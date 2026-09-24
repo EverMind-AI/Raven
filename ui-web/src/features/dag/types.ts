@@ -43,6 +43,10 @@ export interface DagNode {
   /* The other half of the request: a template's `{{ inputs.k }}` does not say
      where k came from. */
   inputs?: Record<string, NodeInput> | null
+  /* Null means zero calls or a lane that does not report the count -- the two
+     read the same on every surface that draws this field. Only the tasks
+     board's own card reads it; every other DagNode caller leaves it unset. */
+  tool_call_count?: number | null
 }
 
 /* What `dag.run_completed` reports. `total` is the server's count and can
@@ -67,9 +71,9 @@ export interface DagRun {
   done: boolean
   folded: boolean
   dir?: string | null
-  /* The line the graph was dispatched with, which is what the sheet is titled
-     by. Absent for a run started before the field existed, where the sheet
-     falls back to naming itself. */
+  /* The line the graph was dispatched with, which is what names the run
+     wherever it is listed. Absent for a run started before the field existed,
+     where the run falls back to its own id. */
   task_summary?: string | null
 }
 

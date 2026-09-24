@@ -496,15 +496,18 @@ def _smoke_handshake(row: object) -> tuple[str, str]:
             return "failed", f"the launcher answered something that is not JSON-RPC: {line[:200]}"
         result = reply.get("result") if isinstance(reply, dict) else None
         if isinstance(result, dict) and "protocolVersion" in result:
-            # A handshake that answered while the plugin registry failed to
-            # build is a broken agent behind a green light: the boot continued
-            # WITHOUT this agent's own tools, hooks and plugin memory backend.
-            # The registry's own WARNING reaches the drained stderr.
-            activation = next((ln.strip() for ln in stderr_lines if "plugin activation failed" in ln), "")
+            # A handshake that answered while a plugin failed to load is a
+            # broken agent behind a green light: the boot continued without
+            # whatever that plugin contributes -- the agent's own tools, hooks
+            # or memory backend when it is the agent's own engine. The notice
+            # reaches the drained stderr through the rpc stack's notifier.
+            from raven.core.plugin_stack import PLUGIN_FAILURE_MARKER
+
+            activation = next((ln.strip() for ln in stderr_lines if PLUGIN_FAILURE_MARKER in ln), "")
             if activation:
                 return "failed", (
-                    "the handshake answered but plugin activation failed -- the agent is running "
-                    f"WITHOUT its own tools and hooks: {activation[:300]}"
+                    "the handshake answered but a plugin did not load -- the agent is running "
+                    f"WITHOUT what it contributes: {activation[:300]}"
                 )
             info = result.get("agentInfo") or {}
             served = f"{info.get('name', 'agent')} {info.get('version', '')}".strip()

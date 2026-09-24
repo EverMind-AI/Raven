@@ -941,6 +941,7 @@
 
   .md-main__inner {
     margin-left: var(--em-rail);
+    margin-right: var(--em-toc);
     max-width: none;
     padding-right: 1.2rem;
   }
@@ -1105,36 +1106,24 @@
   --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>');
 }
 
-.md-typeset .em-run  > ul > li:nth-child(1) {
-  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><path d="M3 11h18v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><rect x="6" y="5" width="4" height="4"/><rect x="11" y="5" width="4" height="4"/></svg>');
+.md-typeset .em-use > ul > li:nth-child(1) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg>');
 }
 
-.md-typeset .em-run  > ul > li:nth-child(2) {
-  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13 6l-2 12"/></svg>');
+.md-typeset .em-use > ul > li:nth-child(2) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7.5 6.5 5 3 8.5 5.5 11M15 16.5l2.5 2.5 3.5-3.5-2.5-2.5M14 5 10 19"/></svg>');
 }
 
-.md-typeset .em-docs > ul > li:nth-child(1) {
-  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/><path d="M7 7h.01M7 17h.01"/></svg>');
+.md-typeset .em-use > ul > li:nth-child(3) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M8 6.5h.01M11 6.5h.01M14 6.5h.01M8 13h8M8 16h5"/></svg>');
 }
 
-.md-typeset .em-docs > ul > li:nth-child(2) {
-  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></svg>');
+.md-typeset .em-explore > ul > li:nth-child(1) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h10l4 4v12H5z"/><path d="M15 4v5h4M8 13h8M8 16h6"/></svg>');
 }
 
-.md-typeset .em-docs > ul > li:nth-child(3) {
-  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="m7 10 2.5 2L7 14M12 14h5"/></svg>');
-}
-
-.md-typeset .em-docs > ul > li:nth-child(4) {
-  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6"><path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>');
-}
-
-/* Four cards read as a block at two columns; at three the fourth is stranded. */
-@media screen and (min-width: 60em) {
-  .md-typeset .grid.cards.em-docs,
-  .md-typeset .grid.cards.em-run {
-    grid-template-columns: repeat(2, 1fr);
-  }
+.md-typeset .em-explore > ul > li:nth-child(2) {
+  --em-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"/></svg>');
 }
 
 /* ------------------------------------------------------ Scale refinement --- */
@@ -1373,8 +1362,8 @@
 }
 
 /* ------------------------------------------------ Reading progress rail --- */
-/* Material marks the current section while the reader scrolls. Keep that
-   state visible with one short gold line, matching the reference layout. */
+/* The rail marks the section being read: toc-progress.js lights the stretch
+   for the headings on screen, or for the nearest one above when none is. */
 
 @media screen and (min-width: 76.25em) {
   .md-sidebar--secondary {

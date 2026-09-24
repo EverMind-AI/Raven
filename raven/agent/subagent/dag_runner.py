@@ -22,7 +22,7 @@ from typing import Any, Protocol
 from loguru import logger
 
 from raven.agent.subagent import activity
-from raven.agent.subagent.backends.base import optional_keyword
+from raven.agent.subagent.backends.base import llm_error_reply, optional_keyword
 from raven.agent.subagent.dag_adjudication import (
     CONTINUE,
     REPLAN,
@@ -52,6 +52,7 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.context_engine.segments.render import dispatch_language_line
+from raven.contracts.subagent_backend import SubagentNoAnswerError
 
 # In-context cap for terminal outputs returned to the main agent; the on-disk
 # .out.md always holds the full text.
@@ -269,10 +270,12 @@ async def run_dag(
     auto_instances: frozenset[str] = frozenset(),
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
+    model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     desk: AdjudicationDesk | None = None,
     adjudication_timeout_s: float = 600.0,
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
     max_continuations: int = 2,
     origin: dict | None = None,
@@ -373,6 +376,10 @@ async def run_dag(
     successor run and finalizes this one. The successor itself is submitted
     by the caller, not here -- this run only reports its id back as
     ``DagRunResult.replanned_into``.
+
+    ``on_node_start``, when given, is called once per attempt as the node is
+    marked running and before it is rendered -- for a caller that needs to know
+    where things stood before this node touched them.
 
     ``judge_node``, when given, is called after a node completes or fails to
     decide whether it actually accomplished its task; a bad verdict suspends it
@@ -620,6 +627,7 @@ async def run_dag(
                         state_for=state_for,
                         memory_for=memory_for,
                         mode_for=mode_for,
+                        model_for=model_for,
                         capabilities=capabilities,
                         session_key=session_key,
                         subagents_root=subagents_root,
@@ -628,6 +636,7 @@ async def run_dag(
                         continuations=continuations,
                         desk=desk,
                         judge_node=judge_node,
+                        on_node_start=on_node_start,
                         announce_exception=announce_exception,
                         max_continuations=max_continuations,
                         origin=origin,
@@ -683,6 +692,9 @@ async def run_dag(
         await _reap_carried(carried)
         _mark_stopped(status)
         await _record_outcome(store, status, cancelled=True)
+        # No manifest will carry them: a stopped run's set-aside accounts
+        # would otherwise outlive it for the life of the process.
+        activity.forget_settled(node_live_key(store.run_id, nid) for nid in status)
         # This run's own memory-record pollers, scheduled for nodes that had
         # already completed before this cancellation landed, would otherwise
         # keep polling with nothing left to reap them.
@@ -973,6 +985,7 @@ async def _apply_verdict(
     status: dict[str, str],
     errors: dict[str, str],
     output_paths: dict[str, str],
+    continuations: dict[str, str],
     node_output: str | None,
     attempt: int,
     desk: "AdjudicationDesk | None",
@@ -1027,6 +1040,18 @@ async def _apply_verdict(
     # input, whatever happens next.
     output_paths.pop(node.id, None)
     remaining = max_continuations - (attempt - 1)
+    if verdict.follow_up and remaining > 0:
+        # The judge already knows what to say, so there is nobody to ask. A
+        # command's judge holds the failing output; relaying that through a
+        # person, or through the main agent, would be asking them to read it
+        # out -- and on an unattended run there is nobody there to read it.
+        # Back to pending with the message parked, which is the same shape an
+        # adjudicated continuation takes, so the ready set picks it up next pass.
+        continuations[node.id] = verdict.follow_up
+        status[node.id] = "pending"
+        errors.pop(node.id, None)
+        logger.info("DAG node {} retries on its judge's own follow-up ({} left)", node.id, remaining - 1)
+        return
     answerable = _route_available(control_reachable)
     report = _exception_report(
         run_id=store.run_id,
@@ -1331,6 +1356,7 @@ async def _run_group(
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
+    model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -1340,6 +1366,7 @@ async def _run_group(
     continuations: dict[str, str] | None = None,
     desk: "AdjudicationDesk | None" = None,
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
     max_continuations: int = 2,
     origin: dict | None = None,
@@ -1382,6 +1409,7 @@ async def _run_group(
                 state_for=state_for,
                 memory_for=memory_for,
                 mode_for=mode_for,
+                model_for=model_for,
                 capabilities=capabilities,
                 progress_publisher=progress_publisher,
                 session_key=session_key,
@@ -1391,6 +1419,7 @@ async def _run_group(
                 continuations=continuations,
                 desk=desk,
                 judge_node=judge_node,
+                on_node_start=on_node_start,
                 announce_exception=announce_exception,
                 max_continuations=max_continuations,
                 origin=origin,
@@ -1433,6 +1462,20 @@ async def _write_node_transcript(store: DagRunStore, node_id: str, did: Any, att
                 await store.write_text(path, text)
             except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
                 logger.warning("DAG node {} transcript could not be written to {}: {}", node_id, path, exc)
+
+
+async def _write_node_closing(store: DagRunStore, node_id: str, did: Any) -> None:
+    """Persist what the node said after its last step, for the answer row.
+
+    An empty file when the lane reported none, rather than no write: the id is
+    reused across attempts (``DagRunStore.closing_path``). Failing to write it
+    must not fail the node, for the reason the transcript's writer gives.
+    """
+    closing = getattr(did, "closing", None)
+    try:
+        await store.write_text(store.closing_path(node_id), closing if isinstance(closing, str) else "")
+    except Exception as exc:  # noqa: BLE001 - an audit trail may not break the run
+        logger.warning("DAG node {} closing could not be written: {}", node_id, exc)
 
 
 async def _previous_output(store: DagRunStore, node_id: str) -> str:
@@ -1521,6 +1564,7 @@ async def _run_node(
     state_for: "Callable[[str, str | None, str], Any] | None" = None,
     memory_for: "Callable[[str], MemoryScope | None] | None" = None,
     mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
+    model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
     capabilities: dict[str, AgentCapabilities] | None = None,
     progress_publisher: ProgressPublisher | None = None,
     session_key: str | None = None,
@@ -1530,6 +1574,7 @@ async def _run_node(
     continuations: dict[str, str] | None = None,
     desk: "AdjudicationDesk | None" = None,
     judge_node: "Callable[..., Awaitable[Any]] | None" = None,
+    on_node_start: "Callable[[str], Awaitable[None]] | None" = None,
     announce_exception: ExceptionAnnouncer | None = None,
     max_continuations: int = 2,
     origin: dict | None = None,
@@ -1552,6 +1597,16 @@ async def _run_node(
         # Set inside the gate, so a node still queued for a concurrency slot
         # stays `pending`: this is what tells a stop which nodes actually ran.
         status[node.id] = "running"
+        if on_node_start is not None:
+            # Inside the gate and before the first byte of work, because what a
+            # caller wants from this moment is a *baseline*: where the tree stood
+            # before this node touched it. Taken when the node was queued it would
+            # include whatever ran while it waited, and taken afterwards there is
+            # nothing left to compare against.
+            try:
+                await on_node_start(node.id)
+            except Exception as exc:  # noqa: BLE001 - a bookkeeping hook must not fail a node
+                logger.opt(exception=True).warning("DAG node {} start hook raised: {}", node.id, exc)
         await _emit(
             progress_publisher,
             "dag_node_updated",
@@ -1608,6 +1663,15 @@ async def _run_node(
             # agent's own default only when there is no tier to inherit -- rather
             # than each lane deciding again.
             node_mode = mode_for(session_key or "", node.subagent, node.instance) if mode_for is not None else None
+            # A third-party acp row's own model, on the same terms: an instance
+            # override if the node names one and one is set, else the row's own
+            # configured `model`. `optional_keyword` below is what keeps this
+            # off a backend that declares no such parameter -- a builtin node's
+            # `RavenLoopBackend` among them, whose own model is a pin the
+            # backend pairs with its credential itself (see `manager.build_builtin_backend`).
+            node_session_model = (
+                model_for(session_key or "", node.subagent, node.instance) if model_for is not None else None
+            )
             # Collected around the dispatch, exactly as a spawn does it: the
             # backend publishes into whatever is open, so a node gets the same
             # account of its tool calls and token cost that a spawned call gets,
@@ -1676,11 +1740,27 @@ async def _run_node(
                             # backend built for a test may take no such keywords.
                             **({"provider": provider} if provider is not None else {}),
                             **({"model": model} if model else {}),
+                            # The row's own acp model choice, not the parent
+                            # binding above: this is what the session itself
+                            # answers with, pushed over `session/set_config_option`
+                            # the same way a spawn's does (`manager.row_default_model`).
+                            **optional_keyword(agent_backend, "session_model", node_session_model),
                             **state_kwargs,
                         )
+                        if (failure := llm_error_reply(result)) is not None:
+                            # The same rule as a spawn's (manager.py): a reply
+                            # that is nothing but the provider's error is not
+                            # this node's output, and a node that read it as
+                            # one fed the error to the step downstream.
+                            raise SubagentNoAnswerError(failure)
                     finally:
                         stall_watch.cancel()
                         node_activity[node.id] = did.as_meta()
+                        # Set aside for the reader until the manifest carries
+                        # it: `collecting` drops the live entry as this block
+                        # exits, and the manifest is written once the whole
+                        # run is over.
+                        activity.record_settled(node_live_key(store.run_id, node.id), node_activity[node.id])
             # The whole answer when the reply cap cut one: the in-context copy of
             # a terminal output is capped again on the way out (see
             # `_terminal_outputs`), and this file is what the reader, the next
@@ -1689,6 +1769,7 @@ async def _run_node(
             persisted = activity.persisted_output(did, result) or ""
             await store.write_text(output_path, persisted)
             await store.write_text(store.attempt_output_path(node.id, attempt), persisted)
+            await _write_node_closing(store, node.id, did)
             node_output = result
             status[node.id] = "completed"
             output_paths[node.id] = output_path
@@ -1714,6 +1795,7 @@ async def _run_node(
                 status=status,
                 errors=errors,
                 output_paths=output_paths,
+                continuations=continuations,
                 node_output=node_output,
                 attempt=attempt,
                 desk=desk,
@@ -1958,6 +2040,9 @@ async def _finalize(
 
     summary = _tally(status)
     await store.write_manifest(manifest)
+    # The manifest now carries every node's account; the copies set aside for
+    # the nodes that finished before it was written have done their job.
+    activity.forget_settled(node_live_key(store.run_id, nid) for nid in by_id)
     await _record_outcome(store, status)
     return DagRunResult(
         run_id=store.run_id,

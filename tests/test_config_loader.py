@@ -1278,6 +1278,245 @@ def test_the_retired_gateway_web_table_is_dropped_once_with_a_notice():
     assert loader.drain_migration_notices() == []
 
 
+def test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays():
+    """Behind the floor a config loses the tool's section and hears about it
+    once; its disabled-tools entry stays, because that list is the general name
+    denylist and a plugin tool may carry the name; a second pass over the same
+    dict has nothing left to say; a config at the floor keeps the lot.
+
+    The floors are literals, not ``CURRENT_CONFIG_VERSION``: written from the
+    constant they would move with every bump and only ever test the generation
+    they were run under (the lesson of
+    test_context_window_pin_survives_once_stamped).
+    """
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {
+        "tools": {
+            "deepResearch": {"apiKey": "sk-test"},
+            "disabledTools": ["deep_research", "exec"],
+            "webSearch": {"provider": "serper"},
+        },
+        "providers": {"anthropic": {"apiKey": "sk-a"}},
+    }
+    loader._migrate_config(data, from_version=9)
+
+    assert "deepResearch" not in data["tools"]
+    assert data["tools"]["disabledTools"] == ["deep_research", "exec"]
+    assert data["tools"]["webSearch"] == {"provider": "serper"}
+    assert data["providers"] == {"anthropic": {"apiKey": "sk-a"}}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1 and "tools.deepResearch" in notices[0], notices
+
+    loader._migrate_config(data, from_version=9)
+    assert data["tools"] == {"disabledTools": ["deep_research", "exec"], "webSearch": {"provider": "serper"}}
+    assert loader.drain_migration_notices() == []
+
+    untouched = {"tools": {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research"]}}
+    loader._migrate_config(untouched, from_version=10)
+    assert untouched["tools"] == {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research"]}
+    assert loader.drain_migration_notices() == []
+
+
+def test_the_deep_research_migration_reads_the_snake_case_spellings():
+    """Configs in the wild spell the section either way; the list, whichever
+    way it is spelled, is left as written."""
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {"tools": {"deep_research": {"apiKey": "sk-test"}, "disabled_tools": ["web_search", "deep_research"]}}
+    loader._migrate_config(data, from_version=9)
+
+    assert data["tools"] == {"disabled_tools": ["web_search", "deep_research"]}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1 and "tools.deep_research" in notices[0], notices
+
+
+def test_a_deep_research_config_that_only_switched_it_off_is_left_alone(tmp_path: Path) -> None:
+    """Most configs never keyed the tool -- they only turned it off. That entry
+    is a name on the general denylist, and a plugin tool may carry the name
+    (plugin tools register last so one can shadow a built-in), so taking it out
+    would put such a tool back on offer: the migration changes nothing, says
+    nothing, and the persist pass leaves the file byte for byte alone."""
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    data = {"tools": {"disabledTools": ["deep_research"]}}
+    assert loader._migrate_retired_deep_research(data, notify=True) is False
+    assert data == {"tools": {"disabledTools": ["deep_research"]}}
+    assert loader.drain_migration_notices() == []
+
+    p = tmp_path / "config.json"
+    _write(p, {"tools": {"disabledTools": ["deep_research"]}})
+    before = p.read_text(encoding="utf-8")
+    _stamp_path(p).write_text(json.dumps({"version": 9}), encoding="utf-8")
+    load_config(p)
+    assert p.read_text(encoding="utf-8") == before
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert [n for n in drain_migration_notices() if "deep_research" in n] == []
+
+
+def test_the_deep_research_section_also_leaves_the_file_on_disk(tmp_path: Path) -> None:
+    """A config stamped 9 still holds the tool's API key in the file itself; the
+    persist pass takes the section out of it, leaves the disabled entry, and
+    stamps the current mark. The 9 is the literal a shipped build wrote."""
+    p = tmp_path / "config.json"
+    _write(p, {"tools": {"deepResearch": {"apiKey": "sk-test"}, "disabledTools": ["deep_research", "exec"]}})
+    _stamp_path(p).write_text(json.dumps({"version": 9}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert "deepResearch" not in on_disk["tools"]
+    assert on_disk["tools"]["disabledTools"] == ["deep_research", "exec"]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    assert len([n for n in drain_migration_notices() if "deep_research" in n]) == 1
+
+
+_RETIRED_CODEX = "npx -y @agentclientprotocol/codex-acp@1.1.14"
+_RETIRED_CLAUDE = (
+    "npx -y @agentclientprotocol/claude-agent-acp@0.66.0",
+    "npx -y @agentclientprotocol/claude-agent-acp@0.79.0",
+)
+
+
+def _codex_row(command: object, **extra: object) -> dict:
+    return {
+        "name": "Codex",
+        "kind": "acp",
+        "preset": "codex",
+        "command": command,
+        "env": {"INITIAL_AGENT_MODE": "agent-full-access"},
+        "readyTimeoutMs": 120000,
+        **extra,
+    }
+
+
+def _claude_row(command: object, **extra: object) -> dict:
+    return {
+        "name": "Claude Code",
+        "kind": "acp",
+        "preset": "claude_code",
+        "command": command,
+        "readyTimeoutMs": 120000,
+        **extra,
+    }
+
+
+def test_rows_on_a_retired_shim_pin_follow_their_preset_in_the_file(tmp_path: Path) -> None:
+    """The shim pin decides which models the agent can reach -- codex-acp 1.1.14
+    bundles a codex whose ``model/list`` stops at GPT-5.6, claude-agent-acp 0.66.0
+    offers no Fable 5.1 -- and ``subagents.add`` copies the preset's command into
+    the row, so a bumped pin reached new rows only. A config stamped 10 (the
+    literal a shipped build wrote) has each such row carried to the command its
+    preset ships now, in the file itself, and hears about each once; the rest of
+    every row is left as it was."""
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+    p = tmp_path / "config.json"
+    rows = [_codex_row(_RETIRED_CODEX, description="Mine.", model="gpt-5.6-sol"), _claude_row(_RETIRED_CLAUDE[0])]
+    _write(p, {"subagents": {"agents": rows}})
+    _stamp_path(p).write_text(json.dumps({"version": 10}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    codex = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    claude = THIRD_PARTY_SUBAGENT_PRESETS["claude_code"]["command"]
+    assert [a.command for a in cfg.subagents.agents] == [codex, claude]
+    assert json.loads(p.read_text(encoding="utf-8"))["subagents"]["agents"] == [
+        _codex_row(codex, description="Mine.", model="gpt-5.6-sol"),
+        _claude_row(claude),
+    ]
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = [n for n in drain_migration_notices() if "-acp@" in n]
+    assert len(notices) == 2, notices
+    assert "subagents.agents[Codex]" in notices[0] and codex in notices[0], notices
+    assert "subagents.agents[Claude Code]" in notices[1] and claude in notices[1], notices
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_the_shim_pin_migration_moves_only_a_stock_command_under_its_preset() -> None:
+    """Only a row that names the preset and still carries the exact command that
+    preset shipped: another pin, an added flag, a row carrying another preset's
+    retired command, and a hand-written row that runs the same command without
+    the provenance field are their owners' to keep, and
+    a command that is not a string is left for config validation to name. The legacy
+    list spelling is read too. A second pass has nothing left to say, and a
+    config already at the floor keeps even the stock row.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    current = THIRD_PARTY_SUBAGENT_PRESETS["codex"]["command"]
+    claude = THIRD_PARTY_SUBAGENT_PRESETS["claude_code"]["command"]
+    kept = [
+        _codex_row("npx -y @agentclientprotocol/codex-acp@1.1.13", name="Codex-older"),
+        _codex_row(_RETIRED_CODEX + " --debug", name="Codex-flagged"),
+        {"name": "my-codex", "kind": "acp", "command": _RETIRED_CODEX},
+        _codex_row(["npx", "-y", "@agentclientprotocol/codex-acp@1.1.14"], name="Codex-listed"),
+        _claude_row("npx -y @agentclientprotocol/claude-agent-acp@0.80.0", name="Claude-own-pin"),
+        _claude_row(_RETIRED_CODEX, name="Claude-wearing-codex"),
+    ]
+    loader._migration_notices.clear()
+    data = {
+        "subagents": {
+            "agents": [_codex_row(_RETIRED_CODEX), _claude_row(_RETIRED_CLAUDE[1]), *json.loads(json.dumps(kept))],
+            "thirdParty": [_codex_row(_RETIRED_CODEX, name="Codex-legacy")],
+        }
+    }
+    loader._migrate_config(data, from_version=10)
+
+    assert data["subagents"]["agents"] == [_codex_row(current), _claude_row(claude), *kept]
+    assert data["subagents"]["thirdParty"] == [_codex_row(current, name="Codex-legacy")]
+    notices = loader.drain_migration_notices()
+    assert sorted(n.split("]")[0] for n in notices) == [
+        "Migrated: subagents.agents[Claude Code",
+        "Migrated: subagents.agents[Codex",
+        "Migrated: subagents.thirdParty[Codex-legacy",
+    ], notices
+
+    loader._migrate_config(data, from_version=10)
+    assert loader.drain_migration_notices() == []
+
+    untouched = {"subagents": {"agents": [_codex_row(_RETIRED_CODEX)]}}
+    loader._migrate_config(untouched, from_version=11)
+    assert untouched == {"subagents": {"agents": [_codex_row(_RETIRED_CODEX)]}}
+    assert loader.drain_migration_notices() == []
+
+
+def test_the_retired_pin_table_leads_to_the_command_its_preset_ships_now() -> None:
+    """The migration spells the preset's command rather than importing it --
+    config does not reach up into the agent package, for the reason
+    ``raven.config.agent_names`` gives -- so the two spellings are pinned equal
+    here. A pin bumped without this table would strand every row already
+    configured on the pin before it, which is how the codex rows came to keep a
+    menu that stopped at GPT-5.6.
+
+    The table is not a history of every pin: an entry needs the new build
+    measured reopening the old one's sessions, the property the migration rests
+    on, so a pin that moves without that measurement stays out of it."""
+    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS, THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.config import loader
+
+    assert loader._RETIRED_SHIM_COMMANDS, "nothing to carry: drop the migration rather than this test"
+    for preset, (retired, current) in loader._RETIRED_SHIM_COMMANDS.items():
+        assert preset in SHIM_LAUNCHED_PRESETS, f"{preset} is not a shim: its row runs the user's own install"
+        assert current == THIRD_PARTY_SUBAGENT_PRESETS[preset]["command"], (
+            f"the {preset} pin moved to {THIRD_PARTY_SUBAGENT_PRESETS[preset]['command']!r} without its "
+            f"migration: rows configured on {current!r} would keep it. Add that command to the retired set "
+            "and give the migration a new floor."
+        )
+        assert retired and current not in retired, preset
+
+
 def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:
     """``channels.sendProgress`` is a setting of the section, not a channel whose
     table failed to parse; only an unknown scalar under ``channels`` warns."""

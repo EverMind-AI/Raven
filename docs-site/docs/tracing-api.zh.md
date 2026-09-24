@@ -1,11 +1,17 @@
-# 追踪 API
+# 追踪与埋点 API { #tracing-api }
 
-**raven**（以及任何其他接入方）与 **raven-tracing** 之间的契约。
+<span id="api"></span>
 
-原则：*标准由 tracing 拥有，应用负责接入。* raven-tracing 定义什么是 span、
+检查失败任务、导出经审核报告或制作回放回归用例，请先读
+[轨迹调试与回放](trajectory-debugging.md)。本页介绍埋点契约。
+
+**raven**（以及任何其他接入方）与仓库内的 `raven.tracing` 实现之间的契约。
+`raven-tracing` 是计划中的独立发行包，不是当前 Raven 包的独立依赖。
+
+原则：*标准由 tracing 拥有，应用负责接入。* `raven.tracing` 定义什么是 span、
 每种 span 携带哪些字段、以及如何渲染。应用（raven）通过在自己选定的位置调用一个
 小而稳定的门面——`trace.span(...)`——来完成自我埋点。两侧都不依赖对方的内部实现，
-唯一的耦合是这份 API 的版本号，加上下文的语义约定。
+唯一的耦合是这份 API 的版本号，以及下文的语义约定。
 
 这与 OpenTelemetry 的模型一致（库定义 API 与数据模型，应用做手工埋点），因此同一套
 纪律同样适用：API 保持微小且缓慢演进，其背后的 SDK（存储、查看器、磁盘格式）可以自由
@@ -14,14 +20,12 @@
 相关：磁盘记录的形态（`audit.span.v1`）定义在 `raven/tracing/spans.py`（`build_span`），
 并在 §2 中做了摘要；本文是产生这些记录的**写入侧**标准。
 
----
-
 ## 1. 公开 API { #1-public-api }
 
 一次导入，一个主调用：
 
 ```python
-from raven_tracing import trace
+from raven.tracing import trace
 
 with trace.span("llm.call", {"llm.provider": provider, "llm.model": model}) as s:
     resp = do_call(...)
@@ -49,7 +53,7 @@ with trace.span("llm.call", {"llm.provider": provider, "llm.model": model}) as s
 
 | 方法 | 作用 |
 |---|---|
-| `s.set(attrs=None, **kw)` | 将属性合并到该 span（点分键映射和/或裸关键字参数） |
+| `s.set(attributes=None, **kw)` | 将属性合并到该 span（点分键映射和/或裸关键字参数） |
 | `s.artifact(key, payload, *, kind="json")` | 将大体积负载落盘到行外存储，并挂上 `<key>.artifact_path/_sha1/_bytes` 与一段截断的 `preview`。用于提示词、工具输入输出、召回结果。 |
 | `_spans.address_items(items)` | 把一组消息按内容寻址存放到 `audit-artifacts/_messages/` 下，返回可嵌入负载的 `{"$msg": sha1}` 引用。参见下文的 `audit.artifact.v2`。 |
 | `s.event(name)` | 追加一条时间线事件 `{time, name}` |
@@ -67,12 +71,16 @@ with trace.span("llm.call", {"llm.provider": provider, "llm.model": model}) as s
 
 ### 硬性保证（接入方为何是安全的） { #hard-guarantees-why-an-adopter-is-safe }
 
-1. **关闭时为空操作。** 若被配置禁用或没有活跃的 SDK 后端，`trace.span(...)` 返回一个
-   空操作句柄：没有 I/O，开销接近零，`with` 代码块照常执行。
-2. **绝不破坏调用方。** 门面会吞掉*自身*的失败（属性错误、磁盘错误、SDK 缺陷）并以 debug
-   级别记录日志。它会原样重新抛出*应用的*异常（在记录 `status=ERROR` 之后）。追踪的缺陷
-   永远不会改变或中断宿主的控制流。
-3. **导入安全。** 即使没有任何配置存在，导入 `raven_tracing` 并调用该 API 也必须成功。
+1. **关闭时为空操作。** 追踪被禁用时，`trace.span(...)` 返回空操作句柄：
+   不写入 span 或产物，`with` 代码块照常执行。
+2. **异常处理边界。** span 创建、span 写出和产物持久化会捕获内部异常并以 debug 级别记录日志。
+   追踪启用且 span 创建成功时，`with` 代码块内抛出的异常会在 span 被标记为错误后重新抛出。
+   句柄方法仍要求输入类型正确：例如 `s.set(42)` 会抛出 `TypeError`，并传播到代码块外。
+   请通过 `s.set({...})` 或 `s.set(attributes={...})` 传入映射；
+   `attrs` 不是参数别名，会被存储为普通的属性键。
+   追踪关闭时，空操作句柄会忽略这些参数，因此 `s.set(42)` 不会报错。开启追踪后，原先被
+   空操作掩盖的参数错误可能才会暴露出来。
+3. **导入安全。** 即使没有任何配置存在，导入 `raven.tracing` 并调用该 API 也必须成功。
 
 ### `@trace.instrument(...)`——装饰器（接入方的主要机制） { #traceinstrument-the-decorator-primary-adopter-mechanism }
 
@@ -80,17 +88,19 @@ with trace.span("llm.call", {"llm.provider": provider, "llm.model": model}) as s
 观测包装）：
 
 ```python
+from raven.observability import semconv
+
 @trace.instrument("llm.call", extract=semconv.llm_call)
 async def chat_with_retry(self, ...): ...
 ```
 
-`trace.instrument(name, *, kind=None, seed=None, on_open=None, extract=None)`
+`trace.instrument(name, *, kind=None, detached=False, root=False, seed=None, on_open=None, extract=None)`
 可以包装同步**或**异步方法：
 
 - `extract(span, bound_args, result, exc)`——在 `finally` 中执行（出错时输入也已捕获），
   负责填充最终的属性与产物。`bound_args` 是按名称组织的调用参数；`result` 是返回值
   （出错时为 `None`）；`exc` 是抛出的异常（成功时为 `None`）。标准提取器位于
-  `raven.tracing.semconv`（`llm_call`、`tool_call`、`memory_*` 等）。
+  `raven.observability.semconv`（`llm_call`、`tool_call`、`memory_*` 等）。
 - `seed(bound_args) -> dict`——返回 `session_key` / `channel` / `chat_id`，用于开启一个
   *根* span（一轮对话），其身份会被所有子节点继承。
 - `on_open(span, bound_args)`——在开启之后、方法体之前执行；用于记录输入，并对进行中的
@@ -106,8 +116,6 @@ async def chat_with_retry(self, ...): ...
 原语（`chat_with_retry` / `tools.execute`），因此它的 span 由那些装饰器捕获，并借助
 `asyncio.create_task` 在派生时取得的 contextvars 快照，自动嵌套在 `subagent.run` 节点
 之下。全程没有使用任何 monkeypatch。
-
----
 
 ## 2. 语义约定（标准 span 类别） { #2-semantic-conventions-standard-span-kinds }
 
@@ -147,7 +155,7 @@ async def chat_with_retry(self, ...): ...
 
 有两处解析点会把外壳还原为等价的 v1：打包轨迹时的 `raven/trajectory/bundle.py`
 （使 bundle 不依赖消息存储），以及随附查看器 `server.js` 中的 `readArtifact`
-（使 UI 永远看不到引用）。位于二者下游的消费方——回放、录像带最小化、查看器 UI——
+（使 UI 永远看不到引用）。位于二者下游的消费方——回放、Trajectory Cassette 的生成、查看器 UI——
 读到的都是 v1 形态，无需了解 v2。
 
 **服务商标注：** `llm.provider` 是调用路由到的*逻辑后端*（例如 `openrouter`），由模型的
@@ -160,15 +168,14 @@ async def chat_with_retry(self, ...): ...
 仅在调用什么也没返回时才填充，因此可用的回答绝不会被存两遍。它只由
 `raven.providers.call_record` 构造，该模块会限制 body 与 headers 的体量，并替换任何以
 凭据命名的 header 的值；其他任何地方都不得构造传输记录。请求自身的字节永远不会被复制进
-记录：`llm.input` 的 `request` 对象只做计数（线上 `bytes`、`images`、解码后的
+记录：`llm.input` 的 `request` 对象只做计数（传输格式下的 `bytes`、`images`、解码后的
 `imageBytes`），图片负载只被计数，不被记录。
 
 命名规则：
 - `name` = `<domain>.<verb>`，小写点分。
-- 属性键 = `<domain>.<field>`，与该 span 的域一致。
+- 属性键 = `<domain>.<field>`，遵循上表的语义约定；命名空间可以与 span 名称不同，
+  例如 `session.turn` 使用 `turn.*` 属性。
 - kind 是封闭词表：`session|model|tool|subagent|skill|memory|plugin`。
-
----
 
 ## 3. 自定义节点 { #3-custom-nodes }
 
@@ -183,52 +190,48 @@ with trace.span("raven.sentinel.tick", {"sentinel.reason": r}, kind="plugin") as
 - `name` 请使用**自有命名空间**（`raven.<subsystem>.<verb>`），以免与 §2 的标准名称冲突。
 - 显式传入 `kind`（否则会退化为通用节点类别）。
 - 查看器对未知名称采用通用渲染（标题取自 `name`，副标题取自选定的某个属性）。若需要定制
-  渲染，请提供一条**描述符**条目（`descriptors/*.json`，以 `name` 为键）——这是查看器的
-  渲染标准，随附于 `raven/tracing/viewer/descriptors/`。
-
----
+  渲染，请提供一条**描述符**条目（`descriptors/*.json`），其 `type` 字段与 span 的 `name`
+  匹配。内置描述符位于 `raven/cli/tracing_viewer/descriptors/`；查看器按 `type` 合并描述符条目。
 
 ## 4. 接入方集成契约（raven） { #4-adopter-integration-contract-raven }
 
-1. 将 `raven-tracing` 声明为默认依赖（默认开启的可选组 `raven[tracing]`），使其随 raven
-   一同分发，并能在 `uv tool upgrade` 后继续存在。
-2. 在埋点处 `from raven_tracing import trace`，用 `with trace.span(...)` 包裹目标操作。
+1. 追踪功能以 `raven.tracing` 的形式随 Raven 分发，无需独立的 `raven-tracing` 依赖
+   或 `raven[tracing]` 可选组。
+2. 在埋点处 `from raven.tracing import trace`，用 `with trace.span(...)` 包裹目标操作。
    埋点位于应用自身的代码中，随重构一同移动，并在 diff 中可见（没有外部 monkeypatch
    会悄悄失效）。
 3. 通过 `[tracing].enabled`（raven 配置）或 `RAVEN_TRACING=0`（环境变量覆盖）来开关。
    禁用时该 API 为空操作。
 4. 应用永远不导入 SDK 内部实现（存储、查看器）——只使用门面。
 
-不存在 monkeypatch 或自动埋点路径：全部埋点都是 raven 自身源码中显式的
-`@trace.instrument` 注解，因此它随代码移动、在 diff 中可见（不会在重构时悄悄失效）。
-
----
+Raven 在自身源码中显式使用 `@trace.instrument` 和 `trace.span` 埋点，
+不安装基于 monkeypatch 的自动探针。重构时应同步检查相关埋点和测试。
 
 ## 5. 版本与治理 { #5-versioning-governance }
+
+下列 API 版本规则是针对独立发行包的提案；当前实现仍随 Raven 一同发布，尚无独立包版本。
 
 - API 与语义约定作为 `standard-api.v1` 一同版本化，独立于应用。
 - **新增性**变更（新的可选属性、新的 span 名称或类别）→ 次版本号递增，向后兼容。
 - **破坏性**变更（重命名或删除属性、改动 API 签名）→ 主版本号递增，并附迁移说明；
   接入方应锁定受支持的版本范围，并在不匹配时发出警告（而不是静默降级）。
-- 一致性快照测试（冻结的 span 名称与必填字段）在 CI 中守护该契约；未同步提升版本号的
-  改动会让构建失败。
+- 应通过一致性快照测试（冻结的 span 名称与必填字段）在 CI 中守护独立包的契约，
+  并要求契约变更时同步提升版本号。
 - 磁盘记录格式单独版本化为 `audit.span.v1`（定义在 `raven/tracing/spans.py`）；
   两者各自独立演进。
-
----
 
 ## 现状 { #status }
 
 仓库内实现，已完整。每一个 span 家族（turn / llm / tool / memory / skill.inject /
 plugin.load / subagent）都通过 raven 自身方法上的 `@trace.instrument` 完成埋点；没有
-monkeypatch，也没有 `instrument.install()`——自动探测模块已被移除。`semconv.py` 拥有
-标准的属性与产物构造器。
+monkeypatch，也没有 `instrument.install()`——自动探测模块已被移除。
+Raven 专用的属性与产物构造器已位于 `raven.observability.semconv`，与追踪机制分离。
 
 留待独立开源阶段（P4）处理，均不阻塞仓库内使用：
 - 让导入变为可选：raven 核心在模块加载时硬导入 `raven.tracing`（装饰器在类定义时应用），
   因此它必须随 raven 分发；要让追踪成为真正可选的 extra，需要先有一个空操作回退垫片。
-- 把 raven 专有的提取器（`semconv.py`）移到 raven 一侧；独立包中只保留通用 API、schema
-  与查看器。
-- 从独立包中去除 raven 品牌标识（`FRAMEWORK`、`RAVEN_*` 环境变量、`~/.raven` 路径），
-  以及 `raven.config`/`raven.token_wise` 的软导入。
+- 将 Raven 专用的提取器保留在 `raven.observability.semconv` 中；独立发行包只包含
+  通用 API、schema 与查看器。
+- 将 Raven 专用的默认值与路径解析（`FRAMEWORK`、`RAVEN_*` 环境变量、
+  `~/.raven` 路径）与独立包解耦。
 - 冻结 `standard-api.v1`；发布 `raven-tracing`；raven 默认依赖它。

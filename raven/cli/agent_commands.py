@@ -12,6 +12,7 @@ and exits non-zero.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -25,7 +26,7 @@ from raven.cli._helpers import (
     print_config_migration_notices,
     print_deprecated_allow_destructive_notice,
     print_deprecated_memory_window_notice,
-    report_dropped_memory_writes,
+    report_memory_write_outcome,
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_provider
@@ -38,6 +39,43 @@ console = Console()
 # turn. Module-level because the render callback runs inside the delivery
 # hub's worker task, where raising typer.Exit would be swallowed.
 _ONE_SHOT_EXIT = {"code": 0}
+
+# A run that finished but had calls refused because nobody could approve them.
+# Not 1: the turn did not fail, and a driver needs to tell "the model could not
+# run" from "the model ran without the mutations it asked for".
+EXIT_ACTIONS_REFUSED = 3
+
+
+def _report_refusals(refusals: list) -> None:
+    """Say which calls the gate turned down, once, after the reply.
+
+    Deduplicated by action: a refused call the model repeats is refused again
+    with an "earlier in this turn" reason, and that is one refusal to a reader.
+    Only a refusal nobody could answer sets the exit code; a builtin or user
+    deny rule is the policy the operator chose, doing what it was set to do.
+    """
+    from rich.markup import escape
+
+    from raven.contracts.permissions import DecisionSource
+
+    seen: dict[tuple[str, str], object] = {}
+    for refusal in refusals:
+        seen.setdefault((refusal.tool_name, refusal.action), refusal)
+    if not seen:
+        return
+    unattended = [r for r in refusals if r.source == DecisionSource.UNATTENDED.value]
+    console.print()
+    console.print(f"[yellow]{len(seen)} action(s) were refused in this run:[/yellow]")
+    for refusal in seen.values():
+        action = refusal.action if len(refusal.action) <= 160 else refusal.action[:157] + "..."
+        console.print(f"  - {escape(refusal.tool_name)}: {escape(action)}")
+        console.print(f"    [dim]{escape(refusal.reason[:200])}[/dim]")
+    if unattended:
+        console.print(
+            "[yellow]A one-shot run has nobody to approve a call. Re-run with "
+            "--permission-mode full to allow what needed approval.[/yellow]"
+        )
+        _ONE_SHOT_EXIT["code"] = _ONE_SHOT_EXIT["code"] or EXIT_ACTIONS_REFUSED
 
 
 async def _wait_for_background_work(agent_loop, scheduler, conversation: str) -> None:
@@ -62,15 +100,36 @@ async def _wait_for_background_work(agent_loop, scheduler, conversation: str) ->
         await asyncio.sleep(1.0)
 
 
+def _print_turn_failure(text: str) -> None:
+    """A turn the runtime gave up on: drawn as a failure rather than as the
+    reply, and a failed command for the exit code."""
+    from rich.markup import escape
+
+    if _print_llm_error(text):
+        return
+    console.print()
+    console.print(f"[red]Error: turn failed: {escape(text[:200])}[/red]")
+    console.print()
+    _ONE_SHOT_EXIT["code"] = 1
+
+
 def _print_agent_response(response: str, render_markdown: bool) -> None:
-    """Render assistant response with consistent terminal styling."""
+    """Render assistant response with consistent terminal styling.
+
+    ``--no-markdown`` prints the reply soft-wrapped, which means the console
+    inserts no newlines of its own. It matters for a caller that parses what a
+    one-shot printed: hard-wrapping at the terminal width puts a line break
+    inside a JSON string literal, and the reply stops being parseable at all.
+    """
     content = response or ""
     if _print_llm_error(content):
         return
-    body = Markdown(content) if render_markdown else Text(content)
     console.print()
     console.print(f"[cyan]{__logo__} Raven[/cyan]")
-    console.print(body)
+    if render_markdown:
+        console.print(Markdown(content))
+    else:
+        console.print(Text(content), soft_wrap=True)
     console.print()
 
 
@@ -91,7 +150,11 @@ _NON_AUTH_HINTS = {
 def _print_llm_error(content: str) -> bool:
     """Render a provider error as a diagnosis + fix hint instead of a fake
     agent reply. Returns True when handled; marks the one-shot path to exit
-    non-zero."""
+    non-zero.
+
+    The detail is printed whole: it arrives already cut to
+    ``providers.base.LLM_ERROR_DETAIL_MAX`` by the sentence's own constructor,
+    and a second bound here would only be a second number to keep in step."""
     from rich.markup import escape
 
     from raven.providers.base import parse_llm_error
@@ -106,11 +169,11 @@ def _print_llm_error(content: str) -> bool:
         # PermissionDeniedError and on substring matches, so naming one would
         # be a guess. The detail carries the provider's own reason instead.
         where = f" ({escape(provider)})" if provider else ""
-        console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail[:200])}[/red]")
+        console.print(f"[red]Error: provider rejected the credentials{where}: {escape(detail)}[/red]")
         target = provider or "<name>"
         console.print(f"Fix: raven provider test {escape(target)}  or  raven onboard")
     else:
-        console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail[:200])}[/red]")
+        console.print(f"[red]Error: LLM call failed ({escape(category)}): {escape(detail)}[/red]")
         hint = _NON_AUTH_HINTS.get(category)
         if hint:
             console.print(hint)
@@ -130,6 +193,26 @@ def register(app: typer.Typer) -> None:
     @app.command()
     def agent(
         message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
+        message_file: Path | None = typer.Option(
+            None,
+            "--message-file",
+            help=(
+                "Read the message from this file instead of the command line. An unattended "
+                "driver should prefer it: a prompt passed with -m sits in this process's argv, "
+                "where every other process in the sandbox can read it -- and be killed by it, "
+                "if something in the run matches on a command line."
+            ),
+        ),
+        permission_mode: str | None = typer.Option(
+            None,
+            "--permission-mode",
+            help=(
+                "How this turn reads the ask tier: ask, smart or full. A one-shot has nobody to "
+                "ask, so a call routed to approval fails closed, is listed after the reply, and "
+                "makes the run exit 3; `full` is how an unattended driver says it accepts that. "
+                "Builtin denies and user deny rules hold regardless."
+            ),
+        ),
         session_id: str | None = typer.Option(
             None,
             "--session",
@@ -169,6 +252,25 @@ def register(app: typer.Typer) -> None:
         """Run a one-shot agent turn (requires -m); interactive chat lives in `raven tui`."""
         if sum((session_id is not None, continue_, resume is not None)) > 1:
             raise typer.BadParameter("--session, --continue and --resume are mutually exclusive")
+
+        if message is not None and message_file is not None:
+            raise typer.BadParameter("--message and --message-file are mutually exclusive")
+        if message_file is not None:
+            try:
+                message = message_file.read_text(encoding="utf-8")
+            except OSError as error:
+                raise typer.BadParameter(f"--message-file: {error}") from error
+            if not message.strip():
+                raise typer.BadParameter(f"--message-file: {message_file} is empty")
+
+        if permission_mode is not None:
+            from raven.contracts.permissions import PermissionMode
+
+            try:
+                permission_mode = PermissionMode(permission_mode.strip().lower()).value
+            except ValueError:
+                allowed = ", ".join(mode.value for mode in PermissionMode)
+                raise typer.BadParameter(f"--permission-mode: expected one of {allowed}") from None
 
         if message is None:
             console.print(
@@ -233,6 +335,11 @@ def register(app: typer.Typer) -> None:
             from raven.cli.session_commands import resolve_session_cross_channel
 
             session_id = resolve_session_cross_channel(session_manager, session_id)
+
+        if permission_mode is not None:
+            from raven.permissions import set_session_mode
+
+            set_session_mode(session_id, permission_mode)
 
         # Build Sentinel stack if enabled — same wiring gateway uses, so the two
         # processes share state via ~/.raven/sentinel/state.json. Discover
@@ -313,6 +420,8 @@ def register(app: typer.Typer) -> None:
         from raven.cli._one_shot_spine import build_one_shot_spine
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
+        refusals: list = []
+
         async def run_once():
             # Bring the memory-backend plugin online before any turn
             # runs. ``backend`` is ``None`` when no plugin is wired.
@@ -332,8 +441,10 @@ def register(app: typer.Typer) -> None:
                     "cli",
                     lambda t: _print_agent_response(t, render_markdown=markdown),
                     render_notice=lambda c: console.print(f"  [dim]↳ {c}[/dim]"),
+                    render_error=_print_turn_failure,
                     send_progress=bool(ch.send_progress) if ch else False,
                     send_tool_hints=bool(ch.send_tool_hints) if ch else False,
+                    on_refusals=refusals.extend,
                 )
                 # A one-shot spawn rarely finishes before the hard-exit below,
                 # but wire submit for parity with the TUI.
@@ -367,8 +478,8 @@ def register(app: typer.Typer) -> None:
                     try:
                         # Drain queued writes first: stopping the backend
                         # closes the HTTP client they still need.
-                        dropped = await agent_loop.drain_backend_stores()
-                        report_dropped_memory_writes(dropped, console)
+                        outcome = await agent_loop.drain_backend_stores()
+                        report_memory_write_outcome(outcome, console)
                         await backend.stop()
                     except Exception:
                         logger.exception(
@@ -377,6 +488,7 @@ def register(app: typer.Typer) -> None:
 
         _ONE_SHOT_EXIT["code"] = 0
         asyncio.run(run_once())
+        _report_refusals(refusals)
         if _ONE_SHOT_EXIT["code"]:
             raise typer.Exit(_ONE_SHOT_EXIT["code"])
 

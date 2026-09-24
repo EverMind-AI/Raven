@@ -73,18 +73,28 @@ class RootState:
 
 
 def _describe(root: Path) -> RootState:
-    from raven_everos.config import role_configured_in
+    from raven_everos.config import everos_role_configured, recorded_slice, role_configured_in
 
     data = _read_toml(root)
     api = data.get("api") or {}
     host, port = api.get("host"), api.get("port")
     declared = f"http://{host}:{port}" if host and port else None
 
+    # Two places the answer can live, and for raven's own root either will do.
+    # What the llm runs is a pin in raven's config now, and the file stops
+    # carrying `[llm]` once migration has moved it -- asking only the file made
+    # raven's own root read as half-built afterwards, so the wizard stopped
+    # offering it back and went on to create another. Asking only the pin would
+    # be wrong the other way, in the window before migration runs. Any other
+    # root is somebody else's, and their file is the only thing that speaks for
+    # it: raven's pins say nothing about a directory raven does not manage.
+    recorded = recorded_slice().get("root")
+    ours = bool(recorded) and Path(str(recorded)).expanduser() == root
+    from_file = role_configured_in(data, "llm")
+
     return RootState(
         root=root,
-        # Through the ops layer rather than re-reading the fields here: one
-        # definition of "configured", shared with the wizard and doctor.
-        configured=role_configured_in(data, "llm"),
+        configured=from_file or (ours and everos_role_configured("llm")),
         declared_url=declared,
         alive=_probe_health(declared) if declared else False,
         lock_held=ome_lock_held(root),

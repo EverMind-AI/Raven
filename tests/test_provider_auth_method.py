@@ -433,8 +433,8 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
     # Every entry is argued, because an unargued allowlist is the line-pattern
     # guard again with extra steps.
     allowed = {
-        # Not an LLM provider section: a tool's own key (deep research, media
-        # generation, web search), the router's, or EverOS's.
+        # Not an LLM provider section: a tool's own key (media generation,
+        # web search), the router's, or EverOS's.
         "raven/agent/loop/wiring.py",
         # The sub-agent loop asks the same question the main loop does, about the
         # same tool: whether web_search resolved a Serper key, so an unusable
@@ -442,10 +442,8 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # tool rather than the config because the tool resolves from either the
         # constructor value or SERPER_API_KEY.
         "raven/agent/subagent/backends/raven_loop.py",
-        "raven/agent/tools/deep_research.py",
         "raven/agent/tools/media_gen.py",
         "raven/agent/tools/web.py",
-        "raven/cli/deep_research_commands.py",
         # The assembly door carries the tool-key reads the three entrances used
         # to make (web search, jina): still a tool's own key, no provider
         # verdict -- the entrances themselves no longer read any key.

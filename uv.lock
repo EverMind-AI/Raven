@@ -167,8 +167,8 @@ name = "aiohttp-socks"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohttp" },
-    { name = "python-socks" },
+    { name = "aiohttp", marker = "sys_platform != 'win32'" },
+    { name = "python-socks", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1f/cc/e5bbd54f76bd56291522251e47267b645dac76327b2657ade9545e30522c/aiohttp_socks-0.11.0.tar.gz", hash = "sha256:0afe51638527c79077e4bd6e57052c87c4824233d6e20bb061c53766421b10f0", size = 11196, upload-time = "2025-12-09T13:35:52.564Z" }
 wheels = [
@@ -180,9 +180,9 @@ name = "aiologic"
 version = "0.17.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "sniffio" },
-    { name = "typing-extensions" },
-    { name = "wrapt" },
+    { name = "sniffio", marker = "python_full_version < '3.14'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "wrapt", marker = "python_full_version < '3.14'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f1/7a/d51f2fde1e8ae8a83431f8e97b7a71e9358cdb1d4d2ce6be387fa44d68de/aiologic-0.17.1.tar.gz", hash = "sha256:2e1b93b9e88ced318c2a63ad7b382688f40cbfe40e3d42258d49dc9c5aea179d", size = 252354, upload-time = "2026-06-27T20:41:33.25Z" }
 wheels = [
@@ -837,8 +837,8 @@ name = "culsans"
 version = "0.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiologic" },
-    { name = "typing-extensions" },
+    { name = "aiologic", marker = "python_full_version < '3.14'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d9/e3/49afa1bc180e0d28008ec6bcdf82a4072d1c7a41032b5b759b60814ca4b0/culsans-0.11.0.tar.gz", hash = "sha256:0b43d0d05dce6106293d114c86e3fb4bfc63088cfe8ff08ed3fe36891447fe33", size = 107546, upload-time = "2025-12-31T23:15:38.196Z" }
 wheels = [
@@ -1637,8 +1637,8 @@ name = "h2"
 version = "4.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "hpack" },
-    { name = "hyperframe" },
+    { name = "hpack", marker = "sys_platform != 'win32'" },
+    { name = "hyperframe", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e7/85/7c366e69d84c17bb778fe41419e1fbcce3033d5b7ce29bbffff0a98b859f/h2-4.4.1.tar.gz", hash = "sha256:4e866ffb1a869ae14dd9b5e6beb5c24a13da0495ad72b65925ded182521c1516", size = 2157281, upload-time = "2026-08-03T11:45:09.509Z" }
 wheels = [
@@ -2514,14 +2514,14 @@ name = "matrix-nio"
 version = "0.25.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiofiles" },
-    { name = "aiohttp" },
-    { name = "aiohttp-socks" },
-    { name = "h11" },
-    { name = "h2" },
-    { name = "jsonschema" },
-    { name = "pycryptodome" },
-    { name = "unpaddedbase64" },
+    { name = "aiofiles", marker = "sys_platform != 'win32'" },
+    { name = "aiohttp", marker = "sys_platform != 'win32'" },
+    { name = "aiohttp-socks", marker = "sys_platform != 'win32'" },
+    { name = "h11", marker = "sys_platform != 'win32'" },
+    { name = "h2", marker = "sys_platform != 'win32'" },
+    { name = "jsonschema", marker = "sys_platform != 'win32'" },
+    { name = "pycryptodome", marker = "sys_platform != 'win32'" },
+    { name = "unpaddedbase64", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/33/50/c20129fd6f0e1aad3510feefd3229427fc8163a111f3911ed834e414116b/matrix_nio-0.25.2.tar.gz", hash = "sha256:8ef8180c374e12368e5c83a692abfb3bab8d71efcd17c5560b5c40c9b6f2f600", size = 155480, upload-time = "2024-10-04T07:51:41.62Z" }
 wheels = [
@@ -4188,7 +4188,7 @@ wheels = [
 
 [[package]]
 name = "raven"
-version = "0.1.13"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk" },
@@ -4203,6 +4203,7 @@ dependencies = [
     { name = "lancedb" },
     { name = "litellm" },
     { name = "loguru" },
+    { name = "lxml" },
     { name = "mcp" },
     { name = "nltk" },
     { name = "numpy" },
@@ -4273,6 +4274,9 @@ channel-wecom = [
 ]
 channel-weixin = [
     { name = "pycryptodome" },
+]
+channel-whatsapp = [
+    { name = "websockets" },
 ]
 channels = [
     { name = "dingtalk-stream" },
@@ -4362,6 +4366,7 @@ requires-dist = [
     { name = "lark-oapi", marker = "extra == 'channel-feishu'", specifier = ">=1.5.0,<2.0.0" },
     { name = "litellm", specifier = ">=1.82.1,<2.0.0" },
     { name = "loguru", specifier = ">=0.7.3,<1.0.0" },
+    { name = "lxml", specifier = ">=5.0,<7" },
     { name = "matrix-nio", marker = "sys_platform != 'win32' and extra == 'channel-matrix'", specifier = ">=0.25.2" },
     { name = "mcp", specifier = ">=1.27.0" },
     { name = "mistune", marker = "extra == 'channel-matrix'", specifier = ">=3.0.0,<4.0.0" },
@@ -4422,6 +4427,7 @@ requires-dist = [
     { name = "watchfiles", specifier = ">=0.21,<2.0" },
     { name = "websocket-client", marker = "extra == 'channel-mochat'", specifier = ">=1.9.0,<2.0.0" },
     { name = "websockets", marker = "extra == 'channel-discord'", specifier = ">=16.0,<17.0" },
+    { name = "websockets", marker = "extra == 'channel-whatsapp'", specifier = ">=16.0,<17.0" },
     { name = "wecom-aibot-sdk-python", marker = "extra == 'channel-wecom'", specifier = ">=0.1.5" },
 ]
 provides-extras = ["channel-telegram", "channel-slack", "channel-discord", "channel-whatsapp", "channel-matrix", "channel-feishu", "channel-wecom", "channel-mochat", "channel-qq", "channel-dingtalk", "channel-email", "channel-weixin", "channels", "tools", "sandbox", "browser", "dev", "eval"]

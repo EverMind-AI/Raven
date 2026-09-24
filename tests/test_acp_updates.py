@@ -20,6 +20,7 @@ import json
 
 import pytest
 
+from raven.acp import updates as updates_mod
 from raven.acp.tool_kinds import MAX_LOCATIONS, locations, title_for, tool_kind
 from raven.acp.updates import (
     KNOWN_EVENT_TYPES,
@@ -111,6 +112,15 @@ class TestTranslatedFrames:
         put a frame on the wire for every one."""
         assert translate({"type": "token.delta", "payload": {"text": ""}}).updates == ()
         assert translate({"type": "token.delta", "payload": {}}).updates == ()
+
+    def test_a_mid_turn_message_produces_no_frame(self):
+        """The client's own steer request is the record that it sent a message
+        mid-turn, the way ``session/prompt`` is the record that a turn began; an
+        update echoing the text would be a second one."""
+        result = translate({"type": "message.injected", "payload": {"turn_id": "t1", "content": "only Q4"}})
+
+        assert result.updates == ()
+        assert result.stop is None
 
     def test_a_tool_start_is_in_progress_not_pending(self):
         """``pending`` means "not started -- streaming input or awaiting
@@ -1080,6 +1090,7 @@ class TestTerminationIsExactlyOnce:
         "tool.start": {"tool_call_id": "t", "name": "exec", "arguments": {"command": "ls"}},
         "tool.complete": {"tool_call_id": "t", "result_preview": "ok"},
         "message.start": {"turn_id": "t"},
+        "message.injected": {"turn_id": "t", "content": "only Q4"},
         "turn.started": {"turn_id": "t"},
         "message.complete": {"turn_id": "t", "usage": {}},
         # turn_id is part of the shape now: the sink stamps the ending turn's own
@@ -1153,6 +1164,172 @@ class TestTerminationIsExactlyOnce:
         await translator.send_frame(_event("error", code=-1, message="late", reason="internal", turn_id="t"))
 
         assert await future == "cancelled"
+
+
+class TestThoughtCoalescing:
+    """One frame per thought token is one blocking write per token on the client's
+    pipe. Consecutive thought chunks are held and sent as one chunk when the window
+    closes, the cap is reached, or something that must follow them arrives."""
+
+    @staticmethod
+    def _thought(text: str, session_id: str = "acp:s1", sub: str = "sub-1", meta: dict | None = None):
+        payload: dict = {"text": text}
+        if meta is not None:
+            payload["target"] = meta
+        return {
+            "jsonrpc": "2.0",
+            "method": "event",
+            "params": {"subscription_id": sub, "event": {"type": "thinking.delta", "payload": payload}},
+        }
+
+    async def test_a_run_of_thought_tokens_becomes_one_frame_when_the_window_closes(self, monkeypatch):
+        monkeypatch.setattr(updates_mod, "THOUGHT_COALESCE_WINDOW_S", 0.01)
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        for token in ("th", "ink", "ing"):
+            await translator.send_frame(self._thought(token))
+        assert written == [], "nothing goes out while the window is open"
+        await asyncio.sleep(0.05)
+
+        (frame,) = written
+        validate_def("SessionNotification", frame["params"])
+        assert frame["params"]["update"] == {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": "thinking"},
+        }
+
+    async def test_the_cap_sends_the_held_text_without_waiting(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("a" * 300))
+        assert written == []
+        await translator.send_frame(self._thought("b" * 300))
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["a" * 300 + "b" * 300]
+        assert translator._thoughts == {}
+
+    async def test_anything_that_must_follow_the_thoughts_releases_them_first(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("plan"))
+        await translator.send_frame(_event("tool.start", tool_call_id="t", name="exec", arguments={"command": "ls"}))
+
+        assert [u["sessionUpdate"] for u in _updates(written)] == ["agent_thought_chunk", "tool_call"]
+
+    async def test_the_turns_ending_releases_the_thoughts_before_it_settles(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+        future = translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(self._thought("almost"))
+        await translator.send_frame(_event("message.complete", turn_id="t", usage={}))
+
+        assert future.done() and future.result() == "end_turn"
+        assert [u["content"]["text"] for u in _updates(written)] == ["almost"]
+
+    async def test_sessions_hold_their_thoughts_apart(self, monkeypatch):
+        monkeypatch.setattr(updates_mod, "THOUGHT_COALESCE_WINDOW_S", 0.01)
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+        translator.add(AcpSession(session_id="acp:s2", session_key="acp:s2", cwd="/w", subscription_id="sub-2"))
+
+        await translator.send_frame(self._thought("one"))
+        await translator.send_frame(self._thought("two", session_id="acp:s2", sub="sub-2"))
+        await asyncio.sleep(0.05)
+
+        by_session = {f["params"]["sessionId"]: f["params"]["update"]["content"]["text"] for f in written}
+        assert by_session == {"acp:s1": "one", "acp:s2": "two"}
+
+    async def test_a_different_speaker_does_not_join_the_held_text(self):
+        """A delegated agent's thought is tagged with its target in ``_meta``;
+        folding it into the main agent's held text would mislabel it."""
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("mine"))
+        await translator.send_frame(self._thought("theirs", meta={"agent": "raven-code", "handle": "h1"}))
+        translator.flush_thoughts("acp:s1")
+
+        texts = [(u["content"]["text"], u.get("_meta")) for u in _updates(written)]
+        assert texts == [("mine", None), ("theirs", {"raven.target": {"agent": "raven-code", "handle": "h1"}})]
+
+    async def test_closing_the_connection_releases_every_sessions_thoughts(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("last words"))
+        translator.close()
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["last words"]
+        assert translator._thoughts == {}
+
+    async def test_dropping_the_turn_slot_sends_what_is_still_held(self):
+        """The prompt handler drops the slot in its finally, before the
+        ``session/prompt`` response goes out. Text held past the ending -- a
+        thought that arrived after the turn settled -- has to precede that
+        response rather than trail it by a window."""
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+        translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(self._thought("straggler"))
+        translator.end_turn("acp:s1")
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["straggler"]
+        assert translator._thoughts == {}
+
+    async def test_settling_the_turn_from_outside_the_stream_sends_what_is_held(self):
+        """A teardown or a cancel settles the prompt without an ending event on
+        the stream; the held text still has to precede the response it settles."""
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+        translator.begin_turn("acp:s1")
+        translator.accept_turn("acp:s1", "t")
+
+        await translator.send_frame(self._thought("half a"))
+        assert translator.settle_turn("acp:s1", "cancelled")
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["half a"]
+
+    async def test_the_window_is_measured_from_the_first_held_chunk_not_the_last(self, monkeypatch):
+        """A sliding window would let a steady trickle of tokens hold the text for
+        as long as the trickle lasts; the bound is 200ms from the first chunk."""
+        monkeypatch.setattr(updates_mod, "THOUGHT_COALESCE_WINDOW_S", 0.05)
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        # Chunks every 20ms for 120ms: a sliding window would never close.
+        for i in range(6):
+            await translator.send_frame(self._thought(f"t{i}"))
+            await asyncio.sleep(0.02)
+
+        assert written, "the first chunk's window closed while the trickle went on"
+        assert _updates(written)[0]["content"]["text"].startswith("t0")
+
+    async def test_a_released_session_sends_what_it_held(self):
+        written = []
+        translator = UpdateTranslator(emit=written.append)
+        translator.add(_session())
+
+        await translator.send_frame(self._thought("bye"))
+        translator.release_session("acp:s1")
+
+        assert [u["content"]["text"] for u in _updates(written)] == ["bye"]
 
 
 class TestTheRealOutletPath:
@@ -1237,17 +1414,23 @@ class TestTheRealOutletPath:
         assert updates[0]["locations"] == [{"path": "/work/a.py"}]
         assert updates[0]["kind"] == "read"
 
-    async def test_reasoning_arrives_as_a_thought_chunk(self):
+    async def test_reasoning_arrives_as_a_thought_chunk_ahead_of_the_answer(self):
+        """Thought text is held for a moment so a run of tokens becomes one
+        frame; the answer's first chunk is what releases it, and in order."""
         from raven.spine.events import Reasoning
 
         written, translator, emitter, outlet = await self._wire()
         try:
-            await outlet.deliver(Reasoning(content="thinking", conversation_id="acp:s1"))
+            await outlet.deliver(Reasoning(content="think", conversation_id="acp:s1"))
+            await outlet.deliver(Reasoning(content="ing", conversation_id="acp:s1"))
+            await outlet.send_stream_chunk("chat", "acp:s1", "answer")
             await self._settle()
         finally:
             await emitter.close_session("acp:s1")
 
-        assert _updates(written)[0]["sessionUpdate"] == "agent_thought_chunk"
+        updates = _updates(written)
+        assert [u["sessionUpdate"] for u in updates] == ["agent_thought_chunk", "agent_message_chunk"]
+        assert updates[0]["content"]["text"] == "thinking"
 
     async def test_a_turn_completion_resolves_the_prompt_through_the_real_emitter(self):
         written, translator, emitter, outlet = await self._wire()
@@ -1527,6 +1710,66 @@ class TestTheFileChangePayload:
         assert self._payload(FileChange(path="/w/a.py", after=after, before="z" * 20)) is None
 
 
+class TestTheFileRemovedPayload:
+    """The same hop for the other half: what a call made vanish.
+
+    A list rather than one mapping -- a single command removes as many files as
+    it names -- and ``None`` rather than an empty list, so the emit site can
+    leave the key off a payload entirely.
+    """
+
+    @staticmethod
+    def _payload(removals):
+        from raven.agent.loop._shared import _file_removed_payload
+
+        return _file_removed_payload(removals)
+
+    def test_a_removal_flattens_to_the_wire_shape(self):
+        from raven.contracts.tool import FileRemoval
+
+        assert self._payload([FileRemoval(path="/w/a.py", before="one\n")]) == [{"path": "/w/a.py", "before": "one\n"}]
+
+    def test_a_removal_whose_text_was_never_captured_carries_only_its_path(self):
+        """Absent, not empty. The file is gone either way; only its body is."""
+        from raven.contracts.tool import FileRemoval
+
+        assert self._payload([FileRemoval(path="/w/a.py")]) == [{"path": "/w/a.py"}]
+
+    def test_nothing_in_gives_nothing_out(self):
+        assert self._payload(None) is None
+        assert self._payload(()) is None
+
+    def test_a_malformed_removal_is_dropped_rather_than_forwarded(self):
+        from types import SimpleNamespace
+
+        assert self._payload([SimpleNamespace(path=None, before="x")]) is None
+        assert self._payload([SimpleNamespace(path="", before="x")]) is None
+
+    def test_an_oversized_body_is_dropped_but_the_removal_is_not(self):
+        """Half a removed file reads as a smaller deletion than the one that
+        happened, so the text goes rather than being cut -- and the row stays,
+        because the deletion is the fact being reported."""
+        from raven.agent.loop._shared import _FILE_CHANGE_MAX_CHARS
+        from raven.contracts.tool import FileRemoval
+
+        big = "x" * (_FILE_CHANGE_MAX_CHARS + 1)
+
+        assert self._payload([FileRemoval(path="/w/a.py", before=big)]) == [{"path": "/w/a.py"}]
+
+    def test_the_budget_is_the_events_and_not_each_files(self):
+        """One command can unlink every file it names; a per-file ceiling would
+        put all of them on one event at full size."""
+        from raven.agent.loop._shared import _FILE_CHANGE_MAX_CHARS
+        from raven.contracts.tool import FileRemoval
+
+        half = "x" * (_FILE_CHANGE_MAX_CHARS // 2 + 10)
+
+        assert self._payload([FileRemoval(path="/w/a.py", before=half), FileRemoval(path="/w/b.py", before=half)]) == [
+            {"path": "/w/a.py", "before": half},
+            {"path": "/w/b.py"},
+        ]
+
+
 class TestTheLiveTranslationPathRedactsWhatItPublishes:
     """A credential in a tool's command line reached the editor verbatim.
 
@@ -1741,7 +1984,12 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
         because the shape they emit is the whole question: an earlier version of
         this test handed the translator a notice carrying a ``turn_id`` the
         production producer does not send, so it passed while the defect it named
-        stayed reachable."""
+        stayed reachable.
+
+        Both wire kinds go through it. ``llm_retry`` is the one the outlet emits
+        while the turn is still running, so latching anything on it would answer
+        a prompt whose turn has not finished -- and ACP has nowhere to draw a
+        transient status, so it must also write no content."""
         from raven.rpc.spine import RpcOutlet
         from raven.rpc.subscriptions import COALESCE_WINDOW_S, SubscriptionEmitter
         from raven.spine.events import Notice, NoticeKind
@@ -1755,6 +2003,11 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
         future = translator.begin_turn("acp:s1")
         translator.accept_turn("acp:s1", "mine")
         try:
+            await outlet.deliver(Notice(kind=NoticeKind.LLM_RETRY, detail="server", conversation_id="acp:s1"))
+            await asyncio.sleep(COALESCE_WINDOW_S * 3)
+            assert not future.done(), "a retry wait says the turn is still running"
+            assert not written, "ACP has no transient status; the wait is not written into the answer"
+
             await outlet.deliver(Notice(kind=NoticeKind.ACTION_BLOCKED, detail="not mine", conversation_id="acp:s1"))
             await outlet.emit_complete("acp:s1", "mine", {})
             await asyncio.sleep(COALESCE_WINDOW_S * 3)

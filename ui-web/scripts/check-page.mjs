@@ -4,14 +4,12 @@
 //   node ui-web/scripts/check-page.mjs
 //
 // Checks, in order:
-//   1. dist/index.html exists and carries exactly one <style> and exactly three
-//      inline <script> blocks -- the asset digest, the island bundle, then the
-//      page script;
+//   1. dist/index.html exists and carries exactly one <style> and exactly two
+//      inline <script> blocks -- the asset digest, then the bundle;
 //   2. no assembly marker survived into the artifact (a leftover marker means
 //      build.py replaced the wrong thing or the source lost one);
-//   3. every script payload parses as a whole -- the live parts are fragments
-//      of one IIFE, so only the assembled artifact is checkable, and this is
-//      the earliest point a mis-ordered or truncated part would surface.
+//   3. every script payload parses as a whole, which is the earliest point a
+//      truncated or mis-inlined bundle would surface.
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -25,21 +23,21 @@ const fail = (msg) => { console.error(`check-page: ${msg}`); process.exit(1) }
 
 const count = (re) => (html.match(re) ?? []).length
 if (count(/<style>/g) !== 1 || count(/<\/style>/g) !== 1) fail('expected exactly one <style> block')
-// Three, in load order: the asset digest hangs __ASSETV on window before any
-// icon helper reads it, then the island bundle, then the page script. Still a
-// fixed count -- an unexpected fourth block is as wrong as zero -- and still
-// all inline (no src= anywhere) so the one-file contract holds. Tags are
-// matched at line start only: the island bundle legitimately carries the
-// string `<script>` inside a template literal, and that is content.
-if (count(/^<script>$/gm) !== 3 || count(/^<\/script>$/gm) !== 3) fail('expected exactly three <script> blocks')
+// Two, in load order: the asset digest hangs __ASSETV on window before any
+// icon helper reads it, then the bundle Vite writes. Still a fixed count -- an
+// unexpected third block is as wrong as zero -- and still all inline (no src=
+// anywhere) so the one-file contract holds. Tags are matched at line start
+// only: the bundle legitimately carries the string `<script>` inside a
+// template literal, and that is content.
+if (count(/^<script>$/gm) !== 2 || count(/^<\/script>$/gm) !== 2) fail('expected exactly two <script> blocks')
 if (/<script\s+[^>]*src\s*=/.test(html)) fail('external script reference breaks the one-file contract')
 
-for (const marker of ['/*__STYLE__*/', '/*__MODERN__*/', '/*__DEMO__*/', '/*__I18N__*/']) {
+for (const marker of ['/*__STYLE__*/', '/*__MODERN__*/']) {
   if (html.includes(marker)) fail(`assembly marker ${marker} survived into dist/index.html`)
 }
 
 const scripts = [...html.matchAll(/^<script>\n([\s\S]*?)\n<\/script>$/gm)].map((m) => m[1])
-if (scripts.length !== 3) fail(`extracted ${scripts.length} script payloads, expected 3`)
+if (scripts.length !== 2) fail(`extracted ${scripts.length} script payloads, expected 2`)
 const dir = mkdtempSync(join(tmpdir(), 'raven-page-'))
 try {
   scripts.forEach((script, i) => {

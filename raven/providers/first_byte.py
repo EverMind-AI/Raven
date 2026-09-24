@@ -66,6 +66,22 @@ class FirstByteTimeoutError(TimeoutError):
         self.waited = waited
 
 
+class StreamIdleTimeoutError(TimeoutError):
+    """No chunk inside the per-chunk idle budget once the stream had started.
+
+    The mid-stream sibling of :class:`FirstByteTimeoutError`, a ``TimeoutError``
+    for the same reason: every ``except TimeoutError`` arm and every retry
+    verdict already on the streaming path keeps applying. What it adds is the
+    message -- ``asyncio.wait_for`` raises a bare ``TimeoutError`` whose
+    ``str`` is empty, and that emptiness travelled all the way to a client as
+    a failure with no stated cause.
+    """
+
+    def __init__(self, *, idle: float) -> None:
+        super().__init__(f"the model stream sent nothing for {idle:g}s (bound stream_idle_timeout={idle:g}s)")
+        self.idle = idle
+
+
 def first_byte_budget(generation: Any) -> float:
     """The configured first-byte budget, clamped to the total call, or 0.0 for none.
 

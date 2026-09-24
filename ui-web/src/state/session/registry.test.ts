@@ -1,0 +1,764 @@
+// @vitest-environment happy-dom
+/* The registry's session switch: what a round trip is allowed to paint once
+ * the reader has moved on, and when the new-task screen comes down.
+ *
+ * Driven through the real switch rather than through assertions about its
+ * source, because the defect this pins is a matter of ordering between two
+ * in-flight opens -- nothing about the text of either function says which of
+ * them wins.
+ */
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
+/* The real reducer, so a case can say "busy and stoppable" rather than naming
+   the event that happens to produce it today. */
+import { reduce } from '../../features/composer/turn'
+
+import type { TurnEvent, TurnSnapshot } from '../../features/composer/turn'
+import type { SessRow } from '../../features/rail/types'
+
+type Registry = typeof import('./registry')
+type Wiring = typeof import('../../app/install')
+
+interface Row { id: string; title?: string; status?: string | null }
+interface Staged { model: unknown; tier: string | null; perm: string | null }
+
+interface Listed { id: string; title?: string; message_count?: number; running?: boolean }
+
+async function harness(
+  { rows, deferSubscribe, subscribeRunning, realResidency, listed }: {
+    rows?: Row[]; deferSubscribe?: boolean; subscribeRunning?: boolean
+    realResidency?: boolean; listed?: () => Listed[]
+  } = {},
+) {
+  const calls: unknown[][] = []
+  const IDLE: TurnSnapshot = { phase: 'idle', cancellable: false, resume: null }
+  /* Where the island's turn machine has been driven to, read off the traffic
+     the switch put through it rather than off the machine itself: the fake
+     below is what stands in for it here, and the switch asks it whether the
+     turn is still busy. A restore replaces the state outright, which is how a
+     conversation coming back off a park gets its phase again -- so it has to
+     count here too, or a test cannot tell an idle machine from one holding a
+     turn it was handed back. */
+  const machine = (): TurnSnapshot => calls
+    .filter((c) => c[0] === 'turnDispatch' || c[0] === 'turnRestore')
+    .reduce(
+      (state, c) => (c[0] === 'turnRestore' ? c[1] as TurnSnapshot : reduce(state, c[1] as TurnEvent)),
+      IDLE,
+    )
+  document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
+  const boxes: Record<string, HTMLElement | null | undefined> = {}
+  for (const id of ['#title', '#stage', '#flash']) boxes[id] = document.getElementById(id.slice(1))
+  /* The top-bar editor stands IN PLACE OF h1#title, so while it is open that id
+     resolves to nothing; committing puts the heading back and writes the typed
+     name onto the row the editor captured when it opened. */
+  const editor = { commit: () => {} }
+  /* The live row's clock anchor, which is composer island state: the switch
+     writes it and nothing here paints, so it is recorded rather than drawn. */
+  const anchor = { ms: 0 }
+  const spare = new Map<string, HTMLElement>()
+  const $ = (selector: string): HTMLElement | null => {
+    if (selector in boxes || selector === '#title') return boxes[selector] || null
+    /* Everything install() wires that this file is not about. */
+    if (!spare.has(selector)) spare.set(selector, document.createElement('div'))
+    return spare.get(selector) as HTMLElement
+  }
+  let current: string | null = null
+  const state: { fresh: string | null } = { fresh: '1' }
+  const pending: Array<{ id: string; res: (v: unknown) => void; rej: (e: unknown) => void }> = []
+  const subs: Array<{ id: string; res: () => void }> = []
+  /* The seam the registry reaches its own switch through: sessionOpen is
+     sources.rail.open, which the boot installs as the switch. Bound
+     through this holder rather than stubbed, so the reconnect drives the real
+     function. */
+  const api: { switchTo?: Registry['switchTo'] } = {}
+  /* The registry is imported first and the module that wires it after, which
+     is the order that keeps one module graph: the fakes are installed around
+     the modules the first import reaches, and one it did not is loaded
+     afterwards without them. */
+  await loadPart(async () => { await import('./registry'); return import('../../app/install') }, {
+    fakes: {
+      'src/state/page': { show: () => {} },
+      'src/state/ws': { setOpen: () => {}, reset: () => {} },
+      'src/state/session/conversation': {
+        pitch: () => { state.fresh = '1'; calls.push(['pitch']) },
+        unpitch: () => { state.fresh = null; calls.push(['unpitch']) },
+      },
+      'src/features/rail/store': {
+        markNew: () => {},
+        draw: () => calls.push(['sessionDraw']),
+        /* What the heading held when the editor was ended, so the order is
+           assertable: ending it has to come before anything reads or writes
+           h1#title, and while one is open that id resolves to nothing. */
+        endRename: () => {
+          calls.push(['endRename', boxes['#title'] ? boxes['#title']!.textContent : null])
+          editor.commit()
+        },
+      },
+      'src/state/session/rows': {
+        sess: (id: string) => (rows || []).find((r) => r.id === id),
+        open: (s: Row) => api.switchTo!(s as SessRow),
+        /* In place, so a case that drives a list answer reads the rows it
+           produced back through the same array `sess` and `rows` answer from. */
+        replace: (next: Row[]) => { if (rows) rows.splice(0, rows.length, ...next) },
+        rows: () => rows || [],
+      },
+      'src/features/composer/mount': {
+        drawMeter: () => {},
+        goPaint: () => calls.push(['goPaint']),
+        loadDraft: (id: string) => calls.push(['loadDraft', id]),
+        parkDraft: () => {},
+        queueClear: () => {},
+        queueRestore: () => {},
+        queueShift: () => undefined,
+        liveAnchor: () => anchor.ms,
+        setLiveAnchor: (ms: number) => { anchor.ms = ms; calls.push(['setLiveAnchor', ms]) },
+        turn: {
+          dispatch: (event: TurnEvent) => calls.push(['turnDispatch', event]),
+          busy: () => machine().phase !== 'idle', snapshot: () => machine(),
+          restore: (phase: TurnSnapshot) => calls.push(['turnRestore', phase]),
+          reduce: (phase: unknown) => phase,
+        },
+      },
+      'src/i18n/t': { t: (key: string) => key },
+      'src/lib/dom': { $ },
+      'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
+      'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
+      'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
+      'src/state/ctxChip': { set: (used: number) => calls.push(['setCtx', used]) },
+      'src/state/banner': { draw: () => {} },
+      'src/state/tier': { load: () => calls.push(['loadTier']) },
+      'src/state/perm': { setFromConfig: () => {} },
+      'src/features/workspace/record': { wsOnHistory: () => {} },
+      'src/features/transcript/source': {
+        renderHistory: (messages: Array<{ text: string }>) => {
+          state.fresh = null
+          calls.push(['renderHistory', messages[0], messages])
+        },
+      },
+      /* The real one where a case is about what leaving does to the runtime:
+         the stubs below record that the switch called them and nothing else,
+         which is exactly the half of the switch a re-open has to survive. */
+      ...(realResidency ? {} : {
+        'src/state/session/residency': {
+          park: () => calls.push(['parkTurn']),
+          resume: () => calls.push(['restoreTurn']),
+        },
+      }),
+      'src/features/workspace/source': { wsSetRoot: (root: string) => calls.push(['wsSetRoot', root]) },
+      /* The streaming buffer the turn state resets through. */
+      'src/features/transcript/mount': {
+        nudge: () => {},
+        stopStream: () => {},
+        killStatus: () => {},
+        status: (text: string) => calls.push(['showStatus', text]),
+      },
+      'src/features/workspace/store': { loadDeliveries: (id: string) => calls.push(['loadDeliveries', id]) },
+      'src/state/session/resume': {
+        resume: (id: string) => calls.push(['viewResume', id]),
+        refreshDag: (id: string) => calls.push(['viewRefreshDag', id]),
+      },
+    },
+  })
+  const registry = (await import('./registry')) as Registry
+  api.switchTo = registry.switchTo
+  await fakeGateway((method: string, params: Record<string, string> = {}) => {
+    calls.push(['rpc', method, params || {}])
+    if (method === 'session.resume') {
+      return new Promise((res, rej) => pending.push({ id: params.session_id!, res, rej }))
+    }
+    if (method === 'session.list') return Promise.resolve({ sessions: listed ? listed() : [] })
+    if (method === 'turn.subscribe') {
+      const answer = { subscription_id: `sub:${params.session_key}`, running: !!subscribeRunning }
+      if (!deferSubscribe) return Promise.resolve(answer)
+      return new Promise((res) => subs.push({ id: params.session_key!, res: () => res(answer) }))
+    }
+    /* The model and permission refreshes a switch starts are the real ones
+       here, and an empty envelope is a valid answer to both. */
+    return Promise.resolve({})
+  })
+  const wiring = (await import('../../app/install')) as Wiring
+  const { setSources } = await import('../sources')
+  setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as never)
+  const { staging } = await import('./staging')
+  const connection = await import('../../app/connection')
+  wiring.installActions()
+  /* The four page-level names the switch used to keep, as the conversations
+     that keep them now: the subscription whose frames paint the stage is the
+     one on the conversation being shown, the two books are that same field
+     read either way round, and the staged picks belong to the draft. */
+  const sub = (key: string | null) => registry.get(key)?.subscriptionId ?? null
+  const env = {
+    live: {
+      get subId() { return sub(current) },
+      set subId(id: string | null) { registry.record(current, id) },
+    },
+    subBySession: new Proxy({} as Record<string, string>, {
+      get: (_t, key: string) => sub(key),
+      set: (_t, key: string, id: string) => { registry.record(key, id); return true },
+    }),
+    subSession: new Proxy({} as Record<string, string>, {
+      get: (_t, id: string) => registry.bySubscription(id),
+    }),
+    parkedTurns: { set: (key: string, _pk: unknown) => { registry.ensure(key).events = [] } },
+    get staged() { return staging() as Staged },
+    sessionCurrent: () => current,
+    sessionSet: (id: string | null) => { current = id; calls.push(['sessionSet', id]) },
+    sess: (id: string) => (rows || []).find((r) => r.id === id),
+  }
+  const asked = (method: string) => calls.filter((c) => c[0] === 'rpc' && c[1] === method).map((c) => c[2])
+  return {
+    turnState: machine,
+    liveAnchor: () => anchor.ms,
+    startedAt: (key: string) => registry.get(key)?.startedAt,
+    subscribe: registry.subscribe,
+    refreshList: registry.refreshList,
+    startDraft: registry.switchToDraft,
+    openLiveSession: (row: Row) => registry.switchTo(row as SessRow),
+    /* The handler app/connection.ts runs once the transport says the socket
+       is back. Registered by installActions(), one registrar today. */
+    onReconnect: [...(connection.reconnectHandlers as Set<() => Promise<void>>)][0]!,
+    calls,
+    env,
+    state,
+    asked,
+    title: () => (boxes['#title'] ? boxes['#title']!.textContent : null),
+    openEditor: (typed: string) => {
+      const heading = boxes['#title']
+      const captured = (rows || []).find((r) => r.id === current)
+      delete boxes['#title']
+      editor.commit = () => {
+        boxes['#title'] = heading
+        if (captured) captured.title = typed
+        editor.commit = () => {}
+      }
+    },
+    settle: (id: string, payload?: unknown) => {
+      const found = pending.find((p) => p.id === id)
+      if (!found) throw new Error(`no session.resume is in flight for ${id}`)
+      pending.splice(pending.indexOf(found), 1)
+      found.res(payload || { session_id: id, messages: [{ text: id }], info: {} })
+      return new Promise((r) => setTimeout(r, 0))
+    },
+    fail: (id: string, error?: Error) => {
+      const found = pending.find((p) => p.id === id)
+      if (!found) throw new Error(`no session.resume is in flight for ${id}`)
+      pending.splice(pending.indexOf(found), 1)
+      found.rej(error || new Error('gone'))
+      return new Promise((r) => setTimeout(r, 0))
+    },
+    settleSub: (id: string) => {
+      const found = subs.find((p) => p.id === id)
+      if (!found) throw new Error(`no turn.subscribe is in flight for ${id}`)
+      subs.splice(subs.indexOf(found), 1)
+      found.res()
+      return new Promise((r) => setTimeout(r, 0))
+    },
+    inFlight: () => pending.map((p) => p.id),
+    /* What a rail click does: the row moves the session pointer and THEN asks
+       for the conversation (features/rail/RailPage.tsx). Every switch a reader
+       makes has this shape, and the pointer moving first is what lets a late
+       answer tell that it is no longer the page. */
+    click: (row: Row) => { env.sessionSet(row.id); return registry.switchTo(row as SessRow) },
+  }
+}
+
+const painted = (calls: unknown[][]) =>
+  calls.filter((c) => c[0] === 'renderHistory').map((c) => (c[1] as { text: string } | undefined)?.text)
+
+/** Each transcript the switch painted, whole: what a re-open read back off disk. */
+const bundles = (calls: unknown[][]) =>
+  calls.filter((c) => c[0] === 'renderHistory')
+    .map((c) => (c[2] as Array<{ text: string }>).map((m) => m.text))
+
+afterEach(() => { vi.useRealTimers() })
+
+describe('the live session switch', () => {
+  it('paints one conversation when one is opened', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+
+    expect(painted(h.calls)).toEqual(['a'])
+    expect(h.env.sessionCurrent()).toBe('a')
+    expect(h.title()).toBe('Alpha')
+    expect(h.env.live.subId).toBe('sub:a')
+    expect(h.calls).toContainEqual(['viewResume', 'a'])
+  })
+
+  it('puts the stop button back on a conversation whose turn is still running', async () => {
+    /* Both answers agree the turn is running: the resume arms the machine and
+       the subscription that confirms it will carry the rest of the turn. */
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: true } })
+
+    /* Everything a live turn owes the reader hangs off this: the stop button,
+       a send that queues instead of being refused, and the deltas still to
+       come opening a step of their own. */
+    expect(h.turnState()).toMatchObject({ phase: 'streaming', cancellable: true })
+    expect(h.calls).toContainEqual(['goPaint'])
+    expect(h.asked('session.resume')).toHaveLength(1)
+  })
+
+  /* The clock on the composer's live row, which is anchored on its first paint
+     and defaults that anchor to now. A reload of a running turn is the one
+     opening that has no first paint to be anchored by, so the turn read "0s"
+     again at every reload -- of a turn the reader had been watching for ten
+     minutes. The bundle carries the age the server measured, so the stamp on
+     the question below is the one thing this branch must NOT read: it is a
+     server wall clock with no offset on it, and parsing it here in the
+     reader's zone dates the turn by the distance between the two.
+     Only `Date` is faked -- the harness settles on a real timer. */
+  it('anchors a resumed turn to the elapsed the server measured', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(1_700_000_600_000)
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [
+        { role: 'user', text: 'first', timestamp: '2026-09-22T09:00:00' },
+        { role: 'assistant', text: 'answered' },
+        { role: 'user', text: 'running', timestamp: '2026-09-22T10:00:00' },
+      ],
+      info: { running: true, running_ms: 600_000 },
+    })
+
+    expect(h.liveAnchor()).toBe(1_700_000_000_000)
+    /* The fold header's own elapsed, which reads the runtime rather than the
+       row: the two must not disagree about when the same turn began. */
+    expect(h.startedAt('a')).toBe(1_700_000_000_000)
+  })
+
+  it('leaves the clock where it was when the bundle carries no elapsed', async () => {
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [{ role: 'user', text: 'running', timestamp: '2026-09-22T10:00:00' }],
+      info: { running: true },
+    })
+
+    expect(h.calls.filter((c) => c[0] === 'setLiveAnchor')).toEqual([])
+    expect(h.liveAnchor()).toBe(0)
+  })
+
+  /* The gap between the two round trips. The resume is read before the
+     subscription exists, so a turn that ends in between takes its completion to
+     nobody: the buffer the gateway would have replayed is dropped with it, and
+     the machine armed by the resume waits for an event that no longer exists --
+     the stop button stayed up for the life of the tab. The subscription's own
+     answer is the one that cannot be stale, and a `false` there means the whole
+     conversation has to be read back off disk: the transcript painted from the
+     resume is missing the answer for exactly the same reason. */
+  it('opens the conversation again when the turn ended between resume and subscribe', async () => {
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: false })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: true } })
+    expect(h.inFlight()).toEqual(['a'])
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a+answer' }], info: { running: false } })
+
+    expect(h.asked('session.resume')).toHaveLength(2)
+    expect(painted(h.calls)).toEqual(['a', 'a+answer'])
+    expect(h.turnState().phase).toBe('idle')
+  })
+
+  /* The same disagreement, against the residency module the page actually runs.
+     The case above passes over a `park` that only records the call, and what
+     breaks the re-open is what the real one DOES on the way out: with the
+     machine still armed it files the turn on the runtime and leaves
+     `rt.events` an empty array, which is truthy -- so the second pass skips
+     the turn-state reset and takes the kept-turn branch, which hands the
+     streaming phase back and never reads the conversation off disk. That is
+     the state the re-open exists to escape, and on the page it is a stop button
+     over a finished answer for the life of the tab. */
+  it('reads the conversation back off disk when the real residency runs the re-open', async () => {
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: false, realResidency: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [{ text: 'run the long thing' }],
+      info: { running: true, running_ms: 40_000 },
+    })
+    expect(h.inFlight()).toEqual(['a'])
+    /* What the stop left on disk while the two round trips were in the air --
+       and `running` still true on the way back, because the gateway drops the
+       replay buffer at the error frame and clears its active-turn slot only
+       when the worker has unwound. The subscription already said otherwise,
+       and that is the answer that cannot be stale. */
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [
+        { text: 'run the long thing' },
+        { text: 'I had started to' },
+        { text: 'stopped by the user, what was said is kept' },
+      ],
+      info: { running: true },
+    })
+
+    expect(h.asked('session.resume')).toHaveLength(2)
+    expect(bundles(h.calls)[1]).toEqual([
+      'run the long thing', 'I had started to', 'stopped by the user, what was said is kept',
+    ])
+    expect(h.turnState()).toMatchObject({ phase: 'idle', cancellable: false })
+    expect(h.liveAnchor()).toBe(0)
+  })
+
+  it('leaves a conversation alone when only the subscription reports the turn', async () => {
+    /* Nothing was missed: the reader arrived while the turn was between its
+       start and this page, and the replay the subscription is handed opens it
+       with a message.start of its own. */
+    const h = await harness({ rows: [{ id: 'a' }], subscribeRunning: true })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: false } })
+
+    expect(h.asked('session.resume')).toHaveLength(1)
+    expect(h.turnState().phase).toBe('idle')
+  })
+
+  it('leaves a conversation that is not answering idle', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [{ text: 'a' }], info: { running: false } })
+
+    expect(h.turnState().phase).toBe('idle')
+  })
+
+  it('drops the answer to an open the reader has already left', async () => {
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+
+    h.click({ id: 'a', title: 'Alpha' })
+    h.click({ id: 'b', title: 'Bravo' })
+    await h.settle('b')
+    await h.settle('a')
+
+    /* Only B's transcript, and only B's -- the defect appended A's messages to
+       the lane B had just built, so the reader saw two conversations welded
+       together under B's title. */
+    expect(painted(h.calls)).toEqual(['b'])
+    expect(h.env.sessionCurrent()).toBe('b')
+    expect(h.title()).toBe('Bravo')
+    expect(h.env.live.subId).toBe('sub:b')
+    expect(h.calls.filter((c) => c[0] === 'viewResume')).toEqual([['viewResume', 'b']])
+    expect(h.calls.filter((c) => c[0] === 'setCtx')).toHaveLength(1)
+  })
+
+  /* The title editor stands IN PLACE OF h1#title, so while one is open that id
+     resolves to nothing -- and both switch paths write the heading, while the
+     reconnect that reloads the open conversation used to READ it. With an
+     editor up that read threw, which left the input in the top bar for the
+     life of the tab and the conversation never reloaded, never re-subscribed
+     and never told the reader it was back.
+
+     Ordering is the whole point, so the stub records what the heading held at
+     the moment it was ended: the name being left behind, never the one being
+     written. */
+  it('ends an open title editor before either path reaches the heading', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    expect(h.calls).toContainEqual(['endRename', ''])
+    expect(h.title()).toBe('Alpha')
+
+    h.startDraft()
+    expect(h.calls).toContainEqual(['endRename', 'Alpha'])
+    expect(h.title()).toBe('gui.new_task')
+  })
+
+  /* The reconnect is the one caller that builds a DETACHED { id, title } for
+     the switch; every other one hands over the live row, whose title the
+     commit mutates in place. So it is the only one that can read a title, have
+     the editor commit a different one underneath it, and then paint the value it
+     captured -- which is what happened, because the teardown lives inside the
+     switch and ran after the lookup here.
+
+     Driven through the real reconnect handler rather than the switch: the
+     ordering is between the two, so a test that calls the inner one cannot see
+     it. */
+  it('paints the title the editor committed, not the one it read first', async () => {
+    const h = await harness({ rows: [{ id: 'a', title: 'Alpha' }] })
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    expect(h.title()).toBe('Alpha')
+
+    h.openEditor('reconciliation audit')
+    expect(h.title()).toBe(null)
+
+    const reconnected = h.onReconnect()
+    /* system.hello is awaited before the reload, so let that microtask land or
+       there is no session.resume in flight yet. */
+    await new Promise((r) => setTimeout(r, 0))
+    await h.settle('a')
+    await reconnected
+
+    expect(h.calls).toContainEqual(['endRename', null])
+    expect(h.title()).toBe('reconciliation audit')
+    expect(h.env.sess('a')!.title).toBe('reconciliation audit')
+  })
+
+  it('drops the answer to an open the reader left for a new task', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.click({ id: 'a', title: 'Alpha' })
+    h.startDraft()
+    await h.settle('a')
+
+    expect(painted(h.calls)).toEqual([])
+    expect(h.env.sessionCurrent()).toBe(null)
+    expect(h.title()).toBe('gui.new_task')
+    expect(h.state.fresh).toBe('1')
+  })
+
+  it('stays quiet when an open the reader left is the one that fails', async () => {
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+
+    h.click({ id: 'a', title: 'Alpha' })
+    h.click({ id: 'b', title: 'Bravo' })
+    await h.settle('b')
+    await h.fail('a')
+
+    expect(h.calls.filter((c) => c[0] === 'toast')).toEqual([])
+    expect(painted(h.calls)).toEqual(['b'])
+    expect(h.state.fresh).toBe(null)
+  })
+
+  it('still reports a failure on the open the reader is waiting for', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.fail('a')
+
+    expect(h.calls.filter((c) => c[0] === 'toast')).toHaveLength(1)
+    expect(h.state.fresh).toBe('1')
+  })
+
+  it('leaves the new-task screen when the switch starts, not when it lands', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+
+    /* Still waiting on session.resume here. The empty state drives a whole
+       layout -- wordmark, crew, a composer 81px above the dock -- so holding it
+       across the round trip left it on screen over an empty stage and then
+       dropped everything into place at once. */
+    expect(h.inFlight()).toEqual(['a'])
+    expect(h.state.fresh).toBe(null)
+  })
+
+  it('gives the new-task screen back when the reader asks for one', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.startDraft()
+
+    expect(h.state.fresh).toBe('1')
+  })
+
+  it('takes the visible stream back with a parked turn, without a round trip', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+    h.env.subBySession.a = 'sub:a'
+    h.env.parkedTurns.set('a', { nodes: [] })
+
+    /* Awaited, where the tests above settle a round trip instead: this path
+       makes none, but it does claim the stream behind an await, and the graph
+       re-read lands on the far side of it. */
+    await h.click({ id: 'a', title: 'Alpha' })
+
+    /* The parked path never reads the transcript back -- the streaming copy is
+       the DOM it kept -- so it claims the stream it already has rather than
+       subscribing again. */
+    expect(h.calls).toContainEqual(['restoreTurn'])
+    expect(h.env.live.subId).toBe('sub:a')
+    expect(h.asked('turn.subscribe')).toEqual([])
+    expect(h.inFlight()).toEqual([])
+    /* The graph half of the replay and not the desk half. A parked turn buffers
+       the events it misses only while it is busy, and a graph outlives the turn
+       that started it, so the sheet on screen is stale and has to be re-read --
+       while the windows never left the page and replaying their opens would give
+       the reader each one twice. */
+    expect(h.calls).toContainEqual(['viewRefreshDag', 'a'])
+    expect(h.calls.filter((c) => c[0] === 'viewResume')).toEqual([])
+  })
+
+  it('does not put a left conversation\'s windows back when its subscription lands late', async () => {
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }], deferSubscribe: true })
+
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    /* A is drawn and waiting on turn.subscribe. This is the second round trip
+       in the same switch, and the reader can leave from here too -- the desk
+       replay behind viewResume opens a file window synchronously, so it lands
+       on whichever desk is on screen. */
+    h.click({ id: 'b', title: 'Bravo' })
+    await h.settleSub('a')
+
+    expect(h.calls.filter((c) => c[0] === 'viewResume')).toEqual([])
+    expect(h.env.live.subId).toBe(null)
+  })
+
+  it('leaves the visible stream alone when a subscription lands too late', async () => {
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    h.env.sessionSet('b')
+    h.env.live.subId = 'sub:b'
+
+    await h.subscribe('a')
+
+    /* The id is recorded so the parked buffer can still find A's events
+       (the event handler reads subSession), but the visible routing stays with
+       the conversation on screen. */
+    expect(h.env.subBySession.a).toBe('sub:a')
+    expect(h.env.subSession['sub:a']).toBe('a')
+    expect(h.env.live.subId).toBe('sub:b')
+  })
+
+  it('takes the visible stream for the conversation that is on screen', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+    h.env.sessionSet('a')
+
+    await h.subscribe('a')
+
+    expect(h.env.live.subId).toBe('sub:a')
+  })
+
+  it('reuses a subscription the session already has', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+    h.env.sessionSet('a')
+    await h.subscribe('a')
+    /* Nothing to release: the subscription whose frames paint the stage is not
+       a second field any more, it is the conversation's own. */
+
+    await h.subscribe('a')
+
+    expect(h.env.live.subId).toBe('sub:a')
+    expect(h.asked('turn.subscribe')).toHaveLength(1)
+  })
+
+  it('reads the default back when a conversation is left for a new task', async () => {
+    /* The other half of the pair: a draft runs the configured default, so
+       startDraft has to re-read it or the chip keeps the model of the
+       conversation just left. A null session omits the field, which is how the
+       default answers. */
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.startDraft()
+
+    expect(h.asked('model.options')).toEqual([{ session_id: 'a' }, {}])
+  })
+
+  it('drops a tier staged for a draft that was abandoned', async () => {
+    /* The pick was for the conversation the reader was writing, and they left it
+       without sending. Kept, it is spent by whichever conversation is sent next
+       -- an invisible choice crossing from one conversation to another. Reset on
+       both paths out of a draft, exactly where the staged model is. */
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.env.staged.tier = 'max'
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    expect(h.env.staged.tier).toBeNull()
+
+    h.env.staged.tier = 'max'
+    h.startDraft()
+    expect(h.env.staged.tier).toBeNull()
+  })
+
+  it('re-reads the tier when the same conversation is reopened', async () => {
+    /* The reconnect path reopens the CURRENT id, and the tier used to be read
+       from `session.onChange` -- which `setCurrent` never fires for an id that
+       has not changed. The loop holds session policies in memory with no
+       persistence, so a gateway restart puts every session back on the
+       catalogue default while the chip went on naming the tier from before. */
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+
+    expect(h.calls.filter((c) => c[0] === 'loadTier')).toHaveLength(2)
+  })
+
+  it('reads the tier back when a conversation is left for a new task', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.startDraft()
+
+    expect(h.calls.filter((c) => c[0] === 'loadTier')).toHaveLength(2)
+  })
+
+  it('holds a staged permission mode to the tier\'s rules: reset on both paths, re-read per open', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.env.staged.perm = 'full'
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    expect(h.env.staged.perm).toBeNull()
+    h.env.staged.perm = 'full'
+    h.startDraft()
+    expect(h.env.staged.perm).toBeNull()
+
+    /* Keyed to the opened id, then to no id at all: a draft runs the default. */
+    expect(h.asked('config.get').map((p) => (p as { session_id?: string }).session_id ?? null)).toEqual(['a', null])
+  })
+
+  /* A `run` badge that came off `session.list`, on a conversation this page
+     holds no subscription for: a second tab, a cron run, a turn that started
+     before the reload. No frame of it reaches this page, and the two callers of
+     `refreshList` are both about a conversation this page IS subscribed to --
+     so the badge sat there for the life of the tab over a conversation that had
+     finished answering minutes earlier. */
+  it('keeps asking for the list while a conversation nobody here subscribes to is answering', async () => {
+    const server = { running: true }
+    const h = await harness({
+      rows: [],
+      listed: () => [{ id: 'b', title: 'Bravo', message_count: 1, running: server.running }],
+    })
+    vi.useFakeTimers()
+
+    await h.refreshList()
+    expect(h.env.sess('b')!.status).toBe('run')
+    expect(h.asked('session.list')).toHaveLength(1)
+
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(h.asked('session.list')).toHaveLength(2)
+
+    server.running = false
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(h.asked('session.list')).toHaveLength(3)
+    expect(h.env.sess('b')!.status).toBeNull()
+
+    /* And then it stops: nothing is answering, so there is nothing to wait for
+       and no reason to ask the gateway for the rest of the tab's life. */
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(h.asked('session.list')).toHaveLength(3)
+  })
+
+  it('refreshes the model for the conversation being opened, not the one left behind', async () => {
+    /* The model is per conversation now. Opening B after A must re-read B's
+       binding, or the chip keeps claiming A's model over a conversation that
+       runs its own. Keyed to the opened id, so it holds even before the session
+       pointer moves over. */
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    await h.settle('b')
+
+    expect(h.asked('model.options').map((p) => (p as { session_id?: string }).session_id)).toEqual(['a', 'b'])
+  })
+})

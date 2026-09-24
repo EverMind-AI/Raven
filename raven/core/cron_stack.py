@@ -83,6 +83,21 @@ def _emit_cron_event(
         )
 
 
+def _turn_failure_detail(outcome: Any) -> str:
+    """Why a cron turn produced no delivery, in the words the record should keep.
+
+    A lane hands back the ``TurnFailed`` it filed, whose text is already the
+    turn's own report (a provider's refusal, the loop's answerless wording), and
+    that is what belongs in ``last_error``; None means the turn never got to
+    file one, which only a cancel does.
+    """
+    from raven.spine import TurnFailed
+
+    if isinstance(outcome, TurnFailed):
+        return outcome.error
+    return "the turn was cancelled before it completed"
+
+
 def _format_schedule_origin(job: "CronJob") -> str:
     """Describe when the reminder was originally set, for the user.
 
@@ -162,7 +177,7 @@ def make_on_cron_job(
     """
 
     async def on_cron_job(job: "CronJob") -> str | None:
-        from raven.spine import ChatType, Origin, Source, TurnRequest
+        from raven.spine import ChatType, Origin, Source, TurnFailed, TurnRequest
 
         # Include the originally-scheduled time so the reminder text can
         # echo "set at 17:05" back to the user — otherwise the agent only
@@ -238,15 +253,20 @@ def make_on_cron_job(
                 text=reminder_note,
                 conversation=conversation,
             )
+        failure_detail: str | None = None
         try:
             outcome = await submit(req).result()
-            if outcome is None:
-                # Cancelled or failed before it completed -- a runtime reload cuts
-                # in-flight turns -- so the job records a failure, not a delivery.
-                raise RuntimeError("turn was cancelled or failed before it completed")
+            if outcome is None or isinstance(outcome, TurnFailed):
+                # No answer reached anyone -- the turn failed, or a runtime reload
+                # cut it -- so the job records a failure, not a delivery.
+                failure_detail = _turn_failure_detail(outcome)
+                raise RuntimeError(failure_detail)
         except Exception as exc:
             if system_events is not None and wake is not None:
-                _emit_cron_event(system_events, wake, job, f"{type(exc).__name__}: {exc}", failed=True)
+                # A turn that worded its own failure is quoted as it stands; only a
+                # crash on the way there needs its exception class to be legible.
+                detail = failure_detail or f"{type(exc).__name__}: {exc}"
+                _emit_cron_event(system_events, wake, job, detail, failed=True)
             raise
         # Read the reply back (for the system event) from the gateway runner's
         # capture, stored before result() resolved, and pop it so the
@@ -487,7 +507,7 @@ def make_on_session_wake(
     A prompt in flight is unaffected: the translator defers a runtime turn's
     ending rather than letting it answer the prompt.
     """
-    from raven.spine import ChatType, Origin, Source, TurnRequest
+    from raven.spine import ChatType, Origin, Source, TurnFailed, TurnRequest
 
     async def on_session_wake(job: "CronJob") -> str | None:
         job_channel = (job.payload.channel or channel).strip()
@@ -501,8 +521,10 @@ def make_on_session_wake(
         )
         logger.info("Cron: wake '{}' running on {}", job.name, conversation)
         outcome = await submit(req).result()
-        if outcome is None:
-            raise RuntimeError("turn was cancelled or failed before it completed")
+        if outcome is None or isinstance(outcome, TurnFailed):
+            # No system events on this path: the raised sentence is the whole of
+            # what the job record gets.
+            raise RuntimeError(_turn_failure_detail(outcome))
         return None
 
     # Read by the assembly tests: which of the two callbacks a stack wired is

@@ -27,8 +27,9 @@ Step 2's answer is read twice. It says which implementation the work is for,
 and it is also the only thing on this seat that knows *what kind of work it
 is*: the classifier answering a target is the entry learning that this task is
 the target's specialty. ``_target_open`` then decides whether that specialty's
-own lane may run here -- the tier this dispatch runs at, and whether the
-deployment holds the credentials the target's pipeline spends. When it may not, the task stays on the
+own lane may run here -- whether the deployment holds the credentials the
+target's pipeline spends, whether the dispatch hands over the file the target
+builds on, and the tier this dispatch runs at. When it may not, the task stays on the
 row's own implementation and carries the closed route's own note with it, so the
 lane that ends up building it is told what the other lane would have produced,
 and how to produce it here.
@@ -47,12 +48,14 @@ every other attribute reads off the row's own implementation.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+import re
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from loguru import logger
 
+from raven.agent.subagent.attachments import turn_attachments_in_force
 from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.mode_tiers import turn_tier_in_force
 from raven.config.schema import TIER_LADDER
@@ -79,15 +82,59 @@ TargetReady = Callable[[str, Sequence[str]], bool]
 HOST_PREFIX = "\n\n[host] "
 
 
+def handed_files(*texts: str | None, media: Iterable[Any] = ()) -> tuple[str, ...]:
+    """The files this dispatch hands the implementation, by path.
+
+    Only files the user attached count, and they are read from where the host
+    holds them rather than from the task text. A direct chat carries them as
+    ``media`` (``Media`` rows, or plain paths): every one of those is handed
+    over, since the transport puts them beside the text. A spawn or a DAG node
+    carries none -- the dispatching model passes a file on by writing its path
+    into the task -- so there the turn's own attachments are read
+    (:func:`turn_attachments_in_force`) and one counts when the task names it.
+
+    Read this way rather than by scanning the text for anything that looks like
+    a file, because the text does not settle the question: every deck brief the
+    dispatching model writes names the deck's destination in the same spelling
+    as a template (``.../tmp/tui/history.pptx``), and one that mentions a stray
+    file in the working directory names that too. Neither was handed over.
+    Conversely an attachment the user told the model to ignore is not named in
+    the task, and stays where it is.
+    """
+    given = [path for path in (_path_of(item) for item in media or ()) if path]
+    if given:
+        return tuple(given)
+    handed: list[str] = []
+    for item in turn_attachments_in_force():
+        path = _path_of(item)
+        if not path:
+            continue
+        # The path or its name, bounded the way a file name is on both sides:
+        # ``brand.pptx`` in ``brand.pptx.bak`` or in ``new_brand.pptx`` is a
+        # different file, while ``brand.pptx.`` at the end of a sentence is
+        # this one -- a dot closes the name unless it opens a longer one.
+        named = re.compile(r"(?<![\w.-])" + re.escape(Path(path).name) + r"(?![\w-])(?!\.[\w-])")
+        if any(text and named.search(text) for text in texts):
+            handed.append(path)
+    return tuple(handed)
+
+
+def _path_of(item: Any) -> str:
+    """A ``Media`` row's path, or a plain string path; anything else is not a file."""
+    path = getattr(item, "path", item)
+    return path if isinstance(path, str) else ""
+
+
 class RouteTarget(NamedTuple):
     """One candidate target as the entry holds it.
 
     ``name`` and ``description`` are the roster line the classifier picks from;
     ``owes`` and ``note`` are the declaring row's own words for the case where
-    the gate keeps the work here, and ``needs`` and ``min_tier`` are what put a
-    route under the gate at all. A plain ``(name, description, backend)`` still
-    builds one, with every declared field saying nothing -- which is what a route
-    that declares nothing means, and such a route is neither probed nor tiered.
+    the gate keeps the work here, and ``needs``, ``min_tier`` and ``needs_file``
+    are what put a route under the gate at all. A plain ``(name, description,
+    backend)`` still builds one, with every declared field saying nothing --
+    which is what a route that declares nothing means, and such a route is
+    neither probed nor tiered nor asked for a file.
     """
 
     name: str
@@ -97,6 +144,7 @@ class RouteTarget(NamedTuple):
     note: str = ""
     needs: tuple[str, ...] = ()
     min_tier: str = ""
+    needs_file: str = ""
 
     def hand_off(self) -> str:
         """What to append to a task classified for this route that stays here."""
@@ -180,21 +228,23 @@ class RoutingBackend(SubagentBackend):
 
         return call
 
-    def _target_open(self, target: RouteTarget, mode: str | None) -> str:
+    def _target_open(self, target: RouteTarget, mode: str | None, handed: Sequence[str] = ()) -> str:
         """``""`` when ``target`` may run this dispatch, else why it may not.
 
-        Two conditions, both about the deployment rather than the task, which is
-        why neither can be asked of the classifier -- and both read off the
-        *route's own declaration*, so a route that declares neither is returned
-        unconditionally open. ``routes`` is a general facility: a row routing for
-        reasons of its own would otherwise be closed by a credential its target
-        never spends and a tier its target never asked for, having opted into
-        nothing.
+        Three conditions, none of them a judgement the classifier could make:
+        two are about the deployment and the third is a fact about what the
+        dispatch carries. All three read off the *route's own declaration*, so a
+        route that declares none is returned unconditionally open. ``routes`` is
+        a general facility: a row routing for reasons of its own would otherwise
+        be closed by a credential its target never spends, a file it never asked
+        for and a tier it never named, having opted into nothing.
 
         The credentials come first because they are the flat answer: a target
         whose pipeline cannot buy a picture builds the same deck at every tier.
-        The tier comes second, and where it is read from depends on what kind of
-        dispatch this is; see :meth:`_tier_in_force`.
+        The file comes second: a target that builds on one the user supplies
+        has nothing to build on without it, at any tier. The tier comes last,
+        and where it is read from depends on what kind of dispatch this is; see
+        :meth:`_tier_in_force`.
         """
         if target.needs and self._target_ready is not None:
             try:
@@ -206,6 +256,10 @@ class RoutingBackend(SubagentBackend):
                 ready = True
             if not ready:
                 return "a credential its lane spends is not configured here"
+        if target.needs_file:
+            suffix = target.needs_file.lower()
+            if not any(name.lower().endswith(suffix) for name in handed):
+                return f"no {target.needs_file} the user attached was handed over"
         if not target.min_tier:
             return ""
         where, tier = self._tier_in_force(mode)
@@ -248,9 +302,19 @@ class RoutingBackend(SubagentBackend):
         return "the turn", turn.strip()
 
     async def pick(
-        self, task: str, *, session_key: str | None, instance: str | None, mode: str | None = None
+        self,
+        task: str,
+        *,
+        session_key: str | None,
+        instance: str | None,
+        mode: str | None = None,
+        handed: Sequence[str] = (),
     ) -> Picked:
-        """What runs this task; see the module docstring for the order."""
+        """What runs this task; see the module docstring for the order.
+
+        ``handed`` is what the dispatch carries by file name (see
+        :func:`handed_files`); a route declaring ``needs_file`` opens on it.
+        """
         if instance and (bound := await self._bound(session_key, instance)) is not None:
             return bound
         if self._router is not None and self._targets:
@@ -262,7 +326,7 @@ class RoutingBackend(SubagentBackend):
                 answer = None
             for target in self._targets:
                 if answer == target.name:
-                    if closed := self._target_open(target, mode):
+                    if closed := self._target_open(target, mode, handed):
                         logger.info(
                             "{!r}: classified for {!r}, but {}; running here{}",
                             self.name,
@@ -317,7 +381,11 @@ class RoutingBackend(SubagentBackend):
         # from the same dict, and lifting it out would hand one to a backend the
         # caller never passed one to.
         picked = await self.pick(
-            authored_task or task, session_key=session_key, instance=instance, mode=kwargs.get("mode")
+            authored_task or task,
+            session_key=session_key,
+            instance=instance,
+            mode=kwargs.get("mode"),
+            handed=handed_files(task, authored_task, media=kwargs.get("media") or ()),
         )
         if picked.note:
             # Both texts, because which one an implementation reads is its own
@@ -340,4 +408,4 @@ class RoutingBackend(SubagentBackend):
         )
 
 
-__all__ = ["HOST_PREFIX", "Picked", "RouteTarget", "Router", "RoutingBackend", "TargetReady"]
+__all__ = ["HOST_PREFIX", "Picked", "RouteTarget", "Router", "RoutingBackend", "TargetReady", "handed_files"]

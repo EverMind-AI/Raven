@@ -12,7 +12,7 @@ import pytest
 
 from raven.channels.adapters.weixin import crypto
 from raven.channels.adapters.weixin import protocol as p
-from raven.channels.adapters.weixin.channel import WeixinChannel
+from raven.channels.adapters.weixin.channel import SessionEndedError, WeixinChannel
 from tests.conftest import make_channel_config, with_channel_fields
 
 
@@ -151,20 +151,6 @@ def test_first_quoted_media_none():
     assert WeixinChannel._first_quoted_media([{"type": p.ITEM_TEXT}]) is None
 
 
-# ── session pause ─────────────────────────────────────────────────────
-
-
-def test_session_pause_blocks_then_clears():
-    ch = _channel()
-    ch._session_pause_until = time.time() + 120
-    assert ch._session_remaining_s() > 0
-    with pytest.raises(RuntimeError):
-        ch._assert_session_active()
-    ch._session_pause_until = 0.0
-    assert ch._session_remaining_s() == 0
-    ch._assert_session_active()  # no raise once cleared
-
-
 # ── outbound message envelope ─────────────────────────────────────────
 
 
@@ -223,6 +209,20 @@ def test_send_carry_nothing_always_clears_remote_typing():
     asyncio.run(ch.send("u1", "hi"))
     ch._stop_typing.assert_awaited_once_with("u1", clear_remote=True)
     ch._typing.stop.assert_awaited_once_with("u1", clear_remote=True)
+
+
+def test_send_asks_for_a_new_scan_once_the_session_was_dropped():
+    """What the delivery hub logs is all the reader gets, so the sentence has to
+    name the one thing that fixes an account WeChat signed out -- which an
+    adapter that never got its client off the ground does not."""
+    ch = _send_ch()
+    ch._token = ""
+    with pytest.raises(RuntimeError, match="Settings"):
+        asyncio.run(ch.send("u1", "hi"))
+
+    ch._client = None
+    with pytest.raises(RuntimeError, match="not initialized"):
+        asyncio.run(ch.send("u1", "hi"))
 
 
 def test_send_raises_when_context_token_missing():
@@ -345,6 +345,7 @@ def test_qr_login_publishes_the_code_then_clears_it_on_confirm():
     assert seen == ["https://scan/1"]  # published while waiting for the scan
     assert ch.pending_qr is None  # retracted on success
     assert ch._token == "tok-1"
+    assert ch._paired_at > 0
     assert ch.connected is True
 
 
@@ -373,6 +374,41 @@ def test_qr_login_clears_the_code_when_it_gives_up():
     assert ch.connected is False
 
 
+def test_start_clears_a_code_the_login_gave_up_on():
+    """The entrance the gateway uses needs login()'s finally too: a code left
+    published after the flow gave up is still served to the page, which draws it
+    as one to scan for as long as the dialog stays open."""
+    ch = _channel()
+
+    async def _gives_up():
+        ch.pending_qr = "https://scan/stale"
+        return False
+
+    ch._authenticate = _gives_up
+    asyncio.run(ch.start())
+    assert ch.pending_qr is None
+    assert ch.is_running is False
+
+
+def test_a_forced_login_starts_from_nothing_the_old_account_left(tmp_path):
+    """`--force` pairs a possibly different account, so everything addressed by
+    the old one goes with the token: a stale context token is rejected by the
+    new account, and a stale cursor replays a history that is not its own."""
+    ch = _channel()
+    ch._state_dir = tmp_path
+    ch.config = with_channel_fields(ch.config, token="")
+    ch._token = "old-token"
+    ch._updates_buf = "cursor-of-the-old-account"
+    ch._context_tokens = {"user-a": "ctx-a"}
+    ch._save_state()
+    ch._qr_login = AsyncMock(return_value=True)
+
+    assert asyncio.run(ch.login(force=True)) is True
+    ch._qr_login.assert_awaited_once()
+    assert ch._updates_buf == "" and ch._context_tokens == {}
+    assert not (tmp_path / "account.json").exists()
+
+
 def test_login_clears_a_pending_code_on_the_way_out():
     """login()'s finally is the backstop: whatever _qr_login left behind, the
     channel must not still be advertising a code once the flow is over."""
@@ -387,6 +423,154 @@ def test_login_clears_a_pending_code_on_the_way_out():
     ch._qr_login = _leaves_a_code
     assert asyncio.run(ch.login()) is False
     assert ch.pending_qr is None
+
+
+# ── a session the service ended (errcode -14) ─────────────────────────
+
+
+async def test_an_ended_session_is_dropped_rather_than_kept(tmp_path):
+    """errcode -14 is this account being paired somewhere else: the token is
+    dead for good, so keeping it -- and the file it came from -- only feeds the
+    same answer to every later poll and to every later start."""
+    ch = _channel()
+    ch._state_dir = tmp_path
+    ch._token = "dead-token"
+    ch._updates_buf = "cursor-of-the-dead-session"
+    ch._context_tokens = {"user-a": "ctx-a"}
+    ch._save_state()
+    ch._client = SimpleNamespace(timeout=None)  # _poll_once sets .timeout before posting
+    ch._post = AsyncMock(return_value={"ret": 0, "errcode": p.ERRCODE_SESSION_EXPIRED})
+
+    with pytest.raises(SessionEndedError):
+        await ch._poll_once()
+
+    assert ch._token == ""
+    assert ch.connected is False
+    assert ch._updates_buf == "" and ch._context_tokens == {}
+    assert not (tmp_path / "account.json").exists(), "a later start would restore the dead session"
+
+
+async def test_a_dropped_session_pairs_again_inside_the_running_adapter(tmp_path):
+    """The reported case, driven over the adapter's HTTP boundary: the stored
+    session is the one the service ended when the account was paired on another
+    gateway. `start()` has to reach a published code without a restart -- that
+    is what the settings page polls for -- and persist the account it gets."""
+    ch = _channel()
+    ch._state_dir = tmp_path
+    ch._token = "token-of-the-other-gateway"
+    ch._save_state()
+    ch._token = ""  # a cold adapter: the credential comes back from the file
+    ch._print_qr = lambda url: None
+    posts: list[str] = []
+    published: list[str | None] = []
+
+    async def _post(endpoint, body=None, **kw):
+        posts.append(endpoint)
+        if len(posts) > 1:  # end a loop that should have left this session behind
+            ch._running = False
+            return {"ret": 0, "errcode": 0}
+        return {"ret": 0, "errcode": p.ERRCODE_SESSION_EXPIRED}
+
+    async def _get(endpoint, params=None, *, base_url=None, auth=True):
+        if endpoint == "ilink/bot/get_bot_qrcode":
+            return {"qrcode": "qid-1", "qrcode_img_content": "https://scan/after-the-drop"}
+        published.append(ch.pending_qr)
+        ch._running = False  # the scan happens off-stage; end the run on its answer
+        return {"status": "confirmed", "bot_token": "new-token"}
+
+    ch._post = _post
+    ch._get = _get
+    await ch.start()
+
+    assert posts == ["ilink/bot/getupdates"], "the poll went on against a session that had ended"
+    assert published == ["https://scan/after-the-drop"], "no code was offered while the adapter ran"
+    assert ch._token == "new-token"
+    assert "new-token" in (tmp_path / "account.json").read_text()
+
+
+async def test_the_adapter_stops_when_the_new_code_is_never_scanned(tmp_path):
+    """`_qr_login` gives up after MAX_QR_REFRESH_COUNT reissues. From there this
+    is the dead end a first login nobody scans already reaches, and the panel's
+    retry path needs the row down with no expired code left on offer."""
+    ch = _channel()
+    ch._state_dir = tmp_path
+    ch._authenticate = AsyncMock(return_value=True)
+    polls = 0
+
+    async def _poll_once():
+        nonlocal polls
+        polls += 1
+        if polls > 1:  # end a loop that should be over rather than spin on a dead session
+            ch._running = False
+            return
+        ch._drop_session()
+        raise SessionEndedError("errcode -14")
+
+    async def _gives_up():
+        ch.pending_qr = "https://scan/stale"
+        return False
+
+    ch._poll_once = _poll_once
+    ch._qr_login = AsyncMock(side_effect=_gives_up)
+    await ch.start()
+
+    ch._qr_login.assert_awaited_once()
+    assert polls == 1
+    assert ch.is_running is False
+    assert ch.pending_qr is None
+
+
+async def test_a_session_that_ends_right_after_a_scan_waits_before_a_new_code(tmp_path):
+    """Two sides of the same guard. A -14 seconds after a confirmed scan would
+    otherwise cost a fresh code every round trip, each asking to be scanned
+    again; a session restored from disk carries no such timestamp and must not
+    be delayed -- that is the reported case, a stored token already dead."""
+    ch = _channel()
+    ch._state_dir = tmp_path
+    ch._qr_login = AsyncMock(return_value=True)
+
+    ch._paired_at = time.time() - (p.SESSION_RELOGIN_GRACE_S - 0.2)
+    started = time.monotonic()
+    assert await ch._sign_in_again() is True
+    assert time.monotonic() - started >= 0.15
+
+    ch._paired_at = 0.0
+    started = time.monotonic()
+    assert await ch._sign_in_again() is True
+    assert time.monotonic() - started < 5
+
+
+async def test_a_session_ending_during_a_rebind_defers_to_that_rebind():
+    """The rebind dialog already has a code up and will adopt the account it
+    confirms; a second login racing it would publish a second code over the
+    first. The relogin waits for the rebind and takes its outcome."""
+    ch = _channel()
+
+    async def _no_second_login():
+        raise AssertionError("the relogin must not fetch a code while a rebind is up")
+
+    ch._qr_login = _no_second_login  # type: ignore[method-assign]
+
+    async def _rebind_confirms():
+        await asyncio.sleep(0.01)
+        ch._token = "tok-from-rebind"
+
+    ch._rebind_task = asyncio.create_task(_rebind_confirms())
+    assert await ch._sign_in_again() is True
+    assert ch._token == "tok-from-rebind"
+
+
+async def test_a_configured_token_the_service_rejected_is_not_replaced_by_a_scan(tmp_path):
+    """`_authenticate` takes the configured token over anything scanned, so a
+    code scanned here would be thrown away on the next start. Stop and name the
+    credential to replace instead of asking for a scan that cannot stick."""
+    ch = _channel()
+    ch._state_dir = tmp_path
+    ch.config = with_channel_fields(ch.config, token="configured-token")
+    ch._qr_login = AsyncMock(return_value=True)
+
+    assert await ch._sign_in_again() is False
+    ch._qr_login.assert_not_awaited()
 
 
 # ── media item rendering (download mocked) ────────────────────────────
@@ -685,29 +869,18 @@ async def test_cancelling_keeps_the_current_account_and_clears_the_code(tmp_path
     assert ch._rebind_task is None or ch._rebind_task.cancelled() or ch._rebind_task.done()
 
 
-async def test_a_rebind_out_of_a_session_pause_starts_receiving_immediately(tmp_path):
-    """The likeliest reason to rebind is that WeChat killed the session.
-
-    `errcode -14` parks the poll for an hour and also makes every send raise
-    (`_assert_session_active`). That pause belongs to the credential being
-    replaced, so a confirmed rebind that left it in place would report "effective
-    now" and then receive and send nothing for the rest of the hour.
-    """
+async def test_a_rebind_keeps_the_running_poll_on_the_wire(tmp_path):
+    """The token is read per request, so a confirmed swap needs no restart: the
+    loop that was polling for the old account keeps polling for the new one."""
     ch = _qr_statuses(_live_channel(tmp_path), [{"status": "confirmed", "bot_token": "new-token"}])
-    ch._session_pause_until = time.time() + p.SESSION_PAUSE_DURATION_S
-    assert ch._session_remaining_s() > 3000
-
     await ch.begin_rebind()
     for _ in range(40):
         if ch.rebind_state()["phase"] == "confirmed":
             break
         await asyncio.sleep(0.02)
     assert ch._token == "new-token"
-    assert ch._session_remaining_s() == 0, "the new account inherited the old one's pause"
-    ch._assert_session_active()  # raises if the pause survived
+    assert ch._paired_at > 0
 
-    # And the parked loop actually reaches the wire: _poll_once sleeps the pause
-    # in bounded ticks, so clearing it is not swallowed by a 59-minute sleep.
     posted: list[str] = []
 
     async def _post(endpoint, body=None, **kw):
@@ -720,25 +893,26 @@ async def test_a_rebind_out_of_a_session_pause_starts_receiving_immediately(tmp_
     assert posted == ["ilink/bot/getupdates"]
 
 
-async def test_a_pause_is_slept_in_bounded_ticks_not_in_one_hour(tmp_path):
-    """Clearing the pause is only half of it: a loop already inside one long
-    sleep would not notice until it woke."""
+async def test_a_stale_poll_answer_does_not_drop_a_freshly_rebound_session(tmp_path):
+    """A rebind confirms while the old account's long poll is still on the wire;
+    when that request finally answers -14 it speaks for the retired account, and
+    must leave the new token and its state file alone."""
     ch = _live_channel(tmp_path)
-    ch._session_pause_until = time.time() + p.SESSION_PAUSE_DURATION_S
-    slept: list[float] = []
+    release = asyncio.Event()
 
-    async def _sleep(seconds):
-        slept.append(seconds)
+    async def _post(endpoint, body=None, **kw):
+        await release.wait()
+        return {"ret": 0, "errcode": -14}
 
-    import raven.channels.adapters.weixin.channel as mod
-
-    real = mod.asyncio.sleep
-    mod.asyncio.sleep = _sleep
-    try:
-        await ch._poll_once()
-    finally:
-        mod.asyncio.sleep = real
-    assert slept and slept[0] <= 60, f"parked for {slept[0]}s; a rebind cannot interrupt that"
+    ch._post = _post
+    ch._client = SimpleNamespace(timeout=None)
+    poll = asyncio.create_task(ch._poll_once())
+    await asyncio.sleep(0.01)
+    ch._adopt_account("fresh-token", "")
+    release.set()
+    await poll
+    assert ch._token == "fresh-token"
+    assert (ch._dir() / "account.json").exists()
 
 
 async def test_stopping_the_channel_cancels_a_rebind_in_flight(tmp_path):

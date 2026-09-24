@@ -6,12 +6,16 @@ channels, scheduled tasks, and other gateway services.
 
 ## Start the container
 
-From the repository root:
+To build and run the current source checkout, start from the repository root:
 
 ```bash
 cd docker
-docker compose up
+docker compose up --build
 ```
+
+To run the configured image without building the checkout, use
+`docker compose up --no-build` from `docker/`. Plain `docker compose up` may
+reuse or pull an image; it does not guarantee a rebuild of local changes.
 
 Open `http://127.0.0.1:18793` after the container is ready. The default local
 configuration signs you in automatically.
@@ -66,14 +70,40 @@ RAVEN_API_KEY=
 RAVEN_API_BASE=http://host.docker.internal:11434
 ```
 
+Docker Desktop provides `host.docker.internal`. On Linux Docker Engine, add
+a host-gateway mapping for that name or use a host address reachable from the
+container. The model server must listen on that address, with access restricted
+to the intended clients.
+
 The entrypoint applies these provider values to Raven's configuration on each
 startup. Values set here take precedence when the container restarts.
 
 ## Configure environment values
 
-The `docker/.env` file contains committed defaults. The optional
-`docker/.env.local` file loads second and overrides them. Store credentials in
-`.env.local`, which Git ignores.
+The `docker/.env` file contains committed defaults. For container runtime
+variables such as `RAVEN_PROVIDER`, `RAVEN_API_KEY`, and `RAVEN_AUTO_LOGIN`,
+the service loads the optional `docker/.env.local` file second as an
+`env_file`. Store credentials there; Git ignores it.
+
+Compose interpolation is separate. `RAVEN_IMAGE`, `RAVEN_WEB_PORT`,
+`RAVEN_EXTRAS`, `RAVEN_PLUGINS`, and `RAVEN_OFFICE` determine the image,
+published port, or build arguments before the container starts. Merely putting
+them in the service's `.env.local` file does not override those settings.
+From `docker/`, provide them in the shell environment, for example:
+
+```bash
+RAVEN_IMAGE=raven:local RAVEN_WEB_PORT=18893 docker compose up --build
+```
+
+Alternatively, after creating `.env.local`, explicitly load it for interpolation
+as well:
+
+```bash
+docker compose --env-file .env --env-file .env.local up --build
+```
+
+The later file overrides the earlier one for interpolation; shell environment
+values take precedence over both files.
 
 ## Persistent data
 

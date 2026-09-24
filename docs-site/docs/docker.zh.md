@@ -5,12 +5,16 @@ Raven 引擎负责 RPC、消息渠道、定时任务和其他网关服务。
 
 ## 启动容器 { #start-the-container }
 
-在仓库根目录运行：
+如需构建并运行当前源码，请在仓库根目录运行：
 
 ```bash
 cd docker
-docker compose up
+docker compose up --build
 ```
+
+如需运行已配置的镜像而不构建当前源码，请在 `docker/` 中使用
+`docker compose up --no-build`。仅运行 `docker compose up` 可能复用或拉取镜像，
+并不保证重新构建本地改动。
 
 容器就绪后打开 `http://127.0.0.1:18793`。本地默认配置会自动完成登录。
 
@@ -60,12 +64,34 @@ RAVEN_API_KEY=
 RAVEN_API_BASE=http://host.docker.internal:11434
 ```
 
+Docker Desktop 提供 `host.docker.internal`。使用 Linux Docker Engine 时，
+需为该名称添加 host-gateway 映射，或改用容器可访问的宿主机地址。
+模型服务也必须监听该地址，并限制允许访问的客户端。
+
 入口脚本会在每次启动时将这些服务商参数写入 Raven 配置，因此容器重启时以此处的值为准。
 
 ## 配置环境变量 { #configure-environment-values }
 
-`docker/.env` 保存已提交的默认值。可选文件 `docker/.env.local` 后加载，并覆盖默认配置。
-凭据应写入 `.env.local`，该文件会被 Git 忽略。
+`docker/.env` 保存已提交的默认值。对于 `RAVEN_PROVIDER`、`RAVEN_API_KEY`、
+`RAVEN_AUTO_LOGIN` 等容器运行时变量，服务会将可选的 `docker/.env.local` 作为
+`env_file` 后加载。凭据应写入该文件，Git 会忽略它。
+
+Compose 插值是另一层配置。`RAVEN_IMAGE`、`RAVEN_WEB_PORT`、`RAVEN_EXTRAS`、
+`RAVEN_PLUGINS` 和 `RAVEN_OFFICE` 在容器启动前决定镜像、发布端口或构建参数。
+仅将这些变量写入服务的 `.env.local`，不会覆盖这些设置。
+可以在 `docker/` 中通过 Shell 环境变量传入，例如：
+
+```bash
+RAVEN_IMAGE=raven:local RAVEN_WEB_PORT=18893 docker compose up --build
+```
+
+也可以先创建 `.env.local`，再显式将其用于插值：
+
+```bash
+docker compose --env-file .env --env-file .env.local up --build
+```
+
+插值时，后一个文件覆盖前一个文件；Shell 环境变量的优先级高于这两个文件。
 
 ## 持久化数据 { #persistent-data }
 

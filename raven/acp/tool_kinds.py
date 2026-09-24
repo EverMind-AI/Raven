@@ -49,7 +49,6 @@ _KINDS: dict[str, str] = {
     "run_subagent_dag": "execute",
     # Retrieving external data.
     "web_fetch": "fetch",
-    "deep_research": "fetch",
     "load_playbook": "fetch",
     # Everything raven has that is none of the above. Listed explicitly rather
     # than left to the default so that adding a tool is a visible decision:

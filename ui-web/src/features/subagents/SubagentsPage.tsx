@@ -1,20 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 
-import { AgentMark, isOwnAgent } from '../../shell/agent-mark'
-import { ds, t } from '../../shell/bridge'
-import { SendGlyph } from '../../shell/ico'
+import { AgentMark, isOwnAgent } from '../../components/AgentMark'
+import { SendGlyph } from '../../components/Ico'
+import { t } from '../../i18n/t'
+import * as lang from '../../state/lang'
+import { ds } from '../../state/sources'
 import { composing, fmtSize } from '../composer/store'
 import { instanceMark, instanceState } from './history'
 import * as store from './store'
 
+import type { Attachment, ComposerSource } from '../composer/types'
 import type { AgentsState } from './store'
 import type { AgentRow, InstanceRow, OpenItem, SubagentRow } from './types'
-import type { Attachment, ComposerSource } from '../composer/types'
 import type { JSX } from 'react'
 
-/* Mirrors the glyph the legacy renderer drew with (ICO.up in
-   ui-web/src/demo/100-workspace.js, through its ico() helper). */
+/* The glyph the panel's rows have always been drawn with. */
 function IcoUp(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -140,7 +141,7 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
            below then cancels its native activation, so the control is reachable
            with the mouse and not with the keyboard -- and the reader gets the
            row opening, which is the thing they were trying not to do. The same
-           boundary `shell/setuprow.tsx` already draws, for the same reason.
+           boundary `components/SetupRow.tsx` already draws, for the same reason.
            `stopPropagation` on the click cannot cover this: a click does not
            reach here, a keydown does. */
         if (e.target !== e.currentTarget) return
@@ -344,8 +345,8 @@ function Back(): JSX.Element {
 }
 
 /* Its own scroller: the run is a transcript of unknown length and must not
-   push the header it belongs to off the top of the panel. The children are
-   the legacy transcript bridge's, never React's. */
+   push the header it belongs to off the top of the panel. The children are the
+   transcript island's, never this component's. */
 function Stage({ paint }: { paint: (box: HTMLElement) => void }): JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -403,7 +404,7 @@ function SpawnDetail({ s, open }: { s: AgentsState; open: Extract<OpenItem, { ki
    render rather than captured, like the composer store's own `canAttach`. */
 function uploader(): ComposerSource['upload'] | undefined {
   try {
-    return ds<ComposerSource>('composer').upload
+    return ds('composer').upload
   } catch {
     return undefined
   }
@@ -431,7 +432,7 @@ function InstanceAtt({ a, onRemove }: { a: Attachment; onRemove: () => void }): 
   )
 }
 
-export function InstanceComposer(
+function InstanceComposer(
   { open, name, fail }: {
     open: Extract<OpenItem, { kind: 'instance' }>
     name: string
@@ -593,7 +594,7 @@ export function InstanceComposer(
 }
 
 export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element {
-  const state = useSyncExternalStore(store.subscribe, store.getState)
+  const state = useSyncExternalStore(store.subscribe, store.get)
   const [poll, setPoll] = useState(0)
   const box = useRef<HTMLDivElement>(null)
   const current = state.instances.find((it) => it.agent === row.agent && it.handle === row.handle) || row
@@ -628,7 +629,7 @@ export function InstanceConversation({ row }: { row: InstanceRow }): JSX.Element
 }
 
 export function AgentRecordConversation({ row }: { row: AgentRow }): JSX.Element {
-  const state = useSyncExternalStore(store.subscribe, store.getState)
+  const state = useSyncExternalStore(store.subscribe, store.get)
   const [poll, setPoll] = useState(0)
   const box = useRef<HTMLDivElement>(null)
   const current = state.rows.find((item) => row.kind === 'dag'
@@ -693,7 +694,10 @@ function InstanceDetail(
 }
 
 export function SubagentsApp(): JSX.Element {
-  const s = useSyncExternalStore(store.subscribe, store.getState)
+  const s = useSyncExternalStore(store.subscribe, store.get)
+  /* The language the page resolved, so a pick repaints this island: every word
+     below is a t(key) read at render time (state/lang/store.ts). */
+  useSyncExternalStore(lang.subscribe, lang.get)
   if (s.open && s.open.kind === 'dag') {
     return <DagDetail key={`d${s.epoch}:${s.open.run_id}:${s.open.node}`} open={s.open} />
   }

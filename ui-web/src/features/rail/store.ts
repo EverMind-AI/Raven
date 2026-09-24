@@ -1,8 +1,12 @@
-import { ds, shell } from '../../shell/bridge'
+import { t } from '../../i18n/t'
+import { setCurrent } from '../../lib/session'
+import { navState } from '../../state/page'
+import { NAV_BUTTONS } from '../../state/pages'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
+import { show as toast } from '../../state/toast'
+import { draw as drawWorkdir } from '../../state/workdir'
 import { dropDraft } from '../composer/store'
-import { mark as navMark } from '../../shell/navfly'
-import { setCurrent } from '../../shell/session'
-import { show as toast } from '../../shell/toast'
 import { plainTitle } from './title'
 
 import type { RailSnapshot, RailSource, SessRow } from './types'
@@ -13,29 +17,23 @@ import type { RailSnapshot, RailSource, SessRow } from './types'
  * instead of keeping a copy that could go stale. */
 
 export interface RailState {
-  /* Null until the first draw: the legacy #list started empty too. */
+  /* Null until the first draw; RailPage renders nothing until then. */
   snap: RailSnapshot | null
   /* True while the live boot holds the rail on skeleton rows. */
   skel: boolean
 }
 
-let state: RailState = { snap: null, skel: false }
+const store = makeStore<RailState>({ snap: null, skel: false })
 let held = false
-const listeners = new Set<() => void>()
 
-export const getState = (): RailState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<RailState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-function set(patch: Partial<RailState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
-}
-
-export const source = (): RailSource => ds<RailSource>('sessions')
+export const source = (): RailSource => ds('rail')
 
 export function reconcileRows(
   previous: SessRow[],
@@ -45,7 +43,12 @@ export function reconcileRows(
   const oldById = new Map(previous.map(row => [row.id, row]))
   for (const row of incoming) {
     const old = oldById.get(row.id)
-    if (old?.status) row.status = old.status
+    /* A `run` on an old row is the server's to clear, and the incoming row
+       already carries its answer: this page subscribes to the conversation it
+       is showing, so no `message.complete` is coming for any other row and a
+       badge kept here would never come off. `done`/`ask`/`err` are the reader's
+       own unread marks, which no answer to `session.list` carries. */
+    if (old?.status && old.status !== 'run') row.status = old.status
   }
   const current = currentId ? oldById.get(currentId) : undefined
   const currentListed = !!currentId && incoming.some(row => row.id === currentId)
@@ -93,8 +96,7 @@ const saveGrpFold = (): void => {
     /* private mode */
   }
 }
-/* Which capped groups stand fully expanded; page-lifetime only, like the
-   legacy listOpen set. */
+/* Which capped groups stand fully expanded; page-lifetime only. */
 const listOpen = new Set<string>()
 
 export const isFolded = (gid: string): boolean => grpFold.has(gid)
@@ -117,7 +119,7 @@ export function flipOpen(gid: string): void {
    on screen rather than blanking the rail. */
 export function draw(): void {
   if (held) {
-    if (!state.skel) set({ skel: true })
+    if (!get().skel) set({ skel: true })
     return
   }
   let snap: RailSnapshot
@@ -128,6 +130,10 @@ export function draw(): void {
   }
   markNew()
   set({ snap, skel: false })
+  /* The composer's working-directory chip reads the same two things a draw
+     does -- the rows and the conversation on screen -- and has no moment of its
+     own, so it repaints here. */
+  drawWorkdir()
 }
 
 export function hold(): void {
@@ -155,12 +161,10 @@ export function count(): number {
    selected rows impossible.
 
    The new-task row stands for a draft -- a draft has no session id, so an
-   empty `cur` is its state -- but only while nothing covers it. Imperative
+   empty `cur` is its get() -- but only while nothing covers it. Imperative
    on purpose: every element it marks lives outside the island's root. */
 export function markNew(): void {
-  const sh = shell()
-  const nav = sh.navState?.()
-  if (!nav) return
+  const nav = navState()
   const el = (id: string): HTMLElement | null => document.getElementById(id)
   const app = document.querySelector<HTMLElement>('.app')
   const pageUp =
@@ -170,23 +174,18 @@ export function markNew(): void {
           return !!n && n.dataset.open === 'true'
         }) || null
       : null
-  let top: string | null | undefined = pageUp ? nav.btnOf(pageUp) : !curId() ? 'newBtn' : null
-  /* While the More group stands open its rows are rail rows, and the current
-     one wears the mark itself; the parent lights up only when the group is
-     folded and has to stand in for whichever of its pages is open. The rows
-     are the flyout module's to write -- it is asked, not reached into, and it
-     answers whether the group stood open. */
-  if (navMark() && top === 'moreBtn') top = null
-  /* Named, not derived: `capsPage` lights skillBtn or plugBtn depending on which
-     tab stands open, so a set built from navState() would leave a stale mark on
-     whichever of the two it could not see. The list is therefore something a new
-     page has to be added to, and rail-nav-registry.test.mjs is what makes
-     forgetting it a failing test rather than a page with no selected state. */
-  for (const id of ['newBtn', 'skillBtn', 'plugBtn', 'pbBtn', 'kbBtn', 'memBtn', 'moreBtn']) {
+  const top: string | null | undefined = pageUp ? nav.btnOf(pageUp) : !curId() ? 'newBtn' : null
+  /* Every button a page can light, plus the draft row's, from the one table
+     that declares them (state/pages.ts): the capabilities page lights skillBtn
+     or plugBtn depending on which tab stands open, so the mark has to be
+     cleared on both whichever of the two `navState` can see. Adding a page to
+     that table is what adds it here. */
+  for (const id of NAV_BUTTONS) {
     const b = el(id)
     if (b) b.setAttribute('aria-current', String(id === top))
   }
 }
+
 
 /* Every session at once, from the settings page's data section. Same guard as
    the pin: no source installed means there is nothing to delete from. */
@@ -240,10 +239,9 @@ export function archive(s: SessRow): void {
   const at = rows.indexOf(s)
   const index = rows.findIndex(row => row.id === s.id)
   if (index >= 0) rows.splice(index, 1)
-  const sh = shell()
   draw()
-  toast(sh.T('gui.sess.archived', { title: s.title }), {
-    label: sh.T('gui.undo'),
+  toast(t('gui.sess.archived', { title: s.title }), {
+    label: t('gui.undo'),
     fn: () => {
       const current = source().snapshot().rows
       if (!current.some(row => row.id === s.id)) current.splice(Math.max(0, Math.min(at, current.length)), 0, s)
@@ -253,7 +251,7 @@ export function archive(s: SessRow): void {
 }
 
 /* Deleting a session. A source that can delete one does it -- the live page
-   has a confirmation to ask and a pile of per-session state to forget, none of
+   has a confirmation to ask and a pile of per-session get() to forget, none of
    which belongs to the rail. Without one, this is the whole behaviour: splice
    the source-owned rows in place, and offer it back. */
 let undoBin: { s: SessRow; at: number } | null = null
@@ -269,7 +267,6 @@ export function remove(s: SessRow): void {
     via(s)
     return
   }
-  const sh = shell()
   const rows = source().snapshot().rows
   const at = rows.indexOf(s)
   dropDraft(s.id)
@@ -285,8 +282,8 @@ export function remove(s: SessRow): void {
     }
   }
   draw()
-  toast(shell().T('gui.sess.deleted_x', { title: s.title }), {
-    label: shell().T('gui.undo'),
+  toast(t('gui.sess.deleted_x', { title: s.title }), {
+    label: t('gui.undo'),
     fn: () => {
       const bin = undoBin as { s: SessRow; at: number }
       source().snapshot().rows.splice(bin.at, 0, bin.s)
@@ -311,13 +308,11 @@ export function endRename(): void {
   finishOpen?.(true)
 }
 
-/* Inline rename in the top bar; the list follows. The DOM dance -- swap
-   #title for an input, put an h1#title back -- is the legacy one, though the
-   body no longer matches it line for line: it commits at most once, and it
+/* Inline rename in the top bar; the list follows. The DOM dance is swap #title
+   for an input, then put an h1#title back. It commits at most once, and it
    publishes that commit so a conversation switch can end an editor left
-   standing. What changed first was who persists it: the source is TOLD the new
-   title (see renamed in types.ts), where the live layer used to wrap this
-   function and hang its own blur listener off the input created here. */
+   standing; persisting is not its own -- the source is TOLD the new title (see
+   renamed in types.ts). */
 export function rename(): void {
   const h = document.getElementById('title')
   if (!h) return
@@ -332,9 +327,13 @@ export function rename(): void {
   const inp = document.createElement('input')
   inp.className = 'titin'
   inp.value = s.title
+  /* The field opens at exactly the heading's width, so nothing after it moves:
+     a field that measures its own value opens a little wider than the name it
+     replaces, and a short name was pushed wider still by the floor such a
+     field needs -- either way the workspace tag beside it slid sideways at
+     the moment of the click. A name longer than the box scrolls in it. */
+  inp.style.width = `${h.getBoundingClientRect().width}px`
   h.replaceWith(inp)
-  const rb = document.getElementById('renameBtn') as HTMLButtonElement | null
-  if (rb) rb.hidden = true
   inp.focus()
   inp.select()
   const was = s.title
@@ -361,7 +360,6 @@ export function rename(): void {
     nh.textContent = plainTitle(next)
     nh.id = 'title'
     inp.replaceWith(nh)
-    if (rb) rb.hidden = false
     draw()
   }
   finishOpen = finish

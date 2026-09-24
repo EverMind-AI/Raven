@@ -91,6 +91,8 @@ class ExternalToolsInfo:
     browsers_root: str = ""
     design_engine: bool = False
     system_chrome: Optional[str] = None
+    cairo: Optional[str] = None
+    cairo_install_hint: str = ""
 
 
 @dataclass
@@ -320,7 +322,7 @@ def _inspect_config_health(config: Any, *, fix: bool) -> ConfigHealth:
         # budget is sized against a default that fits no model in particular.
         health.findings.append(
             f"No catalogue knows the context window of {model}, so history is sized against the "
-            f"{DEFAULT_CONTEXT_WINDOW_TOKENS:,}-token default -- one sixteenth of a 1M-token model. "
+            f"{DEFAULT_CONTEXT_WINDOW_TOKENS:,}-token default -- a fifth of a 1M-token model. "
             f"Pin the real window with agents.defaults.contextWindowTokens."
         )
 
@@ -544,9 +546,15 @@ def _chromium_markers(registry_path: Path, browsers_root: Path) -> tuple[bool, b
 
 
 def _gather_external_tools() -> ExternalToolsInfo:
+    from raven.utils import cairo
     from raven.utils.office import find_soffice, install_hint
 
-    info = ExternalToolsInfo(soffice=find_soffice(), install_hint=install_hint())
+    info = ExternalToolsInfo(
+        soffice=find_soffice(),
+        install_hint=install_hint(),
+        cairo=cairo.libcairo_path(),
+        cairo_install_hint=cairo.install_hint(),
+    )
     package_dir = _playwright_package_dir()
     if package_dir is not None:
         info.browser_package = True
@@ -921,6 +929,13 @@ def _render_human_output(report: DoctorReport) -> None:
         engine = "engine installed" if external.design_engine else "engine not installed"
         found = "chromium found" if (external.system_chrome or external.chromium) else "no chromium found"
         console.print(f"  Design render: [dim]{engine}, {found}[/dim]")
+        if external.cairo:
+            console.print(f"  Cairo:       [green]{external.cairo}[/green]")
+        else:
+            console.print(
+                "  Cairo:       [yellow]not found[/yellow]  "
+                f"[dim]SVG images fetched for a deck are refused; {external.cairo_install_hint}[/dim]"
+            )
 
     gateway = report.gateway
     if gateway is not None:

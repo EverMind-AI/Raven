@@ -571,6 +571,186 @@ def test_test_provider_200_returns_ok_with_models_count(cfg_path: Path) -> None:
     assert result["http_status"] == 200
 
 
+def test_test_provider_names_an_environment_proxy_that_is_not_listening(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import socket
+
+    # The autouse fence swaps the probe out; this one reaches only a closed
+    # localhost port, so it runs the real one.
+    monkeypatch.undo()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dead = f"http://127.0.0.1:{sock.getsockname()[1]}"
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", dead)
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert dead in result["error"]
+
+
+def test_test_provider_never_returns_the_proxy_credentials(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe's error reaches the browser as a tooltip, so a proxy written as
+    user:password@host must come back as host alone, in every field."""
+    import json
+    import socket
+
+    monkeypatch.undo()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", f"http://alice:s3cr@t@127.0.0.1:{port}")
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert result["proxy"] == f"http://127.0.0.1:{port}"
+    dumped = json.dumps(result)
+    assert "s3cr" not in dumped and "alice" not in dumped
+
+
+def test_a_proxy_error_that_quotes_the_proxy_is_redacted_too(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Some proxy failures name the proxy in their own message; that copy of the
+    address loses its credentials as well."""
+    import json
+
+    monkeypatch.undo()
+    raw = "http://alice:s3cret@proxy.invalid:3128"
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", raw)
+
+    def refuse(self, url, **kwargs):
+        raise httpx.ProxyError(f"could not tunnel through {raw}")
+
+    monkeypatch.setattr(httpx.Client, "get", refuse)
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert "http://proxy.invalid:3128" in result["error"]
+    assert "s3cret" not in json.dumps(result)
+
+
+def test_a_scheme_less_proxy_quoted_with_the_assumed_scheme_is_redacted(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    monkeypatch.undo()
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "alice:s3cret@proxy.invalid:3128")
+
+    def refuse(self, url, **kwargs):
+        raise httpx.ProxyError("could not tunnel through http://alice:s3cret@proxy.invalid:3128")
+
+    monkeypatch.setattr(httpx.Client, "get", refuse)
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert "http://proxy.invalid:3128" in result["error"]
+    assert "s3cret" not in json.dumps(result)
+
+
+def test_without_userinfo_leaves_a_plain_address_alone() -> None:
+    from raven.config.update_providers import _without_userinfo
+
+    assert _without_userinfo("http://127.0.0.1:7897") == "http://127.0.0.1:7897"
+    assert _without_userinfo("socks5://u:p@proxy.local:1080/") == "socks5://proxy.local:1080/"
+    # httpx takes a proxy with no scheme and reads it as http://; urlsplit files
+    # the userinfo of that form under the path, not the netloc.
+    assert _without_userinfo("alice:secret@127.0.0.1:9") == "127.0.0.1:9"
+    assert _without_userinfo("alice:s@cret@127.0.0.1:9/x") == "127.0.0.1:9/x"
+
+
+def test_a_scheme_less_proxy_loses_its_credentials_in_every_field(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import socket
+
+    monkeypatch.undo()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", f"alice:s3cret@127.0.0.1:{port}")
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert result["proxy"] == f"127.0.0.1:{port}"
+    dumped = json.dumps(result)
+    assert "s3cret" not in dumped and "alice" not in dumped
+
+
+def _public_catalogue(good_key: str):
+    """A vendor whose /models answers anyone, and whose /key checks the key."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/key"):
+            ok = request.headers.get("Authorization") == f"Bearer {good_key}"
+            return httpx.Response(200 if ok else 401, json={"data": {}})
+        return httpx.Response(200, json={"data": [{"id": "m1"}, {"id": "m2"}]})
+
+    return _mock_transport(handler)
+
+
+def test_a_public_catalogue_does_not_verify_a_made_up_key(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="111")
+    result = probe_provider(
+        "openrouter", config_path=cfg_path, transport=_public_catalogue("sk-real"), check_credential=True
+    )
+    assert result["status"] == "invalid_key"
+    assert result["http_status"] == 401
+
+
+def test_a_public_catalogue_verifies_a_real_key_at_its_check_path(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="sk-real")
+    result = probe_provider(
+        "openrouter", config_path=cfg_path, transport=_public_catalogue("sk-real"), check_credential=True
+    )
+    assert result["status"] == "valid"
+    assert result["models_count"] == 2
+
+
+def test_a_public_catalogue_with_no_check_path_reports_the_key_unchecked(cfg_path: Path) -> None:
+    set_provider_fields("custom", {"api_key": "anything", "api_base": "https://proxy.test/v1"}, config_path=cfg_path)
+    result = probe_provider("custom", config_path=cfg_path, transport=_public_catalogue("x"), check_credential=True)
+    assert result["status"] == "key_unchecked"
+    assert result["ok"] is False
+
+
+def test_a_catalogue_that_refuses_the_decoy_keeps_its_verdict(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="sk-real")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        ok = request.headers.get("Authorization") == "Bearer sk-real"
+        return httpx.Response(200 if ok else 401, json={"data": [{"id": "m1"}]})
+
+    result = probe_provider(
+        "openrouter", config_path=cfg_path, transport=_mock_transport(handler), check_credential=True
+    )
+    assert result["status"] == "valid"
+    assert not any(path.endswith("/key") for path in seen)
+
+
+def test_without_check_credential_a_public_catalogue_is_asked_once(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="111")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"data": []})
+
+    probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
+    assert len(seen) == 1
+
+
 def test_test_provider_200_extracts_model_ids(cfg_path: Path) -> None:
     _seed_key(cfg_path)
 
@@ -688,6 +868,17 @@ def test_test_provider_401_returns_invalid_key(cfg_path: Path) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "bad key"})
+
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
+    assert result["ok"] is False
+    assert result["status"] == "invalid_key"
+
+
+def test_test_provider_non_ascii_key_is_invalid_not_a_crash(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="\U0001f916 Generated with Claude Code")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("a key that cannot be put in a header must not be sent")
 
     result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["ok"] is False
@@ -1851,6 +2042,65 @@ def test_borrow_hands_back_an_empty_address_for_a_vendor_no_table_knows(monkeypa
     assert lend_provider_credentials("gpustack") == {"api_key": "gs-lend", "base_url": ""}
 
 
+class TestTheShapesTheKeyCanBeStoredIn:
+    """The precedence exists because a provider serving traffic every day can
+    have an empty flat ``api_key``. These three shapes used to be covered
+    through the settings RPC, which no longer borrows; the wizard still does,
+    so the coverage moved down to the function rather than going away."""
+
+    @staticmethod
+    def _cfg(name: str, section: dict) -> object:
+        """Built from raw rather than by attribute, so a vendor raven carries no
+        spec for parses the same way it does on disk."""
+        from raven.config.schema import Config
+
+        return Config.model_validate({"providers": {name: section}})
+
+    def test_an_endpoints_section_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``endpoints`` replaces the flat pair outright, so a section written
+        that way has an empty ``api_key`` while the provider works. Reading the
+        flat field offered it as a lender and then refused to lend."""
+        import raven.config
+
+        monkeypatch.setattr(
+            raven.config,
+            "load_config",
+            lambda: self._cfg(
+                "openrouter",
+                {"endpoints": [{"label": "one", "apiKey": "sk-from-endpoint", "apiBase": "https://ep.example/v1"}]},
+            ),
+        )
+        assert lend_provider_credentials("openrouter") == {
+            "api_key": "sk-from-endpoint",
+            "base_url": "https://ep.example/v1",
+        }
+
+    def test_an_api_key_list_section_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The other shape the precedence exists for: a rotation list never
+        populates the flat field either."""
+        import raven.config
+
+        monkeypatch.setattr(
+            raven.config,
+            "load_config",
+            lambda: self._cfg("gemini", {"apiKeyList": ["k-gem-1", "k-gem-2"], "apiBase": "https://gem.example/v1"}),
+        )
+        assert lend_provider_credentials("gemini")["api_key"] == "k-gem-1"
+
+    def test_a_provider_stored_under_another_spelling_is_found(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``ProvidersConfig.get`` is spelling-insensitive and attribute access
+        is not. A provider raven carries no spec for is stored under whatever
+        key its writer used."""
+        import raven.config
+
+        monkeypatch.setattr(
+            raven.config,
+            "load_config",
+            lambda: self._cfg("some-vendor", {"apiKey": "sk-hyphen", "apiBase": "https://hyph.example/v1"}),
+        )
+        assert lend_provider_credentials("some-vendor")["api_key"] == "sk-hyphen"
+
+
 class TestWhatABorrowedCredentialMustCarry:
     """A url/key/header group is reachable only whole, and an everos section
     holds a model, an api_key and a base_url. Anything the section cannot hold
@@ -1908,3 +2158,79 @@ class TestWhatABorrowedCredentialMustCarry:
             "api_key": "relay-key",
             "base_url": "https://relay.internal/v1",
         }
+
+
+class TestNamingTheProviderThatServesAnAddress:
+    """`provider_serving_at` is how every migration turns a stored address back
+    into a vendor. One comparison was not enough for the shapes real configs
+    hold, so it has three -- and each level needs a case it alone answers.
+    """
+
+    @staticmethod
+    def _cfg(tmp_path, providers: dict):
+        import json
+
+        from raven import home as raven_home
+
+        path = tmp_path / "config.json"
+        path.write_text(json.dumps({"providers": providers}), encoding="utf-8")
+        raven_home.set_config_path(path)
+        return path
+
+    def test_the_full_address_wins_over_a_shared_host(self, tmp_path, monkeypatch) -> None:
+        """Two vendors behind one gateway host: the exact address is the only
+        thing that tells them apart, so it must be asked first."""
+        from raven import home as raven_home
+        from raven.config.update_providers import provider_serving_at
+
+        path = self._cfg(
+            tmp_path,
+            {
+                "openrouter": {"apiKey": "sk-a", "apiBase": "https://proxy.test/openrouter/v1"},
+                "deepseek": {"apiKey": "sk-b", "apiBase": "https://proxy.test/deepseek/v1"},
+            },
+        )
+        try:
+            assert provider_serving_at("https://proxy.test/deepseek/v1", config_path=path) == "deepseek"
+        finally:
+            raven_home.set_config_path(None)
+
+    def test_the_host_answers_when_the_path_does_not(self, tmp_path) -> None:
+        """DeepInfra's own shape: reranking is served from /v1/inference while
+        the configured row says /v1/openai. Same vendor, two paths -- and a
+        whole-address comparison calls that nobody."""
+        from raven import home as raven_home
+        from raven.config.update_providers import provider_serving_at
+
+        path = self._cfg(tmp_path, {"deepinfra": {"apiKey": "sk-di", "apiBase": "https://api.deepinfra.com/v1/openai"}})
+        try:
+            assert provider_serving_at("https://api.deepinfra.com/v1/inference", config_path=path) == "deepinfra"
+        finally:
+            raven_home.set_config_path(None)
+
+    def test_the_key_answers_when_the_address_was_moved(self, tmp_path) -> None:
+        """An address hand-edited to a proxy still carries the credential the
+        vendor issued, and that names the vendor more surely than the host."""
+        from raven import home as raven_home
+        from raven.config.update_providers import provider_serving_at
+
+        path = self._cfg(
+            tmp_path, {"deepseek": {"apiKey": "sk-only-deepseek-has", "apiBase": "https://api.deepseek.com/v1"}}
+        )
+        try:
+            assert (
+                provider_serving_at("https://our-gateway.internal/v1", api_key="sk-only-deepseek-has", config_path=path)
+                == "deepseek"
+            )
+        finally:
+            raven_home.set_config_path(None)
+
+    def test_an_address_nobody_serves_is_nobody(self, tmp_path) -> None:
+        from raven import home as raven_home
+        from raven.config.update_providers import provider_serving_at
+
+        path = self._cfg(tmp_path, {"deepseek": {"apiKey": "sk-b", "apiBase": "https://api.deepseek.com/v1"}})
+        try:
+            assert provider_serving_at("https://nobody.example/v1", config_path=path) is None
+        finally:
+            raven_home.set_config_path(None)

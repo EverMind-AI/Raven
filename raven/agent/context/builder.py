@@ -30,6 +30,7 @@ class ContextBuilder:
         now_fn: Callable[[], datetime] | None = None,
         *,
         start_watcher: bool = True,
+        blocklist_reader: Callable[[], frozenset[str]] | None = None,
     ):
         self.workspace = workspace
         self.memory = MemoryStore(workspace)
@@ -37,6 +38,7 @@ class ContextBuilder:
             workspace,
             config=skill_forge_config,
             start_watcher=start_watcher,
+            blocklist_reader=blocklist_reader,
         )
         # Optional fake-clock injection for benchmark harnesses (longrun).
         # When provided, runtime "Current Time:" injected to LLM prompt

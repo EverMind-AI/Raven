@@ -1,0 +1,24 @@
+section#capsPage.page[data-open=false]
+  header
+    h2#capsTitle
+  div.work
+    div.wrap
+      div.cbar
+        div.cfind
+          svg.ic
+            circle
+            path
+          input#cq
+        div#cKind.pills
+          button.pill[data-k=all]
+          button.pill[data-k=on]
+          button.pill[data-k=attn]
+          button.pill[data-k=add]
+      div#capsBody
+      details#advAdd.adv
+        summary
+        p
+        div.row
+          input#mName
+          input#mAddr
+          button#mAdd.mini

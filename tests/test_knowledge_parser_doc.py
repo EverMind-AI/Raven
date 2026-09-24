@@ -45,7 +45,7 @@ def test_a_conversion_that_produced_nothing_is_not_silent(monkeypatch) -> None:
     monkeypatch.setattr(office, "find_soffice", lambda: "/usr/bin/soffice")
     monkeypatch.setattr(
         office,
-        "convert",
+        "to_pdf",
         lambda *a, **k: office.Converted(produced=[], returncode=0, stdout="", stderr="no filter"),
     )
 
@@ -61,7 +61,7 @@ def test_a_conversion_failure_is_reported_against_the_file(monkeypatch) -> None:
     def _boom(*a, **k):
         raise TimeoutError("soffice hung")
 
-    monkeypatch.setattr(office, "convert", _boom)
+    monkeypatch.setattr(office, "to_pdf", _boom)
 
     with pytest.raises(ValueError, match="notice.doc"):
         _parse(b"anything")
@@ -83,7 +83,7 @@ def test_the_converted_document_is_read_as_a_docx(monkeypatch, tmp_path) -> None
     monkeypatch.setattr(office, "find_soffice", lambda: "/usr/bin/soffice")
     monkeypatch.setattr(
         office,
-        "convert",
+        "to_pdf",
         lambda *a, **k: office.Converted(produced=[converted], returncode=0, stdout="", stderr=""),
     )
 
@@ -112,6 +112,6 @@ def test_a_real_conversion_round_trip(tmp_path) -> None:
     staged = tmp_path / "out"
     staged.mkdir()
 
-    done = office.convert(source, staged, executable=office.find_soffice(), timeout_s=120.0, target="docx")
+    done = office.to_pdf(source, staged, executable=office.find_soffice(), timeout_s=120.0, fmt="docx")
 
     assert done.produced, f"soffice wrote nothing: {done.stderr[-200:]}"

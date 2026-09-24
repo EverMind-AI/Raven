@@ -142,6 +142,13 @@ class OpenFoamExecutor(ProcessExecutor):
         self._unmeasured.clear()
         self._cores.clear()
         for key, procs, alive, started, clock, last_touch, _end in rows:
+            # Filtered here rather than after the sum, because _cores and the
+            # timeline are read by the caller and a sibling's width in either
+            # one is the same cross-campaign bill in a different place. This
+            # override does not go through the base class's loop, so it has to
+            # ask the same question itself.
+            if not self._counts_toward_spend(key):
+                continue
             np_ = int(_num(procs) or 0) or self._default_cores
             self._cores[key] = np_
             st, ct, lt = _num(started), _num(clock), _num(last_touch)

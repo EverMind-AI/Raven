@@ -20,14 +20,24 @@ from raven.config import load_config
 # does anything useful with the bytes, and the read would stall the event loop.
 MAX_VIEW_BYTES = 25 * 1024 * 1024
 
-# The largest file `fs.upload` accepts. It sits beside the viewer's ceiling
-# because the two are one story told in both directions, and here rather than
-# in the method that enforces it because the WebSocket transport has to size
-# its own frame ceiling from it: an upload rides as base64 inside one JSON-RPC
-# frame, so a transport ceiling below this one rejects the upload before the
-# method can explain why, and the page sees a dropped socket instead of a
-# reason. See `frame_ceiling_for_upload`.
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+# The largest file `fs.upload` accepts. Deliberately above the viewer's
+# ceiling: the two answer different questions. An upload only has to land a
+# path in the workspace -- a non-image attachment is named to the model, never
+# read into the message -- while the viewer has to render what it serves, which
+# is what keeps MAX_VIEW_BYTES where it is. A file between the two ceilings can
+# therefore be attached and not previewed.
+#
+# It lives here rather than in the method that enforces it because the
+# WebSocket transport has to size its own frame ceiling from it: an upload
+# rides as base64 inside one JSON-RPC frame, so a transport ceiling below this
+# one rejects the upload before the method can explain why, and the page sees a
+# dropped socket instead of a reason. See `frame_ceiling_for_upload`.
+#
+# The ceiling is memory, not policy. One upload at this size costs the gateway
+# the frame, the JSON string parsed out of it and the decoded bytes at once,
+# and the parse holds the event loop while it runs. Raising this much further
+# wants the streamed HTTP upload path instead, not a bigger number.
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 # Room for the JSON-RPC envelope around a maximal upload: the method name, the
 # session key and the file name, plus escaping. Two orders of magnitude more

@@ -252,7 +252,7 @@ describe('EpisodeView', () => {
     const f = view(
       [
         step(0, 'checking upstream', [
-          call('r', 'deep_research', query, { done: false, durationMs: undefined, startedAt: Date.now() - 15000 })
+          call('r', 'web_search', query, { done: false, durationMs: undefined, startedAt: Date.now() - 15000 })
         ])
       ],
       { live: true }
@@ -260,7 +260,7 @@ describe('EpisodeView', () => {
 
     // One call means the summary IS the call: two rows here printed the same
     // sentence twice, under two spinners.
-    const rows = f.split('\n').filter(l => l.includes('researched'))
+    const rows = f.split('\n').filter(l => l.includes('searched'))
     expect(rows).toHaveLength(1)
   })
 

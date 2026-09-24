@@ -114,6 +114,33 @@ def test_run_starts_the_litellm_warm_up_before_the_first_request() -> None:
     assert "warm_up_in_background()" in run_body
 
 
+def test_run_warms_the_deck_template_covers_once_the_page_is_mounted() -> None:
+    """`raven web` is `raven gateway --page-port` underneath, so the gallery's
+    covers are drawn from here, after the page mount, not from `raven serve`
+    alone; pinned by source for the same reason as above."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    page_branch = src.split("if page_mount is not None:", 1)[1]
+    assert "deck_templates.warm_covers_in_background(" in page_branch
+    assert "language=config.language" in page_branch, "in the language the page is in"
+
+
+def test_run_stops_the_cover_warm_up_before_the_teardown_that_waits() -> None:
+    """A cover still converting holds a LibreOffice child, and the thread waiting
+    on it holds the interpreter open past every teardown below; the stop comes
+    first in the same `finally`."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    shutdown = src.split("            finally:\n", 1)[1]
+    assert "_deck_templates.stop_warming()" in shutdown.split("health_server.close()", 1)[0]
+
+
 def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
     """When the instance lock is already held, gateway exits 1 with a clear
     message and never builds the agent/channel stack."""
@@ -283,7 +310,6 @@ def test_a_mounted_page_takes_the_relays_that_belong_to_its_sessions() -> None:
     mounted = src.split("if page_mount is not None:", 1)[1].split("# Channel inbound runs through", 1)[0]
     assert "route_submit(page=page_mount.submit, channel=pro_submit)" in mounted
     assert "agent.subagents.set_submit(routed_submit)" in mounted
-    assert "agent.set_deep_research_submit(routed_submit)" in mounted
     # The gateway-spine binding still precedes it, for a gateway without a page.
     before_mount = src.split("if page_mount is not None:", 1)[0]
     assert "agent.subagents.set_submit(pro_submit)" in before_mount
@@ -298,16 +324,18 @@ class _FakeIntake:
 
 
 class _FakeChannel:
-    def __init__(self) -> None:
+    def __init__(self, name: str = "") -> None:
+        self.name = name
         self.intake = _FakeIntake()
 
 
 class _FakeChannelManager:
-    """The two members `_wire_channel_intake` touches: the table and the hook."""
+    """The members the wiring helpers touch: the table and the two hooks."""
 
-    def __init__(self, *channels, on_started=None) -> None:
+    def __init__(self, *channels, on_started=None, on_stopped=None) -> None:
         self.channels = {f"ch{i}": ch for i, ch in enumerate(channels)}
         self.on_started = on_started
+        self.on_stopped = on_stopped
 
 
 def test_every_channel_present_at_launch_gets_the_inbound_dispatch() -> None:
@@ -380,6 +408,94 @@ def test_the_gateway_command_wires_the_intake_through_the_helper() -> None:
     assert "_wire_channel_intake(channels, _inbound_dispatch)" in src
     # The old launch-only loop is gone: one path wires both the present and the late.
     assert "_ch.intake.set_submit(_inbound_dispatch)" not in src
+
+
+class _FakeCron:
+    """The two members the partition wiring touches, plus a count of the wakes:
+    the service's real methods wake its loop, and that is the half a bare set
+    could not have shown."""
+
+    def __init__(self, allowed: set[str]) -> None:
+        self.allowed_channels = allowed
+        self.wakes = 0
+
+    def admit_channel(self, name: str) -> None:
+        self.allowed_channels.add(name)
+        self.wakes += 1
+
+    def retire_channel(self, name: str) -> None:
+        self.allowed_channels.discard(name)
+        self.wakes += 1
+
+
+def test_a_channel_started_while_the_gateway_runs_joins_the_cron_partition() -> None:
+    """The cron partition is a launch-time snapshot, so a channel the page enabled
+    stayed outside it for the life of the process: it received and replied, while a
+    reminder addressed to it was logged once as foreign and never fired until a
+    restart (2026-09-23, weixin)."""
+    from raven.cli.gateway_commands import _wire_cron_partition
+
+    outlets: list[object] = []
+    manager = _FakeChannelManager(on_started=outlets.append)
+    cron = _FakeCron({"telegram"})
+
+    _wire_cron_partition(manager, cron)
+    late = _FakeChannel("weixin")
+    manager.on_started(late)
+
+    assert cron.allowed_channels == {"telegram", "weixin"}
+    assert cron.wakes == 1, "the loop is asleep on its poll cap and has to be told"
+    assert outlets == [late], "and must keep the outlet the hook already carried"
+
+
+async def test_a_channel_stopped_leaves_the_cron_partition() -> None:
+    """The mirror, and the half that also covers a channel enabled at launch: once
+    it is off, the gateway has no outlet for it, so claiming its jobs would burn a
+    model turn on a reply the hub drops."""
+    from raven.cli.gateway_commands import _wire_cron_partition
+
+    retired: list[str] = []
+
+    async def retire(name: str) -> None:
+        retired.append(name)
+
+    manager = _FakeChannelManager(on_stopped=retire)
+    cron = _FakeCron({"telegram", "weixin"})
+
+    _wire_cron_partition(manager, cron)
+    await manager.on_stopped("telegram")
+
+    assert cron.allowed_channels == {"weixin"}
+    assert retired == ["telegram"], "and must keep the outlet retirement the hook carried"
+
+
+async def test_the_cron_partition_follows_a_manager_with_no_outlet_hooks() -> None:
+    """A gateway built without the hub is not a reason to drop the partition half:
+    both hooks are composed over whatever was there, including nothing."""
+    from raven.cli.gateway_commands import _wire_cron_partition
+
+    manager = _FakeChannelManager(on_started=None, on_stopped=None)
+    cron = _FakeCron(set())
+
+    _wire_cron_partition(manager, cron)
+    manager.on_started(_FakeChannel("weixin"))
+    assert cron.allowed_channels == {"weixin"}
+
+    await manager.on_stopped("weixin")
+    assert cron.allowed_channels == set()
+
+
+def test_the_gateway_command_wires_the_cron_partition_through_the_helper() -> None:
+    """Same pin as the intake above, plus the order: the outlet hooks are assigned
+    rather than composed, so a partition wired before them would be thrown away."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "_wire_cron_partition(channels, cron)" in src
+    assert src.index("channels.on_started = lambda ch:") < src.index("_wire_cron_partition(channels, cron)")
+    assert src.index("channels.on_stopped = gw_hub.retire") < src.index("_wire_cron_partition(channels, cron)")
 
 
 def _gateway_partition_with_the_page_enabled() -> set[str]:
@@ -497,6 +613,51 @@ async def test_a_gateway_hosting_the_page_does_claim_tui_jobs(tmp_path: Path) ->
     assert await _survivors_after_restart(missed, partition) == []
 
 
+async def test_a_hot_started_channel_can_then_claim_its_own_cron_jobs(tmp_path: Path) -> None:
+    """The far end of the same chain: the set the start hook mutates is the one the
+    live service reads, so a reminder addressed to a channel enabled from the page
+    fires on the next due tick rather than waiting for the next restart."""
+    import time
+
+    from raven.cli.gateway_commands import _wire_cron_partition
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    now_ms = int(time.time() * 1000)
+    store = tmp_path / "jobs.json"
+    _write_jobs(
+        store,
+        [
+            {
+                "id": "standup",
+                "name": "standup nudge",
+                "enabled": True,
+                "schedule": {"kind": "every", "everyMs": 600_000},
+                "payload": {"message": "standup", "channel": "weixin", "to": "default"},
+                "state": {"nextRunAtMs": 1},
+                "createdAtMs": now_ms - 600_000,
+                "updatedAtMs": now_ms - 600_000,
+            }
+        ],
+    )
+
+    fired: list[str] = []
+
+    async def on_job(job) -> None:
+        fired.append(job.id)
+
+    svc = CronService(store, allowed_channels=_gateway_partition_with_the_page_enabled())
+    svc.on_job = on_job
+    await svc._process_due()
+    assert fired == [], "weixin was off at launch, so the job is outside the partition"
+
+    manager = _FakeChannelManager()
+    _wire_cron_partition(manager, svc)
+    manager.on_started(_FakeChannel("weixin"))
+
+    await svc._process_due()
+    assert fired == ["standup"]
+
+
 def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     """The gateway ``/stop`` path must fan out to BOTH the scheduler lane cancel
     and the subagent-session cancel, summing their counts.
@@ -512,7 +673,7 @@ def test_stop_dispatch_cancels_both_scheduler_and_subagents() -> None:
     src = inspect.getsource(gateway_commands.register)
     stop_branch = src.split('if cmd == "/stop":', 1)[1].split('elif cmd == "/restart":', 1)[0]
     assert "cancel_conversation(cid)" in stop_branch
-    assert "cancel_by_session(cid)" in stop_branch
+    assert "cancel_by_session(cid, reason=" in stop_branch
     assert "stopped +=" in stop_branch
 
 
@@ -784,10 +945,24 @@ def test_the_gateway_shutdown_cancels_subagents_before_it_closes_the_transports(
     # same spines down in its own order, pinned by test_generation_swap.py.
     shutdown = src[src.index("except KeyboardInterrupt:") :]
     drain = shutdown.index("begin_drain()")
-    cancel = shutdown.index("await agent.subagents.cancel_all()")
+    cancel = shutdown.index("await agent.subagents.cancel_all(reason=")
     pool = shutdown.index("await close_pool()")
 
     assert drain < cancel < pool
+
+
+def test_the_gateway_shutdown_cancels_subagents_before_the_page_spine_seals() -> None:
+    """A sub-agent whose conversation lives on the page announces into the
+    page's own spine, and the mount's teardown seals that spine first -- so a
+    run finishing between the two would announce into a refusal. The swap path
+    already cancels before the mount goes; the shutdown path has to match."""
+    src = (Path(__file__).resolve().parents[1] / "raven" / "cli" / "gateway_commands.py").read_text(encoding="utf-8")
+    shutdown = src[src.index("except KeyboardInterrupt:") :]
+    cancel = shutdown.index("await agent.subagents.cancel_all(reason=")
+    page = shutdown.index("await page_mount.teardown()")
+    spine = shutdown.index("await gw_teardown()")
+
+    assert cancel < page < spine
 
 
 def test_question_body_numbers_choices_and_shows_batch_progress() -> None:
@@ -1163,3 +1338,160 @@ def test_a_swap_cancelled_mid_unbind_leaves_no_live_watcher_thread(tmp_path) -> 
             break
         time.sleep(0.1)
     assert _live() == before, "a generation's watcher outlived the shutdown"
+
+
+async def test_the_control_plane_keeps_the_historical_port_when_the_span_is_free(monkeypatch) -> None:
+    """The fallback below must not move the port on a host that has one free."""
+    from raven.cli.gateway_commands import _CONTROL_PORT_DEFAULT, _control_plane_port
+    from raven.rpc.transports import ws
+
+    async def _free(preferred: int, **_kwargs) -> int:
+        return preferred + 1
+
+    monkeypatch.setattr(ws, "pick_port", _free)
+    assert await _control_plane_port() == _CONTROL_PORT_DEFAULT + 1
+
+
+async def test_the_control_plane_falls_back_to_an_os_assigned_port(monkeypatch) -> None:
+    """Every port in the probe span can be refused at once, and then the gateway
+    must still come up. Windows reserves whole hundred-port blocks (winnat), a
+    host whose dynamic range starts low gets them over 8765..8784, and a bind
+    inside one fails while netstat shows the port unused. The raise reached no
+    handler, so `raven web` died on a port nobody had asked for."""
+    from raven.cli.gateway_commands import _control_plane_port
+    from raven.rpc.transports import ws
+
+    async def _none_free(preferred: int, **_kwargs) -> int:
+        raise OSError(f"no free port in {preferred}..{preferred + 20}")
+
+    monkeypatch.setattr(ws, "pick_port", _none_free)
+    assert await _control_plane_port() == 0
+
+
+def _hold_exclusively(sock) -> None:
+    """Ask for the exclusivity the running platform actually means by it.
+
+    ``SO_REUSEADDR`` is what POSIX needs: with a live listener behind it the
+    port is taken, and the option only lets the test reclaim it without waiting
+    out TIME_WAIT. Winsock reads the same option as permission for a second
+    socket to bind the identical address and port, which is the opposite of
+    what the holder wants, so Windows gets ``SO_EXCLUSIVEADDRUSE`` instead.
+
+    Keyed on the constant rather than on ``sys.platform`` because the constant
+    is the thing that decides: a platform that does not define it has no
+    Winsock semantics to defend against.
+    """
+    import socket
+
+    exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    option = socket.SO_REUSEADDR if exclusive is None else exclusive
+    sock.setsockopt(socket.SOL_SOCKET, option, 1)
+
+
+@pytest.mark.parametrize("windows", [True, False], ids=["windows", "posix"])
+def test_the_port_holder_asks_for_the_exclusivity_its_platform_means(
+    windows: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The holder below has to keep a port from being bound twice, and the two
+    platforms spell that differently.
+
+    On POSIX ``SO_REUSEADDR`` plus a live listener does it. On Windows the same
+    option does the opposite: Winsock lets a second socket bind the identical
+    address and port, with indeterminate ownership, so ``_port_is_free`` -- which
+    sets ``SO_REUSEADDR`` itself -- can bind a port this holder is listening on.
+    ``pick_port`` would then return the base port and the exhaustion case below
+    would fail without anything being wrong with the code it guards.
+
+    Both branches are driven here because they cannot both be driven anywhere
+    else: the unit matrix is one cell, ubuntu, and ``SO_EXCLUSIVEADDRUSE`` does
+    not exist on it. Only the option asked for is asserted. Whether Winsock then
+    refuses the second bind is Winsock's contract, not this repository's, and is
+    not claimed to have been observed here.
+    """
+    import socket
+
+    from tests.test_cli_gateway_commands import _hold_exclusively
+
+    asked: list[tuple[int, int, int]] = []
+
+    class _Sock:
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            asked.append((level, option, value))
+
+    exclusive = 0x4321
+    if windows:
+        monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", exclusive, raising=False)
+    else:
+        monkeypatch.delattr(socket, "SO_EXCLUSIVEADDRUSE", raising=False)
+
+    _hold_exclusively(_Sock())
+
+    wanted = exclusive if windows else socket.SO_REUSEADDR
+    assert asked == [(socket.SOL_SOCKET, wanted, 1)]
+
+
+async def test_pick_port_raises_the_class_the_fallback_catches() -> None:
+    """The fallback catches one exception class, decided in another module.
+
+    Both cases above replace ``pick_port`` with a stub that raises ``OSError``
+    itself, so they pin the helper's reaction to a raise they authored and would
+    not notice ``pick_port`` starting to raise something else -- which turns the
+    fallback into dead code and brings back the bring-up crash this change
+    exists to remove. This case reaches the real function instead.
+    """
+    import socket
+
+    from raven.rpc.transports.ws import _PORT_PROBE_SPAN, pick_port
+
+    def _hold(base: int) -> list[socket.socket] | None:
+        """The whole span held here, or None if any port was already taken.
+
+        Occupied the way ``_port_is_free`` probes for it: that probe sets
+        SO_REUSEADDR, so a socket merely bound does not keep it out and only a
+        live listener does -- on POSIX. Winsock reads that option as leave to
+        bind the same address and port a second time, so the holder asks for
+        the platform's own spelling of exclusivity; see ``_hold_exclusively``.
+        Holding every port here rather than counting a stranger's as one of
+        them is what stops this racing them releasing it.
+        """
+        held: list[socket.socket] = []
+        for port in range(base, base + _PORT_PROBE_SPAN):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            _hold_exclusively(sock)
+            try:
+                sock.bind(("127.0.0.1", port))
+                sock.listen(1)
+            except OSError:
+                sock.close()
+                for other in held:
+                    other.close()
+                return None
+            held.append(sock)
+        return held
+
+    for base in range(41000, 41000 + 10 * _PORT_PROBE_SPAN, _PORT_PROBE_SPAN):
+        held = _hold(base)
+        if held is not None:
+            break
+    else:
+        pytest.fail("no span of free ports to exhaust; the contract went unchecked")
+
+    try:
+        with pytest.raises(OSError):
+            await pick_port(base)
+    finally:
+        for sock in held:
+            sock.close()
+
+
+def test_the_gateway_takes_its_control_port_from_the_fallback() -> None:
+    """The two tests above only bind the helper; this pins the caller to it.
+    Both passed while the command still probed inline, which is the state that
+    shipped the failure."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "ControlPlaneServer(await _control_plane_port()" in src
+    assert "pick_port(8765)" not in src, "an inline probe has no fallback to fall back to"

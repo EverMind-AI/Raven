@@ -10,7 +10,8 @@ root under the host's home and an engine home OUTSIDE it (the home lives in
 the raven data directory, the work stays where the work is), seeding a
 workspace file once, assembling the
 ``acp.modes`` catalogue from overlay files, sweeping stale renders by pid
-liveness, and writing the rendered copy owner-only.
+liveness, and writing the rendered copy owner-only with the host's deny
+rules merged in.
 
 What stays in each product is its tables and its judgement: which secrets go
 where, what its modes are called, how a mode's budget resolves, what must
@@ -31,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -180,6 +182,116 @@ def inherit_llm(config: dict, host: dict) -> str:
         f"provider={defaults.get('provider')} model={defaults.get('model')} "
         f"reasoning_effort={defaults.get('reasoningEffort')}"
     )
+
+
+_DENY = "deny"
+_EXTRA_DENY_KEYS = ("extraDenyPatterns", "extra_deny_patterns")
+
+
+def _compiles(pattern: str) -> bool:
+    try:
+        re.compile(pattern)
+    except re.error:
+        return False
+    return True
+
+
+def inherit_host_denials(config: dict, host: dict) -> list[str]:
+    """Carry every refusal the host operator configured into the product config.
+
+    A product runs as a raven of its own, and its permission gate reads only
+    the rendered file. So a deny rule written on the host bound the host's own
+    tool calls and nothing the host dispatched: the product's gate had never
+    heard of it, and the host answers a product's approval requests itself
+    (``raven/acp_client/permissions.py``), which is how a command the host
+    refuses ran anyway once it was handed to a product.
+
+    Only refusals travel -- the ``deny`` entries of ``permissions.tools`` and
+    ``tools.exec.extraDenyPatterns`` -- because they are the half of a policy
+    that needs nobody to answer it. A host ``allow`` would loosen the product,
+    and a host ``ask`` would only reach an approver that grants it.
+
+    Merged into what the product already says, never replacing it, and a
+    refusal always wins: a product ``exec`` rule written as one tier becomes a
+    table with that tier as its ``*`` fallback, so the host's patterns can sit
+    beside it. An extra deny pattern that does not compile is left behind, as
+    the host's own live reader leaves it (``BuiltinRulings``), rather than
+    stopping the product from starting. Returns what was carried.
+    """
+    carried: list[str] = []
+    host_permissions = host.get("permissions")
+    host_tools = host_permissions.get("tools") if isinstance(host_permissions, dict) else None
+    for tool, entry in (host_tools if isinstance(host_tools, dict) else {}).items():
+        if entry == _DENY:
+            patterns: list[str] = []
+        elif isinstance(entry, dict):
+            patterns = [pattern for pattern, tier in entry.items() if tier == _DENY and isinstance(pattern, str)]
+            if not patterns:
+                continue
+        else:
+            continue
+        tools = config.setdefault("permissions", {}).setdefault("tools", {})
+        own = tools.get(tool)
+        if not patterns:
+            tools[tool] = _DENY
+            carried.append(tool)
+            continue
+        if own == _DENY:
+            continue
+        table = dict(own) if isinstance(own, dict) else ({"*": own} if isinstance(own, str) else {})
+        for pattern in patterns:
+            table[pattern] = _DENY
+            carried.append(f"{tool} {pattern}")
+        tools[tool] = table
+
+    host_node = host.get("tools")
+    host_exec = host_node.get("exec") if isinstance(host_node, dict) else None
+    host_exec = host_exec if isinstance(host_exec, dict) else {}
+    extras = next((host_exec[key] for key in _EXTRA_DENY_KEYS if key in host_exec), None)
+    wanted = [p for p in extras if isinstance(p, str) and _compiles(p)] if isinstance(extras, list) else []
+    if wanted:
+        exec_node = config.setdefault("tools", {}).setdefault("exec", {})
+        key = next((key for key in _EXTRA_DENY_KEYS if key in exec_node), _EXTRA_DENY_KEYS[0])
+        own_extras = exec_node.get(key) if isinstance(exec_node.get(key), list) else []
+        added = [pattern for pattern in wanted if pattern not in own_extras]
+        exec_node[key] = [*own_extras, *added]
+        carried.extend(added)
+    return carried
+
+
+def inherit_plugin_opt_outs(config: dict, host: dict, *, own: Iterable[str] = ()) -> list[str]:
+    """Carry the host's ``plugins.disabled`` into the product config.
+
+    A product engine scans the host's plugin roots -- the launcher inherits
+    ``RAVEN_HOME``, so ``<home>/plugins`` is the host's -- and the entry points
+    of the interpreter they share, but it reads its opt-outs only from the
+    rendered file. So a plugin the host operator switched off, most often one
+    that fails to load, came back in every product the host dispatched.
+
+    ``own`` names the product's own engine plugins, which never travel: the
+    product is that plugin, and a host turning it off for its own agent is not
+    a request to run the product without it. Merged after what the product
+    already disables, in order, without repeats. Returns what was carried.
+    """
+    host_plugins = host.get("plugins")
+    wanted = host_plugins.get("disabled") if isinstance(host_plugins, dict) else None
+    if not isinstance(wanted, list):
+        return []
+    keep = set(own)
+    plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+    already = plugins.get("disabled") if isinstance(plugins.get("disabled"), list) else []
+    carried: list[str] = []
+    for plugin_id in wanted:
+        if (
+            isinstance(plugin_id, str)
+            and plugin_id not in keep
+            and plugin_id not in already
+            and plugin_id not in carried
+        ):
+            carried.append(plugin_id)
+    if carried:
+        config.setdefault("plugins", {})["disabled"] = [*already, *carried]
+    return carried
 
 
 def inherit_media_image(config: dict, host: dict) -> dict:
@@ -463,14 +575,24 @@ def sweep_stale_renders(root: Path) -> None:
             continue
 
 
-def write_rendered(config: dict, root: Path) -> Path:
+def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ()) -> Path:
     """Write the rendered config under ``root``, owner-only, named by pid.
 
     The location is the mechanism: raven derives its data dir from the
     config file's own parent, so wherever this file goes, sessions and cache
     go too. Owner-only because the render is where the secrets landed; the
     pid in the name is what :func:`sweep_stale_renders` reads back.
+
+    The host's refusals (:func:`inherit_host_denials`) and plugin opt-outs
+    (:func:`inherit_plugin_opt_outs`) are merged in here rather than by each
+    launcher: every product render ends in this call, so a launcher cannot
+    write a config that forgot them. ``own_plugins`` is the product's engine,
+    which the opt-outs leave alone; a launcher that names none inherits them
+    all.
     """
+    host = host_config()
+    inherit_host_denials(config, host)
+    inherit_plugin_opt_outs(config, host, own=own_plugins)
     rendered = root / f".config.rendered.{os.getpid()}.json"
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.fchmod(fd, 0o600)

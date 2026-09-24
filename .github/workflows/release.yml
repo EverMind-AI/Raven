@@ -63,6 +63,19 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v8.2.0
 
+      # 2c) The template picker's covers. One cover is a LibreOffice conversion,
+      #     and the gateway used to start ten of them a few seconds after every
+      #     boot -- on hosts whose reader never opens the picker as much as on
+      #     the ones that do. Rendered here instead, from the same templates the
+      #     wheel carries, so an installed raven never runs LibreOffice to draw
+      #     a picture it could have been given. `--extra dev` is what puts the
+      #     engine (and PyMuPDF with it) in the environment the script imports.
+      - name: Bake the deck template covers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-impress
+          uv run --frozen --extra dev python scripts/bake_deck_template_covers.py
+
       - name: Build wheel + sdist
         run: |
           uv build --wheel
@@ -130,7 +143,14 @@ jobs:
               assert len(blob) == entry["bytes"], f"{entry['name']} is {len(blob)} bytes, pinned {entry['bytes']}"
               digest = hashlib.sha256(blob).hexdigest()
               assert digest == entry["sha256"], f"{entry['name']} is {digest}, pinned {entry['sha256']}"
-          print(f"OK: {whl} ships all {len(pins)} bundled templates, each matching its pin")
+          covers = [n for n in names if n.startswith("raven_ppt/assets/templates/covers/")]
+          # One per template per language, and the wheel is the only place they
+          # exist: the directory is gitignored, so a bake that did not run
+          # leaves a wheel that builds and installs and quietly puts LibreOffice
+          # back on every reader's machine.
+          langs = 1 + len(glob.glob("plugins-dist/ppt-engine/raven_ppt/assets/templates/i18n/*.json"))
+          assert len(covers) == len(pins) * langs, f"{len(covers)} covers in {whl}, expected {len(pins) * langs}"
+          print(f"OK: {whl} ships all {len(pins)} bundled templates, each matching its pin, and {len(covers)} covers")
           PY
 
       # 4b) Export the locked dependency set as a constraints file. The install
@@ -143,6 +163,58 @@ jobs:
       #     covers the channel SDKs behind raven[channels].
       - name: Export locked constraints
         run: uv export --locked --all-extras --no-hashes --no-emit-workspace -o dist/raven-constraints.txt
+
+      # 4c) The plugin list: the wheels this release ships beside raven, one
+      #     `name @ url` line each. The upgrade helper (and, once it reads it,
+      #     the installer) takes this file from the release directory next to
+      #     the wheel and the constraints and hands it to `uv tool install
+      #     --with-requirements`, so what a complete install is made of is
+      #     written here once, from what this job just built, and nowhere
+      #     else. Direct URLs on purpose: a bare name would be resolved against
+      #     PyPI, where none of these names are ours. The everos line is what
+      #     the helper keeps when the engines cannot build, so its name is a
+      #     contract (tests/test_release_plugin_list.py).
+      - name: Write the plugin list
+        run: |
+          base="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          : > dist/raven-plugins.txt
+          for whl in dist/everos_memory-*.whl dist/design_engine-*.whl dist/ppt_engine-*.whl; do
+            [ -f "$whl" ] || { echo "no wheel matches $whl"; exit 1; }
+            name="$(basename "$whl" | cut -d- -f1 | tr _ -)"
+            echo "$name @ $base/$(basename "$whl")" >> dist/raven-plugins.txt
+          done
+          cat dist/raven-plugins.txt
+          test "$(wc -l < dist/raven-plugins.txt)" -eq 3
+
+      # 4d) The release installs itself before anything is published: the wheel,
+      #     the constraints, the plugin list and the plugin wheels as one whole,
+      #     through install.sh piped the way users run it. The list's public URLs
+      #     resolve only once a human publishes the draft, so the gate installs
+      #     from a copy of the list rewritten to point at the release directory
+      #     here; the rewrite only matches the exact public prefix, so a list
+      #     that named any other place fails the grep below. Then the installed
+      #     raven has to answer, carry the three plugin packages, and have the
+      #     `web` the installer ends on.
+      - name: Install the release from dist with install.sh
+        env:
+          RAVEN_MINIMAL: "1"
+          RAVEN_NO_LAUNCH: "1"
+          UV_TOOL_DIR: ${{ runner.temp }}/gate/tools
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}/gate/bin
+          UV_CACHE_DIR: ${{ runner.temp }}/gate/cache
+          RAVEN_HOME: ${{ runner.temp }}/gate/home
+        run: |
+          gate="$RUNNER_TEMP/gate/release"
+          mkdir -p "$gate"
+          cp dist/*.whl dist/raven-constraints.txt "$gate/"
+          prefix="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/"
+          sed "s#$prefix#file://$gate/#" dist/raven-plugins.txt > "$gate/raven-plugins.txt"
+          if grep -q "https://" "$gate/raven-plugins.txt"; then echo "plugin list names a URL outside this release"; exit 1; fi
+          wheel="$(ls dist/raven-*-py3-none-any.whl)"
+          RAVEN_WHEEL_URL="file://$gate/$(basename "$wheel")" sh -c 'cat install.sh | sh'
+          "$UV_TOOL_BIN_DIR/raven" --version
+          "$UV_TOOL_DIR/raven/bin/python" -c "import raven_everos, raven_design, raven_ppt"
+          "$UV_TOOL_BIN_DIR/raven" web --help >/dev/null
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -192,7 +264,7 @@ jobs:
             id=""
           fi
           if [ -z "$id" ]; then
-            draft_url=$(gh release create "$tag" dist/*.whl dist/*.tar.gz dist/raven-constraints.txt \
+            draft_url=$(gh release create "$tag" dist/*.whl dist/*.tar.gz dist/raven-constraints.txt dist/raven-plugins.txt \
               --title "Raven $ver ($today)" --notes-file "$RUNNER_TEMP/notes.md" --draft $pre)
             # A draft lives at releases/tag/untagged-<hash> and keeps serving that
             # stale page after publication, with no redirect to the real tag. Print

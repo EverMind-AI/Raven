@@ -27,7 +27,7 @@ from raven.cli._helpers import (
     print_config_migration_notices,
     print_deprecated_allow_destructive_notice,
     print_deprecated_memory_window_notice,
-    report_dropped_memory_writes,
+    report_memory_write_outcome,
 )
 from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
@@ -37,13 +37,40 @@ from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
     from raven.config.schema import GatewayPageConfig
-    from raven.core.runtime import SwapCoordinator
+from raven.core import plugin_stack
+from raven.core.runtime import SwapCoordinator
 
 console = Console()
 
 # Minimum spacing between accepted generation swaps (each one cancels every
 # in-flight turn and reconnects MCP); see SwapCoordinator.
 _SWAP_MIN_INTERVAL_S = 5.0
+
+_CONTROL_PORT_DEFAULT = 8765
+
+
+async def _control_plane_port() -> int:
+    """The historical control-plane port, or any free one when its span is taken.
+
+    ``pick_port`` probes twenty ports forward and raises when every one is
+    refused. On Windows all twenty can be refused at once: winnat reserves
+    whole hundred-port blocks (``netsh interface ipv4 show excludedportrange``),
+    a host whose dynamic range starts low gets them in the 8000s, and a bind
+    inside one fails with WinError 10013 while netstat shows the port free. The
+    raise reached no handler, so the gateway died on a port nobody asked for --
+    `raven web` could not start at all on such a host.
+
+    Falling back costs nothing: no client needs this port to be predictable,
+    they all read it from the lock payload, and ``ControlPlaneServer.start``
+    reads the bound port back off the socket for exactly this case.
+    """
+    from raven.rpc.transports.ws import pick_port
+
+    try:
+        return await pick_port(_CONTROL_PORT_DEFAULT)
+    except OSError:
+        logger.warning("control plane: no free port from {}; taking an OS-assigned one", _CONTROL_PORT_DEFAULT)
+        return 0
 
 
 def _risk_banner(config) -> str | None:
@@ -132,6 +159,39 @@ def _wire_channel_intake(channels, dispatch) -> None:
         wire(ch)
 
     channels.on_started = on_started
+
+
+def _wire_cron_partition(channels, cron) -> None:
+    """Let the cron partition follow the channels this gateway is actually running.
+
+    ``allowed_channels`` is the launch-time snapshot :func:`_build_gateway_channels`
+    computed, and ``_may_claim`` refuses every job whose payload channel falls outside
+    it. A channel enabled from the page therefore received and replied while a reminder
+    addressed to it was logged once as foreign and never fired until the next restart
+    (2026-09-23, weixin). Composed over the hooks the caller already set, like
+    :func:`_wire_channel_intake`, so the outlet and the partition cannot drift apart.
+
+    Through the service's own ``admit_channel`` / ``retire_channel``, which also wake
+    its loop: a reminder already due when the channel comes up must not wait out the
+    loop's 30 s poll cap. ``tui`` is not touched here: it is not a manager channel, and
+    its claim follows the page mount rather than a channel start (see
+    :func:`_build_gateway_channels`).
+    """
+    started_hook = channels.on_started
+    stopped_hook = channels.on_stopped
+
+    def on_started(ch) -> None:
+        if started_hook is not None:
+            started_hook(ch)
+        cron.admit_channel(ch.name)
+
+    async def on_stopped(name: str) -> None:
+        if stopped_hook is not None:
+            await stopped_hook(name)
+        cron.retire_channel(name)
+
+    channels.on_started = on_started
+    channels.on_stopped = on_stopped
 
 
 def _format_question_body(params: dict) -> str:
@@ -559,20 +619,13 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             question_broker = None
             control = None
             page_mount = None
-            # Bring the memory backend online before any turn
-            # runs. ``backend`` is ``None`` when no plugin is wired;
-            # the start / stop awaits are then skipped entirely.
-            from loguru import logger as _logger  # local import: gateway
+            # Detached: a resident host serves many turns, and the backend's
+            # own state machine covers the window before the service answers.
+            # ``backend`` is ``None`` when no plugin is wired, which the helper
+            # takes as nothing to do.
+            from loguru import logger as _logger  # local import: gateway has no module-level logger
 
-            # doesn't have a module-
-            # level logger
-            if backend is not None:
-                try:
-                    await backend.start()
-                except Exception:
-                    _logger.exception(
-                        "memory backend start failed; continuing with legacy memory path",
-                    )
+            plugin_stack.start_backend_detached(backend, logger=_logger)
 
             async def _bind_generation():
                 nonlocal gw_teardown, gw_scheduler, question_broker, page_mount, heartbeat
@@ -614,10 +667,14 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # And retired when it stops, so a channel disabled and enabled
                 # again is not left replying through the adapter it dropped.
                 channels.on_stopped = gw_hub.retire
+                # And its cron jobs are claimed while it runs, so a reminder
+                # addressed to a channel enabled from the page is not left to
+                # the next restart.
+                _wire_cron_partition(channels, cron)
 
-                # Proactive target (cron / sentinel / heartbeat / subagent /
-                # deep_research): the gateway spine. Its hub delivers to the IM
-                # channels and, while a page is mounted, to the page.
+                # Proactive target (cron / sentinel / heartbeat / subagent):
+                # the gateway spine. Its hub delivers to the IM channels and,
+                # while a page is mounted, to the page.
                 pro_submit = gw_scheduler.submit
                 pro_hub = gw_hub
                 pro_readback = gw_readback_texts
@@ -686,12 +743,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     decision_consumer.executor.set_submit(pro_submit)
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
                 agent.subagents.set_submit(pro_submit)
-                # Deep research (channel/async) delivers its finished answer back
-                # via a deliver_text turn; wiring submit here (gateway only) is
-                # what flips the tool from its synchronous path to the async one.
-                # Goes through the loop so a manager built later by promotion (a
-                # mid-session enable) inherits the handle too, not just this one.
-                agent.set_deep_research_submit(pro_submit)
 
                 # ask_user round-trip on the channel side: the QuestionBroker
                 # renders the agent's clarify.request as an outbound Text to the
@@ -709,12 +760,9 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     send_frame=_question_to_channel,
                     timeout_s=config.tools.ask_user.timeout,
                 )
-                # Wire the broker into the mid-turn askers. deep_research goes
-                # through the loop so a tool built later by promotion (a mid-session
-                # enable) inherits the broker too, not just the startup one.
+                # Wire the broker into the mid-turn askers.
                 if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                     ask_tool.set_broker(question_broker)
-                agent.set_deep_research_broker(question_broker)
 
                 # The served page, on this same engine. Mounted after the broker
                 # wiring above on purpose: build_rpc_stack rebinds the streaming
@@ -735,6 +783,15 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     except OSError as exc:
                         logger.warning("page mount failed ({}); gateway continues without the page", exc)
                 if page_mount is not None:
+                    # The page is what shows the deck template gallery, so its
+                    # covers are drawn now, in the background, rather than on
+                    # the click that opens it; a no-op without the engine or
+                    # once the cache is warm.
+                    from raven.rpc import deck_templates
+
+                    deck_templates.warm_covers_in_background(  # pragma: no cover
+                        language=config.language
+                    )
                     # One shared loop, two question surfaces. build_rpc_stack
                     # bound the page's broker over the channel broker wired
                     # above (AskUserTool._broker is process-wide, last write
@@ -742,29 +799,25 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     # browser and its answer starting a fresh turn. Re-bind a
                     # shim that routes by conversation: page/tui sessions
                     # (`tui:<id>`) to the page broker, everything else back to
-                    # the channel broker. deep_research clarify rides the same
-                    # shim, through the loop for the same promotion reason as
-                    # above.
+                    # the channel broker.
                     from raven.rpc.question_broker import RoutingQuestionBroker
 
                     routed_broker = RoutingQuestionBroker(page=page_mount.question_broker, channel=question_broker)
                     if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                         ask_tool.set_broker(routed_broker)
-                    agent.set_deep_research_broker(routed_broker)
                     # Route channel="tui" outbounds from the gateway's own
                     # spines (a tui cron job's reply, a subagent announce whose
                     # conversation lives on the page) to the page.
                     gw_hub.register(page_mount.outlet)
                     # A runtime turn into a page session -- a sub-agent's result
-                    # relay, a deep-research delivery -- runs on the page spine,
-                    # on the lane the page's own turns to that session use, so
-                    # the two never run at once. Everything else stays on the
-                    # gateway spine, whose hub reaches the IM channels.
+                    # relay -- runs on the page spine, on the lane the page's own
+                    # turns to that session use, so the two never run at once.
+                    # Everything else stays on the gateway spine, whose hub
+                    # reaches the IM channels.
                     from raven.gateway.submit_router import route_submit
 
                     routed_submit = route_submit(page=page_mount.submit, channel=pro_submit)
                     agent.subagents.set_submit(routed_submit)
-                    agent.set_deep_research_submit(routed_submit)
                     # Only now is this process a tui surface, so only now may it
                     # claim tui cron jobs. Deciding the partition here rather
                     # than from gateway.page.enabled is what keeps a gateway
@@ -804,7 +857,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     cid = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
                     if cmd == "/stop":
                         stopped = gw_scheduler.cancel_conversation(cid)
-                        stopped += await agent.subagents.cancel_by_session(cid)
+                        stopped += await agent.subagents.cancel_by_session(cid, reason="the user sent /stop")
                         content = f"Stopped {stopped} task(s)." if stopped else "No active task to stop."
                         await gw_hub.dispatch(Text(content=content, source=req.source))
                     elif cmd == "/restart":
@@ -857,7 +910,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # as the shutdown path: a result re-injection into a spine
                 # already gone would record as a failure rather than a stop.
                 # dispose() cancels again, which is an idempotent no-op.
-                await agent.subagents.cancel_all()
+                await agent.subagents.cancel_all(reason="the gateway reloaded")
                 if page_mount is not None:
                     await page_mount.teardown()
                     page_mount = None
@@ -971,13 +1024,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     )
                     agent = runtime.loop
                     backend = runtime.backend
-                    if backend is not None:
-                        try:
-                            await backend.start()
-                        except Exception:
-                            _logger.exception(
-                                "memory backend start failed; continuing with legacy memory path",
-                            )
+                    plugin_stack.start_backend_detached(backend, logger=_logger)
                     try:
                         await _bind_generation()
                     except Exception:
@@ -1000,7 +1047,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
             from raven.rpc.control import ControlPlaneServer, register_control_methods
             from raven.rpc.dispatcher import Dispatcher
-            from raven.rpc.transports.ws import pick_port
 
             started_at = time.time()
             shutdown_requested = False
@@ -1048,13 +1094,16 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 shutdown=_shutdown,
             )
             # Never unauthenticated and never configured: the token is minted
-            # per boot and dies with the process; the port is probed forward
-            # from the historical default. Local clients read both from the
-            # lock payload, the same way `doctor` finds the gateway.
+            # per boot and dies with the process; the port comes from
+            # _control_plane_port. Local clients read both from the lock
+            # payload, the same way `doctor` finds the gateway.
             control_token = secrets.token_urlsafe(24)
 
             try:
-                control = ControlPlaneServer(await pick_port(8765), auth_token=control_token)
+                # Not unit-reachable: 520 lines into `run()`, past the whole
+                # gateway bring-up. The call site is pinned instead by
+                # test_the_gateway_takes_its_control_port_from_the_fallback.
+                control = ControlPlaneServer(await _control_plane_port(), auth_token=control_token)  # pragma: no cover
                 control.bind(control_dispatcher)
                 bound_host, bound_port = await control.start()
                 publish_control_endpoint(bound_host, bound_port, control_token)
@@ -1104,6 +1153,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 else:
                     raise
             finally:
+                # Before anything that waits: a cover still converting holds a
+                # LibreOffice child, and the thread waiting on it would hold the
+                # interpreter open past every teardown below.
+                from raven.rpc import deck_templates as _deck_templates  # pragma: no cover
+
+                _deck_templates.stop_warming()  # pragma: no cover
                 if health_server is not None:
                     health_server.close()
                 # Stop the proactive producers before tearing down the scheduler
@@ -1116,8 +1171,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await sentinel_runner.stop()
                 if question_broker is not None:
                     question_broker.cancel_all()  # release any turn blocked on ask_user
-                if page_mount is not None:
-                    await page_mount.teardown()
                 if control is not None:
                     await control.stop()
                 from raven.acp_client.client import begin_drain
@@ -1132,7 +1185,13 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # every ACP server anyway and no cancelled turn is worth waiting
                 # on when its process is about to go.
                 begin_drain()
-                await agent.subagents.cancel_all()
+                await agent.subagents.cancel_all(reason="the gateway stopped")
+                # The page's spine seals after the sub-agents are cancelled, the
+                # order the generation swap already keeps: a sub-agent whose
+                # conversation lives on the page announces into that spine, and
+                # sealed first it would refuse the result.
+                if page_mount is not None:
+                    await page_mount.teardown()
                 if gw_teardown is not None:
                     await gw_teardown()
                 # ACP agents are launched with start_new_session, so they do not
@@ -1157,8 +1216,8 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     _logger.exception("plugin services stop failed; continuing shutdown")
                 if backend is not None:
                     try:
-                        dropped = await agent.drain_backend_stores()
-                        report_dropped_memory_writes(dropped, console)
+                        outcome = await agent.drain_backend_stores()
+                        report_memory_write_outcome(outcome, console)
                         await backend.stop()
                     except Exception:
                         _logger.exception(

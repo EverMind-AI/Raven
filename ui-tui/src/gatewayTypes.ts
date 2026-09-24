@@ -362,6 +362,10 @@ export interface ModelOptionProvider {
   homepage?: string
   is_current?: boolean
   key_env?: null | string
+  /* Where the vendor hands out API keys; null when the registry has no page. */
+  key_url?: null | string
+  /* Custom request headers by name, each value redacted by the server. */
+  extra_headers?: Record<string, string>
   /* Keyed by the id as it appears in `models`. The tags are drawn as glyphs
      (see components/modelTags.ts); an absent list means the registry publishes
      nothing, not that the model cannot. `context_window` comes from the tables
@@ -374,6 +378,15 @@ export interface ModelOptionProvider {
      picker's offer -- config plus a curated shortlist plus a catalogue -- which
      is what the TUI picker draws; a surface managing the list reads this one. */
   configured_models?: string[]
+  /* Resells other vendors' models under `vendor/model` ids (the registry's
+     `is_gateway`). The web settings page filters its catalogue on it; here it
+     is declared so the drift check stays honest about what the wire sends. */
+  gateway?: boolean
+  /* Every model-id prefix that names this provider: its own name plus the ones
+     it used to answer to. A surface comparing two spellings of one model strips
+     any of them, the way `providers/wire.py`'s `merge_key` does. The web picker
+     reads it; here it is declared for the same reason `gateway` is. */
+  route_names?: string[]
   model_labels?: Record<
     string,
     {
@@ -381,6 +394,9 @@ export interface ModelOptionProvider {
       context_window?: number
       description?: string
       input_modalities?: string[]
+      /* Which bucket a model list files this under, from what it writes
+         (`registry_data.kind_of`): reading pictures leaves a model in `text`. */
+      kind: 'audio' | 'embedding' | 'image' | 'reranker' | 'text' | 'video'
       label: string
       output_modalities?: string[]
     }
@@ -628,7 +644,12 @@ export type GatewayEvent =
         command: string
         conversation_id: string
         description: string
-        expires_at: number
+        // What a richer surface draws the prompt from; the terminal shows the
+        // description and the command and ignores these.
+        evidence: Record<string, unknown>
+        family: string
+        kind: string
+        origin: { kind: string; name: string }
         suggested_pattern?: string
         tool_call_id: string
         turn_id: string

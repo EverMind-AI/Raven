@@ -198,7 +198,7 @@ async def test_a_failed_one_shot_stays_on_the_table_disabled(tmp_path: Path) -> 
     store_path = tmp_path / "jobs.json"
 
     async def on_job(job) -> None:
-        raise RuntimeError("turn was cancelled or failed before it completed")
+        raise RuntimeError("the turn was cancelled before it completed")
 
     svc = CronService(store_path, on_job=on_job)
     job = svc.add_job(

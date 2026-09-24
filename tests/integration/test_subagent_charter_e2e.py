@@ -85,7 +85,9 @@ def _spec(**over) -> AgentPlaybookSpec:
 
 def test_the_generated_table_carries_a_payload_the_worker_can_read() -> None:
     worker = build_table(_spec(), {"research-a": "only A's pricing"}).get("research-a")
-    assert worker.payload["prompt"] == BRIEF
+    assert worker.payload["brief"] == "only A's pricing"
+    assert worker.payload["instructionAddendum"] == BRIEF
+    assert worker.payload["prompt"] == "only A's pricing\n\n" + BRIEF
     assert worker.payload["tools"] == ["web_search", "web_fetch"]
     assert worker.payload["stopWhen"] == "both tables land"
 
@@ -113,7 +115,9 @@ def test_the_payload_survives_the_round_trip_to_a_charter() -> None:
     worker = build_table(_spec(), {"research-a": "b"}).get("research-a")
     charter = parse(worker.payload)
     assert charter is not None
-    assert charter.prompt == BRIEF
+    assert charter.prompt == "b"
+    assert charter.instruction_addendum == BRIEF
+    assert charter.task_brief == "b\n\n" + BRIEF
     assert charter.tools == ("web_search", "web_fetch")
     assert charter.stop_when == "both tables land"
 
@@ -596,7 +600,9 @@ def test_every_field_a_playbook_can_write_reaches_the_worker() -> None:
     assert charter is not None
 
     with charter_scope(charter):
-        assert charter.prompt == BRIEF
+        assert charter.prompt == "b"
+        assert charter.instruction_addendum == BRIEF
+        assert charter.task_brief == "b\n\n" + BRIEF
         assert charter.stop_when == "both tables land"
         assert narrowed_tools(["grep", "write_file", "exec"]) == frozenset({"exec"})
         assert judge("write_file", {"path": "elsewhere", "content": "x"}, ()) == ["under out/ only"]
@@ -629,6 +635,11 @@ def test_nothing_the_model_may_emit_is_quietly_dropped() -> None:
         "tools": ["grep"],
         "checks": [{"tool": "write_file", "pathPrefix": "out/"}],
         "code": "def judge(name, params, prior):\n    return []\n",
+        "functions": {
+            "intake": "def intake(text, step):\n    return {'text': text}",
+            "advise": "def advise(step):\n    return None",
+            "salvage": "def salvage(step):\n    return None",
+        },
         "timeoutSeconds": 90,
     }
     assert offered == set(row), "this test must exercise exactly what the schema offers"
@@ -637,4 +648,49 @@ def test_nothing_the_model_may_emit_is_quietly_dropped() -> None:
     payload = build_table(spec, briefs).get("w").payload
 
     assert briefs["w"] == "a brief"
-    assert set(payload) == {"prompt", "tools", "stopWhen", "checks", "code", "timeoutSeconds"}
+    assert set(payload) == {
+        "brief",
+        "instructionAddendum",
+        "prompt",
+        "tools",
+        "stopWhen",
+        "checks",
+        "code",
+        "functions",
+        "timeoutSeconds",
+    }
+
+
+@pytest.mark.asyncio
+async def test_generated_functions_execute_in_the_in_process_worker_loop(workspace) -> None:
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+
+    class _EmptyCapture(_Stub):
+        def __init__(self) -> None:
+            self.calls: list[list[dict]] = []
+
+        async def chat(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+            self.calls.append([dict(message) for message in messages])
+            return LLMResponse(content=None, finish_reason="stop")
+
+        async def chat_with_retry(self, messages, tools=None, model=None, **kwargs) -> LLMResponse:
+            return await self.chat(messages, tools=tools, model=model, **kwargs)
+
+    provider = _EmptyCapture()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=workspace)
+    payload = {
+        "functions": {
+            "intake": "def intake(text, step):\n    return {'text': 'INTAKE_RUNTIME_OK'}",
+            "advise": "def advise(step):\n    return 'ADVISE_RUNTIME_OK'",
+            "salvage": "def salvage(step):\n    return 'SALVAGE_RUNTIME_OK'",
+        }
+    }
+
+    with dispatch_charter(payload):
+        result = await backend.run("original task", task_id="generated-functions", workspace=workspace, executor=None)
+
+    assert result == "SALVAGE_RUNTIME_OK"
+    first_prompt = "\n".join(str(message.get("content", "")) for message in provider.calls[0])
+    assert "INTAKE_RUNTIME_OK" in first_prompt
+    assert "original task" not in first_prompt
+    assert "ADVISE_RUNTIME_OK" in first_prompt

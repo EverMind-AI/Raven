@@ -539,53 +539,31 @@ def whatsapp_channel(tmp_config: Path):
     return WhatsAppChannel(make_channel_config("whatsapp"))
 
 
-def test_whatsapp_login_runs_bridge_subprocess(
+def _no_bridge_listening(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the login off any bridge this machine happens to be running."""
+
+    async def _closed(host: str, port: int, timeout: float = 1.0) -> bool:  # noqa: ARG001
+        return False
+
+    monkeypatch.setattr("raven.channels.adapters.whatsapp.bridge.port_is_open", _closed)
+
+
+def test_whatsapp_login_returns_false_when_the_bridge_cannot_be_spawned(
     whatsapp_channel, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Happy path: bridge is set up + ``npm start`` invoked with correct env."""
+    """A bridge that will not start yields ``False`` rather than a stack trace."""
     import asyncio
-    import subprocess
 
+    _no_bridge_listening(monkeypatch)
     monkeypatch.setattr(
         "raven.channels.adapters.whatsapp.bridge.ensure_bridge_dir",
         lambda: tmp_path / "bridge",
     )
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/npm")
-    captured = {"cmd": None, "env": None, "cwd": None}
 
-    def fake_run(cmd, cwd=None, check=False, env=None, **_):  # noqa: ARG001
-        captured["cmd"] = cmd
-        captured["cwd"] = cwd
-        captured["env"] = env
-        return subprocess.CompletedProcess(cmd, 0)
+    async def _fail(*args, **kwargs):  # noqa: ARG001
+        raise OSError("no such file or directory")
 
-    monkeypatch.setattr("raven.channels.adapters.whatsapp.bridge.subprocess.run", fake_run)
-
-    result = asyncio.run(whatsapp_channel.login())
-    assert result is True
-    assert captured["cmd"] == ["/usr/bin/npm", "start"]
-    assert captured["cwd"] == tmp_path / "bridge"
-    assert "AUTH_DIR" in captured["env"]
-
-
-def test_whatsapp_login_returns_false_on_subprocess_error(
-    whatsapp_channel, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A failing ``npm start`` (CalledProcessError) yields ``False``."""
-    import asyncio
-    import subprocess
-
-    monkeypatch.setattr(
-        "raven.channels.adapters.whatsapp.bridge.ensure_bridge_dir",
-        lambda: tmp_path / "bridge",
-    )
-    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/npm")
-    monkeypatch.setattr(
-        "raven.channels.adapters.whatsapp.bridge.subprocess.run",
-        lambda *args, **kwargs: (_ for _ in ()).throw(  # noqa: ARG005
-            subprocess.CalledProcessError(1, ["npm", "start"])
-        ),
-    )
+    monkeypatch.setattr("raven.channels.adapters.whatsapp.bridge.spawn_bridge", _fail)
 
     result = asyncio.run(whatsapp_channel.login())
     assert result is False
@@ -597,6 +575,7 @@ def test_whatsapp_login_returns_false_when_bridge_setup_fails(
     """If ``bridge.ensure_bridge_dir`` raises ``RuntimeError`` the login fails gracefully."""
     import asyncio
 
+    _no_bridge_listening(monkeypatch)
     monkeypatch.setattr(
         "raven.channels.adapters.whatsapp.bridge.ensure_bridge_dir",
         lambda: (_ for _ in ()).throw(RuntimeError("bridge source missing")),
@@ -606,12 +585,13 @@ def test_whatsapp_login_returns_false_when_bridge_setup_fails(
     assert result is False
 
 
-def test_whatsapp_login_returns_false_when_npm_missing(
+def test_whatsapp_login_returns_false_when_node_missing(
     whatsapp_channel, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If ``shutil.which('npm')`` returns ``None`` the login fails gracefully."""
+    """If ``shutil.which('node')`` returns ``None`` the login fails gracefully."""
     import asyncio
 
+    _no_bridge_listening(monkeypatch)
     monkeypatch.setattr(
         "raven.channels.adapters.whatsapp.bridge.ensure_bridge_dir",
         lambda: tmp_path / "bridge",

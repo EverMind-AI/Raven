@@ -34,7 +34,7 @@ class RpcStack:
     # host that mounts this stack beside its own spines needs it to build a
     # second outlet over the same emitter (see raven/cli/_gateway_page.py).
     direct_targets: dict[str, dict[str, str]] = field(default_factory=dict)
-    # The page's ask_user / deep-research broker. A host with a question
+    # The page's ask_user broker. A host with a question
     # surface of its own (the gateway's IM channels) needs the handle to build
     # a per-conversation routing shim over both (see RoutingQuestionBroker).
     question_broker: Any = None
@@ -142,6 +142,8 @@ async def build_rpc_stack(
     agent_loop: Any = None,
     channel: str = "tui",
     approval_responder: Any = None,
+    emitter: Any = None,
+    ensure_stack: Callable[[], Awaitable[bool]] | None = None,
 ) -> RpcStack:
     """Assemble dispatcher + engine wired to ``send_frame``.
 
@@ -159,8 +161,8 @@ async def build_rpc_stack(
     they queue behind the page's own turns instead of running beside them),
     and this stack's teardown then stops only what it built (its brokers and
     its turn spine). The page-facing sinks and brokers are applied either way; a host
-    with a question surface of its own then re-binds ask_user / deep-research
-    through a per-conversation routing shim over this stack's broker (exposed
+    with a question surface of its own then re-binds ask_user through a
+    per-conversation routing shim over this stack's broker (exposed
     as ``RpcStack.question_broker``) and its own, so the page answers its own
     sessions' questions without swallowing the host's -- see
     ``RoutingQuestionBroker`` and the gateway's page mount.
@@ -183,6 +185,15 @@ async def build_rpc_stack(
     classification, the one-command scope and the absence of any always-allow
     state all stay where they are. ``None`` keeps this stack's own broker, so
     existing callers are unchanged.
+
+    ``emitter`` and ``ensure_stack`` belong to a host that can assemble this
+    stack a second time -- ``raven serve``, whose first run comes up without a
+    loop because no model is configured yet and builds one once the page writes
+    the config. ``ensure_stack`` is what ``config.set`` asks to do that: the
+    handler decides whether the moment calls for it, the host owns the
+    assembly. ``emitter`` hands the replacement stack the subscriptions the
+    live one already holds; built fresh, every stream open on the socket would
+    go quiet.
     """
     from raven.rpc.approval_broker import ApprovalBroker
     from raven.rpc.confirm_broker import ConfirmBroker
@@ -202,7 +213,11 @@ async def build_rpc_stack(
     from raven.rpc.subscriptions import SubscriptionEmitter
 
     dispatcher = Dispatcher()
-    emitter = SubscriptionEmitter(send_frame=send_frame)
+    # Carried across a rebuild rather than re-created: a subscription lives in
+    # the emitter, and the page re-subscribes only when the socket reconnects
+    # (ui-web state/session/registry.ts). A fresh emitter under a live socket
+    # would leave every open stream silently unfed.
+    emitter = emitter if emitter is not None else SubscriptionEmitter(send_frame=send_frame)
     # ``confirm.request`` now names the conversation the dispatch was asked for
     # (slash.exec threads its session_id down; see cli_dispatch), so the same
     # scoping as the question broker applies: a destructive command's yes/no
@@ -239,7 +254,6 @@ async def build_rpc_stack(
     if agent_loop is not None:
         if (ask_tool := agent_loop.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
             ask_tool.set_broker(question_broker)
-        agent_loop.set_deep_research_broker(question_broker)
         # The TUI path wires this too. Without it a DAG run streams nothing
         # while it works, which reads as a hang rather than as progress.
         agent_loop.set_dag_progress_sink(make_dag_progress_sink(emitter))
@@ -361,6 +375,7 @@ async def build_rpc_stack(
         build_error=build_error,
         send_frame=send_frame,
         default_channel=channel,
+        ensure_stack=ensure_stack,
     )
 
     if owns_loop and agent_loop is not None:
@@ -391,6 +406,26 @@ async def build_rpc_stack(
                 agent_loop.cron_service.stop()
             except Exception:
                 pass
+        # Sub-agents go before the spine seals, and sealing is the first thing
+        # the turn teardown does: a run that finishes after it announces its
+        # result into a submit that refuses new turns, and that announce is the
+        # only route the result has back to its conversation. Cancelled first,
+        # those runs end as the stops they are. Same order every host follows:
+        # drain, cancel, then close -- cancelling after the pool closed would
+        # report each in-flight turn as a connection failure instead of as the
+        # stop it is, and sub-agents also go before the memory backend, whose
+        # adapter a run still going can hand another write. A mounted stack
+        # leaves this to its host, which owns the sub-agents and cancels them
+        # before tearing the mount down.
+        if owns_loop:
+            try:
+                from raven.acp_client.client import begin_drain
+
+                begin_drain()
+                if agent_loop is not None:
+                    await agent_loop.subagents.cancel_all(reason="the server stopped")
+            except Exception:
+                logger.exception("serve: cancelling in-flight sub-agents failed; continuing shutdown")
         if turn_teardown is not None:
             try:
                 await turn_teardown()
@@ -400,27 +435,13 @@ async def build_rpc_stack(
         # the ACP pool are the host process's to close, not this stack's.
         if not owns_loop:
             return
-        # Contributed services stop first of all -- producers before drains,
-        # the same order dispose follows.
+        # Contributed services stop before the stores drain -- producers before
+        # drains, the same order dispose follows.
         if agent_loop is not None:
             try:
                 await agent_loop.stop_plugin_services()
             except Exception:
                 logger.exception("plugin services stop failed; continuing shutdown")
-        # Same order every host follows: drain, cancel, then close. Cancelling
-        # after the pool closed would report each in-flight turn as a connection
-        # failure instead of as the stop it is. Sub-agents also go before the
-        # memory backend: a run that is still going can hand the backend another
-        # write, and closing the adapter under it fails that write for a reason
-        # that has nothing to do with the service.
-        try:
-            from raven.acp_client.client import begin_drain
-
-            begin_drain()
-            if agent_loop is not None:
-                await agent_loop.subagents.cancel_all()
-        except Exception:
-            logger.exception("serve: cancelling in-flight sub-agents failed; continuing shutdown")
         if agent_loop is not None and agent_loop.backend is not None:
             try:
                 # Drain before stop, the same order the CLI hosts follow:

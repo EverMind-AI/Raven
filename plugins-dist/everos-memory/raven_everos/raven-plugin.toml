@@ -44,3 +44,9 @@ owned    = { type = "boolean" }
 port     = { type = "integer" }
 agent_id = { type = "string" }
 user_id  = { type = "string" }
+# One block per EverOS role raven manages: {model, provider}, never a
+# credential. Embedding is not here -- its pin is raven's own top-level
+# block, because knowledge bases embed with it too.
+llm        = { type = "object" }
+rerank     = { type = "object" }
+multimodal = { type = "object" }

@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 
 import typer
 
-from raven.cli._helpers import report_dropped_memory_writes
+from raven.cli._helpers import report_memory_write_outcome
 from raven.cli._log_file import _strip_tty_stream_handlers, redirect_loguru_to_file
 from raven.i18n import t
 from raven.rpc.cron_events import build_cron_callback_spine, fanout_cron_missed
@@ -358,8 +358,8 @@ async def _run_rpc_server_until_done(
     emitter = SubscriptionEmitter(send_frame=server.send_frame)
     # Prompt brokers share the gateway's send_frame sink but retain separate
     # semantics. Shell approval is not a conversational confirmation: it binds
-    # one exact command to one turn, has dual deadlines, and always fails closed
-    # when the transport disappears.
+    # one exact command to one turn, waits for a person rather than a clock, and
+    # always fails closed when the transport disappears.
     confirm_broker = ConfirmBroker(send_frame=server.send_frame)
     approval_broker = ApprovalBroker(send_frame=server.send_frame)
     # QuestionBroker shares the same send_frame sink: the ask_user tool emits a
@@ -385,12 +385,9 @@ async def _run_rpc_server_until_done(
 
     # Late-bind the QuestionBroker into the tools that ask the user mid-turn, now
     # that the loop (and its tool registry) exists; the broker was built up-front.
-    # deep_research goes through the loop so a tool built later by promotion (a
-    # mid-session enable) inherits the broker too, not just the startup one.
     if agent_loop is not None:
         if (ask_tool := agent_loop.tools.get("ask_user")) is not None and hasattr(ask_tool, "set_broker"):
             ask_tool.set_broker(question_broker)
-        agent_loop.set_deep_research_broker(question_broker)
         # Fan run_subagent_dag progress to the turn's conversation so the TUI can
         # draw the graph. Goes through the loop (not the tool) so a DAG tool
         # registered later by a mid-session config apply inherits the sink too.
@@ -559,12 +556,30 @@ async def _run_rpc_server_until_done(
                 agent_loop.cron_service.stop()
             except Exception:
                 pass
+        # Sub-agents go first: before the spine seals, and before the memory
+        # drain in particular. Sealing is the first thing the turn teardown
+        # does, and a run that finishes after it announces its result into a
+        # submit that refuses new turns -- the only route that result has back
+        # to its conversation. And a run still going can hand the backend
+        # another write, so draining while they live is draining into a queue
+        # that is still being filled. Stopping them costs a signal and a
+        # bounded wait, where the drain costs its whole budget.
+        try:
+            from raven.acp_client.client import begin_drain
+
+            begin_drain()
+            if agent_loop is not None:
+                await agent_loop.subagents.cancel_all(reason="the TUI exited")
+        except Exception:
+            from loguru import logger as _logger
+
+            _logger.exception("tui: cancelling in-flight sub-agents failed; continuing shutdown")
         if turn_teardown is not None:
             try:
                 await turn_teardown()
             except Exception:
                 pass
-        # Contributed services stop before everything else -- producers
+        # Contributed services stop before the stores drain -- producers
         # before drains, the order dispose follows.
         if agent_loop is not None:
             try:
@@ -573,21 +588,6 @@ async def _run_rpc_server_until_done(
                 from loguru import logger as _logger
 
                 _logger.exception("tui: plugin services stop failed; continuing shutdown")
-        # Sub-agents go first, and before the memory drain in particular: a run
-        # still going is a run that can hand the backend another write, so
-        # draining while they live is draining into a queue that is still being
-        # filled. Stopping them costs a signal and a bounded wait, where the
-        # drain costs its whole budget.
-        try:
-            from raven.acp_client.client import begin_drain
-
-            begin_drain()
-            if agent_loop is not None:
-                await agent_loop.subagents.cancel_all()
-        except Exception:
-            from loguru import logger as _logger
-
-            _logger.exception("tui: cancelling in-flight sub-agents failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
         # terminal's signals and outlive this process unless the pool is closed.
         try:
@@ -616,8 +616,8 @@ async def _run_rpc_server_until_done(
         # Release the embedded index lock so the next process can start.
         if agent_loop is not None and agent_loop.backend is not None:
             try:
-                dropped = await agent_loop.drain_backend_stores()
-                report_dropped_memory_writes(dropped)
+                outcome = await agent_loop.drain_backend_stores()
+                report_memory_write_outcome(outcome)
                 await agent_loop.backend.stop()
             except Exception:
                 from loguru import logger as _logger

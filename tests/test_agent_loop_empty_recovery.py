@@ -34,13 +34,34 @@ from raven.agent.loop.recovery import (
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.litellm_provider import LiteLLMProvider
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 
 
 @pytest.fixture
 def workspace():
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
+
+
+def _turn(text: str = "hi") -> TurnRequest:
+    return TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+        text=text,
+    )
+
+
+async def _run_answerless(agent: AgentLoop, text: str = "hi", **kwargs) -> str:
+    """Run a turn that ends with no answer, and return the failure it reports.
+
+    A turn the model never answered fails rather than returning a reply, so every
+    test below whose provider stays empty to the end asks for its work through
+    here: the assertions about what the ladder sent are unchanged, and the exit
+    they are reached through is held in one place.
+    """
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await agent._process_message(_turn(text), session_key="s1", **kwargs)
+    return str(failed.value)
 
 
 def _make_agent(workspace: Path, provider: LLMProvider, limits: RecoveryLimits | None = None) -> AgentLoop:
@@ -477,14 +498,7 @@ async def test_an_empty_turn_cut_at_the_output_limit_is_told_so(workspace):
     provider = _AlwaysCutThinkingProvider()
     agent = _make_agent(workspace, provider)
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="write eight files",
-        ),
-        session_key="s1",
-    )
+    await _run_answerless(agent, "write eight files")
 
     assert provider.calls > 1, "the ladder did not ask again at all"
     assert any(any(m.get("content") == OUTPUT_LIMIT_NUDGE for m in seen) for seen in provider.seen), (
@@ -508,14 +522,7 @@ async def test_the_output_limit_nudge_does_not_presume_a_tool_call_was_owed(work
     provider = _AlwaysCutThinkingProvider()
     agent = _make_agent(workspace, provider)
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="which year did the timezone database begin",
-        ),
-        session_key="s1",
-    )
+    await _run_answerless(agent, "which year did the timezone database begin")
 
     delivered = [m for seen in provider.seen for m in seen if m.get("content") == OUTPUT_LIMIT_NUDGE]
     assert delivered, "an answer-only turn never reached the nudge"
@@ -562,14 +569,7 @@ async def test_an_empty_turn_that_was_not_cut_gets_no_output_limit_nudge(workspa
     provider = _Recording()
     agent = _make_agent(workspace, provider)
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="hi",
-        ),
-        session_key="s1",
-    )
+    await _run_answerless(agent)
 
     assert provider.calls > 1, "the ladder never asked again, so this guard proves nothing"
     assert not any(m.get("content") == OUTPUT_LIMIT_NUDGE for seen in provider.seen for m in seen), (
@@ -629,14 +629,7 @@ async def test_the_output_limit_nudge_never_follows_a_tool_message(workspace):
     provider = _ToolThenAlwaysCutProvider()
     agent = _make_agent(workspace, provider, limits=RecoveryLimits(post_tool_empty_max_nudges=0))
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="use the tool",
-        ),
-        session_key="s1",
-    )
+    await _run_answerless(agent, "use the tool")
 
     checked = 0
     for seen in provider.seen:
@@ -659,14 +652,7 @@ async def test_the_output_limit_nudge_is_said_once_not_once_per_retry(workspace)
     provider = _AlwaysCutThinkingProvider()
     agent = _make_agent(workspace, provider)
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="write eight files",
-        ),
-        session_key="s1",
-    )
+    await _run_answerless(agent, "write eight files")
 
     per_request = [sum(1 for m in seen if m.get("content") == OUTPUT_LIMIT_NUDGE) for seen in provider.seen]
     assert max(per_request) == 1, f"nudge accumulated across retries: {per_request}"
@@ -707,29 +693,20 @@ async def test_persistently_empty_is_bounded_then_reports_a_failed_turn(workspac
     provider = _AlwaysEmptyProvider()
     agent = _make_agent(workspace, provider, limits=limits)
 
-    out = await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="hi",
-        ),
-        session_key="s1",
-    )
+    failure = await _run_answerless(agent)
 
-    assert out is not None
     # plain-empty budget -> 1 initial call + a retry per rung the effort descent
     # still has, then give up. From an unstated effort that is low and minimal,
     # so the budget's third retry is never sent: it could only repeat the second.
     assert provider.calls <= 1 + limits.empty_content_max_retries
     assert provider.calls == 3
     # Not the canned "no response to give" filler, which reads as an answer and
-    # let a measured DAG node file a dead turn as a finished one. The reply names
-    # the failure and how many attempts went into it -- three, the calls actually
-    # sent, not the budget's full allowance.
-    reply = out[0]
-    assert "no answer" in reply.lower()
-    assert "failed call" in reply.lower()
-    assert f"{provider.calls} attempt" in reply
+    # let a measured DAG node file a dead turn as a finished one. The turn fails,
+    # and its failure says how many attempts went into it -- three, the calls
+    # actually sent, not the budget's full allowance.
+    assert "returned no content" in failure
+    assert f"{provider.calls} attempt" in failure
+    assert "plain retry 2" in failure, "the failure accounts for each budget by name"
 
 
 @pytest.mark.asyncio
@@ -746,6 +723,10 @@ async def test_an_exhausted_recovery_ends_the_turn_with_error_status(workspace):
     _final, _used, messages, outcome = await agent._run_agent_loop([{"role": "user", "content": "hi"}])
 
     assert outcome.status == "error"
+    # And the words the caller fails the turn on, beside the status: without them
+    # the caller reads an errored turn as one that simply had nothing to say.
+    assert outcome.error is not None
+    assert "returned no content on 3 attempt(s)" in outcome.error
     # Like the provider-error exit beside it, the failure text is not persisted
     # into history: an error reply in the transcript poisons the next request.
     assert not any(m.get("role") == "assistant" for m in messages)
@@ -840,14 +821,7 @@ async def test_the_plain_empty_retry_asks_for_less_reasoning_than_the_call_that_
     provider = _AlwaysEmptyProvider()
     agent = _make_agent(workspace, provider, limits=limits)
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="hi",
-        ),
-        session_key="s1",
-    )
+    await _run_answerless(agent)
 
     assert provider.efforts == [None, "low", "minimal"]
     assert provider.calls == 3, "the fourth call had no rung left to change, so it was not paid for"
@@ -858,22 +832,21 @@ async def test_the_plain_empty_retry_asks_for_less_reasoning_than_the_call_that_
 
 
 @pytest.mark.asyncio
-async def test_recovery_disabled_falls_back_immediately(workspace):
+async def test_recovery_disabled_fails_the_turn_without_asking_again(workspace):
+    """Switching the recovery off buys fewer calls, not a manufactured answer.
+
+    The turn still has nothing to say, and the canned "no response to give" line
+    it used to return is what let a dead turn be filed as a finished one. So this
+    exit fails too -- with a sentence of its own, because there are no budgets
+    here to count.
+    """
     provider = _AlwaysEmptyProvider()
     agent = _make_agent(workspace, provider, limits=RecoveryLimits(enabled=False))
 
-    out = await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="hi",
-        ),
-        session_key="s1",
-    )
+    failure = await _run_answerless(agent)
 
-    assert out is not None
     assert provider.calls == 1  # no retries when disabled
-    assert "no response" in out[0].lower()
+    assert failure == "The model returned no content, and this turn's empty-response recovery is switched off."
 
 
 # ---------------------------------------------------------------------------
@@ -1260,15 +1233,11 @@ async def test_a_turn_cut_at_the_ceiling_records_it_on_the_session(workspace):
     assistant row at all, so a message-seated record has nowhere to land."""
     agent = _make_agent(workspace, _AlwaysCutProvider(), limits=RecoveryLimits())
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="hi",
-        ),
-        session_key="s1",
-    )
+    await _run_answerless(agent)
 
+    # Recorded although the turn failed: a turn cut at the ceiling is the one
+    # most likely to come back with nothing, so a marker written only on the way
+    # out of a successful turn would never see the case it exists for.
     session = agent.sessions.get_or_create("s1")
     assert session.metadata.get("output_limit_turn_at") == 0
 
@@ -1277,16 +1246,11 @@ async def test_a_turn_cut_at_the_ceiling_records_it_on_the_session(workspace):
 async def test_an_answerless_turn_that_was_not_cut_records_no_output_limit(workspace):
     agent = _make_agent(workspace, _AlwaysEmptyProvider(), limits=RecoveryLimits())
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="hi",
-        ),
-        session_key="s1",
-    )
+    await _run_answerless(agent)
 
-    assert "output_limit_turn_at" not in agent.sessions.get_or_create("s1").metadata
+    # Said rather than left unsaid: a save merges over the record on disk, so
+    # the marker is cleared by writing None. Its reader asks for an int.
+    assert agent.sessions.get_or_create("s1").metadata.get("output_limit_turn_at") is None
 
 
 class _CutThenAnswersProvider(LLMProvider):
@@ -1332,7 +1296,9 @@ async def test_a_turn_that_recovered_from_a_cut_records_no_output_limit(workspac
     )
 
     assert out is not None and out[0] == "the whole answer"
-    assert "output_limit_turn_at" not in agent.sessions.get_or_create("s1").metadata
+    # Said rather than left unsaid: a save merges over the record on disk, so
+    # the marker is cleared by writing None. Its reader asks for an int.
+    assert agent.sessions.get_or_create("s1").metadata.get("output_limit_turn_at") is None
 
 
 @pytest.mark.asyncio
@@ -1347,13 +1313,10 @@ async def test_a_turn_that_was_not_cut_clears_a_marker_left_by_an_earlier_one(wo
     agent = _make_agent(workspace, _AlwaysEmptyProvider(), limits=RecoveryLimits())
     agent.sessions.get_or_create("s1").metadata["output_limit_turn_at"] = 0
 
-    await agent._process_message(
-        TurnRequest(
-            origin=Origin.USER,
-            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
-            text="hi",
-        ),
-        session_key="s1",
-    )
+    # And a turn that fails clears it too: the failing turn is the likeliest one
+    # to be reported as cut by a marker it did not write.
+    await _run_answerless(agent)
 
-    assert "output_limit_turn_at" not in agent.sessions.get_or_create("s1").metadata
+    # Said rather than left unsaid: a save merges over the record on disk, so
+    # the marker is cleared by writing None. Its reader asks for an int.
+    assert agent.sessions.get_or_create("s1").metadata.get("output_limit_turn_at") is None

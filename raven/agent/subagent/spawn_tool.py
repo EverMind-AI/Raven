@@ -53,9 +53,9 @@ class SpawnTool(Tool):
     timeout_seconds = 900.0
     # Every tool that runs a sub-agent is a blocking interaction: the run has no
     # automatic deadline (only a manual stop), so a turn stream must not clock
-    # it. Kept uniform across spawn / run_subagent_dag / deep_research rather
-    # than derived from whether a given one happens to return before its
-    # sub-agent does -- a consumer cannot see that distinction.
+    # it. Kept uniform across spawn / run_subagent_dag rather than derived from
+    # whether a given one happens to return before its sub-agent does -- a
+    # consumer cannot see that distinction.
     blocking_interaction = True
 
     def __init__(self, manager: "SubagentManager"):

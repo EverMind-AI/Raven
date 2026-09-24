@@ -35,8 +35,8 @@ from urllib.parse import quote
 from loguru import logger
 
 from raven.acp import protocol
-from raven.acp.redact import redact, redact_value
 from raven.acp.tool_kinds import absolute_path, locations, title_for, tool_kind
+from raven.security.redact import redact, redact_value
 
 # Every event type ``RpcOutlet``, the spine sink, the DAG bridge and the cron
 # fan-out can put on a subscription. Pinned as a set so a new wire event fails
@@ -50,6 +50,7 @@ KNOWN_EVENT_TYPES = frozenset(
         "tool.start",
         "tool.complete",
         "message.start",
+        "message.injected",
         "turn.started",
         "message.complete",
         "error",
@@ -98,6 +99,9 @@ SIDE_CHANNEL_METHODS = frozenset(
 # scheduler use, and those are not cancellations.
 _CANCELLED_REASON = "cancelled_by_client"
 
+# The one notice kind the live translator puts on the wire.
+_ACTION_BLOCKED = "action_blocked"
+
 # A tool result preview is written for a person to read in a panel. The runtime
 # already truncates and sets ``truncated``; this is the backstop for a tool that
 # does not, so one runaway result cannot become a multi-megabyte frame.
@@ -141,6 +145,18 @@ class Translated:
     latch: str | None = None
     stop: str | None = None
 
+
+# One frame per model token is what ``thinking.delta`` arrives as, and one
+# frame is one blocking write on the client's pipe. Consecutive thought
+# chunks of a session are held and sent as one ``agent_thought_chunk`` when
+# the window closes, the text reaches the cap, or anything that has to stay
+# ordered after them (a message chunk, a tool call, the turn's end) arrives.
+# Measured on the 2026-09-20 design run: 58,675 thought frames averaging
+# 5.7 characters, a median 0.34ms apart; this window and cap replay to
+# 4,333 frames. A 100ms window gives 6,210 and a 1,024-character cap
+# changes nothing, so the window is what does the work.
+THOUGHT_COALESCE_WINDOW_S = 0.2
+THOUGHT_COALESCE_MAX_CHARS = 512
 
 MAX_MEDIA_ITEMS = 32
 """How many files one media event may put on the wire.
@@ -234,7 +250,9 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
     # message.start and turn.started carry the turn id, which a client has no use
     # for and which rides ``_meta`` where it matters -- and in ACP the
     # ``session/prompt`` request is itself the record that a turn began, so an
-    # update saying so would be a second one. turn.started's ``delegated`` block
+    # update saying so would be a second one. message.injected is the same case
+    # one step later: the client's own steer request is the record that it sent
+    # a message mid-turn. turn.started's ``delegated`` block
     # names a sub-agent turn, which this surface reports through the tool call
     # that delegated it rather than as a turn of its own. episode.start is a TUI collapsing
     # boundary with no ACP counterpart. The dag.* events would map to `plan`, but
@@ -481,7 +499,7 @@ def _tool_call_update(payload: dict[str, Any], meta: dict[str, Any] | None) -> d
         # first can slice a credential so that it no longer matches the pattern
         # that would have caught it -- ``redact("token sk-ant-api")`` returns it
         # unchanged -- and then the head of it is published as ordinary text.
-        # The scan cap in :mod:`raven.acp.redact` is four times this one, so a
+        # The scan cap in :mod:`raven.security.redact` is four times this one, so a
         # preview of any length that reaches here is scanned whole or truncated
         # by that module with a notice of its own.
         scanned = redact(preview)
@@ -552,21 +570,54 @@ def _ends_the_stream(event: Any) -> bool:
     return payload.get("code") in STREAM_TERMINAL_ERROR_CODES
 
 
+def notice_text(payload: dict[str, Any]) -> str:
+    """What a runtime notice says to a person.
+
+    One wording for the live frame and the replayed entry, for the same reason
+    the TUI keeps one: a stored notice sits on an assistant entry whose text was
+    written for the model to stop on, so a replay that drew that text would put
+    runtime prose in the assistant's voice. The live translator only ever asks
+    about a blocked action; on replay an unrecognised kind reads as its own name
+    rather than as the entry beside it, and no kind at all reads as nothing,
+    which is a caller's signal that there is no line to draw.
+    """
+    kind = payload.get("kind")
+    if kind == _ACTION_BLOCKED:
+        detail = payload.get("detail")
+        # A refusal quotes what was refused, and what was refused is often a
+        # command line. Same publishing surface as the title, same treatment.
+        return redact(detail) if isinstance(detail, str) and detail.strip() else "The runtime blocked this action."
+    return kind.strip() if isinstance(kind, str) else ""
+
+
+def turn_failure_text(*parts: Any) -> str:
+    """What a failed turn says to a person, live or replayed.
+
+    The parts are whatever the failure carried: a message and a detail on the
+    live event, the stored reason on a replay. A failure that carried none of
+    them still says something, because a turn that stopped for no stated reason
+    reads to a person as the client having lost it.
+    """
+    said = [redact(part) for part in parts if isinstance(part, str) and part.strip()]
+    return " ".join(said) if said else "The turn failed."
+
+
 def _notice(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
-    """A runtime notice. Only ``action_blocked`` reaches the wire at all.
+    """A runtime notice, of which only ``action_blocked`` is translated here.
+
+    The outlet also puts ``llm_retry`` on the wire, and ACP has no transient
+    status update to map it to -- the same reason ``permission.review`` is
+    dropped. Translating it as message content would write the runtime's waiting
+    into the answer and, worse, latch a stop reason onto a turn still running.
 
     It latches ``refusal`` rather than terminating: the runtime still ends the
     turn through its normal path, and claiming the stop reason here would race
     that. The detail is surfaced as message content because a refusal with no
     explanation is indistinguishable from an empty answer.
     """
-    if payload.get("kind") != "action_blocked":
+    if payload.get("kind") != _ACTION_BLOCKED:
         return Translated()
-    detail = payload.get("detail")
-    # A refusal quotes what was refused, and what was refused is often a command
-    # line. Same publishing surface as the title, same treatment.
-    text = redact(detail) if isinstance(detail, str) and detail.strip() else "The runtime blocked this action."
-    return Translated(updates=(_text_chunk("agent_message_chunk", text, meta),), latch="refusal")
+    return Translated(updates=(_text_chunk("agent_message_chunk", notice_text(payload), meta),), latch="refusal")
 
 
 def _error(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
@@ -581,10 +632,7 @@ def _error(payload: dict[str, Any], meta: dict[str, Any] | None) -> Translated:
     """
     if payload.get("reason") == _CANCELLED_REASON:
         return Translated(stop="cancelled")
-    message = payload.get("message")
-    detail = payload.get("detail")
-    parts = [redact(str(part)) for part in (message, detail) if isinstance(part, str) and part.strip()]
-    text = " ".join(parts) if parts else "The turn failed."
+    text = turn_failure_text(payload.get("message"), payload.get("detail"))
     code = payload.get("code")
     if isinstance(code, int):
         text = f"{text} (code {code})"
@@ -626,6 +674,16 @@ class _Turn:
 
 
 @dataclass
+class _Thoughts:
+    """Thought text held back for one session, waiting to go out as one chunk."""
+
+    meta: dict[str, Any] | None
+    parts: list[str] = field(default_factory=list)
+    chars: int = 0
+    timer: asyncio.TimerHandle | None = None
+
+
+@dataclass
 class AcpSession:
     """One ACP session: its raven session key, its stream, and its turn."""
 
@@ -662,6 +720,7 @@ class UpdateTranslator:
         self._side_channel = side_channel
         self._by_session_id: dict[str, AcpSession] = {}
         self._by_subscription: dict[str, AcpSession] = {}
+        self._thoughts: dict[str, _Thoughts] = {}
         # Set once the connection is shutting down. A one-way latch, and the
         # reason it exists is a race a single sweep cannot close: a handler task
         # created before EOF may not have *begun* before EOF, so it would open its
@@ -714,6 +773,7 @@ class UpdateTranslator:
         session = self._by_session_id.get(session_id)
         if session is None:
             return None
+        self.flush_thoughts(session_id)
         if session.turn is not None:
             session.turn.settle("cancelled")
         self._mark_stream_dead(session)
@@ -786,17 +846,20 @@ class UpdateTranslator:
         """
         self._closing = True
         for session in self._by_session_id.values():
+            self.flush_thoughts(session.session_id)
             if session.turn is not None:
                 session.turn.settle("cancelled")
 
     def end_turn(self, session_id: str) -> None:
         """Drop the turn slot. Idempotent: the caller runs it from a finally."""
+        self.flush_thoughts(session_id)
         session = self._by_session_id.get(session_id)
         if session is not None:
             session.turn = None
 
     def settle_turn(self, session_id: str, stop: str) -> bool:
         """Resolve a turn from outside the event stream (a teardown, a cancel)."""
+        self.flush_thoughts(session_id)
         session = self._by_session_id.get(session_id)
         if session is None or session.turn is None:
             return False
@@ -846,7 +909,17 @@ class UpdateTranslator:
 
     async def _deliver(self, session: AcpSession, event: Any) -> None:
         result = translate(event, cwd=session.cwd)
+        # Held thoughts go out before anything that has to follow them: a
+        # chunk of the answer, a tool call, an ending. An event that carries
+        # none of those (a thought, or nothing at all) leaves them held, which
+        # is what lets a run of thought tokens become one frame. A latch and a
+        # stream-ending error both arrive on an update the first test catches.
+        if any(update.get("sessionUpdate") != "agent_thought_chunk" for update in result.updates) or result.stop:
+            self.flush_thoughts(session.session_id)
         for update in result.updates:
+            if update.get("sessionUpdate") == "agent_thought_chunk":
+                self._hold_thought(session, update)
+                continue
             self._emit(protocol.notification("session/update", {"sessionId": session.session_id, "update": update}))
         if _ends_the_stream(event):
             # Answered rather than correlated, and answered as cancelled because
@@ -910,6 +983,48 @@ class UpdateTranslator:
         if result.stop:
             turn.settle(result.stop)
 
+    def _hold_thought(self, session: AcpSession, update: dict[str, Any]) -> None:
+        """Add one thought chunk to the session's held text, sending when the cap is reached."""
+        meta = update.get("_meta")
+        held = self._thoughts.get(session.session_id)
+        # A different ``_meta`` is a different speaker (a delegated agent's
+        # thought tagged with its target); it does not join the held text.
+        if held is not None and held.meta != meta:
+            self.flush_thoughts(session.session_id)
+            held = None
+        if held is None:
+            held = _Thoughts(meta=meta)
+            held.timer = asyncio.get_running_loop().call_later(
+                THOUGHT_COALESCE_WINDOW_S, self._flush_thoughts_on_timer, session.session_id
+            )
+            self._thoughts[session.session_id] = held
+        text = str(update["content"]["text"])
+        held.parts.append(text)
+        held.chars += len(text)
+        if held.chars >= THOUGHT_COALESCE_MAX_CHARS:
+            self.flush_thoughts(session.session_id)
+
+    def flush_thoughts(self, session_id: str) -> None:
+        """Send the session's held thought text as one chunk, if any is held."""
+        held = self._thoughts.pop(session_id, None)
+        if held is None:
+            return
+        if held.timer is not None:
+            held.timer.cancel()
+        if not held.parts:
+            return
+        update = _text_chunk("agent_thought_chunk", "".join(held.parts), held.meta)
+        self._emit(protocol.notification("session/update", {"sessionId": session_id, "update": update}))
+
+    def _flush_thoughts_on_timer(self, session_id: str) -> None:
+        # A write that fails here has no caller to raise to; the next
+        # delivery on this connection meets the same broken pipe and raises
+        # where the handler can see it.
+        try:
+            self.flush_thoughts(session_id)
+        except Exception:
+            logger.debug("acp: held thought text for {} could not be written", session_id, exc_info=True)
+
     def _drop(self, what: str) -> None:
         self.dropped[what] = self.dropped.get(what, 0) + 1
         if self.dropped[what] == 1:
@@ -930,5 +1045,7 @@ __all__ = [
     "Translated",
     "TurnAlreadyRunningError",
     "UpdateTranslator",
+    "notice_text",
     "translate",
+    "turn_failure_text",
 ]

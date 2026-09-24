@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.config import product_render as render
+from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.home import raven_home
 
 HERE = Path(__file__).resolve().parent
@@ -103,6 +104,16 @@ IMAGE_SETTING_SLOTS = {
 PROXY_SLOT = ("tools", "web", "proxy")
 PROXY_ENV = ("PPT_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")
 
+# The secret slots above reach only the two pre-vendor leaves, and a host set up
+# on a current raven keeps its web keys in the vendor table instead
+# (tools.web.providers.<vendor>.apiKey). Rendered from the leaves alone, such a
+# host launched this lane keyless: web_search withheld, ppt_image_search declined,
+# and a live run spent six minutes paging a wiki API for picture file names.
+# The vendor for which this product holds a key of its own, by the env name
+# that sets it; that key wins, so the host's vendor slot is not inherited over it.
+OWN_WEB_KEYS = {"serper": "PPT_SERPER_API_KEY", "jina": "PPT_JINA_API_KEY"}
+WEB_SELECTION_SLOTS = (("tools", "web", "search", "provider"), ("tools", "web", "fetch", "provider"))
+
 # The one secret whose absence is fatal: no pictures makes a poorer deck, no
 # model makes no deck at all.
 REQUIRED_SECRETS = ("PPT_API_KEY",)
@@ -164,6 +175,39 @@ def openrouter_key_in_force(config: dict) -> str:
         if _IMAGE_GATEWAY in base and (key := provider.get("apiKey")):
             return str(key)
     return ""
+
+
+def inherit_web_vendors(config: dict, host: dict) -> list[str]:
+    """Carry the host's vendor-table web keys and vendor selection into ``config``.
+
+    Per vendor, a key this product already holds wins: one its config states in
+    the vendor slot, or the own-key env var of a vendor with a pre-vendor leaf
+    (that key sits in the leaf, which trunk reads only after an empty vendor
+    slot, so inheriting the host's slot would silently outrank it). The search
+    and fetch vendor choices follow the host where this config names none, so
+    a host that searches through another vendor hands over the key and the
+    choice together. Returns the vendors whose key was carried.
+    """
+    carried = []
+    for vendor in WEB_VENDOR_ENV_VARS:
+        slot = ("tools", "web", "providers", vendor, "apiKey")
+        own = OWN_WEB_KEYS.get(vendor)
+        if render.dig(config, slot) or (own and env_value(own)):
+            continue
+        if key := render.dig(host, slot):
+            render.put(config, slot, key)
+            carried.append(vendor)
+    for slot in WEB_SELECTION_SLOTS:
+        if not render.dig(config, slot) and (chosen := render.dig(host, slot)):
+            render.put(config, slot, chosen)
+    return carried
+
+
+def serper_key_in_force(config: dict) -> str:
+    """The Serper key trunk's web tools would read from ``config``: vendor slot, then leaf."""
+    return render.dig(config, ("tools", "web", "providers", "serper", "apiKey")) or render.dig(
+        config, SECRET_SLOTS["PPT_SERPER_API_KEY"]
+    )
 
 
 def configure_image_generation(config: dict, host: dict) -> None:
@@ -451,6 +495,8 @@ def render_config(source: Path) -> Path:
     host = render.host_config()
 
     render.apply_secret_slots(config, host, slots=SECRET_SLOTS, required=(), lookup=env_value)
+    if carried := inherit_web_vendors(config, host):
+        log(f"[run] web: vendor keys from the host ({', '.join(carried)})")
     if not render.dig(config, PROXY_SLOT):
         from_host = render.dig(host, PROXY_SLOT)
         if proxy := (from_host or next((value for name in PROXY_ENV if (value := env_value(name))), "")):
@@ -509,14 +555,14 @@ def render_config(source: Path) -> Path:
         )
 
     # The picture-search key reaches both consumers from ONE source of truth:
-    # the tools.web slot AFTER apply_secret_slots, which is the env key when
-    # one is set and the host config's own tools.web.search.apiKey when not
-    # (the per-slot fallback this family pins). trunk's web_search reads that
-    # slot; the engine's ppt_image_search reads its slice key, so the merged
-    # value is copied across -- rendered from the env var alone, a host-keyed
-    # deploy would register web_search while the deck's own image search
-    # silently declined. setdefault twice: a slice that shipped a key keeps it.
-    serper_key = (((config.get("tools") or {}).get("web") or {}).get("search") or {}).get("apiKey")
+    # the Serper key trunk's web_search reads from this config AFTER the secret
+    # merge and the vendor inheritance -- the vendor slot first, the pre-vendor
+    # leaf after it, which is the env key when one is set and the host's own
+    # key when not. The engine's ppt_image_search reads its slice key, so the
+    # same value is copied across -- rendered from the env var alone, a
+    # host-keyed deploy would register web_search while the deck's own image
+    # search silently declined. setdefault twice: a slice that shipped a key keeps it.
+    serper_key = serper_key_in_force(config)
     if serper_key:
         engine_slice = config.setdefault("plugins", {}).setdefault("config", {}).setdefault(ENGINE_PLUGIN_ID, {})
         engine_slice.setdefault("imageSearch", {}).setdefault("apiKey", serper_key)
@@ -579,7 +625,7 @@ def render_config(source: Path) -> Path:
         acp["modes"] = catalogue
         acp["defaultMode"] = DEFAULT_MODE
         log(f"[run] modes: {', '.join(catalogue)} (default {DEFAULT_MODE})")
-    return render.write_rendered(config, root)
+    return render.write_rendered(config, root, own_plugins=(ENGINE_PLUGIN_ID,))
 
 
 def serve(args: argparse.Namespace) -> int:

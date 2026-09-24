@@ -1,9 +1,8 @@
 # 沙箱
 
-启用沙箱后，Raven 在 **Boxlite 微虚拟机**中执行 Shell 命令和 stdio MCP 服务进程。
+启用沙箱后，通过 `BoxliteExecutor` 派发的 Shell 命令和 stdio MCP 服务进程
+在 **Boxlite 微虚拟机**中运行。
 虚拟机具有独立内核、资源限制和网络策略。挂载目录仍按配置的权限开放，其中包括共享工作区。
-
----
 
 ## 1. 安装 { #1-installation }
 
@@ -19,11 +18,11 @@ uv sync --extra sandbox
 `pyproject.toml` 中的 `sandbox` 可选依赖固定为 `boxlite==0.9.5`。请使用固定版本，以保持
 后端与 Raven 执行器实现兼容。
 
----
-
 ## 2. 配置 { #2-configuration }
 
-在 `config.json` 的 `tools` 下添加 `sandbox` 配置块：
+在 `config.json` 的 `tools` 下添加 `sandbox` 配置块。加载器仅接受 JSON，不支持 YAML。
+JSON 无效时会发出警告并回退到默认配置，包括 `tools.sandbox.backend = "none"`；
+因此，在依赖沙箱隔离前请检查启动警告：
 
 ```json
 {
@@ -51,7 +50,7 @@ uv sync --extra sandbox
 | `default_timeout` | `int` | `120` | 未显式传入超时时，单次 `exec()` 的超时秒数。 |
 | `verify_timeout` | `int` | `30` | 启动时用 `echo ok` 探测虚拟机是否响应的超时秒数。 |
 | `create_timeout` | `int` | `300` | 拉取镜像与创建虚拟机的超时秒数。镜像较大或镜像源较慢时调大；镜像总是预先拉取时可调小。 |
-| `debug` | `object` | 禁用 | 将 `debug.enabled` 设为 `true`，启用 `raven sandbox` 使用的本地沙箱检查服务。 |
+| `debug` | `object` | 禁用 | 将 `debug.enabled` 设为 `true`，启用 `raven sandbox` 使用的本地沙箱检查服务。`backend` 为 `"none"` 时忽略此设置。 |
 
 ### 常用预设 { #common-presets }
 
@@ -116,8 +115,6 @@ uv sync --extra sandbox
 }
 ```
 
----
-
 ## 3. 工作原理 { #3-how-it-works }
 
 `SandboxExecutor` 定义在 `raven/sandbox/interfaces.py` 中，为两个执行后端提供统一接口：
@@ -139,8 +136,6 @@ uv sync --extra sandbox
 
 网络限制作用于工作虚拟机，镜像准备阶段仍需访问镜像仓库。后端不可用或平台不受支持时，
 会在沙箱任务执行前抛出 `SandboxInitError`。
-
----
 
 ## 4. 直接使用 `SandboxExecutor` { #4-using-sandboxexecutor-directly }
 
@@ -194,8 +189,10 @@ class ExecResult:
     def as_text(self, max_chars: int = 10_000) -> str: ...
 ```
 
-`as_text()` 将 stdout、非空的 `STDERR:` 块和 `Exit code: N` 行合并为一个字符串。退出码始终
-保留。输出超过 `max_chars` 时，中间内容会被截断，并用 `... (N chars truncated) ...` 标记省略部分。
+`as_text()` 先将 stdout、stderr 包含非空白字符时生成的 `STDERR:` 块，以及 `Exit code: N` 行
+合并为一个字符串，再进行截断。输出超过 `max_chars` 时，中间内容会被截断，并用
+`... (N chars truncated) ...` 标记省略部分。上限过小时，退出码行本身也可能被截断；
+如需不受格式化输出影响的完整退出码，请直接读取 `result.exit_code`。
 
 **生命周期——显式 start/stop：**
 
@@ -280,8 +277,6 @@ executor = build_executor(None, workspace, sandbox_dir=get_sandbox_dir)
 executor = build_executor(SandboxConfig(backend="none"), workspace, sandbox_dir=get_sandbox_dir)
 ```
 
----
-
 ## 5. 向 `ExecTool` 注入执行器 { #5-injecting-an-executor-into-exectool }
 
 通过可选参数 `executor` 传入执行器。省略该参数时，`ExecTool` 会创建 `DirectExecutor`，
@@ -316,10 +311,9 @@ await executor.stop()
 沙箱不会放宽命令权限。工具注册表在向任一后端派发命令前，都会应用相同的拒绝和审批规则。
 由于 `/workspace` 是可读写挂载，在其中删除文件也会删除宿主机上的对应文件。
 
-`ExecTool` 还会执行自身的命令和工作区限制。`restrict_to_workspace` 对两个后端均生效：
-引用工作区之外路径的命令会被拒绝并记录。
-
----
+`ExecTool` 还会执行自身的命令和工作区检查。`restrict_to_workspace` 对两个后端均生效：
+它检查命令文本中可识别的路径，并拒绝超出允许工作目录的命令，但无法检查被调用程序
+内部的每一次文件访问。需要隔离时，仍应配置虚拟机挂载范围和操作系统权限。
 
 ## 6. 接入 `AgentLoop` { #6-wiring-into-agentloop }
 
@@ -384,7 +378,9 @@ await loop.close_mcp()   # closes MCP connections and the sandbox executor toget
 
 **MCP stdio 服务：**
 
-当 `sandbox.backend` 为 `"auto"` 或 `"boxlite"` 时，stdio MCP 服务在**虚拟机内**启动，而非宿主机。三个 asyncio 桥接任务负责在 boxlite 的流式执行 API 与 `ClientSession` 期望的 `anyio` `MemoryObjectStream` 之间转换：
+当 `sandbox.backend` 为 `"auto"` 或 `"boxlite"` 时，stdio MCP 服务在**虚拟机内**启动，而非宿主机。
+Raven 创建两组配对的 `anyio` 内存对象流，并将一个接收流和一个发送流传给 `ClientSession`。
+三个 asyncio 任务分别将 stdout、stdin 桥接到这些流，并将 stderr 转发到应用日志：
 
 - `_stdout_bridge`——读取虚拟机 stdout 分片，缓冲至 `\n`，解析 JSON-RPC，包装为 `SessionMessage`，转发到读取流
 - `_stdin_bridge`——从写入流接收 `SessionMessage`，取出内层 `JSONRPCMessage`，序列化为 JSON 加换行，写入虚拟机 stdin
@@ -400,11 +396,13 @@ WARNING  MCP server stderr [npx]: Error: ENOENT ...
 stdout 中的非 JSON 行（例如 `npx -y ...` 启动时的 npm 进度信息）会以 DEBUG 级别记录并跳过，
 不会中断 `ClientSession`。HTTP/SSE MCP 服务使用远程连接，不经过这一进程桥接机制。
 
----
-
 ## 7. 接入 `SubagentManager` { #7-wiring-into-subagentmanager }
 
-启用沙箱后，每个子 Agent 都在独立的虚拟机中运行，不与父 Agent 共用虚拟机。
+启用沙箱后，内置的 `raven-loop` 子 Agent 后端使用独立的沙箱执行器执行 Shell 命令，
+不与父 Agent 共用虚拟机。这并不意味着整个子 Agent 进程或其宿主机文件系统工具都在虚拟机内运行。
+
+外部 ACP 和 CLI Agent 仍作为宿主机进程启动。向后端传入沙箱执行器，不会自动隔离该后端
+自身的进程或工具；如需隔离，请另行配置外部 Agent 的隔离机制。
 
 ```python
 from raven.agent.subagent import SubagentManager
@@ -420,23 +418,23 @@ manager = SubagentManager(
 handle = await manager.spawn(task="run the test suite and report failures")
 ```
 
-`_run_subagent()` 为子 Agent 的工作区创建执行器，并在 `async with executor:` 中运行任务。
-虚拟机随任务启动，并在任务结束时清理，包括任务失败的情况。
+`_run_subagent()` 为子 Agent 的工作区创建执行器，并在 `async with executor:` 中将其传给后端。
+虚拟机在后端执行前启动，并在任务结束时清理，包括任务失败的情况。
+只有后端通过该执行器派发的操作才会在虚拟机内运行。
 
 每个虚拟机都需要独立启动。预先拉取镜像可以避免多个子 Agent 并发启动时重复下载，
 但创建虚拟机本身仍有开销。
 
-`AgentLoop` 会将自身的 `sandbox_config` 传给 `SubagentManager`，使子 Agent 继承相同配置：
+`AgentLoop` 会将自身的 `sandbox_config` 传给 `SubagentManager`，
+使其为子 Agent 任务创建的执行器继承相同配置：
 
 ```python
 # In AgentLoop.__init__ (simplified)
 self.subagents = SubagentManager(
     ...,
-    sandbox_config=sandbox_config,   # same config, isolated VM per sub-agent
+    sandbox_config=sandbox_config,
 )
 ```
-
----
 
 ## 8. 进阶配置 { #8-advanced-configuration }
 
@@ -514,8 +512,6 @@ SandboxConfig(
 result = await executor.exec("sleep 20", timeout=10)
 ```
 
----
-
 ## 9. 如何运行测试 { #9-how-to-run-tests }
 
 ### 9.1 前置条件 { #91-prerequisites }
@@ -529,8 +525,6 @@ result = await executor.exec("sleep 20", timeout=10)
 
 单元测试通过模拟 Boxlite 运行，无需启动虚拟机或访问 KVM。请使用项目要求的 Python 3.12
 或更高版本。
-
----
 
 ### 9.2 准备虚拟环境 { #92-set-up-the-virtual-environment }
 
@@ -546,8 +540,6 @@ uv sync
 ```
 
 `uv sync` 会创建项目环境并安装锁定的依赖。下方命令均通过 `uv run` 运行，无需手动激活环境。
-
----
 
 ### 9.3 安装依赖 { #93-install-dependencies }
 
@@ -577,8 +569,6 @@ uv run python -c "from raven.sandbox import build_executor, SandboxConfig; print
 uv run python -c "import boxlite; print('boxlite ok')"
 ```
 
----
-
 ### 9.4 运行单元测试 { #94-run-unit-tests }
 
 单元测试覆盖 `SandboxConfig`、`DirectExecutor`、模拟的 `BoxliteExecutor`、`ExecTool` 的限制、
@@ -605,8 +595,6 @@ uv run python -m pytest tests/test_sandbox_unit.py -v -s
 # Filter by test name substring
 uv run python -m pytest tests/test_sandbox_unit.py -k "translate_cwd"
 ```
-
----
 
 ### 9.5 运行集成测试 { #95-run-integration-tests }
 
@@ -646,13 +634,11 @@ MCP 往返测试（`test_npx_mcp_server_everything`）每次运行都会在 `nod
 uv run python -m pytest tests/test_sandbox_unit.py tests/integration/test_sandbox_real_vm.py -v
 ```
 
-**运行项目完整测试套件**（全部测试文件，不含集成测试）：
+**运行项目测试，但排除集成测试：**
 
 ```bash
-uv run python -m pytest tests/ --ignore=tests/integration/test_sandbox_real_vm.py -q
+uv run pytest tests/ --ignore=tests/integration -q
 ```
-
----
 
 ### 9.6 运行单个测试 { #96-run-a-single-test }
 
@@ -663,8 +649,6 @@ uv run python -m pytest "tests/test_sandbox_unit.py::TestBoxliteTranslateCwd::te
 # A single integration test
 uv run python -m pytest "tests/integration/test_sandbox_real_vm.py::TestBoxliteStdioMCPRoundtrip::test_npx_mcp_server_everything" -v -s
 ```
-
----
 
 ### 9.7 排障 { #97-troubleshooting }
 
@@ -721,8 +705,6 @@ for img in ['ubuntu:22.04', 'node:20-slim']:
     print(f'  done')
 "
 ```
-
----
 
 ## 10. 平台要求 { #10-platform-requirements }
 

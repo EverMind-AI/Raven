@@ -244,3 +244,37 @@ async def test_a_relaunch_reclaims_the_exact_port_the_tab_is_on(home: Path, monk
     with pytest.raises(OSError):
         await _gateway_page.mount_page(loop, 18931)
     assert asked == [False], "an ordinary start should still probe forward"
+
+
+async def test_the_mounted_page_says_when_it_is_behind_its_sources(home: Path, tmp_path: Path, monkeypatch) -> None:
+    """The gateway host hands the resolver's judgement to the app the way
+    standalone serve does, so the page it mounts carries the header -- pinned
+    here because the predicate and the header are each tested alone, and a
+    host that forgot to wire them would keep both green."""
+    import os
+
+    import aiohttp
+
+    from raven.cli import serve_commands
+    from raven.cli._gateway_page import mount_page
+
+    ui = tmp_path / "repo" / "ui-web"
+    (ui / "dist").mkdir(parents=True)
+    (ui / "src").mkdir()
+    (ui / "dist" / "index.html").write_text("<html>", encoding="utf-8")
+    (ui / "src" / "main.tsx").write_text("x", encoding="utf-8")
+    os.utime(ui / "dist" / "index.html", (1_000, 1_000))
+    os.utime(ui / "src" / "main.tsx", (2_000, 2_000))
+    monkeypatch.setattr(serve_commands, "_PACKAGED_UI_DIST", tmp_path / "nowhere")
+    monkeypatch.setattr(serve_commands, "_UI_DIR", ui)
+
+    mount = await mount_page(_FakeLoop(_FakeCron()), 18931)
+    assert mount is not None
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(f"{mount.url}/") as resp:
+                assert resp.status == 200
+                assert resp.headers["X-Raven-Page-Behind"] == "sources"
+                assert resp.headers["Cache-Control"] == "no-cache"
+    finally:
+        await mount.teardown()

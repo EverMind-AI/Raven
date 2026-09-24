@@ -106,11 +106,11 @@ export interface InstanceModelReply {
   availableModels?: SubagentModelChoice[]
 }
 
-export interface AgentsSource {
+export interface SubagentsSource {
   roster?(): Promise<SubagentRow[]>
   list(sessionId: string): Promise<AgentRow[]>
   /* Live-only: the fixture replay records no per-run context, so the demo
-     detail keeps its empty note exactly as the legacy renderer did. */
+     detail keeps its empty note. */
   context?(id: string): Promise<AgentCtx>
   node?(runId: string, node: string): Promise<DagNodeCtx>
   /* An empty list and a server that cannot list are different things; the

@@ -24,6 +24,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
+import re
+import shlex
 import tempfile
 import time
 from collections.abc import Sequence
@@ -36,7 +39,7 @@ from loguru import logger
 from raven.acp_client import protocol
 from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
-from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError
+from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError, reason_of
 from raven.utils.atomic_io import atomic_update
 
 _FILENAME = "subagent_acp_capabilities.json"
@@ -60,6 +63,20 @@ _LAUNCH_FIELDS = ("command", "cwd", "env", "ready_timeout_ms")
 # `hermes acp`, an unusable provider credential surfaces as an ordinary failure
 # whose text is the only signal.
 _AUTH_HINTS = ("auth", "unauthor", "credential", "api key", "apikey", "login", "401")
+
+_NOT_AUTH_HINTS = ("rate limit", "rate-limit", "429", "cooling down", "quota", "pip install")
+"""Refusals that name a credential while saying it is not what is wrong.
+
+An agent's remedy text mentions its credential commands whether or not a
+credential is the problem, so a rate limit or a missing package reads as "auth"
+to the hints above. All three of these are hermes's own words, from its source:
+"Anthropic credentials are rate-limited for {model} ... (see `hermes auth
+list`)", a credential "cooling down after a rate limit / quota error (429)", and
+"Entra ID auth requires the 'azure-identity' package. Install it with: pip
+install azure-identity". Hermes's comment on the first says it outright -- a
+benched key "is not a missing credential; telling the user to re-authenticate
+would send them chasing a cooldown that lifts on its own".
+"""
 
 
 @dataclass(frozen=True)
@@ -148,7 +165,31 @@ class CapabilitySnapshot:
     picks from is the one the agent actually serves: a row that named its own
     would drift the first time the agent gained or dropped a mode."""
     auth_methods: tuple[str, ...] = ()
+    needs_auth: bool = False
+    """The agent answered, and then refused to open a session without a credential.
+
+    Measured, not inferred. ``auth_methods`` alone cannot stand in for it: an
+    agent that works advertises those too, so "not ready and has auth methods"
+    is a guess. Deliberately outside ``usable``, which stays "ready and not
+    stale" -- an agent waiting to be signed in is neither usable nor broken, and
+    the surface that tells a reader which is which needs the distinction."""
+    unfetched: bool = False
+    """The handshake never happened because ``npx`` could not fetch the agent.
+
+    Recorded apart from ``status`` for the reason ``needs_auth`` is: the status
+    such a failure used to get was ``missing``, which the roster reads as an
+    absent install and answers with the agent's own installer -- a command that
+    fixes nothing when the network is what failed. See `npx_fetch_failure`."""
     elapsed_ms: int = 0
+    model_menu_measured: bool = True
+    """Whether ``model_choices`` was measured, or only defaulted at load.
+
+    A row written before the menu was recorded reads back with an empty
+    ``model_choices``, exactly like an agent measured to offer none; only the
+    raw row tells the two apart (``SnapshotStore.has_model_menu``). Set at load
+    time from the row's keys and never written as a field of its own: an
+    unmeasured menu is written as the key's absence, so a verdict re-recorded
+    over such a row does not turn "never measured" into "measured, none"."""
     stale: bool = False
     """Measured against a launch config this agent no longer has.
 
@@ -186,12 +227,16 @@ class CapabilitySnapshot:
                 {"id": m.id, "name": m.name, "description": m.description} for m in self.available_modes
             ],
             "authMethods": list(self.auth_methods),
+            "needsAuth": self.needs_auth,
+            "unfetched": self.unfetched,
             "elapsedMs": self.elapsed_ms,
         }
 
     def to_row(self) -> dict[str, Any]:
         row = self.to_wire()
         row["fingerprint"] = self.fingerprint
+        if not self.model_menu_measured:
+            del row["modelChoices"]
         return row
 
     @classmethod
@@ -255,7 +300,10 @@ class CapabilitySnapshot:
             model_choices=_choices("modelChoices"),
             available_modes=_modes("availableModes"),
             auth_methods=_strs("authMethods"),
+            needs_auth=bool(row.get("needsAuth")),
+            unfetched=bool(row.get("unfetched")),
             elapsed_ms=int(row.get("elapsedMs") or 0),
+            model_menu_measured="modelChoices" in row,
         )
 
 
@@ -359,6 +407,21 @@ class SnapshotStore:
                 snapshot = replace(snapshot, stale=True)
             found[name] = snapshot
         return found
+
+    def has_model_menu(self, agent: str) -> bool:
+        """Whether the stored row for ``agent`` carries a ``modelChoices`` key at all.
+
+        Distinct from the field reading empty on a loaded :class:`CapabilitySnapshot`,
+        which also happens for an agent genuinely measured to offer no menu
+        (``from_row``'s ``_choices`` defaults a missing or malformed key to
+        ``()`` either way) -- only the raw row can tell "never measured this"
+        apart from "measured, and it has none". ``True`` when there is no
+        stored row at all: that case is already the missing-snapshot branch of
+        the auto-verify backfill, and this predicate must not itself demand a
+        re-verify for a name nothing has recorded yet.
+        """
+        row = next((r for r in self._read() if r.get("agent") == agent), None)
+        return row is None or "modelChoices" in row
 
     def forget(self, agent: str) -> None:
         def drop(current: str | None) -> tuple[str, None]:
@@ -602,9 +665,121 @@ def relearn_session_modes(
     return updated
 
 
-def _looks_like_auth(text: str) -> bool:
+def looks_like_auth(text: str) -> bool:
+    """Whether a refusal reads as one about a credential.
+
+    Public because the connect path asks it too. It was private while this
+    module was its only reader, and a second reader copying the hint list
+    would be two spellings of one rule -- which is how the roster and the
+    connect button came to disagree about the same failure in the first place.
+    """
     lowered = text.lower()
+    if any(hint in lowered for hint in _NOT_AUTH_HINTS):
+        return False
     return any(hint in lowered for hint in _AUTH_HINTS)
+
+
+# npm's own report of a failed fetch, as npm prints it before exiting: the code
+# on a line of its own, then (for a network failure) lines headed "network".
+# `npm error` is npm 10, `npm ERR!` npm 9 and older; both measured 2026-09-23
+# against an unreachable and an unresolvable registry, npm 10.9.8 and 9.9.4.
+_NPM_CODE = re.compile(r"^npm (?:ERR!|error) code (\S+)", re.MULTILINE)
+_NPM_NETWORK = re.compile(r"^npm (?:ERR!|error) network ", re.MULTILINE)
+# The codes that mean the registry could not be reached or would not serve the
+# package: the network, TLS in front of it, or the registry's own answer (the
+# E<status> codes, and ETARGET for a mirror that lacks the pinned version). A
+# local failure -- EACCES on the cache, ENOSPC -- is deliberately not here: no
+# network, registry or proxy setting fixes it, and that is what this verdict
+# tells its reader to look at.
+_NPM_FETCH_CODES = frozenset(
+    {
+        "ECONNREFUSED",
+        "ECONNRESET",
+        "ECONNABORTED",
+        "ENOTFOUND",
+        "EAI_AGAIN",
+        "ETIMEDOUT",
+        "EHOSTUNREACH",
+        "ENETUNREACH",
+        "ENETDOWN",
+        "EPROTO",
+        "ERR_SOCKET_TIMEOUT",
+        "ETARGET",
+        "EINTEGRITY",
+        "CERT_HAS_EXPIRED",
+        "SELF_SIGNED_CERT_IN_CHAIN",
+        "DEPTH_ZERO_SELF_SIGNED_CERT",
+        "UNABLE_TO_GET_ISSUER_CERT",
+        "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+        "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        "ERR_TLS_CERT_ALTNAME_INVALID",
+    }
+)
+_NPM_STATUS_CODE = re.compile(r"E\d{3}")
+
+
+def launches_with_npx(command: str) -> bool:
+    """Whether ``command`` is run by ``npx``, which fetches what it names on first use."""
+    try:
+        argv = shlex.split(command or "")
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    exe = os.path.basename(argv[0]).lower()
+    return exe in ("npx", "npx.cmd", "npx.exe")
+
+
+def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = None) -> str | None:
+    """Why ``npx`` never got to run what ``command`` names, or ``None`` if that is not what happened.
+
+    The npm error code when the fetch failed, ``"timeout"`` when the start ran
+    out of time while npx still had it, ``None`` for everything else.
+
+    Needed because both look like something else from above. A fetch that
+    fails is a process that exits before the handshake, so it arrives as
+    "connection ended (exit 1)" with npm's stack trace under it; and npm spends
+    about 70s retrying an unreachable registry before it says so (measured),
+    which is past a budget that did not allow for it -- so what the reader saw
+    was "it did not answer within 60s", about an agent that never started.
+    Named for what it is, the reader can be told to look at the network, the
+    npm registry or the proxy, and not at the agent.
+
+    Evidence rather than inference, in the way `looks_like_auth` is not: the
+    verdict needs npm's own error-code line, read from the whole stderr
+    (``AcpConnectionError.stderr``, or ``stderr`` for a caller that holds the
+    client) because npm prints that line first. The timeout is the one reading
+    without such a line, and it is kept to an ``initialize`` that ran out on an
+    ``npx`` command -- an agent that has not finished starting, where a first
+    download is the likeliest cause and the one the reader can act on.
+    """
+    if not launches_with_npx(command):
+        return None
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, protocol.AcpTimeoutError) and current.method == "initialize":
+            return "timeout"
+        if isinstance(current, protocol.AcpConnectionError) and current.stderr:
+            stderr = stderr or current.stderr
+        current = current.__cause__
+    if not stderr:
+        return None
+    for match in _NPM_CODE.finditer(stderr):
+        code = match.group(1)
+        if code in _NPM_FETCH_CODES or _NPM_STATUS_CODE.fullmatch(code):
+            return code
+    if _NPM_NETWORK.search(stderr):
+        return "network"
+    return None
+
+
+def npx_fetch_lead(verdict: str) -> str:
+    """The sentence `npx_fetch_failure`'s verdict is reported with, for the log, the CLI and the TUI."""
+    if verdict == "timeout":
+        return "it did not finish starting in time, and npx may still have been downloading it"
+    return f"npx could not download it ({verdict}); check the network, the npm registry or the proxy"
 
 
 async def verify_agent(cfg: Any) -> CapabilitySnapshot:
@@ -625,7 +800,14 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
     fingerprint = snapshot_fingerprint(cfg)
     budget = max(1.0, (getattr(cfg, "ready_timeout_ms", None) or 30000) / 1000)
 
-    def done(status: SnapshotStatus, detail: str, hs: _Handshake | None = None) -> CapabilitySnapshot:
+    def done(
+        status: SnapshotStatus,
+        detail: str,
+        hs: _Handshake | None = None,
+        *,
+        needs_auth: bool = False,
+        unfetched: bool = False,
+    ) -> CapabilitySnapshot:
         hs = hs or _Handshake()
         full = "; ".join([detail, *hs.warnings]) if hs.warnings else detail
         return CapabilitySnapshot(
@@ -649,6 +831,8 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             model_choices=hs.model_choices,
             available_modes=hs.available_modes,
             auth_methods=hs.auth_methods,
+            needs_auth=needs_auth,
+            unfetched=unfetched,
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
 
@@ -659,8 +843,10 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             command=getattr(cfg, "command", "") or "",
             cwd=getattr(cfg, "cwd", None),
             env=dict(getattr(cfg, "env", None) or {}),
-            # The probe dispatches a real task, so it meets real permission
-            # requests and has to answer them the way a dispatch would.
+            # Nothing here is prompted, so no permission request is expected.
+            # One that arrives anyway still has to be answered, or the agent
+            # waits for a reply that never comes and the handshake stalls behind
+            # its own timeout.
             on_request=auto_approver(name),
         )
         try:
@@ -669,10 +855,17 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             # The agent is there and talking, it just refused this handshake --
             # a version or shape mismatch, not an absent install. Reporting it
             # as "missing" would send the operator looking for the wrong problem.
-            return done("unknown", f"connected, but rejected the ACP handshake: {exc.message} [{exc.code}]")
+            return done("unknown", f"connected, but rejected the ACP handshake: {reason_of(exc)} [{exc.code}]")
         except AcpError as exc:
             tail = client.stderr_tail(400)
             suffix = f"; stderr: {tail}" if tail else ""
+            unfetched = npx_fetch_failure(getattr(cfg, "command", "") or "", exc, client.stderr_tail() or None)
+            if unfetched is not None:
+                # Not `missing`: nothing is absent that an install would bring, and
+                # the roster answers `missing` with the agent's own installer.
+                return done(
+                    "attention", f"{npx_fetch_lead(unfetched)}; handshake failed: {exc}{suffix}", unfetched=True
+                )
             return done("missing", f"handshake failed: {exc}{suffix}")
 
         handshake = _read_initialize(init)
@@ -685,10 +878,28 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             try:
                 session = await client.request("session/new", {"cwd": tmp, "mcpServers": []}, timeout=budget)
             except AcpRemoteError as exc:
-                needs_auth = bool(handshake.auth_methods) or _looks_like_auth(exc.message)
-                status: SnapshotStatus = "attention" if needs_auth else "unknown"
+                # Two readings of one refusal, and they do not take the same
+                # evidence. The advertisement is enough for the coarse status --
+                # it only decides whether a reader should look at this row -- and
+                # it is not enough for `needs_auth`, which is persisted, rendered
+                # as a disabled control and read as "go and sign in". Every agent
+                # that works advertises auth methods too, so taking the
+                # advertisement there would label any unrelated session failure,
+                # a transient one included, as a credential story with no way out.
+                advertised = bool(handshake.auth_methods)
+                # The agent's whole answer, `data` included: the Connect button
+                # classifies this same text (`reason_of`), and two readers given
+                # different halves of one refusal are how they came to disagree.
+                refused_over_a_credential = looks_like_auth(reason_of(exc))
+                needs_auth = refused_over_a_credential
+                status: SnapshotStatus = "attention" if advertised or refused_over_a_credential else "unknown"
                 hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""
-                return done(status, f"connected, but no session could be opened: {exc.message}{hint}", handshake)
+                return done(
+                    status,
+                    f"connected, but no session could be opened: {reason_of(exc)}{hint}",
+                    handshake,
+                    needs_auth=needs_auth,
+                )
             except AcpError as exc:
                 tail = client.stderr_tail(400)
                 suffix = f"; stderr: {tail}" if tail else ""
@@ -730,6 +941,10 @@ __all__ = [
     "SnapshotStatus",
     "SnapshotStore",
     "default_snapshot_path",
+    "launches_with_npx",
+    "looks_like_auth",
+    "npx_fetch_failure",
+    "npx_fetch_lead",
     "relearn_session_modes",
     "snapshot_fingerprint",
     "steer_offered",

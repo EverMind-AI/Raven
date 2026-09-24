@@ -86,6 +86,28 @@ def allow_exec_pattern(pattern: str, *, config_path: Path | None = None) -> bool
     return added
 
 
+def remove_exec_pattern(pattern: str, *, config_path: Path | None = None) -> bool:
+    """Take back one ``permissions.tools.exec`` allow rule; False when none was there.
+
+    Only an ``allow`` entry goes: a ``deny`` or ``ask`` under the same pattern is
+    the user's own rule, not one a prompt wrote, and a prompt does not undo it.
+    """
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str, bool]:
+        data = read_raw_or_raise(path)
+        table = data.get("permissions", {}).get("tools", {}).get("exec")
+        removed = isinstance(table, dict) and table.get(pattern) == "allow"
+        if removed:
+            del table[pattern]
+        return json.dumps(data, indent=2, ensure_ascii=False), removed
+
+    removed = atomic_update(path, _apply)
+    if removed:
+        logger.info("config/update: permissions.tools.exec[{!r}] removed", pattern)
+    return removed
+
+
 def reset_cron_config(*, config_path: Path | None = None) -> None:
     """Remove the entire ``cron`` section from on-disk config.
 
@@ -209,12 +231,26 @@ def set_skill_blocked(
     The blocklist is read at process start (AgentLoop / context engine
     construction), so a change takes effect on the next agent/gateway
     start, not on a running process.
+
+    Respects whichever key casing (camelCase / snake_case) the file already
+    uses for the block itself: the loader accepts both spellings, but writing
+    the second one alongside the first leaves the config unloadable.
     """
     path = config_path or get_config_path()
 
     def _apply(_text: str | None) -> tuple[str | None, tuple[list[str], bool]]:
         data = read_raw_or_raise(path)
-        section = data.setdefault("skillForge", {})
+        # Reuse whichever spelling the file already carries. The loader accepts
+        # both, but a second block under the other one is an extra input to a
+        # model that forbids extras: the whole config then stops loading, and
+        # the blocklist we just read came from the empty block we created.
+        if isinstance(data.get("skillForge"), dict):
+            sf_key = "skillForge"
+        elif isinstance(data.get("skill_forge"), dict):
+            sf_key = "skill_forge"
+        else:
+            sf_key = "skillForge"
+        section = data.setdefault(sf_key, {})
         current = [str(x) for x in (section.get("blocklist") or [])]
         lowered = {x.casefold() for x in current}
         if blocked:
@@ -231,7 +267,7 @@ def set_skill_blocked(
     current, wrote = atomic_update(path, _apply)
     if wrote:
         logger.info(
-            "config/update: skillForge.blocklist now {!r} ({} {!r})",
+            "config/update: skill blocklist now {!r} ({} {!r})",
             current,
             "blocked" if blocked else "unblocked",
             name,

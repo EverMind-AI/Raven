@@ -1,3 +1,5 @@
+import { hasInstanceTurns } from '../../rpc/capabilities'
+
 import type { DirectTurn, InstanceCtx } from './types'
 
 /* An instance's status words, which are NOT the run list's. The registry writes
@@ -50,7 +52,7 @@ export function instanceCtxStatus(status?: string): string | undefined {
    state, and the instance's own status is the fallback for a poll landing
    between the record being written and the turn being marked done. */
 export function toInstanceCtx(turns: DirectTurn[] | undefined, status?: string): InstanceCtx {
-  const rows = turns || []
+  const rows = hasInstanceTurns(turns) ? turns : []
   const live = rows.some((r) => r.live)
   return {
     status: live ? 'run' : instanceCtxStatus(status),

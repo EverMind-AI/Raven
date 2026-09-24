@@ -251,6 +251,7 @@ def _login_locked(
     open_browser: bool = True,
     client: httpx.Client | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
+    on_device: Callable[[str, str, int], None] | None = None,
 ) -> MiniMaxOAuthToken:
     config = oauth_config(region)
     verifier = _base64url(token_bytes(32))
@@ -281,6 +282,10 @@ def _login_locked(
             raise RuntimeError("MiniMax device authorization returned an invalid response")
         verification_uri = _validated_url(verification_uri, config.verification_url, "verification URL")
 
+        # A caller with a screen of its own (the settings page) takes the pair
+        # and the deadline here; the prints below are for a terminal.
+        if on_device is not None:
+            on_device(verification_uri, user_code, deadline)
         print_fn(f"Open {verification_uri}")
         print_fn(f"Enter code: {user_code}")
         if open_browser:
@@ -339,6 +344,7 @@ def login(
     open_browser: bool = True,
     client: httpx.Client | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
+    on_device: Callable[[str, str, int], None] | None = None,
 ) -> MiniMaxOAuthToken:
     with _token_lock(region):
         return _login_locked(
@@ -347,6 +353,7 @@ def login(
             open_browser=open_browser,
             client=client,
             sleep_fn=sleep_fn,
+            on_device=on_device,
         )
 
 

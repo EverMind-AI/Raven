@@ -860,12 +860,23 @@ SKILL_LANE_TOOLS = {
     "use_skill",
 }
 
+#: Two names this product's config no longer decides. ``tool_call`` is reserved
+#: from ``tools.disabledTools``: its absence from an array is how the fold reads
+#: "this request has no search route", so an off switch there would unfold the
+#: array rather than slim it. ``tool_search`` registers with the shipped default
+#: -- the fold is on, and this face sits far below the threshold, so the strategy
+#: drops it from every request; it is in the registry the fixture reads and in no
+#: request the model sees. Neither is pinned off here on purpose: an operator or
+#: a dispatcher can attach MCP servers to this product at runtime, and pinning
+#: the fold off would hold it open at exactly the size it exists for.
+TRUNK_RESERVED = {"tool_call", "tool_search"}
+
 #: The product's visible tool face, hermetically rebuilt from the render:
 #: the fork's config intent minus the ledgered pending waves, plus the
-#: opened skill lane. Trunk also grew tools the fork never had; the withheld
-#: ones must be disabled by the product config, not by luck -- the two
-#: playbook tools only register outside this hermetic fixture, so their
-#: disable rows are the pin.
+#: opened skill lane and the reserved name above. Trunk also grew tools the
+#: fork never had; the withheld ones must be disabled by the product config,
+#: not by luck -- the two playbook tools only register outside this hermetic
+#: fixture, so their disable rows are the pin.
 VENDORED_TOOL_FACE = {
     "ask_user",
     "edit_file",
@@ -877,6 +888,8 @@ VENDORED_TOOL_FACE = {
     "read_file",
     "read_skill",
     "todo",
+    "tool_call",
+    "tool_search",
     "use_skill",
     "web_fetch",
     "write_file",
@@ -911,7 +924,12 @@ def test_the_face_arithmetic_is_the_ledger():
     """The literal above is not free-standing: it is the measured fork intent
     minus the ledgered pending waves, respelled -- so a tool can only leave
     or join the face by moving on this ledger."""
-    expected = (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED)) | set(RESPELLED.values()) | SKILL_LANE_TOOLS
+    expected = (
+        (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED))
+        | set(RESPELLED.values())
+        | SKILL_LANE_TOOLS
+        | TRUNK_RESERVED
+    )
     assert VENDORED_TOOL_FACE == expected
 
 
@@ -953,19 +971,60 @@ def test_the_products_tool_face_is_the_forks_config_intent_minus_the_ledger(grou
 # --- the permission gate: only the hosting with nobody to ask opens it ------------
 
 
-def test_the_acp_render_leaves_the_ask_tier_alone(grounded):
-    """Trunk's permission gate (permissions.mode, default ``ask``) prompts a
-    person before a write or a command, and refuses outright when the turn is
-    not interactive. The ACP hosting keeps that default on purpose: raven
-    dispatching a sub-agent answers those prompts itself
-    (``raven/acp_client/permissions.py`` approves every one), and a person in
-    an editor should still be asked -- opening the tier product-wide would
-    take their prompt away for good."""
+def test_the_acp_render_pins_the_ask_tier(grounded):
+    """The ACP hosting asks, whatever tier trunk defaults to.
+
+    It used to inherit that default, which was the ask tier. The default has
+    since moved to smart, where a reviewer speaks for the ask tier and lets
+    most of it through -- a product decision about raven's own surfaces. This
+    is not one of them: the person is in an editor watching an agent work on
+    their checkout, and the prompt is how they see each write before it lands.
+    Raven dispatching a sub-agent is unaffected either way, since
+    ``raven/acp_client/permissions.py`` answers the ask tier itself."""
     from raven.config.loader import load_config
 
     config = load_config(_render(grounded))
     assert config.permissions.mode == "ask"
     assert "permissions" not in json.loads((RUN_PY.parent / "config.json").read_text())
+
+
+@pytest.mark.parametrize(
+    ("host_rule", "source"),
+    [
+        ({"permissions": {"tools": {"exec": {"curl *": "deny"}}}}, "user_deny"),
+        ({"tools": {"exec": {"extraDenyPatterns": [r"\bcurl\b"]}}}, "builtin_deny"),
+    ],
+    ids=["user-rule", "extra-pattern"],
+)
+@pytest.mark.parametrize("hosting", ["acp", "one-shot"])
+async def test_a_command_the_host_denies_is_refused_by_the_products_own_gate(
+    grounded, tmp_path, host_rule, source, hosting
+):
+    """The host answers the product's approval requests itself, so a host
+    deny rule has to be in the product's own gate or a denied command runs
+    once it is handed over -- and it holds in the one-shot hosting too, whose
+    mode is full."""
+    from raven.config.live import LiveConfig, exec_extra_deny_patterns, permissions_config
+    from raven.contracts.permissions import Deny
+    from raven.permissions import BuiltinRulings, PermissionGate
+
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps(host_rule), encoding="utf-8")
+    if hosting == "acp":
+        rendered = _render(grounded)
+    else:
+        rendered = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "cli", unattended=True)
+
+    live = LiveConfig(rendered)
+    gate = PermissionGate(
+        config_source=lambda: permissions_config(live),
+        builtin=BuiltinRulings(extra_deny_source=lambda: exec_extra_deny_patterns(live)),
+    )
+    decision = await gate.check("exec", {"command": "curl -s https://example.com"})
+    assert isinstance(decision, Deny) and decision.source.value == source, decision
+    allowed = await gate.check("exec", {"command": "git status"})
+    assert not isinstance(allowed, Deny), "only what the host refused is refused"
 
 
 def test_the_one_shot_render_opens_the_ask_tier_because_nobody_can_answer(grounded, tmp_path):

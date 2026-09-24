@@ -46,33 +46,39 @@ class _FakeSubagents:
     def set_delivery_sink(self, fn) -> None:
         self.delivery_sink = fn
 
-    async def cancel_all(self) -> None:
+    async def cancel_all(self, *, reason: str = "") -> None:
         # Reached by an owning stack's teardown, which logs and swallows what
         # this raises -- so without it a real assertion failure in such a test
         # is reported behind an AttributeError traceback that is not the bug.
         self.order.append("cancel_all")
 
 
+class _FakeAskUser:
+    """The one tool build_rpc_stack hands its broker to."""
+
+    def __init__(self) -> None:
+        self.broker = None
+
+    def set_broker(self, broker) -> None:
+        self.broker = broker
+
+
 class _FakeLoop:
     """The AgentLoop surface build_rpc_stack touches, each hook recorded."""
 
     def __init__(self, cron: _FakeCron | None = None) -> None:
-        self.tools: dict = {}
+        self.tools: dict = {"ask_user": _FakeAskUser()}
         self.order: list[str] = []
         self.subagents = _FakeSubagents(self.order)
         self.mcp_closed = 0
         self.cron_service = cron
         self.backend = None
-        self.deep_research_broker = None
         self.dag_sink = None
         self.mcp_sink = None
         self.prewarms = 0
         # Whether the MCP event sink was already bound when the prewarm started.
         # The URL an OAuth server parks on rides that sink and nothing else.
         self.sink_at_prewarm: object = "never called"
-
-    def set_deep_research_broker(self, broker) -> None:
-        self.deep_research_broker = broker
 
     def set_dag_progress_sink(self, sink) -> None:
         self.dag_sink = sink
@@ -194,10 +200,9 @@ async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
         assert cron.started is False
         # Page-facing hooks applied, so the host mounting this stack after its
         # own wiring hands the question and progress surfaces to the page.
-        assert loop.deep_research_broker is not None
         # The page's broker is exposed so a host with a question surface of
         # its own can build a RoutingQuestionBroker over both.
-        assert stack.question_broker is loop.deep_research_broker
+        assert stack.question_broker is loop.tools["ask_user"].broker is not None
         assert loop.dag_sink is not None
         assert loop.mcp_sink is not None
         assert loop.subagents.delivery_sink is not None
@@ -417,11 +422,71 @@ async def test_the_channel_defaults_to_the_one_both_sides_already_used() -> None
     assert inspect.signature(bootstrap.build_rpc_stack).parameters["channel"].default == "tui"
 
 
+async def test_the_owning_teardown_cancels_subagents_before_the_spine_seals(monkeypatch) -> None:
+    """Sealing the scheduler is the first thing the spine's teardown does, and a
+    sub-agent that finishes after it announces its result into a submit that
+    refuses new turns -- the only route that result has back. Cancelled first,
+    the run ends as the stop it is instead of as a result nobody received."""
+    from raven.rpc import spine as spine_module
+
+    loop = _FakeLoop(_FakeCron())
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+    real_build = spine_module.build_rpc_spine
+
+    def _recording_build(*args, **kwargs):
+        scheduler, hub, ids, teardown = real_build(*args, **kwargs)
+
+        async def _teardown() -> None:
+            loop.order.append("turn_teardown")
+            await teardown()
+
+        return scheduler, hub, ids, _teardown
+
+    monkeypatch.setattr(spine_module, "build_rpc_spine", _recording_build)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    await stack.teardown()
+
+    assert loop.order.index("cancel_all") < loop.order.index("turn_teardown")
+
+
+async def test_a_cancel_that_fails_does_not_keep_the_spine_from_sealing(monkeypatch) -> None:
+    """The cancel now runs ahead of the turn teardown, so a failure in it would
+    be a failure in front of the spine's own teardown -- logged and stepped
+    over, the way the rest of this teardown treats its steps."""
+    from raven.rpc import spine as spine_module
+
+    loop = _FakeLoop(_FakeCron())
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+
+    async def _failing_cancel(*, reason: str = "") -> None:
+        raise RuntimeError("cancel blew up")
+
+    loop.subagents.cancel_all = _failing_cancel
+    real_build = spine_module.build_rpc_spine
+
+    def _recording_build(*args, **kwargs):
+        scheduler, hub, ids, teardown = real_build(*args, **kwargs)
+
+        async def _teardown() -> None:
+            loop.order.append("turn_teardown")
+            await teardown()
+
+        return scheduler, hub, ids, _teardown
+
+    monkeypatch.setattr(spine_module, "build_rpc_spine", _recording_build)
+
+    stack = await bootstrap.build_rpc_stack(_sink)
+    await stack.teardown()
+
+    assert "turn_teardown" in loop.order
+
+
 def test_the_served_shutdown_stops_subagents_before_it_stops_the_backend() -> None:
     """Closing the memory adapter while a sub-agent run is still going fails
     that run's next write for a reason the service had no part in."""
     src = (Path(__file__).resolve().parents[1] / "raven" / "rpc" / "bootstrap.py").read_text(encoding="utf-8")
-    cancel = src.index("await agent_loop.subagents.cancel_all()")
+    cancel = src.index("await agent_loop.subagents.cancel_all(reason=")
     stop = src.index("await agent_loop.backend.stop()")
 
     assert cancel < stop
@@ -542,3 +607,35 @@ async def test_an_acp_stack_runs_wakes_on_the_session_and_a_tui_stack_keeps_the_
     await stack.teardown()
     assert tui_cron.on_job is not None
     assert getattr(tui_cron.on_job, "runs_on_session", False) is False, "the served page keeps its reminders"
+
+
+async def test_a_second_assembly_keeps_the_subscriptions_the_live_one_holds() -> None:
+    """A stack rebuilt under a live socket is handed the emitter it replaces.
+
+    ``raven serve`` can assemble late: a first run comes up with no loop and
+    builds one when the page writes a model. The socket does not drop for that,
+    and the page re-subscribes only when it does -- so a replacement stack with
+    an emitter of its own would emit into one nothing is reading, and every
+    open stream would go quiet with no error anywhere.
+    """
+    frames: list[dict] = []
+
+    async def _record(frame: dict) -> None:
+        frames.append(frame)
+
+    first = await bootstrap.build_rpc_stack(_record, agent_loop=_FakeLoop(_FakeCron()))
+    await first.emitter.register("tui:default")
+
+    second = await bootstrap.build_rpc_stack(
+        _record,
+        agent_loop=_FakeLoop(_FakeCron()),
+        emitter=first.emitter,
+    )
+    try:
+        await second.emitter.emit("tui:default", {"type": "message.complete", "payload": {}})
+        await asyncio.sleep(COALESCE_WINDOW_S * 3)
+    finally:
+        await second.teardown()
+        await first.teardown()
+
+    assert [f["params"]["event"]["type"] for f in frames if f.get("method") == "event"] == ["message.complete"]

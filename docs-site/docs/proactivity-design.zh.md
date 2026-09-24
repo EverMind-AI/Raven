@@ -1,232 +1,254 @@
-# 主动性设计
+# 主动性设计与实现
+
+本文面向扩展或调试 Proactive Engine 的开发者，是站点中的实现参考，设计理由与其解释的契约
+放在一起。配置、成本与操作步骤请阅读[主动提醒与跟进](proactivity.md)。
+
+除非另有说明，以下路径均相对于 `raven/proactive_engine/`。配置类型定义在
+`raven/config/raven.py`，运行时规范术语定义在 `CONTEXT.md`。
+
+<span id="1-three-layers-of-proactivity"></span>
+<span id="2-the-core-idea-periodic-planner-plus-on-demand-spawn"></span>
+<span id="7-scenarios"></span>
+<span id="l2-routine-automation"></span>
+<span id="l3-memory-linked-reminder"></span>
+<span id="l3-context-aware-resumption"></span>
+<span id="l3-proactive-status-check"></span>
+
+## 设计理由 { #design-rationale }
+
+目标是在合适时提供有用的后续工作，而不是把每条观察都视为可以打扰用户或采取行动的授权。
+以下三个选择决定了实现方式：
+
+- **决策与执行分离。** Planner 读取组装后的上下文，返回结构化决策；执行器负责投递与
+  任务派发。因此可以在不启动后台任务的情况下测试决策。
+- **按场景选择打扰方式。** 保持安静、独立提醒、追加到回复、延迟提醒与后台任务，对活跃
+  对话的影响各不相同。
+- **复用运行时服务。** 策略、持久化反馈、Spine 与 SubagentManager 提供共享机制，
+  Sentinel 不再实现第二套运行工具的 Agent 循环。
+
+基于例行的辅助与上下文感知的前瞻行为是预期用途，不是保证兑现的能力。例如，记忆中的截止期
+可用于判断是否提醒，近期部署记录可用于提出状态检查。是否实际发生取决于可用上下文、模型
+输出、策略与工具。学习到一个模式，并不等于用户已经创建了 Cron 计划。
+
+<span id="3-components"></span>
+
+## 组件与组装 { #components-and-assembly }
+
+| 职责 | 实现 |
+| --- | --- |
+| 栈构建与钩子 | `raven/core/proactive_stack.py` |
+| 生命周期、节拍与路由 | `sentinel/executor/runner.py` |
+| 上下文组装 | `sentinel/predictor/context_assembler.py`（`PlannerContextAssembler`） |
+| 决策与校验 | `sentinel/planner.py`、`sentinel/types.py` |
+| 工具 schema 与上下文渲染 | `sentinel/trigger_policy/prompts.py` |
+| 限制与偏好 | `sentinel/trigger_policy/`（`policy.py`、`prefs.py`） |
+| 提醒投递、回复追加与延迟 | `sentinel/executor/`（`dispatcher.py`、`injector.py`、`defer_manager.py`） |
+| 主动任务派发 | `sentinel/executor/spawn.py` |
+| 例行学习与任务发现 | `sentinel/predictor/` |
+| 持久化与反馈 | `sentinel/feedback/`、`sentinel/state_files.py` |
+| 派生注意力状态 | `sentinel/attention_updater.py`、`sentinel/attention_producers/` |
+
+Sentinel 关闭时，`build_sentinel_stack()` 返回未启用结果；开启时则构建共享存储、策略、
+Planner、执行器与 runner。网关在 DeliveryHub 创建后绑定 dispatcher 的 `post` 回调；
+`attach_sentinel_spawn()` 与 `attach_sentinel_decision_consumer()` 接入依赖 Agent 的执行能力。
+
+Planner 默认使用主 Agent 模型，可通过 `evaluator_model` 覆盖；`evaluator_base_url` 与
+`evaluator_api_key_env` 可选择独立服务商。如果指定的 API key 环境变量为空，组装过程会告警
+并回退到主服务商。系统提示词通过 `raven.i18n` 加载；工具 schema 与上下文渲染器仍位于
+`trigger_policy/prompts.py`。
+
+<span id="proactiveplanner-periodic-reasoner"></span>
+<span id="contextassembler-input-packaging"></span>
+<span id="planner-decision-quality"></span>
+
+## 上下文与决策契约 { #context-and-decision-contracts }
+
+`PlannerContext` 是 Planner 的输入。`PlannerContextAssembler` 收集以下内容：
+
+| 上下文 | 来源 |
+| --- | --- |
+| `memory_md`、`history_md_recent` | 长期记忆与近期历史尾部 |
+| `active_sessions` | 近期活跃会话及其最后一条用户和助手消息 |
+| `routines` | 确定性的历史模式学习 |
+| `calendar` | 调用方可选提供的日历函数；不代表内置了日历集成 |
+| `nudge_policy_state`、`fire_history` | 策略计数、近期话题触发与拒绝记录 |
+| `last_decision` | runner 记住的上一次决策 |
+| `attention_md`、`behaviors_recent` | 选定的注意力章节与折叠后的行为窗口 |
+
+来源缺失时通常返回空字段，而不是中止组装。记忆过滤、注意力章节选择与行为窗口均可配置；
+Planner 不会自行搜索其他数据源。
+
+`ProactivePlanner.decide()` 请求 `planner_decision` 工具调用，将非法动作归为 `skip`，
+非法优先级归为 `low`，并把分数限制到 `[0, 1]`。提醒动作需要 `nudge_message`；
+延迟提醒还需要 `defer_condition`；派发任务需要 `spawn_task`。缺少必要载荷时决策降级为
+`skip`。`topic_tag` 用于按话题执行策略；模型未提供时，Planner 会派生一个兜底标签。
+
+服务商返回错误、未返回工具调用或参数不是字典时，转为 `skip`。抛出的异常由 runner 处理，
+而不是被 Planner 吞掉。结构化输出约束动作格式，并不能证明提议的动作正确或安全。
+
+## 节拍生命周期 { #tick-lifecycle }
+
+`await tick_once()` 组装上下文后调用 `await tick_with_context(ctx)`，后者执行以下步骤：
+
+1. 到期时裁剪反馈，并重新调整策略。
+2. 刷新派生记忆状态；任务发现已开启且到期时，运行任务发现。
+3. 检查每日触发计划中的周期性槽位；若满足条件，不调用 Planner，直接路由预先准备的消息。
+4. 对免打扰时段，或上次为 skip 且上下文未变的情况应用仅跳过的快路径。到期的高优先级
+   截止期会绕过这些捷径，以进入 Planner。
+5. 请求 Planner 并路由决策。若抛出异常且兜底已启用，尝试带守卫的高优先级截止期兜底；
+   否则返回错误 skip。
+6. 记住决策供下一个节拍使用。
+
+一次性的截止期槽位通常交给 Planner，以便从近期上下文判断用户是否已经完成工作。
+故障兜底无法作出这一判断，因此仅限到期的高优先级截止期槽位，并仍走正常路由策略。
+返回 `skip` 与抛出异常不同，前者不会触发该兜底。
 
-> 从被动通知走向前瞻式协作：Raven 主动性子系统的设计。
+`start()` / `stop()` 管理周期循环、延迟提醒循环，以及接入时的发现触发器消费循环。
+触发器消费者按短周期轮询独立的文件存储，不等待下一个 Planner 节拍。runner 会记录意外的
+后台异常并继续运行。`TickOutcome` 为诊断提供决策、执行结果、路由、可选的提醒标识与备注。
+
+<span id="4-action-space"></span>
+<span id="proactivespawn-multi-step-execution-bridge"></span>
 
-本文描述的是设计意图——主动性子系统应该成为什么，以及它为何是现在这个形态。其配套文档
-[主动性参考](proactivity.md)是竣工文档：它把每个部件映射到 `raven/proactive_engine/`
-下的模块路径以及 spine（`raven/spine/`）。
+## 动作路由 { #action-routing }
+
+| 动作 | 路径 | 何时视为已派发 |
+| --- | --- | --- |
+| `skip` | 不使用执行器 | 不派发 |
+| `nudge` | 策略检查、目标解析、NudgeDispatcher → `DeliveryHub.post` | dispatcher 报告投递成功后 |
+| `nudge_inject` | 策略检查、NudgeInjector 入队 | 入队时，早于用户收到回复 |
+| `nudge_defer` | 策略检查、DeferManager 登记 | 登记只是待处理，不是投递 |
+| `spawn_agent` | ProactiveSpawn 策略检查 → SubagentManager | 任务派发时，而非任务完成时 |
 
----
+普通提醒与任务发现菜单直接投递给 DeliveryHub。它们是已生成的消息，不是应交给带工具的
+Agent Loop 执行的提示词。这样既保留菜单格式，也避免 Agent 把提醒当作新的用户请求执行。
 
-## 1. 主动性的三个层次 { #1-three-layers-of-proactivity }
+NudgeInjector 通过响应修饰钩子，将待发文字追加到符合条件的回复中，并设有过期时间与按会话
+的 FIFO 上限。DeferManager 等待目标会话达到空闲阈值，超过最大等待时间则丢弃条目，并在
+触发时解析接收目标。它不会让 LLM 评估 `defer_condition`，而是仅按空闲时间判断。
 
-一种被广泛采用的划分把代理的主动性分为三层，每一层都建立在前一层之上：
+ProactiveSpawn 校验任务，以任务文字作为去重内容检查共享策略，然后调用 SubagentManager。
+完成结果以 `SUBAGENT` 来源轮次返回发起会话，不经过 NudgeDispatcher。它不增加独立配额
+或整体任务超时。
 
-| 层次 | 名称 | 定义 |
-|:---:|---|---|
-| L1 | 响应式监控 | 事件已经发生并被检测到，代理决定是否通知用户。 |
-| L2 | 预测式 / 基于例行 | 从用户历史中学习重复出现的模式，并在用户开口之前采取行动。 |
-| L3 | 前瞻式 / 情境式 | 代理就用户当前处境进行推理，推断潜在需求并采取行动。 |
+<span id="8-cost"></span>
+<span id="spawn-safety"></span>
+成本与派发安全说明已移至使用指南的[成本与安全限制](proactivity.md#costs-and-safety-limits)
+一节，包括模型调用、后端执行与隔离限制。
 
-止步于 L1 的系统给人的感受是通知器，而不是协作者。Raven 的子系统触及 L2 与 L3，
-同时在默认配置下保持克制。
+执行器未接入时，返回降级、未投递结果。尤其是关闭 inject 或 defer，不会把对应决策转换为
+普通提醒。
 
-由此得出的设计原则：
+<span id="nudgepolicy-the-shared-anti-spam-gate"></span>
+<span id="5-anti-spam-the-nudgepolicy-gate"></span>
+<span id="9-risks-and-mitigations"></span>
+<span id="over-notification"></span>
+
+## 策略边界 { #policy-boundaries }
 
-1. 三选一的决策，而非二选一：保持沉默、发一条短消息，或执行一个多步任务——不只是
-   通知与否。
-2. 按用户建模：主动性偏好必须因人而异，不能是一个全局开关。
-3. 反馈闭环：每一次推送都会收集一个信号，用于收紧或放宽后续行为。
-4. 低打扰优先：保守的默认值，渐进式接管；最初几条主动消息的质量，决定用户会不会
-   继续保留这个功能。
-5. 内容质量重于频次：一条精准的主动消息胜过十条泛泛的通知。
+`NudgePolicy.check()` 检查免打扰时段、学习得到及用户指定的免打扰窗口、每日/小时限制、
+会话与拒绝冷却、话题反馈、内容去重及滚动话题配额。高优先级可以绕过部分软限制，但不能
+绕过每日上限、冷却或话题限制。普通的用户指定免打扰窗口也受高优先级豁免设置影响，
+并非无条件阻止发送。
 
----
-
-## 2. 核心思路：周期性 Planner 加按需派生 { #2-the-core-idea-periodic-planner-plus-on-demand-spawn }
-
-该子系统不运行第二个代理循环，也不订阅事件流。它周期性醒来，读取一份打包好的上下文，
-每个节拍做一次结构化的 LLM 决策。当某个决策需要多步执行时，它通过既有的
-`SubagentManager` 派生一个微代理，而不是重新实现一套循环。
-
-这样成本有界（每节拍一次 LLM 调用，派生的尾部开销也有界），同时仍能覆盖例行自动化
-（L2）与多步前瞻（L3）。周期性 Planner 的形态对齐心跳服务
-（`raven/proactive_engine/schedulers/heartbeat/service.py`），执行则复用子代理机制，
-而非另建一套专用运行时。
-
-主动性有两个来源：
-
-- Sentinel——由 LLM 在每个节拍决定是否以及如何触达用户。
-- Cron——由用户显式安排的提醒。
-
-两者都以带来源标记的轮次经由 spine 抵达代理，并且都要通过同一本 `NudgePolicy` 账本，
-因此这两个入口绝不会就同一话题重复提醒用户。
-
----
-
-## 3. 组件 { #3-components }
-
-### ProactivePlanner——周期性推理器 { #proactiveplanner-periodic-reasoner }
-
-按自己的间隔醒来，读取单一的打包上下文，做一次返回结构化决策的 LLM 调用。它是其输入的
-纯函数：没有副作用，也绝不抛出异常——任何失败都退化为 `skip`。
-
-它唯一的输入是组装好的 `PlannerContext`：用户的长期记忆、近期历史的尾部、当前活跃会话、
-已学习到的例行、日历条目、当前的 `NudgePolicy` 状态、上一节拍的决策、近期触发历史、
-`attention.md` 状态文件中选定的若干段落，以及一个折叠后的近期行为窗口。
-Planner 看不到其他任何东西。
-
-### ContextAssembler——输入打包 { #contextassembler-input-packaging }
-
-把每一个信号源汇聚进 `PlannerContext`，并按字段做优雅降级（某个来源缺失时给出空值，
-而不是崩溃）。这里是决定 Planner 能看到什么的唯一位置。
-
-### RoutineLearner——行为模式学习 { #routinelearner-behavior-pattern-learning }
-
-从用户历史中挖掘重复出现的模式（按时间新近度加权的词频统计，不需要 LLM），并产出候选
-例行供 Planner 消费。候选项带确认生命周期持久化：一个模式先被提议，再由用户确认，
-然后才自动触发；被拒绝则暂停，长期不用则退役。
-
-### NudgePolicy——共用的防打扰闸门 { #nudgepolicy-the-shared-anti-spam-gate }
-
-每一条主动消息——无论来自哪个执行器，还是来自任务发现菜单——在投递前都必须通过
-`NudgePolicy.check()`。它执行配额、免打扰时段、冷却期、内容去重和按话题的限额，
-并会根据用户反馈学会收紧或放宽。见第 5 节。
-
-### ProactiveSpawn——多步执行桥接 { #proactivespawn-multi-step-execution-bridge }
-
-当决策为 `spawn_agent` 时，这一层包装 `SubagentManager.spawn(...)` 来运行一个微代理执行
-多步任务（例如状态检查或摘要），再把结果经由 NudgePolicy 与分发器送回。它不引入新的代理
-循环——只是在子代理自身的迭代上限之上，加一层薄薄的主动来源标记、结果格式化，以及
-并发与超时约束。
-
-### 任务发现——前瞻性菜单 { #task-discovery-anticipatory-menus }
-
-每日一次的批处理读取近期记忆与历史，提出一份简短的候选任务菜单，发给用户按编号挑选。
-用户的选择会在抵达代理之前被截获，并路由到某个执行器（回复、工具或派生），
-必要时还可加一道确认步骤。
-
----
-
-## 4. 动作空间 { #4-action-space }
-
-一个 Planner 节拍恰好返回五种动作之一，并依据工具 schema 校验，使 Planner 无法产出
-格式错误的决策：
-
-- `skip`——本节拍没有值得做的事。
-- `nudge`——立即发送一条独立消息。
-- `nudge_inject`——把消息追加到代理在目标会话中的下一条回复里（用户本来就在那段对话中，
-  因此这条信息自然地延续了当前话题）。
-- `nudge_defer`——等目标会话当前的话题告一段落后再发送（用户正忙于别的事，不应被打断）。
-- `spawn_agent`——派出一个微代理执行多步任务。
-
-`nudge_inject` 与 `nudge_defer` 是其中最有特色的两个：它们让代理意识到用户此刻正在做
-什么，而不只是在「现在发」和「不发」之间二选一。它们的执行路径见实现参考文档。
-
----
-
-## 5. 防打扰：NudgePolicy 闸门 { #5-anti-spam-the-nudgepolicy-gate }
-
-NudgePolicy 是一道分层闸门，读写职责划分清晰：`check()` 是纯粹的裁决，
-`record_fired()` 只在投递成功之后才写状态。按顺序应用的各层覆盖：
-
-- 免打扰时段（一个静态窗口，加上一个从反馈中按小时学习得到的窗口）；
-- 按人格划分的免打扰窗口；
-- 按天与按小时的配额；
-- 按会话与按忽略次数的冷却期；
-- 按话题的接受率冷却与硬拒绝冷却；
-- 窗口内的内容去重；
-- 按话题的滚动配额栈（小时 / 天 / 周）。
-
-高优先级消息可以绕过部分软性层，但硬性配额与冷却期依然成立；而且当用户连高优先级消息
-的接受率都很低时，这条高优先级豁免本身也会被收回。
-
-小时配额会被一个自适应乘数缩放，该乘数随用户近期接受率对称移动：高度参与的用户可以收到
-更多，低参与的用户收到更少。这个乘数还会作为软信号出现在 Planner 的提示词中，
-使 Planner 能够提高自己的价值阈值，避免发起注定会被拒绝的 LLM 调用。
-
-该策略可个性化：`ProactivityPreferencesReader` 允许学习到的用户偏好覆盖静态配置，
-但只能朝收紧方向生效（用户偏好可以拉长免打扰窗口，绝不能缩短）。
-
-所有这些状态都跨进程持久化（一个带 `fcntl` 锁、以原子重命名写入的 JSON 存储），
-因此 REPL 与网关共用同一本账本，重启也不会丢失配额或冷却状态。
-
----
-
-## 6. 投递与轮次传输：spine { #6-delivery-and-turn-transport-the-spine }
-
-系统中没有消息总线。spine 是唯一的轮次传输与投递路径。
-
-- 一个轮次以 `TurnRequest` 的形式提交给进程级的 `Scheduler`（`raven/spine/scheduler.py`），
-  由它路由到按会话串行的 `Lane`。每个请求都携带一个 `Origin`——`USER`、`SENTINEL`、
-  `CRON`、`HEARTBEAT` 或 `SUBAGENT`——它决定并发池的划分与控制权资格
-  （`raven/spine/turn.py`）。
-- 回复，以及任何主动消息，都经由 `DeliveryHub`（`raven/spine/delivery.py`）投递，
-  由它把每份可投递内容路由到所属渠道的出口。普通 nudge 直接投到 hub（不再跑一遍轮次），
-  因此用户收到的是一条独立消息，代理也无法「就提醒采取行动」。
-- Sentinel、cron 与心跳抵达代理的方式完全相同：都是经由 spine 提交的、带来源标记的轮次。
-  cron 的提醒以 `CRON` 来源的轮次触发；心跳则作为自己的服务醒来。
-
-`USER` 来源的轮次享有完整的用户入站处理（参与度检测，以及让 `nudge_inject` 得以搭车的
-响应修饰链）。那些不应被当作用户输入、或不应在自身输出上再叠加 nudge 的主动系统轮次，
-会按来源被挡在这些钩子之外。
-
----
-
-## 7. 场景 { #7-scenarios }
-
-### L2——例行自动化 { #l2-routine-automation }
-
-用户最近几个周一早上都查了天气。RoutineLearner 浮出一条候选例行；在下一个周一早上的
-节拍上，Planner 提出建议（「我注意到你周一早上会看天气——要我自动帮你查吗？」）。
-一经确认，此后某个周一早上的节拍就会发出 `spawn_agent` 去获取并总结天气预报，
-然后投递一份简洁的摘要。
-
-### L3——关联记忆的提醒 { #l3-memory-linked-reminder }
-
-用户提到过一张 SSL 证书将在月底到期。Planner 读取记忆后，提前一周提醒用户
-（`nudge`，中等优先级）；若此后仍无动作，则在到期前两天以高优先级再提醒一次。
-
-### L3——感知上下文的续接 { #l3-context-aware-resumption }
-
-用户两小时前在调试 Redis 连接，之后一直没有回复。Planner 读取该活跃会话，看到代理上一次
-给出的建议，然后提出一个贴合上下文的追问（「Redis 连接的问题解决了吗？如果
-`systemctl start redis` 没起作用，我可以去看看防火墙规则或 bind 地址。」）——
-而不是一句脱离上下文的「你还在吗？」。
-
-### L3——主动状态检查 { #l3-proactive-status-check }
-
-用户部署到了预发布环境，并说「先让它跑一会儿」。经过一段合理的间隔后，Planner 发出
-`spawn_agent` 执行一次健康检查并报告结果——代理已经替用户看过了，而不是提醒用户去看。
-
----
-
-## 8. 成本 { #8-cost }
-
-Planner 每个节拍只做一次有界的 LLM 调用（小输入，小的结构化输出）。默认节拍间隔为
-30 分钟，RoutineLearner 完全不使用 LLM。被派生的微代理是唯一的多步成本，其尾部开销由
-子代理的迭代上限、每任务超时和并发上限共同约束。整个子系统默认关闭
-（`sentinel.enabled=false`），因此选择不启用的用户不付出任何代价。
-
-尾部风险控制：
-
-- 主动微代理的并发上限；
-- 每个任务各自的超时；
-- 子代理自身的迭代上限；
-- NudgePolicy 的限流，它间接约束了派生频率。
-
----
-
-## 9. 风险与缓解 { #9-risks-and-mitigations }
-
-### 过度打扰 { #over-notification }
-
-如果 Planner 判断失误、推送了低价值的提醒，用户就会关掉这个功能。缓解措施：保守的默认值；
-RoutineLearner 先提议后行动；自适应的 NudgePolicy 在接受率低时自动收紧；Planner 的提示词
-默认倾向 `skip`。
-
-### Planner 决策质量 { #planner-decision-quality }
-
-小模型可能误判复杂上下文。缓解措施：Planner 的输出是结构化的工具调用（解析可靠）；
-上下文刻意保持精简，以落在模型的最佳区间内；高影响动作至少要求中等优先级；
-Planner 使用的模型可配置，需要更强模型的用户可以自行更换。
-
-### 派生安全 { #spawn-safety }
-
-无人看管的微代理可能做出破坏性动作。缓解措施：主动派生默认关闭；子代理在工作区限制下运行，
-不具备消息发送与递归派生工具，并受迭代上限和一层额外超时约束。
-
-### 历史格式漂移 { #history-format-drift }
-
-RoutineLearner 依赖带时间戳的历史格式。缓解措施：历史由整合器按受控格式写入，解析器容忍
-一定偏差，无法解析的条目会被跳过而不是导致失败。
+自适应调节根据反馈调整小时乘数，周末因子可以进一步收紧。偏好覆盖只能收紧静态策略。
+策略状态会持久化，因此重启不会重置配额。
+
+检查与记录是分开的操作。不要假定所有路径在同一时刻消耗配额，也不要把持久化账本理解为
+原子的“检查并预留额度”事务：
+
+- 普通提醒在报告投递成功后记录；追加提醒在入队时记录；主动派发在派发后记录。
+  入队或派发并不证明用户已看到结果。
+- 延迟提醒在登记时检查策略，但当前 runner 没有接入记录最终触发的回调。DeferManager
+  在空闲检查后直接投递，不重新检查策略，因此没有完整的发送时配额或免打扰保障。
+- 任务发现菜单受策略约束。用户选择后的执行是独立路径，并非每种动作都再经 ProactiveSpawn。
+- Cron 是用户显式安排的任务，绕过 `check()`。接入 Sentinel runner 时，成功触发会更新
+  共享计数与话题账本。这有助于抑制重叠的 Sentinel 提醒，但不能保证所有消息语义上绝不重复。
+
+## 状态与反馈 { #state-and-feedback }
+
+默认运行时状态位于 `~/.raven/sentinel/`，随 `RAVEN_HOME` 迁移。文件名定义在
+`sentinel/state_files.py`。
+
+| 文件 | 职责 |
+| --- | --- |
+| `state.json` | 共享策略账本、待处理的追加与延迟提醒，以及互动状态 |
+| `feedback.jsonl` | 用于自适应调节的派发与反馈事件 |
+| `pending_decisions.json` | 任务发现菜单、过期与确认状态 |
+| `routines.json` | 学到的例行任务及其持久化确认状态 |
+| `discover_triggers.json` | 由运维发起、runner 消费的任务发现请求 |
+
+`JsonStateStore` 对 JSON 的读改写使用 `fcntl` 锁与原子重命名。使用同一状态目录的进程
+共享这些文件，这不代表每个聊天接收方都有独立配额。
+
+在所配置的 Agent 主目录中，`user_memory/attention.md` 保存派生章节。AttentionUpdater
+在文件锁外计算生产者输出，在锁内拼接章节，跳过未变化内容并隔离生产者故障。
+可选的每日分析会让多个生产者复用一个 LLM 结果。`user_memory/behaviors.md` 保存提取出的
+行为事件。每日分析与行为提取默认关闭。
+
+当前反馈钩子将近期提醒后的 `/dismiss` 回复记为拒绝，并触发会话冷却。未分类的回复记为
+中性，不会自动视为接受。任务发现的选择与确认分别记录反馈；长期未获回应的提醒可以形成
+忽略信号。
+
+<span id="routinelearner-behavior-pattern-learning"></span>
+<span id="task-discovery-anticipatory-menus"></span>
+<span id="history-format-drift"></span>
+
+## 例行学习与任务发现 { #routines-and-task-discovery }
+
+RoutineLearner 按星期与时间段对带时间戳的历史分组，不调用 LLM，仅提取关键词。
+无法解析的行会跳过，历史不足时不产生候选项；近期权重使当前模式优先。RoutineStore 刷新时
+保留确认状态；确认会把候选项提升为 active，拒绝则将其置为 retired，经过冷却后才可再次
+提议。仅仅没有回应，不会让例行任务变成已确认状态。
+
+开启后，TaskDiscoverer 刷新候选项、按配置验证、合并整理后生成 `PendingDecision` 菜单。
+PendingDecisionStore 管理过期、取代与确认状态。DecisionRouter 通过确定性规则匹配
+`/pick N`。其他回复（包括纯数字）在已配置服务商和模型时由带置信度门槛的模型分类器处理；
+缺少任一项配置时，只有 `/pick N` 能选择选项。DecisionConsumer 在普通 Agent 轮次继续前
+处理匹配的回复。
+
+完成所配置的确认步骤后，ActionExecutor 按类别派发：
+
+- `reply`：将选中的提示词提交为带 `sentinel.action_origin` 的用户意图轮次，而不是使用
+  NudgeInjector 追加。菜单选择钩子提交后不能等待同一 Lane 上的轮次，否则会自锁。
+- `tool`：调用已注册工具。
+- `spawn`：直接交给 SubagentManager。
+- `routine_confirm`：提升例行任务状态；载荷有要求且接入 CronService 时，可创建 Cron 任务。
+
+确定性选择避开的是普通对话的 LLM 路径；分类、确认或所选任务本身仍可能调用模型。
+
+<span id="6-delivery-and-turn-transport-the-spine"></span>
+
+## Cron、Heartbeat 与 Spine { #cron-heartbeat-and-the-spine }
+
+CronService（`schedulers/cron/service.py`）在文件锁下持久化任务、认领到期工作，然后在
+锁外执行。归属遵循 **Fire-at-origin**：由任务创建时绑定的渠道/接收方所对应的 runner
+执行与投递，不在触发时转发或广播。`raven/core/cron_stack.py` 将工作以 `CRON` 轮次
+提交到 `cron:<job_id>`。
+
+周期任务成功触发会增加 `silent_fire_count`，匹配的用户活动会将其重置。
+达到 `silent_fire_limit`（默认 `12`）后任务被禁用。这里计数的是没有用户活动的触发，
+不是失败次数。Cron 的反馈记录记为中性，不会拉低 Sentinel 学习到的接受率。
+固定延迟的 `every` 计划从完成时刻计算下一次运行时间，而不是从上一次应触发时刻计算。
+
+HeartbeatService（`schedulers/heartbeat/service.py`）通过结构化模型决策检查
+`HEARTBEAT.md`，仅在结果为 `run` 时执行 Agent 工作。`wake.py` 合并提前唤醒请求、
+限制频率，并在用户工作繁忙时延后。Wake 驱动 Heartbeat，不驱动 Sentinel 的节拍循环。
+
+Spine 的 Scheduler 将轮次路由到按会话划分的 Lane 与按来源划分的并发池；
+DeliveryHub 将输出投递到出口。用户入站与响应修饰钩子区分真实用户轮次和系统来源工作。
+用户确认后的任务发现动作带独立标记，避免对一次选择重复计数。
+
+通用轮次控制不是 Sentinel 专属功能：`BusyPolicy.INJECT` 处理轮次进行中的用户输入，
+`ask_user` 与 QuestionBroker 处理结构化提问。见[架构](architecture.md)；
+实现入口为 `raven/spine/scheduler.py`、`raven/agent/loop/main.py` 与
+`raven/rpc/question_broker.py`。
+
+## 验证入口 { #verification-entry-points }
+
+决策行为见 `tests/test_sentinel_planner.py` 与 `tests/test_sentinel_fast_path.py`；
+路由与策略见 `tests/test_sentinel_runner.py`、`tests/test_nudge_policy.py` 与
+`tests/test_proactive_spawn.py`。组装测试在 `tests/test_core_sentinel_stack.py`，
+Cron 账本集成测试在 `tests/test_core_cron_stack_ledger.py`，运维命令测试在
+`tests/test_cli_sentinel_commands.py`。通过 `uv run pytest` 运行测试，使用注入的时钟
+与模拟服务商验证契约，不要用真实通知验证。

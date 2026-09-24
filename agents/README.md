@@ -56,11 +56,14 @@ What one agent directory carries:
   `"noteFile": "<name>.md"` beside the manifest instead -- discovery reads that
   file into `note`, so a requirement long enough to be worth writing stays
   reviewable as a diff; declaring both is refused. What puts a route under that
-  gate at all is its own declaration, and the two halves are independent:
+  gate at all is its own declaration, and the three parts are independent:
   `"needs": ["image_generation", "image_search"]` names what the target's own
-  pipeline cannot work without, and `"minTier": "max"` the lowest tier the
-  route may open at. A route naming neither is dispatched exactly as routes
-  were before the gate existed -- never probed, never tiered -- because
+  pipeline cannot work without, `"needsFile": ".pptx"` a file the user attached
+  that the dispatch hands over (a direct chat's media, or an attachment of the
+  turn that the spawn task names -- a path in the text alone is not one) for
+  the route to open, and `"minTier": "max"` the lowest tier the route may open
+  at. A route naming none is dispatched exactly as routes were before the
+  gate existed -- never probed, never asked for a file, never tiered -- because
   `routes` is a general facility and a row routing for reasons of its own must
   not inherit conditions it never asked for. The names in `needs` come from a
   closed vocabulary (`ROUTE_REQUIREMENTS`), since the host is what answers
@@ -177,7 +180,11 @@ Agent notes:
   channel names, normalized characters and truncated names remain distinct.
   Task State is still stored under the configured `taskState.stateRoot`,
   keyed by this session directory; relative file and render paths use the
-  same directory. A symlink used as `designs/` or as the session directory
+  same directory. The reply ends with that directory's absolute path and the
+  note that its paths resolve against it: a caller dispatched the run into the
+  directory above, which is what its dispatch receipt names, so it would
+  otherwise resolve the reply's relative paths one level too high and deliver
+  nothing. A symlink used as `designs/` or as the session directory
   stops the turn before model or tool execution, preserving the original
   working directory's access boundary. The caller's working directory may
   itself be a symlink; its resolved location is the root. Resuming a session

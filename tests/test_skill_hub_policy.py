@@ -137,6 +137,44 @@ class _FakeStdin(io.StringIO):
         return self._tty
 
 
+class TestLiveBlocklist:
+    """Every screen the policy owns asks the reader, not the frozen field.
+
+    A loop builds its policy once; the operator flips the switch afterwards.
+    A screen that reads the construction-time list answers the switch that was
+    thrown before it and no other, which showed up as a Hub skill enabled on
+    the settings page and still refused by `refusal_for_detail`.
+    """
+
+    @staticmethod
+    def _policy(live: set[str]) -> SkillPolicy:
+        return SkillPolicy.create(blocklist=["codeword"], blocklist_reader=lambda: frozenset(live))
+
+    def test_detail_gate_follows_the_list_both_ways(self) -> None:
+        live: set[str] = set()
+        policy = self._policy(live)
+        meta = {"slug": "codeword", "name": "codeword", "score_safety": 0.9}
+
+        assert policy.refusal_for_detail(meta, ()) is None
+
+        live.add("codeword")
+        assert "blocklist" in (policy.refusal_for_detail(meta, ()) or "")
+
+        live.discard("codeword")
+        assert policy.refusal_for_detail(meta, ()) is None
+
+    def test_blocked_now_falls_back_to_the_field(self) -> None:
+        """No reader, no change: the callers that never had one keep theirs."""
+        assert SkillPolicy.create(blocklist=["a"]).blocked_now() == frozenset({"a"})
+
+    def test_a_reader_that_raises_leaves_the_field_in_force(self) -> None:
+        def boom() -> frozenset[str]:
+            raise RuntimeError("config gone")
+
+        policy = SkillPolicy.create(blocklist=["a"], blocklist_reader=boom)
+        assert policy.blocked_now() == frozenset({"a"})
+
+
 class TestInstallSkipReason:
     async def test_auto_allows(self) -> None:
         assert await SkillPolicy.create().install_skip_reason("foo") is None

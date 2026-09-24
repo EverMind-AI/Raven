@@ -18,6 +18,7 @@ from loguru import logger
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.contracts.asking import SupportsDirectAsk
 from raven.gateway.outlet import ChannelOutletAdapter
+from raven.providers.base import bound_llm_detail, llm_error_summary, parse_llm_error
 from raven.spine import OriginPools, Scheduler
 from raven.spine.delivery import DeliveryHub
 from raven.spine.events import Text, TurnEnded, TurnFailed, TurnStarted
@@ -33,6 +34,29 @@ if TYPE_CHECKING:
 
 _TURN_FAILED_REPLY = "Sorry, I encountered an error."
 _TURN_CUT_BY_RELOAD_REPLY = "A runtime reload cut this reply short; please send your message again."
+
+
+def _failed_turn_reply(error: str, *, reported: bool) -> str:
+    """What a channel reader is told about a failed turn.
+
+    A model call's failure is told as its category and endpoint alone. The
+    vendor's own account goes to the operator's log, not to a group chat: an
+    auth body carries a masked key and an account URL, and a rejected-request
+    body can quote the prompt back. ``a2a`` already answers a remote caller at
+    this altitude (``TURN_FAILED_MESSAGE``).
+
+    A runner that worded the failure itself -- ``reported`` -- is quoted,
+    bounded, because that text is the runtime's own report and was written for
+    a reader. Anything else is a crash whose message names hosts and paths, and
+    gets the one sentence channels have always got.
+    """
+    parsed = parse_llm_error(error)
+    if parsed is not None:
+        category, provider, _detail = parsed
+        return llm_error_summary(category, provider)
+    if reported and error.strip():
+        return bound_llm_detail(error)
+    return _TURN_FAILED_REPLY
 
 
 def _cid(req: TurnRequest) -> str:
@@ -103,6 +127,7 @@ class GatewayTurnRunner(AgentTurnRunner):
             ApprovalViaAsk(asker, cid) if asker is not None else None,
             conversation_id=cid,
             turn_id=req.turn_id or "",
+            origin=req.origin.value,
         )
         start_ask_turn(
             asker,
@@ -119,7 +144,15 @@ class GatewayTurnRunner(AgentTurnRunner):
         if req.origin not in _READBACK_ORIGINS:
             return await self._loop.run_turn(req, emit, drain, stream=False)
         text_sink: dict[str, str] = {}
-        outcome = await self._loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+        try:
+            outcome = await self._loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+        finally:
+            # A turn that fails or is cancelled stores nothing, and the submitter
+            # pops by conversation: without this, a cron job whose turn failed
+            # reads the text its previous run left behind and records it as this
+            # run's reply.
+            if req.conversation is not None:
+                self._readback_texts.pop(req.conversation, None)
         # Stored before returning: the worker resolves result() only after run()
         # returns, so the submitter's read is ordered after this write.
         if req.conversation is not None and (text := text_sink.get("text")) is not None:
@@ -137,7 +170,8 @@ def _make_gateway_sink(
     lifecycle side effects the plain hub sink does not carry: on TurnEnded or
     TurnFailed fire ``on_turn_complete`` (the WakeScheduler's parked-wake
     signal), and on a non-cancelled failure deliver a user-visible error reply
-    to the originating channel. A cancelled turn (/stop) fires the wake and
+    to the originating channel -- the failure's category when a model call was
+    what failed. A cancelled turn (/stop) fires the wake and
     sends no reply -- unless ``cut_by_reload`` says a generation swap did the
     cancelling, in which case the channel is told the reply was cut.
 
@@ -154,7 +188,9 @@ def _make_gateway_sink(
             source = sources.pop(event.conversation_id, None)
             if isinstance(event, TurnFailed) and source is not None:
                 if not event.cancelled:
-                    await hub.dispatch(Text(content=_TURN_FAILED_REPLY, source=source))
+                    await hub.dispatch(
+                        Text(content=_failed_turn_reply(event.error, reported=event.reported), source=source)
+                    )
                 elif cut_by_reload is not None and cut_by_reload():
                     # /stop is the user's own act and stays silent; a reload is
                     # not, so the reply it cut is owed at least a sentence.

@@ -1,11 +1,9 @@
 # Sandbox
 
-With sandboxing enabled, Raven runs shell commands and stdio MCP server
-processes in a **Boxlite microVM**. The VM has its own kernel, resource limits,
-and network policy. Mounted directories remain accessible according to their
-configured permissions, including the shared workspace.
-
----
+With sandboxing enabled, shell commands and stdio MCP server processes dispatched
+through `BoxliteExecutor` run in a **Boxlite microVM**. The VM has its own kernel,
+resource limits, and network policy. Mounted directories remain accessible
+according to their configured permissions, including the shared workspace.
 
 ## 1. Installation
 
@@ -18,17 +16,18 @@ uv sync --extra sandbox
 
 When the backend is `"auto"` or `"boxlite"`, a missing dependency raises
 `SandboxInitError`. Raven does not silently fall back to host execution.
-`DirectExecutor` is used when the backend is `"none"` or no sandbox configuration
+`DirectExecutor` is used only when the backend is `"none"` or no sandbox configuration
 is supplied.
 
 The `sandbox` extra pins `boxlite==0.9.5` in `pyproject.toml`. Use the pinned
 version to keep the backend compatible with Raven's executor implementation.
 
----
-
 ## 2. Configuration
 
-Add a `sandbox` block under `tools` in `config.json`:
+Add a `sandbox` block under `tools` in `config.json`. The loader accepts JSON,
+not YAML. Invalid JSON produces a warning and falls back to defaults, including
+`tools.sandbox.backend = "none"`, so check startup warnings before relying on
+sandbox isolation:
 
 ```json
 {
@@ -56,7 +55,7 @@ The default backend is `"none"`. Enable `"auto"` or `"boxlite"` to use a microVM
 | `default_timeout` | `int` | `120` | Per-`exec()` timeout in seconds when no explicit timeout is passed. |
 | `verify_timeout` | `int` | `30` | Timeout in seconds for the startup `echo ok` probe that confirms the VM is responsive. |
 | `create_timeout` | `int` | `300` | Timeout in seconds for image pull + VM creation. Increase for large images or slow registries; decrease if images are always pre-pulled. |
-| `debug` | `object` | Disabled | Set `debug.enabled` to `true` to enable the local sandbox inspection service used by `raven sandbox`. |
+| `debug` | `object` | Disabled | Set `debug.enabled` to `true` to enable the local sandbox inspection service used by `raven sandbox`. Ignored when `backend` is `"none"`. |
 
 ### Common presets
 
@@ -122,8 +121,6 @@ at startup. Initialization fails if the backend is unavailable:
 }
 ```
 
----
-
 ## 3. How It Works
 
 `SandboxExecutor`, defined in `raven/sandbox/interfaces.py`, provides a shared
@@ -151,8 +148,6 @@ a VM. At runtime startup or before a turn, `_start_executor()` calls
 Network restrictions apply to the working VM; image preparation still needs
 registry access. An unavailable backend or unsupported platform raises
 `SandboxInitError` before sandboxed work can run.
-
----
 
 ## 4. Using `SandboxExecutor` Directly
 
@@ -206,10 +201,12 @@ class ExecResult:
     def as_text(self, max_chars: int = 10_000) -> str: ...
 ```
 
-`as_text()` combines stdout, a `STDERR:` block when stderr is non-empty, and an
-`Exit code: N` line. The exit code is always included. Output longer than
-`max_chars` is truncated in the middle, with a `... (N chars truncated) ...`
-marker indicating the omitted content.
+`as_text()` combines stdout, a `STDERR:` block when stderr contains non-whitespace
+characters, and an `Exit code: N` line into a single string before truncation.
+Output longer than `max_chars` is truncated in the middle, with a
+`... (N chars truncated) ...` marker indicating the omitted content. Very small
+limits can truncate the exit-code line itself; read `result.exit_code` directly
+when the complete exit code is required independently of the formatted output.
 
 **Lifecycle — explicit start/stop:**
 
@@ -294,8 +291,6 @@ executor = build_executor(None, workspace, sandbox_dir=get_sandbox_dir)
 executor = build_executor(SandboxConfig(backend="none"), workspace, sandbox_dir=get_sandbox_dir)
 ```
 
----
-
 ## 5. Injecting an Executor into `ExecTool`
 
 Pass an executor through the optional `executor` parameter. If omitted,
@@ -333,10 +328,10 @@ Because `/workspace` is a read-write mount, deleting a file there also deletes
 it on the host.
 
 `ExecTool` enforces its own command and workspace restrictions.
-`restrict_to_workspace` applies to both backends: commands that reference paths
-outside the workspace are rejected and logged.
-
----
+`restrict_to_workspace` applies to both backends: it checks command text for
+recognizable paths outside the allowed working directories and rejects those
+commands. It cannot inspect every filesystem access performed by the programs
+a command launches. Use VM mounts and OS permissions for isolation.
 
 ## 6. Wiring into `AgentLoop`
 
@@ -402,7 +397,11 @@ the VM stops because their stdio server processes run inside it. Repeating
 
 **MCP stdio servers:**
 
-When `sandbox.backend` is `"auto"` or `"boxlite"`, stdio MCP servers are launched **inside the VM** rather than on the host. Three asyncio bridge tasks translate between boxlite's streaming execution API and the `anyio` `MemoryObjectStream` pairs that `ClientSession` expects:
+When `sandbox.backend` is `"auto"` or `"boxlite"`, stdio MCP servers are launched
+**inside the VM** rather than on the host. Raven creates two pairs of `anyio`
+memory object streams and passes a receive stream and a send stream to
+`ClientSession`. Three asyncio tasks bridge stdout and stdin to those streams
+and forward stderr to the application log:
 
 - `_stdout_bridge` — reads VM stdout chunks, buffers until `\n`, parses JSON-RPC, wraps in `SessionMessage`, forwards to read stream
 - `_stdin_bridge` — receives `SessionMessage` from write stream, extracts the inner `JSONRPCMessage`, serialises to JSON + newline, writes to VM stdin
@@ -420,12 +419,16 @@ startup, are logged at DEBUG level and skipped without interrupting
 `ClientSession`. HTTP/SSE MCP servers use remote connections, so this process
 bridge does not apply to them.
 
----
-
 ## 7. Wiring into `SubagentManager`
 
-With sandboxing enabled, each subagent runs in its own VM rather than sharing
-the parent agent's VM.
+With sandboxing enabled, the built-in `raven-loop` subagent backend uses its
+own sandbox executor for shell commands rather than sharing the parent agent's
+VM. This does not place the entire subagent process or its host-side filesystem
+tools inside the VM.
+
+External ACP and CLI agents still launch as host processes. Passing a sandbox
+executor to a backend does not sandbox that backend's own process or tools;
+configure isolation in the external agent separately when required.
 
 ```python
 from raven.agent.subagent import SubagentManager
@@ -441,25 +444,24 @@ manager = SubagentManager(
 handle = await manager.spawn(task="run the test suite and report failures")
 ```
 
-`_run_subagent()` creates an executor for the subagent's workspace and runs the
-task inside `async with executor:`. The VM starts with the task and is cleaned
-up when the task finishes, including when it fails.
+`_run_subagent()` creates an executor for the subagent's workspace and passes it
+to the backend inside `async with executor:`. The VM starts before backend
+execution and is cleaned up when the task finishes, including when it fails.
+Only operations the backend sends through that executor run inside the VM.
 
 Each VM starts independently. Pre-pulling images can avoid repeated downloads
 when many subagents start concurrently; VM creation still has its own cost.
 
-`AgentLoop` passes its `sandbox_config` to `SubagentManager`, so subagents
-inherit the same configuration:
+`AgentLoop` passes its `sandbox_config` to `SubagentManager`, so the executors
+created for subagent tasks inherit the same configuration:
 
 ```python
 # In AgentLoop.__init__ (simplified)
 self.subagents = SubagentManager(
     ...,
-    sandbox_config=sandbox_config,   # same config, isolated VM per sub-agent
+    sandbox_config=sandbox_config,
 )
 ```
-
----
 
 ## 8. Advanced Configuration
 
@@ -539,8 +541,6 @@ Per-call timeout overrides the default:
 result = await executor.exec("sleep 20", timeout=10)
 ```
 
----
-
 ## 9. How to Run Tests
 
 ### 9.1 Prerequisites
@@ -554,8 +554,6 @@ result = await executor.exec("sleep 20", timeout=10)
 
 Unit tests mock Boxlite and do not require a running VM or KVM. Use Python 3.12
 or newer, as required by the project.
-
----
 
 ### 9.2 Set up the virtual environment
 
@@ -572,8 +570,6 @@ uv sync
 
 `uv sync` creates the project environment and installs the locked dependencies.
 Use `uv run` for the commands below; manual activation is not required.
-
----
 
 ### 9.3 Install dependencies
 
@@ -603,8 +599,6 @@ uv run python -c "from raven.sandbox import build_executor, SandboxConfig; print
 uv run python -c "import boxlite; print('boxlite ok')"
 ```
 
----
-
 ### 9.4 Run unit tests
 
 Unit tests cover `SandboxConfig`, `DirectExecutor`, a mocked `BoxliteExecutor`,
@@ -633,8 +627,6 @@ uv run python -m pytest tests/test_sandbox_unit.py -v -s
 # Filter by test name substring
 uv run python -m pytest tests/test_sandbox_unit.py -k "translate_cwd"
 ```
-
----
 
 ### 9.5 Run integration tests
 
@@ -675,13 +667,11 @@ on each run, then starts the MCP server and validates the full `initialize` +
 uv run python -m pytest tests/test_sandbox_unit.py tests/integration/test_sandbox_real_vm.py -v
 ```
 
-**Run the full project test suite** (all test files, excluding integration):
+**Run the project tests without integration tests:**
 
 ```bash
-uv run python -m pytest tests/ --ignore=tests/integration/test_sandbox_real_vm.py -q
+uv run pytest tests/ --ignore=tests/integration -q
 ```
-
----
 
 ### 9.6 Run a single test
 
@@ -692,8 +682,6 @@ uv run python -m pytest "tests/test_sandbox_unit.py::TestBoxliteTranslateCwd::te
 # A single integration test
 uv run python -m pytest "tests/integration/test_sandbox_real_vm.py::TestBoxliteStdioMCPRoundtrip::test_npx_mcp_server_everything" -v -s
 ```
-
----
 
 ### 9.7 Troubleshooting
 
@@ -752,8 +740,6 @@ for img in ['ubuntu:22.04', 'node:20-slim']:
     print(f'  done')
 "
 ```
-
----
 
 ## 10. Platform Requirements
 

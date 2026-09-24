@@ -23,6 +23,7 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import httpx
 
@@ -233,38 +234,16 @@ def run(argv=None):
         if parent_status != 0:
             return parent_status
 
-    # Pin to the same locked constraints the installer uses. Derive the URL from
-    # the (already trust-checked) wheel URL so the constraints always match the
-    # wheel being installed. Missing asset / download failure -> upgrade without
-    # pinning rather than abort.
-    constraints_path = None
-    constraints_url = wheel_url.rsplit("/", 1)[0] + "/raven-constraints.txt"
-    try:
-        import os
-        import socket
-        import tempfile
-        import urllib.request
-
-        socket.setdefaulttimeout(30)
-        fd, constraints_path = tempfile.mkstemp(prefix="raven-constraints-", suffix=".txt")
-        os.close(fd)
-        urllib.request.urlretrieve(constraints_url, constraints_path)
-    except Exception:
-        print(
-            "Warning: could not download locked constraints; "
-            "upgrading without version pinning.",
-            file=sys.stderr,
-        )
-        constraints_path = None
-
-    def run_uv(requirement, mode):
+    def run_uv(requirement, mode, plugin_list):
         command = [uv_path, "tool", "install"] + mode
         if constraints_path:
             command += ["-c", constraints_path]
+        if plugin_list:
+            command += ["--with-requirements", plugin_list]
         command.append(requirement)
         return subprocess.run(command, check=False).returncode
 
-    def install(requirement):
+    def install(requirement, plugin_list):
         # Cheap shape first. `--force` tears the whole environment down and
         # writes 150-odd packages back even when the only thing that moved is
         # raven's own wheel; `--reinstall-package raven` replaces that wheel and
@@ -284,10 +263,10 @@ def run(argv=None):
         # shape reports success, the fallback never runs, and the environment
         # stays broken. `--force` used to repair it by accident on every
         # upgrade. Nothing repairs it now short of rerunning the installer.
-        status = run_uv(requirement, ["--reinstall-package", "raven"])
+        status = run_uv(requirement, ["--reinstall-package", "raven"], plugin_list)
         if status == 0:
             return 0
-        return run_uv(requirement, ["--force"])
+        return run_uv(requirement, ["--force"], plugin_list)
 
     def restart():
         # Called on every path out of the install, not just the successful one.
@@ -311,28 +290,129 @@ def run(argv=None):
         print("Raven restarted.")
         return True
 
+    # Everything a version's install is made of sits beside its wheel in the
+    # release directory: raven-constraints.txt, the locked pins, and
+    # raven-plugins.txt, the plugin wheels the release ships alongside raven as
+    # one `name @ url` line each. The list is what keeps an upgrade from
+    # dropping the plugins the installer put in: uv replaces the tool's
+    # requirement set with what one command names, so anything not named again
+    # is uninstalled. Installing raven alone would be exactly that loss, so no
+    # list means no upgrade.
+    import base64
+    import os
+    import socket
+    import tempfile
+    import urllib.parse
+    import urllib.request
+
+    socket.setdefaulttimeout(30)
+    release_dir = wheel_url.rsplit("/", 1)[0]
+    wheel_parts = urllib.parse.urlsplit(wheel_url)
+
+    def authorize(url):
+        # A beta wheel URL carries its deploy token as userinfo, and uv reads
+        # credentials only from the URL, so its siblings on the same host get
+        # the same ones. Release URLs carry none and pass through untouched.
+        parts = urllib.parse.urlsplit(url)
+        if not wheel_parts.username or parts.username or parts.hostname != wheel_parts.hostname:
+            return url
+        return urllib.parse.urlunsplit(parts._replace(netloc=wheel_parts.netloc))
+
+    def download(url, prefix):
+        # urllib takes `user:token@host` for the host name, so the credentials
+        # move into the header and out of the URL before the request is made.
+        parts = urllib.parse.urlsplit(url)
+        headers = {}
+        if parts.username:
+            creds = urllib.parse.unquote(parts.username) + ":" + urllib.parse.unquote(parts.password or "")
+            headers["Authorization"] = "Basic " + base64.b64encode(creds.encode("utf-8")).decode("ascii")
+            host = parts.hostname if parts.port is None else f"{parts.hostname}:{parts.port}"
+            url = urllib.parse.urlunsplit(parts._replace(netloc=host))
+        fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
+        request = urllib.request.Request(url, headers=headers)
+        with os.fdopen(fd, "wb") as handle, urllib.request.urlopen(request) as response:
+            handle.write(response.read())
+        return path
+
+    def write_list(lines, prefix):
+        fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("".join(line + "\n" for line in lines))
+        return path
+
+    constraints_path = None
     try:
-        channel_status = install(f"raven[channels] @ {wheel_url}")
-        if channel_status != 0:
-            base_status = install(wheel_url)
-            if base_status != 0:
-                print(
-                    f"Unable to upgrade Raven: uv exited with status {base_status}.",
-                    file=sys.stderr,
-                )
-                restart()
-                return base_status
-            print(
-                "Warning: Channel dependencies failed to install; installed base raven only. "
-                "Some channels stay unavailable (see: raven channels list).",
-                file=sys.stderr,
-            )
+        constraints_path = download(authorize(release_dir + "/raven-constraints.txt"), "raven-constraints-")
+    except Exception:
+        print(
+            "Warning: could not download locked constraints; upgrading without version pinning.",
+            file=sys.stderr,
+        )
+
+    try:
+        with open(download(authorize(release_dir + "/raven-plugins.txt"), "raven-plugins-"), encoding="utf-8") as handle:
+            plugin_lines = [line.strip() for line in handle if line.strip() and not line.lstrip().startswith("#")]
+    except Exception as exc:
+        print(
+            f"Unable to upgrade Raven: could not download the plugin list for {latest_version} ({exc}). "
+            "Nothing was changed; retry later.",
+            file=sys.stderr,
+        )
+        restart()
+        return 1
+
+    def authorize_line(line):
+        name, sep, url = line.partition(" @ ")
+        return name + sep + authorize(url) if sep else line
+
+    plugin_lines = [authorize_line(line) for line in plugin_lines]
+    memory_lines = [line for line in plugin_lines if line.partition(" @ ")[0].strip() == "everos-memory"]
+
+    # Two independent things can fail: the channel extras, and the plugins
+    # (the engines' native builds first, the memory plugin after). A failed
+    # attempt does not say which, so the rungs walk both axes and stop at the
+    # first that lands -- the largest install this machine can build -- and
+    # report exactly what that rung lacks:
+    #   1 channels + all plugins      4 base + memory plugin
+    #   2 base + all plugins          5 channels, no plugins
+    #   3 channels + memory plugin    6 base, no plugins
+    lost_channels = "Channel dependencies failed to install; some channels stay unavailable (see: raven channels list)."
+    lost_engines = "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+    lost_plugins = (
+        "No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
+    )
+    full = write_list(plugin_lines, "raven-plugins-") if plugin_lines else None
+    memory = write_list(memory_lines, "raven-plugins-memory-") if memory_lines and memory_lines != plugin_lines else None
+    rungs = [(full, "raven[channels]", []), (full, "raven", [lost_channels])]
+    if memory is not None:
+        rungs.append((memory, "raven[channels]", [lost_engines]))
+        rungs.append((memory, "raven", [lost_engines, lost_channels]))
+    if full is not None:
+        rungs.append((None, "raven[channels]", [lost_plugins]))
+        rungs.append((None, "raven", [lost_plugins, lost_channels]))
+
+    try:
+        status = 0
+        for plugin_list, spec, losses in rungs:
+            requirement = wheel_url if spec == "raven" else f"{spec} @ {wheel_url}"
+            status = install(requirement, plugin_list)
+            if status == 0:
+                for loss in losses:
+                    print(f"Warning: {loss}", file=sys.stderr)
+                break
+        else:
+            print(f"Unable to upgrade Raven: uv exited with status {status}.", file=sys.stderr)
+            restart()
+            return status
     except OSError as exc:
         print(f"Unable to upgrade Raven: could not run uv: {exc}.", file=sys.stderr)
         restart()
         return 1
 
-    print(f"Raven upgraded: {current_version} -> {latest_version}")
+    if current_version == latest_version:
+        print(f"Raven {latest_version} reinstalled with its plugins.")
+    else:
+        print(f"Raven upgraded: {current_version} -> {latest_version}")
     if relaunch is None:
         print("Restart any other running Raven process to use the new version.")
         return 0
@@ -546,6 +626,59 @@ def fetch_latest_version(client: httpx.Client | None = None) -> str:
         return _fetch_latest_version_via_redirect(owned_client)
 
 
+PLUGIN_LIST_NAME = "raven-plugins.txt"
+
+
+def plugin_list_url(release: ReleaseInfo) -> str:
+    """The release's plugin list, beside its wheel like the constraints are."""
+    return release.wheel_url.rsplit("/", 1)[0] + "/" + PLUGIN_LIST_NAME
+
+
+def plugin_names(text: str) -> list[str]:
+    """Distribution names from a plugin list: one ``name @ url`` line each."""
+    names: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        names.append(line.partition(" @ ")[0].strip())
+    return names
+
+
+def missing_plugins(release: ReleaseInfo, client: httpx.Client | None = None) -> list[str]:
+    """Plugin distributions ``release`` ships beside its wheel that this environment lacks.
+
+    Read from the release's own list, the file the upgrade helper installs
+    from, never guessed here. A release without a list (older than the list
+    itself) has nothing to miss, and a list that cannot be fetched counts as
+    nothing missing: this check exists to offer a repair to an up-to-date
+    install, not to stand between the reader and "up to date".
+    """
+
+    def fetch(owned: httpx.Client) -> str:
+        response = owned.get(plugin_list_url(release), headers={"User-Agent": _user_agent()})
+        if response.status_code == 404:
+            return ""
+        response.raise_for_status()
+        return response.text
+
+    try:
+        if client is not None:
+            text = fetch(client)
+        else:
+            with httpx.Client(timeout=_REQUEST_TIMEOUT, follow_redirects=True) as owned_client:
+                text = fetch(owned_client)
+    except httpx.HTTPError:
+        return []
+    missing: list[str] = []
+    for name in plugin_names(text):
+        try:
+            metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            missing.append(name)
+    return missing
+
+
 def _direct_url_data() -> dict[str, object] | None:
     raw = metadata.distribution("raven").read_text("direct_url.json")
     if raw is None:
@@ -609,6 +742,40 @@ def _is_editable_install() -> bool:
     directory = data["dir_info"]
     editable = directory.get("editable", False)
     return editable
+
+
+def editable_checkout_status() -> tuple[Path, int, int]:
+    """Read the installed checkout against its last fetched origin/main."""
+    data = _direct_url_data()
+    if data is None:
+        raise UpgradeError("Editable source checkout metadata is unavailable")
+    source_url = data["url"]
+    if not isinstance(source_url, str):
+        raise UpgradeError("Editable source checkout URL must be a string")
+    url = urlparse(source_url)
+    if url.scheme != "file" or url.netloc not in ("", "localhost"):
+        raise UpgradeError("Editable source checkout must be a local directory")
+    checkout = Path(url2pathname(url.path))
+    if not checkout.is_absolute():
+        raise UpgradeError("Editable source checkout path must be absolute")
+    try:
+        git = shutil.which("git")
+        if git is None:
+            raise FileNotFoundError("Git is not installed")
+        result = subprocess.run(
+            [git, "-C", str(checkout), "rev-list", "--left-right", "--count", "origin/main...HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        behind, ahead = map(int, result.stdout.split())
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise UpgradeError(
+            "Cannot compare the source checkout with origin/main; ensure Git is installed "
+            "and run git fetch origin main in the source checkout"
+        ) from exc
+    return checkout, ahead, behind
 
 
 def _uv_tool_target() -> ToolInstallTarget | None:

@@ -146,9 +146,9 @@ _RECALL_TIMEOUT_S: float = 4.0
 _STORE_TIMEOUT_S: float = 10.0
 # ...and an append is not flat work: EverOS may carve a boundary out of any
 # add, which runs a model, so the cost follows how much is handed over. A turn
-# passes a handful of messages and lands well inside the floor; a bulk import
-# passes up to a hundred at once and did not, which read as a dead service and
-# failed every source behind it.
+# passes a handful of messages and lands well inside the floor; a writer that
+# hands over more and says so (``metadata["bulk"]``) skips this estimate for
+# the extraction budget instead.
 _STORE_TIMEOUT_PER_MESSAGE_S: float = 0.5
 
 # Shutdown's total budget for flushing every session left with buffered-but-
@@ -184,10 +184,10 @@ class ServiceState(Enum):
 
     Two axes are folded into one enum because callers only ever act on the
     combination: may I send a request, and is it worth probing again. The
-    states that answer "no" to both -- ``UNCONFIGURED``, ``NO_BINARY`` and
-    ``BAD_IDENTITY`` -- describe the installation and its config rather than
-    the process, so no amount of probing resolves them and a stray success must
-    not clear them.
+    states that answer "no" to both -- ``UNCONFIGURED``, ``NO_BINARY``,
+    ``BAD_IDENTITY`` and ``UNSUPPORTED`` -- describe the installation, its
+    config and its platform rather than the process, so no amount of probing
+    resolves them and a stray success must not clear them.
     """
 
     UNKNOWN = "unknown"
@@ -199,17 +199,15 @@ class ServiceState(Enum):
     NO_BINARY = "no_binary"
     BAD_IDENTITY = "bad_identity"
     FOREIGN = "foreign"
+    UNSUPPORTED = "unsupported"
 
 
 # Probing cannot change these: they are facts about the install, not the
 # process. Letting a probe promote out of them would hide a missing binary
 # behind somebody else's server answering on the same port.
-_TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
-
-# Only the opening state may spawn. Every other non-ready state has already
-# either spawned once (STARTING / FAILED), found the data occupied
-# (UNRESPONSIVE), been told not to (FOREIGN), or knows a spawn cannot succeed.
-_SPAWNABLE_STATES = frozenset({ServiceState.UNKNOWN})
+_TERMINAL_STATES = frozenset(
+    {ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY, ServiceState.UNSUPPORTED}
+)
 
 # Minimum gap between out-of-band probes. Coarse on purpose: this exists to
 # stop a task per turn from piling up, not to schedule anything.
@@ -221,7 +219,7 @@ _PROBE_MIN_INTERVAL_S: float = 2.0
 # memory LLM that it dropped turns of memory it never had. BAD_IDENTITY is
 # deliberately not one of these: that service works, the config is wrong, and
 # the turns it refuses really are lost.
-_NO_MEMORY_TO_LOSE = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
+_NO_MEMORY_TO_LOSE = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.UNSUPPORTED})
 
 
 class _HttpEverosAdapter:
@@ -623,15 +621,6 @@ class EverosBackend:
         """Hold the spawned child, even if the start it belongs to then fails."""
         self._proc = proc
 
-    def _may_spawn(self) -> bool:
-        """Whether starting a server could still help.
-
-        Guards against the loop where a child that dies on startup is spawned
-        again on the next turn, and again, filling the log with identical
-        tracebacks while the user waits.
-        """
-        return self._state in _SPAWNABLE_STATES
-
     def _should_report(self) -> bool:
         """True once per state per session, so a warning stays a warning."""
         if self._state in self._reported:
@@ -741,15 +730,6 @@ class EverosBackend:
         """
         return self._state
 
-    def _host_embedding(self) -> Any:
-        """The host's embedding block, through the service grant.
-
-        Off ``ctx.services`` rather than read from raven's config: a plugin
-        does not open the host's config file, and this endpoint is the host's
-        to hand over.
-        """
-        return getattr(self._services, "embedding", None)
-
     async def start(self) -> None:
         try:
             self._validate_identity()
@@ -774,7 +754,7 @@ class EverosBackend:
         # backend to ask health() -- raven doctor's path -- stays read-only.
         # Runs here, once identity is known good, on every start path.
         from raven_everos.config import (
-            configure_embedding_env,
+            bind_roles_here,
             configure_everos_env,
             ensure_everos_home,
             everos_owned,
@@ -782,12 +762,23 @@ class EverosBackend:
         )
 
         root = everos_root()
+        # Before anything reads a pin. An install upgrading into this still has
+        # its four roles in everos.toml, and raven no longer reads that file for
+        # them -- so without this the environment sent to the service blanks all
+        # four and long-term memory stops. Scheduled here rather than in raven's
+        # config migrations because the host may know this plugin only through
+        # the plugin contract; idempotent, so every later start pays nothing.
+        from raven_everos.config import migrate_roles
+
+        for notice in migrate_roles():
+            self.notify(notice)
         configure_everos_env(root)
-        # The host owns the embedding endpoint: one installation, one endpoint,
-        # read by the knowledge base too. Sent down here rather than kept in
-        # everos.toml, the same direction the data root above travels.
-        if configure_embedding_env(self._host_embedding()):
-            self._logger.info("EverosBackend: embedding endpoint taken from the host config")
+        # All four roles, into this process as well as into any child. The
+        # in-process half is what `understand_media` reads: multimodal runs here,
+        # through EverOS's cached settings, so a role bound only for the spawn
+        # was one that tool could not use.
+        bound = bind_roles_here()
+        self._logger.info("EverosBackend: bound %d EverOS role variables from raven's config", len(bound))
         # See tools.py: a root the user manages is read-only, template files
         # included.
         if everos_owned():
@@ -798,14 +789,16 @@ class EverosBackend:
             type(self._adapter).__name__,
         )
         if isinstance(self._adapter, _HttpEverosAdapter):
-            import sys
+            from raven.core.plugin_stack import everos_platform_note
 
-            if sys.platform == "win32":
-                self.notify(
-                    "EverOS memory is not available on native Windows.\n"
-                    "Run Raven inside WSL for full memory support, "
-                    "or run `raven onboard` to reconfigure."
-                )
+            platform_note = everos_platform_note()
+            if platform_note is not None:
+                # Terminal and nothing to lose: a write here is not a failed
+                # write, or the host retries it for a minute every turn and
+                # then raises the memory banner over a service that was never
+                # going to exist on this platform.
+                self._state = ServiceState.UNSUPPORTED
+                self.notify(platform_note)
                 self._adapter = _NoOpAdapter()
                 return
 
@@ -974,7 +967,12 @@ class EverosBackend:
         itself is the only source for a root the user runs -- no root is
         recorded for one, and its ``everos.toml`` is not Raven's to read.
         """
-        from raven_everos.config import everos_owned, everos_role_configured, everos_root
+        from raven_everos.config import (
+            everos_owned,
+            everos_role_configured,
+            everos_root,
+            everos_toml_role_notes,
+        )
         from raven_everos.health import (
             DEGRADING_SECTIONS,
             REQUIRED_SECTIONS,
@@ -1005,6 +1003,21 @@ class EverosBackend:
                 )
             )
         checks.append(HealthCheck("address", "ok", base_url))
+        # What everos.toml still says about the four roles. Reported from here
+        # rather than from doctor: reading that file and knowing which root is
+        # raven's are both this plugin's to answer, and the host may know it only
+        # through the backend contract.
+        for note in everos_toml_role_notes():
+            checks.append(HealthCheck("everos.toml", "ok", note))
+
+        from raven.core.plugin_stack import everos_platform_note
+
+        platform_note = everos_platform_note()
+        if platform_note is not None:
+            # Nothing to probe: "not running (starts on demand)" would be
+            # false here, and the importer's refusal should say why.
+            checks.append(HealthCheck("server", "missing", platform_note))
+            return BackendHealth(ready=False, checks=checks)
 
         report = await asyncio.to_thread(probe_capabilities, base_url)
         sections = (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS)
@@ -1242,8 +1255,11 @@ class EverosBackend:
 
         # A per-turn append must not hold a turn open; a final flush is the call
         # that makes EverOS extract, which is what the six-minute budget was
-        # sized for. One number for both silently overrode the other.
-        budget = _MEMORIZE_TIMEOUT_S if is_final else _store_budget(len(payload))
+        # sized for. One number for both silently overrode the other. A bulk
+        # write is neither a turn nor a flush: nothing waits on it, and EverOS
+        # extracts on the add itself, so it takes the extraction budget outright.
+        bulk = bool(metadata and metadata.get("bulk"))
+        budget = _MEMORIZE_TIMEOUT_S if is_final or bulk else _store_budget(len(payload))
         # Marked before the call, not after: if this is cancelled mid-flight
         # the add may already have landed, and the safe direction is one
         # redundant flush rather than content that is never extracted.

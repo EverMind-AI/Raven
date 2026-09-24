@@ -13,11 +13,12 @@ Q9 (partial answer): we treat ``agents.defaults.provider`` as the canonical
 provider field. A concrete provider name (``"anthropic"`` / ``"openai"`` / …)
 counts as *configured*; the sentinel value ``"auto"`` counts as
 *not-yet-configured* (the user has not picked one and Raven has not run
-auto-detection). If the config read fails for any reason — file missing,
-unparseable JSON, unexpected shape — the v0.1 fallback returns
-``{"provider_configured": true}`` (design §3a.1) so the hermes UI never blocks
-on a transient I/O hiccup. The real signal can be tightened in v0.2 once we
-support proper provider auto-detection.
+auto-detection). If the config read fails on a present file — unparseable
+JSON, an I/O error — the v0.1 fallback returns ``{"provider_configured": true}``
+(design §3a.1) so the UI never blocks on a transient hiccup. A config file that
+does not exist is not a hiccup: it is what a fresh install looks like, and the
+web page opens its first-run wizard on exactly this answer, so it reports
+``false``.
 """
 
 from __future__ import annotations
@@ -110,16 +111,16 @@ def _detect_provider_configured(payload: dict) -> bool:
 async def setup_status(params: dict) -> dict:
     """``setup.status`` — return whether a provider has been configured.
 
-    v0.1 fallback: on any read / parse failure, return
-    ``{"provider_configured": true}`` so the hermes UI does not park on the
-    *Setup required* panel.
+    A missing file is a first run and answers ``false``; a present file that
+    cannot be read or parsed keeps the v0.1 fallback ``true`` so the UI does
+    not park on the *Setup required* panel over a transient failure.
     """
     path = get_config_path()
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        logger.debug("setup.status: {} missing → v0.1 fallback true", path)
-        return {"provider_configured": True}
+        logger.debug("setup.status: {} missing → first run", path)
+        return {"provider_configured": False}
     except OSError as exc:
         logger.warning("setup.status: read failed for {}: {} → fallback true", path, exc)
         return {"provider_configured": True}

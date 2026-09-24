@@ -2,7 +2,7 @@
 
 The roster draws a brand mark per agent, chosen by preset key. The preset list
 lives in Python and the mark table lives in
-``ui-web/src/shell/agent-mark.tsx``, so nothing in either language can notice
+``ui-web/src/components/AgentMark.tsx``, so nothing in either language can notice
 when they disagree: adding a preset leaves its row wearing the generic glyph,
 and renaming a file leaves a row addressing a 404. Both are invisible in
 review and neither breaks a build.
@@ -32,7 +32,7 @@ from pathlib import Path
 from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
 
 _ROOT = Path(__file__).resolve().parents[1]
-_TABLE = _ROOT / "ui-web" / "src" / "shell" / "agent-mark.tsx"
+_TABLE = _ROOT / "ui-web" / "src" / "components" / "AgentMark.tsx"
 _ASSETS = _ROOT / "ui-web" / "src" / "assets" / "agents"
 
 _ENTRY = re.compile(
@@ -131,21 +131,30 @@ def test_the_own_mark_ships() -> None:
     assert (_ASSETS / f"{_own_mark()}.svg").is_file()
 
 
-def test_the_own_mark_answers_the_theme_from_inside_the_file() -> None:
-    """The two halves of that are one fact, and neither is safe alone.
+def test_the_own_mark_answers_the_theme() -> None:
+    """A raven is dark, and the dark theme's surface is ``#1e1c14``.
 
-    A raven is black, and the dark theme's surface is ``#1e1c14`` -- 1.2:1, a
-    silhouette that leaves two white eyes floating in an empty frame. The mark
-    cannot be filtered into legibility the way a ``mono`` one is, because it is
-    not one colour, so it carries a ``prefers-color-scheme`` rule of its own,
-    as miromind.svg does; an ``<img>`` resolves that against the embedding
-    element's used colour-scheme, which the stylesheet pins to the chosen
-    theme.
+    Two mechanisms answer that, and the file may carry either. A
+    ``prefers-color-scheme`` rule inside the file flips the bird for the dark
+    surface -- what the mark the chrome draws does through ``currentColor``
+    (components/RavenMark.tsx), and what the stylesheet's ``color-scheme``
+    lines on ``.agent-mark img`` exist to make reachable from an ``<img>``, as
+    miromind.svg also relies on. An opaque plate behind every shape is the
+    other: it renders the same on either surface and makes the rule redundant.
+    A file with neither is the failure this guards -- measured at the roster's
+    render size, the bird against that surface is 1.07:1, gone.
 
-    The tone must therefore stay absent: a ``mono`` or ``hybrid`` here would
-    invert the file on top of the answer it already gave, which lands back at
-    black on black in exactly one theme -- and no DOM assertion sees a colour.
+    The tone must stay absent either way, for the reason it always did: a
+    ``mono`` or ``hybrid`` here would invert the whole mark, which lands
+    dark-on-dark in exactly one theme -- and no DOM assertion sees a colour.
     """
     svg = (_ASSETS / f"{_own_mark()}.svg").read_text(encoding="utf-8")
-    assert "prefers-color-scheme: dark" in svg
+    root = svg[: svg.index(">") + 1]
+    shapes = _SHAPE.findall(svg)
+    plate = [el for el in shapes if el.startswith("<rect") and 'fill="#FFFFFF"' in el]
+    assert plate or "prefers-color-scheme" in svg, (
+        "the own mark carries neither a plate nor a prefers-color-scheme rule"
+    )
+    if plate:
+        assert 'fill="none"' in root, "a root fill would paint outside the plate"
     assert _tone_of(_own_mark()) is None

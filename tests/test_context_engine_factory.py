@@ -90,6 +90,23 @@ def _stub_get_defs() -> list[dict]:
     return []
 
 
+class _StubPool:
+    """Pairs any pin it is asked for, so a test can assert which one was asked."""
+
+    def bind_pin(self, model, provider_name=None):
+        from raven.providers.binding import ModelBinding
+
+        return ModelBinding(MagicMock(name=provider_name or "stub-provider"), model) if model else None
+
+
+def _point_live_config(tmp_path: Path, monkeypatch, payload: dict) -> Path:
+    """Point ``LiveConfig``'s default path at a file this test owns."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: cfg)
+    return cfg
+
+
 def _build_engine(
     tmp_path: Path,
     *,
@@ -99,9 +116,11 @@ def _build_engine(
     model: str = "stub",
     skill_forge_config: SkillForgeConfig | None = None,
     rrf_k: int | None = None,
+    provider_pool=None,
 ) -> ContextAssembler:
     builder = ContextBuilder(workspace=tmp_path)
     engine = build_context_engine(
+        provider_pool=provider_pool,
         workspace=tmp_path,
         config=ContextConfig(),
         builder=builder,
@@ -272,9 +291,10 @@ class TestRewriterGateModelWiring:
             ),
         )
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
-        assert skills._gate._model is None
+        assert skills._gate._pin_resolver() is None
 
-    def test_gate_prefers_dedicated_llm_gate_model(self, tmp_path: Path) -> None:
+    def test_gate_prefers_dedicated_llm_gate_model(self, tmp_path: Path, monkeypatch) -> None:
+        cfg = _point_live_config(tmp_path, monkeypatch, {"skillForge": {"llmGateModel": "gate-only-model"}})
         engine = _build_engine(
             tmp_path,
             model="main-model",
@@ -284,9 +304,48 @@ class TestRewriterGateModelWiring:
                 llm_gate_enabled=True,
                 llm_gate_model="gate-only-model",
             ),
+            provider_pool=_StubPool(),
         )
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))
-        assert skills._gate._model == "gate-only-model"
+        assert skills._gate._binding()[1] == "gate-only-model"
+        assert cfg.exists()
+
+    def test_the_gate_pin_follows_the_file_rather_than_the_build_argument(self, tmp_path: Path, monkeypatch) -> None:
+        """A gate model repointed on the settings page reaches the next filter.
+
+        The factory argument is the config as it stood when the engine was
+        built; the pin is read from the file when the gate runs, so the two can
+        disagree and the file is what counts. Before this the pair was resolved
+        once here, and the settings surface answered every write to it with
+        "applies after the next gateway reload or restart".
+        """
+        cfg = _point_live_config(tmp_path, monkeypatch, {"skillForge": {"llmGateModel": "gate-from-file"}})
+        engine = _build_engine(
+            tmp_path,
+            skill_forge_config=SkillForgeConfig(
+                discovery="push",
+                rewrite_enabled=False,
+                llm_gate_enabled=True,
+                llm_gate_model="gate-at-build",
+            ),
+            provider_pool=_StubPool(),
+        )
+        gate = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))._gate
+
+        assert gate._binding()[1] == "gate-from-file"
+        cfg.write_text(json.dumps({"skillForge": {"llmGateModel": "gate-after-edit"}}), encoding="utf-8")
+        assert gate._binding()[1] == "gate-after-edit"
+
+    def test_the_curator_pin_follows_the_file_too(self, tmp_path: Path, monkeypatch) -> None:
+        """Same seam, the other subsystem pin. Both blocks are written by the
+        same settings surface and both used to owe a reload."""
+        cfg = _point_live_config(tmp_path, monkeypatch, {"context": {"curatorModel": "curator-from-file"}})
+        engine = _build_engine(tmp_path, provider_pool=_StubPool())
+        curator = next(b for b in engine._builders if isinstance(b, CuratorSegmentBuilder))
+
+        assert curator.curator_model == "curator-from-file"
+        cfg.write_text(json.dumps({"context": {"curatorModel": "curator-after-edit"}}), encoding="utf-8")
+        assert curator.curator_model == "curator-after-edit"
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +511,7 @@ class TestTheWindowFollowsTheTurnsBinding:
         )
         curator = _curator_builder(agent.context_engine)
 
-        with use_binding(ModelBinding(_StubProvider(), "other-model", agent._configured_window)):
+        with use_binding(ModelBinding(_StubProvider(), "other-model", agent.default_binding.configured_window)):
             assert agent.context_window_tokens == 8192
             assert curator.context_window_tokens == 8192
             assert curator.assembler.trimmer.context_window_tokens == 8192
@@ -583,7 +642,12 @@ class TestOwnershipReachesTheIdentityPrompt:
         assert "## Delegation" in await self._text(agent)
 
         self._disable(*every)
-        assert agent.tools.get_definitions() == []
+        # Not empty any more: raven reserves the tool-search meta-pair from the
+        # off switch, so what an operator can withhold is everything else. Zero
+        # live delegation paths is what retires the section, and that is reached.
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
+
+        assert {d["function"]["name"] for d in agent.tools.get_definitions()} == set(META_TOOL_NAMES)
         assert "## Delegation" not in await self._text(agent)
 
     async def test_withholding_one_path_keeps_the_other_named(self, tmp_path: Path) -> None:

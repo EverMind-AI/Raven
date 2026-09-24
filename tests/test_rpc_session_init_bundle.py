@@ -269,7 +269,7 @@ def test_resolve_context_window_helper_removed() -> None:
 
 
 async def test_default_session_info_key_set_matches_expected_v030(fake_agent_loop, config, monkeypatch) -> None:
-    """wire-shape lock — info dict has exactly the 12 expected keys.
+    """wire-shape lock — info dict has exactly the 13 expected keys.
 
     Anti-drift gate: adding a new field to the init bundle MUST update this
     expected set, forcing an explicit spec amendment, until the dict is
@@ -307,6 +307,7 @@ async def test_default_session_info_key_set_matches_expected_v030(fake_agent_loo
         # extended bundle
         "usage",
         "endpoint",
+        "running",
     }
     assert set(info) == expected_keys, (
         f"init bundle key set drift: unexpected={set(info) - expected_keys}, missing={expected_keys - set(info)}"

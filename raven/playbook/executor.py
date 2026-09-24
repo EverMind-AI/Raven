@@ -31,7 +31,8 @@ import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from loguru import logger
 from pydantic import ValidationError
@@ -358,6 +359,8 @@ class PlaybookExecutor:
         compose_model: str | None = None,
         background: bool = True,
         compose_prompt_mode: bool = False,
+        workspace: Path | None = None,
+        workspace_for: Callable[[str | None], Path] | None = None,
     ) -> None:
         self._dag_tool = dag_tool
         self._provider = provider
@@ -374,6 +377,35 @@ class PlaybookExecutor:
         #: error it can fix, rather than through a private two-round repair loop
         #: working from a cached roster and no history.
         self._compose_prompt_mode = compose_prompt_mode
+        #: The multi-round driver, built here rather than injected because it
+        #: needs this executor's own graph tool to submit each round -- and wired
+        #: back into that tool, because the hand-over happens on a finished run's
+        #: task where nothing else is left to reach it.
+        self._rounds: Any = None
+        if dag_tool is not None and hasattr(dag_tool, "set_stint_driver"):
+            from raven.playbook.stint import StintDriver
+
+            fixed = Path(workspace) if workspace is not None else Path.cwd()
+            self._rounds = StintDriver(
+                dag_tool,
+                stints_root=dag_tool.stints_root,
+                # A host that keeps a working directory per conversation answers
+                # per conversation; one that does not gives every plan the same
+                # project, which is what a single-workspace host has anyway.
+                workspace_for=workspace_for or (lambda _key: fixed),
+            )
+            dag_tool.set_stint_driver(self._rounds)
+
+    @property
+    def rounds(self) -> Any:
+        """The multi-round driver this executor built, if its host can have one.
+
+        Exposed for the entry points that act on a plan rather than start one --
+        taking an interrupted one up again, sweeping for plans nobody is
+        advancing. They need the same driver the running plan uses, not a second
+        one pointed at the same files.
+        """
+        return self._rounds
 
     @property
     def dag_tool(self) -> Any:
@@ -401,6 +433,7 @@ class PlaybookExecutor:
         *,
         fills: dict[str, dict[str, Any]] | None = None,
         confirmed: bool = False,
+        max_rounds: int | None = None,
     ) -> ExecutionPlan:
         """Fill the spec and act on it. The mode decides which of those happens.
 
@@ -412,6 +445,10 @@ class PlaybookExecutor:
         graph-level gate should not ask a second time. Nothing in the conversation
         path sets it now that no funnel asks ahead of the turn; it stays because
         an entry point that *does* ask must be able to say so.
+
+        ``max_rounds`` reaches ``rounds`` playbooks only, where it overrules the
+        file's own budget for this run; the other modes have no rounds to bound
+        and ignore it.
         """
         # A stored credential stands in for a secret the caller did not supply:
         # the playbook page (or `raven playbook secret set`) wrote it under this
@@ -430,6 +467,33 @@ class PlaybookExecutor:
                 kind="questions",
                 reply="No graph executor is wired up in this environment; describe the task directly and I will handle it ad hoc.",
             )
+
+        if spec.mode == "stint":
+            if self._rounds is None:
+                return ExecutionPlan(
+                    kind="questions",
+                    reply=(
+                        f"'{spec.name}' takes many rounds and this environment has no driver for one; "
+                        "describe the task directly and I will handle it ad hoc."
+                    ),
+                )
+            # A missing param stops it before anything is written: a role's
+            # standing orders are written against those values, and a plan is
+            # expensive to start and awkward to unstart.
+            if missing:
+                return ExecutionPlan(kind="gaps", reply=_gap_reply(spec, missing, []))
+            roles = [
+                role.model_copy(
+                    update={"prompt_template": _fill_text(role.prompt_template, spec, values, f"role {role.label!r}")}
+                )
+                for role in (spec.roles or [])
+            ]
+            receipt = await self._rounds.start(
+                spec.model_copy(update={"roles": roles}), values=values, max_rounds=max_rounds
+            )
+            if receipt.startswith("Error"):
+                return ExecutionPlan(kind="questions", reply=f"Failed to start the plan: {receipt}")
+            return ExecutionPlan(kind="dag", reply=receipt + _credential_reminders(spec, values))
 
         if spec.mode == "prompt":
             # Nothing to fill node-wise: there are no nodes yet. A missing param

@@ -27,11 +27,17 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
-from raven.agent.subagent.presets import install_hint_for
-from raven.agent.subagent.probe_state import LastTest
+from raven.agent.subagent.presets import (
+    THIRD_PARTY_SUBAGENT_PRESETS,
+    install_hint_for,
+    shim_requirement_for,
+    sign_in_hint_for,
+    third_party_subagent_presets,
+)
+from raven.agent.subagent.probe_state import LastTest, Remedy
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
-Source = Literal["config", "preset"]
+Source = Literal["config", "preset", "vendored"]
 
 PROBE_PROMPT = "Reply with exactly: PONG"
 
@@ -53,9 +59,10 @@ Half the explicit-Test budget, because this one is on the path of a settings
 switch a person is waiting on. Two measured agents hang rather than refuse, so
 the cap is what turns "no answer" into an answer.
 
-Handed to the backend as well as to the ``wait_for`` around it, so one number
-means one thing: a backend allowed the longer Test budget could only ever be
-cancelled from outside, never reach its own timeout and describe the failure.
+Handed to the backend as well as counted in the ``wait_for`` around it, so one
+number means one thing: a backend allowed the longer Test budget could only ever
+be cancelled from outside, never reach its own timeout and describe the failure.
+It bounds the answer, not the start -- see `_ping_bounds`.
 """
 
 
@@ -83,6 +90,13 @@ class ProbeResult:
     """The remembered outcome of an explicit test, when one is still valid for this
     exact configuration. Attached by ``probe_all``; ``probe.py`` never reads or
     writes the store itself, which keeps file I/O out of this module."""
+    absent: str | None = None
+    """The executable ``shutil.which`` looked for and did not find, on a ``missing``
+    result that came from that lookup -- ``argv[0]``, or the local agent a shim
+    drives. ``None`` everywhere else, including a ``missing`` recorded off a
+    failed handshake, where something was found and then did not work. A page
+    reads it to say what to install: for a shim preset the absent executable is
+    ``npx``, which Node.js brings, and the agent's own installer does not."""
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -108,8 +122,9 @@ class TestResult:
     """One subagent's explicit verdict.
 
     ``kind`` is ``None`` only for the unknown-name failure, which has no config
-    to read a kind from. ``reply`` is the agent's own answer for a cli test and
-    always ``None`` for openai, which sends no completion.
+    to read a kind from. ``reply`` is the agent's own answer for a cli test, the
+    model menu its handshake advertised for acp, and ``None`` for openai, whose
+    prompt is sent but whose answer is not carried back.
     """
 
     name: str
@@ -119,6 +134,7 @@ class TestResult:
     detail: str
     reply: str | None
     elapsed_ms: int
+    remedy: Remedy | None = None
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -165,8 +181,127 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     them growing the hint alone is the shape a reader would trust and be wrong
     about on the other.
     """
+    from raven.acp_client.capabilities import launches_with_npx
+
+    if launches_with_npx(exe):
+        # A shim preset's argv[0] is npx, and the agent's own installer does not
+        # bring it: without Node.js that installer (an `npm i -g`) cannot run
+        # either, and with the agent installed some other way the row still
+        # launches through npx and is still absent.
+        return _missing_detail(exe, _NODE_HINT)
+    return _missing_detail(exe, install_hint_for(cfg))
+
+
+_NODE_HINT = "Node.js from https://nodejs.org, which brings npx"
+
+
+def _said(exc: BaseException) -> tuple[str, str | None]:
+    """What to show for a failed ping, and the part of it that is the agent's answer.
+
+    Shown: the failure as raised, with the agent's reason (`reason_of`) spliced in
+    after its own words -- they were in the answer all along, and ``str()`` drops
+    them. Classified: the agent's answer alone. A wrapper can add words of its
+    own -- raven's MCP-grant note does ("withheld because OAuth needs user
+    interaction") -- and those are raven describing an MCP server, not the agent
+    describing its credential; the verdict must not come from them. ``None``
+    when no agent answered at all (a timeout, a process that never started), and
+    the whole text is then all there is to go on.
+    """
+    from raven.acp_client.protocol import reason_of, remote_error_in
+
+    shown = str(exc)
+    error = remote_error_in(exc)
+    if error is None:
+        return shown, None
+    answer = reason_of(error)
+    added = answer[len(error.message) :]
+    if added:
+        own = str(error)
+        shown = shown.replace(own, own + added, 1) if own in shown else shown + added
+    return shown, answer
+
+
+def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
+    """What the reader is told when the test message came back a failure.
+
+    The agent's own words are the evidence and they are kept, but they are not
+    the whole answer: every one of these arrives as whatever prose that vendor
+    chose, wrapped in a JSON-RPC code, and the one thing a reader can act on --
+    that this agent is installed and has no credential -- is never in it.
+    Measured: an adapter answered "[-32603] Internal error: Failed to
+    authenticate: OAuth session expired and could not be refreshed", against a
+    local CLI whose own `auth status` said `loggedIn: false`. Nothing in that
+    sentence says to sign in, and nothing says where.
+
+    So a refusal that reads as one about a credential is named as one, with the
+    command where the command is known -- or, for a row that is an endpoint and
+    a key rather than an installed agent, with where the key goes, since
+    "sign in" is not a thing its reader can do.
+
+    ``answer`` is the agent's own answer, ``data`` included, when one came back
+    (`_said`); it is what gets classified, and ``said`` is what gets shown. The
+    SDKs put the reason in ``data`` and a placeholder in ``message``, so
+    classifying the placeholder alone would leave every such refusal
+    unclassified. A failure this cannot classify keeps the words it came with
+    rather than being given a guess about what they mean.
+
+    The same question the roster asks (`acp_client.capabilities.looks_like_auth`)
+    rather than a second spelling of it -- the roster already marks such a row
+    "go and sign in", and the two disagreeing about one failure is what this is.
+    """
+    return _refusal(cfg, said, answer)[0]
+
+
+def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remedy | None]:
+    """`_refusal_detail`'s sentence, and the remedy it was written from.
+
+    One decision with two renderings: the sentence is the record the log, the
+    CLI and the TUI read, and the remedy is the same verdict as data a page can
+    put in its reader's language. ``None`` for a refusal that is not about a
+    credential, whose words are passed through as they came.
+    """
+    from raven.acp_client.capabilities import looks_like_auth
+
+    if not looks_like_auth(said if answer is None else answer):
+        return said[:_DETAIL_CAP], None
+    remedy = _remedy_for(cfg)
+    if remedy.kind == "api_key":
+        # Nothing was installed and there is nothing to sign in to: this row is
+        # an endpoint and a key. Telling its reader to sign in would send them
+        # looking for a CLI that does not exist -- measured, the row that
+        # prompted this answers `HTTP 401: {"error":"missing api key"}` against
+        # a preset whose `apiKey` ships empty on purpose.
+        lead = "it has no usable API key"
+        advice = "add one in this agent's settings and connect again"
+    else:
+        lead = "it is installed but has no usable credential"
+        advice = (
+            f"sign in with `{remedy.command}` and connect again"
+            if remedy.command
+            else "sign in to it and connect again"
+        )
+    return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP], remedy
+
+
+def _remedy_for(cfg: Any) -> Remedy:
+    """What fixes a refusal already known to be about a credential, on this machine."""
+    if getattr(cfg, "kind", None) == "openai":
+        return Remedy("api_key")
+    hint = sign_in_hint_for(cfg)
+    if hint is None:
+        return Remedy("sign_in")
+    # Which spelling, decided on this machine rather than in the table: a
+    # shim-launched row runs where the agent's CLI was never installed globally,
+    # and naming a command that is not there answers a credential failure with a
+    # second one. Resolved against the same PATH the probe resolves every other
+    # executable against, so the hint and the probe cannot disagree about what
+    # this machine has.
+    local = shutil.which(hint.exe, path=_login_path()) is not None
+    return Remedy(hint.does, hint.local if local or hint.anywhere is None else hint.anywhere)
+
+
+def _missing_detail(exe: str, hint: str | None) -> str:
     detail = f"{exe} is not on the login shell PATH"
-    hint = install_hint_for(cfg)
     return f"{detail}; install with {hint}" if hint else detail
 
 
@@ -193,7 +328,7 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
-        return done("missing", _missing_exe_detail(cfg, exe), exe)
+        return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
     return done("ready", f"installed at {resolved}", resolved)
 
 
@@ -208,6 +343,12 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     ``which`` alone would be a green light for an agent that cannot run a task --
     so an unverified entry is ``attention``, with the recorded verdict taking over
     once one exists.
+
+    For a shim-launched preset the executable asked after is the agent the shim
+    drives, not ``argv[0]``: an ``npx`` command resolves on any machine with
+    node, so on its own it would report Pi installed wherever ``pi`` is not, and
+    the connect that follows would fail a minute later inside the adapter with
+    the sentence this probe can say up front.
     """
     name = getattr(cfg, "name", "") or ""
 
@@ -227,7 +368,12 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
-        return done("missing", _missing_exe_detail(cfg, exe), exe)
+        return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
+    requirement = shim_requirement_for(cfg)
+    if requirement is not None:
+        agent_exe, install = requirement
+        if shutil.which(agent_exe, path=cfg_path or path) is None:
+            return replace(done("missing", _missing_detail(agent_exe, install), agent_exe), absent=agent_exe)
 
     snapshot = acp_snapshot_for(cfg)
     if snapshot is None:
@@ -244,6 +390,17 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         return done(
             "attention",
             f"installed at {resolved}, but its launch config changed since the last test -- run a test",
+            resolved,
+        )
+    if not getattr(snapshot, "model_menu_measured", True):
+        # A row recorded before the menu was: its "ready" predates a capability
+        # the sheet now draws from, and reporting it would put a disabled
+        # "managed by itself" pill on an agent that may well offer a menu. The
+        # boot-time backfill re-measures such rows; until one succeeds, the row
+        # says what is missing rather than claiming a verdict it does not have.
+        return done(
+            "attention",
+            f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
             resolved,
         )
     return done(snapshot.status, snapshot.detail, resolved)
@@ -368,8 +525,15 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     transcript parser and the CLI's own auth. **This spends the agent's own
     quota**, which is why it is only ever reached by an explicit request.
 
-    openai: runs the same free ``/models`` probe and sends no completion, so
-    nothing is billed.
+    acp: the same bar, reached the same way, after a free handshake that can
+    refuse first. **Also spends the agent's own quota** -- see `_test_acp` for
+    why the handshake alone could not stand in for it.
+
+    openai: the same bar, after the free ``/models`` probe, which decides alone
+    only when nothing is listening. **Otherwise spends the endpoint's own
+    quota**, like the two above -- a reachable endpoint is settled by asking it,
+    because the probe cannot tell a rejected key from an endpoint that simply
+    serves no model list, and the second of those works.
 
     The verdict is "exited 0 and returned something", not "the reply contains
     PONG": asserting content would flake on an agent that answers with a
@@ -403,7 +567,19 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return await _test_acp(cfg, source=source, elapsed=elapsed)
     probe = await probe_one(cfg, source=source)
     if kind == "openai":
-        return TestResult(cfg.name, source, "openai", probe.status == "ready", probe.detail, None, elapsed())
+        # The free probe runs first but decides alone only when it has proved
+        # there is nothing to send to. `/models` is optional -- the backend only
+        # ever POSTs `/chat/completions` -- so "reachable, but no model list" is
+        # a working agent, and it shares the `attention` verdict with a rejected
+        # key. Vetoing on that verdict would fail a Test that Connect accepts,
+        # which is the disagreement this whole gate exists to remove, so
+        # anything reachable is settled by asking it. A rejected key then costs
+        # one POST the endpoint refuses before it infers anything.
+        if probe.status == "missing":
+            return TestResult(cfg.name, source, "openai", False, probe.detail, None, elapsed())
+        answered = await ping_agent(cfg)
+        detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
+        return TestResult(cfg.name, source, "openai", answered.ok, detail, None, elapsed(), answered.remedy)
     if probe.status != "ready":
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
@@ -430,12 +606,77 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     return TestResult(cfg.name, source, "cli", True, "the agent ran and replied", text[:_DETAIL_CAP], elapsed())
 
 
+def _ping_bounds(cfg: Any) -> tuple[int, int, float]:
+    """The ping's three bounds: the handshake's (ms), the answer's (s), and the wait around both (s).
+
+    The answer is capped at `_ENABLE_PING_TIMEOUT_SECONDS`, the number a
+    person waiting on a switch can stand. The handshake is not: an acp row
+    starts within its own ``readyTimeoutMs``, the window every dispatch of it
+    gets (`AcpAgentBackend`), and for an ``npx`` command that window is where
+    the first download happens. Capping it too turned two things into "it did
+    not answer within 60s" -- a first download on a slow line (a cold fetch of
+    the Claude Code adapter is about 260 MB unpacked; 20s on a good line,
+    measured 2026-09-23), and npm's own "cannot reach the registry", which it
+    reports only after about 70s of retries (measured the same day), so the
+    reader never saw it.
+
+    The wait is the two added together, which keeps what the cap once kept:
+    neither inner bound is ever cancelled from outside before the backend can
+    reach it and say which one ran out. A row of another kind has no handshake,
+    so it is waited on for its answer alone, and is handed the old number for a
+    field it ignores.
+    """
+    answer = min(getattr(cfg, "timeout", None) or _ENABLE_PING_TIMEOUT_SECONDS, _ENABLE_PING_TIMEOUT_SECONDS)
+    if getattr(cfg, "kind", None) != "acp":
+        return _ENABLE_PING_TIMEOUT_SECONDS * 1000, answer, float(answer)
+    ready_ms = getattr(cfg, "ready_timeout_ms", None) or _ENABLE_PING_TIMEOUT_SECONDS * 1000
+    return ready_ms, answer, ready_ms / 1000 + answer
+
+
+def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
+    """What a ping that raised is reported as, and the fix when one is known.
+
+    ``npx`` failing to fetch the agent comes first, because it is not the
+    agent's answer at all -- no agent ran -- and it has a fix of its own: the
+    network, the npm registry or the proxy, or the agent's launch command run
+    once in a terminal, where nothing times the download out. Everything else
+    is the agent's refusal, read the way `_refusal` reads it.
+    """
+    from raven.acp_client.capabilities import npx_fetch_failure, npx_fetch_lead
+
+    unfetched = npx_fetch_failure((getattr(cfg, "command", None) or "").strip(), exc)
+    if unfetched is None:
+        return _refusal(cfg, *_said(exc))
+    shipped = _shipped_command(cfg)
+    run = f"`{shipped}`" if shipped else "this agent's launch command"
+    advice = f"connect again, or run {run} once in a terminal to fetch it with no time limit"
+    return f"{npx_fetch_lead(unfetched)}; {advice}. It said: {exc}"[:_DETAIL_CAP], Remedy("download", shipped)
+
+
+def _shipped_command(cfg: Any) -> str | None:
+    """The row's launch command when it is the one this repo ships for its preset, else ``None``.
+
+    A download is best fixed by running that command once in a terminal, so the
+    fix would name it. But a row's command is its operator's execution config,
+    and its arguments can carry a credential (``--token ...``) -- which is why no
+    row the RPC layer sends carries it, and why a refusal must not start to. So
+    it is repeated only when it is the preset's own, word for word: that text is
+    this repo's, and saying it back tells a reader nothing the preset table does
+    not. A row whose command was edited is told to run its launch command
+    without it being quoted.
+    """
+    preset = THIRD_PARTY_SUBAGENT_PRESETS.get(getattr(cfg, "preset", None) or "") or {}
+    shipped = str(preset.get("command") or "").strip()
+    return shipped if shipped and (getattr(cfg, "command", None) or "").strip() == shipped else None
+
+
 @dataclass(frozen=True)
 class PingResult:
     """Whether one agent answered a prompt, and what to tell the operator if not."""
 
     ok: bool
     detail: str
+    remedy: Remedy | None = None
 
 
 async def ping_agent(cfg: Any) -> PingResult:
@@ -450,7 +691,23 @@ async def ping_agent(cfg: Any) -> PingResult:
 
     So this spends one call on the agent's own quota, which is why it is reached
     only from an explicit switch-on and never from a listing.
+
+    It runs on a pool of its own, closed on the way out. The shared pool keys a
+    connection on its launch arguments and ``cwd`` falls back to the caller's
+    workspace, which here is a fresh temporary directory per call -- so a ping on
+    the shared pool never matches a held connection and ``acquire`` retires every
+    connection of that agent before opening its own. Measured 2026-09-20 against
+    a live adapter: a second Connect pressed while the first was still running
+    took the first one's connection down, and the first came back "did not answer
+    a test message" for a failure raven had caused; a ping fired while that agent
+    was serving a real run would have taken that run's connection with it.
     """
+    # Function-level like the rest of this module's acp imports: the client family
+    # is future shelf cargo and must not be named at import time.
+    from raven.acp_client import pool as acp_pool
+
+    ready_ms, answer_s, wait_s = _ping_bounds(cfg)
+    pool = acp_pool.AcpConnectionPool()
     try:
         with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
             backend = build_third_party_backend(
@@ -458,23 +715,23 @@ async def ping_agent(cfg: Any) -> PingResult:
                 # A stateful create commits a handle binding; a ping must not leave
                 # that in the file the running gateway reads.
                 registry=InstanceRegistry(path=Path(tmp) / "ping_instances.json"),
-                timeout=min(
-                    getattr(cfg, "timeout", None) or _ENABLE_PING_TIMEOUT_SECONDS,
-                    _ENABLE_PING_TIMEOUT_SECONDS,
-                ),
-                ready_timeout_ms=min(
-                    getattr(cfg, "ready_timeout_ms", None) or _ENABLE_PING_TIMEOUT_SECONDS * 1000,
-                    _ENABLE_PING_TIMEOUT_SECONDS * 1000,
-                ),
+                timeout=answer_s,
+                ready_timeout_ms=ready_ms,
+                pool=pool,
             )
             reply = await asyncio.wait_for(
                 backend.run(PROBE_PROMPT, task_id=f"ping-{uuid.uuid4().hex[:8]}", workspace=Path(tmp), executor=None),
-                timeout=_ENABLE_PING_TIMEOUT_SECONDS,
+                timeout=wait_s,
             )
     except asyncio.TimeoutError:
-        return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
+        return PingResult(False, f"it did not answer within {wait_s:.0f}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, str(exc)[:_DETAIL_CAP])
+        return PingResult(False, *_ping_refusal(cfg, exc))
+    finally:
+        # The pool is this call's alone, so nothing else will ever close it, and a
+        # pool left open holds the child process it launched for the rest of the
+        # gateway's life -- one per press.
+        await pool.close_all()
 
     text = (reply or "").strip()
     if not text:
@@ -483,32 +740,200 @@ async def ping_agent(cfg: Any) -> PingResult:
 
 
 async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
-    """Verify an acp agent by connecting to it, and remember what it reported.
+    """Run an acp agent to reach its verdict, and remember what its handshake said.
 
-    Cheaper *and* stronger than the cli test, which is why the two differ. The cli
-    test has to dispatch a real task -- spending the agent's own quota -- because
-    nothing short of that exercises its auth. ACP answers the same question in the
-    handshake, so this costs no tokens and still reaches a real verdict; and unlike
-    the cli test it produces something reusable, since the snapshot it records is
-    what the roster later reads statefulness from.
+    Two measurements, in that order, because they answer different questions.
+
+    The handshake -- ``initialize`` plus ``session/new`` -- answers whether the
+    agent is installed, speaks ACP and will open a session, and it is free. So it
+    goes first, and a refusal there is the verdict: no prompt is spent on an
+    agent that cannot take one.
+
+    What it cannot answer is whether the agent *works*. ACP carries no
+    authenticated-state field, so one that defers its credential to the first
+    model call opens a session happily and fails afterwards; six of thirteen
+    registry agents measured on 2026-09-07 did exactly that, and this test called
+    every one of them ready. So the verdict is the agent's own answer to
+    ``PROBE_PROMPT`` -- the bar `cli` has always had, and the one the enable gate
+    already holds a connect to, which is what makes a green Test and a successful
+    Connect mean the same thing.
+
+    Two consequences worth stating. It **spends one call on the agent's own
+    quota**, which this test did not before; it is reached only from an explicit
+    press, since `subagents.test` is `run_test`'s one caller, and never from a
+    listing or the boot backfill. And it launches the agent twice, because the
+    handshake and the ping have different reuse rules -- the ping runs on a pool
+    of its own so that it cannot retire a connection a real run is holding.
 
     Always connects live, deliberately skipping the probe: the probe reports the
     *recorded* snapshot, so consulting it here would replay a stale failure (one
     slow first `npx` download) as this test's verdict forever. A truly absent
     executable still fails fast -- launch raises before any timeout waits.
     """
-    # Function-level on purpose: the acp client family is future shelf cargo,
-    # and this module must not name it at import time (binding-time debt).
+    # A preset's snapshot is recorded too, and has to be: the page draws a
+    # preset row's verdict from it -- a recorded credential refusal is what puts
+    # "Unauthorized" there -- so Test is that row's only way back. The store
+    # keys on a fingerprint of the launch fields, so a record under a preset's
+    # name is returned only to a config that launches the same way. Recorded off
+    # the handshake either way, and never off the ping: the ping answers one
+    # minute, while the menu and the statefulness it holds are launch facts.
+    snapshot = await record_capabilities(cfg)
+    reply = ", ".join(snapshot.available_models[:5]) or None
+    if not snapshot.usable:
+        # The handshake already classified the refusal (`needs_auth`, from the
+        # agent's own answer), so the remedy is read off that verdict rather than
+        # off this detail, whose "(auth methods: ...)" suffix names an
+        # advertisement every working agent makes too.
+        remedy = (
+            _remedy_for(cfg)
+            if snapshot.needs_auth
+            else Remedy("download", _shipped_command(cfg))
+            if snapshot.unfetched
+            else None
+        )
+        return TestResult(cfg.name, source, "acp", False, snapshot.detail, reply, elapsed(), remedy)
+    answered = await ping_agent(cfg)
+    # Verdict first on a failure, the handshake after it: "it connected and then
+    # said nothing" is what went wrong, and the half that succeeded is the
+    # context that separates it from an agent that is not installed.
+    detail = snapshot.detail if answered.ok else f"{answered.detail}; {snapshot.detail}"
+    return TestResult(cfg.name, source, "acp", answered.ok, detail, reply, elapsed(), answered.remedy)
+
+
+async def record_capabilities(cfg: Any) -> Any:
+    """Measure an acp entry's capabilities live and write them down; the snapshot.
+
+    The one writer the manual test and the connect share. A connect proves the
+    agent answers (``ping_agent``) but records nothing, so until now a row
+    connected from the page stayed "capabilities not recorded -- run a test",
+    stateless and menuless, until someone pressed Test or the gateway restarted
+    into the boot backfill: no ``instance`` for it, no model pill, an attention
+    dot on an agent that had just replied. The handshake this records costs no
+    tokens, so the connect can afford it.
+    """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     snapshot = await verify_agent(cfg)
-    if source == "config":
-        # Presets are templates, not entries: recording a snapshot for one would
-        # key it to a name no config claims, and the roster would then read
-        # capabilities off a preset the user never installed.
-        SnapshotStore().record(snapshot)
-    reply = ", ".join(snapshot.available_models[:5]) or None
-    return TestResult(cfg.name, source, "acp", snapshot.usable, snapshot.detail, reply, elapsed())
+    _note_menu_re_measured(snapshot, getattr(cfg, "name", "") or "")
+    store = SnapshotStore()
+    store.record(_test_record(snapshot, store.load([cfg], allow_stale=True).get(cfg.name)))
+    return snapshot
+
+
+#: Raven's own rows this process has already re-measured for a menu and been
+#: given none again. The reason below is the one re-measure reason nothing
+#: invalidates, so it is the one that has to remember it has been spent.
+_MENULESS_OWN_RE_MEASURED: set[str] = set()
+
+
+def _measured_no_menu(snapshot: Any) -> bool:
+    """A ready snapshot of one of raven's own agents that advertised no model."""
+    return (
+        snapshot is not None
+        and getattr(snapshot, "agent_name", "") == "raven"
+        and getattr(snapshot, "status", "") == "ready"
+        and bool(getattr(snapshot, "model_menu_measured", False))
+        and not getattr(snapshot, "model_choices", ())
+    )
+
+
+def _host_has_a_usable_provider() -> bool:
+    """Does raven itself hold one provider credential?
+
+    ``credential_status`` with ``include_external``, which is the predicate the
+    model picker's own "configured" flag reads (``Config._provider_is_configured``):
+    a sign-in lives in a token file, and asking without it reports every OAuth
+    vendor usable on a host that has never been connected to anything -- exactly
+    the host this bound is here to spare.
+    """
+    from raven.config.loader import load_config
+    from raven.providers.auth import credential_status
+    from raven.providers.registry import find_by_name
+
+    providers = load_config().providers
+    names = [*type(providers).model_fields, *(providers.model_extra or {})]
+    sections = ((name, providers.get(name)) for name in names)
+    return any(
+        section is not None and credential_status(name, section, spec=find_by_name(name), include_external=True).ok
+        for name, section in sections
+    )
+
+
+def _own_row_missing_its_menu(snapshot: Any, name: str) -> bool:
+    """A ready snapshot of one of raven's own agents that measured no model menu,
+    worth spending a handshake on again.
+
+    Raven's own acp agents run on this raven's provider catalogue, so a menu
+    measured empty there is a handshake taken before that catalogue reached
+    them, not a fact about the agent -- and nothing invalidates it: the launch
+    config it was measured against has not moved, so the row would go on
+    offering nothing for as long as the file survives. Only raven's own: a third
+    party that really offers none would be relaunched at every boot to be told
+    so again.
+
+    Twice bounded, because a child raven genuinely advertises no model while the
+    catalogue is empty (``acp.config_options``), and this reason re-arms itself
+    on the record it writes. So: only once this raven has a credential of its
+    own, which is the whole premise of the fallback, and only once per row per
+    process, so a boot that is told "none" again does not go on paying for the
+    same answer at every connect after it.
+    """
+    if not _measured_no_menu(snapshot) or name in _MENULESS_OWN_RE_MEASURED:
+        return False
+    return _host_has_a_usable_provider()
+
+
+def _note_menu_re_measured(snapshot: Any, name: str) -> None:
+    """Spend this row's one re-measure when the live answer is menuless again."""
+    if _measured_no_menu(snapshot):
+        _MENULESS_OWN_RE_MEASURED.add(name)
+
+
+def capabilities_wanted(cfg: Any) -> bool:
+    """Does this acp entry lack a fresh, complete capability record?
+
+    The same four cases the boot backfill re-measures: no snapshot, one whose
+    launch config has changed, one written before the model menu was recorded,
+    or one of raven's own whose menu came back empty -- that last one bounded as
+    ``_own_row_missing_its_menu`` bounds it. A row with a complete record keeps
+    it -- a connect must not spend a handshake re-measuring what is already
+    known.
+    """
+    snapshot = acp_snapshot_for(cfg)
+    if snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True):
+        return True
+    return _own_row_missing_its_menu(snapshot, getattr(cfg, "name", "") or "")
+
+
+def _test_record(snapshot: Any, previous: Any) -> Any:
+    """What a manual test writes down: its verdict always, its capabilities only
+    when it reached them.
+
+    A verify that fails before ``session/new`` -- a cold shim start, a machine
+    under load, a login that lapsed -- carries no menu and no statefulness, and
+    recorded whole it would cost the row both until the next success, silently:
+    the verdict is visible, the loss of the previous measurement is not. So an
+    unusable result keeps the previous record's capabilities under its own
+    status and detail. Same reasoning as ``SnapshotStore.load`` gives for a
+    stale row: the old capabilities are the weaker claim and self-heal, since a
+    session that really cannot be loaded fails at ``session/load`` and the
+    backend starts fresh. ``previous`` is the last record for this agent, stale
+    or not -- the roster reads a stale row's capabilities too, so a failed test
+    after a config edit must not erase what it was trusting -- or ``None``,
+    with nothing to keep. The record takes this test's fingerprint: it is a
+    measurement of the config as it stands now, whatever it kept.
+    """
+    if snapshot.usable or previous is None:
+        return snapshot
+    return replace(
+        previous,
+        fingerprint=snapshot.fingerprint,
+        stale=False,
+        status=snapshot.status,
+        detail=snapshot.detail,
+        measured_at_ms=snapshot.measured_at_ms,
+        elapsed_ms=snapshot.elapsed_ms,
+    )
 
 
 _SCHEDULED = False
@@ -519,6 +944,65 @@ _VERIFY_TASKS: set[asyncio.Task] = set()
 """The running backfill task, if any. Kept by reference: asyncio holds only a
 weak reference to a task it did not create, and an unrefed task can be collected
 mid-run with a "Task was destroyed but it is pending!" warning at exit."""
+
+
+class _PresetRow:
+    """A registry-row shape around a preset, so one backfill serves both halves.
+
+    The registry holds configured agents only. Everything the reader has not
+    connected yet is therefore invisible to it -- which is exactly the set whose
+    Connect button is about to promise something the agent will refuse.
+    """
+
+    __slots__ = ("config", "enabled", "kind", "name")
+
+    def __init__(self, config: Any) -> None:
+        self.config = config
+        self.name = getattr(config, "name", "")
+        self.kind = "acp"
+        self.enabled = False
+
+
+def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> list[Any]:
+    """Shipped acp presets this machine could actually answer for.
+
+    Three filters, each for its own reason. A configured name is the registry
+    half's already. A non-acp preset has no handshake to record -- an openai
+    row's credential is settled by the free ``/models`` probe and a cli row is
+    never handshaken at all. And a command that does not resolve is one whose
+    verdict the free probe already reached for nothing: launching it to learn
+    the same thing is the cost this filter exists to refuse.
+
+    ``path`` is the login shell's, captured once by the caller -- the same PATH
+    ``_probe_acp`` resolves against. Reading this process's instead would answer
+    a different question from the one the row on screen was answered with, and
+    skip an agent the page is reporting as installed.
+    """
+    from raven.config.schema import SubagentsConfig
+
+    wanted = [
+        preset
+        for preset in third_party_subagent_presets()
+        if preset.get("kind") == "acp" and preset.get("name") not in configured
+    ]
+    here = []
+    for preset in wanted:
+        try:
+            argv = shlex.split((preset.get("command") or "").strip())
+        except ValueError:
+            continue
+        if argv and shutil.which(argv[0], path=path or None) is not None:
+            here.append(preset)
+    if not here:
+        return []
+    try:
+        # Validated as one list, the way the row builder reads the same table:
+        # these are shipped entries, so a failure here is a packaging fault, not
+        # a user's typo, and it must not take the boot with it.
+        return [_PresetRow(cfg) for cfg in SubagentsConfig(agents=here).agents]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("acp presets cannot be read for auto-verify: {}", exc)
+        return []
 
 
 def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
@@ -543,16 +1027,21 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
         # scheduling nothing is the correct degradation, not a missing feature.
         return None
     _SCHEDULED = True
-    rows = [row for row in registry.rows() if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)]
-    if not rows:
-        return None
-    task = asyncio.create_task(_verify_missing_snapshots(manager, rows))
+    live = list(registry.rows())
+    rows = [row for row in live if getattr(row, "kind", None) == "acp" and getattr(row, "enabled", False)]
+    # No early return on an empty list any more: the shipped presets are the
+    # other half of the work, and whether any of them is on this machine cannot
+    # be answered here -- that needs the login shell's PATH, and this is the
+    # synchronous side.
+    task = asyncio.create_task(
+        _verify_missing_snapshots(manager, rows, configured={getattr(row, "name", "") for row in live})
+    )
     _VERIFY_TASKS.add(task)
     task.add_done_callback(_VERIFY_TASKS.discard)
     return task
 
 
-async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
+async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured: set[str] | None = None) -> None:
     """One verification per missing or stale row, sequentially, never raising.
 
     Sequential, not concurrent: every acp verify spawns a child process, and a
@@ -564,7 +1053,16 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
+    # After the configured rows, never before: those are the ones a run can
+    # dispatch to this minute, and a slow preset adapter ahead of them would hold
+    # the roster's own capabilities back behind an agent nobody has asked for yet.
+    if configured is not None:
+        rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=await _captured_login_path())]
     store = SnapshotStore()
+    # Optional: a caller's own stand-in (tests substitute a bare `record`-only
+    # object) may not carry it, and its absence must not itself force a
+    # re-verify -- see `SnapshotStore.has_model_menu` for what it detects.
+    has_model_menu = getattr(store, "has_model_menu", None)
     recorded = False
     for row in rows:
         cfg = getattr(row, "config", None)
@@ -572,13 +1070,29 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
             continue
         try:
             snapshot = acp_snapshot_for(cfg)
-            if snapshot is not None and not snapshot.stale:
+            name = getattr(row, "name", "") or ""
+            outdated_menu = snapshot is not None and has_model_menu is not None and not has_model_menu(name)
+            # Three reasons to re-measure besides staleness: a record written
+            # from before the model menu (above), a credential refusal, and one
+            # of raven's own that came back with an empty menu. Staleness asks
+            # whether the launch config moved, and neither signing in nor
+            # configuring a provider moves it -- so a recorded refusal never goes
+            # stale, and the row it came from would go on saying "Unauthorized"
+            # across every restart after the sign-in that cured it.
+            refused = getattr(snapshot, "needs_auth", False)
+            menuless_own = _own_row_missing_its_menu(snapshot, name)
+            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused and not menuless_own:
                 continue
             result = await verify_agent(cfg)
-            if result.status == "ready":
+            _note_menu_re_measured(result, name)
+            # A pass, or a refusal the agent explained. Every other failure stays
+            # unrecorded on purpose: a timeout or a crashed adapter is a fact
+            # about this minute, and a snapshot of one would label a working
+            # agent broken until somebody happened to press Test.
+            if result.status == "ready" or getattr(result, "needs_auth", False):
                 store.record(result)
                 recorded = True
-            logger.info("acp agent {!r}: auto-verify {}", getattr(row, "name", ""), result.status)
+            logger.info("acp agent {!r}: auto-verify {}", name, result.status)
         except Exception as exc:  # noqa: BLE001 - a failed verify must not sink the rest
             logger.warning("acp agent {!r}: auto-verify failed: {}", getattr(row, "name", ""), exc)
     if recorded:
@@ -591,6 +1105,8 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any]) -> None:
 
 
 __all__ = [
+    "capabilities_wanted",
+    "record_capabilities",
     "PROBE_PROMPT",
     "PingResult",
     "ProbeResult",

@@ -13,8 +13,10 @@ Three things this adapter does that the spec does not describe:
   state goes to a ``sessionUpdate: "plan"`` frame instead, so the plan row is
   the only place they appear, and it is named for the tool that produced it.
 
-``Bash`` and ``Read`` are the two names measured on the wire (v0.66.0), and any
-other name is reported exactly as sent rather than checked against a list: the
+``Bash`` and ``Read`` are the two names measured on the wire (v0.66.0; ``Bash``
+again with the same meta, ``rawOutput`` and fence on v0.79.0, 2026-09-21; ``Read``,
+``Bash`` and ``Write`` with the same meta and fence on v0.81.1, 2026-09-23), and
+any other name is reported exactly as sent rather than checked against a list: the
 record keeps the transport's own vocabulary, so a tool this adapter adds or
 renames upstream is recorded for what it is without an entry anywhere.
 Those names now reach a client unchanged: the read boundary renames only the
@@ -65,6 +67,10 @@ def _custom_answer_for(field: Any) -> str | None:
 class ClaudeCodeDialect(AcpDialect):
     key = "claude-agent-acp"
     plan_tool_name = "TodoWrite"
+    # Measured on 0.79.0 and again on 0.81.1: every `Write` is announced with
+    # `oldText: null`, whether or not the file existed, so the block cannot say
+    # it was new.
+    missing_old_text_is_creation = False
 
     def tool_name(self, update: dict[str, Any]) -> str:
         named = _dict(_dict(update.get("_meta")).get("claudeCode")).get("toolName")

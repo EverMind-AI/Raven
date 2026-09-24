@@ -1,0 +1,68 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`connections island > keeps its rendered shape, list 1`] = `
+"div.two-pane
+  div.two-pane-side
+    div.two-pane-find
+      div.two-pane-search
+        svg
+          circle
+          path
+        input
+    div.two-pane-list
+      div.two-pane-grp
+      div.two-pane-row
+        button.two-pane-hit
+          span.channel-mark
+            img
+          span.two-pane-txt
+            span.nm
+            span.ds.live
+        button.two-pane-swi
+      div.two-pane-grp
+      div.two-pane-row.two-pane-off
+        button.two-pane-hit
+          span.channel-mark
+            img
+          span.two-pane-txt
+            span.nm
+            span.ds
+        button.two-pane-swi
+      div.two-pane-row.two-pane-off
+        button.two-pane-hit
+          span.channel-mark.channel-mark-inset
+            svg
+              rect
+              path
+          span.two-pane-txt
+            span.nm
+            span.ds
+        button.two-pane-swi
+  div.two-pane-main
+    div.two-pane-none"
+`;
+
+exports[`connections island > keeps its rendered shape, the picked channel 1`] = `
+"div.two-pane-head
+  span.channel-mark
+    img
+  div.ttl
+    div.nm
+    div.two-pane-meta
+      span.st.off
+div#connDlgBody.subody
+  div.sucreds
+    span.k
+      span.n
+    a.jump
+      svg
+        path
+  div.sugroup
+    div.sufields
+      div.sufield
+        label
+        input
+div.sufoot
+  span.n
+  button.mini.key"
+`;

@@ -38,29 +38,51 @@ def register(app: typer.Typer) -> None:
         channel that offered them the update.
         """
         try:
+            if _upgrade._is_editable_install():
+                console.print("Editable Raven installation: update from the source checkout.")
+                try:
+                    checkout, ahead, behind = _upgrade.editable_checkout_status()
+                    console.print(f"Source checkout: {checkout}", markup=False)
+                    console.print(
+                        f"Relative to origin/main (last fetched): {ahead} commits ahead, {behind} commits behind."
+                    )
+                    console.print("Run git fetch origin main in the source checkout to refresh the comparison.")
+                except _upgrade.UpgradeError as exc:
+                    console.print(f"[red]Unable to check source status:[/red] {_upgrade._sentence(exc)}")
+                    raise typer.Exit(1) from exc
+                finally:
+                    console.print("To update, run [cyan]git pull && ./install.sh[/cyan] in the source checkout.")
+                if not check:
+                    raise typer.Exit(1)
+                return
             current_version = _upgrade._current_version()
             release, version_key = _upgrade.fetch_latest_for_channel()
             current_key = version_key(current_version)
             latest_key = version_key(release.version)
 
-            if current_key == latest_key:
-                console.print(f"Raven {current_version} is up to date.")
-                return
             if current_key > latest_key:
                 console.print(
                     f"Raven {current_version} is newer than the latest release "
                     f"{release.version}; no downgrade was performed."
                 )
                 return
-            if check:
+            if current_key == latest_key:
+                # An install this version's list says is incomplete -- the
+                # upgrade that put it here ran a helper that knew no plugins --
+                # is repaired by installing the same version again, list and all.
+                missing = _upgrade.missing_plugins(release)
+                if not missing:
+                    console.print(f"Raven {current_version} is up to date.")
+                    return
+                console.print(f"Raven {current_version} is up to date, but this install lacks {', '.join(missing)}.")
+                if check:
+                    console.print("Run [cyan]raven upgrade[/cyan] to reinstall them.")
+                    return
+                console.print(f"Reinstalling Raven {release.version} with its plugins.")
+            elif check:
                 console.print(f"Raven upgrade available: {current_version} -> {release.version}")
                 console.print("Run [cyan]raven upgrade[/cyan] to install it.")
                 return
-            if _upgrade._is_editable_install():
-                raise _upgrade.UpgradeError(
-                    "Editable Raven installations cannot be upgraded automatically. "
-                    "Pull the source checkout and rebuild Raven."
-                )
             target = _upgrade._uv_tool_target()
             if target is None:
                 raise _upgrade.UpgradeError(

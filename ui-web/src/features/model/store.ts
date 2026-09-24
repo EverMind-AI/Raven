@@ -7,12 +7,14 @@
  * paints the chosen model in its own tree.
  */
 
-import { ds, t } from '../../shell/bridge'
-import { show as toast } from '../../shell/toast'
+import { t } from '../../i18n/t'
+import { ds } from '../../state/sources'
+import { sources } from '../../state/sources'
+import { show as toast } from '../../state/toast'
+import { remember } from './recent'
+import { KIND_ORDER, offered, sameModel, statedTags, withCurrent } from './types'
 
-import { offered } from './types'
-
-import type { ApiProtocol, ModelSource, Provider } from './types'
+import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
 
 export interface OpenAt {
   /* What the popover is anchored to and must not close on a click inside.
@@ -36,21 +38,33 @@ export interface OpenAt {
      it here to mark the right row without moving the chip. Null means mark
      `current`. */
   marked: string | null
+  /* What this opening lists and what a pick means: see `Offer` in types.ts. */
+  offer: Offer
 }
 
-const CLOSED: OpenAt = { host: null, after: null, footer: false, scope: 'session', marked: null }
+/* Text models, every connected provider, a pick switches this conversation:
+   the composer chip's opening, and what any caller that names nothing gets. */
+const DEFAULT_OFFER: Offer = { kind: 'text' }
+
+const CLOSED: OpenAt = { host: null, after: null, footer: false, scope: 'session', marked: null, offer: DEFAULT_OFFER }
 
 let at: OpenAt = CLOSED
 let epoch = 0
 let selected = 'minimax-m3'
+/* The account the conversation is on. A pick names one, and two accounts can
+   list the same id, so the model alone cannot say which row is the one in
+   force. Empty means nothing has said -- the served frame, and a page that has
+   seen neither a pick nor an answer from the gateway -- and the surfaces fall
+   back to whichever account lists the model, which is what they did before. */
+let selectedAt = ''
 const subs = new Set<() => void>()
 
-export const source = (): ModelSource => ds<ModelSource>('model')
+export const source = (): ModelSource => ds('model')
 
 /* Installed by the live layer only. The offline demo's chip opens a plain menu
-   of its own (demo/150-chrome.js), so the opener below has to be callable and
-   do nothing there rather than throw at a name the page publishes. */
-const installed = (): boolean => !!(window.DS && window.DS.model)
+   of its own (the composer's model button), so the opener below has to be callable and
+   do nothing there rather than throw at the name the chrome imports. */
+const installed = (): boolean => !!sources.model
 
 export function subscribe(fn: () => void): () => void {
   subs.add(fn)
@@ -65,32 +79,48 @@ const announce = (): void => {
 export const openAt = (): OpenAt => at
 export const version = (): number => epoch
 export const isOpen = (): boolean => !!at.host
+
+/* Whether the picker that is up is this element's own. One store serves every
+   opener -- the composer chip, and each settings role pill against its own
+   button (features/settings/providers/Roles.tsx) -- so `isOpen` answers "a
+   picker is up somewhere", which is not the question a control reporting its
+   own state is putting. A chip that answered the first would tell a reader
+   that it had expanded something while the popover belongs to another
+   control. */
+export const openedFrom = (el: Element | null): boolean => !!el && at.host === el
 export const current = (): string => selected
 
-export function setCurrent(model: string): void {
-  if (selected === model) return
+/** The account serving `current`, or '' while nothing has said which. */
+export const currentProvider = (): string => selectedAt
+
+/* Both together, because a switch between two accounts serving one id moves
+   only the second: returning early on the model alone would leave the page
+   marking the account the reader just left. An omitted account is "not known"
+   rather than "unchanged", so a caller that has one always states it. */
+export function setCurrent(model: string, provider = ''): void {
+  if (selected === model && selectedAt === provider) return
   selected = model
+  selectedAt = provider
   announce()
 }
 
 /* Every open replaces the one before it rather than stacking: the chip and the
    settings button can both be reached while a picker is up. */
-export function open(anchor?: HTMLElement | null, after?: () => void, marked?: string): void {
+export function open(anchor?: HTMLElement | null, after?: () => void, marked?: string, offer: Offer = DEFAULT_OFFER): void {
   if (!installed()) return
-  const accounts = source()
-    .providers()
-    .filter((p) => p.on)
-  const authed = accounts.filter((p) => offered(p).length)
-  if (!authed.length) {
-    /* Two different dead ends, and telling them apart is the whole value of
-       the message: nothing connected is a credential to go and add, while
-       connected with nothing added is a list to go and build. Saying "no
-       account" to somebody whose keys all work sends them to fix what is not
-       broken. */
-    if (accounts.length) {
-      const provider = accounts[0]!
-      source().openProviderModels?.(provider.id)
-      toast(t('gui.picker.no_models_for', { name: provider.name }))
+  const rows = listed(offer)
+  if (!rows.length) {
+    /* Nothing to open onto is now one dead end, not two: a provider connected
+       with nothing added is listed, with a column that says so and a row to
+       type an id into, so "go and build a list" is answered inside the picker.
+       What is left is having no account the offer allows -- a credential to go
+       and add, or, for a slot restricted to one vendor, that vendor. */
+    const only = offer.providers?.length === 1
+      ? source().providers().find((p) => p.id === offer.providers![0])
+      : undefined
+    if (only && !only.on) {
+      source().openProviderModels?.(only.id)
+      toast(t('gui.picker.no_models_for', { name: only.name }))
     } else {
       toast(t('gui.picker.no_account'))
     }
@@ -101,7 +131,7 @@ export function open(anchor?: HTMLElement | null, after?: () => void, marked?: s
   /* The composer chip opens with no anchor and means this conversation; the
      settings control passes its button and means the default, and marks the
      default model rather than the chip's. */
-  at = { host, after: after || null, footer: !anchor, scope: anchor ? 'default' : 'session', marked: marked || null }
+  at = { host, after: after || null, footer: !anchor, scope: anchor ? 'default' : 'session', marked: marked || null, offer }
   announce()
 }
 
@@ -111,9 +141,63 @@ export function close(): void {
   announce()
 }
 
-/* Only providers with an account and something to offer. Exported because the
-   list decides both columns and the initial selection. */
-export const authed = (): Provider[] => source().providers().filter((p) => p.on && offered(p).length)
+/* The providers one opening lists: connected, and named by the offer when it
+   names any. The kind does NOT filter here -- it narrows each provider's column
+   (`column` below) instead.
+   A provider whose key works but whose model list nobody has built yet stays
+   visible: hiding it told a reader with a working DeepSeek key that DeepSeek
+   was not connected (reported 2026-09-20), and the model the chip named -- set
+   by onboarding, never "added" -- had no column to be marked in. */
+export const listed = (offer: Offer = at.offer): Provider[] =>
+  source()
+    .providers()
+    .filter((p) => p.on && (!offer.providers || offer.providers.includes(p.id)))
+
+/* One provider's column: its models of the offer's kind, with the current one
+   first when the list does not carry it. `agents.defaults.model` is routinely
+   set by onboarding or the CLI without a matching entry under
+   `providers.<slug>.models`, and a model the page is showing as current has to
+   be somewhere the reader can see it marked. */
+export const column = (p: Provider, offer: Offer = at.offer): string[] => {
+  /* What this provider offers of the opening's kind, by the rule on the
+     domain's public surface -- the agents page draws its own rows from the
+     same one, and a column that differed between the two put a model on one
+     picker and not on the other. What this adds is the pin below. */
+  const rows = offered(p, offer.kind)
+  /* Whose model to pin. A slot states its own pair or holds none -- an unset
+     slot has nothing to pin, and borrowing the conversation's model would put
+     a chat model at the top of the embedding column. Only the composer falls
+     back to the conversation's, in the provider the wire marks as serving it.
+     `pick` is what tells them apart: every slot writes through one. */
+  const cur = offer.current
+    ? (offer.current.provider === p.id ? offer.current.model : null)
+    : offer.pick ? null
+      /* The account the conversation is on, where the page has been told which:
+         a pick names one and so does the gateway's answer. `carried` below is
+         the guess for when it has not, and guessing is what put the model in
+         the wrong column when a second account listed it. */
+      : selectedAt ? (selectedAt === p.id ? selected : null)
+        : (p.current && !carried(selected) ? selected : null)
+  /* By the backend's identity, not by string: a role stores the spelling it was
+     handed while `model.add_model` stores the one it derived, so comparing the
+     strings put the same model in the column twice, under one visible name. */
+  return withCurrent(p, rows, cur)
+}
+
+/* Whether any connected account lists this model as its own. The wire's
+   `is_current` marks the provider serving the model the SESSION started on, and
+   it goes stale the moment a pick moves the conversation to another account:
+   pinning by that flag alone drew the new model twice, once in its own column
+   and once, ticked, under the old account. */
+const carried = (m: string): boolean => {
+  try {
+    return source().providers().some((q) => q.on && offered(q).some((x) => sameModel(q, x, m)))
+  } catch {
+    return false
+  }
+}
+
+export { KIND_ORDER, statedTags }
 
 export const protocolFor = (provider: Provider, model: string): ApiProtocol => {
   const configured = provider.protocols?.[model]
@@ -130,20 +214,50 @@ export async function setProtocol(model: string, provider: string, protocol: Api
 /* Optimistic: the chip has to say the new model before the round trip, because
    the next turn already uses it. A rejected write puts the old one back and
    says so rather than leaving the page claiming a model the config never took. */
-export async function choose(m: string, provider: string): Promise<void> {
+export async function choose(m: string, provider: string, typed = false, kind?: Kind): Promise<void> {
   const src = source()
   const prev = current()
+  const prevAt = currentProvider()
   const after = at.after
   const scope = at.scope
+  const { offer } = at
   close()
+  /* A slot writes through its own path -- a role key, an EverOS section, a
+     media pair -- and never through the conversation switch below, whose scope
+     logic answers a different question. Returned before it: the two are
+     alternatives, not steps. */
+  if (offer.pick) {
+    try {
+      await offer.pick(m, provider, typed, kind ?? offer.kind)
+    } catch (e) {
+      toast(t('gui.op.switch_failed', { detail: detail(e) }))
+    }
+    return
+  }
+  /* The typed id joins the provider's list before the switch: a conversation
+     must not name a model its provider does not list. */
+  if (typed) {
+    try {
+      /* The kind the chip was showing when it was clicked, which is what the
+         person said this id is -- not the offer's, which is only its default. */
+      await src.addModel?.(m, provider, kind ?? offer.kind)
+    } catch (e) {
+      toast(t('gui.op.switch_failed', { detail: detail(e) }))
+      return
+    }
+  }
   /* A session switch is optimistic: the chip -- which reads the same `current`
      -- says the new model before the round trip, and rolls back if it is
      refused. A default switch must not touch the chip (a different value), so it
      commits nothing locally and only reflects the settled default through
      `after` once the write lands. */
   if (scope === 'session') {
-    setCurrent(m)
+    setCurrent(m, provider)
     after?.()
+    /* Remembered on the pick rather than on the acknowledgement: a model the
+       reader reached for belongs at the head of the list whether or not this
+       one write lands. */
+    remember(m, provider)
   }
   try {
     const settled = await src.persist(m, provider, scope)
@@ -156,7 +270,7 @@ export async function choose(m: string, provider: string): Promise<void> {
       : t('gui.model.pick_switched', { name: short(m) }))
   } catch (e) {
     if (scope === 'session') {
-      setCurrent(prev)
+      setCurrent(prev, prevAt)
       after?.()
     }
     toast(t('gui.op.switch_failed', { detail: detail(e) }))
@@ -176,5 +290,6 @@ export function _resetForTests(): void {
   at = CLOSED
   epoch = 0
   selected = 'minimax-m3'
+  selectedAt = ''
   subs.clear()
 }

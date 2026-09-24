@@ -98,9 +98,9 @@ def test_kernel_and_organs_know_no_surface():
                 for m in mods:
                     if any(m == s or m.startswith(s + ".") for s in SURFACES):
                         offenders.append(f"{p.relative_to(REPO)}:{node.lineno} -> {m}")
-    # Debt allowlist: EMPTY, and may only shrink — it emptied when ask_user /
-    # deep_research were re-typed against the QuestionResponder paper (tool
-    # side), so no inner module names the concrete broker machine at rpc.
+    # Debt allowlist: EMPTY, and may only shrink — it emptied when ask_user
+    # was re-typed against the QuestionResponder paper (tool side), so no
+    # inner module names the concrete broker machine at rpc.
     assert offenders == [], f"an inner layer imports a surface (callers must stay unknown to the called): {offenders}"
 
 

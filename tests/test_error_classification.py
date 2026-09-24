@@ -184,6 +184,20 @@ def test_a_first_byte_timeout_is_retryable_and_named() -> None:
     assert verdict.should_compress is False
 
 
+@pytest.mark.parametrize("idle", [180.0, 429.0, 500.0])
+def test_a_stream_idle_timeout_is_named_whatever_budget_its_message_carries(idle: float) -> None:
+    """The message embeds the configured idle budget. Classified by substring it
+    would read as a rate limit at 429 and a server error at 500 -- the same
+    wrong-cause report the error exists to remove -- so it is named by type
+    before any substring runs, like the first-byte bound beside it."""
+    from raven.providers.first_byte import StreamIdleTimeoutError
+
+    verdict = LLMProvider.classify_error(StreamIdleTimeoutError(idle=idle))
+    assert verdict.category == "stream_idle_timeout"
+    assert verdict.retryable is True
+    assert verdict.should_fallback is True
+
+
 def test_the_first_byte_error_content_names_the_bound_and_the_wait() -> None:
     """Half the 2026-09-10 defect was that nothing was recorded. The content the
     provider hands back is what the loop logs and what the llm.output artefact
@@ -345,3 +359,122 @@ def test_a_model_without_eyes_has_the_pictures_taken_out():
     assert verdict.category == "images_unsupported"
     assert verdict.strip_images
     assert not verdict.retryable and not verdict.should_drop_tool_images
+
+
+# --- the bound and the category table --------------------------------------- #
+
+
+def test_a_vendors_whole_body_is_bounded_but_still_reads_back():
+    """A rejected-request body runs to kilobytes -- the prompt quoted back, an
+    HTML error page -- and the same sentence is read in a chat reply, a session
+    marker, a cron job record and a log line. It is cut once, where it is
+    built, and the cut sentence is still the machine-readable shape."""
+    from raven.providers.base import LLM_ERROR_DETAIL_MAX, format_llm_error, parse_llm_error
+
+    exc = _StatusError("the request was rejected: " + "x" * 5000, status_code=400)
+    content = format_llm_error(exc, LLMProvider.classify_error(exc), provider="openrouter")
+
+    parsed = parse_llm_error(content)
+    assert parsed is not None
+    category, provider, detail = parsed
+    assert (category, provider) == ("invalid_request", "openrouter")
+    assert len(detail) == LLM_ERROR_DETAIL_MAX
+    assert detail.endswith("...")
+
+
+async def test_the_retry_ladder_classifies_a_deep_needle_before_the_sentence_is_bounded():
+    """The place the hazard lives: ``chat_with_retry`` classifies a raised
+    exception and only then renders the bounded sentence. A needle four
+    kilobytes into a rejected-request body still decides the category the
+    response carries, and the detail that reaches the reader is cut."""
+    from raven.providers.base import LLM_ERROR_DETAIL_MAX, LLMResponse, parse_llm_error
+
+    body = "rejected: " + "x" * 4000 + " this model's maximum context length is 8192 tokens"
+
+    class _Refuses(LLMProvider):
+        _CHAT_RETRY_DELAYS = ()
+
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7, **_):
+            raise _StatusError(body, status_code=400)
+
+        async def chat_stream(self, *args, **kwargs):  # pragma: no cover - the non-stream path is under test
+            raise NotImplementedError
+
+    response = await _Refuses().chat_with_retry(messages=[{"role": "user", "content": "hi"}])
+
+    assert isinstance(response, LLMResponse) and response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "context_overflow"
+    parsed = parse_llm_error(response.content or "")
+    assert parsed is not None and parsed[0] == "context_overflow"
+    assert len(parsed[2]) <= LLM_ERROR_DETAIL_MAX + 3
+    assert "maximum context length" not in (response.content or "")
+
+
+def test_a_needle_past_the_bound_still_decides_the_category():
+    """The bound is applied after the verdict is taken, not before. A vendor
+    that buries "context length exceeded" behind four kilobytes of echoed
+    prompt must still be reported as an overflow -- classified by the string
+    the constructor was handed, whose category then travels in the head."""
+    from raven.providers.base import format_llm_error, parse_llm_error
+
+    body = "rejected: " + "x" * 4000 + " this model's maximum context length is 8192 tokens"
+    verdict = LLMProvider.classify_error(_StatusError(body, status_code=400))
+    assert verdict.category == "context_overflow"
+
+    content = format_llm_error(_StatusError(body, status_code=400), verdict, provider="openrouter")
+    parsed = parse_llm_error(content)
+    assert parsed is not None and parsed[0] == "context_overflow"
+    assert "maximum context length" not in content
+
+
+def test_the_category_table_answers_for_every_category_the_classifier_can_reach():
+    """The summary is what a chat reader is told, so a category with no clause
+    would reach them as the default and say nothing useful. Read off the
+    classifier's own source rather than a hand-kept list, plus the categories
+    providers attach directly, so a new bucket fails here instead of going
+    unsaid."""
+    import inspect
+    import re as _re
+
+    from raven.providers.base import _LLM_ERROR_SUMMARIES, llm_error_summary
+
+    source = inspect.getsource(LLMProvider._classify)
+    reached = set(_re.findall(r'ErrorClassification\(\s*(?:category=)?"([a-z_]+)"', source))
+    assert "unknown" in reached  # the fallback arm; a sanity check on the scrape
+    reached |= {"tool_image_unsupported", "upstream_transport_failure"}
+    assert reached <= set(_LLM_ERROR_SUMMARIES)
+
+    assert llm_error_summary("auth", "openrouter") == (
+        "The provider rejected the credentials (openrouter). The runtime log has the provider's own account."
+    )
+    assert llm_error_summary("auth") == (
+        "The provider rejected the credentials. The runtime log has the provider's own account."
+    )
+    # A category nothing in the table names still gets a sentence.
+    assert llm_error_summary("a_bucket_invented_later") == (
+        "The model call failed. The runtime log has the provider's own account."
+    )
+
+
+def test_the_canonical_sentence_has_exactly_one_constructor():
+    """Every reader of this shape -- the CLI's diagnosis, the gateway's channel
+    reply, the marker the model reads -- trusts one invariant: the detail is
+    bounded. A second place that assembles the sentence by hand is how that
+    invariant comes to hold on some failures and not others."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parent.parent / "raven"
+    home = root / "providers" / "base.py"
+    hand_built = [
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*.py")
+        if path != home and "Error calling LLM (" in path.read_text(encoding="utf-8")
+    ]
+    assert hand_built == []

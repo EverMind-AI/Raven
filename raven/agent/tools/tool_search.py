@@ -262,15 +262,18 @@ class ToolSearchController:
             return _Target(None, f"Error: '{name}' cannot be invoked via tool_call.")
         tool = self._registry.get(name)
         if tool is None or not self._registry.offers(tool):
-            tail = " -- tool_search lists what is currently loaded" if self._search_visible() else ""
+            tail = " -- tool_search lists what is currently loaded" if self.search_visible() else ""
             return _Target(None, absent_tool_error(name, tail=tail))
         return _Target(tool, None)
 
-    def _search_visible(self) -> bool:
+    def search_visible(self) -> bool:
         """Whether ``tool_search`` reaches the model's tool list this turn.
 
-        The old shape of :meth:`tool_call_available`, kept but moved to the
-        meta-tool it is actually true of. ``tool_search`` is registered only
+        Public because it is also the honest gate on anything the host says
+        about the fold: ``_mcp_tool_notices`` tells the model a connected
+        server's schemas are withheld, and that sentence is true only while
+        this is. The old shape of :meth:`tool_call_available`, kept but moved to
+        the meta-tool it is actually true of. ``tool_search`` is registered only
         where the fold is configured on, withheld by the same off switch as
         anything else, and dropped from the request again below the threshold --
         so a pointer at it is dishonest in three separate states, not one.
@@ -435,6 +438,23 @@ class ToolCallTool(Tool):
         return await self._ctrl.call(name, arguments)
 
 
+def _schema_name(entry: Any) -> str | None:
+    """The name a tool definition carries, or ``None`` for a shape this strategy
+    cannot read.
+
+    The arrays raven assembles are always well formed; replay is what is not.
+    It feeds a recorded array back through this same chain, so a corrupt
+    recording arrives here as an entry whose ``function`` is a string -- and
+    that has to end at replay's own backstop as an unreplayable recording,
+    not as a TypeError thrown from a strategy that assumed the shape. An entry
+    this cannot read is counted as a tool and passed through untouched: the
+    fold may only withhold a schema it recognised.
+    """
+    function = entry.get("function") if isinstance(entry, dict) else None
+    name = function.get("name") if isinstance(function, dict) else None
+    return name if isinstance(name, str) else None
+
+
 class ToolSearchStrategy(TokenStrategy):
     """``before_llm_call`` hook that compacts the tool list for large catalogs.
 
@@ -470,16 +490,16 @@ class ToolSearchStrategy(TokenStrategy):
         if not tools:
             return messages, tools, model
         self._ctrl.refresh()
-        catalog_size = sum(1 for t in tools if t["function"]["name"] not in META_TOOL_NAMES)
+        catalog_size = sum(1 for t in tools if _schema_name(t) not in META_TOOL_NAMES)
         if catalog_size <= self._compaction_threshold:
-            out = [t for t in tools if t["function"]["name"] != TOOL_SEARCH_NAME]
+            out = [t for t in tools if _schema_name(t) != TOOL_SEARCH_NAME]
             return messages, out, model
-        present = {t["function"]["name"] for t in tools}
+        present = {name for t in tools if (name := _schema_name(t)) is not None}
         if not META_TOOL_NAMES <= present:
             # Meta-tools unavailable (e.g. removed via disabled_tools): expose
             # everything rather than strand the cataloged tools behind a search
             # the model cannot invoke.
             return messages, tools, model
         visible = self._ctrl.visible_names()
-        out = [t for t in tools if t["function"]["name"] in visible]
+        out = [t for t in tools if (name := _schema_name(t)) is None or name in visible]
         return messages, out, model

@@ -126,6 +126,7 @@ def make_understand_media_tool(ctx: Any) -> Tool | None:
     # Point EverOS at raven's ~/.everos/raven home before any everos import
     # resolves settings (the multimodal parser/LLM read EVEROS_* at call time).
     from raven_everos.config import (
+        bind_roles_here,
         configure_everos_env,
         ensure_everos_home,
         everos_owned,
@@ -134,6 +135,12 @@ def make_understand_media_tool(ctx: Any) -> Tool | None:
 
     root = everos_root()
     configure_everos_env(root)
+    # The multimodal model this tool runs on is a pin in raven's config now, and
+    # raven no longer writes `[multimodal]` into everos.toml. The backend's own
+    # bind reaches it only when everos is the configured memory backend AND has
+    # started; this tool is registered whether or not either holds, so it binds
+    # for itself. Idempotent, and the same source the spawn uses.
+    bind_roles_here()
     # Templates only into a root raven owns. Multimodal parsing reads the same
     # EverOS config the memory does -- one machine, one user, one set of keys --
     # but reusing a root the user manages must not write to it, and "the files

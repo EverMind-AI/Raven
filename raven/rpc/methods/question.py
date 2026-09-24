@@ -5,7 +5,10 @@ from inside a paused ask_user tool call) with
 ``clarify.respond {request_id, answer}``; this handler resolves the matching
 pending future on the broker. ``clarify.request`` / ``clarify.respond`` is the
 ui-tui frontend's existing multi-choice prompt contract (ClarifyPrompt), which
-the broker reuses rather than introducing a new frontend card.
+the broker reuses rather than introducing a new frontend card. A surface that
+renders a whole batch as one form may also send the optional ``answers``, the
+batch's whole answer set, which the broker stashes for the loop's later
+questions in the same batch.
 
 Registered via a closure that pre-binds the broker (mirrors
 ``register_confirm_methods``). Gated on a non-None broker by the umbrella, so
@@ -24,11 +27,16 @@ if TYPE_CHECKING:
 async def question_respond(params: dict[str, Any], *, question_broker: "QuestionBroker") -> dict:
     """Resolve a pending question. Unknown/expired key → ``{ok: False}``.
 
-    Accepts either ``conversation_id`` or ``request_id`` as the handle.
+    Accepts either ``conversation_id`` or ``request_id`` as the handle. An
+    ``answers`` list is passed through only when it is actually a list of
+    strings; any other shape is treated as absent rather than raising, since a
+    malformed batch answer must not cost the question its own ``answer``.
     """
     key = str(params.get("conversation_id") or params.get("request_id") or "")
     answer = str(params.get("answer", ""))
-    ok = question_broker.reply(key, answer)
+    raw_answers = params.get("answers")
+    answers = raw_answers if isinstance(raw_answers, list) and all(isinstance(a, str) for a in raw_answers) else None
+    ok = question_broker.reply(key, answer, answers=answers)
     return {"ok": ok}
 
 

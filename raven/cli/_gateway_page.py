@@ -28,7 +28,7 @@ class PageMount:
     url: str
     emitter: Any
     outlet: Any
-    # The page's own ask_user / deep-research broker (build_rpc_stack's). The
+    # The page's own ask_user broker (build_rpc_stack's). The
     # host wires a RoutingQuestionBroker over this and its channel broker so
     # the page answers its own sessions without swallowing the IM round-trip.
     question_broker: Any
@@ -89,7 +89,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     applies the page's streaming sinks (dag progress, mcp events) to the
     shared loop, and last write wins is the intent for those -- the page is
     the surface that renders a progress stream. The question brokers are NOT
-    left last-write-wins: the host re-binds ask_user / deep-research through a
+    left last-write-wins: the host re-binds ask_user through a
     ``RoutingQuestionBroker`` over this mount's ``question_broker`` and its
     channel broker, so IM conversations keep their round-trip while the page
     answers its own.
@@ -102,6 +102,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         _announce_updates,
         _write_serve_state,
         adopt_stored_cookie,
+        page_behind_sources,
         port_strict,
         resolve_ui_dist,
     )
@@ -135,11 +136,13 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     stack = await build_rpc_stack(ws_gateway.broadcast, agent_loop=agent_loop)
     ws_gateway.dispatcher = stack.dispatcher
 
+    dist = resolve_ui_dist()
     app = build_app(
         ws_gateway,
-        resolve_ui_dist(),
+        dist,
         deliverables=stack.deliverables,
         agent_loop_factory=lambda: stack.agent_loop,
+        page_behind=lambda: page_behind_sources(dist),
     )
     runner = web.AppRunner(app)
     await runner.setup()

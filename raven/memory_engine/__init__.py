@@ -68,11 +68,12 @@ if TYPE_CHECKING:
         filter_by_required_tools,
     )
     from raven.memory_engine.skill_local.types import SkillMeta
-    from raven.memory_engine.store_pipeline import StorePipeline
+    from raven.memory_engine.store_pipeline import DrainOutcome, StorePipeline
 
 __all__ = [
     "DAILY_FIRE_PLAN_HEADER",
     "BehaviorsExtractor",
+    "DrainOutcome",
     "BehaviorsOffsets",
     "BackendSkillSource",
     "HubSkillSource",
@@ -115,6 +116,7 @@ _FACE: dict[str, str] = {
     "SkillForgeRouter": "raven.memory_engine.skill_forge",
     "SkillMeta": "raven.memory_engine.skill_local.types",
     "SkillRegistry": "raven.memory_engine.skill_local.registry",
+    "DrainOutcome": "raven.memory_engine.store_pipeline",
     "StorePipeline": "raven.memory_engine.store_pipeline",
     "filter_by_required_tools": "raven.memory_engine.skill_local.registry",
     "DAILY_FIRE_PLAN_HEADER": "raven.memory_engine.consolidate.attention",

@@ -1,0 +1,33 @@
+/* The import row in the rail's foot. Styled after .upnote (styles/page.css),
+   which sits in the same slot; the domain prefix keeps it clear of the page's
+   other `.bar` rules. Imported by ImportSyncPage.tsx and inlined after page.css
+   by ui-web/build.py. */
+
+.importSync { display: grid; gap: 5px; padding: 7px 10px; margin-bottom: 6px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--surface); font-size: 12px; color: var(--muted); }
+.importSync-l1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.importSync-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0; border: 0;
+  background: none; color: inherit; font: inherit; text-align: left; cursor: default; }
+.importSync-main:not(:disabled) { cursor: pointer; }
+.importSync-main:not(:disabled):hover .importSync-nm { color: var(--text); }
+.importSync-main:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 4px; }
+.importSync-led { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: none; }
+.importSync-scan .importSync-led, .importSync-run .importSync-led, .importSync-wrap .importSync-led {
+  animation: breathe 1.4s ease-in-out infinite; }
+.importSync-paused .importSync-led { background: var(--faint); }
+.importSync-done .importSync-led { background: var(--moss); }
+.importSync-done.importSync-warn .importSync-led { background: var(--clay); }
+.importSync-nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.importSync-pc { flex: none; font-variant-numeric: tabular-nums; color: var(--faint); }
+.importSync-warn .importSync-pc { color: var(--clay); font-weight: 600; }
+.importSync-x { flex: none; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0;
+  border-radius: 5px; background: none; color: var(--faint); cursor: pointer; }
+.importSync-x:hover { color: var(--text); background: var(--raised); }
+.importSync-x svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.importSync-bar { height: 3px; border-radius: 99px; background: var(--raised); overflow: hidden; }
+.importSync-bar i { display: block; height: 100%; background: var(--amber); transition: width .3s; }
+.importSync-scan .importSync-bar i { animation: breathe 1.4s ease-in-out infinite; }
+.importSync-paused .importSync-bar i { background: var(--faint); }
+.importSync-done .importSync-bar i { background: var(--moss); }
+.importSync-done.importSync-warn .importSync-bar i { background: var(--clay); }
+@media (prefers-reduced-motion: reduce) { .importSync-led, .importSync-scan .importSync-bar i { animation: none; } }

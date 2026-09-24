@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from raven.acp.redact import MAX_SCAN_CHARS, REPLACEMENT, pattern_names, redact, redact_value
+from raven.security.redact import MAX_SCAN_CHARS, REPLACEMENT, pattern_names, redact, redact_value
 
 
 class TestWhatItCatches:

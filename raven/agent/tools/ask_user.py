@@ -43,7 +43,7 @@ DEFAULT_TIMEOUT_S = 600.0
 _MAX_JSON_LAYERS = 3
 
 
-def _normalize_questions(raw: Any) -> list[dict[str, Any]]:
+def _normalize_questions(raw: Any, *, strict_json: bool = False) -> list[dict[str, Any]]:
     """Coerce the model's ``questions`` argument into the documented shape.
 
     Models routinely emit an array-typed argument as a JSON *string*, and a
@@ -53,7 +53,10 @@ def _normalize_questions(raw: Any) -> list[dict[str, Any]]:
     was plainly meant and drop what cannot be read, rather than trusting the
     declared schema.
     """
-    raw = _loads(raw)
+    try:
+        raw = _loads(raw, strict_json=strict_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"questions is not valid JSON: {exc}") from exc
     if isinstance(raw, dict):
         raw = [raw]
     if not isinstance(raw, list):
@@ -127,8 +130,8 @@ def _flagged(raw: Any) -> int | None:
     return None
 
 
-def _loads(raw: Any) -> Any:
-    """``json.loads`` for a string, unchanged for anything else, never raising.
+def _loads(raw: Any, *, strict_json: bool = False) -> Any:
+    """``json.loads`` for a string, unchanged for anything else; optionally report invalid JSON.
 
     The exception list is the point. ``json.loads`` answers deeply nested input
     with ``RecursionError``, which is not a ``ValueError``, so catching only
@@ -147,6 +150,10 @@ def _loads(raw: Any) -> Any:
             return raw
         try:
             parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            if strict_json:
+                raise
+            return raw
         except (TypeError, ValueError, RecursionError):
             return raw
         if parsed is raw:
@@ -170,6 +177,7 @@ class _Question:
     header: str
     options: list[str]
     recommended: str
+    multi_select: bool
 
 
 def _dedup(labels: list[str]) -> list[str]:
@@ -225,6 +233,10 @@ def _prepare(entries: list[dict[str, Any]]) -> tuple[list["_Question"], str]:
                 header=str(entry.get("header", "")).strip()[:_MAX_HEADER_CHARS],
                 options=options,
                 recommended=recommended,
+                # Meaningless without options to choose among, so a model that
+                # set it on a free-form question is silently corrected rather
+                # than reaching the broker with a flag the surface cannot use.
+                multi_select=bool(entry.get("multi_select")) and bool(options),
             )
         )
     return prepared, ""
@@ -276,7 +288,7 @@ class AskUserTool(Tool):
         *,
         index: int = 0,
         total: int = 1,
-        batch: list[dict[str, str]] | None = None,
+        batch: list[dict[str, Any]] | None = None,
     ) -> str | None:
         """One host-side question outside a model tool call.
 
@@ -324,7 +336,8 @@ class AskUserTool(Tool):
             "for low-stakes or reversible choices, pick a sensible default instead. "
             "When you can name a few likely answers, pass them as 'options' -- two or "
             "more, or none at all for a free-form question (the user can always type an "
-            "answer instead). Point at the one you would pick with 'recommended'. Batch "
+            "answer instead). Point at the one you would pick with 'recommended'. Set "
+            "'multi_select' when more than one option can apply at once. Batch "
             f"related questions into one call, up to {MAX_QUESTIONS}; they share one deadline."
         )
 
@@ -370,6 +383,14 @@ class AskUserTool(Tool):
                                     "Omit when you have no preference."
                                 ),
                             },
+                            "multi_select": {
+                                "type": "boolean",
+                                "description": (
+                                    "Allow the user to choose more than one option; the answer "
+                                    "arrives as the chosen options joined with ', '. Only "
+                                    "meaningful with 'options'."
+                                ),
+                            },
                         },
                         "required": ["question"],
                     },
@@ -401,7 +422,7 @@ class AskUserTool(Tool):
         params = dict(params)
         if "questions" in params:
             entries = []
-            for entry in _normalize_questions(params["questions"]):
+            for entry in _normalize_questions(params["questions"], strict_json=True):
                 entry = dict(entry)
                 if "options" in entry:
                     # A flag written on an option is the recommendation when the
@@ -436,7 +457,10 @@ class AskUserTool(Tool):
             return "Error: ask_user not configured (no question broker)"
         if not cid:
             return "Error: ask_user has no conversation context"
-        entries = _normalize_questions(questions)
+        try:
+            entries = _normalize_questions(questions, strict_json=True)
+        except ValueError as exc:
+            return f"Error: ask_user {exc}"
         if not entries:
             return "Error: ask_user requires at least one question"
 
@@ -452,7 +476,16 @@ class AskUserTool(Tool):
         budget = float(self._timeout_s or getattr(self._broker, "default_timeout_s", DEFAULT_TIMEOUT_S))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + budget
-        batch = [{"question": item.question, "header": item.header} for item in prepared]
+        batch = [
+            {
+                "question": item.question,
+                "header": item.header,
+                "choices": item.options,
+                "recommended": item.recommended,
+                "multi_select": item.multi_select,
+            }
+            for item in prepared
+        ]
 
         told: list[str] = []  # model-facing
         # Human-facing display: one "question -> answer" line per question, so a
@@ -478,6 +511,7 @@ class AskUserTool(Tool):
                         timeout_s=remaining,
                         header=item.header,
                         recommended=item.recommended,
+                        multi_select=item.multi_select,
                         index=index,
                         total=len(prepared),
                         batch=batch,

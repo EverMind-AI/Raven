@@ -75,10 +75,13 @@ class AgentCaps:
 class Injectable:
     """Whether per-node configuration can be pushed into this agent's session.
 
-    Only an in-process raven loop has a skill menu and an MCP client raven owns,
-    so only ``builtin`` rows can take either. Recorded as a field rather than
-    left as a verbal rule so a node that declares ``skills`` for a cli agent gets
-    told it will do nothing, instead of appearing to work.
+    ``skills`` says whether raven controls the agent's skill menu -- only an
+    in-process raven loop's -- and so whether a node's list narrows that menu.
+    It does not say whether the list reaches the agent: where it is false the
+    skills are quoted into the node's prompt instead (``dag_skills``), so the
+    field decides the delivery, not whether there is one. ``mcps`` is whether a
+    node's server list can be attached to the session, which a peer that does
+    not isolate its sessions cannot take.
     """
 
     skills: bool
@@ -91,9 +94,10 @@ class Route:
 
     ``owes`` and ``note`` are what the declaring row says about the case where
     the gate keeps the work here; see :class:`SubagentRouteConfig` for why they
-    are the row's words rather than the gate's. ``needs`` and ``min_tier`` are
-    what subject the route to that gate in the first place, and a route naming
-    neither is dispatched exactly as routes were before the gate.
+    are the row's words rather than the gate's. ``needs``, ``min_tier`` and
+    ``needs_file`` are what subject the route to that gate in the first place,
+    and a route naming none of them is dispatched exactly as routes were before
+    the gate.
     """
 
     to: str
@@ -101,6 +105,7 @@ class Route:
     note: str = ""
     needs: tuple[str, ...] = ()
     min_tier: str = ""
+    needs_file: str = ""
 
 
 @dataclass(frozen=True)
@@ -203,6 +208,7 @@ def _route_for(declared: Any) -> Route:
         note=str(read("note", "") or ""),
         needs=tuple(str(need) for need in declared_needs),
         min_tier=str(read("min_tier", "") or read("minTier", "") or ""),
+        needs_file=str(read("needs_file", "") or read("needsFile", "") or ""),
     )
 
 
@@ -357,6 +363,7 @@ class AgentRegistry:
                     route.note,
                     route.needs,
                     route.min_tier,
+                    route.needs_file,
                 )
             )
         if not targets:

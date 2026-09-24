@@ -22,8 +22,10 @@ The layers, outermost first:
 * :mod:`raven.acp.permissions` -- the shell-approval round trip over
   ``session/request_permission``. A second transport for raven's existing
   approval decision, not a second decision.
-* :mod:`raven.acp.redact` -- credentials out of anything on its way to the
-  client, because an ACP payload is rendered in an editor and often kept there.
+* :mod:`raven.security.redact` (not in this package) -- credentials out of
+  anything on its way to the client, because an ACP payload is rendered in an
+  editor and often kept there. It sits below both ACP directions so the
+  outbound client's refusal log is scrubbed by the same table.
 * :mod:`raven.acp.methods` -- the inbound methods, each mapped onto an RPC call
   that already exists.
 * :mod:`raven.acp.server` -- one connection: its engine, its frame loop, its

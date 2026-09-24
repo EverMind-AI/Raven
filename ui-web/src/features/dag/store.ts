@@ -1,18 +1,20 @@
 /* The graphs the page is watching, one per conversation.
  *
- * A `run_subagent_dag` call is the whole picture of a turn's work, so it gets a
- * sheet above the composer rather than one clamped line in the scrollback. The
- * live layer feeds the three `dag.*` events in through mount.tsx; what the sheet
- * draws is decided here and in DagSheet.tsx.
+ * A `run_subagent_dag` call is the whole picture of a turn's work, and this is
+ * where that picture is kept while it moves. The live layer feeds the three
+ * `dag.*` events in through mount.ts. Nothing here renders: the trail's
+ * delegation card holds its own copy of the same frames, and the graph a
+ * reader opens is drawn by the desk's task pane from `tasks.list`. What this
+ * answers is session resume, which puts the run back on reload; nothing else
+ * reads it today.
  *
- * The runs are shared objects, not copies: the live layer mutates a node's
- * status and times in place and then calls `touch()`, the same arrangement the
- * settings island has with PROVIDERS. That keeps the event handlers reading as
- * they did, and keeps one answer to "what is this node doing" rather than two
- * that have to be held in step.
+ * The runs are shared objects, not copies: the pipeline mutates a node's
+ * status and times in place and then calls `touch()`. That keeps the event
+ * handlers reading as they did, and keeps one answer to "what is this node
+ * doing" rather than two that have to be held in step.
  */
 
-import { slot } from '../../shell/persist'
+import { slot } from '../../lib/persist'
 
 import type { DagRun } from './types'
 
@@ -24,11 +26,11 @@ const listeners = new Set<() => void>()
    were watching, and whether they had folded it. Not what a reload NEEDS -- a
    sheet comes back from the run ids the transcript carries when there is no note
    at all, which is the case for a graph that started while the reader was in
-   another conversation (see `dagToRead` in shell/resume.ts). What only this can
+   another conversation (see `dagToRead` in state/session/resume.ts). What only this can
    say is which of several runs was wanted, and the fold.
 
    The graph is not in here on purpose -- it is read back from `dag.get`, the
-   only source that can say what the nodes are doing now (see shell/persist.ts). */
+   only source that can say what the nodes are doing now (see lib/persist.ts). */
 interface Kept {
   run: string
   folded: boolean
@@ -42,7 +44,6 @@ export const saved = (key: string): Kept | null => KEPT.read(key)
 
 export const version = (): number => epoch
 export const run = (key: string): DagRun | null => RUNS.get(key) || null
-export const keys = (): string[] => [...RUNS.keys()]
 
 export function subscribe(l: () => void): () => void {
   listeners.add(l)

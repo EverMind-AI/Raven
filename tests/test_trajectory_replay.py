@@ -580,6 +580,65 @@ async def test_run_replay_drives_the_loop_and_executes_nothing(tmp_path, monkeyp
     assert trace.enabled(), "suppression must not outlive the replay"
 
 
+async def test_run_replay_records_a_turn_the_loop_gave_up_on_as_a_missing_reply(tmp_path) -> None:
+    """A recorded call that answered with an error response fails the turn now;
+    the replay files the missing reply and drives on instead of aborting. The
+    sentence is worded as an auth failure so the loop's own retry ladder, which
+    only waits for retryable classes, does not run here."""
+    bundle = _make_bundle(
+        tmp_path,
+        llm_calls=[
+            (
+                None,
+                _llm_output(
+                    content="Error calling LLM (auth@replay): Unauthorized: invalid api key", finish_reason="error"
+                ),
+            )
+        ],
+        turns=[{"content": "go", "channel": "cli", "chat_id": "direct"}],
+    )
+
+    report = await run_replay(bundle, mode="warn")
+
+    assert (report.turns_replayed, report.turns_recorded) == (1, 1)
+    assert report.replies == [None]
+
+
+async def test_run_replay_serves_a_folded_recording_unchanged(tmp_path) -> None:
+    """A replay reproduces a request; it does not assemble one.
+
+    The fold ships on, and a recording made above the threshold already IS the
+    folded array -- the always-visible core plus the meta-pair. Served through a
+    strategy that takes deployment defaults, that array counts as a catalog
+    under the threshold, ``tool_search`` is dropped from what the replay sends,
+    and every strict regression case halts on a divergence in the offered tool
+    names before the first recorded reply. The harness pins the fold off, and
+    this recording carries ``tool_search`` so the next default that leaks in is
+    caught here rather than by a reader.
+    """
+    folded = [
+        {"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": {}}}}
+        for name in ("read_file", "grep", "exec", "message", "ask_user", "tool_search", "tool_call")
+    ]
+    bundle = _make_bundle(
+        tmp_path,
+        llm_calls=[({"model": "stub", "messages": [], "tools": folded}, _llm_output(content="done"))],
+        turns=[{"content": "go", "channel": "cli", "chat_id": "direct"}],
+    )
+
+    report = await run_replay(bundle, mode="warn")
+
+    # The report records the offered names, which is the field compare_llm_request
+    # diverges on.
+    assert report.llm_requests[0]["tools"] == [t["function"]["name"] for t in folded], (
+        "the replay must send the recorded array"
+    )
+    # warn, and the assertion is on the field rather than on completeness: this
+    # hand-built recording carries no rendered messages, so it diverges there by
+    # construction. The tools field is the one this case is about.
+    assert [d for d in report.divergences if d.field == "tools"] == []
+
+
 async def test_run_replay_leaves_no_skill_watcher_threads(tmp_path) -> None:
     """The loop's ContextBuilder starts a skill file watcher; a replay must
     stop it, or repeated probes leak daemon threads that crash the process at

@@ -33,7 +33,7 @@ from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
 
 
 class _Budgeted(AgentHook):
@@ -168,6 +168,19 @@ def _req(text: str = "who won?") -> TurnRequest:
     )
 
 
+async def _run_answerless(agent: AgentLoop, req: TurnRequest | None = None, **kwargs) -> str:
+    """Run a turn whose last attempt answers nothing, and return its failure text.
+
+    A turn with no answer fails rather than returning one, so the tests below
+    that end on ``_dead()`` read what the turn reported instead of what it
+    replied. What each of them is about -- how many attempts ran, and why -- is
+    unchanged.
+    """
+    with pytest.raises(AnswerlessTurnError) as failed:
+        await agent._process_message(req if req is not None else _req(), session_key="s1", **kwargs)
+    return str(failed.value)
+
+
 @pytest.mark.asyncio
 async def test_a_dead_turn_runs_again_and_the_second_answer_wins(tmp_path):
     provider = _Scripted(_dead(), _answers("Alice Smith won it."))
@@ -220,10 +233,10 @@ async def test_an_agent_that_asks_for_nothing_is_never_re_run(tmp_path):
     provider = _Scripted(_dead())
     agent = _loop(tmp_path, provider)
 
-    out = await agent._process_message(_req(), session_key="s1")
+    failure = await _run_answerless(agent)
 
     assert provider.attempts_used == 1
-    assert "produced no answer" in out[0], "the dead turn was returned as it was"
+    assert "returned no content" in failure, "the dead turn was reported as it was"
 
 
 @pytest.mark.asyncio
@@ -231,7 +244,7 @@ async def test_switching_it_off_restores_the_old_behaviour(tmp_path):
     provider = _Scripted(_dead(), _answers("Alice Smith won it."))
     agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=0)])
 
-    await agent._process_message(_req(), session_key="s1")
+    await _run_answerless(agent)
 
     assert provider.attempts_used == 1
 
@@ -242,10 +255,10 @@ async def test_the_budget_is_a_ceiling_not_a_loop(tmp_path):
     provider = _Scripted(_dead(), _dead(), _dead())
     agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1)])
 
-    out = await agent._process_message(_req(), session_key="s1")
+    failure = await _run_answerless(agent)
 
     assert provider.attempts_used == 2
-    assert "produced no answer" in out[0], "still dead after the one retry it was allowed"
+    assert "returned no content" in failure, "still dead after the one retry it was allowed"
 
 
 @pytest.mark.asyncio
@@ -273,7 +286,7 @@ async def test_the_reason_filter_narrows_the_trigger(tmp_path):
     provider = _Scripted(_dead(), _answers("Alice Smith won it."))
     agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1, dead_end_reasons=["refusal_string"])])
 
-    await agent._process_message(_req(), session_key="s1")
+    await _run_answerless(agent)
 
     assert provider.attempts_used == 1, "no reason matched, so nothing was re-run"
 
@@ -293,7 +306,7 @@ async def test_a_spent_wall_clock_stops_the_retry(tmp_path, monkeypatch):
     provider = _Scripted(_dead(), _answers("Alice Smith won it."))
     agent = _loop(tmp_path, provider, [_Budgeted(dead_end_retries=1, wall_clock_seconds=5.0)])
 
-    await agent._process_message(_req(), session_key="s1")
+    await _run_answerless(agent)
 
     assert provider.attempts_used == 1, "the spent clock stopped the rerun"
     # Not vacuous: the first attempt must have run to empty-response exhaustion. If

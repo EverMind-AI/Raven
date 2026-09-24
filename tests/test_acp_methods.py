@@ -54,6 +54,9 @@ class _Stack:
                 }
             ],
         }
+        # What ``model.options`` answers when asked about one session, keyed by
+        # its id; a session not listed here gets the process-wide answer above.
+        self.model_options_by_session: dict[str, dict] = {}
         self.config_set_result: dict | Exception = {"applied": True, "previous": "sonnet-5"}
         self.dispatcher.register("turn.subscribe", self._subscribe)
         self.dispatcher.register("turn.send", self._send)
@@ -66,7 +69,7 @@ class _Stack:
         self.calls.append(("model.options", params))
         if isinstance(self.model_options, Exception):
             raise self.model_options
-        return self.model_options
+        return self.model_options_by_session.get(params.get("session_id"), self.model_options)
 
     async def _config_set(self, params: dict) -> dict:
         self.calls.append(("config.set", params))
@@ -439,6 +442,39 @@ class TestSessionLoad:
         for frame in rig.written:
             validate_outbound(frame)
 
+    async def test_a_reloaded_turn_that_the_runtime_ended_says_what_it_says_live(self, rig):
+        """``notice`` and ``turn_ended`` mark entries whose text was written for
+        the model. The stub answers ``session.resume`` directly, so these
+        fixtures are already in the wire shape the transcript mapper produces."""
+        rig.stack.stored["acp:old"] = [
+            {"role": "user", "text": "delete the logs"},
+            {
+                "role": "assistant",
+                "text": "The operation was not completed, and no alternative method will be attempted.",
+                "notice": {"kind": "action_blocked", "detail": "rm -rf /var/log was refused by policy"},
+            },
+            {
+                "role": "assistant",
+                "text": "(turn failed: Error calling LLM (server@stub): 503)",
+                "turn_ended": {"status": "failed", "reason": "Error calling LLM (server@stub): 503"},
+            },
+        ]
+        await rig.handshake()
+
+        await rig.call(
+            "session/load",
+            {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project"), "mcpServers": []},
+        )
+
+        said = [u["content"]["text"] for u in rig.updates() if u["sessionUpdate"].endswith("message_chunk")]
+        assert said == [
+            "delete the logs",
+            "rm -rf /var/log was refused by policy",
+            "Error calling LLM (server@stub): 503",
+        ]
+        for frame in rig.written:
+            validate_outbound(frame)
+
     async def test_the_session_becomes_promptable(self, rig):
         """A load that did not register the session would replay a history the
         client then cannot continue."""
@@ -795,7 +831,7 @@ class TestAvailableCommands:
         menus = [u for u in rig.updates() if u.get("sessionUpdate") == "available_commands_update"]
         assert len(menus) == 1
         names = [c["name"] for c in menus[0]["availableCommands"]]
-        assert "deep-research" in names and "playbook" in names
+        assert "playbook" in names
         for frame in rig.written:
             if frame.get("method") == "session/update":
                 validate_outbound(frame)
@@ -992,6 +1028,28 @@ class TestConfigOptions:
         )
 
         assert rig.stack.params_for("config.set")["session_id"] == session_id
+
+    async def test_the_answer_reads_back_the_sessions_own_model_not_the_process_default(self, rig):
+        """The catalogue is asked about this session, so the switch shows as current.
+
+        Asked without a session id, ``model.options`` answers with the process
+        default, and the response to a switch would carry the value it had just
+        replaced. A client renders ``currentValue`` as the selected item, so its
+        picker would snap back to the old model the moment the switch succeeded.
+        """
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.stack.model_options_by_session[session_id] = {**rig.stack.model_options, "model": "opus-5"}
+
+        response = await rig.call(
+            "session/set_config_option",
+            {"sessionId": session_id, "configId": "model", "value": "anthropic/opus-5"},
+        )
+
+        assert response["result"]["configOptions"][0]["currentValue"] == "anthropic/opus-5"
+        asked = [params for name, params in rig.stack.calls if name == "model.options"]
+        assert len(asked) == 2, "once at session/new, once for the switch's answer"
+        assert all(params.get("session_id") == session_id for params in asked), asked
 
     async def test_a_runtime_refusal_keeps_its_own_code(self, rig):
         """A code a client can act on must not be flattened to an internal error.

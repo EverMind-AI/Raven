@@ -30,6 +30,18 @@ class NoticeKind(StrEnum):
     # this one replaces the answer rather than accompanying it, so an outlet
     # that renders nothing else should still render this.
     ACTION_BLOCKED = "action_blocked"
+    # A model call failed and the Model-Error Ladder is waiting before asking
+    # again. The turn is still running: the detail is the error category, never
+    # the vendor's own body.
+    LLM_RETRY = "llm_retry"
+
+
+# Which notices pass with the turn and which stand in for its answer. An outlet
+# draws a transient one where it draws a status -- a place the next frame of
+# real output overwrites -- and a closing one as a row that stays. Stated once
+# here rather than as a kind list repeated at every surface, because a kind
+# added there and forgotten here is drawn as the turn's outcome.
+TRANSIENT_NOTICE_KINDS = frozenset({NoticeKind.LLM_RETRY})
 
 
 class ToolPhase(StrEnum):
@@ -71,12 +83,46 @@ class TurnStarted:
     turn_id: str = ""
 
 
+#: The longest failure text a turn's report carries. The providers layer bounds
+#: a model call's own account to the same number before it ever gets here; this
+#: second copy is for the texts that never passed through it -- a crash's
+#: message, a runner's own wording -- and it is written again rather than
+#: imported because the kernel does not reach into raven.providers.
+TURN_FAILURE_TEXT_MAX = 200
+
+_ELLIPSIS = "..."
+
+
+def bound_failure_text(text: str) -> str:
+    """``text`` cut to ``TURN_FAILURE_TEXT_MAX``, marked when it was cut.
+
+    A crash message is arbitrary -- a stack of chained exceptions, a whole HTTP
+    body -- and it is read back in a chat reply, a session marker and a cron
+    job record, none of which is a log.
+    """
+    text = text.strip()
+    if len(text) <= TURN_FAILURE_TEXT_MAX:
+        return text
+    return text[: TURN_FAILURE_TEXT_MAX - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
+
+
 @dataclass(frozen=True)
 class TurnFailed:
+    """A turn that ended without an answer, and what it is reported by.
+
+    ``reported`` says the runner itself worded ``error`` -- it raised an
+    ``AnswerlessTurnError``, whose message is the report a reader should see --
+    rather than the text being whatever a crash carried. In-process only: the
+    wire frame stays one ``error``, and the distinction exists so a consumer
+    deciding what to show a stranger (the gateway's channel reply) can quote a
+    report and refuse to quote a crash.
+    """
+
     error: str
     cancelled: bool
     conversation_id: str | None = None
     turn_id: str = ""
+    reported: bool = False
 
 
 @dataclass(frozen=True)
@@ -125,6 +171,16 @@ class ToolEvent:
     # and therefore needs the contents, not a rendering of them. Carried as a
     # plain mapping so ``spine`` stays free of the tools package.
     file_change: dict[str, Any] | None = None
+    # COMPLETE only, and the other half of ``file_change``: the files this call
+    # made vanish, one ``{path, before?}`` mapping each. No tool deletes as its
+    # purpose, so this is reported from what was on disk either side of the call
+    # rather than from a tool's own result. Empty and None both mean none went.
+    file_removed: list[dict[str, Any]] | None = None
+    # COMPLETE only, and the third of that set: the files a command left behind,
+    # one ``{path, created, size, lines}`` mapping each. A file tool names what it
+    # wrote and a command names nothing, so these are read off a listing of the
+    # working directory either side of the call. Empty and None both mean none.
+    file_written: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)

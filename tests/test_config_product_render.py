@@ -379,3 +379,187 @@ def test_acp_home_instance_tag_tells_same_named_homes_apart(tmp_path, monkeypatc
         tags.append(render._instance_tag())
     assert tags[0] != tags[1]
     assert all(tag.startswith("rhome-") for tag in tags)
+
+
+# --- inherit_host_denials: the host's refusals reach every product render ------
+
+
+def _exec_tier(tools: dict, command: str):
+    from raven.permissions.rules import user_tier
+
+    return user_tier("exec", {"command": command}, tools)
+
+
+def test_host_denials_merge_into_the_product_and_a_refusal_always_wins():
+    host = {
+        "permissions": {
+            "mode": "full",
+            "tools": {
+                "exec": {"curl *": "deny", "git *": "allow", "rm *": "ask"},
+                "web_fetch": "deny",
+                "write_file": "ask",
+            },
+        },
+        "tools": {"exec": {"extraDenyPatterns": [r"\bnc\b", "(", r"\bdd\b"]}},
+    }
+    config = {
+        "permissions": {"mode": "ask", "tools": {"exec": {"curl *": "allow", "ls *": "allow"}, "web_fetch": "allow"}},
+        "tools": {"exec": {"timeout": 600, "extraDenyPatterns": [r"\bdd\b"]}},
+    }
+
+    carried = render.inherit_host_denials(config, host)
+
+    assert config["permissions"] == {
+        "mode": "ask",
+        "tools": {"exec": {"curl *": "deny", "ls *": "allow"}, "web_fetch": "deny"},
+    }, "only refusals travel; the product's mode and its own allows stay"
+    assert config["tools"]["exec"] == {"timeout": 600, "extraDenyPatterns": [r"\bdd\b", r"\bnc\b"]}, (
+        "patterns are unioned, and one that does not compile is left behind"
+    )
+    assert carried == ["exec curl *", "web_fetch", r"\bnc\b"]
+    from raven.contracts.permissions import Tier
+
+    assert _exec_tier(config["permissions"]["tools"], "curl -s https://example.com") is Tier.DENY
+    assert _exec_tier(config["permissions"]["tools"], "ls -la") is Tier.ALLOW
+
+
+def test_a_product_exec_tier_becomes_the_fallback_beside_the_hosts_patterns():
+    from raven.contracts.permissions import Tier
+
+    config = {"permissions": {"tools": {"exec": "allow"}}}
+    render.inherit_host_denials(config, {"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+
+    tools = config["permissions"]["tools"]
+    assert tools["exec"] == {"*": "allow", "curl *": "deny"}
+    assert _exec_tier(tools, "curl x") is Tier.DENY
+    assert _exec_tier(tools, "make test") is Tier.ALLOW, "the product's own tier still answers everything else"
+
+
+def test_a_host_that_denies_a_whole_tool_denies_it_in_the_product():
+    config = {"permissions": {"tools": {"exec": {"ls *": "allow"}}}}
+    render.inherit_host_denials(config, {"permissions": {"tools": {"exec": "deny"}}})
+    assert config["permissions"]["tools"]["exec"] == "deny"
+
+    already = {"permissions": {"tools": {"exec": "deny"}}}
+    render.inherit_host_denials(already, {"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    assert already["permissions"]["tools"]["exec"] == "deny", "a whole-tool refusal is already the strictest"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        {},
+        {"permissions": {"mode": "ask", "tools": {"exec": {"git *": "allow"}, "write_file": "ask"}}},
+        {"permissions": "garbage", "tools": {"exec": {"extraDenyPatterns": "not-a-list"}}},
+        {"tools": {"exec": {"extraDenyPatterns": ["("]}}},
+    ],
+)
+def test_a_host_with_nothing_to_refuse_leaves_the_render_untouched(host):
+    config = {"agents": {"defaults": {"model": "m"}}}
+    assert render.inherit_host_denials(config, host) == []
+    assert config == {"agents": {"defaults": {"model": "m"}}}, "no empty permissions block appears"
+
+
+def test_write_rendered_carries_the_hosts_denials(homed):
+    (homed / "config.json").write_text(
+        json.dumps(
+            {
+                "permissions": {"tools": {"exec": {"curl *": "deny"}}},
+                "tools": {"exec": {"extra_deny_patterns": [r"\bcurl\b"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    rendered = json.loads(render.write_rendered({"permissions": {"mode": "ask"}}, homed).read_text())
+    assert rendered["permissions"] == {"mode": "ask", "tools": {"exec": {"curl *": "deny"}}}
+    assert rendered["tools"]["exec"]["extraDenyPatterns"] == [r"\bcurl\b"], "either host spelling is read"
+
+
+LAUNCHERS = sorted(Path(__file__).resolve().parents[1].glob("agents/*/run.py")) + [
+    Path(__file__).resolve().parents[1] / "raven" / "templates" / "agents_scaffold" / "run.py"
+]
+
+
+@pytest.mark.parametrize("launcher", LAUNCHERS, ids=lambda p: p.parent.name)
+def test_every_launcher_writes_its_render_through_write_rendered(launcher):
+    """The host's refusals are merged in ``write_rendered``, so a launcher
+    that wrote its render any other way would ship a product without them."""
+    source = launcher.read_text(encoding="utf-8")
+    assert "render.write_rendered(" in source
+    assert ".config.rendered" not in source
+
+
+# --- plugin opt-outs: what the host switched off stays off in its products ----
+
+
+def test_opt_outs_carry_the_hosts_list_after_the_products_own():
+    config = {"plugins": {"disabled": ["mine"], "config": {"x": {}}}}
+    host = {"plugins": {"disabled": ["everme-memory", "ppt-engine", "mine", 3, "everme-memory"]}}
+
+    carried = render.inherit_plugin_opt_outs(config, host, own=("ppt-engine",))
+
+    assert carried == ["everme-memory"]
+    assert config["plugins"] == {"disabled": ["mine", "everme-memory"], "config": {"x": {}}}
+
+
+def test_opt_outs_leave_a_config_alone_when_the_host_has_none_to_lend():
+    for host in ({}, {"plugins": None}, {"plugins": {"disabled": "everme-memory"}}, {"plugins": {"disabled": []}}):
+        config: dict = {}
+        assert render.inherit_plugin_opt_outs(config, host) == []
+        assert config == {}
+
+
+def test_opt_outs_never_carry_the_products_own_engine():
+    config: dict = {}
+    assert (
+        render.inherit_plugin_opt_outs(config, {"plugins": {"disabled": ["design-engine"]}}, own=("design-engine",))
+        == []
+    )
+    assert config == {}
+
+
+def test_write_rendered_carries_the_hosts_opt_outs(homed, tmp_path):
+    (homed / "config.json").write_text(
+        json.dumps({"plugins": {"disabled": ["everme-memory", "research-flow"]}}), encoding="utf-8"
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+
+    rendered = render.write_rendered({"plugins": {"dirs": ["/p"]}}, out, own_plugins=("research-flow",))
+
+    assert json.loads(rendered.read_text())["plugins"] == {"dirs": ["/p"], "disabled": ["everme-memory"]}
+
+
+def test_every_launcher_names_its_engine_when_it_writes_the_render():
+    """A launcher that names no engine inherits every opt-out, its own included,
+    so a host that switched the product's engine off for itself would start the
+    product without it. Each launcher's render call is read here, the scaffold
+    a new product is copied from included."""
+    import ast
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    launchers = sorted((repo / "agents").glob("*/run.py")) + [repo / "raven/templates/agents_scaffold/run.py"]
+    assert len(launchers) >= 6
+    for path in launchers:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        constants = {
+            node.targets[0].id: node.value.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id.endswith("_PLUGIN_ID")
+            and isinstance(node.value, ast.Constant)
+        }
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "write_rendered"
+        ]
+        assert len(calls) == 1, path
+        [keyword] = [k for k in calls[0].keywords if k.arg == "own_plugins"] or [None]
+        assert keyword is not None, f"{path} writes its render without naming its engine"
+        named = {constants[e.id] for e in keyword.value.elts if isinstance(e, ast.Name) and e.id in constants}
+        assert named == set(constants.values()) and named, path

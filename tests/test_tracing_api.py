@@ -230,6 +230,26 @@ def test_disabled_is_noop(trace_dir, monkeypatch):
     assert _spans_written(trace_dir) == []
 
 
+def test_enabled_set_rejects_non_mapping_attributes(trace_dir):
+    with pytest.raises(TypeError):
+        with trace.span("raven.invalid_attributes") as span:
+            span.set(attributes={"valid": 1})
+            span.set(42)
+
+    records = _spans_written(trace_dir)
+    assert len(records) == 1
+    assert records[0]["attributes"]["valid"] == 1
+    assert records[0]["status"]["code"] == "ERROR"
+
+
+def test_disabled_set_ignores_non_mapping_attributes(trace_dir, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING", "0")
+    with trace.span("raven.invalid_attributes") as span:
+        assert span.set(42) is span
+
+    assert _spans_written(trace_dir) == []
+
+
 def test_tool_call_extractor(trace_dir):
     from raven.observability import semconv
 
@@ -818,7 +838,9 @@ def test_each_host_declares_before_it_can_emit_a_span():
 
     serve_src = inspect.getsource(serve_commands._serve_main)
     assert "set_surface(SERVED_PAGE_SURFACE)" in serve_src
-    assert serve_src.index("set_surface") < serve_src.index("await build_rpc_stack(")
+    # The stack is assembled by ``_ServedStack``, which this awaits: the
+    # ordering the declaration has to beat is that call, not the build inside it.
+    assert serve_src.index("set_surface") < serve_src.index("await served.start()")
 
     tui_src = inspect.getsource(tui_commands._run_rpc_server_until_done)
     assert "set_surface(TERMINAL_SURFACE)" in tui_src

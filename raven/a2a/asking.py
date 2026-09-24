@@ -35,17 +35,19 @@ class A2aQuestionBroker:
         timeout_s: float | None = None,
         header: str = "",
         recommended: str = "",
+        multi_select: bool = False,
         index: int = 0,
         total: int = 1,
         batch: list[dict[str, Any]] | None = None,
     ) -> str:
         """Park `conversation_id`'s task and wait for the caller's next message.
 
-        `choices`, `header`, `recommended`, `index`, `total`, and `batch` describe
-        richer question shapes (multiple choice, batched sub-questions, a
-        recommended default among choices) that a text-only A2A caller cannot
-        render beyond `prompt` itself; they are accepted to satisfy
-        `QuestionResponder` but do not change how this transport asks.
+        `choices`, `header`, `recommended`, `multi_select`, `index`, `total`, and
+        `batch` describe richer question shapes (multiple choice, batched
+        sub-questions, a recommended default among choices, more than one
+        choice allowed) that a text-only A2A caller cannot render beyond
+        `prompt` itself; they are accepted to satisfy `QuestionResponder` but do
+        not change how this transport asks.
         """
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()

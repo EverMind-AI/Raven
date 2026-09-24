@@ -42,7 +42,7 @@ async def converted(
             nothing -- which it does, exiting 0, for a corrupt or
             password-protected file.
     """
-    from raven.utils.office import convert, find_soffice, install_hint
+    from raven.utils.office import find_soffice, install_hint, to_pdf
 
     executable = find_soffice()
     if executable is None:
@@ -64,8 +64,11 @@ async def converted(
         # and indexing runs in the gateway process, which is also answering the
         # page that is watching the document's status.
         try:
+            # `to_pdf` is the general converter despite its name: `fmt` is the
+            # LibreOffice export filter, and this asks it for `.docx` and
+            # `.xlsx` rather than PDF.
             done = await asyncio.to_thread(
-                convert, source, staged, executable=executable, timeout_s=timeout_s, target=target
+                to_pdf, source, staged, executable=executable, timeout_s=timeout_s, fmt=target
             )
         except (OSError, TimeoutError) as exc:
             raise ValueError(f"Failed to convert {filename!r} with LibreOffice: {exc}") from exc

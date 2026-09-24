@@ -613,6 +613,57 @@ async def test_tail_breakpoints_survive_the_anthropic_conversion() -> None:
     assert {k: v for k, v in assistant["content"][-1].items() if k != "cache_control"} == unmarked[-2]["content"][-1]
 
 
+async def test_a_messages_stream_cut_after_its_first_delta_is_not_asked_again(monkeypatch):
+    """The messages adapter catches a connection that died mid-answer and reports
+    it as a terminal error delta instead of raising -- the tree's only producer of
+    that shape, and the one the rule about rendered output used to miss. The call
+    comes back with the failure's own account and a verdict spent of its retry, so
+    the caller's ladder does not draw the same answer from the top again."""
+    from raven.providers.streaming import stream_llm_call
+
+    async def cut_after_two_deltas():
+        yield _anthropic_sse(
+            {"type": "message_start", "message": {"usage": {"input_tokens": 3}}},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "the first "}},
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "half"}},
+        )
+        raise httpx.ReadError("connection reset by peer")
+
+    asked: list[httpx.Request] = []
+
+    def handler(request):
+        asked.append(request)
+        return httpx.Response(200, content=cut_after_two_deltas())
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+    provider = AnthropicMessagesProvider(
+        api_key="test", api_base="https://api.anthropic.com", provider_name="claude", default_model="test"
+    )
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    response = await stream_llm_call(
+        provider,
+        messages=[{"role": "user", "content": "hi"}],
+        tools=None,
+        model="test",
+        on_token_delta=on_delta,
+        retry_delays=(0.0, 0.0),
+    )
+
+    assert seen == ["the first ", "half"]
+    assert len(asked) == 1, "the helper's own reconnect budget was not spent on it"
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.retryable is False
+    assert (response.content or "").startswith("Error calling LLM (")
+    assert "the first half" not in (response.content or "")
+
+
 @pytest.mark.parametrize("protocol", ["responses", "messages", "messages_stream"])
 @pytest.mark.parametrize(
     "name,endpoint",

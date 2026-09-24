@@ -34,6 +34,9 @@ class _StubProvider:
 
 
 class _DummyExecutor:
+    # Host execution: ExecTool reads this at construction.
+    is_sandboxed = False
+
     async def __aenter__(self) -> "_DummyExecutor":
         return self
 
@@ -331,6 +334,9 @@ async def test_subagent_fences_on_both_the_session_dir_and_agent_home(tmp_path: 
 
         def register(self, tool) -> None:
             captured.setdefault(tool.name, tool)
+
+        def set_withheld_source(self, source) -> None:
+            pass
 
         def get_definitions(self):
             return []

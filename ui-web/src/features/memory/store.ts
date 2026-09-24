@@ -1,12 +1,14 @@
-import { ds, shell } from '../../shell/bridge'
-import { dropAfterFade } from '../../shell/detailfade'
+import * as settingsDialog from '../../state/settings'
+import { ds } from '../../state/sources'
+import { makeStore } from '../../state/store'
 
 import type { MemItem, MemKind, MemStats, MemorySource } from './types'
 
-/* Page state, outside React on purpose: the legacy shell drives this page
- * imperatively (nav opens it, Esc closes it, a language flip redraws it),
- * so the state lives in a plain store the shims can call, and the
- * component subscribes.
+/* Section state, outside React on purpose: the callers that drive this section
+ * are not React. Memory is a section of the settings dialog rather than a page
+ * of its own, so the dialog's own nav is what opens it and the dialog's own
+ * Escape takes it back -- the state lives in a plain store those callers can
+ * reach, and the component subscribes.
  */
 
 export const MEM_PAGE_SIZE = 20
@@ -33,7 +35,7 @@ export interface MemoryState {
   detail: MemItem | null
 }
 
-let state: MemoryState = {
+const store = makeStore<MemoryState>({
   kind: 'episode',
   page: 1,
   q: '',
@@ -44,24 +46,17 @@ let state: MemoryState = {
   note: '',
   err: '',
   detail: null,
-}
-const listeners = new Set<() => void>()
+})
 let debounce: ReturnType<typeof setTimeout> | undefined
-let busy = false
 
-export const getState = (): MemoryState => state
+export const { get, subscribe, _resetForTests } = store
 
-export function subscribe(l: () => void): () => void {
-  listeners.add(l)
-  return () => listeners.delete(l)
+/** A patch, merged into the page's state. */
+export function set(patch: Partial<MemoryState>): void {
+  store.set((prev) => ({ ...prev, ...patch }))
 }
 
-function set(patch: Partial<MemoryState>): void {
-  state = { ...state, ...patch }
-  for (const l of listeners) l()
-}
-
-export const source = (): MemorySource => ds<MemorySource>('memory')
+const source = (): MemorySource => ds('memory')
 
 function failure(e: unknown): string {
   const err = e as { data?: { detail?: string }; message?: string }
@@ -74,7 +69,7 @@ export async function load(): Promise<void> {
      installing the plugin the page would keep saying it is missing. */
   set({ phase: 'loading', err: '', note: '' })
   try {
-    const r = await source().list({ kind: state.kind, page: state.page, page_size: MEM_PAGE_SIZE, q: state.q || null })
+    const r = await source().list({ kind: get().kind, page: get().page, page_size: MEM_PAGE_SIZE, q: get().q || null })
     set({ items: r.items || [], total: r.total || 0, note: r.note || '', phase: 'ready' })
   } catch (e) {
     if ((e as { down?: boolean }).down) set({ phase: 'down' })
@@ -85,22 +80,25 @@ export async function load(): Promise<void> {
 export function refreshStats(): Promise<void> {
   return source()
     .stats()
-    .then((stats) => set({ stats, note: (stats && stats.note) || state.note }))
+    .then((stats) => set({ stats, note: (stats && stats.note) || get().note }))
     .catch(() => set({ stats: null }))
 }
 
-export function open(): void {
-  shell().showPage('memPage')
+/* What arriving at this section of the settings dialog costs: the counters and
+   the first page -- so a reader who picks the row in the dialog's own nav gets
+   the same two reads the opener above does. Registered at this module's own
+   evaluation rather than by the page's wiring, the same shape
+   features/desk/store.ts fills state/escapeOrder.ts's slot with: the
+   alternative is src/app/install.ts importing three island stores for three
+   lines, which is three island graphs in the page's own wiring. */
+function enter(): void {
   void refreshStats()
   void load()
 }
-
-export function close(): void {
-  shell().showPage(null)
-}
+settingsDialog.onEnter('memory', enter)
 
 export function setKind(kind: MemKind): void {
-  if (state.kind === kind) return
+  if (get().kind === kind) return
   clearTimeout(debounce)
   closeDetail()
   set({ kind, page: 1, q: '', items: [] })
@@ -110,89 +108,26 @@ export function setKind(kind: MemKind): void {
 /* A keystroke changes no pixels until the reload lands, so the query is
    stored without notifying -- the debounced reload is the only redraw. */
 export function search(q: string): void {
-  state = { ...state, q }
+  set({ q })
   clearTimeout(debounce)
   debounce = setTimeout(() => {
-    state = { ...state, page: 1 }
+    set({ page: 1 })
     void load()
   }, 350)
 }
 
 export function pageBy(delta: number): void {
-  set({ page: state.page + delta })
+  set({ page: get().page + delta })
   void load()
 }
 
-/* The portal's own container inside the shared #dBody. Another page's
-   opener may wipe #dBody at any time (the skills/plugins openers do),
-   which detaches this node but leaves React's tree inside it intact;
-   every open re-adopts it, so the island never reconciles into nodes
-   a legacy wipe orphaned. */
-let host: HTMLDivElement | null = null
-export function detailHost(): HTMLDivElement {
-  if (!host) {
-    host = document.createElement('div')
-    /* Out of the box tree: #dBody is a grid and the sections were its
-       items before this container existed; contents keeps them so. */
-    host.style.display = 'contents'
-  }
-  return host
-}
-
-/* Counts opens of the shared card -- see the xa store: the row object cannot
-   answer which open a pending close belongs to, because reopening the same row
-   hands back the same object. */
-let detailGen = 0
-
+/* Which memory the right column is showing. It used to be the shared drawer's
+   card, with an onClose registration and a fade to wait out; beside its own
+   list it is one field, and a pick replaces it. */
 export function openDetail(it: MemItem): void {
-  const body = document.getElementById('dBody')
-  if (body && !body.contains(detailHost())) {
-    body.innerHTML = ''
-    body.appendChild(detailHost())
-  }
-  detailGen += 1
   set({ detail: it })
 }
 
-export function closeDetail(): void {
-  shell().closeDetail?.()
-  detailDismissed()
-}
-
-/* Called when legacy chrome closed the drawer itself (Esc, the close
-   button, a click outside): only the island state has to follow -- but not
-   until the drawer has finished fading, or the card is gone from inside a
-   panel that is still on screen. */
-export function detailDismissed(): void {
-  if (!state.detail) return
-  const gen = detailGen
-  dropAfterFade(
-    () => set({ detail: null }),
-    () => detailGen !== gen,
-  )
-}
-
-export function remove(it: MemItem): void {
-  if (busy) return
-  busy = true
-  source()
-    .remove(it)
-    .then(() => {
-      closeDetail()
-      void refreshStats()
-      return load()
-    })
-    .catch((e: unknown) => {
-      if ((e as { handled?: boolean }).handled) return
-      console.error('memory delete', e)
-    })
-    .finally(() => {
-      busy = false
-    })
-}
-
-/* A language flip changes nothing in this state, but every visible string
-   comes from T(), so a re-render is the whole redraw. */
-export function redraw(): void {
-  set({})
+function closeDetail(): void {
+  set({ detail: null })
 }

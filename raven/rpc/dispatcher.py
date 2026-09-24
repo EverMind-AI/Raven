@@ -107,7 +107,11 @@ class Dispatcher:
                 "message": exc.message,
             }
             if exc.data is not None:
-                err_payload["data"] = exc.data
+                # Clients read the sentence from ``data.detail``; structured
+                # ``data`` used to replace it, so the page showed only the code.
+                err_payload["data"] = (
+                    {**exc.data, "detail": exc.detail} if exc.detail and "detail" not in exc.data else exc.data
+                )
             elif exc.detail:
                 err_payload["data"] = {"detail": exc.detail}
             return {"jsonrpc": "2.0", "id": frame_id, "error": err_payload}

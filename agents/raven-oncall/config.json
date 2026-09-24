@@ -40,8 +40,6 @@
       "read_skill",
       "use_skill",
       "hub",
-      "tool_search",
-      "tool_call",
       "deep_research",
       "image_generate",
       "text_to_speech",
@@ -51,7 +49,15 @@
       "find_skill",
       "load_playbook",
       "plugin",
-      "run_subagent_dag"
+      "run_subagent_dag",
+      "browser_click",
+      "browser_navigate",
+      "browser_press",
+      "browser_screenshot",
+      "browser_scroll",
+      "browser_snapshot",
+      "browser_tabs",
+      "browser_type"
     ]
   },
   "memory": {

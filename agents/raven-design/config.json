@@ -5,6 +5,7 @@
       "contextWindowTokens": 262144,
       "maxToolIterations": 400,
       "llmCallTimeout": 1800,
+      "llmRetryAfterOutput": true,
       "compaction": {
         "enabled": true,
         "triggerRatio": 0.8,
@@ -37,7 +38,15 @@
       "run_subagent_dag",
       "spawn",
       "text_to_speech",
-      "video_generate"
+      "video_generate",
+      "browser_click",
+      "browser_navigate",
+      "browser_press",
+      "browser_screenshot",
+      "browser_scroll",
+      "browser_snapshot",
+      "browser_tabs",
+      "browser_type"
     ],
     "toolSearch": {
       "enabled": true

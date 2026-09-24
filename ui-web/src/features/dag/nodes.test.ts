@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { applyUpdate, fromArgs, fromSnapshot, fromStarted, merge, settled } from './nodes'
+import { applyUpdate, fromArgs, fromSnapshot, fromStarted, merge } from './nodes'
 
 /* The three sources a graph reaches the page through, and the merge that lets a
  * card learn from more than one of them.
@@ -215,24 +215,5 @@ describe('one node updated', () => {
     const started = applyUpdate(two, { node: 'a', status: 'running', started_at: 7 })
     const ended = applyUpdate(started, { node: 'a', status: 'completed' })
     expect(ended[0]?.started_at).toBe(7)
-  })
-})
-
-describe('settled', () => {
-  it('reads a suspended node as open, not finished', () => {
-    /* `exception` means the node stopped without finishing and is waiting on
-       the caller's verdict -- not one of the run's endings, whatever its rank
-       relative to `running`. */
-    expect(settled('exception')).toBe(false)
-  })
-
-  it('reads every terminal status as settled', () => {
-    expect(['completed', 'failed', 'skipped', 'cancelled', 'interrupted'].map(settled)).toEqual([
-      true, true, true, true, true,
-    ])
-  })
-
-  it('reads pending and running as open', () => {
-    expect(['pending', 'running'].map(settled)).toEqual([false, false])
   })
 })

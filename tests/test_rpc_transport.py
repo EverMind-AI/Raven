@@ -609,8 +609,38 @@ async def test_a_rebuilt_asset_is_not_served_from_a_stale_browser_cache(tmp_path
         again = await client.get("/assets/providers/acme.svg", headers={"If-None-Match": etag})
         assert again.status == 304, "an unchanged asset must still cost no bytes"
 
-        # The page itself is a different question and keeps whatever it had.
-        assert (await client.get("/")).status == 200
+        # The page beside them carries the same directive: the shape users run.
+        assert (await client.get("/")).headers["Cache-Control"] == "no-cache"
+    finally:
+        await client.close()
+
+
+async def test_a_rebuilt_page_is_not_served_from_a_stale_browser_cache(tmp_path: Path) -> None:
+    """The page has the assets' problem, and a worse case of it.
+
+    The sign-in page at ``/auth`` ends by navigating the tab to ``/``, and a
+    browser answers that navigation from a copy it still guesses fresh -- a
+    lifetime read off the last-modified date, hours long for a build that was
+    days old when the tab first loaded it. So a rebuilt page kept opening as
+    the build before it until a hard reload. Holds with no assets directory at
+    all: the directive is the page's own, not a side effect of the assets mount.
+    """
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<html>", encoding="utf-8")
+
+    client = TestClient(TestServer(build_app(WsGateway(), static)))
+    await client.start_server()
+    try:
+        page = await client.get("/")
+        assert page.status == 200
+        assert page.headers["Cache-Control"] == "no-cache"
+
+        etag = page.headers.get("ETag")
+        assert etag, "revalidation needs something to revalidate against"
+        again = await client.get("/", headers={"If-None-Match": etag})
+        assert again.status == 304, "an unchanged page must still cost no bytes"
+        assert again.headers["Cache-Control"] == "no-cache", "a 304 must carry the directive too"
     finally:
         await client.close()
 
@@ -654,7 +684,7 @@ async def test_the_socket_carries_a_frame_larger_than_aiohttp_would_allow_by_def
 def test_the_frame_ceiling_can_carry_the_largest_upload_the_method_accepts() -> None:
     """The two limits are one limit, and this is what keeps them that way.
 
-    Sized arithmetically rather than by building a 25 MB payload: the envelope
+    Sized arithmetically rather than by building a maximal payload: the envelope
     is what has to fit around a maximal base64 body, and materialising one to
     learn its length would cost the suite a second to answer a question about
     two integers.
@@ -676,3 +706,45 @@ def test_the_frame_ceiling_can_carry_the_largest_upload_the_method_accepts() -> 
     assert envelope + body <= frame_ceiling_for_upload(), (
         "a maximal upload must fit the frame the transport accepts, or the socket closes before fs.upload can refuse it"
     )
+
+
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+async def test_a_page_behind_its_sources_says_so_on_the_document_alone(tmp_path: Path, method: str) -> None:
+    """The page reads this through its HEAD probe of ``/`` -- the terminal has
+    already been told, but `raven web` detaches it, so the page is where both
+    launch paths can show it. The header is the caller's judgement, asked per
+    response so a rebuild takes it away without a restart, and it never lands
+    on an asset."""
+    static = tmp_path / "dist"
+    (static / "assets").mkdir(parents=True)
+    (static / "index.html").write_text("<html>", encoding="utf-8")
+    (static / "assets" / "raven.svg").write_text("<svg/>", encoding="utf-8")
+    behind = True
+
+    client = TestClient(TestServer(build_app(WsGateway(), static, page_behind=lambda: behind)))
+    await client.start_server()
+    try:
+        page = await client.request(method, "/")
+        assert page.status == 200
+        assert page.headers["X-Raven-Page-Behind"] == "sources"
+        assert "X-Raven-Page-Behind" not in (await client.get("/assets/raven.svg")).headers
+
+        behind = False
+        assert "X-Raven-Page-Behind" not in (await client.request(method, "/")).headers
+    finally:
+        await client.close()
+
+
+async def test_a_page_with_no_judgement_of_its_sources_says_nothing(tmp_path: Path) -> None:
+    """The wheel's copy has no sources beside it to be behind, and a caller
+    that passes no judgement gets the header nowhere."""
+    static = tmp_path / "dist"
+    static.mkdir()
+    (static / "index.html").write_text("<html>", encoding="utf-8")
+
+    client = TestClient(TestServer(build_app(WsGateway(), static)))
+    await client.start_server()
+    try:
+        assert "X-Raven-Page-Behind" not in (await client.get("/")).headers
+    finally:
+        await client.close()

@@ -141,6 +141,87 @@ async def test_options_current_provider_derived_from_model(fake_home: Path) -> N
     assert _entry(result, "anthropic")["is_current"] is True
 
 
+async def test_options_rows_carry_the_gateway_flag(fake_home: Path) -> None:
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    result = await model_options({})
+    assert _entry(result, "openrouter")["gateway"] is True
+    assert _entry(result, "custom")["gateway"] is True
+    assert _entry(result, "anthropic")["gateway"] is False
+
+
+async def test_options_rows_carry_every_prefix_that_names_the_provider(fake_home: Path) -> None:
+    """The set ``merge_key`` strips, so a client can ask the same identity.
+
+    A page holding only the current slug cannot tell that a model id written
+    before a rename names the same model; ``ProviderSpec.route_names`` is what
+    says so, and it has to reach the client rather than be rebuilt there.
+    """
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    result = await model_options({})
+    assert _entry(result, "zai")["route_names"] == ["zai", "zhipu"]
+    assert _entry(result, "anthropic")["route_names"] == ["anthropic"]
+    for row in result["providers"]:
+        assert row["slug"] in row["route_names"], row["slug"]
+
+
+async def test_model_labels_carry_a_kind(fake_home: Path) -> None:
+    # openrouter with a key and one configured model whose name is the only
+    # thing that says what it is
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "openrouter/anthropic/claude-sonnet-4-5"}},
+            "providers": {"openrouter": {"apiKey": "sk-or-xxx", "models": ["openai/text-embedding-3-small"]}},
+        },
+    )
+    result = await model_options({})
+    labels = _entry(result, "openrouter")["model_labels"]
+    assert labels["openai/text-embedding-3-small"]["kind"] == "embedding"
+    assert all("kind" in v for v in labels.values())
+
+
+async def test_a_window_is_shown_for_an_id_the_vendor_serves_itself(fake_home: Path, monkeypatch) -> None:
+    """The badge a person reads to size a conversation. LiteLLM's table ships
+    pinned with the dependency, so every model added by hand is unknown to it,
+    and the catalogue that does carry the window files the row under the
+    vendor's own id -- which the lookup used to refuse for anything but an
+    ``openrouter/`` route. The row then had nothing to show at all: a model
+    nothing describes and nothing sizes is left out of the labels entirely.
+    """
+    from raven.providers import rates
+
+    rates.reset_openrouter_cache()
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE", {"deepseek/deepseek-v9-pro": {"context_length": 1_048_576}})
+    monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0)
+    _write_config(
+        fake_home,
+        {
+            "agents": {"defaults": {"model": "deepseek/deepseek-v9-pro"}},
+            "providers": {"deepseek": {"apiKey": "sk-xxx", "models": ["deepseek/deepseek-v9-pro"]}},
+        },
+    )
+
+    result = await model_options({})
+    labels = _entry(result, "deepseek")["model_labels"]
+    assert labels["deepseek/deepseek-v9-pro"]["context_window"] == 1_048_576
+
+
+async def test_options_asks_for_a_fresh_catalogue(fake_home: Path, monkeypatch) -> None:
+    """Nothing else on this page would ever fill the table the windows are read
+    from: the warm runs on a vision probe that misses, so a home whose models
+    never raise that question keeps whatever it cached, or nothing. The picker
+    is the surface those figures are for, so it is the surface that asks.
+    """
+    from raven.providers import rates
+
+    calls: list[int] = []
+    monkeypatch.setattr(rates, "warm_catalog_in_background", lambda: calls.append(1))
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+
+    await model_options({})
+    assert calls == [1]
+
+
 async def test_options_oauth_provider_warning_and_auth_type(fake_home: Path) -> None:
     _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
     result = await model_options({})
@@ -788,6 +869,37 @@ async def test_options_lists_the_codex_models_the_account_reports(
     assert entry["models"] == ["openai-codex/gpt-5.6-sol", "openai-codex/gpt-5.4"]
 
 
+async def test_the_picker_offers_what_the_vendor_last_named_with_its_kind(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A vendor's own list outruns the bundled catalogue; once asked, the picker offers it."""
+    _write_config(fake_home, {"providers": {"openrouter": {"apiKey": "sk-or"}}})
+
+    def probe(name: str, **kwargs) -> dict:
+        return {
+            "ok": True,
+            "status": "valid",
+            "model_ids": ["zz-vendor/brand-new-model", "zz-vendor/new-embed"],
+            "implied_capabilities": {"zz-vendor/new-embed": "embedding"},
+        }
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+    before = _entry(await model_options({}), "openrouter")
+    assert not any("brand-new-model" in m for m in before["models"])
+
+    await model_fetch_models({"slug": "openrouter", "verify": True})
+    after = _entry(await model_options({}), "openrouter")
+    new = next(m for m in after["models"] if m.endswith("brand-new-model"))
+    embed = next(m for m in after["models"] if m.endswith("new-embed"))
+    assert after["model_labels"][embed]["kind"] == "embedding"
+    assert after["model_labels"][new]["kind"] == "text"
+
+    await model_disconnect({"slug": "openrouter"})
+    _write_config(fake_home, {"providers": {"openrouter": {"apiKey": "sk-or"}}})
+    again = _entry(await model_options({}), "openrouter")
+    assert not any("brand-new-model" in m for m in again["models"])
+
+
 async def test_options_lists_lm_studio_models_from_the_local_server(
     fake_home: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1351,7 +1463,7 @@ async def test_a_user_written_overlay_reaches_the_picker(fake_home: Path) -> Non
     )
     entry = _entry(await model_options({}), "hosted_vllm")
     label = (entry.get("model_labels") or {}).get("hosted-vllm/my-finetune-v3")
-    assert label == {"label": "Our finetune", "description": "tuned on tickets"}
+    assert label == {"label": "Our finetune", "description": "tuned on tickets", "kind": "text"}
 
 
 async def test_the_picker_gets_the_tags_it_draws_as_icons(fake_home: Path) -> None:
@@ -1657,3 +1769,276 @@ async def test_the_offer_and_the_configured_list_are_separate_answers(fake_home:
     )
     entry = _entry(await model_options({}), "anthropic")
     assert entry["configured_models"] == ["anthropic/claude-opus-5"]
+
+
+async def test_options_carries_the_vendor_key_url(fake_home: Path) -> None:
+    _write_config(fake_home, {"agents": {"defaults": {"model": "deepseek-chat"}}})
+    result = await model_options({})
+    assert _entry(result, "deepseek")["key_url"] == "https://platform.deepseek.com/api_keys"
+    assert _entry(result, "hosted_vllm")["key_url"] is None
+
+
+# ----------------------------------------------------------------------------
+# model.set_fields / model.add_models / add_model description
+# ----------------------------------------------------------------------------
+
+
+def _read_config(home: Path) -> dict:
+    return json.loads((home / ".raven" / "config.json").read_text(encoding="utf-8"))
+
+
+async def test_set_fields_patches_headers_one_at_a_time_and_masks_the_reply(fake_home: Path) -> None:
+    from raven.rpc.methods.model import model_set_fields
+
+    await model_save_key({"slug": "moonshot", "api_key": "sk-moon"})
+    await model_set_fields({"slug": "moonshot", "fields": {"extra_headers": {"X-App": "alpha"}}})
+    await model_set_fields({"slug": "moonshot", "fields": {"extra_headers": {"X-Env": "beta"}}})
+    assert _read_config(fake_home)["providers"]["moonshot"]["extraHeaders"] == {"X-App": "alpha", "X-Env": "beta"}
+    reply = await model_set_fields({"slug": "moonshot", "fields": {"extra_headers": {"X-App": None}}})
+    assert _read_config(fake_home)["providers"]["moonshot"]["extraHeaders"] == {"X-Env": "beta"}
+    assert "alpha" not in json.dumps(reply) and "beta" not in json.dumps(reply)
+    assert _read_config(fake_home)["providers"]["moonshot"]["apiKey"] == "sk-moon"
+
+
+async def test_set_fields_refuses_the_key_and_unknown_fields(fake_home: Path) -> None:
+    from raven.rpc.methods.model import model_set_fields
+
+    with pytest.raises(ConfigValidationError):
+        await model_set_fields({"slug": "moonshot", "fields": {"api_key": "x"}})
+    with pytest.raises(ConfigValidationError):
+        await model_set_fields({"slug": "moonshot", "fields": {}})
+    with pytest.raises(ConfigValidationError):
+        await model_set_fields({"slug": "moonshot", "fields": {"extra_headers": {"X": ""}}})
+
+
+async def test_set_fields_changes_the_address_without_the_key(fake_home: Path) -> None:
+    from raven.rpc.methods.model import model_set_fields
+
+    await model_save_key({"slug": "moonshot", "api_key": "sk-moon"})
+    await model_set_fields({"slug": "moonshot", "fields": {"api_base": "https://api.moonshot.cn/v1"}})
+    section = _read_config(fake_home)["providers"]["moonshot"]
+    assert section["apiBase"] == "https://api.moonshot.cn/v1"
+    assert section["apiKey"] == "sk-moon"
+
+
+async def test_set_fields_writes_azure_deployment_and_api_version(fake_home: Path) -> None:
+    from raven.rpc.methods.model import model_set_fields
+
+    await model_set_fields({"slug": "azure_openai", "fields": {"deployment": "gpt-4o-eu", "api_version": "2024-10-21"}})
+    providers = _read_config(fake_home)["providers"]
+    section = providers.get("azure_openai") or providers["azureOpenai"]
+    assert (section["deployment"], section["apiVersion"]) == ("gpt-4o-eu", "2024-10-21")
+
+
+async def test_add_model_description_and_empty_string_clears(fake_home: Path) -> None:
+    await model_save_key({"slug": "deepseek", "api_key": "sk-deep"})
+    await model_add_model({"slug": "deepseek", "model": "deepseek-v4-flash", "label": "Flash", "description": "cheap"})
+
+    def overlay() -> dict:
+        return _read_config(fake_home)["providers"]["deepseek"].get("modelOverlay", {})
+
+    def named() -> dict:
+        row = next(v for k, v in overlay().items() if k.endswith("deepseek-v4-flash"))
+        return {k: row[k] for k in ("label", "description") if row.get(k)}
+
+    assert named() == {"label": "Flash", "description": "cheap"}
+    await model_add_model({"slug": "deepseek", "model": "deepseek-v4-flash", "label": ""})
+    assert named() == {"description": "cheap"}
+    await model_add_model({"slug": "deepseek", "model": "deepseek-v4-flash", "description": ""})
+    assert not any(k.endswith("deepseek-v4-flash") for k in overlay())
+
+
+async def test_add_models_appends_all_in_one_write_and_skips_duplicates(fake_home: Path, monkeypatch) -> None:
+    from raven.config import update_providers
+    from raven.rpc.methods.model import model_add_models
+
+    await model_save_key({"slug": "deepseek", "api_key": "sk-deep"})
+    writes = []
+    real = update_providers.atomic_update
+    monkeypatch.setattr(update_providers, "atomic_update", lambda path, fn: writes.append(path) or real(path, fn))
+    result = await model_add_models({"slug": "deepseek", "models": ["deepseek-a", "deepseek-b", "deepseek-a"]})
+    stored = _read_config(fake_home)["providers"]["deepseek"]["models"]
+    assert [m for m in stored if m.endswith("deepseek-a")] and [m for m in stored if m.endswith("deepseek-b")]
+    assert len([m for m in stored if m.endswith("deepseek-a")]) == 1
+    assert len(writes) == 1
+    assert any(m.endswith("deepseek-b") for m in result["provider"]["models"])
+    with pytest.raises(ConfigValidationError):
+        await model_add_models({"slug": "deepseek", "models": ["  "]})
+
+
+# ----------------------------------------------------------------------------
+# model.oauth_login
+# ----------------------------------------------------------------------------
+
+
+async def test_oauth_login_hands_the_pair_from_the_starter(fake_home: Path, monkeypatch) -> None:
+    from raven.providers import oauth_login
+    from raven.rpc.methods.model import model_oauth_login
+
+    async def fake_start(slug: str) -> dict:
+        assert slug == "minimax_global"
+        return {
+            "verification_uri": "https://platform.minimax.io/oauth-authorize",
+            "user_code": "ABCD",
+            "expires_in": 42,
+        }
+
+    monkeypatch.setattr(oauth_login, "start", fake_start)
+    assert await model_oauth_login({"slug": "minimax_global"}) == {
+        "verification_uri": "https://platform.minimax.io/oauth-authorize",
+        "user_code": "ABCD",
+        "expires_in": 42,
+    }
+
+
+async def test_oauth_login_refuses_a_key_provider_and_a_second_start(fake_home: Path, monkeypatch) -> None:
+    from raven.providers import oauth_login
+    from raven.rpc.methods.model import model_oauth_login
+
+    with pytest.raises(NotSupportedError):
+        await model_oauth_login({"slug": "deepseek"})
+
+    async def busy(slug: str) -> dict:
+        raise RuntimeError("already waiting")
+
+    monkeypatch.setattr(oauth_login, "start", busy)
+    with pytest.raises(ConfigValidationError):
+        await model_oauth_login({"slug": "openai_codex"})
+
+
+async def test_options_lists_extra_headers_by_name_only(fake_home: Path) -> None:
+    """The advanced card removes headers by name and must never see a value."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "openai": {
+                    "apiKey": "sk-x",
+                    "extraHeaders": {"X-Auth": "secret-1234", "APP-Code": "code-5678"},
+                }
+            },
+        },
+    )
+    result = await model_options({})
+    entry = _entry(result, "openai")
+    assert set(entry["extra_headers"]) == {"X-Auth", "APP-Code"}
+    for value in entry["extra_headers"].values():
+        assert value and "secret" not in value and "code-5678" not in value
+    assert _entry(result, "anthropic")["extra_headers"] == {}
+
+
+async def test_add_models_and_set_fields_name_an_unknown_provider(fake_home: Path) -> None:
+    _write_config(fake_home, {"providers": {}})
+    with pytest.raises(ConfigValidationError):
+        await model_module.model_add_models({"slug": "nobody_home", "models": ["m"]})
+    with pytest.raises(ConfigValidationError):
+        await model_module.model_set_fields({"slug": "nobody_home", "fields": {"api_base": "https://x"}})
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected", "text"),
+    [
+        (LookupError("no device flow"), NotSupportedError, "no device flow"),
+        (RuntimeError("already waiting"), ConfigValidationError, "already waiting"),
+        (ValueError("vendor said no"), ConfigValidationError, "could not start"),
+    ],
+)
+async def test_oauth_login_maps_each_failure_to_the_pages_vocabulary(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, raised: Exception, expected: type, text: str
+) -> None:
+    from raven.providers import oauth_login
+
+    async def failing(slug: str) -> dict:
+        raise raised
+
+    monkeypatch.setattr(oauth_login, "start", failing)
+    with pytest.raises(expected, match=text):
+        await model_module.model_oauth_login({"slug": "minimax_global"})
+
+
+# ----------------------------------------------------------------------------
+# A credential edited here has to reach the memory service
+# ----------------------------------------------------------------------------
+
+
+class TestEverosFollowsACredentialChange:
+    """EverOS holds the key it booted with; these handlers are where it changes.
+
+    The four memory roles store a pin -- a model and a provider -- and resolve
+    the address and key from that provider when the server is spawned. Editing
+    the credential here therefore changes what the *next* spawn would hand the
+    server while the running one keeps the old value, and nothing says so:
+    EverOS's /health never touches a model, so a revoked key reads as healthy
+    until memory fails in EverOS's own log.
+    """
+
+    @pytest.fixture
+    def pinned(self, fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        """A config where the llm role runs on deepseek, and a recorded restart."""
+        _write_config(
+            fake_home,
+            {
+                "providers": {
+                    "deepseek": {"apiKey": "old-key", "apiBase": "https://api.deepseek.com/v1"},
+                    "openai": {"apiKey": "sk-openai"},
+                },
+                "plugins": {"config": {"everos-memory": {"llm": {"model": "deepseek-chat", "provider": "deepseek"}}}},
+            },
+        )
+        restarts: list[str] = []
+        monkeypatch.setattr(
+            "raven.rpc.methods.console._everos_applied",
+            lambda factory, cost="": restarts.append("restart") or {"applied": True},
+        )
+        return restarts
+
+    async def test_rotating_the_key_of_a_pinned_provider_restarts_memory(self, pinned: list[str]) -> None:
+        """The reported bug: the key moved in raven and never reached EverOS."""
+        await model_save_key({"slug": "deepseek", "api_key": "new-key"})
+        assert pinned == ["restart"]
+
+    async def test_a_provider_no_role_uses_does_not_restart_memory(self, pinned: list[str]) -> None:
+        """Restarting memory over an unrelated vendor costs a session its memory."""
+        await model_save_key({"slug": "openai", "api_key": "sk-new"})
+        assert pinned == []
+
+    async def test_moving_the_address_restarts_memory(self, pinned: list[str]) -> None:
+        """EverOS is handed a base_url too, resolved from the same provider."""
+        await model_module.model_set_fields({"slug": "deepseek", "fields": {"api_base": "https://moved.test/v1"}})
+        assert pinned == ["restart"]
+
+    async def test_a_field_everos_never_sees_does_not_restart_memory(self, pinned: list[str]) -> None:
+        """Only the model, the address and the key travel; headers stay in raven."""
+        await model_module.model_set_fields({"slug": "deepseek", "fields": {"extra_headers": {"X-A": "1"}}})
+        assert pinned == []
+
+    async def test_disconnecting_a_pinned_provider_restarts_memory(self, pinned: list[str]) -> None:
+        await model_disconnect({"slug": "deepseek"})
+        assert pinned == ["restart"]
+
+    async def test_endpoint_edits_restart_memory(self, pinned: list[str]) -> None:
+        """EverOS is handed the first endpoint holding a key, so the list matters."""
+        await model_add_endpoint(
+            {"slug": "deepseek", "label": "backup", "api_key": "k2", "api_base": "https://b.test/v1"}
+        )
+        assert pinned == ["restart"]
+        await model_remove_endpoint({"slug": "deepseek", "label": "backup"})
+        assert pinned == ["restart", "restart"]
+
+    async def test_an_install_without_everos_saves_normally(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The plugin is optional; a save must not fail because it is absent."""
+        _write_config(fake_home, {"providers": {"deepseek": {"apiKey": "old-key"}}})
+        import builtins
+
+        real_import = builtins.__import__
+
+        def no_everos(name: str, *args, **kwargs):
+            if name.startswith("raven_everos"):
+                raise ImportError("no everos here")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_everos)
+        result = await model_save_key({"slug": "deepseek", "api_key": "new-key"})
+        assert result["provider"]["slug"] == "deepseek"

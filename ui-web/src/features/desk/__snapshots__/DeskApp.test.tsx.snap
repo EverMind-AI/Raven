@@ -1,0 +1,36 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`asking for the instance list > keeps its rendered shape 1`] = `
+"div.desk-palette[data-anchored=true][data-phase=in]
+  div.desk-drag
+    div.desk-tabs
+      button
+        svg
+          path
+          path
+        span.lb
+      button
+        svg
+          rect
+          path
+        span.lb
+      button
+        svg
+          path
+          path
+          path
+        span.lb
+  div.desk-body
+    div.desk-empty
+      svg
+        rect
+        path
+      b
+  div.desk-resize
+button.ghost-ic.desk-follow-toggle[data-working=true]
+  svg
+    path
+    circle
+    circle
+    circle"
+`;

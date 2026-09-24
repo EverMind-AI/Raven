@@ -410,9 +410,10 @@ def make_run_id() -> str:
 def node_live_key(run_id: str, node_id: str) -> str:
     """The live-index key a node's activity is collected under.
 
-    Shared with the reader rather than spelled out on both sides: a spawn keys
-    its activity by the record directory's name, and a node has no such
-    directory, so the two namespaces are kept apart by this prefix.
+    Shared with the reader rather than spelled out on both sides. A spawn keys
+    its activity by its node root plus its id (``history.spawn_live_key``); a
+    node has no root of its own, so it keys by its run plus its id -- and the
+    two prefixes keep one process-wide index's namespaces apart.
     """
     return f"dag:{run_id}:{node_id}"
 
@@ -547,6 +548,15 @@ class DagRunStore:
                 ``<nodes_root>/<node_id>.attempt-<n>.transcript.jsonl``.
         """
         return self._backend.join_path(self._nodes_root, f"{node_id}.attempt-{attempt}.transcript.jsonl")
+
+    def closing_path(self, node_id: str) -> str:
+        """Path of a node's closing message: ``<nodes_root>/<node_id>.closing.md``.
+
+        Written on every attempt, empty when the lane reported none: the id is
+        reused across attempts, and an earlier attempt's closing left in place
+        would stand in for this attempt's answer.
+        """
+        return self._backend.join_path(self._nodes_root, f"{node_id}.closing.md")
 
     def memory_path(self, node_id: str) -> str:
         """Path of a node's distilled memory file. See :func:`memory_path_in`."""

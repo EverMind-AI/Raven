@@ -1014,19 +1014,77 @@ async def test_a_session_grant_on_a_file_tool_is_the_path(no_grants):
 
 
 @pytest.mark.asyncio
-async def test_allow_always_writes_the_confirmed_pattern_and_grants_the_session(no_grants, monkeypatch):
+async def test_allow_always_writes_the_confirmed_pattern_and_the_rule_alone_carries_the_grant(no_grants, monkeypatch):
+    """No session grant beside a rule that reached the file: config is read
+    live, so the rule holds from the next call -- and taking the rule back means
+    being asked again, which is the promise the prompt's undo makes."""
     from raven.permissions import gate as gate_module
 
+    config = PermissionsConfig()
     written: list[str] = []
-    monkeypatch.setattr(gate_module, "allow_exec_pattern", lambda pattern: written.append(pattern) or True)
-    gate = gate_for(PermissionsConfig())
+
+    def write(pattern: str) -> bool:
+        written.append(pattern)
+        config.tools.setdefault("exec", {})[pattern] = "allow"
+        return True
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", write)
+    gate = gate_for(config)
     responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern="git push *"))
     bind(responder)
 
     assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
     assert written == ["git push *"]
-    # Config is read live and the rule holds from the next call; until the
-    # reload lands, the session grant covers the same action.
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 1
+    del config.tools["exec"]["git push *"]
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_allow_always_still_covers_the_call_when_a_stricter_rule_outranks_the_new_one(no_grants, monkeypatch):
+    """The rule reached the file and does nothing for this call: the user's own
+    ``git *: ask`` outranks the ``git push *`` just saved, because the strictest
+    matching rule wins. The human still said yes, so the session grant stays
+    and the next identical call runs without asking."""
+    from raven.permissions import gate as gate_module
+
+    config = PermissionsConfig(tools={"exec": {"git *": "ask"}})
+    written: list[str] = []
+
+    def write(pattern: str) -> bool:
+        written.append(pattern)
+        config.tools["exec"][pattern] = "allow"
+        return True
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", write)
+    gate = gate_for(config)
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern="git push *"))
+    bind(responder)
+
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert written == ["git push *"]
+    assert exec_rule_tier("git push origin HEAD", config.tools["exec"]) is Tier.ASK, "the file alone would ask again"
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_allow_always_keeps_the_session_grant_when_the_rule_could_not_be_written(no_grants, monkeypatch):
+    """The human did say yes. A config file that refuses the write -- ``exec``
+    set to a plain tier -- must not turn that into being asked again."""
+    from raven.permissions import gate as gate_module
+
+    def refuse(pattern: str) -> bool:
+        raise ValueError("permissions.tools.exec is 'ask', a tier for the whole tool, not a table of patterns")
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", refuse)
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern="git push *"))
+    bind(responder)
+
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
     assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
     assert len(responder.calls) == 1
 
@@ -1228,3 +1286,205 @@ def test_a_flag_is_not_dressed_up_as_a_string():
     """`append=False` and a string reading "False" are different answers."""
     line = action_line("write_file", {"path": "/tmp/x", "append": False})
     assert "append=False" in line
+
+
+# ---------------------------------------------------------------------------
+# What the prompt is drawn from: the tool's own view of the call
+# ---------------------------------------------------------------------------
+
+
+class _Viewed:
+    """A tool that knows how to show itself, the way exec and the file tools do."""
+
+    approval_kind = "file.write"
+
+    def approval_evidence(self, params):
+        return {"path": params["path"], "diff": "-a\n+b"}
+
+
+class _Broken:
+    approval_kind = "mcp.call"
+
+    def approval_evidence(self, params):
+        raise RuntimeError("no server")
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_carries_the_tools_view_and_the_turns_origin():
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+    start_permission_turn(
+        responder, conversation_id="conv-1", turn_id="turn-1", origin="subagent", origin_name="raven-code"
+    )
+
+    assert await gate.enforce("write_file", {"path": "a.py", "content": "b"}, tool=_Viewed()) is None
+
+    call = responder.calls[0]
+    assert call["kind"] == "file.write"
+    assert call["evidence"] == {"path": "a.py", "diff": "-a\n+b"}
+    assert (call["origin"], call["origin_name"]) == ("subagent", "raven-code")
+    assert call["family"] == ""
+
+
+@pytest.mark.asyncio
+async def test_a_declared_family_rides_on_the_prompt():
+    from raven.permissions.shell_policy import DELETE_MATCHERS
+
+    gate = gate_for(PermissionsConfig(), families=DELETE_MATCHERS)
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+    bind(responder)
+
+    await gate.enforce("exec", {"command": "rm coverage.xml"})
+
+    assert responder.calls[0]["family"] == "delete_command"
+
+
+@pytest.mark.asyncio
+async def test_a_view_that_fails_or_is_missing_falls_back_to_the_arguments():
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+    bind(responder)
+
+    await gate.enforce("notion_create", {"title": "weekly"}, tool=_Broken())
+    await gate.enforce("notion_create", {"title": "weekly"})
+
+    # The kind goes with the evidence: a layout keyed to `mcp.call` would draw
+    # the bare arguments as blanks, so a failed hook reads as unknown too.
+    assert [(c["kind"], c["evidence"]) for c in responder.calls] == [
+        ("unknown", {"input": {"title": "weekly"}}),
+        ("unknown", {"input": {"title": "weekly"}}),
+    ]
+
+
+class _Verbose:
+    """A tool whose account of itself is far longer than anyone reads."""
+
+    approval_kind = "mcp.call"
+
+    def approval_evidence(self, params):
+        return {"server": "notion", "tool": "create", "input": params, "diff": "x" * 200_000}
+
+
+@pytest.mark.asyncio
+async def test_a_tools_account_of_itself_is_cut_to_what_a_person_reads():
+    """The prompt is read by a person and drawn on the event loop, so one tool's
+    evidence cannot be unbounded. The filesystem tools cap what they read off
+    disk; a new file's whole text, an MCP call's arguments and the fallback's
+    raw params do not, so the ceiling sits where every account passes. What was
+    cut is marked, or the prompt would show half a change and say nothing."""
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+    bind(responder)
+
+    await gate.enforce("notion_create", {"body": "y" * 100_000}, tool=_Verbose())
+
+    evidence = responder.calls[0]["evidence"]
+    assert evidence["truncated"] is True
+    assert len(evidence["diff"]) == 16 * 1024
+    assert len(evidence["input"]) == 16 * 1024, "a nested value counts too, or the cap is one key deep"
+    assert evidence["server"] == "notion", "what fits is left alone"
+
+
+class ReportingResponder(Responder):
+    """A transport that offers an undo, so the gate owes it a word on the write."""
+
+    def __init__(self, outcome: ApprovalOutcome):
+        super().__init__(outcome)
+        self.grants: list[tuple[str, str, bool]] = []
+
+    def record_grant(self, approval_id: str, pattern: str, written: bool) -> None:
+        self.grants.append((approval_id, pattern, written))
+
+
+@pytest.mark.asyncio
+async def test_the_gate_tells_the_transport_whether_its_write_added_the_rule(no_grants, monkeypatch):
+    """An undo can only be about the rule THIS answer put on disk, and the gate
+    is the only one that knows: `allow_exec_pattern` reports `added`, and a rule
+    the reader already had comes back False."""
+    from raven.permissions import gate as gate_module
+
+    config = PermissionsConfig()
+    _already: set[str] = set()
+
+    def write(pattern: str) -> bool:
+        first = pattern not in _already
+        _already.add(pattern)
+        config.tools.setdefault("exec", {})[pattern] = "allow"
+        return first
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", write)
+    gate = gate_for(config)
+    responder = ReportingResponder(
+        ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern=" git push * ", approval_id="ap-1")
+    )
+    bind(responder)
+
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert responder.grants == [("ap-1", "git push *", True)], "the pattern as written, and that this call wrote it"
+
+    del config.tools["exec"]["git push *"]
+    responder.calls.clear()
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert responder.grants[-1] == ("ap-1", "git push *", False), "already there, so not this prompt's to take away"
+
+
+@pytest.mark.asyncio
+async def test_a_transport_with_no_undo_is_not_asked_for_one(no_grants, monkeypatch):
+    """The ACP wire has no undo surface and no such method; the gate must not
+    assume one, and a plain allow is never a grant to report either."""
+    from raven.permissions import gate as gate_module
+
+    monkeypatch.setattr(gate_module, "allow_exec_pattern", lambda pattern: True)
+    gate = gate_for(PermissionsConfig())
+    plain = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_ALWAYS, pattern="git push *", approval_id="ap-1"))
+    bind(plain)
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+
+    reporting = ReportingResponder(ApprovalOutcome(ApprovalChoice.ALLOW, approval_id="ap-2"))
+    bind(reporting)
+    assert await gate.enforce("exec", {"command": "git fetch origin && git rebase origin/main"}) is None
+    assert reporting.grants == [], "allow once writes nothing, so there is nothing to undo"
+
+
+@pytest.mark.asyncio
+async def test_every_refusal_leaves_the_turn_a_record_and_an_allow_leaves_none():
+    """A refusal replaces the tool's result, so the turn goes on and ends the
+    way an allowed one would. On a surface nobody watches -- a one-shot -- the
+    turn's record is the only way a caller learns what was turned down."""
+    gate = gate_for(PermissionsConfig(tools={"exec": {"git push *": "deny"}}))
+    turn = start_permission_turn(None, conversation_id="conv-1", turn_id="turn-1")
+
+    assert await gate.enforce("read_file", {"path": "a.txt"}) is None
+    assert turn.refusals == []
+
+    write = {"path": "a.txt", "content": "x"}
+    await gate.enforce("write_file", write)
+    await gate.enforce("exec", {"command": "git push origin main"})
+    await gate.enforce("exec", {"command": "dd if=/dev/zero of=/dev/sda"})
+
+    assert [(r.tool_name, r.source) for r in turn.refusals] == [
+        ("write_file", DecisionSource.UNATTENDED.value),
+        ("exec", DecisionSource.USER_DENY.value),
+        ("exec", DecisionSource.BUILTIN_DENY.value),
+    ]
+    first = turn.refusals[0]
+    # The same line an approval prompt would have shown, and the sentence the
+    # model was given, minus the instruction appended to every refusal.
+    assert first.action == action_line("write_file", write)
+    assert first.reason.endswith("but this turn is not interactive")
+    assert not first.reason.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_answered_by_a_person_is_recorded_with_its_own_source():
+    gate = gate_for(PermissionsConfig())
+    turn = start_permission_turn(
+        Responder(ApprovalOutcome(ApprovalChoice.DENY, feedback="not in prod")),
+        conversation_id="conv-1",
+        turn_id="turn-1",
+    )
+    await gate.enforce("write_file", {"path": "a.txt", "content": "x"})
+    await gate.enforce("write_file", {"path": "a.txt", "content": "x"})
+
+    assert [r.source for r in turn.refusals] == ["approval_denied", "denied_earlier"]
+    assert "not in prod" in turn.refusals[0].reason

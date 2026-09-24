@@ -2,18 +2,17 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
 import { TurnClock } from './TurnClock'
 
-import type { Shell } from '../../shell/bridge'
 import type { InstanceRow } from './types'
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key),
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
 }
 
 const row = (over: Partial<InstanceRow> = {}): InstanceRow =>
@@ -23,7 +22,7 @@ const shown = (): string | null => document.querySelector('.pane-turnms')?.textC
 
 afterEach(() => {
   cleanup()
-  delete window.RavenShell
+  resetTranslator()
   vi.useRealTimers()
 })
 
@@ -41,7 +40,7 @@ describe('the turn clock on an instance pane', () => {
     vi.useFakeTimers()
     vi.setSystemTime(1_700_000_090_000)
     render(<TurnClock row={row({ turnStartedAtMs: 1_700_000_000_000 })} />)
-    /* 90s, in the spelling `shell/duration.ts` gives every other elapsed number
+    /* 90s, in the spelling `lib/duration.ts` gives every other elapsed number
        on the page. */
     expect(shown()).toBe('1m30s')
   })

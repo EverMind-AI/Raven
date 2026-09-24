@@ -239,6 +239,18 @@ beside the contract it bends rather than left for the next reader to find.
 
 Measured at 3,542.
 
+
+And once more, 3,570 -> 3,620 (2026-09-22), for ``FileRemoval`` on the tool
+paper: the file a call made vanish, beside ``FileChange``, the file it wrote.
+No tool deletes as its purpose, so the shell tool reports what was on disk
+either side of its command and the loops re-stat what the turn wrote; the
+paper only names the shape that travels back -- a path and, when it could be
+read before it went, the text -- and gives ``ToolResult`` and ``ToolOutput``
+one ``removed`` tuple each, empty for every call that removed nothing. 24
+lines of dataclass, two fields and their prose.
+
+Measured at 3,593.
+
 """
 
 from __future__ import annotations
@@ -249,7 +261,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_570
+CONTRACTS_LINE_CEILING = 3_620
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

@@ -7,7 +7,8 @@
 # A piped run always installs the published release wheel, even from inside a
 # clone. Set RAVEN_LOCAL_SRC=<dir> to force an editable install of a checkout.
 # Set RAVEN_MINIMAL=1 to skip the chromium download and the LibreOffice offer;
-# the wheel install itself is unchanged.
+# the wheel install itself is unchanged. Set RAVEN_NO_LAUNCH=1 to skip the
+# closing `raven web` (CI, Dockerfiles), so the script returns.
 #
 # Goal: a clean machine ends up able to run `raven` / `raven tui` from any
 # directory with no manual steps. The script is idempotent -- it detects what
@@ -22,6 +23,11 @@
 # this terminal, so the install finishes on something running rather than on a
 # hint to go and start it.
 #
+# Probe rule: this script is served from main and installs the latest release,
+# which can predate a subcommand main already knows about. Every `raven <sub>`
+# call below is preceded by `raven <sub> --help`; when the probe fails, the
+# script finishes on the one command every release has.
+#
 # POSIX sh on purpose (runs under dash/ash, not just bash).
 set -eu
 
@@ -30,12 +36,25 @@ MIN_NODE_MAJOR=22
 RAVEN_HOME="${RAVEN_HOME:-${HOME:?HOME is required, or set RAVEN_HOME explicitly}/.raven}"
 NODE_RUNTIME_DIR="$RAVEN_HOME/runtime"
 
+# uv does not byte-compile by default, so the first process to import a module
+# compiles it. For raven that process is the memory service the first session
+# starts, and it imports the serving stack -- measured at 22s on a fresh
+# install against 2s once compiled, which overruns the readiness budget and
+# costs that session its long-term memory. Paid here instead, where a wait is
+# what the user is already watching.
+export UV_COMPILE_BYTECODE=1
+
 # --- pretty output ---------------------------------------------------------
 info()  { printf '\033[1;34m>\033[0m %s\n' "$1"; }
 ok()    { printf '\033[1;32m+\033[0m %s\n' "$1"; }
 warn()  { printf '\033[1;33m!\033[0m %s\n' "$1" >&2; }
 die()   { printf '\033[1;31mx\033[0m %s\n' "$1" >&2; exit 1; }
 have()  { command -v "$1" >/dev/null 2>&1; }
+sha256_of() {
+  if have sha256sum; then sha256sum "$1" | cut -d' ' -f1
+  elif have shasum; then shasum -a 256 "$1" | cut -d' ' -f1
+  else printf ''; fi
+}
 
 # --- 0. platform detection -------------------------------------------------
 detect_platform() {
@@ -320,7 +339,7 @@ install_raven() {
     build_web_assets "$script_dir"
     # Pin to the locked dependency set so an install matches what we test.
     constraints="$(mktemp)"
-    uv export --directory "$script_dir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
+    uv export -q --directory "$script_dir" --frozen --all-extras --no-hashes --no-emit-workspace -o "$constraints"
     # Install all channel adapters by default. If the umbrella extra fails to
     # resolve/build on this platform, fall back to base raven so one broken
     # channel SDK cannot block the whole install.
@@ -373,23 +392,16 @@ install_raven() {
     # install from git here -- the TUI bundle is a gitignored build artifact,
     # so a git install would yield a raven whose `raven tui` cannot start.
     # Override RAVEN_WHEEL_URL to pin a specific wheel.
+    #
+    # One discovery step, no GitHub API: the release page redirect names the
+    # latest stable tag, and everything else is derived from it, because the
+    # wheel, the locked constraints and the plugin list sit in one release
+    # directory. The API caps unauthenticated callers at 60 requests/hour per
+    # IP, which a shared egress exhausts, and its JSON was only ever grepped
+    # for file names.
     wheel_url="${RAVEN_WHEEL_URL:-}"
     if [ -z "$wheel_url" ]; then
       info "Resolving the latest raven release from GitHub..."
-      release_json="$(curl -fsSL "https://api.github.com/repos/EverMind-AI/Raven/releases/latest" 2>/dev/null)"
-      wheel_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/raven-[^"]*\.whl' | head -n1)"
-      # The everos memory plugin ships as a sibling wheel from the same
-      # release; older releases carry none, and its absence only means the
-      # default memory backend degrades loudly at boot.
-      everos_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/everos_memory-[^"]*\.whl' | head -n1)"
-      design_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/design_engine-[^"]*\.whl' | head -n1)"
-      ppt_url="$(printf '%s' "$release_json" | grep -oE 'https://[^"]*/ppt_engine-[^"]*\.whl' | head -n1)"
-    fi
-    if [ -z "$wheel_url" ]; then
-      # The GitHub API caps unauthenticated callers at 60 requests/hour per IP, so a
-      # shared egress can exhaust it. The release page carries no API quota: its
-      # redirect names the latest stable tag, and the wheel URL is derived from it.
-      warn "GitHub API returned no release wheel; falling back to the release page."
       tag="$(curl -fsS -o /dev/null -w '%{redirect_url}' \
         "https://github.com/EverMind-AI/Raven/releases/latest")" || tag=""
       # Same shape the CLI and install.ps1 enforce: the redirect must land on this
@@ -418,67 +430,72 @@ install_raven() {
       fi
     fi
     [ -n "$wheel_url" ] || die "Could not resolve the latest raven release wheel from GitHub. Retry later, or set RAVEN_WHEEL_URL to a wheel URL."
-    # Derive the locked-constraints URL from the wheel URL (same release dir) so
-    # the constraints always match the wheel being installed, including when
-    # RAVEN_WHEEL_URL pins an older wheel. Missing asset / download failure ->
-    # install without pinning rather than fail.
-    constraints_url="${RAVEN_CONSTRAINTS_URL:-}"
-    if [ -z "$constraints_url" ]; then
-      case "$wheel_url" in
-        *.whl) constraints_url="${wheel_url%/*}/raven-constraints.txt" ;;
-      esac
-    fi
+    release_dir="${wheel_url%/*}"
+    # The locked constraints from the same release directory, so they always
+    # match the wheel being installed, including when RAVEN_WHEEL_URL pins an
+    # older wheel. Missing asset / download failure -> install without pinning
+    # rather than fail.
+    constraints="$(mktemp)"
     c_args=""
-    if [ -n "$constraints_url" ]; then
-      constraints="$(mktemp)"
-      if curl -fsSL "$constraints_url" -o "$constraints" 2>/dev/null; then
-        c_args="-c $constraints"
-      else
-        warn "Could not download locked constraints; installing without version pinning."
+    if curl -fsSL "${RAVEN_CONSTRAINTS_URL:-$release_dir/raven-constraints.txt}" -o "$constraints" 2>/dev/null; then
+      c_args="-c $constraints"
+    else
+      warn "Could not download locked constraints; installing without version pinning."
+    fi
+    # The plugin list: the wheels this release ships beside raven, one
+    # `name @ url` line each, written by the release workflow from what it
+    # built. What a complete install is made of lives there, not here, and
+    # `raven upgrade` installs from the same file. A release without one
+    # (0.1.13 and older) installs raven alone, as it always did.
+    plugins="$(mktemp)"
+    memory_only="$(mktemp)"
+    p_args=""
+    m_args=""
+    if curl -fsSL "$release_dir/raven-plugins.txt" -o "$plugins" 2>/dev/null && grep -q '[^[:space:]]' "$plugins"; then
+      info "  with the release's plugins:"
+      sed 's/^/    /' "$plugins"
+      # Both option pairs expand unquoted below and must stay two words each;
+      # mktemp paths carry no spaces.
+      p_args="--with-requirements $plugins"
+      grep '^everos-memory ' "$plugins" > "$memory_only" || true
+      if [ -s "$memory_only" ] && ! cmp -s "$plugins" "$memory_only"; then
+        m_args="--with-requirements $memory_only"
       fi
+    else
+      warn "This release carries no plugin list; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
     fi
     info "  installing $wheel_url"
-    # shellcheck disable=SC2086  # $c_args is an intentional word-split option pair.
-    p_args=""
-    if [ -n "${everos_url:-}" ]; then
-      # No spaces in the requirement: unquoted expansion must yield exactly
-      # "--with" plus one argument, or uv rejects the extra words.
-      p_args="--with everos-memory@$everos_url"
-      info "  with memory plugin $everos_url"
+    # shellcheck disable=SC2086  # $c_args and $1 are intentional word-split option pairs.
+    install_rung() {
+      uv tool install --force $c_args $1 "$2"
+    }
+    # Two independent things can fail: the channel extras, and the plugins
+    # (the engines' native builds first, the memory plugin after). A failed
+    # attempt does not say which, so the rungs walk both axes and stop at the
+    # first that lands -- the largest install this machine can build -- and
+    # warn about exactly what that rung lacks:
+    #   1 channels + all plugins      4 base + memory plugin
+    #   2 base + all plugins          5 channels, no plugins
+    #   3 channels + memory plugin    6 base, no plugins
+    lost_channels="Channel dependencies failed to install; some channels stay unavailable (see: raven channels list)."
+    lost_engines="A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
+    lost_plugins="No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
+    if install_rung "$p_args" "raven[channels] @ $wheel_url"; then
+      :
+    elif install_rung "$p_args" "$wheel_url"; then
+      warn "$lost_channels"
+    elif [ -n "$m_args" ] && install_rung "$m_args" "raven[channels] @ $wheel_url"; then
+      warn "$lost_engines"
+    elif [ -n "$m_args" ] && install_rung "$m_args" "$wheel_url"; then
+      warn "$lost_engines"
+      warn "$lost_channels"
+    elif [ -n "$p_args" ] && install_rung "" "raven[channels] @ $wheel_url"; then
+      warn "$lost_plugins"
+    elif [ -n "$p_args" ] && install_rung "" "$wheel_url"; then
+      warn "$lost_plugins"
+      warn "$lost_channels"
     else
-      warn "This release carries no EverOS memory plugin wheel; long-term memory stays off (raven doctor explains)."
-    fi
-    # Same shape for the product engines the roster gates Raven-Design and
-    # Raven-PPT on. Absent wheels are a warning, not a failure: the release
-    # still installs, and the two rows stay disabled the way discovery
-    # already reports them.
-    # Kept in their own variable, not appended to the memory plugin's: the
-    # ladder below drops the engines one rung before the memory plugin, and a
-    # shared scalar would take everos-memory down with the first engine that
-    # cannot resolve or build.
-    e_args=""
-    if [ -n "${design_url:-}" ]; then
-      e_args="$e_args --with design-engine@$design_url"
-      info "  with design engine $design_url"
-    else
-      warn "This release carries no design-engine wheel; Raven-Design stays disabled (raven doctor explains)."
-    fi
-    if [ -n "${ppt_url:-}" ]; then
-      e_args="$e_args --with ppt-engine@$ppt_url"
-      info "  with deck engine $ppt_url"
-    else
-      warn "This release carries no ppt-engine wheel; Raven-PPT stays disabled (raven doctor explains)."
-    fi
-    # shellcheck disable=SC2086  # $c_args / $p_args / $e_args are intentional word-split option pairs.
-    if ! uv tool install --force $c_args $p_args $e_args "raven[channels] @ $wheel_url"; then
-      warn "Channel dependencies failed to install; retrying with base raven. Some channels stay unavailable (see: raven channels list)."
-      if ! uv tool install --force $c_args $p_args $e_args "$wheel_url"; then
-        warn "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
-        if ! uv tool install --force $c_args $p_args "$wheel_url"; then
-          warn "EverOS memory plugin failed to install; long-term memory stays off (raven doctor explains)."
-          uv tool install --force $c_args "$wheel_url"
-        fi
-      fi
+      die "Raven install failed."
     fi
   fi
   # Ensure ~/.local/bin (uv tool bin dir) is on PATH for future shells.
@@ -513,6 +530,68 @@ install_browser() {
     || warn "Chromium download failed; the browser tool stays off. Retry later with: $py -m playwright install chromium"
 }
 
+# macOS without Homebrew: the release dmg, pinned the way the cask pins it --
+# one version, one digest per build. The stable directory drops a release once
+# the next one ships and the archive keeps it byte for byte, so the archive is
+# the fallback rather than the only source. Verified before it is mounted.
+LO_VERSION="26.8.0"
+LO_BUILD="26.8.0.3"
+LO_SHA256_ARM64="8858d8058da4f862f47559486814e65efc27294da67c5e4bb56b006b1ee59f89"
+LO_SHA256_X64="2dcbce4894e01bc1ecd594658e2cbda70ff7bfcd0b310f35d38887797172d09e"
+
+# Where a Mac's apps live; overridable so a test can install into a directory
+# of its own. raven's own lookup (raven/utils/office.py) checks the same two.
+MACOS_APPS="${RAVEN_MACOS_APPS:-/Applications}"
+
+# The cask's own trick: a two-line launcher rather than a symlink, because
+# soffice finds the rest of its bundle from the path it was started by. On PATH
+# because the model checks a deck by running `soffice` itself.
+write_soffice_launcher() {
+  launcher_dir="$HOME/.local/bin"
+  mkdir -p "$launcher_dir" \
+    && printf '#!/bin/sh\nexec "%s/Contents/MacOS/soffice" "$@"\n' "$1" > "$launcher_dir/soffice" \
+    && chmod +x "$launcher_dir/soffice" \
+    && ok "LibreOffice launcher: $launcher_dir/soffice"
+}
+
+install_libreoffice_dmg() {
+  case "$NODE_ARCH" in
+    arm64) lo_dir=aarch64; lo_arch=aarch64; lo_sha="$LO_SHA256_ARM64" ;;
+    x64) lo_dir=x86_64; lo_arch=x86-64; lo_sha="$LO_SHA256_X64" ;;
+    *) return 1 ;;
+  esac
+  # /Applications takes an admin's write without sudo; anyone else gets their
+  # own Applications folder.
+  apps="$MACOS_APPS"
+  [ -w "$apps" ] || apps="$HOME/Applications"
+  work="$(mktemp -d "${TMPDIR:-/tmp}/raven-libreoffice.XXXXXX")" || return 1
+  dmg="$work/LibreOffice.dmg"
+  info "Downloading LibreOffice $LO_VERSION for deck preview (about 300 MB)..."
+  fetched=""
+  for url in \
+    "https://download.documentfoundation.org/libreoffice/stable/$LO_VERSION/mac/$lo_dir/LibreOffice_${LO_VERSION}_MacOS_$lo_arch.dmg" \
+    "https://downloadarchive.documentfoundation.org/libreoffice/old/$LO_BUILD/mac/$lo_dir/LibreOffice_${LO_BUILD}_MacOS_$lo_arch.dmg"; do
+    if curl -fsSL --retry 2 --max-time 1800 -o "$dmg" "$url" && [ "$(sha256_of "$dmg")" = "$lo_sha" ]; then
+      fetched=1
+      break
+    fi
+  done
+  if [ -z "$fetched" ]; then
+    rm -rf "$work"
+    return 1
+  fi
+  mkdir -p "$work/mnt" "$apps" || { rm -rf "$work"; return 1; }
+  hdiutil attach -nobrowse -readonly -noverify -noautoopen -quiet -mountpoint "$work/mnt" "$dmg" \
+    || { rm -rf "$work"; return 1; }
+  copied=0
+  ditto "$work/mnt/LibreOffice.app" "$apps/LibreOffice.app" || copied=1
+  hdiutil detach -quiet "$work/mnt" || hdiutil detach -quiet -force "$work/mnt" || true
+  rm -rf "$work"
+  [ "$copied" = 0 ] || { rm -rf "$apps/LibreOffice.app"; return 1; }
+  ok "LibreOffice $LO_VERSION installed to $apps/LibreOffice.app"
+  write_soffice_launcher "$apps/LibreOffice.app"
+}
+
 install_office() {
   # soffice and libreoffice are the two launcher names the runtime resolves
   # (raven/utils/office.py); either one means deck preview already works.
@@ -520,18 +599,28 @@ install_office() {
   have libreoffice && return 0
   case "$NODE_OS" in
     darwin)
+      # An app already in an Applications folder (the libreoffice.org dmg, or
+      # an earlier run of this script) only lacks a launcher on PATH. Never
+      # install a second copy over it.
+      for app in "$MACOS_APPS/LibreOffice.app" "$HOME/Applications/LibreOffice.app"; do
+        if [ -x "$app/Contents/MacOS/soffice" ]; then
+          write_soffice_launcher "$app" \
+            || warn "Could not write ~/.local/bin/soffice; raven still finds $app, but a plain soffice command will not."
+          return 0
+        fi
+      done
+      # A cask needs no sudo, so install directly rather than prompting.
       if have brew; then
         info "Installing LibreOffice (deck preview)..."
-        # A cask needs no sudo, so install directly rather than prompting.
-        brew install --cask libreoffice \
-          || warn "LibreOffice install failed; deck preview stays off. Retry later with: brew install --cask libreoffice"
-      else
-        warn "LibreOffice not found; deck preview stays off. Install it later with: brew install --cask libreoffice"
+        brew install --cask libreoffice && return 0
+        warn "brew could not install LibreOffice; fetching it from libreoffice.org instead."
       fi
+      install_libreoffice_dmg \
+        || warn "LibreOffice install failed; deck preview stays off. Install it later from https://www.libreoffice.org/download/ or with: brew install --cask libreoffice"
       ;;
     linux)
       if ! have apt-get; then
-        warn "LibreOffice not found; deck preview stays off. Install it with your system package manager (package: libreoffice)."
+        warn "LibreOffice not found; deck preview stays off. Install it with your system package manager (packages: libreoffice fonts-noto-cjk)."
         return 0
       fi
       # Installing needs sudo, so ask first -- and under `curl | sh` stdin is
@@ -540,35 +629,101 @@ install_office() {
       # without -i), so probe by opening it rather than stat-ing it; no
       # openable terminal means skip cleanly, never hang on the read.
       if ! { : < /dev/tty; } 2>/dev/null || ! have sudo; then
-        warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+        warn "LibreOffice not found; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
         return 0
       fi
       # Default yes: for the deck lane this is the one dependency that matters
       # (the whole render-truth capability is soffice being present), and the
       # macOS path already installs it without asking. sudo's own password
       # prompt still stands between Enter and any change.
-      printf 'Install LibreOffice for deck preview (needs sudo)? Without it a deck still builds, but no page is ever rendered, measured or checked. [Y/n] '
+      printf 'Install LibreOffice and a Chinese font for deck preview (needs sudo)? Without them a deck still builds, but no page is ever rendered, measured or checked. [Y/n] '
       # A failed read is not an Enter: Ctrl-D, or a tty that closed after the
       # gate passed, must decline -- only a deliberate empty Enter accepts.
       answer=""
       read -r answer < /dev/tty || {
-        warn "Skipping LibreOffice (no answer read); deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+        warn "Skipping LibreOffice (no answer read); deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
         return 0
       }
       case "$answer" in
         n|N|[nN][oO])
-          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice"
+          warn "Skipping LibreOffice; deck preview stays off. Install it later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
           ;;
         *)
           # sudo's password prompt also reads stdin: give it the tty too.
           # shellcheck disable=SC2024  # input redirect on purpose; opening /dev/tty needs no elevation.
-          sudo apt-get install -y libreoffice < /dev/tty \
-            || warn "LibreOffice install failed; deck preview stays off. Retry later with: sudo apt-get install -y libreoffice"
+          sudo apt-get install -y libreoffice fonts-noto-cjk < /dev/tty \
+            || warn "LibreOffice install failed; deck preview stays off. Retry later with: sudo apt-get install -y libreoffice fonts-noto-cjk"
           ;;
       esac
       ;;
   esac
 }
+
+# --- 4b. Chinese on a rendered page -----------------------------------------
+# A .pptx names its fonts and carries none, so a deck's Chinese is drawn with
+# whatever this machine's LibreOffice can reach. With nothing, the conversion
+# still succeeds and every Han glyph comes out as a box -- in the preview panel,
+# in the delivery thumbnail, and in the page the model renders to check its work.
+#
+# Linux: LibreOffice's apt package brings no CJK face. The offer above installs
+# fonts-noto-cjk alongside it; otherwise a pinned Noto Sans SC goes into the
+# user's font directory, which fontconfig reads without being told. The pin is
+# the Simplified Chinese subset, Regular weight only: bold is synthesized, and
+# Traditional Chinese or Japanese glyphs outside the subset still draw as boxes.
+# Enough for zh-CN decks; fonts-noto-cjk is the full answer.
+#
+# macOS needs nothing here. The system already ships Han faces; LibreOffice's
+# macOS build just cannot see them when it renders headless, and raven links
+# them into the profile of every conversion it runs, and into the default one
+# the model's own soffice uses (raven/utils/office.py) -- no file outside the
+# user's home, no password.
+
+HAN_FONT_URL="https://raw.githubusercontent.com/notofonts/noto-cjk/Sans2.004/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
+HAN_FONT_SHA256="faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9"
+HAN_FONT_BYTES="8331336"
+HAN_FONT_NAME="NotoSansSC-Regular.otf"
+
+# LibreOffice reads the same fontconfig as fc-list here, so its answer holds;
+# the pinned file is checked by name for a host with the library but no fc-list.
+linux_has_han_face() {
+  [ -n "$(fc-list :lang=zh family 2>/dev/null)" ] && return 0
+  [ -f "${XDG_DATA_HOME:-$HOME/.local/share}/fonts/$HAN_FONT_NAME" ]
+}
+
+install_linux_cjk_font() {
+  dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts"
+  hint="Install one with your system package manager (package: fonts-noto-cjk)."
+  mkdir -p "$dir" || { warn "Could not create $dir; Chinese pages in a deck will render as boxes. $hint"; return 1; }
+  part="$dir/.$HAN_FONT_NAME.$$.part"
+  info "Downloading a Chinese font for deck preview..."
+  # Size and digest both, before the file is put in place: a truncated OTF
+  # still parses and draws nothing, which is the failure this step exists for.
+  if curl -fsSL --max-time 120 -o "$part" "$HAN_FONT_URL" \
+    && [ "$(wc -c < "$part" | tr -d ' ')" = "$HAN_FONT_BYTES" ] \
+    && { actual="$(sha256_of "$part")"; [ -z "$actual" ] || [ "$actual" = "$HAN_FONT_SHA256" ]; } \
+    && mv -f "$part" "$dir/$HAN_FONT_NAME"; then
+    have fc-cache && fc-cache -f "$dir" >/dev/null 2>&1
+    ok "Chinese font installed to $dir/$HAN_FONT_NAME"
+    return 0
+  fi
+  rm -f "$part"
+  warn "The Chinese font download failed; Chinese pages in a deck will render as boxes. $hint"
+  return 1
+}
+
+install_cjk_fonts() {
+  [ "$NODE_OS" = linux ] || return 0
+  # No LibreOffice (the offer declined, a distro without apt): nothing renders,
+  # so the face would be 8 MB nobody reads.
+  have soffice || have libreoffice || return 0
+  linux_has_han_face && return 0
+  install_linux_cjk_font || return 0
+  # Previews and gallery covers cached before this were drawn without a Han
+  # face, and they are keyed by the deck's own stamp, so nothing else would
+  # ever replace them.
+  rm -rf "$RAVEN_HOME/cache/pdf-preview" "$RAVEN_HOME/cache/deck-template-covers"
+}
+
 
 # --- 5. launch -------------------------------------------------------------
 # The install ends on a running page. `--stop` first, because a gateway an
@@ -581,13 +736,23 @@ launch_web() {
   bin="$(uv tool dir --bin 2>/dev/null || true)/raven"
   [ -x "$bin" ] || bin="$HOME/.local/bin/raven"
   [ -x "$bin" ] || {
-    warn "raven is not where this script looked for it; open a new terminal and run: raven web"
+    warn "raven is not where this script looked for it; open a new terminal and run: raven"
     return 0
   }
+  # The release this script just installed may predate `raven web` (0.1.13
+  # does). Ask before calling, and end on the command every release has.
+  if ! "$bin" web --help >/dev/null 2>&1; then
+    printf '\n'
+    ok "Raven installed. Open a new terminal (or source your shell profile), then run: raven"
+    return 0
+  fi
   printf '\n'
   ok "Starting Raven -- your browser will open in a moment. Ctrl-C here stops it."
   printf '\n'
-  "$bin" web --stop >/dev/null && "$bin" web --foreground
+  "$bin" web --stop >/dev/null 2>&1 || warn "could not stop a previous gateway; continuing"
+  # The page's exit code is not the install's: Ctrl-C is how a foreground page
+  # ends, and the install above it already succeeded.
+  "$bin" web --foreground || warn "the page ended with exit code $?; start it again with: raven web"
 }
 
 # --- main ------------------------------------------------------------------
@@ -600,8 +765,16 @@ main() {
 
   [ -n "${RAVEN_MINIMAL:-}" ] || install_browser
   [ -n "${RAVEN_MINIMAL:-}" ] || install_office
+  [ -n "${RAVEN_MINIMAL:-}" ] || install_cjk_fonts
 
-  launch_web
+  # Before the launch, not after: the page holds this terminal until Ctrl-C,
+  # and `uv tool update-shell` only reaches future shells.
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) warn "Your current PATH does not include ~/.local/bin yet -- open a new terminal, or run: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  esac
+
+  [ -n "${RAVEN_NO_LAUNCH:-}" ] || launch_web
 }
 
 main "$@"

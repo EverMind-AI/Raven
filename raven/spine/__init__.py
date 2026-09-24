@@ -6,6 +6,7 @@ it replaces the dormant pub/sub ``bus``.
 """
 
 from raven.spine.events import (
+    TRANSIENT_NOTICE_KINDS,
     Deliverable,
     EpisodeStart,
     MediaOut,
@@ -25,9 +26,10 @@ from raven.spine.events import (
 from raven.spine.message import ChatType, Media, Source
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
 from raven.spine.scheduler import OriginPools, Scheduler, TurnHandle, conversation_id
-from raven.spine.turn import BusyPolicy, Origin, TurnRequest, direct_lane, session_of
+from raven.spine.turn import AnswerlessTurnError, BusyPolicy, Origin, TurnRequest, direct_lane, session_of
 
 __all__ = [
+    "AnswerlessTurnError",
     "BusyPolicy",
     "ChatType",
     "Deliverable",
@@ -46,6 +48,7 @@ __all__ = [
     "Text",
     "ToolEvent",
     "ToolPhase",
+    "TRANSIENT_NOTICE_KINDS",
     "TurnEnded",
     "TurnEvent",
     "TurnFailed",

@@ -144,10 +144,18 @@ def test_the_roster_row_is_the_vendored_twins_modulo_the_ledgered_deltas():
 
 #: Trunk tools the fork loop never registered under this product's config;
 #: every one is held out of the face by a config row, not by luck (the code
-#: family's ledger discipline). tool_call/tool_search additionally keep the
-#: fork's face: its meta-pair registers only under tools.toolSearch.enabled,
-#: default False and never set by this config (the threshold only folds).
+#: family's ledger discipline). The meta-pair left this set: raven reserves
+#: tool_call/tool_search from tools.disabledTools, so the rows that used to
+#: hold them out are gone and tool_call joins the face (see TRUNK_RESERVED).
 TRUNK_HELD_OUT = {
+    "browser_click",
+    "browser_navigate",
+    "browser_press",
+    "browser_screenshot",
+    "browser_scroll",
+    "browser_snapshot",
+    "browser_tabs",
+    "browser_type",
     "create_playbook",
     "cron",
     "deliver_files",
@@ -161,8 +169,6 @@ TRUNK_HELD_OUT = {
     "read_skill",
     "run_subagent_dag",
     "spawn",
-    "tool_call",
-    "tool_search",
 }
 
 
@@ -912,6 +918,58 @@ def test_a_host_config_serper_key_reaches_both_search_consumers(grounded, tmp_pa
     assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "host-serper"
 
 
+def _host(tmp_path: Path, web: dict) -> None:
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"web": web}}))
+
+
+def test_a_host_on_the_vendor_table_hands_its_web_keys_down(grounded, tmp_path, monkeypatch):
+    """A host set up on a current raven keeps its keys under tools.web.providers,
+    not in the two pre-vendor leaves the secret slots read. Rendered from the
+    leaves alone, this lane launched keyless on such a host: web_search withheld
+    and ppt_image_search declined, while the host's own tools searched fine."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    _host(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}, "jina": {"apiKey": "host-jina"}}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    providers = data["tools"]["web"]["providers"]
+    assert providers["serper"]["apiKey"] == "host-serper"
+    assert providers["jina"]["apiKey"] == "host-jina"
+    assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "host-serper"
+    assert data["tools"]["web"]["search"]["maxResults"] == 10, "the product's own search knobs stay"
+
+
+def test_an_own_web_key_outranks_the_hosts_vendor_slot(grounded, tmp_path, monkeypatch):
+    """PPT_SERPER_API_KEY lands in the pre-vendor leaf, which trunk reads only
+    after an empty vendor slot; inheriting the host's slot beside it would have
+    the host's key silently answer for the one this product set."""
+    monkeypatch.setenv("PPT_SERPER_API_KEY", "sk-own-serper")
+    _host(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["tools"]["web"]["search"]["apiKey"] == "sk-own-serper"
+    assert "serper" not in data["tools"]["web"].get("providers", {})
+    assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "sk-own-serper"
+
+
+def test_the_hosts_vendor_choice_travels_with_its_key(grounded, tmp_path, monkeypatch):
+    """A host that searches through another vendor hands down the choice and the
+    key together; the key alone would sit unread beside a Serper default."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    _host(
+        tmp_path,
+        {
+            "providers": {"tavily": {"apiKey": "host-tavily"}},
+            "search": {"provider": "tavily"},
+            "fetch": {"provider": "tavily"},
+        },
+    )
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    web = data["tools"]["web"]
+    assert web["providers"]["tavily"]["apiKey"] == "host-tavily"
+    assert web["search"]["provider"] == "tavily" and web["fetch"]["provider"] == "tavily"
+    assert "imageSearch" not in data["plugins"]["config"]["ppt-engine"], "the picture search is Serper's alone"
+
+
 def test_the_render_loads_through_trunks_own_loader(grounded):
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
@@ -1019,13 +1077,17 @@ DECK_TOOLS = {
     "ppt_review",
 }
 
-#: The product's visible tool face, hermetically rebuilt from the render: the
-#: fork's config intent plus the deck tools as plugin contributions. The
-#: key-gated pair (web_search from the merged tools.web slot, ppt_image_search
-#: from the rendered slice key) joins only when a Serper key is present -- the
-#: fork's own refusal to register keyless search. Every trunk-new name is held
-#: out by the TRUNK_HELD_OUT config rows pinned above.
-VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS
+#: Two names this product's config no longer decides. ``tool_call`` is reserved
+#: from ``tools.disabledTools``: its absence from an array is how the fold reads
+#: "this request has no search route", so an off switch there would unfold the
+#: array rather than slim it. ``tool_search`` registers with the shipped default
+#: -- the fold is on, and this face sits far below the threshold, so the strategy
+#: drops it from every request; it is in the registry the fixture reads and in no
+#: request the model sees. Neither is pinned off here on purpose: an operator or
+#: a dispatcher can attach MCP servers to this product at runtime, and pinning
+#: the fold off would hold it open at exactly the size it exists for.
+TRUNK_RESERVED = {"tool_call", "tool_search"}
+VENDORED_TOOL_FACE = FORK_CONFIG_INTENT | DECK_TOOLS | TRUNK_RESERVED
 KEY_GATED = {"web_search", "ppt_image_search"}
 
 
@@ -1144,6 +1206,17 @@ def test_a_host_config_serper_key_admits_the_same_pair(grounded, tmp_path, monke
     assert visible == VENDORED_TOOL_FACE | KEY_GATED
 
 
+def test_a_host_vendor_table_serper_key_admits_the_same_pair(grounded, tmp_path, monkeypatch):
+    """The symptom itself: on a host keyed through tools.web.providers the lane's
+    face lacked both searches, so the author paged a wiki API for picture names."""
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_SERPER_API_KEY", raising=False)
+    _host(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}}})
+    rendered = grounded.render_config(RUN_PY.parent / "config.json")
+    visible = _hermetic_build(rendered, tmp_path, monkeypatch)
+    assert visible == VENDORED_TOOL_FACE | KEY_GATED
+
+
 def test_copying_a_published_deck_is_not_denied():
     """A deny rule on `cp ... .pptx` once stopped a model that copied an unpublished build
     into out/ and called it delivered. It also stopped the one copy a delegating agent
@@ -1160,3 +1233,19 @@ def test_copying_a_published_deck_is_not_denied():
         policy.evaluate('cp out/deck.pptx "/work/community elderly care operations plan.pptx"')
         is not CommandDecision.HARD_DENY
     )
+
+
+def test_the_hosts_plugin_opt_outs_reach_the_render_but_not_the_engine(grounded, tmp_path):
+    """The child scans the host's plugin roots, so a plugin the host switched
+    off has to be off in the render too; the deck engine is this product and
+    stays on even when the host turned it off for its own agent."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps({"plugins": {"disabled": ["everme-memory", "ppt-engine"]}}), encoding="utf-8"
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["plugins"]["disabled"] == ["everme-memory"]
+    assert "ppt-engine" in data["plugins"]["config"]

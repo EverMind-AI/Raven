@@ -23,7 +23,8 @@ Measured on 2026-08-11, which is what fixed each transport below:
   these as *external* agents, so an adapter demanding its own credential would
   not be acceptable.
 - ``Codex`` - ACP through the ACP project's adapter. resume + load but **no
-  fork**, which is exactly why capabilities are negotiated rather than declared.
+  fork** in the build measured then (1.13.1 adds it), which is exactly why
+  capabilities are negotiated rather than declared.
 - ``OpenCode`` - ACP, native (``opencode acp``). resume + fork + load.
 - ``OpenClaw`` - ACP, native (``openclaw acp``). This one is a bridge backed by
   the OpenClaw Gateway rather than a self-contained server: with no reachable
@@ -44,9 +45,11 @@ The **agent itself** is never fetched. Its row names the bare executable
 (``hermes acp``, ``opencode acp``), so the agent that answers is the one the user
 installed, at the version they chose, holding the login they already granted --
 and a machine without it says so, because ``_probe_acp`` resolves ``argv[0]`` and
-an ``npx`` command always resolves whether the agent is there or not.
-:data:`SHIM_LAUNCHED_PRESETS` is that split, declared; a test holds every
-command to it.
+an ``npx`` command always resolves whether the agent is there or not. For a shim
+that reaches for a local install the probe therefore asks after that agent as
+well (:data:`SHIM_REQUIRED_EXECUTABLES`), so a machine without ``pi`` reads Pi as
+absent rather than as connectable. :data:`SHIM_LAUNCHED_PRESETS` is that split,
+declared; a test holds every command to it.
 
 Every preset runs unattended, so none of them may stop to ask permission: raven
 answers whatever an ACP agent asks (``raven/acp_client/permissions.py``), and the
@@ -67,7 +70,7 @@ mechanism. For an acp preset they are not spelled out because they are not
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, NamedTuple
 
 from raven.agent.subagent.acp_registry_presets import (
     ACP_REGISTRY_INSTALL_HINTS,
@@ -116,9 +119,12 @@ from raven.agent.subagent.acp_registry_presets import (
 #             (chat -Q joins a session and keeps stdout to the answer; the id is
 #             printed on stderr, matched by sessionIdPattern)
 
-# Pinned deliberately; see the module docstring.
-_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.66.0"
-_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.1.14"
+# Pinned deliberately; see the module docstring. A bump reaches rows already
+# configured only through the config migration that carries the previous stock
+# command forward (``_RETIRED_SHIM_COMMANDS`` in raven/config/loader.py), since
+# ``subagents.add`` copies this string into the row.
+_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.81.1"
+_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.13.1"
 
 SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS
 """Presets whose command fetches an ACP shim rather than naming a local agent.
@@ -129,6 +135,34 @@ docstring. Every other acp preset must name an executable the user installed.
 Spelled with the preset key, not the row's ``name``: what a package is cannot
 depend on what the row is called, and a configured row's name is the user's to
 change (``test_provenance_survives_a_rename``).
+"""
+
+SHIM_REQUIRED_EXECUTABLES: dict[str, tuple[str, str]] = {
+    "pi": ("pi", "npm install -g @earendil-works/pi-coding-agent"),
+}
+"""The local agent a shim drives, as ``(executable, install command)``, by preset key.
+
+A shim is plumbing in front of an agent the user installs themselves, and its
+``npx`` command resolves whether that agent is there or not. ``_probe_acp`` asks
+after this executable as well, so a machine without it reports the row absent
+with the install beside it, instead of offering a connect that fails a minute
+later inside the adapter with the same sentence. Listed only where the shim
+really does reach for a local install: ``pi-acp`` launches ``pi`` and fails
+with "executable not found" without it. The other two shims bring their agent
+along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
+runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
+per-platform optional dependency (read from the 0.66.0, 0.79.0 and 0.81.1
+packages on 2026-09-20/21/23), so a ``claude`` on PATH is neither needed nor the
+one that answers -- and what either wants is a login, not an install. The pin is
+also what decides which Claude models the row can reach: 0.66.0 bundled CLI
+2.1.220, which refuses a model newer than it knows ("version 2.1.251 or newer is
+required"), so an account whose Claude settings name a recent model could not
+connect at all, and its menu offers ``claude-fable-5[1m]`` where 0.79.0 and
+0.81.1 offer ``claude-fable-5-1[1m]``; 0.79.0 bundles 2.1.274 and 0.81.1
+bundles 2.1.280. The codex pin decides its menu the same
+way, because ``codex-acp`` builds the model choices from its bundled codex's
+``model/list``: 1.1.14 bundles codex 0.147.0, whose list stops at GPT-5.6, and
+1.13.1 bundles 0.156.1, which lists the GPT-6 family (measured 2026-09-23).
 """
 
 
@@ -159,8 +193,8 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # an ACP agent asks for anyway (raven/acp_client/permissions.py), so
         # asking buys nothing but a round trip per tool call -- and the mode is
         # also what restores network access, which no per-call approval does.
-        # Measured in codex-acp 1.1.14: AgentMode.AgentFullAccess is approval
-        # policy "never".
+        # Measured in codex-acp 1.1.14 and re-read in 1.13.1: AgentMode.AgentFullAccess
+        # is approval policy "never", and INITIAL_AGENT_MODE still selects it.
         "env": {"INITIAL_AGENT_MODE": "agent-full-access"},
     },
     "opencode": {
@@ -292,9 +326,113 @@ def install_hint_for(cfg: Any) -> str | None:
     return ACP_REGISTRY_INSTALL_HINTS.get(preset) if preset else None
 
 
+class SignIn(NamedTuple):
+    """Two spellings of one sign-in, and the executable that decides which.
+
+    A shim-launched row runs on machines that never installed the agent's CLI
+    globally -- that is the setup ``SHIM_REQUIRED_EXECUTABLES`` deliberately
+    does not hold these rows to, because the adapter carries its own copy as a
+    per-platform dependency and never links it onto PATH. So the obvious
+    command is unavailable on exactly the setup this preset supports, and
+    naming it there would answer a credential failure with a second one.
+
+    ``local`` is what to run where the reader installed the CLI themselves --
+    their build, their version. ``anywhere`` needs no install at all. Both end
+    at the same place: the credential is the machine's, not the copy's, which
+    is what makes the second one an answer rather than a detour. Measured --
+    the adapter's own bundled binary and the published CLI fetched fresh report
+    the same `auth status` on one machine.
+
+    ``anywhere`` is ``None`` for a row whose command names a local install
+    rather than a shim -- there is no second spelling to offer, because a
+    reader who has no such install never reaches a credential failure in the
+    first place: the probe stops at the absent executable, which is a different
+    message with a different answer.
+    """
+
+    exe: str
+    local: str
+    anywhere: str | None = None
+    does: Literal["sign_in", "setup"] = "sign_in"
+    """What running the command does, for the page to say in its reader's words.
+
+    ``sign_in`` signs in through a browser; ``setup`` opens the agent's own
+    interactive setup, where a provider is chosen and signed in to. The English
+    advice reads the same for both -- this only lets a page that renders the
+    remedy itself describe the step truthfully."""
+
+
+SIGN_IN_HINTS: dict[str, SignIn] = {
+    "claude_code": SignIn(
+        exe="claude",
+        local="claude auth login",
+        anywhere="npx -y @anthropic-ai/claude-code auth login",
+    ),
+    "codex": SignIn(
+        exe="codex",
+        local="codex login",
+        anywhere="npx -y @openai/codex login",
+    ),
+    # `hermes model` ("Interactively select your inference provider and default
+    # model") is the first remedy hermes names when it refuses a session for want
+    # of a provider -- "Hermes is not connected to any AI provider yet. Run
+    # `hermes model` to pick one (the free Nous tier needs no API key)" -- and the
+    # only one that needs nothing in hand. `hermes auth add <provider>`, which the
+    # same sentence offers next, adds a pooled credential for a reader who already
+    # holds a key. Shim-launched it is not: the command is a bare `hermes`, so the
+    # local spelling is the only one it can reach.
+    "hermes": SignIn(exe="hermes", local="hermes model", does="setup"),
+}
+"""How to sign in to the agent a row defers to, by preset key.
+
+For the failure the tables above cannot catch. ``SHIM_REQUIRED_EXECUTABLES``
+answers "the agent is not installed", which the probe can see before it spends
+anything; this answers "it is installed and has no credential", which only the
+agent itself can report, and which it reports as prose in whatever words its
+vendor chose.
+
+Every command here was read from the installed tool's own help rather than
+from its documentation, because the two disagree: measured on 2026-09-23,
+`codex --help` lists `login`, and `hermes model` is the command `hermes`
+itself names when it refuses a session for want of a provider.
+
+Only agents whose sign-in was read from the installed tool are listed. An
+unlisted agent gets the sentence without a command, which is still the
+difference between "go and sign in" and a JSON-RPC error code -- and a command
+that is not there to run is the same mistake as a guessed one.
+"""
+
+
+def sign_in_hint_for(cfg: Any) -> SignIn | None:
+    """How to sign in to the agent this row defers to, or ``None`` when unknown.
+
+    By provenance, like :func:`install_hint_for` and for the same reason: the
+    name is the owner's to edit, so a hand-written row wearing a preset's name
+    is not that agent and must not be told to run that agent's login.
+    """
+    preset = getattr(cfg, "preset", None)
+    return SIGN_IN_HINTS.get(preset) if preset else None
+
+
+def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
+    """The agent a shim-launched row needs installed, with its install, or ``None``.
+
+    By provenance, like :func:`install_hint_for`, and for the same reason: the
+    row's name is its owner's to change, and a hand-written row that merely
+    wears a preset's name runs whatever command it wrote.
+    """
+    preset = getattr(cfg, "preset", None)
+    return SHIM_REQUIRED_EXECUTABLES.get(preset) if preset else None
+
+
 __all__ = [
     "SHIM_LAUNCHED_PRESETS",
+    "SHIM_REQUIRED_EXECUTABLES",
+    "SIGN_IN_HINTS",
+    "SignIn",
     "install_hint_for",
+    "shim_requirement_for",
+    "sign_in_hint_for",
     "THIRD_PARTY_SUBAGENT_PRESETS",
     "session_mcp_for",
     "third_party_subagent_presets",

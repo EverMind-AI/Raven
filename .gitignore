@@ -150,6 +150,12 @@ agents/raven-ppt/materials/
 # `make install` and the image build download them instead.
 raven/core/res/
 raven/knowledge/res/
+# The deck template picker's covers, rendered from the templates beside them by
+# scripts/bake_deck_template_covers.py and carried by the ppt-engine wheel as a
+# hatch artifact. Generated from tracked inputs, and images besides
+# (AGENTS.md section 7), so they are built rather than committed.
+plugins-dist/ppt-engine/raven_ppt/assets/templates/covers/
+
 # MkDocs build output. The site is published from CI; HTML is never committed
 # (AGENTS.md section 7).
 docs-site/site/

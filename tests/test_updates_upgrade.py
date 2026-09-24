@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import base64
 import ctypes
+import io
 import json
 import os
 import subprocess
 import sys
 import tomllib
+import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError
 from datetime import datetime
@@ -23,6 +27,13 @@ from raven.updates import upgrade as upgrade_commands
 
 WHEEL_NAME = "raven-0.1.4-py3-none-any.whl"
 WHEEL_URL = "https://github.com/EverMind-AI/Raven/releases/download/v0.1.4/raven-0.1.4-py3-none-any.whl"
+RELEASE_DIR = "https://github.com/EverMind-AI/Raven/releases/download/v0.1.4"
+PLUGIN_LIST = (
+    f"everos-memory @ {RELEASE_DIR}/everos_memory-1.2.0-py3-none-any.whl\n"
+    f"design-engine @ {RELEASE_DIR}/design_engine-0.2.0-py3-none-any.whl\n"
+    f"ppt-engine @ {RELEASE_DIR}/ppt_engine-0.2.0-py3-none-any.whl\n"
+)
+MEMORY_ONLY_LIST = PLUGIN_LIST.splitlines(keepends=True)[0]
 RATE_LIMIT_RESET = 1786451027
 MALFORMED_DIRECT_URL_METADATA = [
     pytest.param("", id="empty-document"),
@@ -63,6 +74,23 @@ def isolated_raven_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     home = tmp_path / "agent-home"
     monkeypatch.setenv("RAVEN_HOME", str(home))
     return home
+
+
+@pytest.fixture(autouse=True)
+def release_install_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep release tests independent of the developer's editable installation."""
+    distribution_lookup = upgrade_commands.metadata.distribution
+    installed = distribution_lookup("raven")
+    release_install = Mock(wraps=installed)
+    release_install.version = installed.version
+    release_install.read_text.side_effect = lambda name: (
+        None if name == "direct_url.json" else installed.read_text(name)
+    )
+    monkeypatch.setattr(
+        upgrade_commands.metadata,
+        "distribution",
+        lambda name: release_install if name == "raven" else distribution_lookup(name),
+    )
 
 
 def _release_payload(**overrides: object) -> dict[str, object]:
@@ -643,15 +671,59 @@ def test_uv_tool_target_rejects_malformed_target_fields(
         upgrade_commands._uv_tool_target()
 
 
-@pytest.fixture(autouse=True)
-def _stub_constraints_urlretrieve(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The upgrade helper downloads locked constraints via urllib before running
-    # uv. Stub it so helper tests never touch the network; default to failure so
-    # the graceful no-pin path (the pre-constraints command shape) is what the
-    # existing assertions observe. Tests that exercise pinning override this.
-    import urllib.request
+class _ReleaseDirectory:
+    """The release directory beside the wheel, served in memory to the helper's
+    downloads. Ships the plugin list by default and no constraints, so the
+    unpinned command shape is what the assertions observe unless a test adds
+    the constraints file."""
 
-    monkeypatch.setattr(urllib.request, "urlretrieve", Mock(side_effect=OSError("no network")))
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {"raven-plugins.txt": PLUGIN_LIST.encode("utf-8")}
+        self.requests: list[urllib.request.Request] = []
+
+    def urlopen(self, request: urllib.request.Request, *args: object, **kwargs: object) -> io.BytesIO:
+        self.requests.append(request)
+        url = request.full_url
+        name = url.rsplit("/", 1)[1]
+        if name not in self.files:
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        return io.BytesIO(self.files[name])
+
+
+@pytest.fixture(autouse=True)
+def release_directory(monkeypatch: pytest.MonkeyPatch) -> _ReleaseDirectory:
+    directory = _ReleaseDirectory()
+    monkeypatch.setattr(urllib.request, "urlopen", directory.urlopen)
+    return directory
+
+
+def _uv_calls(run: Mock) -> list[dict[str, object]]:
+    """Each `uv tool install` the helper ran, with the plugin list read back
+    from the file it wrote, so a rung is judged by what uv was told."""
+    calls: list[dict[str, object]] = []
+    for call in run.call_args_list:
+        argv = list(call.args[0])
+        assert argv[:3] == ["/usr/bin/uv", "tool", "install"], argv
+        assert call.kwargs == {"check": False}
+        options, requirement = argv[3:-1], argv[-1]
+        mode = options[:2] if options[0] == "--reinstall-package" else options[:1]
+        options = options[len(mode) :]
+        constraints: str | None = None
+        plugins: str | None = None
+        while options:
+            flag, value, options = options[0], options[1], options[2:]
+            if flag == "-c":
+                constraints = Path(value).read_text(encoding="utf-8")
+            elif flag == "--with-requirements":
+                plugins = Path(value).read_text(encoding="utf-8")
+            else:
+                raise AssertionError(argv)
+        calls.append({"mode": mode, "constraints": constraints, "plugins": plugins, "requirement": requirement})
+    return calls
+
+
+REINSTALL = ["--reinstall-package", "raven"]
+FORCE = ["--force"]
 
 
 def _load_upgrade_helper_namespace() -> dict[str, object]:
@@ -685,10 +757,13 @@ def test_upgrade_helper_bootstrap_runs_in_isolated_python() -> None:
     assert completed.stderr == "Unable to upgrade Raven: invalid upgrade helper arguments.\n"
 
 
-def test_upgrade_helper_stops_after_channel_install_succeeds(
+def test_upgrade_helper_installs_the_release_plugins_beside_the_wheel(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """uv replaces the tool's requirement set with what one command names, so
+    the plugins the installer put in survive an upgrade only if the helper
+    names them again -- from the release's own list, not from memory."""
     run = Mock(return_value=Mock(returncode=0))
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
@@ -696,17 +771,59 @@ def test_upgrade_helper_stops_after_channel_install_succeeds(
     status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
 
     assert status == 0
-    run.assert_called_once_with(
-        ["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],
-        check=False,
-    )
+    assert _uv_calls(run) == [
+        {
+            "mode": REINSTALL,
+            "constraints": None,
+            "plugins": PLUGIN_LIST,
+            "requirement": f"raven[channels] @ {WHEEL_URL}",
+        },
+    ]
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in capsys.readouterr().out
 
 
-def test_upgrade_helper_warns_when_base_fallback_succeeds(
+def test_upgrade_helper_refuses_to_upgrade_without_the_plugin_list(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    release_directory: _ReleaseDirectory,
+) -> None:
+    """No list, no upgrade: installing raven alone would uninstall every plugin
+    the environment carries, which is the loss this file exists to prevent.
+    The surface still comes back, on the old version."""
+    del release_directory.files["raven-plugins.txt"]
+    run = Mock(return_value=Mock(returncode=0))
+    monkeypatch.setattr(subprocess, "run", run)
+    popen = Mock()
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    helper_main = _load_upgrade_helper()
+    helper_main.__globals__["wait_for_parent"] = Mock(return_value=0)
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH])
+
+    assert status == 1
+    run.assert_not_called()
+    err = capsys.readouterr().err
+    assert "could not download the plugin list for 0.1.4" in err
+    assert "Nothing was changed" in err
+    popen.assert_called_once()
+
+
+LOST_CHANNELS = "some channels stay unavailable"
+LOST_ENGINES = "Raven-Design and Raven-PPT stay disabled"
+LOST_PLUGINS = "No plugin could be installed"
+
+
+def _ladder(run: Mock) -> list[tuple[list[str], str | None, str]]:
+    return [(c["mode"], c["plugins"], c["requirement"]) for c in _uv_calls(run)]
+
+
+def test_upgrade_helper_keeps_every_plugin_when_only_the_channel_extras_fail(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A channel SDK that will not build on this platform says nothing about
+    the plugins. The second rung drops the extras and keeps the whole list,
+    and the only loss reported is the one that happened."""
     run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=9), Mock(returncode=0)])
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
@@ -714,23 +831,69 @@ def test_upgrade_helper_warns_when_base_fallback_succeeds(
     status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
 
     assert status == 0
-    # Both shapes are tried for the channel requirement before the base wheel is
-    # reached: a cheap install that failed says nothing about whether the
-    # environment can be rebuilt whole.
-    assert run.call_args_list == [
-        (
-            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],),
-            {"check": False},
-        ),
-        ((["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],), {"check": False}),
-        (
-            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", WHEEL_URL],),
-            {"check": False},
-        ),
+    channels = f"raven[channels] @ {WHEEL_URL}"
+    assert _ladder(run) == [
+        (REINSTALL, PLUGIN_LIST, channels),
+        (FORCE, PLUGIN_LIST, channels),
+        (REINSTALL, PLUGIN_LIST, WHEEL_URL),
+    ]
+    err = capsys.readouterr().err
+    assert LOST_CHANNELS in err
+    assert LOST_ENGINES not in err and LOST_PLUGINS not in err
+
+
+def test_upgrade_helper_keeps_the_channel_extras_when_only_an_engine_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The engines carry native builds a platform can refuse. Dropping them
+    must not cost the channel extras, and the report must not blame them."""
+    run = Mock(side_effect=[Mock(returncode=9)] * 4 + [Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    channels = f"raven[channels] @ {WHEEL_URL}"
+    assert _ladder(run)[-1] == (REINSTALL, MEMORY_ONLY_LIST, channels)
+    err = capsys.readouterr().err
+    assert LOST_ENGINES in err
+    assert LOST_CHANNELS not in err and LOST_PLUGINS not in err
+
+
+def test_upgrade_helper_walks_both_axes_and_lands_on_the_largest_install(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Channels and plugins can fail independently and a failed attempt does
+    not say which, so the rungs cover both axes -- each tried cheap, then with
+    --force -- and the landing rung reports exactly what it lacks."""
+    run = Mock(side_effect=[Mock(returncode=9)] * 11 + [Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    channels = f"raven[channels] @ {WHEEL_URL}"
+    assert _ladder(run) == [
+        (REINSTALL, PLUGIN_LIST, channels),
+        (FORCE, PLUGIN_LIST, channels),
+        (REINSTALL, PLUGIN_LIST, WHEEL_URL),
+        (FORCE, PLUGIN_LIST, WHEEL_URL),
+        (REINSTALL, MEMORY_ONLY_LIST, channels),
+        (FORCE, MEMORY_ONLY_LIST, channels),
+        (REINSTALL, MEMORY_ONLY_LIST, WHEEL_URL),
+        (FORCE, MEMORY_ONLY_LIST, WHEEL_URL),
+        (REINSTALL, None, channels),
+        (FORCE, None, channels),
+        (REINSTALL, None, WHEEL_URL),
+        (FORCE, None, WHEEL_URL),
     ]
     captured = capsys.readouterr()
-    assert "Channel dependencies failed to install" in captured.err
-    assert "Some channels stay unavailable" in captured.err
+    assert LOST_PLUGINS in captured.err and LOST_CHANNELS in captured.err
+    assert LOST_ENGINES not in captured.err, "the landing rung has no engines to blame separately"
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in captured.out
 
 
@@ -738,7 +901,7 @@ def test_upgrade_helper_returns_final_uv_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    run = Mock(side_effect=[Mock(returncode=9)] * 3 + [Mock(returncode=23)])
+    run = Mock(side_effect=[Mock(returncode=9)] * 11 + [Mock(returncode=23)])
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
 
@@ -763,16 +926,9 @@ def test_upgrade_helper_catches_uv_execution_errors(
 
 def test_upgrade_helper_pins_constraints_when_download_succeeds(
     monkeypatch: pytest.MonkeyPatch,
+    release_directory: _ReleaseDirectory,
 ) -> None:
-    import urllib.request
-
-    downloaded: list[tuple[str, str]] = []
-
-    def fake_urlretrieve(url: str, filename: str) -> tuple[str, None]:
-        downloaded.append((url, filename))
-        return filename, None
-
-    monkeypatch.setattr(urllib.request, "urlretrieve", fake_urlretrieve)
+    release_directory.files["raven-constraints.txt"] = b"httpx==0.28.1\n"
     run = Mock(return_value=Mock(returncode=0))
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
@@ -780,30 +936,26 @@ def test_upgrade_helper_pins_constraints_when_download_succeeds(
     status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
 
     assert status == 0
-    assert len(downloaded) == 1
-    constraints_url, constraints_path = downloaded[0]
-    assert constraints_url == ("https://github.com/EverMind-AI/Raven/releases/download/v0.1.4/raven-constraints.txt")
-    run.assert_called_once_with(
-        [
-            "/usr/bin/uv",
-            "tool",
-            "install",
-            "--reinstall-package",
-            "raven",
-            "-c",
-            constraints_path,
-            f"raven[channels] @ {WHEEL_URL}",
-        ],
-        check=False,
-    )
+    assert [request.full_url for request in release_directory.requests] == [
+        f"{RELEASE_DIR}/raven-constraints.txt",
+        f"{RELEASE_DIR}/raven-plugins.txt",
+    ]
+    assert _uv_calls(run) == [
+        {
+            "mode": REINSTALL,
+            "constraints": "httpx==0.28.1\n",
+            "plugins": PLUGIN_LIST,
+            "requirement": f"raven[channels] @ {WHEEL_URL}",
+        },
+    ]
 
 
 def test_upgrade_helper_skips_constraints_when_download_fails(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    # The autouse stub makes the constraints download fail; the helper must fall
-    # back to an unpinned install rather than abort.
+    # The release directory fixture serves no constraints; the helper must fall
+    # back to an unpinned install rather than abort -- unlike the plugin list.
     run = Mock(return_value=Mock(returncode=0))
     monkeypatch.setattr(subprocess, "run", run)
     helper_main = _load_upgrade_helper()
@@ -811,11 +963,60 @@ def test_upgrade_helper_skips_constraints_when_download_fails(
     status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
 
     assert status == 0
-    run.assert_called_once_with(
-        ["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],
-        check=False,
-    )
+    assert _uv_calls(run)[0]["constraints"] is None
     assert "upgrading without version pinning" in capsys.readouterr().err
+
+
+def test_upgrade_helper_reports_a_reinstall_when_the_version_does_not_move(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`raven upgrade` sends an up-to-date install here when the release's list
+    names a plugin the environment lacks; the same command repairs it."""
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.4", "0.1.4"])
+
+    assert status == 0
+    assert "Raven 0.1.4 reinstalled with its plugins" in capsys.readouterr().out
+
+
+BETA_DIR = "https://gitlab.com/api/v4/projects/7/packages/generic/raven/0.1.4b1"
+BETA_WHEEL_URL = BETA_DIR.replace("https://", "https://raven-beta:s3cret%2F@") + "/raven-0.1.4b1-py3-none-any.whl"
+
+
+def test_upgrade_helper_carries_the_beta_credentials_to_the_release_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    release_directory: _ReleaseDirectory,
+) -> None:
+    """A beta wheel URL carries the deploy token as userinfo. urllib reads
+    `user:token@host` as a host name, so the helper moves the credentials into
+    the header for its own downloads -- and copies them onto the plain plugin
+    URLs the list carries, since uv reads credentials only from the URL."""
+    release_directory.files["raven-plugins.txt"] = (
+        f"everos-memory @ {BETA_DIR}/everos_memory-1.2.0-py3-none-any.whl\n"
+    ).encode("utf-8")
+    release_directory.files["raven-constraints.txt"] = b"httpx==0.28.1\n"
+    run = Mock(return_value=Mock(returncode=0))
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", BETA_WHEEL_URL, "0.1.3", "0.1.4b1"])
+
+    assert status == 0
+    expected_header = "Basic " + base64.b64encode(b"raven-beta:s3cret/").decode("ascii")
+    assert [request.full_url for request in release_directory.requests] == [
+        f"{BETA_DIR}/raven-constraints.txt",
+        f"{BETA_DIR}/raven-plugins.txt",
+    ]
+    assert all(request.get_header("Authorization") == expected_header for request in release_directory.requests)
+    (call,) = _uv_calls(run)
+    assert call["plugins"] == (
+        f"everos-memory @ {BETA_DIR.replace('https://', 'https://raven-beta:s3cret%2F@')}"
+        "/everos_memory-1.2.0-py3-none-any.whl\n"
+    )
+    assert call["requirement"] == f"raven[channels] @ {BETA_WHEEL_URL}"
 
 
 def test_upgrade_helper_waits_for_parent_before_running_uv(
@@ -1238,21 +1439,101 @@ def test_upgrade_check_reports_available_without_install(monkeypatch: pytest.Mon
     handoff.assert_not_called()
 
 
-def test_upgrade_reports_current_release_as_up_to_date(monkeypatch: pytest.MonkeyPatch) -> None:
+def _patch_current_release(monkeypatch: pytest.MonkeyPatch, missing: list[str]) -> Mock:
     monkeypatch.setattr(upgrade_commands, "_current_version", lambda: "0.1.4")
     monkeypatch.setattr(
         upgrade_commands,
         "_fetch_latest_release",
         lambda: upgrade_commands.ReleaseInfo("0.1.4", WHEEL_URL),
     )
+    monkeypatch.setattr(upgrade_commands, "missing_plugins", lambda release: missing)
+    monkeypatch.setattr(upgrade_commands, "_is_editable_install", lambda: False)
+    target = upgrade_commands.ToolInstallTarget(Path("/tools"), Path("/bin"))
+    monkeypatch.setattr(upgrade_commands, "_uv_tool_target", lambda: target)
     handoff = Mock()
     monkeypatch.setattr(upgrade_commands, "_handoff_upgrade", handoff)
+    return handoff
+
+
+def test_upgrade_reports_current_release_as_up_to_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    handoff = _patch_current_release(monkeypatch, missing=[])
 
     result = runner.invoke(app, ["upgrade"])
 
     assert result.exit_code == 0
     assert "up to date" in result.stdout
     handoff.assert_not_called()
+
+
+def test_upgrade_reinstalls_the_release_plugins_an_older_helper_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The 0.1.13 helper knew no plugin list, so an install it upgraded to the
+    first release with plugins has none -- and "up to date" would leave it
+    that way. The release's own list says what is missing; the same handoff
+    installs the same version again with it."""
+    handoff = _patch_current_release(monkeypatch, missing=["everos-memory", "ppt-engine"])
+
+    result = runner.invoke(app, ["upgrade"])
+
+    assert result.exit_code == 0
+    output = " ".join(result.stdout.split())
+    assert "lacks everos-memory, ppt-engine" in output
+    assert "Reinstalling Raven 0.1.4 with its plugins" in output
+    handoff.assert_called_once()
+    release, current_version, target = handoff.call_args.args
+    assert (release.version, current_version, target) == (
+        "0.1.4",
+        "0.1.4",
+        upgrade_commands.ToolInstallTarget(Path("/tools"), Path("/bin")),
+    )
+
+
+def test_upgrade_check_names_the_missing_plugins_without_installing(monkeypatch: pytest.MonkeyPatch) -> None:
+    handoff = _patch_current_release(monkeypatch, missing=["ppt-engine"])
+
+    result = runner.invoke(app, ["upgrade", "--check"])
+
+    assert result.exit_code == 0
+    assert "lacks ppt-engine" in " ".join(result.stdout.split())
+    assert "raven upgrade" in result.stdout
+    handoff.assert_not_called()
+
+
+def test_missing_plugins_reads_the_release_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == f"{RELEASE_DIR}/raven-plugins.txt"
+        return httpx.Response(200, text=PLUGIN_LIST)
+
+    def distribution(name: str) -> Mock:
+        if name == "design-engine":
+            raise upgrade_commands.metadata.PackageNotFoundError(name)
+        return Mock()
+
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", distribution)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        missing = upgrade_commands.missing_plugins(upgrade_commands.ReleaseInfo("0.1.4", WHEEL_URL), client)
+
+    assert missing == ["design-engine"]
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        pytest.param(lambda request: httpx.Response(404), id="release-without-a-list"),
+        pytest.param(Mock(side_effect=httpx.ConnectError("offline")), id="list-unreachable"),
+    ],
+)
+def test_missing_plugins_is_empty_when_the_release_has_nothing_to_say(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    """A release older than the list has nothing to miss, and a list that cannot
+    be fetched must not stand between the reader and "up to date"."""
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert upgrade_commands.missing_plugins(upgrade_commands.ReleaseInfo("0.1.4", WHEEL_URL), client) == []
+
+
+def test_plugin_names_read_one_distribution_per_line() -> None:
+    text = "# the release's plugins\n\n" + PLUGIN_LIST + "   \n"
+    assert upgrade_commands.plugin_names(text) == ["everos-memory", "design-engine", "ppt-engine"]
 
 
 def test_upgrade_does_not_downgrade_newer_local_version(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1596,12 +1877,10 @@ def test_upgrade_helper_rebuilds_the_environment_when_the_cheap_shape_fails(
     status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
 
     assert status == 0
-    assert run.call_args_list == [
-        (
-            (["/usr/bin/uv", "tool", "install", "--reinstall-package", "raven", f"raven[channels] @ {WHEEL_URL}"],),
-            {"check": False},
-        ),
-        ((["/usr/bin/uv", "tool", "install", "--force", f"raven[channels] @ {WHEEL_URL}"],), {"check": False}),
+    channels = f"raven[channels] @ {WHEEL_URL}"
+    assert [(c["mode"], c["plugins"], c["requirement"]) for c in _uv_calls(run)] == [
+        (REINSTALL, PLUGIN_LIST, channels),
+        (FORCE, PLUGIN_LIST, channels),
     ]
 
 

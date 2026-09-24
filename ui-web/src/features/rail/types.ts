@@ -14,6 +14,10 @@ export interface SessRow {
   live?: boolean
   persisted?: boolean
   status?: string | null
+  /* The directory the conversation was pinned to when it was created; null or
+     absent for one that runs where the policy default puts it. The rail groups
+     on it: pinned to a folder, or not. */
+  workdir?: string | null
   /* A title is being generated for this row, so the row shows a placeholder
      where the title goes. Client state only: nothing on the wire carries it,
      and a reload of a session already named simply never sets it. */
@@ -22,7 +26,7 @@ export interface SessRow {
 
 /* What one draw reads: the list plus the two page facts a row's look depends
  * on (the current session, and whether a turn is running). The search term is
- * NOT in here: it belongs to the row that produces it (shell/find.ts), and
+ * NOT in here: it belongs to the row that produces it (state/find.ts), and
  * asking the demo and live sources to carry a value only the bundle can
  * produce was coupling with nothing on the other end of it.
  */

@@ -1484,6 +1484,14 @@ class SessionTitleConfig(_Base):
     once instead of holding a placeholder until its grace period runs out."""
 
 
+class SessionsConfig(_Base):
+    """Session housekeeping the settings page controls."""
+
+    auto_archive_after_days: int | None = None
+    """``session.list`` archives an unpinned session whose last message is
+    older than this many days. None turns the pass off."""
+
+
 class SubagentDagConfig(_Base):
     """Judging a finished DAG node, and adjudicating the ones that did not succeed.
 
@@ -1609,6 +1617,7 @@ class RavenConfig(_Base):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     tracing: TracingConfig = Field(default_factory=TracingConfig)
     session_title: SessionTitleConfig = Field(default_factory=SessionTitleConfig)
+    sessions: SessionsConfig = Field(default_factory=SessionsConfig)
     translate: TranslateConfig = Field(default_factory=TranslateConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)

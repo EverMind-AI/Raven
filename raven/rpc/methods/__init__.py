@@ -11,6 +11,7 @@ the declared names that answer -32601.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from raven.rpc.methods._stubs import register_stub_methods
@@ -25,6 +26,7 @@ from raven.rpc.methods.confirm import register_confirm_methods
 from raven.rpc.methods.console import register_console_methods
 from raven.rpc.methods.dag import register_dag_methods
 from raven.rpc.methods.delegation import register_delegation_methods
+from raven.rpc.methods.import_sync import register_import_methods
 from raven.rpc.methods.input import register_input_methods
 from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.knowledge import register_knowledge_methods
@@ -43,6 +45,7 @@ from raven.rpc.methods.slash_routing import register_slash_routing_methods
 from raven.rpc.methods.subagent import register_subagent_methods
 from raven.rpc.methods.subagents import register_subagents_methods
 from raven.rpc.methods.system import register_system_methods
+from raven.rpc.methods.tasks import register_tasks_methods
 from raven.rpc.methods.terminal import register_terminal_methods
 from raven.rpc.methods.turn import (
     register_session_interrupt_method,
@@ -122,6 +125,7 @@ def register_aligned_methods_except_system(
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
     default_channel: str = "tui",
+    ensure_stack: "Callable[[], Awaitable[bool]] | None" = None,
 ) -> None:
     """Register every aligned RPC handler EXCEPT system.* on a dispatcher.
 
@@ -136,12 +140,14 @@ def register_aligned_methods_except_system(
     """
     register_cli_methods(dispatcher, confirm_broker=confirm_broker)
     register_setup_methods(dispatcher)
+    register_import_methods(dispatcher)
     register_reload_methods(dispatcher, agent_loop_factory=agent_loop_factory)
-    register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_config_methods(dispatcher, agent_loop_factory=agent_loop_factory, ensure_stack=ensure_stack)
     register_subagent_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_subagents_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_instance_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_dag_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_tasks_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_session_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_terminal_methods(dispatcher)
     register_stub_methods(dispatcher)
@@ -220,7 +226,7 @@ def register_aligned_methods_except_system(
     # memory.* — a read-only view onto the memory engine, which shipped
     # without an RPC surface. (A matching subagent.* view waits for the
     # transcript writer that would give it anything to list.)
-    register_memory_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_memory_methods(dispatcher)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the
     # page can list what is stored and read one whole spec. Registered
@@ -247,6 +253,7 @@ __all__ = [
     "register_cli_methods",
     "register_commands_methods",
     "register_setup_methods",
+    "register_import_methods",
     "register_reload_methods",
     "register_config_methods",
     "register_subagent_methods",

@@ -1,0 +1,579 @@
+// @vitest-environment happy-dom
+/* The per-conversation model refresh, driven with deferred responses.
+ * model.options does its catalogue work off-thread, so a refresh for a
+ * conversation the reader has left can land after the one they moved to; the
+ * generation ticket is what keeps the late answer from repainting the page. A
+ * synchronous stub cannot exercise that, so this runs the real functions.
+ */
+
+import { describe, expect, it } from 'vitest'
+
+import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
+
+/* One entry of the traffic log: a method name with its params, or a page verb
+   with whatever it was handed. */
+type Call = [string, unknown?]
+/* A call the case has not settled yet. */
+interface Deferred {
+  method: string
+  params: Record<string, unknown>
+  res(answer: unknown): void
+  rej(error: unknown): void
+}
+interface Options {
+  session?: string | null
+  answers?: Record<string, unknown> | null
+}
+
+/* The two sources and the override part in one fresh graph: the staged picks
+ * live in the part and both sources read them, and the generation ticket is a
+ * module of its own that all three share.
+ *
+ * `answers` resolves a call at once; without it every call is held in
+ * `pending` for the test to settle in whatever order the race needs.
+ */
+async function live({ session = null, answers = null }: Options = {}) {
+  const calls: Call[] = []
+  const pending: Deferred[] = []
+  /* A view switch re-reads the default model and the permission mode, and
+     those two reads are the switch's own -- no case here settles them. Held
+     apart so the indices below stay the indices of the calls under test. */
+  let switching = false
+  await loadPart(() => import('../model/source'), {
+    fakes: {
+      'src/state/ws': {
+        setOpen: () => {},
+        reset: () => {},
+      },
+      'src/state/session/conversation': {
+        pitch: () => {},
+        unpitch: () => {},
+      },
+      'src/features/rail/store': {
+        draw: () => {},
+        endRename: () => {},
+      },
+      'src/features/composer/mount': {
+        drawMeter: () => {},
+        goPaint: () => {},
+        loadDraft: () => {},
+        parkDraft: () => {},
+        queueClear: () => {},
+        turn: { dispatch: () => {}, busy: () => false },
+      },
+      'src/features/model/store': {
+        current: () => '',
+        setCurrent: (m: string) => calls.push(['modelSet', m]),
+      },
+      'src/lib/dom': {
+        $: looseQuery(),
+      },
+      'src/lib/session': { current: () => session, setCurrent: () => {} },
+      'src/state/banner': { draw: () => {} },
+      'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
+      'src/state/tier': { load: () => {} },
+      'src/state/perm': { setFromConfig: (m: string) => calls.push(['setPermMode', m]) },
+      'src/state/session/residency': { park: () => {} },
+      'src/features/settings/store': {
+        openModels: () => calls.push(['openModels']),
+      },
+    },
+  })
+  await fakeGateway((method: string, params: Record<string, unknown>) => {
+    if (switching) return new Promise(() => {})
+    calls.push([method, params])
+    /* `?? {}` so a call the case did not name -- the refresh a write kicks
+       off behind `void` -- answers an empty envelope rather than crashing
+       in a promise nobody is holding. */
+    if (answers) return Promise.resolve(answers[method] ?? {})
+    return new Promise((res, rej) => pending.push({ method, params, res, rej }))
+  })
+  const model = await import('../model/source')
+  const settingsModule = await import('../settings/source')
+  const { generation } = await import('../../state/session/generation')
+  const registry = await import('../../state/session/registry')
+  const runtime = await import('../../state/session/runtime')
+  const { staging } = await import('../../state/session/staging')
+  /* The staged picks are the conversation's own now: the draft holds them and
+     a switch to another draft drops them with it, so the object the sources
+     read is whichever one is on screen. */
+  const overrides = {
+    get staged() { return staging() },
+    startDraft: () => registry.switchToDraft(),
+    applyStagedModel: (sessionId: string, gen: number) =>
+      runtime.applyStagedModel(registry.viewRuntime(), sessionId, gen),
+  }
+  /* Everything the two sources read off the page. `modelSet` is the island's
+     verb, faked above; the chip painter is the page's. */
+  model.setChipPainter(() => {})
+  const settings = {
+    setupState: model.setupState,
+    openModelsForMissingProvider: model.openModelsForMissingProvider,
+    loadProviders: model.loadProviders,
+    persistModel: model.persistModel,
+    loadPermMode: settingsModule.loadPermMode,
+    loadSettings: settingsModule.loadSettings,
+    settingsSnapshot: settingsModule.settingsSnapshot,
+    loadDefaultProviders: model.loadDefaultProviders,
+    get providersLive() { return model.modelSource.providers() },
+    get defaultProvidersLive() { return model.defaultProviders() },
+    get defaultModelLive() { return model.defaultModel() },
+    get defaultProviderLive() { return model.defaultProvider() },
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+  return {
+    settings,
+    overrides,
+    calls,
+    source: model.modelSource,
+    /* A switch to the new-task screen, which is one of the two paths that
+       spends a generation ticket -- the real counter, not a stand-in. */
+    bump: () => {
+      switching = true
+      try { overrides.startDraft() } finally { switching = false }
+      return generation()
+    },
+    gen: () => generation(),
+    inFlight: () => pending.map((p) => p.method),
+    param: (i: number) => pending[i]!.params,
+    settle: (i: number, answer: unknown) => { pending[i]!.res(answer); return tick() },
+    fail: (i: number, error: unknown) => { pending[i]!.rej(error); return tick() },
+    modelsSet: () => calls.filter((c) => c[0] === 'modelSet').map((c) => c[1]),
+  }
+}
+
+describe('the first-run provider guard', () => {
+  it('opens Models when setup reports no configured provider', async () => {
+    const h = await live()
+    h.settings.setupState.providerConfigured = false
+    expect(h.settings.openModelsForMissingProvider()).toBe(true)
+    expect(h.calls.filter((c) => c[0] === 'openModels')).toHaveLength(1)
+  })
+
+  it('stops redirecting as soon as a provider refresh authenticates one', async () => {
+    const h = await live({ session: 'sess-1' })
+    h.settings.setupState.providerConfigured = false
+    const read = h.settings.loadProviders()
+    await h.settle(0, { providers: [{ slug: 'anthropic', name: 'Anthropic', authenticated: true, models: [] }] })
+    await read
+
+    expect(h.settings.openModelsForMissingProvider()).toBe(false)
+    expect(h.calls.filter((c) => c[0] === 'openModels')).toEqual([])
+  })
+
+  it('does not redirect while first-run status is still unknown', async () => {
+    const h = await live()
+    expect(h.settings.openModelsForMissingProvider()).toBe(false)
+    expect(h.calls.filter((c) => c[0] === 'openModels')).toEqual([])
+  })
+})
+
+describe('the picker\'s settings door', () => {
+  it('lands on Model providers, which is the page it names', async () => {
+    /* The footer says "manage models and accounts", and settings opened
+       wherever it had been left last -- General, on a fresh page -- so the
+       reader who asked for one page got another. Model providers is where a
+       key is entered and a model list is built. */
+    const h = await live()
+    h.source.openSettings()
+    expect(h.calls.filter((c) => c[0] === 'openModels')).toHaveLength(1)
+  })
+})
+
+describe('the live model refresh', () => {
+  it('drops a superseded refresh even when its response lands last', async () => {
+    const h = await live()
+    h.bump()
+    h.settings.loadProviders('a', h.gen())
+    h.bump()
+    h.settings.loadProviders('b', h.gen())
+
+    await h.settle(1, { model: 'model-b', providers: [] })
+    await h.settle(0, { model: 'model-a', providers: [] })
+
+    expect(h.modelsSet()).toEqual(['model-b'])
+  })
+
+  it('commits a refresh whose generation is still current', async () => {
+    const h = await live()
+    h.bump()
+    h.settings.loadProviders('a', h.gen())
+    await h.settle(0, { model: 'model-a', providers: [] })
+    expect(h.calls).toContainEqual(['modelSet', 'model-a'])
+  })
+
+  it('takes its own ticket when the caller brought none, so a late answer is still dropped', async () => {
+    /* Three call sites do not pass a generation (the settings load, the
+       provider-op refresh, and any future one). Capturing at entry is what
+       makes them safe by construction instead of by each caller remembering. */
+    const h = await live()
+    h.settings.loadProviders('a')
+    h.bump()
+    await h.settle(0, { model: 'model-a', providers: [] })
+    expect(h.modelsSet()).toEqual([])
+  })
+
+  it('commits a ticketless refresh when nothing moved under it', async () => {
+    const h = await live()
+    h.settings.loadProviders('a')
+    await h.settle(0, { model: 'model-a', providers: [] })
+    expect(h.calls).toContainEqual(['modelSet', 'model-a'])
+  })
+
+  it('omits session_id when there is no session, rather than serializing null', async () => {
+    const h = await live()
+    h.settings.loadProviders(null)
+    expect(h.param(0)).toEqual({})
+    h.settings.loadProviders('a')
+    expect(h.param(1)).toEqual({ session_id: 'a' })
+  })
+})
+
+describe('the live model persist', () => {
+  it('a default write carries the visible session and repaints a chip that follows the default', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, applies_to_session: true } } })
+    await expect(h.settings.persistModel('m2', 'minimax', 'default')).resolves.toBeUndefined()
+    expect(h.calls[0]).toEqual(['config.set', { key: 'model', value: 'm2', provider: 'minimax', scope: 'default', session_id: 'sess-1' }])
+    expect(h.calls).toContainEqual(['model.options', { session_id: 'sess-1' }])
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['m2', 'minimax'])
+  })
+
+  it('says needs_restart when the default landed in a gateway with no loop', async () => {
+    /* A first run: the config is right and this process still cannot chat on
+       it. The wizard's model step reads this to say so. */
+    const h = await live({ answers: { 'config.set': { applied: true, needs_restart: true } } })
+    await expect(h.settings.persistModel('m2', 'minimax', 'default')).resolves.toBe('needs_restart')
+  })
+
+  it('rejects a refused session write, because only the caller\'s catch puts the chip back', async () => {
+    /* `choose` moves the chip before the round trip and rolls it back only in
+       its catch, so a refusal that RESOLVES left the chip on a model the
+       session does not have and the page saying it switched. */
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: false, previous: null, scope: 'session' } } })
+    const { t } = await import('../../i18n/t')
+    await expect(h.settings.persistModel('m2', 'minimax', 'session')).rejects.toMatchObject({
+      data: { detail: t('gui.model.refused') },
+    })
+  })
+
+  it('an applied session write resolves and says nothing', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, previous: 'm1', scope: 'session' } } })
+    await expect(h.settings.persistModel('m2', 'minimax', 'session')).resolves.toBeUndefined()
+  })
+
+  it('a default write moves a visible draft chip, which follows the default like an unswitched session', async () => {
+    const h = await live({ answers: { 'config.set': { applied: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'default')
+    expect(h.calls).toContainEqual(['modelSet', 'm2'])
+  })
+
+  it('a default write leaves a draft that staged its own pick alone', async () => {
+    const h = await live({ answers: { 'config.set': { applied: true } } })
+    h.overrides.staged.model = { model: 'other', provider: 'anthropic' }
+    await h.settings.persistModel('m2', 'minimax', 'default')
+    expect(h.modelsSet()).toEqual([])
+  })
+
+  it('a default write leaves a session with its own binding alone', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true, applies_to_session: false } } })
+    await h.settings.persistModel('m2', 'minimax', 'default')
+    expect(h.calls.filter((c) => c[0] === 'model.options')).toEqual([])
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['m2', 'minimax'])
+  })
+
+  it('a refused default write moves neither half of the stored default pair', async () => {
+    const h = await live({ session: 'sess-1' })
+    /* Caught as it is made, not after the refusal: a rejection left unheld
+       while the test drives the clock is an unhandled rejection. */
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
+      .then(() => null, (e) => e)
+    await h.fail(0, new Error('boom'))
+    expect((await write)?.message).toBe('boom')
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['', ''])
+  })
+
+  /* The fourth path, added with the migration: a session pick WITH a session
+     writes under it and nothing else -- no default pair moves, no refresh. */
+  it('a session pick writes under that session and moves no default', async () => {
+    const h = await live({ session: 'sess-1', answers: { 'config.set': { applied: true } } })
+    await h.settings.persistModel('m2', 'minimax', 'session')
+    expect(h.calls).toEqual([['config.set', { key: 'model', value: 'm2', provider: 'minimax', session_id: 'sess-1' }]])
+    expect([h.settings.defaultModelLive, h.settings.defaultProviderLive]).toEqual(['', ''])
+  })
+
+  it('a session pick with no session stages and says so', async () => {
+    const h = await live()
+    const out = await h.settings.persistModel('m2', 'minimax', 'session')
+    expect(out).toBe('staged')
+    expect(h.overrides.staged.model).toEqual({ model: 'm2', provider: 'minimax' })
+    expect(h.calls).toEqual([])
+  })
+})
+
+describe('the live settings snapshot', () => {
+  it('pairs the default model with the default provider, not the visible session', async () => {
+    const h = await live({
+      session: 'sess-1',
+      answers: {
+        'settings.get': { settings: { agents: { defaults: { model: 'default-b', provider: 'openrouter' } } } },
+        'model.options': { model: 'session-a', provider: 'anthropic', providers: [] },
+      },
+    })
+    await h.settings.loadSettings()
+    const snap = h.settings.settingsSnapshot()
+    expect(snap.model).toBe('default-b')
+    expect(snap.curProvider).toBe('openrouter')
+  })
+})
+
+describe('providers the page does not offer', () => {
+  const row = (slug: string) => ({ slug, name: slug, authenticated: false, models: [] })
+
+  async function listed(providers: unknown[]) {
+    const h = await live({ session: 'sess-1', answers: { 'model.options': { model: '', provider: '', providers } } })
+    await h.settings.loadProviders()
+    return h.settings.providersLive
+  }
+
+  it('keeps every row the wire reports, the two generic ones included', async () => {
+    /* `hosted_vllm` and `custom` used to be dropped here, on the reasoning that
+       a row whose name says nothing about what it reaches is noise beside fifty
+       that do. The settings catalogue has a search box and six filters, and
+       `custom` is the page's only entry for a vendor Raven carries no spec for,
+       so the whole list travels and the surfaces choose. */
+    const rows = await listed([row('anthropic'), row('custom'), row('hosted_vllm'), row('ollama_chat')])
+
+    expect(rows.map((p) => p.id)).toEqual(['anthropic', 'custom', 'hosted_vllm', 'ollama_chat'])
+  })
+
+  it('carries the two facts only the registry has: gateway and which row is current', async () => {
+    const rows = await listed([
+      { ...row('openrouter'), gateway: true },
+      { ...row('anthropic'), is_current: true },
+    ])
+
+    expect(rows.map((p) => [p.id, !!p.gateway, !!p.current])).toEqual([
+      ['openrouter', true, false],
+      ['anthropic', false, true],
+    ])
+  })
+})
+
+describe('one catalogue read per question', () => {
+  const row = (slug: string) => ({ slug, name: slug, authenticated: true, models: [`${slug}/m`] })
+
+  it('two default-scoped reads in flight share one model.options call', async () => {
+    /* The boot asks this question from three places within a second, and each
+       was a full catalogue build on the gateway. */
+    const h = await live()
+    const chip = h.settings.loadProviders(null)
+    const snapshot = h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options'])
+
+    await h.settle(0, { model: 'deepseek/d', provider: 'deepseek', providers: [row('deepseek')] })
+    await Promise.all([chip, snapshot])
+
+    expect(h.settings.providersLive.map((p) => p.id)).toEqual(['deepseek'])
+    expect(h.settings.defaultProvidersLive.map((p) => p.id)).toEqual(['deepseek'])
+  })
+
+  it('a read for a conversation is its own question', async () => {
+    const h = await live()
+    void h.settings.loadProviders('sess-1')
+    void h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options', 'model.options'])
+  })
+
+  it('asks again once the shared answer has landed', async () => {
+    const h = await live()
+    const first = h.settings.loadDefaultProviders()
+    await h.settle(0, { providers: [row('deepseek')] })
+    await first
+    void h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options', 'model.options'])
+  })
+})
+
+describe('the two provider scopes', () => {
+  const row = (slug: string, current = false) =>
+    ({ slug, name: slug, authenticated: true, models: [`${slug}/m`], is_current: current })
+
+  it('a default-scoped read leaves the conversation rows alone', async () => {
+    /* `is_current` is the whole difference: the backend marks the
+       conversation's provider when the read names a session and
+       agents.defaults' when it does not. Sharing one array let the settings
+       dialog's read -- which every settings write repeats -- put the default's
+       answer under the composer's picker, which then opened on the default's
+       column with the conversation's model prepended and ticked there, under a
+       vendor whose key does not serve it. */
+    const h = await live({ session: 'sess-1' })
+
+    const perSession = h.settings.loadProviders()
+    await h.settle(0, { model: 'gemini/g', provider: 'gemini', providers: [row('deepseek'), row('gemini', true)] })
+    await perSession
+    expect(h.settings.providersLive.filter((p) => p.current).map((p) => p.id)).toEqual(['gemini'])
+
+    const perDefault = h.settings.loadDefaultProviders()
+    await h.settle(1, { model: 'deepseek/d', provider: 'deepseek', providers: [row('deepseek', true), row('gemini')] })
+    await perDefault
+
+    expect(h.settings.providersLive.filter((p) => p.current).map((p) => p.id)).toEqual(['gemini'])
+    expect(h.settings.defaultProvidersLive.filter((p) => p.current).map((p) => p.id)).toEqual(['deepseek'])
+  })
+})
+
+describe('the default-scoped provider read', () => {
+  const row = (slug: string, current = false) => ({ slug, name: slug, authenticated: true, current, models: [] })
+  it('asks once when the page and the picker both refresh with no conversation open', async () => {
+    /* A provider write refreshes both; with no session the two reads are the
+       same live round trip to every vendor, most of a second each. */
+    const h = await live({ session: null })
+    const a = h.settings.loadDefaultProviders()
+    const b = h.settings.loadProviders()
+    expect(h.inFlight()).toEqual(['model.options'])
+    await h.settle(0, { model: 'deepseek/d', provider: 'deepseek', providers: [row('deepseek', true)] })
+    await Promise.all([a, b])
+    expect(h.settings.defaultProvidersLive.map((p) => p.id)).toEqual(['deepseek'])
+    expect(h.settings.providersLive.map((p) => p.id)).toEqual(['deepseek'])
+  })
+
+  it('asks again once the shared read has answered', async () => {
+    const h = await live({ session: null })
+    const a = h.settings.loadDefaultProviders()
+    await h.settle(0, { providers: [] })
+    await a
+    void h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options', 'model.options'])
+  })
+})
+
+describe('the follows-default repaint under navigation', () => {
+  it('drops the repaint when the reader left during the write', async () => {
+    const h = await live({ session: 'a' })
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
+    h.bump()
+    await h.settle(0, { applied: true, applies_to_session: true })
+    await write
+    expect(h.inFlight()).toEqual(['config.set', 'model.options'])
+    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.modelsSet()).toEqual([])
+  })
+
+  it('drops a draft repaint when the reader opened a conversation during the write', async () => {
+    /* The draft branch runs after the same await, so it needs the same ticket:
+       the picker has closed, nothing locks the write, and opening a conversation
+       advances the generation. Without the check the resolved draft write
+       repaints a chip that has since been loaded for that conversation. */
+    const h = await live()
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
+    h.bump()
+    await h.settle(0, { applied: true })
+    await write
+    expect(h.modelsSet()).toEqual([])
+  })
+
+  it('commits a draft repaint when the reader stayed on the draft', async () => {
+    const h = await live()
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
+    await h.settle(0, { applied: true })
+    await write
+    expect(h.calls).toContainEqual(['modelSet', 'm2'])
+  })
+
+  it('commits the repaint when the reader stayed', async () => {
+    const h = await live({ session: 'a' })
+    const write = h.settings.persistModel('m2', 'minimax', 'default')
+    await h.settle(0, { applied: true, applies_to_session: true })
+    await write
+    await h.settle(1, { model: 'm2', providers: [] })
+    expect(h.calls).toContainEqual(['modelSet', 'm2'])
+  })
+})
+
+describe('the staged draft-write recovery', () => {
+  /* The real applyStagedModel driving the real loadProviders over one shared
+   * viewGen, with the config.set response deferred: the recovery refresh reports
+   * on the session the send began under, so leaving it must drop the answer. */
+  async function staged() {
+    const h = await live({ session: 'a' })
+    h.overrides.staged.model = { model: 'm2', provider: 'minimax' }
+    return h
+  }
+
+  it('drops its refusal refresh when the reader opened another conversation', async () => {
+    /* Order is the whole point: the reader leaves while `config.set` is still
+       pending, so by the time the refusal fires the generation has ALREADY
+       moved. A ticket taken when the refresh starts would read as current and
+       repaint B; only the generation captured when the send began is right. */
+    const h = await staged()
+    const applied = h.overrides.applyStagedModel('a', h.gen())
+    h.bump()
+    await h.fail(0, { data: { detail: 'credential gone' } })
+    await applied
+    expect(h.inFlight()).toEqual(['config.set', 'model.options'])
+    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.modelsSet()).toEqual([])
+    expect(h.calls.some((c) => c[0] === 'toast')).toBe(true)
+  })
+
+  it('reconciles the chip when the reader stayed on that conversation', async () => {
+    const h = await staged()
+    const applied = h.overrides.applyStagedModel('a', h.gen())
+    await h.fail(0, { data: { detail: 'credential gone' } })
+    await applied
+    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.calls).toContainEqual(['modelSet', 'model-a'])
+  })
+
+  it('speaks and reconciles when the refusal RESOLVES rather than raises', async () => {
+    /* A first run answers `applied: false`: there is no loop to bind a session
+       to, because this gateway started without a model. That resolves, so a
+       catch-only recovery heard nothing and left the chip showing a model the
+       session does not have -- after a pick the reader was told was staged. */
+    const h = await staged()
+    const applied = h.overrides.applyStagedModel('a', h.gen())
+    await h.settle(0, { applied: false, previous: null, scope: 'session' })
+    await applied
+    expect(h.calls.some((c) => c[0] === 'toast')).toBe(true)
+    expect(h.inFlight()).toEqual(['config.set', 'model.options'])
+    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.calls).toContainEqual(['modelSet', 'model-a'])
+  })
+
+  it('says nothing and refreshes nothing when the write lands', async () => {
+    const h = await staged()
+    const applied = h.overrides.applyStagedModel('a', h.gen())
+    await h.settle(0, { applied: true })
+    await applied
+    expect(h.calls.filter((c) => c[0] === 'toast' || c[0] === 'modelSet')).toEqual([])
+    expect(h.inFlight()).toEqual(['config.set'])
+  })
+})
+
+/* The permission chip's refresh runs the same race as the model's: two opens in
+   a row, the first answer landing last. Same ticket, same outcome -- the chip
+   shows the conversation the reader is in, which is the one the gate runs. */
+describe('the live permission-mode refresh', () => {
+  it('drops a superseded refresh even when its response lands last', async () => {
+    const h = await live()
+    h.bump()
+    h.settings.loadPermMode('a', h.gen())
+    h.bump()
+    h.settings.loadPermMode('b', h.gen())
+
+    await h.settle(1, { config: { 'permissions.mode': 'full' } })
+    await h.settle(0, { config: { 'permissions.mode': 'ask' } })
+
+    expect(h.calls.filter((c) => c[0] === 'setPermMode').map((c) => c[1])).toEqual(['full'])
+    expect(h.param(0)).toEqual({ keys: ['permissions.mode'], session_id: 'a' })
+  })
+
+  it('reads the default for a draft and takes its own ticket when the caller brought none', async () => {
+    const h = await live()
+    h.bump()
+    h.settings.loadPermMode(null)
+    expect(h.param(0)).toEqual({ keys: ['permissions.mode'] })
+    await h.settle(0, { config: {} })
+    expect(h.calls.filter((c) => c[0] === 'setPermMode').map((c) => c[1])).toEqual(['ask'])
+  })
+})

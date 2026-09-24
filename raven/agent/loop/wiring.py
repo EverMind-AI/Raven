@@ -14,8 +14,6 @@ from raven.agent.loop._shared import (
     Any,
     AskUserTool,
     Callable,
-    DeepResearchManager,
-    DeepResearchOfferTool,
     EditFileTool,
     ExecTool,
     FindTool,
@@ -35,7 +33,6 @@ from raven.agent.loop._shared import (
     WebSearchTool,
     WriteFileTool,
     active_binding,
-    deep_research_mode,
     image_search_vendor,
     logger,
     resolve_vendor_key,
@@ -54,9 +51,19 @@ if TYPE_CHECKING:
     from raven.agent.tools.deliverables import DeliverableStore
     from raven.config.raven import SkillForgeRouterConfig
     from raven.config.schema import PlaybookConfig
-    from raven.contracts.asking import QuestionResponder
     from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
+
+
+#: What the iteration cap is held under for the length of a turn.
+_CAP_KEY = "agents.defaults.maxToolIterations"
+#: Same, for the effort every model call of the turn is sent at.
+_EFFORT_KEY = "agents.defaults.reasoningEffort"
+#: Same, for the switch both personalization gates of a turn read.
+_PERSONALIZATION_KEY = "agents.defaults.enablePersonalization"
+#: Both web vendors under one key: they come out of one section, and a turn
+#: that searches and fetches must not straddle an edit between the two.
+_WEB_VENDORS_KEY = "tools.web.providers"
 
 
 class WiringMixin:
@@ -72,12 +79,14 @@ class WiringMixin:
         preference expressed by destroying its subject is one that cannot be
         reversed: nothing remembered what to put back.
 
-        The MCP meta-tools are the one exemption, and it is theirs by ownership
-        rather than by policy: :meth:`_sync_mcp_meta_tools` registers them while
-        some connected server serves resources or prompts and withdraws them when
-        none does, so it owns those five names for the life of the loop. An entry
-        naming one is a preference nothing can act on -- reported here once,
-        ignored where the array is built.
+        Two groups are exempt, and both are theirs by ownership rather than by
+        policy. :meth:`_sync_mcp_meta_tools` registers the five MCP meta-tools
+        while some connected server serves resources or prompts and withdraws them
+        when none does, so it owns those names for the life of the loop.
+        ``tool_search`` and ``tool_call`` are owned the same way by
+        :meth:`_register_default_tools`, and ``tools.tool_search.enabled`` is the
+        switch that speaks for them. An entry naming either group is a preference
+        nothing can act on -- reported here once, ignored where the array is built.
 
         Run after :meth:`_register_default_tools` and after MCP connect, so an
         entry naming a tool from either group is resolvable by the time it is
@@ -88,6 +97,7 @@ class WiringMixin:
         is about the entry the operator can actually see -- most of them are in
         the config file, which is no longer copied into ``_disabled_tools``.
         """
+        from raven.agent.tools.tool_search import META_TOOL_NAMES, TOOL_SEARCH_NAME
         from raven.config.live import disabled_tool_names
         from raven.mcp.prompts import PROMPT_TOOL_NAMES
         from raven.mcp.resources import RESOURCE_TOOL_NAMES
@@ -95,11 +105,12 @@ class WiringMixin:
         entries = set(disabled_tool_names(self._live_config)) | self._disabled_tools
         if not entries:
             return
-        reserved = RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
+        mcp_reserved = RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES
         for entry in sorted(entries):
             if entry in self._disabled_tools_reserved_warned:
                 continue
-            if any(name in reserved for name in self.tools.resolve_configured(entry)):
+            resolved = self.tools.resolve_configured(entry)
+            if any(name in mcp_reserved for name in resolved):
                 self._disabled_tools_reserved_warned.add(entry)
                 logger.warning(
                     "tools.disabled_tools names '{}', which raven registers and withdraws on its "
@@ -107,16 +118,44 @@ class WiringMixin:
                     "no effect; remove it to keep the config honest.",
                     entry,
                 )
+            elif any(name in META_TOOL_NAMES for name in resolved):
+                self._disabled_tools_reserved_warned.add(entry)
+                # One remedy per name, because the two are not owned the same
+                # way: tools.tool_search.enabled decides whether tool_search is
+                # registered at all, while tool_call is registered whatever that
+                # switch says -- it is the only route to a schema-hidden tool.
+                # A shared "turn the fold off" line sent an operator who wrote
+                # tool_call here to a setting that leaves it exactly where it was.
+                remedy = (
+                    "turn the fold off with tools.tool_search.enabled, which is what registers it"
+                    if TOOL_SEARCH_NAME in resolved
+                    else "this deploy has no switch for it: it is the only route to a tool whose "
+                    "schema is not in the array, so it is registered whatever the fold is doing"
+                )
+                logger.warning(
+                    "tools.disabled_tools names '{}', which raven owns for the life of the loop. "
+                    "The entry has no effect; remove it, or {}.",
+                    entry,
+                    remedy,
+                )
 
     def _withheld_tool_names(self) -> frozenset[str]:
         """Which tools are not on offer right now, read live.
 
         The registry asks this when it assembles a tool array. Reserved names are
-        removed here rather than at the switch: ``_sync_mcp_meta_tools`` owns those
-        five for the life of the loop (it registers them while some connected
-        server serves resources or prompts and withdraws them when none does), so
-        an entry naming one is a preference the loop cannot honour -- reported
-        above, ignored here.
+        removed here rather than at the switch: ``_sync_mcp_meta_tools`` owns the
+        five MCP meta-tools for the life of the loop (it registers them while some
+        connected server serves resources or prompts and withdraws them when none
+        does), so an entry naming one is a preference the loop cannot honour --
+        reported above, ignored here.
+
+        ``tool_search`` and ``tool_call`` are reserved for that reason and one
+        more. Their absence from the array is how ``ToolSearchStrategy`` reads
+        "this request has no search route", and it answers by shipping every
+        schema instead -- so an off switch here would not slim the array, it would
+        unfold it, and mid-turn at that, because this source is read once per
+        assembly. The switch that speaks for the fold is
+        ``tools.tool_search.enabled``.
 
         Constructor-supplied names are unioned in because an eval harness passes
         them directly rather than through a config file; a file-less run would
@@ -124,6 +163,7 @@ class WiringMixin:
         list in there -- see the note in ``__init__`` on why that made the switch
         one-way.
         """
+        from raven.agent.tools.tool_search import META_TOOL_NAMES
         from raven.config.live import disabled_tool_names
         from raven.mcp.prompts import PROMPT_TOOL_NAMES
         from raven.mcp.resources import RESOURCE_TOOL_NAMES
@@ -133,7 +173,7 @@ class WiringMixin:
         for entry in configured:
             withheld.update(self.tools.resolve_configured(entry))
         withheld.update(self._unconfigured_tool_names())
-        return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES))
+        return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES | META_TOOL_NAMES))
 
     def _unconfigured_tool_names(self) -> set[str]:
         """Registered tools whose config asks for nothing right now, read live.
@@ -222,21 +262,7 @@ class WiringMixin:
         until the next process. The leaf is Serper's alone, hence consulted
         only when Serper is the selection.
         """
-        from raven.config.live import web_provider_key, web_search_key
-
-        vendor = self.web_search_provider
-        slot = web_provider_key(self._live_config, vendor)
-        if slot:
-            return slot
-        if vendor == "serper":
-            leaf = web_search_key(self._live_config)
-            if leaf is not None:
-                return leaf
-        # An empty-but-present slot is a revocation, not a miss: fall through to
-        # the boot value only when the file answered nothing at all.
-        if slot == "":
-            return ""
-        return self._web_key(vendor) or ""
+        return self._live_vendor_key(self.web_search_provider)
 
     def _media_config_reader(self, kind: str, fallback) -> "Callable[[], Any]":
         def read():
@@ -352,18 +378,9 @@ class WiringMixin:
         same order: the canonical vendor slot, then the pre-vendor leaf that is
         Serper's alone, then the boot value.
         """
-        from raven.config.live import web_provider_key, web_search_key
+        from raven.config.live import live_vendor_key
 
-        slot = web_provider_key(self._live_config, vendor)
-        if slot:
-            return slot
-        if vendor == "serper":
-            leaf = web_search_key(self._live_config)
-            if leaf is not None:
-                return leaf
-        if slot == "":
-            return ""
-        return self._web_key(vendor) or ""
+        return live_vendor_key(self._live_config, vendor, boot=self._web_key(vendor))
 
     @property
     def provider(self) -> LLMProvider:
@@ -393,6 +410,91 @@ class WiringMixin:
         """
         binding = active_binding() or self._default_binding
         return binding.context_window
+
+    def _turn_scope(self):
+        """Hold the settings a turn reads more than once, from here on.
+
+        Entered beside ``use_binding`` at the turn boundary and for the same
+        reason: one turn, one answer. The cap is resolved here rather than at
+        its first read, which happens after context assembly.
+        """
+        from raven.config.live import hold_for_this_turn, max_tool_iterations, reasoning_effort
+
+        return hold_for_this_turn(
+            **{
+                _CAP_KEY: max_tool_iterations(self._live_config),
+                _EFFORT_KEY: reasoning_effort(self._live_config),
+            }
+        )
+
+    def _with_live_window(self, binding: ModelBinding) -> ModelBinding:
+        """This turn's binding, carrying the window the config has right now.
+
+        Resolved once per turn and then held, like the pair it rides on: the
+        budget is read several times while a turn runs -- history trimming, the
+        compaction check, the usage report -- and a number that moved between
+        those reads would leave one turn disagreeing with itself. Re-read at the
+        next turn, which is what makes a window set on a settings surface apply
+        without bringing the gateway back.
+
+        The same object comes back when the number has not changed, so the
+        binding keeps the window it already resolved from the rates catalogue
+        rather than resolving it again every turn.
+        """
+        from dataclasses import replace
+
+        from raven.config.live import context_window_tokens
+
+        configured = context_window_tokens(self._live_config)
+        if configured == binding.configured_window:
+            return binding
+        return replace(binding, configured_window=configured)
+
+    @property
+    def default_reasoning_effort(self) -> str | None:
+        """The effort a call runs at when the session pinned none.
+
+        The provider holds a configured default too, but it is frozen at
+        construction on purpose (see ``ResolvingProvider``: a credentials
+        refresh must not import a live ``agents`` section), so an edit reached
+        it only at a restart. Sent as an explicit argument instead, which is
+        the path a session's pinned effort already takes.
+
+        None passes nothing, which leaves the provider's own default standing
+        -- an explicit None would switch it off instead.
+        """
+        from raven.config.live import held, reasoning_effort
+
+        return held(_EFFORT_KEY, lambda: reasoning_effort(self._live_config))
+
+    @property
+    def personalization_enabled(self) -> bool:
+        """Whether the personalization flow runs, as the file has it now.
+
+        ``configure_personalization`` still sets what a process was built with;
+        the file answers when it has an opinion, so a switch on a settings
+        surface reaches the next turn.
+        """
+        from raven.config.live import held, personalization_enabled
+
+        configured = held(_PERSONALIZATION_KEY, lambda: personalization_enabled(self._live_config))
+        return self.enable_personalization if configured is None else configured
+
+    @property
+    def max_iterations(self) -> int:
+        """The ReAct cap a turn runs under when its session pinned none.
+
+        Read live rather than frozen at build for the reason the permission
+        mode is: a cap is a sentence about the next turn, not work to redo.
+        A turn holds the value it starts on (``run_turn`` passes it to
+        ``hold_for_this_turn``), because the cap is first read after context
+        assembly -- which can spend minutes in the curator -- and an edit made
+        in that window would otherwise change the request already running.
+        """
+        from raven.config.live import held, max_tool_iterations
+
+        configured = held(_CAP_KEY, lambda: max_tool_iterations(self._live_config))
+        return configured or self._default_max_iterations
 
     @property
     def provider_pool(self) -> "ProviderPool | None":
@@ -704,7 +806,7 @@ class WiringMixin:
         nothing else.
         """
         cfg = self._playbook_config
-        if cfg is None or getattr(cfg, "agent_harness", "default") != "generate":
+        if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
             return None
         if is_subagent_process():
             return None
@@ -759,11 +861,14 @@ class WiringMixin:
         No production caller today -- every switch path goes through the pool
         and lands on ``set_default_binding`` or ``set_session_binding``. Kept as
         the pair-free entry point for an embedder that has a provider in hand,
-        which is why it carries ``_configured_window`` forward: a window the
-        user pinned belongs to whatever they run, and building the binding
-        without it here would drop it the day this grows a caller.
+        which is why it carries the current default's window forward: a window
+        the user pinned belongs to whatever they run, and building the binding
+        without it here would drop it the day this grows a caller. Taken from
+        the binding rather than re-read from the file, because a caller holding
+        a provider of its own need not be one this process loaded a config for;
+        a turn re-reads the file anyway (see ``_with_live_window``).
         """
-        self.set_default_binding(ModelBinding(provider, model, self._configured_window))
+        self.set_default_binding(ModelBinding(provider, model, self._default_binding.configured_window))
 
     def configure_personalization(self, enable: bool) -> None:
         """Global switch for the 4-step personalization flow (PAHF-inspired).
@@ -778,6 +883,28 @@ class WiringMixin:
         """
         self.enable_personalization = enable
         logger.info("Personalization flow: {}", "enabled" if enable else "disabled")
+
+    @property
+    def web_search_provider(self) -> str:
+        """The search vendor a call runs on, as the file has it now.
+
+        The keys have been read live since they landed and resolve against this
+        selection (``_live_web_search_key``), so a vendor frozen at startup was
+        the half that kept the pair on the old endpoint. Held for the turn, like
+        the rest of them.
+        """
+        from raven.config.live import default_live, held, web_providers
+
+        configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
+        return configured[0] or self._boot_web_search_provider
+
+    @property
+    def web_fetch_provider(self) -> str:
+        """The fetch vendor a call runs on. See :attr:`web_search_provider`."""
+        from raven.config.live import default_live, held, web_providers
+
+        configured = held(_WEB_VENDORS_KEY, lambda: web_providers(default_live()))
+        return configured[1] or self._boot_web_fetch_provider
 
     def _web_key(self, vendor: str) -> str | None:
         return resolve_vendor_key(vendor, self.web_provider_keys, self.search_api_key, self.jina_api_key)
@@ -821,7 +948,9 @@ class WiringMixin:
         # says nothing about the replacement's credential story.
         self._config_gated_tools: dict[str, Any] = {}
         web_search = WebSearchTool(
-            api_key=self._live_web_search_key, proxy=self.web_proxy, provider=self.web_search_provider
+            api_key=self._live_web_search_key,
+            proxy=self.web_proxy,
+            provider=lambda: self.web_search_provider,
         )
         self.tools.register(web_search)
         self._config_gated_tools[web_search.name] = web_search
@@ -830,21 +959,38 @@ class WiringMixin:
         # only where `tools.web.search.images` asks for the tool at all, so a lane
         # that never places a picture keeps the tool face it had.
         if self.image_search:
-            picture_vendor = image_search_vendor(self.web_search_provider, self._web_key)
+            # Both halves follow the selection: the picture vendor is derived
+            # from it, so freezing either one pins the pair to the boot choice.
+            def picture_vendor() -> str:
+                return image_search_vendor(self.web_search_provider, self._web_key)
+
             image_search = ImageSearchTool(
-                api_key=lambda: self._live_vendor_key(picture_vendor), proxy=self.web_proxy, provider=picture_vendor
+                api_key=lambda: self._live_vendor_key(picture_vendor()),
+                proxy=self.web_proxy,
+                provider=picture_vendor,
             )
             self.tools.register(image_search)
             self._config_gated_tools[image_search.name] = image_search
         # web_fetch registers the same way and is never withheld: Jina needs no
         # key, so a keyed backend selected without one is replaced by Jina
         # rather than left to fail.
-        fetch_provider = WebFetchTool.effective_provider(
-            self.web_fetch_provider, self._web_key(self.web_fetch_provider)
-        )
+        # The substitution moved into the tool, which asks it per call: decided
+        # here it outlived the key that would have stopped it.
         self.tools.register(
-            WebFetchTool(api_key=self._web_key(fetch_provider), proxy=self.web_proxy, provider=fetch_provider)
+            WebFetchTool(
+                api_key=lambda: self._live_vendor_key(self.web_fetch_provider),
+                proxy=self.web_proxy,
+                provider=lambda: self.web_fetch_provider,
+            )
         )
+        # The shared browser's tools. Registered always and withheld through
+        # ``configured()`` while the browser extra is not installed, so the
+        # schema carries no verbs that can only answer with an install hint;
+        # the panel is where a reader learns the extra exists.
+        from raven.agent.tools.browser import browser_tools
+
+        for tool in browser_tools():
+            self.tools.register(tool)
         # Media tools (image/speech/video) are opt-in: a tool is registered only
         # when the user configured it (a model or apiKey under tools.media.<tool>),
         # which Config.effective_media_config() surfaces as a resolved key/model.
@@ -866,23 +1012,6 @@ class WiringMixin:
             )
             self.tools.register(tool)
             self._config_gated_tools[tool.name] = tool
-        # Deep research (MiroThinker) is a paid, minute-scale HTTP engine, so it is
-        # never a plain default tool. Two modes: ``real`` (key configured) is the
-        # working tool + async manager; ``offer`` (no key) is a same-named stand-in
-        # that, on a research query, asks the user deep-vs-regular and guides setup.
-        self.deep_research_manager: DeepResearchManager | None = None
-        # The async-delivery submit handle (gateway-wired, post-construction). Kept
-        # on the loop so a manager built later by promotion inherits it too, rather
-        # than only the startup manager -- see ``set_deep_research_submit``.
-        self._deep_research_submit: Callable[[Any], Any] | None = None
-        # The deep-vs-regular ask broker (transport-wired, post-construction). Kept
-        # on the loop for the same reason: a tool built later by promotion must
-        # inherit it, else it silently skips the ask -- see ``set_deep_research_broker``.
-        self._deep_research_broker: QuestionResponder | None = None
-        if deep_research_mode(self.deep_research_config) == "real":
-            self._register_real_deep_research(self.deep_research_config)
-        else:
-            self.tools.register(DeepResearchOfferTool())
         self.tools.register(MessageTool())
         # Not registered at all for a sub-agent, rather than hidden from the
         # schema: hiding leaves the tool in the registry, which is exactly how the
@@ -938,6 +1067,7 @@ class WiringMixin:
                     registry=skill_registry,
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
+                    blocklist_reader=self._skill_blocklist_reader,
                 ),
             )
             # Pull-mode discovery: search on the model's own terms through the
@@ -948,6 +1078,7 @@ class WiringMixin:
                     hub_wired=self._skill_hub_client is not None,
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
+                    blocklist_reader=self._skill_blocklist_reader,
                 ),
             )
             self.tools.register(
@@ -956,6 +1087,7 @@ class WiringMixin:
                     registry=skill_registry,
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
+                    blocklist_reader=self._skill_blocklist_reader,
                     auto_install=self._skill_auto_install,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
@@ -1043,6 +1175,7 @@ class WiringMixin:
                 state_for=self.subagents.instance_state,
                 memory_for=self.subagents.memory_scope,
                 mode_for=self.subagents.resolve_mode,
+                model_for=self.subagents.session_model_for,
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 announce_exception=self.subagents.announce_dag_exception,
@@ -1316,6 +1449,7 @@ class WiringMixin:
             # at all -- the executor dropped the field on the way to dispatch.
             state_for=self.subagents.instance_state,
             mode_for=self.subagents.resolve_mode,
+            model_for=self.subagents.session_model_for,
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
             announce_exception=self.subagents.announce_dag_exception,
@@ -1327,6 +1461,10 @@ class WiringMixin:
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
             binding_for=self._turn_binding,
+            # Stored Playbook nodes already name roster agents and carry their
+            # own prompts. A turn-scoped generated worker with the same label
+            # must not rewrite that persisted graph.
+            worker_table_for=lambda: None,
             control_reachable=self.dag_control_reachable,
             control_advert=self.dag_control_advert,
             verdict_config=self.subagent_dag_config,
@@ -1342,6 +1480,11 @@ class WiringMixin:
             dag_tool=dag_tool,
             provider=self.provider,
             compose_model=cfg.model,
+            # A multi-round stint works a project for hours and takes a checkout
+            # of it. The project is the conversation's own working directory,
+            # not this process's: a gateway is started from wherever it happens
+            # to be started from, and that is nobody's repository.
+            workspace_for=self._stint_workspace,
         )
         # Both Playbook model calls use the live, capability-aware agent view.
         executor.set_agent_profiles(lambda: agent_profiles_from_registry(self.subagents.registry))
@@ -1530,6 +1673,16 @@ class WiringMixin:
         it -- the RPC surface that answers what a conversation handed over."""
         return self._deliverables
 
+    def _stint_workspace(self, session_key: str | None) -> Path:
+        """The project a stint started in this session works.
+
+        Through the same resolver a tool call goes through, and with no key it
+        still goes through it: an operator who launched with ``-w`` named one
+        directory for this process, and a stint is the last thing that should
+        work a different one.
+        """
+        return self.peek_session_workdir(session_key or "")
+
     def peek_session_workdir(self, session_key: str) -> Path:
         """Where this session would work, with no side effect and no refusal.
 
@@ -1570,7 +1723,6 @@ class WiringMixin:
             "message",
             "spawn",
             "cron",
-            "deep_research",
             "run_subagent_dag",
             "deliver_files",
             "dag_status",
@@ -1584,7 +1736,6 @@ class WiringMixin:
                     tool.set_context(channel, chat_id, message_id)
                 elif name in (
                     "spawn",
-                    "deep_research",
                     "run_subagent_dag",
                     "deliver_files",
                     "dag_status",

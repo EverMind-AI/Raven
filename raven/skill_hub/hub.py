@@ -28,7 +28,7 @@ import httpx
 from loguru import logger
 
 from raven.config.loader import load_config
-from raven.skill_hub.audit import INSTALL_META
+from raven.skill_hub.audit import INSTALL_META, write_install_meta
 from raven.skill_hub.client import ALLOWED_SUFFIXES, MAX_ZIP_ENTRY_BYTES, MAX_ZIP_TOTAL_BYTES
 
 
@@ -614,6 +614,7 @@ async def install(skill_id: str, *, agent_loop_factory=None, if_absent: bool = F
     except OSError as exc:
         raise SkillHubUnavailableError(f"the skill could not be written: {exc}", data={"path": str(target)}) from exc
     await asyncio.to_thread(_refresh_pool, agent_loop_factory)
+    write_install_meta(target, slug=entry_id, version=str(detail.get("version") or ""), trigger="rpc")
     return {
         "name": name,
         "path": str(target),

@@ -1,23 +1,31 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { closeApproval, open, openApproval } from './approve'
-import { _resetForTests, forget, session, sync } from './sheets'
-import { _resetForTests as sessionReset, setCurrent } from '../../shell/session'
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
+import * as confirmStore from '../../state/confirm'
+import * as pageStore from '../../state/page'
+import { _resetForTests as draftsReset } from '../../state/sheetDrafts'
+import { _resetForTests, add as rackAdd, forget, remove as rackRemove, session, sync } from '../../state/sheetRack'
+import { mountPageRoot } from '../../test/pageRoot'
+import { _resetForTests as approveReset, closeApproval, open, openApproval } from './approve'
 
-import type { Shell } from '../../shell/bridge'
+import type { ApprovalHandlers } from './approve'
+
 
 function wire(): void {
-  const shell: Shell = {
-    T: (key) => key,
-    confirmAsk: () => {},
-    showPage: () => {},
-  }
-  window.RavenShell = shell
+  setTranslator((key) => key)
+  vi.spyOn(pageStore, 'show').mockImplementation(() => {})
+  vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
   document.body.innerHTML =
     '<div class="chat"><div class="dock"><div class="sheets" id="sheetRack"></div>'
     + '<div class="dock-in"></div></div></div>'
+  /* The sheets render from the page's own root (src/chrome/SheetRack.tsx), so it
+     has to be standing before one is raised. */
+  unmount = mountPageRoot()
 }
+
+let unmount: (() => void) | null = null
 
 const rack = (): HTMLElement => document.getElementById('sheetRack')!
 const sheets = (): HTMLElement[] => [...rack().querySelectorAll<HTMLElement>('.csheet')]
@@ -31,12 +39,16 @@ beforeEach(() => {
   sessionReset()
   setCurrent('a')
   _resetForTests()
+  draftsReset()
   wire()
 })
 
 afterEach(() => {
+  if (unmount) unmount()
+  unmount = null
+  approveReset()
   sessionReset()
-  delete window.RavenShell
+  resetTranslator()
   document.body.innerHTML = ''
 })
 
@@ -51,7 +63,7 @@ describe('the approval sheet', () => {
   it('marks itself as asking, so whatever else is docked can step aside', () => {
     /* The reader cannot get on until they answer this, and the rack is shared --
        a running graph is tall enough to push the question below the fold. The
-       rack passes the mark on through `watchAsking`. */
+       sweeps read the mark to know what they may replace. */
     open('rm -rf build/')
 
     expect(sheets()[0]!.dataset.asks).toBe('1')
@@ -342,79 +354,280 @@ describe('the approval sheet', () => {
 })
 
 describe('the permission approval sheet', () => {
-  const req = { approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete files' }
-  const suggested = { ...req, command: 'git push origin HEAD', suggestedPattern: 'git push *' }
-  const sheets = () => [...document.querySelectorAll('.csheet')]
+  const base = {
+    approvalId: 'ap-1', command: 'rm file.txt', description: 'Delete files',
+    kind: 'shell.exec', family: 'delete_command', origin: { kind: 'user', name: '' },
+    evidence: { command: 'rm file.txt', cwd: '/w' },
+  }
+  const suggested = {
+    ...base, approvalId: 'ap-s', command: 'git push origin HEAD', family: 'publish_command', suggestedPattern: 'git push *',
+    evidence: { command: 'git push origin HEAD', cwd: '/w' },
+  }
+  /* One sheet per request id, so a case that opens several gives each its own. */
+  let n = 0
+  const fresh = <T extends { approvalId: string }>(req: T): T => ({ ...req, approvalId: `${req.approvalId}-${++n}` })
+  const sheets = () => [...document.querySelectorAll<HTMLElement>('.csheet')]
   const opts = () => [...document.querySelectorAll<HTMLButtonElement>('.csheet .opt')]
-  const patternBox = () => document.querySelector<HTMLInputElement>('.csheet .pattern-in')!
+  const landed = () => document.querySelector<HTMLElement>('.cp-land')
+  const said: Array<[string, string, string | undefined]> = []
+  const handlers = (more: Partial<ApprovalHandlers> = {}): ApprovalHandlers => ({
+    onChoice: (c, f, p) => { said.push([c, f, p]) },
+    ...more,
+  })
+  const tick = () => new Promise((r) => setTimeout(r, 0))
 
-  it('offers allow once, allow for the session and the two refusals, in that order', () => {
-    openApproval(req, () => {})
-    expect(opts().map((b) => b.textContent)).toEqual([
-      '1gui.confirm.allow',
-      '2gui.confirm.allow_session',
-      '3gui.confirm.deny',
-      '4gui.confirm.deny_stop',
-    ])
+  beforeEach(() => { said.length = 0 })
+
+  it('words the question by the family and quotes the command as the evidence', () => {
+    openApproval(base, handlers())
+    expect(sheets()[0]!.getAttribute('aria-label')).toBe('gui.confirm.title.delete_command')
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.delete_command')
+    expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.delete_command')
+    expect(document.querySelector('.csheet .what')!.textContent).toBe('rm file.txt')
+    expect(sheets()[0]!.dataset.asks).toBe('1')
   })
 
-  it('offers the persisted grant only with a suggestion, before the refusals', () => {
-    openApproval(suggested, () => {})
-    expect(opts().map((b) => b.querySelector('span:nth-child(2)')!.textContent)).toEqual([
-      'gui.confirm.allow',
-      'gui.confirm.allow_session',
-      'gui.confirm.allow_always',
-      'gui.confirm.deny',
-      'gui.confirm.deny_stop',
-    ])
-    expect(patternBox().value).toBe('git push *')
+  it('offers deny first and focused, allow once last, and one broader grant between them', () => {
+    /* No rule can be written for this one, so the middle answer is the grant
+       that lasts as long as the conversation -- the only thing that stops the
+       same question repeating through a task. */
+    openApproval(base, handlers())
+    expect(opts().map((b) => b.textContent)).toEqual(
+      ['1gui.confirm.deny', '2gui.confirm.allow_session', '3gui.confirm.allow'])
+    expect(opts()[0]!.className).toContain('go')
+    expect(document.activeElement).toBe(opts()[0])
+
+    /* A rule can be written for this one, and it takes that middle slot rather
+       than adding a fourth answer beside it. */
+    openApproval(suggested, handlers())
+    expect(opts().map((b) => b.textContent)).toEqual(
+      ['1gui.confirm.deny', '2gui.confirm.always', '3gui.confirm.allow'])
   })
 
-  it('reports the session grant', () => {
-    const said: unknown[] = []
-    openApproval(req, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
+  it('sends the session grant the engine knows by name', () => {
+    openApproval(base, handlers())
     opts()[1]!.click()
     expect(said).toEqual([['allow_session', '', undefined]])
-    expect(sheets().length).toBe(0)
   })
 
-  it('sends the prefix as the reader left it, and nothing when they emptied it', () => {
-    const said: unknown[] = []
-    openApproval(suggested, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
-    patternBox().value = ' git push origin * '
-    opts()[2]!.click()
-    expect(said).toEqual([['allow_always', '', 'git push origin *']])
-    expect(sheets().length).toBe(0)
-
-    openApproval(suggested, (choice, feedback, pattern) => said.push([choice, feedback, pattern]))
-    patternBox().value = '   '
-    opts()[2]!.click()
-    expect(said.length).toBe(1)
+  /* The one sweep that could still strand a turn. A confirm request arriving on
+     the same conversation used to take the gate's pending ask down with it, and
+     nothing under that ask retires it but an answer: the call would then wait
+     for the day-long floor. Confirm and clarify both have deadlines of their
+     own, so sparing this one costs nothing and losing it costs the turn. */
+  it('is left standing when a confirm request arrives on the same conversation', () => {
+    const said: string[] = []
+    openApproval(base, handlers({ onChoice: (c) => { said.push(c) } }))
     expect(sheets().length).toBe(1)
+
+    open('rm -rf build/', () => said.push('confirm-yes'), () => said.push('confirm-no'))
+    expect(sheets().length).toBe(2)
+    /* And it is still the one that can be answered. */
+    const gate = sheets().find((el) => el.dataset.noDeadline === '1')!
+    expect(gate).toBeTruthy()
+    expect(gate.querySelector('.opt')).toBeTruthy()
   })
 
-  it('reports the choice, with the typed note riding a refusal', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
-    document.querySelector<HTMLInputElement>('.csheet .note-in')!.value = ' move it aside '
+  /* The landed sheet after a refusal carries a field. A reader typing into it
+     for longer than the linger would have watched it vanish mid-sentence, with
+     nothing sent and the words gone. */
+  /* The gate cuts an oversized account down to what a person reads
+     (PermissionGate._clamped) and marks it. Rendering the clipped value without
+     the mark is the one thing the cap must not cause: the reader would answer
+     about a change they can only see part of, with nothing saying so. */
+  it('says so in every layout when the engine shortened the evidence', () => {
+    const cases = [
+      { kind: 'file.write', evidence: { path: '/w/big.py', created: false, diff: '-a\n+b', truncated: true } },
+      { kind: 'mcp.call', evidence: { server: 's', tool: 't', input: 'x'.repeat(40), truncated: true } },
+      { kind: 'shell.exec', evidence: { command: 'rm -rf x', cwd: '/w', truncated: true } },
+      { kind: 'unknown', evidence: { input: 'y'.repeat(40), truncated: true } },
+    ]
+    for (const c of cases) {
+      openApproval(fresh({ ...base, ...c, family: '' }), handlers())
+      const mark = document.querySelector('.cp-ev-cut')
+      expect(mark?.textContent, c.kind).toBe('gui.confirm.ev.cut')
+      /* Outside the box that scrolls. Inside it, the mark sits at the end of
+         however much evidence there is -- and the reader who never scrolls,
+         who is the one it exists for, never reaches it. */
+      expect(mark!.closest('.cp-ev'), c.kind).toBeNull()
+      expect(mark!.closest('.what'), c.kind).toBeNull()
+    }
+    /* And stays quiet when nothing was cut. */
+    openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/a.py', diff: '-a\n+b' } }), handlers())
+    expect(document.querySelector('.cp-ev-cut')).toBeNull()
+  })
+
+  it('lays out a write as its path and diff, an MCP call as its tool and input, the rest as arguments', () => {
+    const diff = '--- a\n+++ b\n@@ -1 +1 @@\n-x = 1\n+x = 2'
+    openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/a.py', created: false, diff } }), handlers())
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.file_write')
+    expect(document.querySelector('.cp-ev-path')!.textContent).toBe('/w/a.py')
+    expect([...document.querySelectorAll('.cp-diff .cp-add')].map((e) => e.textContent!.trim())).toEqual(['+x = 2'])
+    expect([...document.querySelectorAll('.cp-diff .cp-del')].map((e) => e.textContent!.trim())).toEqual(['-x = 1'])
+    /* The file header repeats the path line; the room goes to the change. */
+    expect(document.querySelector('.cp-diff')!.textContent).not.toContain('--- a')
+
+    openApproval(fresh({ ...base, kind: 'file.write', family: '', evidence: { path: '/w/new.py', created: true } }), handlers())
+    expect(document.querySelector('.cp-ev-path')!.textContent).toBe('/w/new.py · gui.confirm.ev.created')
+    expect(document.querySelector('.cp-ev-none')!.textContent).toBe('gui.confirm.ev.nodiff')
+
+    openApproval(fresh({
+      ...base, kind: 'mcp.call', family: '',
+      evidence: { server: 'notion', tool: 'create_page', input: { title: 'weekly' } },
+    }), handlers())
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.mcp_call')
+    expect(document.querySelector('.cp-ev-path')!.textContent).toBe('notion.create_page')
+    expect(document.querySelector('.cp-json')!.textContent).toContain('"title": "weekly"')
+
+    openApproval(fresh({ ...base, kind: 'unknown', family: '', evidence: { input: { n: 3 } } }), handlers())
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.unknown')
+    expect(document.querySelector('.cp-json')!.textContent).toContain('"n": 3')
+  })
+
+  it('names a sub-agent as the one asking, and Raven otherwise', () => {
+    setTranslator((key, vars) => `${key}|${String(vars?.who ?? '')}`)
+    openApproval(fresh({ ...base, origin: { kind: 'subagent', name: 'raven-code' } }), handlers())
+    expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.delete_command|raven-code')
+    openApproval(fresh(base), handlers())
+    expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.delete_command|Raven')
+  })
+
+  it('answers at once and leaves nothing behind when there is nothing to do', () => {
+    openApproval(base, handlers())
     opts()[2]!.click()
-    expect(said).toEqual([['deny', 'move it aside']])
+    expect(said).toEqual([['allow', '', undefined]])
+    /* The sheet going is the receipt. A line that only repeats the press is one
+       more thing to read, and the rack is where the reader is trying to work. */
+    expect(sheets().length).toBe(0)
+    expect(landed()).toBeNull()
+  })
+
+  it('leaves nothing behind after a refusal either', () => {
+    openApproval(base, handlers())
+    opts()[0]!.click()
+    expect(said).toEqual([['deny', '', undefined]])
     expect(sheets().length).toBe(0)
   })
 
-  it('answers deny_stop from its own button', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
-    opts()[3]!.click()
-    expect(said).toEqual([['deny_stop', '']])
+  it('sends the suggested rule with a saved grant, and the landed sheet can take it back', async () => {
+    /* The undo says only "take back what this answer wrote" -- it carries no
+       pattern, because what the answer put on disk is the engine's to know. */
+    let undone = 0
+    openApproval(suggested, handlers({ onRevoke: async () => { undone += 1; return true } }))
+    opts()[1]!.click()
+    expect(said).toEqual([['allow_always', '', 'git push *']])
+    expect(landed()!.querySelector('.cp-land-text')!.textContent).toBe('gui.confirm.land.always')
+
+    landed()!.querySelector<HTMLButtonElement>('.cp-undo')!.click()
+    await tick()
+    expect(undone).toBe(1)
+    expect(landed()!.textContent).toBe('gui.confirm.land.revoked')
+    expect(landed()!.querySelector('.cp-undo')).toBeNull()
   })
 
-  it('withdraws silently when the server closes the request', () => {
-    const said: Array<[string, string]> = []
-    openApproval(req, (choice, feedback) => said.push([choice, feedback]))
+  it('says so when the rule could not be taken back', async () => {
+    openApproval(fresh(suggested), handlers({ onRevoke: async () => false }))
+    opts()[1]!.click()
+    landed()!.querySelector<HTMLButtonElement>('.cp-undo')!.click()
+    await tick()
+    expect(landed()!.textContent).toBe('gui.confirm.land.revoke_failed')
+  })
+
+  it('reads Escape and the digits, deny being the default', () => {
+    openApproval(fresh(suggested), handlers())
+    key('Escape')
+    openApproval(fresh(suggested), handlers())
+    key('3')
+    openApproval(fresh(suggested), handlers())
+    key('2')
+    expect(said.map(([c]) => c)).toEqual(['deny', 'allow', 'allow_always'])
+  })
+
+  it('answers once, whichever door is used twice', () => {
+    openApproval(base, handlers())
+    const [deny, , allow] = opts()
+    allow!.click()
+    deny!.click()
+    key('Escape')
+    expect(said.map(([c]) => c)).toEqual(['allow'])
+  })
+
+  it('ignores the keyboard while its conversation is not the open one', () => {
+    openApproval(base, handlers())
+    setCurrent('b')
+    sync()
+    key('1')
+    key('Escape')
+    expect(said).toEqual([])
+    setCurrent('a')
+    sync()
+    key('3')
+    expect(said.map(([c]) => c)).toEqual(['allow'])
+  })
+
+  it('withdraws silently when the server closes the request, and leaves a landed answer alone', () => {
+    openApproval(base, handlers())
     closeApproval('ap-1')
     expect(sheets().length).toBe(0)
     expect(said).toEqual([])
-    closeApproval('ap-1')
+
+    openApproval(suggested, handlers())
+    opts()[1]!.click()
+    closeApproval('ap-s')
+    expect(landed()).not.toBeNull()
+  })
+
+  it('takes a landed sheet down with the next request in the same conversation', () => {
+    openApproval(suggested, handlers())
+    opts()[1]!.click()
+    expect(landed()).not.toBeNull()
+    openApproval({ ...base, approvalId: 'ap-2' }, handlers())
+    expect(landed()).toBeNull()
+    expect(sheets().length).toBe(1)
+  })
+
+  it('says so when the engine did not take the answer, where an answer that landed says nothing', async () => {
+    openApproval(base, handlers({ onChoice: () => Promise.resolve(false) }))
+    opts()[2]!.click()
+    /* Nothing yet: as far as the page knows the answer was taken. */
+    expect(landed()).toBeNull()
+    await tick()
+    expect(landed()!.textContent).toBe('gui.confirm.land.unsent')
+
+    openApproval({ ...base, approvalId: 'ap-2' }, handlers({ onChoice: () => Promise.reject(new Error('socket')) }))
+    opts()[2]!.click()
+    await tick()
+    expect(landed()!.textContent).toBe('gui.confirm.land.unsent')
+  })
+
+  it('reads no digit typed into a field, where it is text -- Escape still refuses', () => {
+    const ta = document.createElement('textarea')
+    document.body.appendChild(ta)
+    openApproval(suggested, handlers())
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))
+    expect(said).toEqual([])
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(said.map(([c]) => c)).toEqual(['deny'])
+  })
+
+  it('leaves the keyboard to a sheet docked above it, and takes it back when that one goes', () => {
+    openApproval(base, handlers())
+    const above = document.createElement('div')
+    above.className = 'csheet'
+    rackAdd(above, session())
+    key('2')
+    expect(said).toEqual([])
+    rackRemove(above)
+    key('3')
+    expect(said.map(([c]) => c)).toEqual(['allow'])
+  })
+
+  it('opens one sheet per request, so a replay after a reload does not stack a second', () => {
+    openApproval(base, handlers())
+    openApproval(base, handlers())
+    expect(sheets().length).toBe(1)
+    opts()[2]!.click()
+    expect(said.map(([c]) => c)).toEqual(['allow'])
   })
 })

@@ -85,10 +85,11 @@ def site(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def page(site: str) -> Iterator[Page]:
-    if not Path(CHROME).exists():
-        pytest.skip("no chrome binary to drive")
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(executable_path=CHROME, args=["--no-sandbox", "--disable-gpu"])
+        executable = CHROME if Path(CHROME).exists() else pw.chromium.executable_path
+        if not Path(executable).exists():
+            pytest.skip("no Chrome or Playwright Chromium binary to drive")
+        browser = pw.chromium.launch(executable_path=executable, args=["--no-sandbox", "--disable-gpu"])
         pg = browser.new_page(viewport=DESKTOP)
         yield pg
         browser.close()
@@ -451,7 +452,7 @@ def test_the_contents_column_follows_the_reader(page: Page, site: str) -> None:
     lit entry walks off its bottom edge and the reader loses their place. The
     reference layout centres the first lit entry in the column and clamps at
     both ends, which is what is checked here at points down a long page."""
-    _open(page, site, "proactivity/")
+    _open(page, site, "sandbox/")
     height = page.evaluate("() => document.body.scrollHeight")
     strays = []
     for step in range(1, 14):
@@ -492,7 +493,7 @@ def test_both_columns_scroll_the_whole_way_down(page: Page, site: str, height: i
     too short, which cuts the list off partway down the screen and leaves dead
     space below it -- the reader sees the column's own end as an obstruction."""
     page.set_viewport_size({"width": 1440, "height": height})
-    _open(page, site, "proactivity/")
+    _open(page, site, "sandbox/")
     page.wait_for_timeout(400)
     reach = page.evaluate(COLUMN_REACH)
     assert isinstance(reach, dict), reach
@@ -503,7 +504,9 @@ def test_both_columns_scroll_the_whole_way_down(page: Page, site: str, height: i
     assert reach["tocScrollbar"] == "none", (
         f"the table of contents paints a {reach['tocScrollbar']} scrollbar over its own entries"
     )
-    assert reach["tocScrolls"], "the contents column is not scrollable, so this page proves nothing"
+    # The current outline fits at 900px; smaller viewports must exercise overflow.
+    if height <= 780:
+        assert reach["tocScrolls"], "the contents column is not scrollable, so this page proves nothing"
     mask = reach["tocMask"]
     assert "gradient" in mask and mask.rstrip(")").rstrip().endswith("0"), (
         f"the contents column ends on a hard edge rather than fading out: mask is {mask!r}"
@@ -547,6 +550,41 @@ def test_the_footer_keeps_to_the_content_column(page: Page, site: str, path: str
     page.wait_for_timeout(300)
     clashes = page.evaluate(PAGE_FOOT)
     assert not clashes, "at the end of the page: " + "; ".join(clashes)
+
+
+CONTENT_BOUNDS = """() => {
+  const content = document.querySelector('.md-content').getBoundingClientRect();
+  const toc = document.querySelector('.md-sidebar--secondary').getBoundingClientRect();
+  const cards = [...document.querySelectorAll('.md-typeset .grid.cards > ul > li')]
+    .map(e => e.getBoundingClientRect());
+  return {
+    contentRight: content.right,
+    tocLeft: toc.width ? toc.left : innerWidth,
+    cardsRight: Math.max(content.right, ...cards.map(r => r.right)),
+    pageOverflow: document.documentElement.scrollWidth - innerWidth,
+  };
+}"""
+
+
+@pytest.mark.parametrize("width", [390, 768, 960, 1219, 1220, 1280, 1440, 1920])
+@pytest.mark.parametrize("path", ["", "zh/", "playbooks/", "zh/playbooks/"])
+def test_content_stays_clear_of_the_contents_column(page: Page, site: str, width: int, path: str) -> None:
+    """Fixed sidebars leave no space in flow, including at the desktop breakpoint."""
+    page.set_viewport_size({"width": width, "height": 900})
+    try:
+        _open(page, site, path)
+        for fraction in (0, 0.5):
+            page.evaluate("(fraction) => window.scrollTo(0, document.body.scrollHeight * fraction)", fraction)
+            bounds = page.evaluate(CONTENT_BOUNDS)
+            assert bounds["contentRight"] <= bounds["tocLeft"] + 1, (
+                f"{path or '/'} at {width}px: body overlaps the contents column: {bounds}"
+            )
+            assert bounds["cardsRight"] <= bounds["contentRight"] + 1, (
+                f"{path or '/'} at {width}px: cards overflow the body: {bounds}"
+            )
+            assert bounds["pageOverflow"] <= 1, f"{path or '/'} at {width}px: horizontal page overflow: {bounds}"
+    finally:
+        page.set_viewport_size(DESKTOP)
 
 
 RAIL_FOOT = """() => {
@@ -652,6 +690,7 @@ TOC_GEOMETRY = """() => {
           pad: parseFloat(getComputedStyle(a).paddingLeft),
           active: a.classList.contains('md-nav__link--raven-active'),
           inView: Boolean(hb) && hb.bottom > 0 && hb.top < innerHeight,
+          above: Boolean(hb) && hb.bottom <= 0,
         });
       }
       const nested = li.querySelector(':scope > .md-nav > .md-nav__list');
@@ -730,7 +769,8 @@ def test_table_of_contents_rail_is_one_polyline_through_the_outline(page: Page, 
 
 
 def test_table_of_contents_lights_every_heading_on_screen(page: Page, site: str) -> None:
-    """Current means the heading is in the viewport, so several can be current.
+    """Whenever any heading is on screen, current means in the viewport, so
+    several can be current.
 
     The lit stretch then runs from the first current entry to the last without
     a break, which is what carries the colour across a diagonal when a parent
@@ -753,6 +793,44 @@ def test_table_of_contents_lights_every_heading_on_screen(page: Page, site: str)
         bottom = _run(rows, current[-1])[1]
         assert geometry["clipTop"] == pytest.approx(top, abs=0.5), anchor
         assert geometry["clipHeight"] == pytest.approx(bottom - top, abs=0.5), anchor
+
+
+HEADING_FREE_STRETCHES = """() => {
+  const list = document.querySelector('.md-sidebar--secondary .md-nav--secondary > .md-nav__list');
+  const spans = [...list.querySelectorAll('a.md-nav__link')].map((a) => {
+    const box = document.getElementById(a.getAttribute('href').slice(1)).getBoundingClientRect();
+    return { top: box.top + scrollY, bottom: box.bottom + scrollY };
+  });
+  const end = document.documentElement.scrollHeight - innerHeight;
+  return spans.flatMap(({ bottom }, index) => {
+    const last = index + 1 < spans.length ? spans[index + 1].top - innerHeight : end;
+    return last - bottom > 2 ? [Math.round((bottom + last) / 2)] : [];
+  });
+}"""
+
+
+def test_table_of_contents_keeps_the_section_above_lit_between_headings(page: Page, site: str) -> None:
+    """A section longer than the screen scrolls its heading off the top before
+    the next heading comes on, and the reader is inside that section the whole
+    way. With no heading in the viewport, the entry of the nearest one above is
+    current on its own, so the column never goes dark partway down a page."""
+    _open(page, site, "sandbox/")
+    stretches = page.evaluate(HEADING_FREE_STRETCHES)
+    assert stretches, "no section on this page is longer than the screen, so it proves nothing"
+    for y in stretches:
+        page.evaluate(f"() => window.scrollTo(0, {y})")
+        page.evaluate(TOC_SETTLED)
+        geometry = page.evaluate(TOC_GEOMETRY)
+        rows = geometry["rows"]
+        assert not any(row["inView"] for row in rows), f"a heading is on screen at {y}px"
+
+        nearest = [index for index, row in enumerate(rows) if row["above"]][-1]
+        current = [index for index, row in enumerate(rows) if row["active"]]
+        assert current == [nearest], f"at {y}px"
+
+        top, bottom = _run(rows, nearest)
+        assert geometry["clipTop"] == pytest.approx(top, abs=0.5), f"at {y}px"
+        assert geometry["clipHeight"] == pytest.approx(bottom - top, abs=0.5), f"at {y}px"
 
 
 @pytest.mark.parametrize(

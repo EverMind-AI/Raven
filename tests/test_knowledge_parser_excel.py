@@ -285,12 +285,12 @@ def test_a_zip_that_is_not_a_workbook_is_refused() -> None:
 def test_a_legacy_workbook_is_converted_and_read(tmp_path) -> None:
     """The one format with no reader here. Against the real converter, because
     the stubs elsewhere prove the wiring and only this proves the argv."""
-    from raven.utils.office import convert, find_soffice
+    from raven.utils.office import find_soffice, to_pdf
 
     (tmp_path / "book.csv").write_text("Region,Revenue\nEU,1.2M\n")
     staged = tmp_path / "out"
     staged.mkdir()
-    convert(tmp_path / "book.csv", staged, executable=find_soffice(), timeout_s=120.0, target="xls")
+    to_pdf(tmp_path / "book.csv", staged, executable=find_soffice(), timeout_s=120.0, fmt="xls")
     legacy = next(Path(staged).glob("*.xls"))
 
     assert _texts(_parse(legacy.read_bytes(), "book.xls")) == ["Region: EU; Revenue: 1.2M -- book"]

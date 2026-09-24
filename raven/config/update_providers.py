@@ -21,6 +21,7 @@ import os
 import typing
 from pathlib import Path
 from typing import Any, Union
+from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
@@ -867,6 +868,58 @@ def _load_provider_models(name: str, data: dict[str, Any]) -> tuple[type, list[s
     return cls, list(getattr(instance, "models", []) or [])
 
 
+def provider_extra_headers(name: str, *, config_path: Path | None = None) -> dict[str, str]:
+    """The provider's custom headers as stored, values included.
+
+    For a writer that merges a patch into them; every reading face redacts
+    the values (``_redact_headers``), which is why this is not one of those.
+    """
+    name = canonical_provider_name(name)
+    data = read_raw_or_raise(config_path or get_config_path())
+    section = _raw_section(data, name)
+    headers = section.get("extraHeaders") or section.get("extra_headers") or {}
+    return {str(k): str(v) for k, v in headers.items()} if isinstance(headers, dict) else {}
+
+
+def add_provider_models(
+    name: str,
+    models: list[str],
+    *,
+    config_path: Path | None = None,
+) -> list[str]:
+    """Append several model ids to a provider's curated list in one write.
+
+    Ids already present (by identity, not spelling) are skipped. Returns the
+    new model list. Raises KeyError for an unknown provider.
+    """
+    from raven.providers.wire import merge_key
+
+    name = canonical_provider_name(name)
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str | None, list[str]]:
+        data = read_raw_or_raise(path)
+        cls, current = _load_provider_models(name, data)
+        known = {merge_key(name, m) for m in current}
+        added = False
+        for model in models:
+            key = merge_key(name, model)
+            if key in known:
+                continue
+            known.add(key)
+            current.append(model)
+            added = True
+        if not added:
+            return None, current
+        section = _raw_section(data, name)
+        section["models"] = current
+        validated = cls.model_validate(section)
+        _write_raw_section(data, name, validated.model_dump(by_alias=True))
+        return json.dumps(data, indent=2, ensure_ascii=False), current
+
+    return atomic_update(path, _apply)
+
+
 def add_provider_model(
     name: str,
     model: str,
@@ -914,7 +967,16 @@ def add_provider_model(
             # has no parameter to be restated with at all, so a wholesale write
             # loses it every time. Re-adding corrects the tags it names and
             # leaves the rest of the row alone.
-            overlays[model] = {**(overlays.get(model) or {}), **overlay}
+            merged = {**(overlays.get(model) or {}), **overlay}
+            # An empty string is how a caller clears a field it can otherwise
+            # only restate; None would be "unstated" and leave it alone.
+            merged = {k: v for k, v in merged.items() if v != ""}
+            # A row with no name, no description and no tags says nothing;
+            # dropping it keeps the file from filling with empty rows.
+            if any(v for v in merged.values()):
+                overlays[model] = merged
+            else:
+                overlays.pop(model, None)
             section["modelOverlay"] = overlays
             section.pop("model_overlay", None)
         validated = cls.model_validate(section)
@@ -1119,16 +1181,28 @@ _PROVIDER_BASE_URL_FALLBACK = {
 }
 
 
-def provider_serving_at(base_url: str, *, config_path: Path | None = None) -> str | None:
+def provider_serving_at(base_url: str, *, api_key: str | None = None, config_path: Path | None = None) -> str | None:
     """Which configured provider answers at ``base_url``, if any.
 
-    The migrations' one hard part: a retired block stored an address, the
-    block replacing it names a provider, and only the configured providers can
-    say which of them is that address. Compared on the host and path with a
-    trailing slash removed, because the two spellings are the same endpoint and
-    the config may hold either.
+    The migrations' one hard part: a retired block stored an address, the block
+    replacing it names a provider, and only the configured providers can say
+    which of them is that address.
+
+    Three levels, because one is not enough:
+
+    1. the full address, trailing slash removed -- both spellings are the same
+       endpoint and a config may hold either;
+    2. the **host**, which exists for DeepInfra: its rerank section deliberately
+       holds ``/v1/inference`` while chat is served from ``/v1/openai``, so a
+       full-address comparison misses a vendor that is plainly the same one;
+    3. the **key**, when one is offered. A section whose address was hand-edited
+       to a proxy still carries the credential the vendor issued, and that names
+       the vendor more surely than the address does.
+
+    Earlier levels win outright: a host two configured providers share must not
+    overturn an exact address match.
     """
-    want = base_url.rstrip("/")
+    rows: list[tuple[str, str, str]] = []
     for row in list_providers(config_path=config_path):
         name = str(row.get("name") or "")
         if not name:
@@ -1137,8 +1211,24 @@ def provider_serving_at(base_url: str, *, config_path: Path | None = None) -> st
             resolved = resolve_provider_credentials(name, config_path=config_path)
         except Exception:  # noqa: BLE001 - one unusable provider must not stop the search
             continue
-        if resolved and resolved[0].rstrip("/") == want:
+        if resolved:
+            rows.append((name, resolved[0].rstrip("/"), resolved[1]))
+
+    want = base_url.rstrip("/")
+    for name, address, _key in rows:
+        if address == want:
             return name
+
+    want_host = urlparse(want).netloc
+    if want_host:
+        for name, address, _key in rows:
+            if urlparse(address).netloc == want_host:
+                return name
+
+    if api_key:
+        for name, _address, key in rows:
+            if key and key == api_key:
+                return name
     return None
 
 
@@ -1201,6 +1291,7 @@ def test_provider(
     config_path: Path | None = None,
     transport: httpx.BaseTransport | None = None,
     full_catalogue: bool = False,
+    check_credential: bool = False,
 ) -> dict[str, Any]:
     """Verify a provider's credentials via a free GET request to ``/v1/models``.
 
@@ -1333,6 +1424,20 @@ def test_provider(
             "error": "api_key is empty",
         }
 
+    if api_key and not api_key.isascii():
+        # A header carries ASCII only, so such a key can never be sent: it is
+        # text pasted from the wrong place, and httpx raising on it surfaced as
+        # an internal error instead of a verdict on the key.
+        return {
+            "ok": False,
+            "status": "invalid_key",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "api_key contains non-ASCII characters",
+        }
+
     extras = _CATALOGUE_EXTRAS.get(spec.name, ()) if (spec and full_catalogue) else ()
     shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
     if shape and api_key and not api_base:
@@ -1403,6 +1508,8 @@ def test_provider(
         headers["x-api-key"] = api_key
 
     result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+    if check_credential and api_key and result.get("status") == "valid":
+        result = _confirm_credential(spec, api_base, url, headers, result, timeout_s=timeout_s, transport=transport)
     if derived_api_base and result.get("status") == "http_404":
         # The address LiteLLM sends completions to is not always where the
         # catalogue lives -- DeepSeek's is `/beta`, which has no `/models`. A 404
@@ -1497,6 +1604,93 @@ _CATALOGUE_SHAPES: dict[str, Any] = {
 }
 
 
+#: Where a vendor whose catalogue is public checks a key: a path under its
+#: api_base that answers 401 to a key it does not know.
+_CREDENTIAL_CHECKS: dict[str, str] = {
+    "openrouter": "/key",
+}
+
+#: Sent in place of the real key to learn whether an endpoint looks at keys at
+#: all. Shaped like no vendor's key, so no vendor can accept it.
+_DECOY_KEY = "raven-credential-check-not-a-key"
+
+
+def _confirm_credential(
+    spec: Any,
+    api_base: str,
+    url: str,
+    headers: dict[str, str],
+    result: dict[str, Any],
+    *,
+    timeout_s: float,
+    transport: httpx.BaseTransport | None,
+) -> dict[str, Any]:
+    """Whether a 200 from a models endpoint says anything about the key.
+
+    Some catalogues are public -- OpenRouter's answers anyone, with any key or
+    none -- so a key of "111" read as verified. The same request with a key no
+    vendor could accept tells the two apart: refused, and the first answer was
+    about the key; answered too, and it was not. A vendor with a path that does
+    check keys is asked there instead; any other is reported as unchecked
+    rather than as verified.
+    """
+    decoy = {name: (f"Bearer {_DECOY_KEY}" if name.lower() == "authorization" else _DECOY_KEY) for name in headers}
+    control = _probe_models_endpoint(url, decoy, timeout_s=timeout_s, transport=transport)
+    if control.get("status") != "valid":
+        return result
+    check = _CREDENTIAL_CHECKS.get(spec.name) if spec else None
+    if check:
+        verdict = _probe_models_endpoint(
+            api_base.rstrip("/") + check, headers, timeout_s=timeout_s, transport=transport
+        )
+        if verdict.get("status") == "valid":
+            return result
+        if verdict.get("status") == "invalid_key":
+            return {**result, "ok": False, "status": "invalid_key", "http_status": verdict.get("http_status")}
+    return {
+        **result,
+        "ok": False,
+        "status": "key_unchecked",
+        "error": "this vendor's models endpoint answers without checking the key",
+    }
+
+
+def _env_proxy_for(url: str) -> str | None:
+    """The proxy httpx takes from the environment for ``url``, or None.
+
+    Verbatim, credentials included: only for matching against error text and
+    for ``_without_userinfo`` -- never for a result that leaves this module.
+    """
+    import urllib.request
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if not parts.hostname or urllib.request.proxy_bypass(parts.hostname):
+        return None
+    proxies = urllib.request.getproxies()
+    return proxies.get(parts.scheme) or proxies.get("all") or None
+
+
+def _without_userinfo(url: str) -> str:
+    """``url`` with any ``user:password@`` dropped.
+
+    A proxy is commonly configured as ``http://user:password@host:port``, and a
+    probe's error travels to the browser, where it is shown as a tooltip.
+    httpx also takes one with no scheme (``user:password@host:port``, read as
+    http://), which ``urlsplit`` files under the path, so that form is split by
+    hand.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    if "://" not in url:
+        authority, sep, rest = url.partition("/")
+        return authority.rsplit("@", 1)[-1] + sep + rest
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
 def _probe_models_endpoint(
     url: str,
     headers: dict[str, str],
@@ -1527,6 +1721,26 @@ def _probe_models_endpoint(
         with httpx.Client(**client_kwargs) as client:
             resp = client.get(url, headers=headers)
     except httpx.HTTPError as exc:
+        # A proxy from the environment that is not listening fails as a plain
+        # "connection refused", which reads as the vendor being down or the key
+        # being wrong. Naming the proxy is the only thing that points the reader
+        # at the real fault.
+        raw_proxy = _env_proxy_for(url) if transport is None else None
+        proxy = _without_userinfo(raw_proxy) if raw_proxy else None
+        # Also covers httpx quoting a scheme-less proxy with the http:// it
+        # assumed: the value as set is a substring of that.
+        detail = str(exc).replace(raw_proxy, proxy) if raw_proxy and proxy else str(exc)
+        if proxy and isinstance(exc, (httpx.ProxyError, httpx.ConnectError, httpx.ConnectTimeout)):
+            return {
+                "ok": False,
+                "status": "proxy_unreachable",
+                "elapsed_ms": int((time.monotonic() - start) * 1000),
+                "http_status": None,
+                "models_count": None,
+                "model_ids": None,
+                "error": f"proxy {proxy} is not reachable: {detail}",
+                "proxy": proxy,
+            }
         return {
             "ok": False,
             "status": "network_error",
@@ -1534,7 +1748,7 @@ def _probe_models_endpoint(
             "http_status": None,
             "models_count": None,
             "model_ids": None,
-            "error": str(exc),
+            "error": detail,
         }
 
     elapsed_ms = int((time.monotonic() - start) * 1000)

@@ -1,11 +1,13 @@
+import { Cancel01Icon, File01Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
-import { shell, t } from '../../shell/bridge'
+import { FileBadge, Icon } from '../../components/Icon'
+import { t } from '../../i18n/t'
+import * as lightbox from '../../state/lightbox'
 import * as store from './store'
 
 import type { Attachment, SlashCmd } from './types'
 import type { ReactElement } from 'react'
-import * as lightbox from '../../shell/lightbox'
 
 /* The dock's four drawn collections. Each is its own root over the container
  * page.html already carries -- #queued, #atts, #slashList, and a host at the
@@ -22,7 +24,7 @@ const PEN = 'M4.5 19.5h4L19 9a2.12 2.12 0 0 0-3-3L5.5 16.5v3ZM15.5 6.5l2 2'
 const CROSS = 'M6.5 6.5l11 11M17.5 6.5l-11 11'
 
 function useComposer(): number {
-  return useSyncExternalStore(store.subscribe, () => store.getState().v)
+  return useSyncExternalStore(store.subscribe, () => store.get().v)
 }
 
 /* An icon-only button whose verb lives in the hover pill ([data-tip]). */
@@ -74,7 +76,7 @@ function QueueEdit({ text, i }: { text: string; i: number }): ReactElement {
 
 export function QueueList(): ReactElement {
   useComposer()
-  const editing = store.getState().editing
+  const editing = store.get().editing
   return (
     <>
       {store.queue().map((text, i) => (
@@ -90,30 +92,50 @@ export function QueueList(): ReactElement {
 
 /* ── the attachment tray ──────────────────────────────────────────────── */
 
+/* The badge a staged file wears, by its extension: the two kinds the design
+   draws one for, and a plain file glyph for the rest. */
+function kindMark(name: string): ReactElement {
+  const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase()
+  if (ext === 'pdf') return <FileBadge kind="pdf" />
+  if (ext === 'doc' || ext === 'docx') return <FileBadge kind="doc" />
+  return <Icon icon={File01Icon} size={14} />
+}
+
 function AttChip({ a, i }: { a: Attachment; i: number }): ReactElement {
   const isImg = !!a.url
   const size = a.uploading ? t('gui.att.uploading') : store.fmtSize(a.size)
-  return (
-    <div className={'att' + (isImg ? ' img' : '') + (a.uploading ? ' up' : '')}>
-      {isImg ? (
-        /* the square crops the image, so a click has to be able to show all of it */
+  const rm = (
+    <button className="rm" aria-label={t('gui.att.remove', { name: a.name })}
+      onClick={(e) => { e.stopPropagation(); store.removeAtt(i) }}>
+      {isImg ? '✕' : <Icon icon={Cancel01Icon} size={12} />}
+    </button>
+  )
+  if (isImg) {
+    return (
+      <div className={'att img' + (a.uploading ? ' up' : '')}>
+        {/* the square crops the image, so a click has to be able to show all of it */}
         <img src={a.url as string} alt={a.name} title={`${a.name} · ${size}`}
           onClick={() => lightbox.open(a.url as string, a.name)} />
-      ) : (
-        <>
-          <span className="nm">{a.name}</span>
-          <span className="sz">{size}</span>
-        </>
-      )}
-      <button className="rm" aria-label={t('gui.att.remove', { name: a.name })}
-        onClick={(e) => { e.stopPropagation(); store.removeAtt(i) }}>✕</button>
+        {rm}
+      </div>
+    )
+  }
+  /* The name and the badge are the chip; a finished file's size goes to the
+     tooltip, and only an upload in flight says so in words. The
+     remove button takes the badge's slot on hover, the way the design draws it,
+     so the chip keeps its width. */
+  return (
+    <div className={'att' + (a.uploading ? ' up' : '')} title={`${a.name} · ${size}`}>
+      <span className="cp-ik">{kindMark(a.name)}{rm}</span>
+      <span className="nm">{a.name}</span>
+      {a.uploading ? <span className="sz">{size}</span> : null}
     </div>
   )
 }
 
 export function AttTray(): ReactElement {
   useComposer()
-  return <>{store.getState().atts.map((a, i) => <AttChip key={i} a={a} i={i} />)}</>
+  return <>{store.get().atts.map((a, i) => <AttChip key={i} a={a} i={i} />)}</>
 }
 
 /* ── the slash palette ────────────────────────────────────────────────── */
@@ -130,7 +152,7 @@ function SlashRow({ x, on }: { x: SlashCmd; on: boolean }): ReactElement {
 
 export function SlashList(): ReactElement {
   useComposer()
-  const s = store.getState()
+  const s = store.get()
   return <>{s.slashRows.map((x, i) => <SlashRow key={x.id} x={x} on={i === s.slashSel} />)}</>
 }
 
@@ -139,7 +161,7 @@ export function SlashList(): ReactElement {
 /* Decorative to a screen reader -- whatever it sits beside carries the meaning
    in words, and three animated bars announced as anything would be noise on a
    row that repaints four times a second. */
-export function WorkGlyph(): ReactElement {
+function WorkGlyph(): ReactElement {
   return <span className="wkg" aria-hidden="true"><i /><i /><i /></span>
 }
 
@@ -150,7 +172,7 @@ export function WorkGlyph(): ReactElement {
    accessible name, where a reader who gets the row as text still needs it. */
 export function TurnLive({ afterPaint }: { afterPaint?: () => void }): ReactElement | null {
   useComposer()
-  const live = store.getState().live
+  const live = store.get().live
   useEffect(() => { if (afterPaint) afterPaint() })
   if (!live) return null
   const clock = store.durText(store.liveMs())

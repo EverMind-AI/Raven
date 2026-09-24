@@ -35,8 +35,11 @@ def agent_profiles_from_registry(registry: "AgentRegistry") -> dict[str, Playboo
     """Project enabled registry rows into the model-safe Playbook view.
 
     MCP injection is advertised per agent (``row.injectable.mcps``); the runtime
-    delivers a node's ``mcps``. Registry transport/configuration fields
-    deliberately do not cross this boundary.
+    delivers a node's ``mcps``. ``injectable_skills`` is advertised too, but it
+    is not a gate: a node may name skills for any agent, and the runtime narrows
+    the menu where it controls one and quotes the skills into the prompt where
+    it does not. Registry transport/configuration fields deliberately do not
+    cross this boundary.
     """
     return {
         row.name: PlaybookAgentProfile(
@@ -72,11 +75,6 @@ def validate_node_capabilities(
             errors.append(
                 f"node '{node.id}' sets instance on stateless agent '{node.subagent}'; "
                 "remove instance or choose a stateful agent"
-            )
-        if node.skills is not None and not profile.injectable_skills:
-            errors.append(
-                f"node '{node.id}' sets skills on agent '{node.subagent}', which does not support "
-                "skill injection; remove skills or choose an agent with injectableSkills=true"
             )
         if node.mcps is not None and not profile.injectable_mcps:
             errors.append(

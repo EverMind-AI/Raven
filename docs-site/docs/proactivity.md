@@ -1,645 +1,290 @@
-# Proactivity Reference
+# Proactive reminders and follow-ups { #proactivity-reference }
 
-This is the as-built reference for Raven's proactivity subsystem: what the
-code actually does, with module paths you can open directly. Its companion, the
-[Proactivity Design](proactivity-design.md), is the design intent.
+This page is for users and operators who want Raven to offer reminders and
+follow-up work without a new request each time. It covers enabling, configuring,
+observing, and stopping **Sentinel**. Developers should use
+[Proactivity Design and Implementation](proactivity-design.md) for the
+decision pipeline and execution contracts.
 
-Raven's proactivity is a periodic tick plus an LLM decision plus
-user-state awareness — not a user-scheduled timer. The key points:
+## Choose the right mechanism
 
-1. Two sources: Sentinel (the LLM decides each tick whether and how to reach
-   the user) and Cron (the user explicitly schedules a reminder). Both reach the
-   agent as origin-tagged turns through the spine, and both share one
-   `NudgePolicy` ledger so they never double-remind on the same topic.
-2. A decision is one of five structured actions: `skip`, `nudge`,
-   `nudge_inject`, `nudge_defer`, `spawn_agent`. `nudge_inject` (ride the next
-   reply) and `nudge_defer` (wait until the current thread settles) are what
-   make the agent aware of what the user is doing right now.
-3. The decision reads one packaged context, the `PlannerContext`. The Planner is
-   a pure function and degrades any failure to `skip`; it never raises.
-4. One shared anti-spam gate, the `NudgePolicy`, learns its tightness from user
-   feedback. Every nudge executor and task discovery passes through it.
-5. State is persisted, not rebuilt each tick: derived decision signals land in
-   `user_memory/attention.md`, long-term behavior in `behaviors.md`, and runtime
-   state in an `fcntl`-locked `state.json`. The REPL and gateway share it.
-6. Off by default (`sentinel.enabled=false`); opt-in to activate.
+The Proactive Engine includes Sentinel and the time-driven Cron and Heartbeat
+services. They have different purposes and independent lifecycles:
 
-**Module root**: `raven/proactive_engine/`, with `sentinel/` (the decision
-and execution subsystem), `schedulers/cron/` and `schedulers/heartbeat/` (the
-two timer-driven services), and `wake.py` (event-driven early wake).
+| Mechanism | Use it when | What starts the work |
+| --- | --- | --- |
+| Sentinel | Raven should decide whether a contextual reminder or follow-up is useful | A periodic evaluation of memory, recent conversations, and derived signals |
+| Cron | You want an explicitly scheduled task or reminder | A user-created schedule |
+| Heartbeat | You maintain periodic tasks in `HEARTBEAT.md` | Its own timer or an early wake request |
 
-**Subdirectories of `sentinel/`**: `predictor/` (ContextAssembler, RoutineLearner,
-RoutineStore, TaskDiscoverer, DailyAnalysisService), `executor/` (Runner,
-NudgeDispatcher, NudgeInjector, DeferManager, ProactiveSpawn, PendingDecisionStore,
-DecisionRouter, DecisionConsumer, ActionExecutor), `feedback/`
-(NudgeFeedbackTracker, JsonStateStore), `trigger_policy/` (NudgePolicy,
-ProactivityPreferencesReader, prompts), `tools/` (the nudge-feedback tool),
-`attention_producers/` (the attention.md producers plus their base), and the
-top-level `attention_updater.py` / `discover_triggers.py`.
+Sentinel is off by default (`sentinel.enabled=false`). Enabling it does not
+enable task discovery automatically; disabling it does not disable Cron or
+Heartbeat. Use [Command Reference](commands.md) for their separate commands.
 
----
+Sentinel can stay silent, send a standalone reminder, append a reminder to a
+later reply, wait for a session to become idle, or spawn a background task.
+These are model decisions, not guaranteed schedules: use Cron when the timing
+must be explicit, and do not rely on Sentinel as the sole alert for a critical
+deadline.
 
-## Architecture overview
+## Before enabling
 
-Proactivity has two sources, Sentinel (LLM decision) and Cron (user-scheduled),
-and both reach the agent as origin-tagged turns submitted to the spine
-`Scheduler`. There is no message bus.
+- Configure a working model provider; the Planner normally inherits
+  `agents.defaults.model`. See [Quick Start](quick-start.md).
+- Configure the messaging channel that should receive reminders and verify that
+  ordinary messages work there.
+- Review which agent-home memory and session data the configured model provider
+  may receive. Sentinel uses these as planning context.
+- Review tool permissions, workspace restrictions, and subagent backends.
+  Enabling Sentinel in the gateway also wires background task spawning; it is
+  not a reminders-only switch.
 
-```
-SentinelRunner (tick loop)
-  ContextAssembler.assemble()                    -> PlannerContext
-    MemoryStore.read_long_term()                 -> memory_md
-    history file tail                            -> history_md_recent
-    RoutineLearner.learn(history)                -> routines
-    SessionManager.sessions (active window)      -> active_sessions
-    NudgePolicy.snapshot_state()                 -> nudge_policy_state
-    attention.md selected sections               -> attention_md
-    behaviors.md folded window                   -> behaviors_recent
-    NudgePolicy ledger                           -> fire_history
+The steps below use `raven gateway`, which assembles and runs the Sentinel
+stack. A standalone `raven sentinel` command does not start a background
+service.
 
-  fast-path rules (skip-only)                    -> Decision | None
-    quiet hours hard hit -> skip
-    unchanged-context dedup -> skip
+## Enable and configure
 
-  scheduled-fire (cron-style plan execution)     -> Decision | None
+From a source checkout, inspect the saved configuration:
 
-  ProactivePlanner.decide(ctx)                   -> PlannerDecision
-    tool call: planner_decision(...)
-    5 actions: skip | nudge | nudge_inject | nudge_defer | spawn_agent
-
-  _route(decision):
-    skip         -> record tick, return
-    nudge        -> NudgePolicy.check -> NudgeDispatcher.dispatch
-    nudge_inject -> NudgePolicy.check -> NudgeInjector.queue
-    nudge_defer  -> NudgePolicy.check -> DeferManager.register
-    spawn_agent  -> ProactiveSpawn.dispatch (its own policy check inside)
-
-  JsonStateStore (fcntl + atomic rename) <- NudgePolicy / NudgeInjector / DeferManager
-  DeliveryHub.post(...)                  -> channel outlet
-  NudgeFeedbackTracker                   <- engagement signals
-
-
-CronService (timer loop, sleep capped so peer-process job edits are seen)
-  _on_timer():
-    fcntl lock on jobs.json.lock
-    filter by allowed_channels + claim unclaimed jobs
-    save claim, release lock
-    execute job out of lock -> on_cron_job callback
-      submit(TurnRequest(origin=CRON, ...)) -> run_turn -> hub delivery / broadcast
+```bash
+uv run raven sentinel status
 ```
 
-Core design decisions:
+Merge the following fragment into your existing `config.json` (normally
+`~/.raven/config.json`); do not replace your provider or channel settings.
+Use JSON, not YAML. Replace `telegram:123456789` with your own enabled channel
+and recipient:
 
-1. Pure-function decision layer: the Planner is `(ctx, provider, model) ->
-   Decision` with no side effects; any failure degrades to `skip` and it never
-   raises.
-2. Structured tool call: the Planner returns one of the five actions via the
-   `planner_decision` tool schema.
-3. Five actions, three nudge executors plus spawn: finer-grained than a binary
-   run/skip, and aware of the user's current state.
-4. One shared NudgePolicy gate: all three nudge executors and task discovery use
-   it.
-5. The spine is the sole transport: proactive messages are posted to the
-   DeliveryHub; proactive sources submit origin-tagged turns to the Scheduler.
-
----
-
-## 1. Data types (`sentinel/types.py`)
-
-### Action
-
-```python
-Action = Literal[
-    "skip",            # nothing worth doing this tick
-    "nudge",           # send a standalone message NOW
-    "nudge_inject",    # append to the agent's next reply in target_session
-    "nudge_defer",     # wait until target_session's current thread settles
-    "spawn_agent",     # dispatch a micro-agent for a multi-step task
-]
+```json
+{
+  "sentinel": {
+    "enabled": true,
+    "tick_interval_seconds": 1800,
+    "task_discovery_targets": ["telegram:123456789"],
+    "nudge_policy": {
+      "max_nudges_per_hour": 1,
+      "max_nudges_per_day": 4,
+      "quiet_hours": [23, 7],
+      "high_priority_bypasses_limits": false
+    }
+  }
+}
 ```
 
-### PlannerDecision
+This example uses lower quotas than the defaults and disables the
+high-priority bypass. Then start the gateway, or restart the gateway process
+you already run:
 
-```python
-@dataclass
-class PlannerDecision:
-    action: Action
-    reason: str = ""
-    priority: Priority = "low"           # low | medium | high
-    proactivity_score: float = 0.0       # 0-1 confidence
-    target_session: str | None = None    # "channel:chat_id"
-    nudge_message: str | None = None     # required for the three nudge actions
-    spawn_task: str | None = None        # required for spawn_agent
-    defer_condition: str | None = None   # required for nudge_defer
-    raw_llm_response: dict | None = None
+```bash
+uv run raven gateway
 ```
 
-### PlannerContext
+For a deployment whose targets and limits are already configured, the switch
+also has a CLI:
 
-The Planner's only input. In production it is built by the ContextAssembler.
-Key fields:
-
-- `memory_md` / `history_md_recent`: the workspace MEMORY.md and a tail of the
-  history file.
-- `active_sessions`: channel sessions active within the recent window (with
-  their last user/assistant message).
-- `routines`: candidate recurring patterns from the RoutineLearner.
-- `calendar`: calendar entries.
-- `nudge_policy_state`: remaining quota and quiet-hours state.
-- `last_decision`: the previous tick's decision (so the Planner does not repeat
-  itself).
-- `fire_history`: what topics the Planner recently fired and whether the user
-  dismissed them. Filled directly from the in-memory NudgePolicy (no LLM, no
-  disk).
-- `attention_md`: a markdown block of selected sections from `attention.md` (not
-  the whole file). Which sections is config-driven.
-- `behaviors_recent`: a folded single-line-per-event block from the tail of
-  `behaviors.md`.
-
-These last three are what feed the Planner the subsystem's derived decision
-state explicitly; each is assembled by its own ContextAssembler helper. The
-Planner prompt rendering lives in `trigger_policy/prompts.py`.
-
----
-
-## 2. Orchestration: SentinelRunner (`sentinel/executor/runner.py`)
-
-### One tick
-
-```python
-async def tick_once(self) -> TickOutcome:
-    ctx = self.assembler.assemble()
-    return await self.tick_with_context(ctx)
-
-async def tick_with_context(self, ctx):
-    self._maybe_cleanup_feedback()        # daily trim of the feedback JSONL
-    self._maybe_retune_policy()           # adaptive NudgePolicy multiplier
-    await self._refresh_memory_state()    # refresh attention.md + behaviors.md
-    await self._maybe_run_task_discovery()# daily task-discovery batch
-    scheduled = self._fast_path_scheduled_fire(now)   # cron-style plan execution
-    if scheduled is not None:
-        self.assembler.remember_last_decision(scheduled)
-        return await self._route(scheduled)
-    fast = self._fast_path_rules(ctx)     # skip-only rule short-circuit
-    if fast is not None:
-        self.assembler.remember_last_decision(fast)
-        return TickOutcome(decision=fast, result=None, route="fast_path_skip")
-    try:
-        decision = await self.planner.decide(ctx)
-    except Exception:
-        if (fb := self._fallback_deadline_fire(now)) is not None:
-            return await self._route(fb)  # high-priority deadline outage fallback
-        decision = PlannerDecision(action="skip", reason="planner_error:...")
-    self._warn_unfired_due_deadline(decision, now)
-    outcome = await self._route(decision)
-    if decision.action == "skip":
-        setattr(decision, "_ctx_signature", self._context_signature(ctx))
-    self.assembler.remember_last_decision(decision)
-    return outcome
+```bash
+uv run raven sentinel enable
 ```
 
-### Fast-path rules (skip-only)
+The switch and quota commands update the saved configuration; restart the
+gateway for them to take effect. Run configuration commands with the same
+`RAVEN_HOME` as the gateway. `sentinel status` reports saved settings, not
+proof that a running process has reloaded them.
 
-Two rules short-circuit the Planner LLM call. Both are safe-to-deny — they only
-produce `skip`, never a false nudge:
+### Delivery targets
 
-| Rule | Condition | Benefit |
-|---|---|---|
-| quiet hours | `ctx.nudge_policy_state.in_quiet_hours` | running the Planner in a muted window is wasted (NudgePolicy would deny anyway) |
-| unchanged-context dedup | `last_decision.action == skip` and the context signature matches | memory/history/sessions did not change between ticks; skip the second LLM call |
+Despite its name, `sentinel.task_discovery_targets` also supplies destinations
+for plain nudges aimed at the internal `sentinel:direct` target, such as
+daily-plan reminders. It is used even when task discovery is disabled.
 
-The signature is a short byte hash over `memory_md`, `history_md_recent`, and
-the active session keys, stashed on the decision as a dynamic attribute. A skip
-cache expires after a bounded TTL so a quiet persona cannot lock `skip`
-indefinitely and starve the feedback loop.
+- `"channel:chat_id"`: a specific recipient; preferable when a channel has
+  multiple conversations.
+- `"channel"`: resolve the most recent recipient in that channel at fire time.
+- `"*"`: expand to enabled gateway channels and resolve their recent recipients.
 
-### Scheduled-fire fast path
+An empty list leaves the daily discovery batch without a destination. A plain
+nudge can still target a concrete session. For an internal target such as
+`sentinel:direct`, if the configured targets resolve to no recipients (including
+when the list is empty), the runner falls back to a single most-recent active
+session, not a broadcast. If no suitable session can be resolved, the nudge has
+no delivery target. A literal `tui` target is not automatically forwarded by a
+gateway that has no matching outlet. Start with one explicit recipient before
+choosing broadcast.
 
-A daily-plan producer lays out the day's intended proactive fires. The
-scheduled-fire path is its cron-style executor: when a tick lands within a slot's
-time window and that topic has not yet fired today, it sends the pre-planned
-message without an LLM call. Recurring slots fire directly; one-shot deadline
-slots fall through to the Planner instead, because only the Planner can read the
-recent history and tell "not done yet" from "user already finished it" — a
-language-level judgment. If the Planner is unavailable, a guarded fallback can
-blind-fire only the high-priority deadline slots, and only through the normal
-policy gates, to keep a hard deadline from being silently missed during an
-outage.
+### Frequency and quiet hours
 
-### Drive modes
+Common settings under `sentinel`:
 
-- `start()` / `stop()`: the runner owns its own tick loop on a plain interval
-  (default 1800s / 30 minutes), and concurrently runs the DeferManager loop and,
-  in the gateway, a trigger-consume loop. The runner does not depend on the wake
-  scheduler — event-driven wake is the heartbeat's concern (see section 11).
-- `tick_once()` / `tick_with_context()`: a single synchronous tick, used by
-  tests and benchmark adapters.
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `tick_interval_seconds` | `1800` | Evaluation interval in seconds; minimum `60` |
+| `evaluator_model` | `null` | Inherit the main model, or select a Planner model |
+| `nudge_policy.max_nudges_per_hour` | `3` | Base hourly quota; adaptive and weekend factors can change the effective limit |
+| `nudge_policy.max_nudges_per_day` | `10` | Daily policy cap; high priority cannot bypass it |
+| `nudge_policy.quiet_hours` | `[23, 7]` | Quiet window in the runtime host's local time |
+| `nudge_policy.high_priority_bypasses_limits` | `true` | Allow high priority to bypass quiet hours and the hourly quota, subject to policy checks |
+| `nudge_policy.min_interval_seconds` | `300` | Minimum interval for the same session |
+| `inject_enabled` / `defer_enabled` | `true` / `true` | Wire reply-appended and delayed reminders; disabling one leaves its decisions unexecuted |
 
-### Degradation
+To change the two quotas without editing JSON:
 
-Every layer is wrapped: a ContextAssembler failure becomes a `skip`; a Planner
-failure tries the deadline fallback then `skip`; an executor failure returns a
-non-delivered result and the tick continues. The runner never raises — a single
-failed tick never breaks the lifecycle.
-
-### TickOutcome
-
-```python
-@dataclass
-class TickOutcome:
-    decision: PlannerDecision
-    result: ExecutionResult | None   # None when skip or no executor fired
-    nudge_id: str | None = None      # correlates the NudgeFeedbackTracker
-    route: str = ""                  # which executor path was taken
-    notes: list[str] = field(default_factory=list)
+```bash
+uv run raven sentinel config set --max-nudges-per-hour 1 --max-nudges-per-day 4
 ```
 
----
+Restart afterward. These are Sentinel policy limits, not account-wide billing
+caps. User-scheduled Cron jobs bypass the policy check; when the shared ledger
+is wired, their fires still consume counters seen by Sentinel.
 
-## 3. Context assembly: ContextAssembler (`sentinel/predictor/context_assembler.py`)
+The policy is not a strict send-time barrier for queued messages. Injects are
+checked and charged when queued; deferred reminders are checked at registration
+but currently lack a send-time recheck and quota-recording callback. To keep
+Sentinel nudges out of quiet windows, also disable inject, defer, and the
+high-priority bypass, or keep Sentinel off. This does not silence Cron or
+already-running tasks.
+See [Policy boundaries](proactivity-design.md#policy-boundaries).
 
-Aggregates every signal source into the PlannerContext, with graceful
-degradation per field:
+## Optional task discovery
 
-| Field | Source | When the source is missing |
-|---|---|---|
-| `memory_md` | `MemoryStore.read_long_term()` | `""` |
-| `history_md_recent` | tail of the history file | `""` |
-| `routines` | `RoutineLearner.learn(history_md)` | `[]` |
-| `active_sessions` | `SessionManager.sessions` filtered to the active window | `[]` |
-| `nudge_policy_state` | `NudgePolicy.snapshot_state()` | default object |
-| `calendar` | a caller-injected calendar function | `[]` |
-| `last_decision` | the runner's `remember_last_decision()` | `None` |
-| `attention_md` | selected H2 sections of `attention.md` | `""` |
-| `behaviors_recent` | folded tail of `behaviors.md` | `""` |
-| `fire_history` | the in-memory NudgePolicy ledger (no LLM, no disk) | `{}` |
+Task discovery proposes a numbered menu of tasks. It is separately opt-in.
+Merge these fields into the same `sentinel` object, retaining your delivery
+targets:
 
-The coupling to SessionManager is deliberately loose (attribute access, no type
-assumption).
-
----
-
-## 4. Decision layer: ProactivePlanner (`sentinel/planner.py`)
-
-Generation parameters are pinned (a small max-tokens, a low temperature, no
-reasoning effort) so a global provider configuration cannot leak in and pollute
-the decision.
-
-`decide()` flow:
-
-1. Build the messages: the system prompt plus the rendered context prompt.
-2. Call the provider with the `planner_decision` tool.
-3. Every failure path degrades to `skip` (provider error, no tool call, tool
-   args not a dict).
-4. Field validation and clamping: an invalid `action` becomes `skip`, an invalid
-   `priority` becomes `low`, an out-of-range `proactivity_score` is clamped to
-   `[0, 1]`.
-5. Action/field consistency guard: a nudge action with no `nudge_message`, a
-   `nudge_defer` with no `defer_condition`, or a `spawn_agent` with no
-   `spawn_task` is all downgraded to `skip`.
-
-Step 5 is the key defense: the tool schema only requires action / reason /
-score, so the conditionally-required fields are enforced here and the downstream
-executors do not need defensive checks.
-
-Prompts live in `sentinel/trigger_policy/prompts.py`: the system prompt (the
-Planner's identity, the five-action semantics, and "default to skip unless
-clearly worthwhile"), the structured tool schema, and the context prompt builder
-that renders the PlannerContext to markdown.
-
----
-
-## 5. The gate: NudgePolicy (`sentinel/trigger_policy/policy.py`)
-
-All three nudge executors (dispatcher / injector / defer) and the task
-discoverer must pass `check()` before delivering.
-
-### Layered checks
-
-`check()` runs a sequence of gates, roughly in this order:
-
-| Layer | Rule | High priority can bypass? |
-|---|---|---|
-| 1 | `action == skip` -> deny | n/a |
-| 2 | quiet hours (default 23:00-07:00) | yes (but the bypass is itself withdrawn when high-priority acceptance is low) |
-| 2b | dynamic per-hour do-not-disturb learned from feedback | yes |
-| 3 | per-persona do-not-disturb windows | yes |
-| 4 | per-day quota | no (hard cap) |
-| 5 | per-hour quota (scaled by the adaptive + weekend multipliers) | yes |
-| 6 | per-session cooldown | no |
-| 7 | dismissal cooldown | no |
-| 8 | per-topic weighted hard-reject cooldown | no |
-| 9 | per-topic acceptance-rate gate | no |
-| 10 | content de-duplication within a window | no |
-| 11 | rolling per-topic quota stack (hour / day / week) | no |
-
-### Adaptive multiplier
-
-`apply_adaptive_tuning()`, called by the runner each tick, moves the hour-quota
-multiplier symmetrically with the user's recent acceptance rate: a highly
-engaged user can be loosened above the baseline, a disengaged user tightened
-below it, with a cold-start floor, an asymmetric volume gate (loosening needs
-more samples than tightening), and a hysteresis band to prevent flapping. The
-weekend tightener stacks a separate factor on top. The multiplier is also
-surfaced to the Planner prompt as a soft signal so the Planner can raise its own
-value threshold and avoid LLM calls that would only be denied.
-
-### Read/write split
-
-```python
-verdict = policy.check(action, session_key, content, priority)
-if verdict.verdict == "allow":
-    await dispatch(...)
-    policy.record_fired(action, session_key, content)
+```json
+{
+  "task_discovery_enabled": true,
+  "task_discovery_time": "08:00",
+  "task_discovery_require_confirm": true
+}
 ```
 
-State is written only after a successful dispatch, so a "deny -> dispatch ->
-error -> do not charge quota" case is handled correctly.
+The daily batch runs on a Sentinel tick after the configured local time, not
+at an exact minute. Targets default to an empty list, so enabling discovery
+alone does not deliver a menu. By default a menu has at most four options and
+expires after 60 minutes.
 
-### Personalization and persistence
+Reply with `/pick N` in the same conversation for deterministic option selection
+without a classifier call. Bare numbers and natural-language choices require a
+configured model provider and model for the classifier, and sufficient confidence
+in its result. Without that classifier, use `/pick N` to select an option. Then
+answer the confirmation if requested. A selected option can start agent work,
+invoke a tool, spawn a subagent, or confirm a learned routine. The confirmation
+setting applies to menu choices; it is not an approval step for every
+Planner-generated `spawn_agent` decision.
 
-The policy accepts an optional overrides function. The ContextAssembler binds a
-`ProactivityPreferencesReader` that re-reads the user's preferences each tick, so
-the chain from learned preference to effective gate is always current. Overrides
-may only tighten (a user preference can widen the quiet window, never narrow it).
+## Inspect and troubleshoot
 
-When constructed with a `JsonStateStore`, the policy hydrates from disk before
-each check and writes back atomically after each fire. One store instance is
-shared by the NudgePolicy, the NudgeInjector, and the DeferManager, so every
-mutation goes through one `fcntl` lock and the REPL and gateway never tear each
-other's state.
+These commands inspect saved settings or persisted state:
 
-A `now_fn` injection point lets tests drive quota windows, dedup TTLs, and
-cooldowns under a frozen clock.
+```bash
+uv run raven sentinel status
+uv run raven sentinel nudges
+uv run raven sentinel decisions
+uv run raven sentinel routines
+uv run raven sentinel attention
+uv run raven sentinel behaviors
+```
 
----
+To inspect one planning decision when Sentinel is enabled:
 
-## 6. The three nudge execution paths
+```bash
+uv run raven sentinel tick --dry-run
+```
 
-### NudgeDispatcher (`sentinel/executor/dispatcher.py`)
+Dry-run disables nudge execution and task discovery, but still runs planning
+and state maintenance: it may call the model and refresh derived state. It is
+not a read-only check or a free preview. The CLI's `--live` mode uses a
+headless sink for dispatcher output, including plain nudges and discovery menus;
+it does not verify delivery to a real channel.
 
-The dispatcher is stateless (the caller owns rate limiting and target
-resolution) and posts to the spine DeliveryHub. The hub's `post` callable is
-late-bound via `set_post` because the hub is built inside the running loop after
-the dispatcher.
+| Symptom | Check |
+| --- | --- |
+| Saved settings say enabled, but nothing runs | Restart the gateway and check its startup output; confirm it uses the same configuration home |
+| A tick returns `skip` | Often normal: quiet hours, unchanged context, or no useful action; inspect `reason` and `route` |
+| Decision exists, but no message arrives | Check the recipient, enabled channel, policy denial, queue expiry, and `no_delivery_target` / `degraded:...` result |
+| No task menu appears | Check the separate discovery switch, non-empty targets, local time, quota, and menu expiry |
+| No routines or behaviors appear | Routine learning needs enough parseable history; behavior extraction is separately off by default |
+| Reminders are too frequent | Lower quotas, review high-priority bypass, and inspect Cron separately |
 
-- `dispatch(decision, targets)` handles `action == nudge`. It posts a `Text` to
-  each resolved `(channel, chat_id)` with `source.extras._sentinel_origin=True`.
-  It goes through the hub's non-turn `post`, so the user receives it as a
-  standalone proactive message — it never re-enters the tool-enabled agent loop,
-  and the agent therefore cannot "act on" a reminder (fabricate a deliverable or
-  mark a deadline done). Real channel outlets deliver the content verbatim; the
-  interactive CLI outlet reads `_sentinel_origin` to prefix a proactive marker.
-- `dispatch_options(decision)` handles a task-discovery menu. It renders the
-  PendingDecision to a markdown menu and posts it the same way. The menu is the
-  finished user-facing artifact (numbered options, one-line reasons, "reply with
-  a number"), so posting it raw is intentional — running it through the agent
-  would paraphrase and break the format. The user's pick is caught downstream by
-  the DecisionConsumer hook before it reaches the LLM.
+Replying `/dismiss` after a recent nudge in the same session records dismissal
+and starts a cooldown. An ordinary reply is recorded as neutral, not
+automatically as acceptance. Neither is a global stop command.
 
-### NudgeInjector (`sentinel/executor/injector.py`)
+## Costs and safety limits
 
-`action == nudge_inject` queues the message and is consumed as the agent's
-`response_modifier`: `NudgeInjector.__call__(session_key, content) -> content`
-pops the pending messages for that session and appends them to the agent's
-outgoing reply. The agent loop applies this in its `after_send` chain and skips
-it for system-origin turns so a proactive reply does not get a nudge layered on
-top of itself.
+A tick that reaches the Planner makes a model request; provider retries can
+add requests. Fast paths can skip that request. Task discovery, optional daily
+analysis, routine validation, behavior extraction, and spawned tasks can add
+their own model or tool costs. A 30-minute interval is not a total cost cap.
 
-Constraints: a TTL drops stale entries, a per-session cap evicts the oldest
-beyond it (FIFO), and the pending queue is persisted through the shared
-`JsonStateStore` so the REPL and gateway do not double-consume or lose an inject.
+The Planner may receive memory, recent conversation excerpts, selected
+`attention.md` sections, and folded behavior events. Runtime state and feedback
+persist across restarts; see [State and feedback](proactivity-design.md#state-and-feedback)
+for the files and their roles.
 
-The seam is a plain `Callable[[str, str], str]`: the agent loop does not import
-the Sentinel, and the Sentinel does not import the agent loop.
+A spawned task uses the selected subagent backend. The built-in `raven-loop`
+backend has an iteration cap and omits messaging and recursive-spawn tools.
+However, `tools.restrict_to_workspace` defaults to `false`, and ProactiveSpawn
+does not force it on or add an overall task timeout. External ACP and CLI
+agents run as host processes. Review [Sandbox](sandbox.md) for what isolation
+does and does not cover.
 
-### DeferManager (`sentinel/executor/defer_manager.py`)
+## Disable Sentinel
 
-`action == nudge_defer` registers the decision on a priority heap and dispatches
-it (via the same nudge routing) once the target session has settled. Settling is
-time-based: the session has been idle for a threshold. A maximum wait bounds how
-long a deferred decision can linger before it expires. The heap is persisted
-through the shared `JsonStateStore`, so pending defers survive a restart (the
-optional on-dispatch callback is the only thing not serialized, and it is just
-instrumentation).
+```bash
+uv run raven sentinel disable
+```
 
----
+Restart the gateway to stop its Sentinel stack. The command alone does not
+stop a currently running stack, cancel an already-dispatched task, remove
+state, or disable Cron and Heartbeat. If you need an immediate stop, stop the
+running gateway and inspect any remaining external agent processes separately.
+Persisted queues are not cleared by disabling; inspect them before re-enabling.
 
-## 7. The spawn_agent path: ProactiveSpawn (`sentinel/executor/spawn.py`)
+## Implementation reference
 
-`action == spawn_agent` wraps `SubagentManager.spawn(...)` to run an independent
-micro-agent for a multi-step task (a digest, a status check). `dispatch()`:
+The implementation sections formerly on this page now live in
+[Proactivity Design and Implementation](proactivity-design.md). Older section
+links land on the matching entry below:
 
-1. validates `action == spawn_agent` and a non-empty `spawn_task`;
-2. passes its own NudgePolicy check, reusing the shared quota and dedup (keyed on
-   the spawn task as the content hash);
-3. splits the target session into channel and chat_id;
-4. spawns the micro-agent; the result is delivered back through the
-   NudgeDispatcher to the originating channel.
-
-Spawn uses its own quota line (so it does not steal the reactive-nudge quota) but
-shares the same dedup so the same spawn task does not repeat in a short window.
-
----
-
-## 8. Feedback loop: NudgeFeedbackTracker + the nudge-feedback tool
-
-The NudgeFeedbackTracker (`sentinel/feedback/tracker.py`) records each nudge's
-lifecycle (dispatched / accepted / dismissed / neutral) to a JSONL log, and the
-runner reads its recent acceptance rate each tick to retune the NudgePolicy
-multiplier.
-
-Verdicts come from a tool (`sentinel/tools/`): when the user replies, the main
-LLM can call `nudge_feedback(verdict, nudge_id, reason)` to mark a dispatched
-nudge accepted, dismissed, or neutral. This costs no extra LLM call (the main
-turn runs anyway) and avoids the brittle "default to accepted unless the user
-said stop" heuristic that miscounted an explicit "stop reminding me".
-
-A per-turn session key is published by the user-inbound hook through a context
-variable so the tool can find the current session without changing the agent's
-tool-execute signature.
-
----
-
-## 9. State files
-
-The subsystem persists its derived state rather than rebuilding it each tick.
-
-- `attention.md` (under `user_memory/`): a set of producers
-  (`sentinel/attention_producers/`) each own one H2 section, maintained each
-  tick by the `AttentionUpdater` (`sentinel/attention_updater.py`) in two phases
-  (compute out of lock, splice in under a file lock), with a compare-and-skip so
-  a cold tick does not write, and per-producer failure isolation. A daily
-  analysis service (`sentinel/predictor/daily_analysis.py`) makes one LLM call a
-  day whose result several producers share. Most producers are pure algorithm;
-  the LLM-backed ones and the daily analysis are off by default.
-- `behaviors.md` (under `user_memory/`): an idle-triggered LLM extractor turns
-  session messages into structured behavior events; the Planner reads a folded
-  window of the tail. The extractor is off by default.
-- `state.json` (under the sentinel data dir): the runtime ledger shared by the
-  NudgePolicy, NudgeInjector, and DeferManager, written under one `fcntl` lock
-  with atomic rename.
-
----
-
-## 10. Cron (`schedulers/cron/`)
-
-The CronService (`schedulers/cron/service.py`) runs its own timer loop and
-persists jobs to an `fcntl`-locked `jobs.json`. Its sleep-until-next-wake is
-capped so it picks up jobs written by a peer process (the store reloads on mtime
-change). Each fire is claimed with a pid and timestamp under the lock (with a
-stale-claim TTL) so two processes do not double-fire the same job, and a channel
-filter lets a REPL avoid stealing a job destined for a real channel.
-
-When a job fires, the `on_cron_job` callback (`raven/core/cron_stack.py`)
-submits a `CRON`-origin `TurnRequest` to the spine, bound to the `cron:<job_id>`
-conversation. Delivery is explicit per branch: a single-target delivering job
-rides the hub to its one outlet; a broadcast or a silent job submits with the
-job's own (ephemeral) channel as the source so the hub drops the reply, and a
-broadcast then delivers the reply explicitly to every resolved target. Delivery
-targets are resolved at trigger time (so a `cron config set` takes effect on the
-next fire): a real channel passes through, an ephemeral one (cli / tui) expands
-to the configured forward channels, and the chat_id is looked up from the most
-recent session for each channel.
-
-A cron fire also writes the shared NudgePolicy ledger (a topic-tag fire plus a
-dispatched record marked neutral) so the Sentinel suppresses its own proactive
-nudge on the same topic within the dedup window, without dragging down the
-acceptance rate the Sentinel learns from (a cron is user-initiated, not the
-Sentinel's own proposal). A recurring job that fires repeatedly with no user
-response auto-decays after a strike limit, to contain a runaway "every few
-minutes forever" job.
-
----
-
-## 11. Heartbeat and event-driven wake
-
-The HeartbeatService (`schedulers/heartbeat/service.py`) is a separate
-timer-driven service. Phase one reads a `HEARTBEAT.md` and asks the LLM, via a
-virtual tool call, whether there are active tasks (avoiding free-text parsing);
-phase two, only on a `run` decision, executes through the full agent loop and
-delivers the result.
-
-Event-driven wake (`raven/proactive_engine/wake.py`) coalesces wake requests
-into early heartbeat ticks. Producers (a cron completion, a subagent completion,
-a manual trigger) call `request_wake_now`, and the heartbeat loop waits on the
-scheduler's wake event instead of a bare sleep, so a wake simply ends the
-current sleep early. A rate guard spaces consecutive fires, and while the agent
-is busy with user messages the wake is parked and re-fired from the agent loop's
-turn-complete callback. Wake drives the HeartbeatService only — the
-SentinelRunner keeps its own independent tick loop and does not reference the
-wake scheduler. The trigger store (`sentinel/discover_triggers.py`) is a
-separate file-based IPC (modeled on the cron jobs file) the runner drains on its
-own short-cadence loop, for an operator-initiated discovery run.
-
----
-
-## 12. Task discovery: anticipatory menus
-
-Alongside the reactive nudge path, a daily task-discovery batch proposes a menu
-of candidate tasks for the user to pick from. The pipeline:
-
-- TaskDiscoverer (`sentinel/predictor/task_discoverer.py`): triggered once a day
-  by the runner's tick (a time guard, sharing the `sentinel.enabled` lifecycle),
-  it reads recent memory and history, produces a `PendingDecision` with a few
-  options, gates it through the NudgePolicy, and dispatches the formatted menu
-  via `NudgeDispatcher.dispatch_options`.
-- PendingDecisionStore (`sentinel/executor/pending_decision.py`): an
-  `fcntl`-locked JSON store with TTL, awaiting-confirm state, and supersede
-  semantics.
-- DecisionRouter (`sentinel/executor/decision_router.py`): watches user replies,
-  matching a number / `/pick N` deterministically with an LLM classifier
-  fallback (above a confidence threshold). A match consumes the reply so it does
-  not reach the agent loop.
-- DecisionConsumer (`sentinel/executor/decision_consumer.py`): turns a matched
-  pick into an ActionExecutor call, optionally behind a confirm step.
-- ActionExecutor (`sentinel/executor/action_executor.py`): executes a `reply`
-  (through the injector), a `tool` (through the agent's tools), or a `spawn`
-  (through ProactiveSpawn). Each path passes the NudgePolicy and records the
-  fire.
-
-The user's pick is short-circuited in the agent loop's hook chain (the
-DecisionConsumer adapter) before the LLM is called.
-
----
-
-## 13. Spine integration and the user-inbound gates
-
-Proactive turns reach the agent the same way a user message does: as a
-`TurnRequest` with an `Origin` (`USER`, `SENTINEL`, `CRON`, `HEARTBEAT`,
-`SUBAGENT`) submitted to the per-process `Scheduler` (`raven/spine/scheduler.py`),
-which routes it to a per-conversation serial `Lane`. Replies and proactive
-messages are delivered through the `DeliveryHub` (`raven/spine/delivery.py`).
-
-The agent loop (`raven/agent/loop/main.py`, `run_turn`) reads `req.origin` to
-gate two things:
-
-- The user-inbound hooks (engagement detection, the discovery-menu consumer) run
-  only for genuine user input. `SENTINEL` and `SUBAGENT` turns are not real user
-  input, so they are gated out.
-- The `after_send` chain (the NudgeInjector / response-modifier) is skipped for
-  origins whose output is system-generated, so a proactive reply does not get a
-  nudge layered onto it. This is a separate gate from the user-inbound one, even
-  though their members coincide today, because they mean different things.
-
-A cron turn additionally guards the cron tool (via a context variable set in the
-lane task) so the agent cannot schedule new cron jobs mid-run.
-
-### Mid-turn user input (BusyPolicy.INJECT)
-
-When a user message arrives while a turn is already running for that
-conversation, the gateway inbound dispatch
-(`raven/cli/gateway_commands.py`) detects the in-flight turn
-(`Scheduler.has_inflight`) and submits the message with `BusyPolicy.INJECT`
-instead of queuing a fresh turn. The lane holds the inject in a mailbox; the
-running turn's loop calls `drain()` at the top of each tool-loop iteration and
-merges the pending injects as user turns before the next LLM call
-(`raven/spine/scheduler.py`, `raven/agent/loop/main.py`). An inject the
-turn never drains falls back to a fresh appended turn, so nothing is lost.
-`INJECT` and `INTERRUPT` are user-only; a proactive origin requesting either is
-demoted to `APPEND`.
-
-### ask_user — pausing a turn to ask the user
-
-The `ask_user` tool (`raven/agent/tools/ask_user.py`) pauses a turn to ask the
-user a structured question and awaits the reply. It hands the turn's
-conversation_id and prompt to a `QuestionBroker`
-(`raven/rpc/question_broker.py`), which emits a `clarify.request`
-notification and blocks (on a future keyed by conversation_id) until an answer
-arrives, with a fail-safe default so the loop always gets a string back.
-`clarify.request` / `clarify.respond` is the ui-tui frontend's existing
-multi-choice prompt contract (ClarifyPrompt), which the broker reuses.
-
-The answer reaches the broker by two routes:
-
-- TUI: the frontend renders the ClarifyPrompt and answers with a
-  `clarify.respond` RPC, handled in `raven/rpc/methods/question.py`,
-  which calls `broker.reply(...)`.
-- Channel: the broker renders the question as an outbound Text to the
-  conversation's channel; the gateway inbound dispatch, on the next message for a
-  conversation with a pending question (`broker.pending_req(cid)` is set), routes
-  that message to `broker.reply(cid, text)` instead of starting or injecting a
-  turn (`raven/cli/gateway_commands.py`).
-
-Because a turn is serial, at most one question is pending per conversation; an
-overlapping question fail-safes the stale one.
-
-A turn blocked on `ask_user` holds its lane and one user concurrency slot
-(`OriginPools(user=...)`) until the answer arrives or the broker's timeout
-fail-safe fires. With the gateway's pool of 4, three pending questions still
-leave a free slot; only four conversations blocked at once exhaust the pool.
-The default timeout bounds the worst case, so a forgotten question cannot wedge
-the gateway indefinitely.
-
-The `clarify.request` wire payload carries `{question, choices, header,
-recommended, timeout_s, index, total, batch}`. `header` is a short chip label,
-`recommended` names the option the agent would pick, and `index` / `total` /
-`batch` place the question in its call so a surface can show the whole set and
-its progress while still collecting one answer at a time. ClarifyPrompt renders
-a single-select prompt, marks the recommended option, counts the budget down,
-and takes a free-form answer or a note alongside a selection; multi-select is
-not offered.
-
-One `ask_user` call shares one budget (`tools.ask_user.timeout`, 600s by
-default) across every question in it, so the paragraph above holds for a batch
-too -- a three-question call cannot hold a lane for three timeouts.
+- <span id="architecture-overview"></span>
+  [Architecture and assembly](proactivity-design.md#components-and-assembly)
+- <span id="1-data-types-sentineltypespy"></span>
+  <span id="plannerdecision"></span>
+  <span id="plannercontext"></span>
+  <span id="3-context-assembly-contextassembler-sentinelpredictorcontext_assemblerpy"></span>
+  <span id="4-decision-layer-proactiveplanner-sentinelplannerpy"></span>
+  [Data types, context assembly, and Planner decisions](proactivity-design.md#context-and-decision-contracts)
+- <span id="2-orchestration-sentinelrunner-sentinelexecutorrunnerpy"></span>
+  <span id="one-tick"></span>
+  <span id="fast-path-rules-skip-only"></span>
+  <span id="scheduled-fire-fast-path"></span>
+  <span id="drive-modes"></span>
+  <span id="tickoutcome"></span>
+  [Runner lifecycle, fast paths, and tick outcomes](proactivity-design.md#tick-lifecycle)
+- <span id="action"></span>
+  <span id="degradation"></span>
+  <span id="6-the-three-nudge-execution-paths"></span>
+  <span id="nudgedispatcher-sentinelexecutordispatcherpy"></span>
+  <span id="nudgeinjector-sentinelexecutorinjectorpy"></span>
+  <span id="defermanager-sentinelexecutordefer_managerpy"></span>
+  <span id="7-the-spawn_agent-path-proactivespawn-sentinelexecutorspawnpy"></span>
+  [Actions, nudge execution, and proactive spawning](proactivity-design.md#action-routing)
+- <span id="5-the-gate-nudgepolicy-sentineltrigger_policypolicypy"></span>
+  <span id="layered-checks"></span>
+  <span id="adaptive-multiplier"></span>
+  <span id="readwrite-split"></span>
+  <span id="personalization-and-persistence"></span>
+  [Policy checks, adaptation, and accounting](proactivity-design.md#policy-boundaries)
+- <span id="8-feedback-loop-nudgefeedbacktracker-the-nudge-feedback-tool"></span>
+  <span id="9-state-files"></span>
+  [State files and feedback](proactivity-design.md#state-and-feedback)
+- <span id="12-task-discovery-anticipatory-menus"></span>
+  [Routines and task discovery](proactivity-design.md#routines-and-task-discovery)
+- <span id="10-cron-schedulerscron"></span>
+  <span id="11-heartbeat-and-event-driven-wake"></span>
+  <span id="13-spine-integration-and-the-user-inbound-gates"></span>
+  <span id="mid-turn-user-input-busypolicyinject"></span>
+  <span id="ask_user-pausing-a-turn-to-ask-the-user"></span>
+  [Cron, Heartbeat, Spine integration, and turn controls](proactivity-design.md#cron-heartbeat-and-the-spine)
