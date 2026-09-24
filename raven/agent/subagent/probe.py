@@ -28,11 +28,13 @@ from loguru import logger
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
+from raven.agent.subagent.node_runtime import NodeTooOld, node_too_old
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
     diagnose_hint_for,
     install_hint_for,
     model_switch_hint_for,
+    runs_on_node,
     shim_requirement_for,
     sign_in_hint_for,
     third_party_subagent_presets,
@@ -390,9 +392,14 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
     """A launch or a wait that failed without the agent answering, when there is evidence of which.
 
     An exit carries the agent's own last words on stderr; a flag it does not know
-    means it predates the release its preset launches. A timed-out prompt carries
-    nothing, and is named only for an agent measured to go silent while it
-    retries (`presets.DIAGNOSE_HINTS`), with the command that makes it say why.
+    means it predates the release its preset launches; a Node.js agent that quit
+    on a Node.js older than its package declares was run on the wrong one
+    (`_stale_node`). A timed-out prompt carries nothing, and is named only for an
+    agent measured to go silent while it retries (`presets.DIAGNOSE_HINTS`), with
+    the command that makes it say why.
+
+    Runs ``node --version`` for a Node.js agent that quit, so its callers keep it
+    off the event loop.
     """
     if _EXITED.search(shown):
         if _NO_ACP_FLAG.search(shown):
@@ -402,12 +409,37 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
                 f"it is too old to be connected: it does not know the flag that starts it in ACP mode; "
                 f"upgrade it{how} and connect again. It said: {shown}"
             )[:_DETAIL_CAP], Remedy("upgrade", up)
+        stale = _stale_node(cfg)
+        if stale is not None:
+            how = f" with `{stale.upgrade}`" if stale.upgrade else " from nodejs.org"
+            return (
+                f"its Node.js is too old for it: it needs Node.js {stale.needs} or newer and was launched with "
+                f"{stale.found} ({stale.node}); upgrade Node.js{how} and connect again. It said: {shown}"
+            )[:_DETAIL_CAP], Remedy("runtime", stale.upgrade, needs=stale.needs, found=stale.found)
         return shown[:_DETAIL_CAP], Remedy("exited")
     if _PROMPT_TIMEOUT.search(shown):
         run = diagnose_hint_for(cfg)
         if run:
             return _silent_detail(shown, run), Remedy("silent", run)
     return None
+
+
+def _stale_node(cfg: Any) -> NodeTooOld | None:
+    """The too-old Node.js this row's launch resolves, for an agent known to run on one.
+
+    Read from the PATH the launch itself gets -- the row's own, else the login
+    shell's -- since that is the PATH its ``#!/usr/bin/env node`` resolves.
+    """
+    if not runs_on_node(cfg):
+        return None
+    try:
+        argv = shlex.split((getattr(cfg, "command", None) or "").strip())
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    path = (getattr(cfg, "env", None) or {}).get("PATH") or _login_path()
+    return node_too_old(argv[0], path)
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -841,7 +873,7 @@ async def ping_agent(cfg: Any) -> PingResult:
         run = diagnose_hint_for(cfg)
         return PingResult(False, _silent_detail(said, run), Remedy("silent", run)) if run else PingResult(False, said)
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, *_ping_refusal(cfg, exc))
+        return PingResult(False, *(await asyncio.to_thread(_ping_refusal, cfg, exc)))
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the
@@ -900,14 +932,15 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         # off this detail, whose "(auth methods: ...)" suffix names an
         # advertisement every working agent makes too. A launch that quit
         # before answering is read the way the connect reads it
-        # (`_process_refusal`), so the two buttons name one crash one way.
-        detail, remedy = (
-            (snapshot.detail, _remedy_for(cfg))
-            if snapshot.needs_auth
-            else (snapshot.detail, Remedy("download", _shipped_command(cfg)))
-            if snapshot.unfetched
-            else _process_refusal(cfg, snapshot.detail) or (snapshot.detail, None)
-        )
+        # (`_process_refusal`, off the event loop), so the two buttons name one
+        # crash one way.
+        if snapshot.needs_auth:
+            detail, remedy = snapshot.detail, _remedy_for(cfg)
+        elif snapshot.unfetched:
+            detail, remedy = snapshot.detail, Remedy("download", _shipped_command(cfg))
+        else:
+            read = await asyncio.to_thread(_process_refusal, cfg, snapshot.detail)
+            detail, remedy = read or (snapshot.detail, None)
         return TestResult(cfg.name, source, "acp", False, detail, reply, elapsed(), remedy)
     answered = await ping_agent(cfg)
     # Verdict first on a failure, the handshake after it: "it connected and then

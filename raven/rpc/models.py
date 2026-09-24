@@ -2804,7 +2804,18 @@ class SubagentRemedy(_Strict):
     """What fixes a refused connect or test, as the page draws it."""
 
     kind: Literal[
-        "sign_in", "setup", "api_key", "download", "model", "billing", "quota", "network", "silent", "upgrade", "exited"
+        "sign_in",
+        "setup",
+        "api_key",
+        "download",
+        "model",
+        "billing",
+        "quota",
+        "network",
+        "silent",
+        "upgrade",
+        "exited",
+        "runtime",
     ] = Field(
         ...,
         description=(
@@ -2820,7 +2831,9 @@ class SubagentRemedy(_Strict):
             "terminal. silent: the agent outlasted the wait without a word, which is how it retries a provider "
             "that keeps refusing it; `command` prints the reason in a terminal. upgrade: the agent is too old to "
             "know the flag that starts it in ACP mode; `command` upgrades it. exited: the agent quit on starting, "
-            "and what it said is in the detail."
+            "and what it said is in the detail. runtime: the agent quit on starting because the Node.js it was "
+            "launched with is older than its package declares; `needs` is that floor, `found` the version "
+            "launched, and `command` upgrades that Node.js when its installer is recognisable."
         ),
     )
     command: str | None = Field(None, description="The command that makes the fix on this machine, when one is known.")
@@ -2830,6 +2843,12 @@ class SubagentRemedy(_Strict):
             "What to type once `command` is running, for an agent whose fix is a step inside it rather than "
             "the command itself. Sent only beside `command`."
         ),
+    )
+    needs: str | None = Field(
+        None, description="For runtime: the Node.js version the agent's package declares it needs, e.g. 22."
+    )
+    found: str | None = Field(
+        None, description="For runtime: the Node.js version the agent was launched with, e.g. 18.20.8."
     )
 
 
