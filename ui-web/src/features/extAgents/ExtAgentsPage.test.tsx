@@ -1057,6 +1057,30 @@ describe('a refusal that names its fix', () => {
     expect(note()).toBeNull()
   })
 
+  it('names Connect in a bare connect refusal too, once a key is typed', async () => {
+    const r = row({ name: 'MiroThinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const sent: string[] = []
+    install([r], {
+      act: async (op) => {
+        sent.push(op)
+        if (op === 'toggle' && sent.length === 1) throw { data: { detail: 'HTTP 451: unavailable for legal reasons' } }
+        if (op === 'toggle') r.enabled = true
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('MiroThinker')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(note()!.querySelector('.extAgents-note-t')!.textContent).toBe(say('gui.agent.bad_connect', { agent: 'MiroThinker' }))
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.said_connect', { button: 'gui.retry' }))
+    expect(note()!.querySelector('.extAgents-note-said')!.textContent).toBe('HTTP 451: unavailable for legal reasons')
+    await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
+    expect(sheetActs()).toEqual(['gui.agent.connect'])
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.said_connect', { button: 'gui.agent.connect' }))
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(sent).toEqual(['toggle', 'update', 'toggle'])
+  })
+
   /* A key typed beside an unrelated refusal is still the connect that spends
      it, so the button says Connect rather than the Retry the press would not
      make, and the refusal, whose retry that press will never be, leaves the
