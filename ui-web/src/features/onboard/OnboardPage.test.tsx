@@ -131,7 +131,40 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('the onboarding wizard', () => {
+describe('the first run as shipped', () => {
+  it('offers only the model and search steps, and enters from the second without configuring search', async () => {
+    const h = install(SCAN_CLAUDE)
+    h.agents.agents = [{ id: 'claude_code', name: 'Claude Code' }]
+    mount()
+    await open()
+    expect(steps()).toEqual(['1gui.onb.step_model:current', '2gui.onb.step_search:upcoming'])
+    expect(h.agents.load).not.toHaveBeenCalled()
+    await act(async () => { h.model.setDone(true) })
+    await click(button('gui.onb.next'))
+    /* Search is optional: no Skip, and Start chatting takes the reader in as it stands. */
+    expect(buttons().map((b) => b.textContent)).toEqual(['gui.onb.back', 'gui.onb.enter'])
+    expect(button('gui.onb.enter').disabled).toBe(false)
+    await click(button('gui.onb.enter'))
+    expect(host().dataset.off).toBe('1')
+    expect(setupState.providerConfigured).toBe(true)
+    expect(h.runs).toEqual([])
+    await settle()
+    expect(host().children.length).toBe(0)
+  })
+
+  it('keeps its rendered shape', async () => {
+    const h = install(SCAN_CLAUDE)
+    h.agents.agents = [{ id: 'claude_code', name: 'Claude Code' }]
+    mount()
+    await open()
+    await act(async () => { h.model.setLoaded(true) })
+    expect(domSnapshot(host())).toMatchSnapshot('model step')
+  })
+})
+
+describe('the onboarding wizard with every step', () => {
+  beforeEach(() => store._showStepsForTests(store.STEPS))
+
   it('renders nothing until opened, then takes the host', async () => {
     install()
     mount()
@@ -182,15 +215,18 @@ describe('the onboarding wizard', () => {
     await click(button('gui.onb.next'))
     expect(steps()[0]).toBe('✓gui.onb.step_model:done')
     expect(steps()[1]).toBe('2gui.onb.step_search:current')
+    expect(buttons().map((b) => b.textContent)).toEqual(['gui.onb.back', 'gui.onb.next'])
+    expect(button('gui.onb.next').disabled).toBe(false)
+    await click(button('gui.onb.next'))
     expect(buttons().map((b) => b.textContent)).toEqual(['gui.onb.back', 'gui.onb.skip', 'gui.onb.next'])
     expect(button('gui.onb.next').disabled).toBe(true)
     expect(button('gui.onb.skip').disabled).toBe(false)
     await click(button('gui.onb.skip'))
     expect(steps()).toEqual([
-      '✓gui.onb.step_model:done', '-gui.onb.step_search:skipped', '3gui.onb.step_agents:current', '4gui.onb.step_sync:upcoming',
+      '✓gui.onb.step_model:done', '✓gui.onb.step_search:done', '-gui.onb.step_agents:skipped', '4gui.onb.step_sync:current',
     ])
     await click(button('gui.onb.back'))
-    expect(steps()[1]).toBe('2gui.onb.step_search:current')
+    expect(steps()[2]).toBe('3gui.onb.step_agents:current')
   })
 
   it('disables Skip once the step is done: a configured step is not one you skipped', async () => {
@@ -199,7 +235,8 @@ describe('the onboarding wizard', () => {
     await open()
     await act(async () => { h.model.setDone(true) })
     await click(button('gui.onb.next'))
-    await act(async () => { h.search.setDone(true) })
+    await click(button('gui.onb.next'))
+    await act(async () => { h.agents.setDone(true) })
     expect(button('gui.onb.skip').disabled).toBe(true)
     expect(button('gui.onb.next').disabled).toBe(false)
   })
@@ -211,7 +248,7 @@ describe('the onboarding wizard', () => {
     await open()
     await act(async () => { h.model.setDone(true) })
     await click(button('gui.onb.next'))
-    await click(button('gui.onb.skip'))
+    await click(button('gui.onb.next'))
     await click(button('gui.onb.skip'))
     expect(steps()[3]).toBe('4gui.onb.step_sync:current')
     expect(document.querySelector('.ob-empty')!.textContent).toBe('gui.onb.sync_empty')
@@ -234,7 +271,7 @@ describe('the onboarding wizard', () => {
     expect(steps().length).toBe(4)
     await act(async () => { h.model.setDone(true) })
     await click(button('gui.onb.next'))
-    await click(button('gui.onb.skip'))
+    await click(button('gui.onb.next'))
     expect(button('gui.onb.next')).toBeDefined()
     await click(button('gui.onb.skip'))
     expect(steps()[3]).toBe('4gui.onb.step_sync:current')
@@ -278,7 +315,7 @@ describe('the onboarding wizard', () => {
     await open()
     await act(async () => { h.model.setDone(true) })
     await click(button('gui.onb.next'))
-    await click(button('gui.onb.skip'))
+    await click(button('gui.onb.next'))
     await click(button('gui.onb.skip'))
     await click(document.querySelector('.ob-row [role=switch]')!)
     await click(button('gui.onb.start_sync'))
@@ -295,7 +332,7 @@ describe('the onboarding wizard', () => {
     expect(steps().length).toBe(4)
     await act(async () => { h.model.setDone(true) })
     await click(button('gui.onb.next'))
-    await click(button('gui.onb.skip'))
+    await click(button('gui.onb.next'))
     await click(button('gui.onb.skip'))
     expect(document.querySelector('.ob-needs')!.textContent).toContain('gui.onb.sync_needs_memory')
     expect(document.querySelector('.ob-needs .fake-memory')).not.toBeNull()
@@ -339,14 +376,5 @@ describe('the onboarding wizard', () => {
     await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
     expect(document.querySelector('.ob-langmenu')).toBeNull()
     expect(pick).not.toHaveBeenCalled()
-  })
-
-  it('keeps its rendered shape', async () => {
-    const h = install(SCAN_CLAUDE)
-    h.agents.agents = [{ id: 'claude_code', name: 'Claude Code' }]
-    mount()
-    await open()
-    await act(async () => { h.model.setLoaded(true) })
-    expect(domSnapshot(host())).toMatchSnapshot('model step')
   })
 })

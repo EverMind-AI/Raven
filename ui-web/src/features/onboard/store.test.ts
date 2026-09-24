@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
@@ -42,7 +42,34 @@ const opened = async (scan: ImportScan, found: FoundAgent[], done = false, embed
   await Promise.resolve()
 }
 
+describe('the first run as shipped', () => {
+  it('asks for a model, offers a search tool, then enters', async () => {
+    const scans: number[] = []
+    setSources({ onboard: { ...source(READY), scan: async () => { scans.push(1); return READY } } })
+    const agents = { ...body(true, [{ id: 'hermes', name: 'Hermes' }]), load: vi.fn(async () => {}) }
+    store.setBodies({ model: body(true) as StepBody, search: body(false) as StepBody, agents, memory: body(true) })
+    store.open()
+    await Promise.resolve()
+    expect(store.visibleSteps()).toEqual(['model', 'search'])
+    expect(store.isLast('search')).toBe(true)
+    /* The held-back steps' data is not asked for: the roster's load probes every agent. */
+    expect(agents.load).not.toHaveBeenCalled()
+    expect(scans).toEqual([])
+    await store.next()
+    expect(store.get().step).toBe('search')
+    /* Search is optional: an unset one neither holds the reader nor offers a Skip. */
+    expect(store.stepDone('search')).toBe(true)
+    expect(store.skippable('search')).toBe(false)
+    expect(store.skippable('model')).toBe(false)
+    expect(store.skippable('agents')).toBe(true)
+    await store.finish()
+    expect(store.get().closing).toBe(true)
+  })
+})
+
 describe('the wizard store', () => {
+  beforeEach(() => store._showStepsForTests(store.STEPS))
+
   it('does not open before the page has handed it the bodies', () => {
     setSources({ onboard: source(READY) })
     store.open()
@@ -204,13 +231,16 @@ describe('the wizard store', () => {
   it('records a skip and lands on the next step', async () => {
     await opened(READY, [])
     await store.next()
+    await store.next()
     await store.skip()
-    expect(store.get().skipped).toEqual({ search: true })
-    expect(store.get().step).toBe('agents')
+    expect(store.get().skipped).toEqual({ agents: true })
+    expect(store.get().step).toBe('sync')
   })
 })
 
 describe('the tier', () => {
+  beforeEach(() => store._showStepsForTests(store.STEPS))
+
   const HERMES: FoundAgent[] = [{ id: 'hermes', name: 'Hermes' }]
 
   const readyToSync = async (): Promise<[string[], string][]> => {
