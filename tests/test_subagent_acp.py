@@ -407,14 +407,14 @@ async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_stil
     from raven.agent.subagent.probe import ping_agent
     from raven.agent.subagent.probe_state import Remedy
 
-    cfg = _through_npx(tmp_path, "silent", ready_timeout_ms=1500)
+    cfg = _through_npx(tmp_path, "silent", ready_timeout_ms=1000)
     pinged = await ping_agent(cfg)
     assert pinged.ok is False
     assert pinged.remedy == Remedy("download")
     assert pinged.detail.startswith("it did not finish starting in time, and npx may still have been downloading it; ")
 
     # A session that opens and then says nothing started fine: not this story.
-    quiet = await ping_agent(stub_config(mode="silent", ready_timeout_ms=1500))
+    quiet = await ping_agent(stub_config(mode="silent", ready_timeout_ms=1000))
     assert quiet.remedy is None
 
 
