@@ -145,7 +145,9 @@ function optionals(schema, value, path, declared, sent) {
    ones worth a second look are the fields a row on the page draws and this
    library has never exercised: `dag.get`'s node_summary and terminal_outputs,
    `session.resume`'s diff and notice, `subagents.list`'s stateful and
-   upgrade_to, `ext.list`'s tools[].needs. */
+   upgrade_to, `ext.list`'s tools[].needs. `last_test_remedy`'s needs and
+   found are carried only by a Node.js agent that quit on an old Node.js; the
+   one Qwen Code row here shows its two-step fix instead. */
 const UNSENT = new Set([
   // browser.close: 7
   'browser.close.can_back', 'browser.close.can_forward', 'browser.close.error', 'browser.close.headful', 'browser.close.loading', 'browser.close.title', 'browser.close.url',
@@ -232,10 +234,10 @@ const UNSENT = new Set([
   'settings.set.warning',
   // settings.usage: 3
   'settings.usage.session_key', 'settings.usage.session_titles', 'settings.usage.sessions',
-  // subagents.list: 3
-  'subagents.list.rows[].building', 'subagents.list.rows[].stateful', 'subagents.list.rows[].upgrade_to',
-  // subagents.probe: 2
-  'subagents.probe.rows[].stateful', 'subagents.probe.rows[].upgrade_to',
+  // subagents.list: 5
+  'subagents.list.rows[].building', 'subagents.list.rows[].last_test_remedy.found', 'subagents.list.rows[].last_test_remedy.needs', 'subagents.list.rows[].stateful', 'subagents.list.rows[].upgrade_to',
+  // subagents.probe: 4
+  'subagents.probe.rows[].last_test_remedy.found', 'subagents.probe.rows[].last_test_remedy.needs', 'subagents.probe.rows[].stateful', 'subagents.probe.rows[].upgrade_to',
   // subagents.test: 2
   'subagents.test.cancelled', 'subagents.test.reply',
   // system.hello: 1

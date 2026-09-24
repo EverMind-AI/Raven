@@ -6,6 +6,18 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- `ops_connection_add` is a trunk tool, served on `tools.connectionAdd`
+  (on in raven-code and raven-oncall, off elsewhere). It writes the machine
+  an owner described into their connection registry after reaching it, with
+  `ssh -G` filling a port, user or key they left out and each candidate key
+  probed on its own (`raven.ops.transport.make_ssh_runner(identities_only=)`).
+  The probe, the writer and the `~/.ssh/config` alias live in
+  `raven.ops.connection_add`, behind both this tool and `raven ops connection
+  add`; the on-call plugin's copies are gone. Raven-Code's guide gains the
+  rule for when to leave this computer at all: write here, verify where the
+  software is, and ask the owner for a machine only when installing the
+  software here would be wrong or heavy.
+
 - Serply joins the `web_search` vendors: `tools.web.search.provider: serply`
   with the key under `tools.web.providers.serply.apiKey` (or `SERPLY_API_KEY`).
   Google SERP rows normalised into the shared render path; the research
@@ -21,6 +33,16 @@ All notable changes to Raven are documented here.
   a technology register.
 
 ### Changed
+
+- A sub-agent reads the connection registry in the owner's home
+  (`raven_home()/connections.json`), which the host hands it as `RAVEN_HOME`;
+  any other instance reads the one beside its config first, so a `--config`
+  host keeps its own file. A first write lands in the home. A sub-agent runs on a rendered
+  config in a state directory of its own and is handed `RAVEN_HOME`, not a
+  copy of the file; resolved beside the config alone, Raven-Code read an
+  empty directory while the owner's machines sat one level up, and reached
+  for the raw ssh address instead. The on-call plugin's `connections` module
+  now imports trunk's reader rather than mirroring it.
 
 - Progressive tool disclosure ships on (`tools.toolSearch.enabled`). Below
   `compactionThreshold` (50) nothing changes: the strategy drops `tool_search`

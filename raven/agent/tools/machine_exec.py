@@ -87,7 +87,8 @@ def machines_registered() -> bool:
     """Whether this install has any connection to offer the channel for.
 
     Read per schema build rather than cached: the registry can be written
-    mid-session, and the loop rebuilds the tool schema every turn.
+    mid-session, and ``ExecTool.to_schema`` has the tool registry render
+    exec's schema per model call rather than from its registration copy.
     """
     try:
         from raven.ops.connections import load

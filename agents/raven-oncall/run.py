@@ -116,8 +116,14 @@ def connections_registry() -> Path:
     rendered config -- which is the state root here -- so the on-call tools
     would see no machines at all, and a task naming a remote path would be
     read as naming a local one. A pointer rather than a copy: a copy is wrong
-    from the first machine the owner adds, with nothing to say so. An install
-    that predates this and keeps its own list stays on it.
+    from the first machine the owner adds, with nothing to say so.
+
+    The owner's home when it holds a registry; a list of this install's own
+    only when the home has none. The home comes first because a list in the
+    state root is a copy -- nothing writes there since 2026-09-01 -- and read
+    first it hid every machine added to the home since, including the coding
+    agent's own adds, which land in the home (reviewed 2026-09-24). An install
+    that predates the home registry and kept its own list still reads it.
     """
     host = raven_home() / "connections.json"
     if host.is_file():

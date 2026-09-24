@@ -69,6 +69,7 @@ RemedyKind = Literal[
     "silent",
     "upgrade",
     "exited",
+    "runtime",
     "plan",
     "config",
 ]
@@ -112,17 +113,27 @@ class Remedy:
 
     ``then`` is what to type once ``command`` is running, for an agent whose fix
     is a step inside it rather than the command itself (`presets.SignIn.then`).
+
+    ``runtime`` is an agent that quit on start because the Node.js it was
+    launched with is older than its package declares: ``needs`` is that floor
+    and ``found`` the version launched, both measured, and ``command`` the
+    upgrade when the Node.js's installer is recognisable
+    (`node_runtime.node_too_old`).
     """
 
     kind: RemedyKind
     command: str | None = None
     then: str | None = None
+    needs: str | None = None
+    found: str | None = None
 
     def to_wire(self) -> dict[str, str]:
         return {
             "kind": self.kind,
             **({"command": self.command} if self.command else {}),
             **({"then": self.then} if self.command and self.then else {}),
+            **({"needs": self.needs} if self.needs else {}),
+            **({"found": self.found} if self.found else {}),
         }
 
     @classmethod
@@ -133,7 +144,18 @@ class Remedy:
         command = raw.get("command")
         command = command if isinstance(command, str) and command else None
         then = raw.get("then")
-        return cls(raw["kind"], command, then if command and isinstance(then, str) and then else None)
+
+        def text(key: str) -> str | None:
+            value = raw.get(key)
+            return value if isinstance(value, str) and value else None
+
+        return cls(
+            raw["kind"],
+            command,
+            then if command and isinstance(then, str) and then else None,
+            needs=text("needs"),
+            found=text("found"),
+        )
 
 
 @dataclass(frozen=True)

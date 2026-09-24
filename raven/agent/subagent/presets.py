@@ -433,11 +433,14 @@ class InAgent(NamedTuple):
 
 
 MODEL_SWITCH_HINTS: dict[str, InAgent] = {
-    # `/model` ("Switch the model for this session") writes the pick back to
-    # ~/.qwen/settings.json -- measured: `/model second-model(openai)` over ACP
-    # left `model.name` as `second-model` -- so the next launch raven makes uses
-    # it too, which is what makes it a fix rather than a workaround.
-    "qwen_code": InAgent("qwen", "/model"),
+    # `/auth`, not `/model`. `/model` only picks among the models already
+    # registered in ~/.qwen/settings.json, and qwen 0.24.4's own OpenRouter
+    # preset registers exactly two free models, both since withdrawn from
+    # OpenRouter's free tier (measured 2026-09-24: each answers 404 "unavailable
+    # for free"), so for anyone set up the default way the list it offers is the
+    # dead ones. `/auth` re-runs the provider setup, whose "Model IDs" step takes
+    # any id the provider serves.
+    "qwen_code": InAgent("qwen", "/auth"),
     # `/model` ("Switch LLM model") saves the pick as `default_model` in
     # ~/.kimi-code/config.toml: its picker's plain select persists the choice
     # (`persistModelSelection`, "Saved ... as default"), and only a separate
@@ -473,6 +476,27 @@ DIAGNOSE_HINTS: dict[str, str] = {
 For the failure that carries no reason at all: a connect that timed out while
 the agent kept working. Only for an agent measured to fail that way, because
 for the rest a timeout is not known to mean anything in particular."""
+
+
+NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(
+    {
+        # `#!/usr/bin/env node`, and a hard floor: measured 2026-09-24 on 0.24.4,
+        # Node 18.20.8 exits at import ("does not provide an export named
+        # 'openAsBlob'") while 20.20.2 and 22 run; the package asks for >=22.
+        "qwen_code",
+    }
+)
+"""Presets whose agent is a Node.js script, so a launch that quits may be the
+wrong Node.js rather than the agent (`node_runtime.node_too_old`).
+
+Only for an agent measured to die that way: the check runs ``node --version``
+on a failure, and naming Node.js for an agent that does not care about it would
+send its reader after the wrong fix."""
+
+
+def runs_on_node(cfg: Any) -> bool:
+    """Whether this row's agent is one of :data:`NODE_RUNTIME_PRESETS`, by provenance."""
+    return getattr(cfg, "preset", None) in NODE_RUNTIME_PRESETS
 
 
 def model_switch_hint_for(cfg: Any) -> InAgent | None:

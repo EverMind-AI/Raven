@@ -134,6 +134,7 @@ export interface Remedy {
     | 'silent'
     | 'upgrade'
     | 'exited'
+    | 'runtime'
     | 'plan'
     | 'config'
   command: string
@@ -141,4 +142,8 @@ export interface Remedy {
      agent rather than the command itself -- Qwen Code's `/auth`. Only ever
      beside a command. */
   then?: string
+  /* For `runtime`: the Node.js the agent's package declares it needs (`22`),
+     and the one this machine launched it with (`18.20.8`). */
+  needs?: string
+  found?: string
 }

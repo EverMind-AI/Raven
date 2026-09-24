@@ -11,6 +11,11 @@ alike, which is more consumers than any one shelf should own.
 
 ``raven.config.loader`` re-exports all three names, so the shelves and the
 entrances keep reading them from where they always have.
+
+The sub-agent role flag sits here for the same reason: it says whose home a
+process answers for (``raven.ops.connections`` reads it to pick the owner's
+machine list), so every shelf has to reach it, and this is the one module they
+all may import. ``raven.agent.subagent.role`` re-exports it.
 """
 
 from __future__ import annotations
@@ -20,7 +25,14 @@ from pathlib import Path
 
 from raven.contracts.path_policy import CONFIG_FILENAME, DEFAULT_HOME_DIRNAME, HOME_ENV_VAR
 
-__all__ = ["get_config_path", "raven_home", "set_config_path"]
+__all__ = [
+    "SUBAGENT_ENV_VAR",
+    "get_config_path",
+    "is_subagent_process",
+    "raven_home",
+    "set_config_path",
+    "subagent_role_env",
+]
 
 #: Set by a caller that runs against a config file of its own (tests, and a
 #: second instance). Wins over the environment and the default.
@@ -49,3 +61,25 @@ def get_config_path() -> Path:
     if _current_config_path:
         return _current_config_path
     return raven_home() / CONFIG_FILENAME
+
+
+#: Set by the host on a child it launches to act as a sub-agent; read only for
+#: truth, so a config ``env`` entry of "0" is the way back to a full registry
+#: (that map is merged after the host's, and so wins).
+SUBAGENT_ENV_VAR = "RAVEN_SUBAGENT"
+
+
+def is_subagent_process() -> bool:
+    """Whether the host launched this process to serve as a sub-agent."""
+    return os.environ.get(SUBAGENT_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def subagent_role_env() -> dict[str, str]:
+    """What the host overlays on a child it launches to answer as a sub-agent.
+
+    Written next to the reader above rather than beside the other environment
+    builders: the two are one contract, and a variable named in two files is one
+    rename away from a child that is told nothing and silently keeps the full
+    registry -- the failure this exists to close, and one no error reports.
+    """
+    return {SUBAGENT_ENV_VAR: "1"}

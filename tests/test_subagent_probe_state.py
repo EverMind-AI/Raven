@@ -79,6 +79,22 @@ def test_a_fix_typed_inside_the_agent_keeps_its_step(tmp_path: Path) -> None:
         assert Remedy.from_wire({"kind": kind}) == Remedy(kind), kind
 
 
+def test_an_old_node_fix_keeps_both_versions(tmp_path: Path) -> None:
+    """The sheet says which Node.js ran and which is needed, so both survive a reload."""
+    store = TestStateStore(path=tmp_path / "state.json")
+    cfg = _cli()
+    stale = Remedy("runtime", "nvm install 22 && nvm alias default 22", needs="22", found="18.20.8")
+    store.record(cfg, "config", ok=False, detail="its Node.js is too old", tested_at_ms=1, remedy=stale)
+    assert store.load([(cfg, "config")])["config:Coder"].remedy == stale
+    assert stale.to_wire() == {
+        "kind": "runtime",
+        "command": "nvm install 22 && nvm alias default 22",
+        "needs": "22",
+        "found": "18.20.8",
+    }
+    assert Remedy.from_wire({"kind": "runtime", "needs": 22, "found": ""}) == Remedy("runtime")
+
+
 def test_a_remembered_fix_that_is_not_one_is_dropped(tmp_path: Path) -> None:
     """A hand-edited or stale file cannot put a kind on the page it has no words for."""
     path = tmp_path / "state.json"

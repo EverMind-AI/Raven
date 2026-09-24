@@ -862,6 +862,7 @@ describe('a refusal that names its fix', () => {
     ['silent', 'gui.agent.bad_silent'],
     ['upgrade', 'gui.agent.bad_upgrade'],
     ['exited', 'gui.agent.bad_exited'],
+    ['runtime', 'gui.agent.bad_runtime'],
   ])('puts a %s fix on the card as a line in the reader\'s words', async (kind, key) => {
     const r = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
     install([r], {
@@ -887,7 +888,7 @@ describe('a refusal that names its fix', () => {
       'the model it is set to use'
     install([r], {
       act: async (op) => {
-        if (op === 'connect') throw { data: { detail: said, remedy: { kind: 'model', command: 'qwen', then: '/model' } } }
+        if (op === 'connect') throw { data: { detail: said, remedy: { kind: 'model', command: 'qwen', then: '/auth' } } }
         return [r]
       },
     })
@@ -899,9 +900,9 @@ describe('a refusal that names its fix', () => {
     expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_model', { agent: 'Qwen Code', button: 'gui.retry' }))
     const steps = [...fix()!.querySelectorAll('.extAgents-steps li')]
     expect(steps.map((li) => li.firstChild!.textContent)).toEqual(['gui.agent.fix_step_run', 'gui.agent.fix_step_type'])
-    expect(steps.map((li) => li.querySelector('.extAgents-cmd code')!.textContent)).toEqual(['qwen', '/model'])
+    expect(steps.map((li) => li.querySelector('.extAgents-cmd code')!.textContent)).toEqual(['qwen', '/auth'])
     await click(steps[1]!.querySelector('.extAgents-cmd button'))
-    expect(writeText).toHaveBeenCalledWith('/model')
+    expect(writeText).toHaveBeenCalledWith('/auth')
     expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
   })
 
@@ -969,6 +970,41 @@ describe('a refusal that names its fix', () => {
     expect(fix()!.firstElementChild!.textContent).toBe(say(key, { agent: 'my-agent', button: 'gui.retry' }))
     expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
     expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain('the English sentence')
+  })
+
+  /* Measured on Qwen Code 0.24.4 under Node 18.20.8: it dies at import with a
+     missing `node:fs` export, a sentence that names no Node.js. The fix is the
+     Node.js, so the sheet says which one ran and which one it needs. */
+  it.each([
+    ['nvm install 22 && nvm alias default 22', 'gui.agent.fix_runtime'],
+    ['', 'gui.agent.fix_runtime_bare'],
+  ])('says which Node.js ran and which one is needed, with the upgrade when one is known (%s)', async (command, key) => {
+    const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
+    install([r], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: 'the English sentence', remedy: { kind: 'runtime', command, needs: '22', found: '18.20.8' } } }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('Qwen Code')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry', needs: '22', found: '18.20.8' }))
+    expect([...fix()!.querySelectorAll('.extAgents-cmd code')].map((c) => c.textContent)).toEqual(command ? [command] : [])
+  })
+
+  it('says only that it quit when the versions did not come with the fix', async () => {
+    const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
+    install([r], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: 'the English sentence', remedy: { kind: 'runtime' } } }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('Qwen Code')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_exited', { agent: 'Qwen Code', button: 'gui.retry' }))
   })
 
   it('says a failure with no fix in the reader\'s words too, and folds the server\'s sentence', async () => {

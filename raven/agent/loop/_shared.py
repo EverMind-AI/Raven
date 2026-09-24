@@ -43,6 +43,7 @@ from raven.agent.subagent import SubagentManager
 from raven.agent.subagent.direct_chat import DirectChatHandoff
 from raven.agent.subagent.spawn_tool import SpawnTool
 from raven.agent.tools.ask_user import AskUserTool
+from raven.agent.tools.connection_add import ConnectionAddTool
 from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.media_gen import (

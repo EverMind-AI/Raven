@@ -83,6 +83,8 @@ describe('one agent row', () => {
     const stray = extAgentRowOf(wire({ last_test_remedy: { kind: 'setup', then: '/auth' } }))
     expect(stray.last_test_remedy).toEqual({ kind: 'setup', command: '' })
     expect('then' in stray.last_test_remedy!).toBe(false)
+    const oldNode = extAgentRowOf(wire({ last_test_remedy: { kind: 'runtime', needs: '22', found: '18.20.8' } }))
+    expect(oldNode.last_test_remedy).toEqual({ kind: 'runtime', command: '', needs: '22', found: '18.20.8' })
   })
 
   /* The two about the agent's own account and files: a plan carries the page

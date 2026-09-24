@@ -71,6 +71,7 @@ export function whatFailed(row: ExtAgentRow, failed: Failure): string {
   if (kind === 'silent') return t('gui.agent.bad_silent', { agent })
   if (kind === 'upgrade') return t('gui.agent.bad_upgrade', { agent })
   if (kind === 'exited') return t('gui.agent.bad_exited', { agent })
+  if (kind === 'runtime') return t('gui.agent.bad_runtime', { agent })
   if (kind === 'plan') return t('gui.agent.bad_plan', { agent })
   if (kind === 'config') return t('gui.agent.bad_config', { agent })
   const write = refusedWrite(failed)

@@ -5192,24 +5192,24 @@
       "zh": "进入后输入："
     },
     "gui.agent.fix_model": {
-      "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, a name it does not know, or a model the account's plan does not include). Switch to another model as below, then press {button}:",
-      "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了、模型名不对，或者账号的套餐不含这个模型）。按下面的步骤换一个模型，然后点「{button}」："
+      "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, a name it does not know, or a model the account's plan does not include). Set it up again as below and enter a model the provider still serves at the model step, then press {button}:",
+      "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了、模型名不对，或者账号的套餐不含这个模型）。按下面的步骤重新配置，在填模型的那一步换一个还能用的模型，然后点「{button}」："
     },
     "gui.agent.fix_model_bare": {
       "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, a name it does not know, or a model the account's plan does not include). Switch it to another model, then press {button}.",
       "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了、模型名不对，或者账号的套餐不含这个模型）。换一个模型后点「{button}」。"
     },
     "gui.agent.fix_billing": {
-      "en": "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model as below, then press {button}:",
-      "zh": "{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者按下面的步骤换一个模型，然后点「{button}」："
+      "en": "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or set it up again as below and enter a free or cheaper model at the model step, then press {button}:",
+      "zh": "{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者按下面的步骤重新配置，在填模型的那一步换一个免费或更便宜的模型，然后点「{button}」："
     },
     "gui.agent.fix_billing_bare": {
       "en": "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model, then press {button}.",
       "zh": "{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者换一个模型，然后点「{button}」。"
     },
     "gui.agent.fix_quota": {
-      "en": "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch to another model as below:",
-      "zh": "{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者按下面的步骤换一个模型："
+      "en": "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or set it up again as below and enter another model at the model step:",
+      "zh": "{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者按下面的步骤重新配置，在填模型的那一步换一个模型："
     },
     "gui.agent.fix_quota_bare": {
       "en": "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch it to another model.",
@@ -5242,6 +5242,14 @@
     "gui.agent.fix_exited": {
       "en": "{agent} quit as soon as it started. The original error below has what it said on its way out; once that is fixed, press {button}.",
       "zh": "{agent} 一启动就退出了。展开下面的原始报错，能看到它退出前说了什么，处理好后点「{button}」。"
+    },
+    "gui.agent.fix_runtime": {
+      "en": "{agent} quit as soon as it started because the Node.js it runs on is too old: it needs Node.js {needs} or newer, and this machine started it with {found}. Upgrade Node.js by running this command in a terminal, then press {button}:",
+      "zh": "{agent} 一启动就退出了：启动它的 Node.js 版本太旧。它需要 Node.js {needs} 或更高版本，这台机器上用的是 {found}。在终端运行下面这条命令升级 Node.js，完成后点「{button}」："
+    },
+    "gui.agent.fix_runtime_bare": {
+      "en": "{agent} quit as soon as it started because the Node.js it runs on is too old: it needs Node.js {needs} or newer, and this machine started it with {found}. Install Node.js {needs} or newer from nodejs.org, then press {button}.",
+      "zh": "{agent} 一启动就退出了：启动它的 Node.js 版本太旧。它需要 Node.js {needs} 或更高版本，这台机器上用的是 {found}。去 nodejs.org 安装 Node.js {needs} 或更高版本，装好后点「{button}」。"
     },
     "gui.agent.fix_plan": {
       "en": "{agent} is signed in, but the account's current plan does not include it. Open this page to get a plan that does, then press {button}:",
@@ -5318,6 +5326,10 @@
     "gui.agent.bad_exited": {
       "en": "{agent} quit as soon as it started",
       "zh": "{agent} 一启动就退出了"
+    },
+    "gui.agent.bad_runtime": {
+      "en": "{agent}'s Node.js is too old",
+      "zh": "{agent} 的 Node.js 版本太旧"
     },
     "gui.agent.bad_plan": {
       "en": "The account's plan does not include {agent}",

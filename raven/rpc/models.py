@@ -2815,6 +2815,7 @@ class SubagentRemedy(_Strict):
         "silent",
         "upgrade",
         "exited",
+        "runtime",
         "plan",
         "config",
     ] = Field(
@@ -2833,10 +2834,12 @@ class SubagentRemedy(_Strict):
             "terminal. silent: the agent outlasted the wait without a word, which is how it retries a provider "
             "that keeps refusing it; `command` prints the reason in a terminal. upgrade: the agent is too old to "
             "know the flag that starts it in ACP mode, or never finishes its handshake; `command` upgrades it. "
-            "exited: the agent quit on starting, and what it said is in the detail. plan: the agent is signed "
-            "in, but the account's plan does not include it or its membership cannot be verified; `command`, "
-            "when sent, is the page that sells one. config: the agent cannot read its own config file; "
-            "`command` says where it is wrong."
+            "exited: the agent quit on starting, and what it said is in the detail. runtime: the agent quit on "
+            "starting because the Node.js it was launched with is older than its package declares; `needs` is "
+            "that floor, `found` the version launched, and `command` upgrades that Node.js when its installer is "
+            "recognisable. plan: the agent is signed in, but the account's plan does not include it or its "
+            "membership cannot be verified; `command`, when sent, is the page that sells one. config: the agent "
+            "cannot read its own config file; `command` says where it is wrong."
         ),
     )
     command: str | None = Field(None, description="The command that makes the fix on this machine, when one is known.")
@@ -2846,6 +2849,12 @@ class SubagentRemedy(_Strict):
             "What to type once `command` is running, for an agent whose fix is a step inside it rather than "
             "the command itself. Sent only beside `command`."
         ),
+    )
+    needs: str | None = Field(
+        None, description="For runtime: the Node.js version the agent's package declares it needs, e.g. 22."
+    )
+    found: str | None = Field(
+        None, description="For runtime: the Node.js version the agent was launched with, e.g. 18.20.8."
     )
 
 

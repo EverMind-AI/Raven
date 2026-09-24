@@ -1,10 +1,11 @@
 """The campaign-facing half of the connections suite.
 
-The registry suite itself lives on trunk (tests/test_ops_connections.py,
-upstreamed from the fork); these four stayed behind with the campaign
-machinery they exercise -- the backend seam reading a campaign's named
-connection, the submit path refusing to bury it, and the listing saying
-which machine holds the work.
+The registry suite itself lives on trunk (tests/test_ops_connections.py);
+these stayed behind with the campaign machinery they exercise -- the backend
+seam reading a campaign's named connection, the submit path refusing to bury
+it, and the listing saying which machine holds the work. The plugin reads the
+registry through trunk's module since 2026-09-23, so the store is patched
+where the reader lives.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ sys.path.insert(0, str(PLUGIN_DIR))
 from oncall_flow import connections  # noqa: E402
 from oncall_flow.tools import base as tools_base  # noqa: E402
 
+from raven.ops import connections as trunk  # noqa: E402
+
 
 @pytest.fixture(autouse=True)
 def _campaign_root(tmp_path):
@@ -31,7 +34,7 @@ def _campaign_root(tmp_path):
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     path = tmp_path / "connections.json"
-    monkeypatch.setattr(connections, "store_path", lambda: path)
+    monkeypatch.setattr(trunk, "store_path", lambda: path)
 
     def write(rows):
         path.write_text(json.dumps({"connections": rows}, ensure_ascii=False), encoding="utf-8")
@@ -188,41 +191,35 @@ def test_the_listing_of_campaigns_says_which_machine(store, tmp_path, monkeypatc
     assert "on my CPU box" in out
 
 
-def test_the_plugin_reader_counts_capacity_the_way_trunk_does():
-    """Aligned by hand (the plugin cannot import trunk at runtime); drift is a
-    parity-ledger entry, so the same cases are pinned on both sides."""
-    from oncall_flow import connections as plugin
+def test_the_plugin_reader_is_trunks_not_a_copy_of_it():
+    """Two readers of one file used to be kept byte-aligned by hand, with a
+    parity test on each side pinning the same cases; a mutation in the copy
+    passed every test until the case was re-pinned (reviewed 2026-09-07). One
+    reader now: the names this plugin serves are trunk's own objects."""
+    for name in (
+        "capacity",
+        "resource_unit",
+        "row_problems",
+        "usable",
+        "read",
+        "load",
+        "problems",
+        "shown",
+        "store_path",
+    ):
+        assert getattr(connections, name) is getattr(trunk, name), name
+    assert connections.SHOWN is trunk.SHOWN
+    assert connections.LOCAL == trunk.LOCAL and connections.SSH == trunk.SSH
 
-    row = {"kind": "gpu", "device": "2 x NVIDIA A800-SXM4-80GB", "cores": 128, "memory": "463 GB", "concurrency": 1}
-    assert plugin.capacity(row) == {"gpus": 2, "cores": 128, "memory_gb": 463}
-    cpu = {"kind": "cpu", "device": "2 x Intel Xeon Platinum", "cores": 64}
-    assert plugin.capacity(cpu) == {"cores": 64}, "the N x reading is a GPU row's; a CPU box hands out cores"
-    assert plugin.resource_unit(cpu) == "cores"
-    uncounted = {"kind": "gpu", "device": "NVIDIA A800 + NVIDIA A800", "cores": 128}
-    assert plugin.resource_unit(uncounted) == "", "a GPU row with no device count is gated by job count, not cores"
-    assert plugin.resource_unit(row) == "gpus"
-    assert plugin.resource_unit({"cores": 32}) == "cores"
-    assert plugin.resource_unit({"concurrency": 1}) == ""
-    assert "gpus" in plugin._SHOWN
-    said = [str(p) for p in plugin.row_problems({"id": "g", "display_name": "G", "transport": "local", "kind": "gpu"})]
-    assert any("kind is gpu but neither" in s for s in said)
 
-
-def test_the_plugin_reader_reports_capacity_problems_the_way_trunk_does():
-    """Parity for the four doctor behaviours the trunk tests pin: the plugin copy
-    cannot import trunk, so each is pinned here too, or a mutation in this copy
-    passes every test (reviewed 2026-09-07)."""
-    from oncall_flow import connections as plugin
-
-    def said(row):
-        return [str(p) for p in plugin.row_problems({"id": "g", "display_name": "G", "transport": "local", **row})]
-
-    assert any("'gpus' must be a whole number of devices" in s for s in said({"gpus": 0}))
-    uncounted = said({"kind": "gpu", "device": "NVIDIA A800 + NVIDIA A800", "cores": 128})
-    assert any("kind is gpu but neither 'gpus' nor a device" in s for s in uncounted)
-    assert any("'concurrency' is not set" in s for s in uncounted), (
-        "an uncounted GPU row is gated by job count, so its missing concurrency is reported"
-    )
-    counted = said({"kind": "gpu", "gpus": 2, "concurrency": 1})
-    assert any("'concurrency' is not read on a row that says gpus" in s for s in counted)
-    assert not any("kind is gpu but neither" in s for s in counted)
+def test_what_only_a_campaign_needs_stays_with_the_plugin(store):
+    """The lookups a campaign makes -- by id, for the owner's name, into a meta
+    -- are the plugin's; trunk keeps its registry readers to what the CLI and
+    the exec lane need."""
+    store(TWO)
+    assert connections.get("conn_cpu")["display_name"] == "my CPU box"
+    assert connections.display_name("conn_cpu") == "my CPU box"
+    assert connections.display_name("nope") == "nope"
+    merged = connections.resolve_into({"connection": "conn_cpu", "port": 1})
+    assert merged["host"] == TWO[0]["host"] and merged["port"] == 1, "a meta's own value wins over the row"
+    assert not hasattr(trunk, "resolve_into")
