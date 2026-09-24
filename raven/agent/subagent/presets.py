@@ -397,6 +397,13 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # key the provider refuses, an expired Qwen OAuth -- because each is fixed by
     # choosing the provider again.
     "qwen_code": SignIn(exe="qwen", local="qwen", does="setup", then="/auth"),
+    # `kimi login` ("Authenticate with Kimi Code CLI via the device-code flow")
+    # is in `kimi --help`, and it is the command Kimi Code names over ACP too:
+    # its `initialize` advertises a terminal auth method whose
+    # `_meta.terminal-auth` is `kimi` with `login` (measured 2026-09-24, Kimi
+    # Code 2.1.0). Its own installer puts `kimi` on PATH, so the local spelling
+    # is the only one.
+    "kimi_code": SignIn(exe="kimi", local="kimi login"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -431,6 +438,11 @@ MODEL_SWITCH_HINTS: dict[str, InAgent] = {
     # left `model.name` as `second-model` -- so the next launch raven makes uses
     # it too, which is what makes it a fix rather than a workaround.
     "qwen_code": InAgent("qwen", "/model"),
+    # `/model` ("Switch LLM model") saves the pick as `default_model` in
+    # ~/.kimi-code/config.toml: its picker's plain select persists the choice
+    # (`persistModelSelection`, "Saved ... as default"), and only a separate
+    # "this session only" select does not (read from Kimi Code 2.1.0).
+    "kimi_code": InAgent("kimi", "/model"),
 }
 """How to change the model the agent a row defers to is set to use, by preset key.
 
@@ -449,6 +461,12 @@ DIAGNOSE_HINTS: dict[str, str] = {
     # s for a provider's 500, a second or two for the rest. The positional prompt
     # is the one-shot form 0.24's own help names; `-p` is marked deprecated.
     "qwen_code": "qwen hi",
+    # Kimi Code does the same: 5xx, 429, an unreachable or refused host and a
+    # reply it cannot read are retried ten times over about 150 s, with nothing
+    # over ACP while it does. `-p` ("Run one prompt non-interactively") prints
+    # the reason once it gives up, and within a second for everything it does not
+    # retry (measured 2026-09-24, Kimi Code 2.1.0).
+    "kimi_code": "kimi -p hi",
 }
 """A command that makes the agent a row defers to say why it is not answering.
 

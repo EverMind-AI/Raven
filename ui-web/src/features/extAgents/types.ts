@@ -118,9 +118,24 @@ export interface ExtAgentsSource {
    verdict the server's English sentence spells out, as data, so the sheet can
    say it in the reader's language. The first four are about the agent itself;
    `model`, `billing`, `quota` and `network` are its model provider refusing or
-   out of reach; `silent`, `upgrade` and `exited` are how it failed to answer. */
+   out of reach; `silent`, `upgrade` and `exited` are how it failed to answer;
+   `plan` is its account's plan not including it, and `config` its own config
+   file it cannot read. */
 export interface Remedy {
-  kind: 'sign_in' | 'setup' | 'api_key' | 'download' | 'model' | 'billing' | 'quota' | 'network' | 'silent' | 'upgrade' | 'exited'
+  kind:
+    | 'sign_in'
+    | 'setup'
+    | 'api_key'
+    | 'download'
+    | 'model'
+    | 'billing'
+    | 'quota'
+    | 'network'
+    | 'silent'
+    | 'upgrade'
+    | 'exited'
+    | 'plan'
+    | 'config'
   command: string
   /* What to type once `command` is running, when the fix is a step inside the
      agent rather than the command itself -- Qwen Code's `/auth`. Only ever

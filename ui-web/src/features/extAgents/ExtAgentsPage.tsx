@@ -334,6 +334,8 @@ const FIX_SAY: Record<Remedy['kind'], (vars: { agent: string; button: string }, 
   silent: (v, command) => (command ? t('gui.agent.fix_silent', v) : t('gui.agent.fix_silent_bare', v)),
   upgrade: (v, command) => (command ? t('gui.agent.fix_upgrade', v) : t('gui.agent.fix_upgrade_bare', v)),
   exited: (v) => t('gui.agent.fix_exited', v),
+  plan: (v, command) => (command ? t('gui.agent.fix_plan', v) : t('gui.agent.fix_plan_bare', v)),
+  config: (v, command) => (command ? t('gui.agent.fix_config', v) : t('gui.agent.fix_config_bare', v)),
 }
 
 /* A refusal, and the fix when the server named one. The server's sentence is

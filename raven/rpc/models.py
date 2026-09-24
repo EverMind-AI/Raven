@@ -2804,7 +2804,19 @@ class SubagentRemedy(_Strict):
     """What fixes a refused connect or test, as the page draws it."""
 
     kind: Literal[
-        "sign_in", "setup", "api_key", "download", "model", "billing", "quota", "network", "silent", "upgrade", "exited"
+        "sign_in",
+        "setup",
+        "api_key",
+        "download",
+        "model",
+        "billing",
+        "quota",
+        "network",
+        "silent",
+        "upgrade",
+        "exited",
+        "plan",
+        "config",
     ] = Field(
         ...,
         description=(
@@ -2820,7 +2832,9 @@ class SubagentRemedy(_Strict):
             "terminal. silent: the agent outlasted the wait without a word, which is how it retries a provider "
             "that keeps refusing it; `command` prints the reason in a terminal. upgrade: the agent is too old to "
             "know the flag that starts it in ACP mode; `command` upgrades it. exited: the agent quit on starting, "
-            "and what it said is in the detail."
+            "and what it said is in the detail. plan: the agent is signed in, but the account's plan does not "
+            "include it; `command` is the page that sells one. config: the agent cannot read its own config file; "
+            "`command` says where it is wrong."
         ),
     )
     command: str | None = Field(None, description="The command that makes the fix on this machine, when one is known.")

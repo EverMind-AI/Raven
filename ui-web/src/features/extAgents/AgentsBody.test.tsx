@@ -347,6 +347,36 @@ describe('the onboarding wizard\'s agents step', () => {
     expect(rowNamed('Qwen Code').querySelector('.extAgents-one-bad')!.textContent).toBe(`${line} ${JSON.stringify(vars)}`)
   })
 
+  /* A plan's `command` is the page that sells one: a row that told the reader
+     to "run" a URL in a terminal would be telling them to do the wrong thing
+     with the right address, so the row names the problem and the retry, and the
+     link is the sheet's to give. A config's check is a command, and is run. */
+  it.each([
+    [{ kind: 'plan', command: 'https://www.kimi.com/code/#pricing' }, 'gui.agent.bad_plan', 'gui.agent.bad_retry'],
+    [{ kind: 'config', command: 'kimi doctor config' }, 'gui.agent.bad_config', 'gui.agent.bad_run'],
+  ])('puts an account or config fix on the row as what it is (%o)', async (remedy, bad, line) => {
+    const rows = [row({ name: 'Kimi Code', preset: 'kimi_code' })]
+    install(rows)
+    setSources({
+      extAgents: {
+        load: async () => rows,
+        act: async () => {
+          throw { data: { detail: 'English', remedy } }
+        },
+      },
+    })
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+    await act(async () => {
+      fireEvent.click(control('Kimi Code'))
+    })
+    const what = `${bad} ${JSON.stringify({ agent: 'Kimi Code' })}`
+    const vars = line === 'gui.agent.bad_retry' ? { what, button: 'gui.retry' } : { what, command: remedy.command, button: 'gui.retry' }
+    expect(rowNamed('Kimi Code').querySelector('.extAgents-one-bad')!.textContent).toBe(`${line} ${JSON.stringify(vars)}`)
+  })
+
   it('says where to look for a download, rather than the adapter\'s long command', async () => {
     const rows = [row({ name: 'Claude Code', preset: 'claude_code' })]
     install(rows)

@@ -927,6 +927,8 @@ describe('a refusal that names its fix', () => {
     ['network', 'qwen hi', 'gui.agent.fix_network'],
     ['silent', 'qwen hi', 'gui.agent.fix_silent'],
     ['upgrade', 'npm i -g @qwen-code/qwen-code@latest', 'gui.agent.fix_upgrade'],
+    ['plan', 'https://www.kimi.com/code/#pricing', 'gui.agent.fix_plan'],
+    ['config', 'kimi doctor config', 'gui.agent.fix_config'],
   ])('says a %s refusal and puts its one command on a line of its own', async (kind, command, key) => {
     const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
     install([r], {
@@ -951,6 +953,8 @@ describe('a refusal that names its fix', () => {
     ['silent', 'gui.agent.fix_silent_bare'],
     ['upgrade', 'gui.agent.fix_upgrade_bare'],
     ['exited', 'gui.agent.fix_exited'],
+    ['plan', 'gui.agent.fix_plan_bare'],
+    ['config', 'gui.agent.fix_config_bare'],
   ])('says a %s refusal with no command known in a sentence that ends, offering nothing to run', async (kind, key) => {
     const r = row({ name: 'my-agent', preset: undefined, configured: true, enabled: false })
     install([r], {

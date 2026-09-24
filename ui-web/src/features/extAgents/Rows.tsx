@@ -91,7 +91,8 @@ function failureLine(row: ExtAgentRow, failed: Failure, opens: boolean): string 
   /* The adapter's own command is too long for a row, and what fixes a
      download is the network anyway, so the row names where to look. */
   if (kind === 'download') return t('gui.agent.bad_download_retry', { what, button })
-  const command = kind && kind !== 'api_key' ? failed.remedy?.command : ''
+  /* A plan's `command` is the page that sells one, opened rather than run. */
+  const command = kind && kind !== 'api_key' && kind !== 'plan' ? failed.remedy?.command : ''
   if (!command) return t('gui.agent.bad_retry', { what, button })
   if (kind === 'network' || kind === 'silent') return t('gui.agent.bad_run_diagnose', { what, command, button })
   const then = failed.remedy?.then

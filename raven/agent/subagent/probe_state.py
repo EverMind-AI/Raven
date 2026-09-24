@@ -58,7 +58,19 @@ def default_state_path() -> Path:
 
 
 RemedyKind = Literal[
-    "sign_in", "setup", "api_key", "download", "model", "billing", "quota", "network", "silent", "upgrade", "exited"
+    "sign_in",
+    "setup",
+    "api_key",
+    "download",
+    "model",
+    "billing",
+    "quota",
+    "network",
+    "silent",
+    "upgrade",
+    "exited",
+    "plan",
+    "config",
 ]
 _REMEDY_KINDS: frozenset[str] = frozenset(get_args(RemedyKind))
 
@@ -91,6 +103,12 @@ class Remedy:
     said nothing, and ``command`` is what makes it say why. ``upgrade`` is an
     agent too old to know its own ACP flag; ``exited`` is one that quit and
     left its reason on stderr, which the English detail already carries.
+
+    Two are about the agent's own account rather than a provider's answer:
+    ``plan`` is an account signed in whose plan does not include the agent, with
+    the page that sells one as ``command``, and ``config`` is an agent that
+    cannot read its own config file, with the command that says where it is
+    wrong.
 
     ``then`` is what to type once ``command`` is running, for an agent whose fix
     is a step inside it rather than the command itself (`presets.SignIn.then`).
