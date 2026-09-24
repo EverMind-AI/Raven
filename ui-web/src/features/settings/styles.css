@@ -146,8 +146,6 @@ body:not(.settings-notes) .settings-notecard {display:none}
 .settings-notecard li b {color:var(--text); font-weight:600}
 .settings-filefoot {display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 15px; border:1px dashed var(--line);
   border-radius:10px; color:var(--faint); font-size:13px; margin-top:4px}
-.settings-soonbox {border:1px dashed var(--line); border-radius:10px; padding:34px 24px; text-align:center; color:var(--faint)}
-.settings-soonbox .settings-t {font-family:var(--disp); font-size:16px; color:var(--muted); font-weight:600; margin-bottom:6px}
 .settings-scrim {position:fixed; inset:0; background:var(--scrim); display:grid; place-items:center; z-index:60; padding:20px}
 .settings-scrim[hidden] {display:none}
 .settings-modal {background:var(--paper); border:1px solid var(--line); border-radius:12px; box-shadow:var(--elev-up); max-width:430px; width:100%; padding:20px 22px}
@@ -449,8 +447,10 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-plink:hover:not(:disabled) {text-decoration:underline}
 .settings-plink:disabled {color:var(--faint); cursor:default}
 .settings-pline {margin:-4px 0 10px}
-.settings-xrow {cursor:pointer}
-.settings-xrow:hover {background:var(--surface)}
+.settings-xrow.settings-xopen {cursor:pointer}
+/* Only a row with a panel answers the pointer: on the rest the switch is the
+   one control, and a row-wide hover promised a click that did nothing. */
+.settings-xrow.settings-xopen:hover {background:var(--surface)}
 .settings-xrow .settings-k {gap:9px}
 /* The same chevron the role rows and the page's own folds show: a mark that
    turns. In a bordered box it read as a second control beside the name, and
@@ -461,7 +461,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
    inside the row, not on the row. */
 .settings-xrow .settings-chev {flex:none; width:11px; height:11px; color:var(--faint); fill:none; stroke:currentColor;
   stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .16s, color .16s}
-.settings-xrow:hover .settings-chev {color:var(--muted)}
+.settings-xrow.settings-xopen:hover .settings-chev {color:var(--muted)}
 @media (prefers-reduced-motion:reduce) {.settings-xrow .settings-chev {transition:none}}
 .settings-row.settings-dim .settings-k {color:var(--faint)}
 .settings-xrow.settings-dim .settings-chev {opacity:.5}
@@ -569,7 +569,8 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-xrow {display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line-soft)}
 .settings-xrow:last-child {border-bottom:0}
 .settings-xrow.settings-dim .settings-xn {color:var(--muted)}
-.settings-xname {display:inline-flex; align-items:center; gap:9px; flex:1; min-width:0; font:inherit; color:inherit; background:none; border:0; padding:0; text-align:left; cursor:pointer}
+.settings-xname {display:inline-flex; align-items:center; gap:9px; flex:1; min-width:0; font:inherit; color:inherit; background:none; border:0; padding:0; text-align:left}
+button.settings-xname {cursor:pointer}
 .settings-xname .settings-xn {font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-xrow.settings-open .settings-chev {transform:rotate(90deg); color:var(--amber)}
 .settings-lnkico {margin-left:6px; vertical-align:middle}
@@ -607,6 +608,18 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-tp-def {flex:none; font-size:10.5px; color:var(--gold); border:1px solid var(--line); border-radius:99px; padding:0 6px}
 .settings-tp-dot {width:7px; height:7px; border-radius:50%; background:var(--moss); flex:none}
 .settings-tp-empty {padding:12px 9px; color:var(--faint); font-size:13px}
+/* An empty card or column: the settings copy of the two-pane frame's empty state. */
+.settings-empty {display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:34px 24px 38px; box-sizing:border-box}
+.settings-glyph {width:44px; height:44px; border-radius:12px; display:grid; place-items:center; margin-bottom:14px;
+  background:var(--surface); box-shadow:inset 0 0 0 1px var(--line-soft); color:var(--faint)}
+.settings-glyph svg {width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round}
+.settings-et {font-size:14px; font-weight:600; color:var(--text)}
+.settings-es {max-width:26em; word-break:keep-all; overflow-wrap:anywhere; margin-top:5px; font-size:12.5px; line-height:1.6; color:var(--muted)}
+.settings-ea {margin-top:16px}
+.settings-quiet .settings-glyph {width:auto; height:auto; background:none; box-shadow:none; margin-bottom:8px}
+.settings-quiet .settings-glyph svg {width:18px; height:18px}
+.settings-quiet .settings-es {margin-top:0; color:var(--faint)}
+.settings-tp-side > .settings-empty {padding:28px 12px}
 .settings-tp-main {padding:17px 20px 20px; min-width:0; min-height:0; overflow-y:auto}
 /* Every one-line field on a provider's page is one width, and every button
    beside one stands at the pane's right edge -- the edge "Add model" already
@@ -628,7 +641,8 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 /* The empty model list is a sentence under the heading, at the heading's edge;
    the list page's empty state carries padding this one does not want. */
 .settings-tp-main .settings-taglist > .settings-tp-empty {padding:2px 0}
-.settings-tp-none {display:grid; place-items:center; padding:60px 20px; color:var(--faint); font-size:13px}
+.settings-tp-none {display:flex; min-height:100%}
+.settings-tp-none > .settings-empty {flex:1}
 .settings-tp-head {display:flex; align-items:flex-start; gap:10px}
 .settings-tp-head .provider-icon {width:30px; height:30px; border-radius:8px}
 .settings-tp-ttl {min-width:0; flex:1}

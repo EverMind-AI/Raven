@@ -27,6 +27,35 @@ export function Card({ title, act, raw, children }: {
   )
 }
 
+/* A card, or a column, with nothing in it: a mark, what the state is, and how
+   it ends -- the frame's TwoPaneNone again, under this domain's prefix (a class
+   name belongs to one domain). `title` absent is the quiet form: "pick one",
+   "nothing matches", which are pointers rather than news. */
+export function Empty({ icon, title, action, children }: {
+  icon: ReactNode
+  title?: string
+  action?: { label: string; onClick(): void }
+  children?: ReactNode
+}): JSX.Element {
+  return (
+    <div className={title ? 'settings-empty' : 'settings-empty settings-quiet'}>
+      <span className="settings-glyph" aria-hidden="true">{icon}</span>
+      {title ? <div className="settings-et">{title}</div> : null}
+      {children ? <div className="settings-es">{children}</div> : null}
+      {action ? <button type="button" className="mini go settings-ea" onClick={action.onClick}>{action.label}</button> : null}
+    </div>
+  )
+}
+
+export const GLYPH = {
+  pick: <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15M6 8.5h1M6 11.5h1" /></svg>,
+  nohit: <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4M8.5 11h5" /></svg>,
+  archive: <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4" rx="1.2" /><path d="M5 8.5v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9M10 12.5h4" /></svg>,
+  chart: <svg viewBox="0 0 24 24"><path d="M4.5 19.5h15M7.5 16v-4M12 16V8M16.5 16v-6" /></svg>,
+  offline: <svg viewBox="0 0 24 24"><path d="M9.5 14.5 7.8 16.2a3 3 0 0 1-4.2-4.2l2.6-2.6M14.5 9.5l1.7-1.7a3 3 0 0 1 4.2 4.2l-2.6 2.6M4.5 4.5l15 15" /></svg>,
+  plug: <svg viewBox="0 0 24 24"><path d="M9 3.5v4M15 3.5v4M6.5 7.5h11v3a5.5 5.5 0 0 1-11 0zM12 16v4.5" /></svg>,
+}
+
 /* A labelled block with no card around it, which is the prototype's own shape
    for a detail pane: the label IS the separation. A border per block turns a
    pane of three facts into three boxes, and the boxes then need their own
@@ -244,7 +273,7 @@ export function Xrow({ name, status, ctl, panel, open, dim, onToggle }: {
   dim?: boolean
   onToggle(): void
 }): JSX.Element {
-  const cls = ['settings-xrow', dim ? 'settings-dim' : '', open ? 'settings-open' : ''].filter(Boolean).join(' ')
+  const cls = ['settings-xrow', panel ? 'settings-xopen' : '', dim ? 'settings-dim' : '', open ? 'settings-open' : ''].filter(Boolean).join(' ')
   return (
     <>
       <div className={cls}>

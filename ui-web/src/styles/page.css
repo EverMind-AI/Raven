@@ -3374,7 +3374,6 @@ details[open] summary { margin-bottom: 8px; }
   font-family: var(--mono); font-size: 10.5px; color: var(--moss);
   background: var(--surface); border-radius: 999px; padding: 2px 8px;
 }
-.errline-lite { font-size: 12.5px; color: var(--clay); margin: 14px 0; }
 
 /* ── plugin market (pm*) — rides the hub grid, adds status language ── */
 /* page hero: the market's one big line -- everything else stays quiet */
@@ -4053,9 +4052,6 @@ details[open] summary { margin-bottom: 8px; }
   font-size: 11px; font-weight: 500; color: var(--faint); padding: 14px 9px 5px; letter-spacing: .04em;
 }
 .two-pane-list > .two-pane-grp:first-child { padding-top: 4px; }
-/* The side's own "nothing here": the prototype states it where the first row
-   would have been, not centred in the column's whole height. */
-.two-pane-list > .empty-note { padding: 12px 9px; text-align: left; font-size: 13px; line-height: 1.6; }
 /* The same column while its rows are still being read: the rows' own boxes
    with a bar where each line of text will be, so the list fills in rather than
    appearing (components/TwoPane.tsx's TwoPaneWait says what it replaces).
@@ -4131,7 +4127,28 @@ details[open] summary { margin-bottom: 8px; }
    it its rhythm (`.sheet > .subody`); here the column does. */
 .two-pane-main > .subody { display: grid; gap: 15px; align-content: start; color: var(--muted); font-size: 13.5px; }
 .two-pane-main > .subody > * { margin-top: 0; }
-.two-pane-none { display: grid; place-items: center; padding: 60px 20px; color: var(--faint); font-size: 13px; text-align: center; }
+.two-pane-none {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 100%; box-sizing: border-box; padding: 32px 24px 56px; text-align: center;
+}
+.two-pane-glyph {
+  width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; margin-bottom: 14px;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-soft); color: var(--faint);
+}
+.two-pane-glyph svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.two-pane-nt { font-size: 14px; font-weight: 600; color: var(--text); }
+.two-pane-ns { max-width: 26em; word-break: keep-all; overflow-wrap: anywhere; margin-top: 5px; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.two-pane-nd { max-width: 32em; margin-top: 8px; font-family: var(--mono); font-size: 11px; color: var(--faint); overflow-wrap: anywhere; }
+.two-pane-none > .mini { margin-top: 16px; }
+.two-pane.two-pane-solo { grid-template-columns: minmax(0, 1fr); }
+/* "Pick one" is a pointer, not news: the mark without its tile, one faint line. */
+.two-pane-quiet .two-pane-glyph { background: none; box-shadow: none; margin-bottom: 8px; }
+.two-pane-quiet .two-pane-ns { margin-top: 0; color: var(--faint); }
+.two-pane-nohit {
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 30px 12px;
+  font-size: 12.5px; color: var(--faint); text-align: center;
+}
+.two-pane-nohit svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 
 /* ── settings building blocks ───────────────────────────────────────────
    A module is a few cards, not a table: the card is what carries a heading,
@@ -4474,8 +4491,14 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 .mstat[aria-pressed="true"] .v { color: var(--amber); }
 /* The line under the switch, and the count under the list. */
 .two-pane-side > .memnote { margin: -3px 2px 0; }
-.two-pane-side > .hubpage { margin: 4px 0 0; }
-.two-pane-side .errline-lite { margin: 4px 0; }
+/* The buttons pinned to the edges and the count between them in fixed-width
+   digits: centred as one run, "Page 9" becoming "Page 10" slid both buttons. */
+.two-pane-side > .hubpage {
+  display: grid; grid-template-columns: 1fr auto 1fr; margin: 4px 0 0;
+}
+.two-pane-side > .hubpage > :first-child { justify-self: start; }
+.two-pane-side > .hubpage > :last-child { justify-self: end; }
+.two-pane-side > .hubpage .pnote { font-variant-numeric: tabular-nums; }
 .mmeter { display: inline-block; width: 76px; height: 4px; border-radius: 999px; background: var(--raised); overflow: hidden; flex: none; }
 .mmeter i { display: block; height: 100%; background: var(--amber); border-radius: 999px; }
 .memkv {

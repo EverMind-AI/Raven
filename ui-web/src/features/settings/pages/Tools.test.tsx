@@ -64,6 +64,17 @@ describe('tools page', () => {
     expect(screen.getByText('gui.settings.tools.counter {"on":5,"total":7}')).toBeTruthy()
   })
 
+  /* Only a row with a panel answers the pointer: on the rest the switch is the
+     one control, and a row-wide hover promised a click that went nowhere. */
+  it('marks a row clickable only where it has a panel to open', async () => {
+    install()
+    await mount('tools')
+    const rowOf = (id: string): Element => screen.getByLabelText(id).closest('.settings-xrow')!
+    expect(rowOf('web_search').classList.contains('settings-xopen')).toBe(true)
+    expect(rowOf('read_file').classList.contains('settings-xopen')).toBe(false)
+    expect(rowOf('read_file').querySelector('button.settings-xname')).toBeNull()
+  })
+
   /* No "built in" label beside a meta tool: the row already draws a control
      nobody can move, and the word was one more thing to read for a fact the
      reader cannot act on. The click says it instead, and only when it is

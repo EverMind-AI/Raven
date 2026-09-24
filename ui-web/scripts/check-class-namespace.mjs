@@ -261,8 +261,10 @@ const LEGACY_LOCAL = {
   installed: 0,
   /* Down from 14 with the memory section: the page's hero, its own list and
      row classes and the shared drawer's head went with the two-pane frame
-     (src/components/TwoPane.tsx owns those names now). */
-  memory: 8,
+     (src/components/TwoPane.tsx owns those names now), and 8 to 7 when its
+     failure moved from an inline `.errline-lite` into the frame's own empty
+     state. */
+  memory: 7,
   /* `.empty` and the row's `.ct`, `.nm`, `.tick`: the picker's own list
      vocabulary, shared with the popovers beside it. */
   model: 4,
