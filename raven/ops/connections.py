@@ -323,6 +323,7 @@ def store_path() -> Path:
         return home
     return beside if beside.is_file() else home
 
+
 MISSING, UNREADABLE, OK = "missing", "unreadable", "ok"
 
 
