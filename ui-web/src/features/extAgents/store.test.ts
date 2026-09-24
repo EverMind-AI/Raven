@@ -208,6 +208,51 @@ describe('the model verbs', () => {
     expect(store.get().joining).toEqual({})
   })
 
+  it('a write that fails after another landed keeps what landed', async () => {
+    /* Five Connects pressed at once: the slow one that fails must not put back
+       the rows from before the fast ones connected. */
+    const slow = row({ name: 'claude_code' })
+    const fast = row({ name: 'codex', preset: 'codex' })
+    let failSlow: (e: unknown) => void = () => {}
+    const listing = [slow, { ...fast, configured: true, enabled: true }]
+    setSources({
+      extAgents: {
+        load: async () => listing,
+        act: (_op, r) => (r.name === 'claude_code'
+          ? new Promise((_, reject) => { failSlow = reject })
+          : Promise.resolve(listing)),
+      },
+    })
+    store.set({ rows: [slow, fast] })
+
+    const first = store.act(slow, 'connect')
+    await store.act(fast, 'connect')
+    expect(store.get().rows.find((r) => r.name === 'codex')!.enabled).toBe(true)
+    failSlow({ data: { detail: 'did not answer' } })
+    await first
+
+    expect(store.get().rows.find((r) => r.name === 'codex')!.enabled).toBe(true)
+    expect(store.get().failed.claude_code!.detail).toBe('did not answer')
+  })
+
+  it('keeps the rows on screen, not the ones it started from, when the listing cannot be read after a refusal', async () => {
+    const r = row()
+    const other = row({ name: 'codex', preset: 'codex' })
+    let refuse: (e: unknown) => void = () => {}
+    setSources({
+      extAgents: {
+        load: async () => { throw new Error('offline') },
+        act: () => new Promise((_, reject) => { refuse = reject }),
+      },
+    })
+    store.set({ rows: [r, other] })
+    const pending = store.act(r, 'connect')
+    store.set({ rows: [r, { ...other, enabled: true, configured: true }] })
+    refuse({ data: { detail: 'refused' } })
+    await pending
+    expect(store.get().rows.find((x) => x.name === 'codex')!.enabled).toBe(true)
+  })
+
   it('repaints from the listing when a pick is refused, so the sheet leaves the menu that failed behind', async () => {
     /* A row is re-measured behind the page, which is how its menu can change
        under an open sheet; a refusal is where the page finds out. */

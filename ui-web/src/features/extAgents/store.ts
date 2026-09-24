@@ -192,10 +192,13 @@ export async function run(
   } catch (e) {
     const remedy = remedyFrom(e)
     failedWith = remedy ? { detail: failure(e), remedy } : { detail: failure(e) }
-    /* A refused model write may have been checked against a menu the row has
-       since moved off -- it is re-measured behind the page -- so the sheet
-       repaints from the listing as it is now rather than from what it held. */
-    if (op === 'model') rows = await source().load(false).catch(() => rows)
+    /* A refusal repaints from the listing as it is now, never from the rows
+       held when this write started: writes run side by side (five Connects
+       pressed at once), and a slow one that fails would otherwise put back the
+       rows from before the others landed -- rows connected meanwhile read as
+       connectable again. It is also how a refused model pick leaves a menu the
+       row has since moved off, since rows are re-measured behind the page. */
+    rows = await source().load(false).catch(() => get().rows)
     if (!opts.quiet) toast(t('gui.agent.failed', { detail: failedWith.detail }))
   }
   const landed: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
