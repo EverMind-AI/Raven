@@ -346,6 +346,12 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "upgrade_to": _upgrade_transport(cfg, source),
                 "probe_status": result.status,
                 "probe_detail": result.detail,
+                # What to install, as the executable the lookup did not find: for
+                # a shim preset that is `npx`, which Node.js brings and the
+                # agent's own installer does not. Only on a row still `missing`
+                # -- a vendored row demoted to `attention` above is not offered
+                # an install at all.
+                "probe_missing": result.absent if result.status == "missing" else None,
                 "has_api_key": bool((getattr(cfg, "api_key", "") or "").strip()),
                 # Measured by the handshake, not guessed from the status: an
                 # `attention` row is equally "wants a credential" and "installed
@@ -421,7 +427,8 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     the same one real prompt `subagents.toggle` sends, through this entry's own
     backend, and a refusal in the agent's own words when nothing answers. So
     this spends one call on that agent's own quota, and can hold the add for up
-    to `_ENABLE_PING_TIMEOUT_SECONDS`. `force: true` bypasses it, as on the
+    to the row's own start window plus `_ENABLE_PING_TIMEOUT_SECONDS`
+    (`probe._ping_bounds`). `force: true` bypasses it, as on the
     switch. A refusal stores nothing at all -- not the row disabled -- because
     the surface that calls this offers one verb per row: an added row is
     connected, and a row that could not be proved has to stay one Connect away
@@ -1021,7 +1028,8 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     backend and refuses the enable, in the agent's own words, when nothing
     answers: the roster's entry criterion is that the agent works now, not that
     it is installed. So this spends one call on that agent's own quota and can
-    hold the switch for up to `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching
+    hold the switch for up to the row's own start window plus
+    `_ENABLE_PING_TIMEOUT_SECONDS` (`probe._ping_bounds`). Exempt: switching
     off, a `builtin` row (this process, with no backend to reach), and
     `force: true`, the operator's override for an agent whose provider is
     briefly down. A refusal writes nothing.

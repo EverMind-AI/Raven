@@ -47,6 +47,12 @@ def test_a_failed_verdict_remembers_the_fix_it_named(tmp_path: Path) -> None:
     got = store.load([(cfg, "config")])["config:Coder"]
     assert got.remedy == Remedy("setup", "hermes model")
 
+    # The download fix reads back too: it is what a Test npx could not fetch for
+    # says on the page after a reload.
+    fetch = Remedy("download", "npx -y @agentclientprotocol/claude-agent-acp@0.79.0")
+    store.record(cfg, "config", ok=False, detail="npx could not download it", tested_at_ms=1750, remedy=fetch)
+    assert store.load([(cfg, "config")])["config:Coder"].remedy == fetch
+
     # A verdict with no fix writes no `remedy` key, so a file written before this
     # field existed and one written after for a plain failure read the same.
     store.record(cfg, "config", ok=False, detail="exited 1", tested_at_ms=1800)

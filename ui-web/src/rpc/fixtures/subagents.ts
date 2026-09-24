@@ -60,7 +60,7 @@ const ROSTER: Row[] = [
     ],
     description: 'Claude Code CLI - strong general coding / agent tasks.' },
   { name: 'codex', preset: 'codex', kind: 'cli', configured: false, enabled: false,
-    group: 'uninstalled', probe_status: 'missing', probe_detail: 'codex: command not found',
+    group: 'uninstalled', probe_status: 'missing', probe_detail: 'codex: command not found', probe_missing: 'codex',
     has_api_key: false, needs_auth: false, mcps: [], allow_mcp_secrets: false, test_running: false,
     own: false, model_source: 'fixed', model_choices: [],
     last_test_detail: '', description: 'OpenAI Codex CLI - coding tasks.' },
