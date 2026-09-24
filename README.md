@@ -101,6 +101,14 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 <p align="center"><em>Raven-Oncall significantly outperforms Claude Code on both success rate and cost for AI4S tasks</em></p>
 
+## ❯❯ Runtime Self-Evolution (Experimental)
+
+**Raven is built for this from the ground up.** Its agent loop is split into four decoupled strategy modules — **Memory**, **Planning**, **Capability**, and **Action** — so what an agent is told, what it treats as finished, which tools it reaches for, and which checks it must pass can all be rewritten **while it is running**. What changes belongs to that agent alone: a setting, or a small piece of judgement code written for it. The next turn of the same conversation already runs on it, with nothing restarted.
+
+**A Persona is the first thing this builds.** Describe the assistant you want and Raven assembles one: a lead role that talks to you, and specialists drawn from the agents you already have. What you asked for does not stop at a prompt — it lands in that assistant's **harness**, as its division of work, the tools it may reach for, and the checks it must pass before it acts. Raven keeps reworking the assistant from your feedback until it does the job, and from then on you hand it the few things it asks for, and it runs.
+
+> Describe what you need once. Raven assembles the assistant, keeps improving it while you work, and afterwards a sentence is enough to put it to work again.
+
 ## ❯❯ Showcase
 
 Real runs, each captured from Raven's task graph. The graph shows the
