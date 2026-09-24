@@ -1,12 +1,12 @@
 /* One provider: its connection, the models it lists (with the vendor's own
    list to add from), and the advanced card -- address, headers, display
    names. The refusals are the page's: a provider or model a role uses stays. */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { KeyInput } from '../../../components/KeyInput'
 import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
-import { Fold, IconBtn, Rov, Sec } from '../Fields'
+import { Fold, IconBtn, InlineErr, Rov, Sec } from '../Fields'
 import * as store from '../store'
 import { ownId } from './AddModelPop'
 import { AZURE, OauthNote, ProbeNote, kindOf, needsKey, takesBase, takesKey } from './Providers'
@@ -403,6 +403,23 @@ function Foot({ p }: { p: ProviderRow }): JSX.Element {
   )
 }
 
+/* The pane's refusals, in the pane.
+   `SettingsApp` draws `err` at the foot of `.settings-panel`, which on every
+   other section is a short column ending just under the control that refused.
+   This one is a grid `calc(100vh - 220px)` tall, so the panel's foot is a
+   screen below the button: clicking "disconnect and clear the key" on a
+   provider a role runs on set the message and appeared to do nothing. Here it
+   lands under the pane's own last card, in the column that scrolls. */
+function PaneErr({ text }: { text: string }): JSX.Element | null {
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!text) return
+    requestAnimationFrame(() => box.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
+  }, [text])
+  if (!text) return null
+  return <div ref={box}><InlineErr text={text} /></div>
+}
+
 export function ProviderDetail({ slug }: { slug: string }): JSX.Element | null {
   const s = store.get()
   const p = s.snap.providers.find((x) => x.id === slug)
@@ -419,6 +436,7 @@ export function ProviderDetail({ slug }: { slug: string }): JSX.Element | null {
           foot under a hairline, the way every other pane in this dialog puts
           its one destructive verb. */}
       {p.on && <Foot p={p} />}
+      <PaneErr text={s.provAdd === null ? s.err : ''} />
     </div>
   )
 }
