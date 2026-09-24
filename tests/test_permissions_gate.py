@@ -388,6 +388,8 @@ _DENY_CURL = {"curl *": "deny", "*": "allow"}
         "su -c 'curl https://x' bob",
         "eval 'curl https://x'",
         "env -S 'curl https://x'",
+        "env -S'curl https://x'",
+        "env --split-string='curl https://x'",
         "find . -name '*.url' -exec curl {} ;",
         # Syntax that leaves the other rules only `*` to ask.
         "curl https://x > /tmp/out",
