@@ -1440,8 +1440,8 @@
       "zh": "启用"
     },
     "gui.conn.none": {
-      "en": "No channels in the catalogue yet.",
-      "zh": "渠道目录还是空的。"
+      "en": "No channels available yet",
+      "zh": "还没有可用的渠道"
     },
     "gui.conn.none_match": {
       "en": "No channel matches.",
@@ -1736,8 +1736,12 @@
       "zh": "下次 {next}"
     },
     "gui.cron.none": {
-      "en": "No schedules yet. Say \"every morning at 8...\" in a conversation and one is made, or add one here.",
-      "zh": "还没有定时任务。在对话里说「每天早上八点……」就会建一条，也可以在这里新建。"
+      "en": "Ask Raven in a conversation, say \"every morning at 8...\", and it sets one up for you.",
+      "zh": "在对话里跟 Raven 说「每天早上八点……」，它会帮你建一条。"
+    },
+    "gui.cron.none_t": {
+      "en": "No schedules yet",
+      "zh": "暂无定时任务"
     },
     "gui.cron.ok": {
       "en": "Done",
@@ -2643,9 +2647,25 @@
       "zh": "长期记忆当前写不进去，这段时间的对话不会被记住。",
       "en": "Long-term memory is not being written; nothing from here on will be remembered."
     },
+    "gui.mem.off_t": {
+      "en": "Long-term memory is not connected",
+      "zh": "长期记忆没有接上"
+    },
+    "gui.mem.err_t": {
+      "en": "Can't reach the memory service",
+      "zh": "连不上记忆服务"
+    },
+    "gui.mem.err_sub": {
+      "en": "Retry once it is back up.",
+      "zh": "服务恢复后点重试即可。"
+    },
     "gui.mem.empty": {
-      "zh": "这里还没有记忆，先和 Raven 干点活吧",
-      "en": "Nothing here yet - go do some work with Raven"
+      "zh": "和 Raven 一起干点活，这里会慢慢攒起来。",
+      "en": "They build up as you work with Raven."
+    },
+    "gui.mem.empty_t": {
+      "en": "No memories yet",
+      "zh": "暂无记忆"
     },
     "gui.mem.hero": {
       "zh": "数据与记忆",
@@ -6871,6 +6891,10 @@
       "en": "No archived sessions yet",
       "zh": "还没有归档的会话"
     },
+    "gui.settings.archive.empty_sub": {
+      "en": "Archived conversations are kept here, and any of them can be restored.",
+      "zh": "归档的会话收在这里，随时可以恢复。"
+    },
     "gui.settings.archive.restore": {
       "en": "Restore",
       "zh": "恢复"
@@ -6984,8 +7008,20 @@
       "zh": "这段时间没有记录"
     },
     "gui.settings.usage.unavailable": {
-      "en": "No usage counter behind this page",
-      "zh": "这个页面后面没有用量计数器"
+      "en": "Can't reach the Raven service",
+      "zh": "连不上 Raven 服务"
+    },
+    "gui.settings.usage.unavailable_sub": {
+      "en": "Retry once it is back up.",
+      "zh": "服务恢复后点重试即可。"
+    },
+    "gui.settings.usage.empty_t": {
+      "en": "No usage yet",
+      "zh": "暂无用量数据"
+    },
+    "gui.settings.usage.empty_sub": {
+      "en": "Nothing was used in this range. Try a longer one.",
+      "zh": "这段时间还没有用量，换个时间范围看看。"
     },
     "gui.settings.providers.title": {
       "en": "Providers · {n}",
@@ -7738,6 +7774,10 @@
     "gui.settings.plugins.none": {
       "en": "No MCP server configured",
       "zh": "还没有配置 MCP 服务"
+    },
+    "gui.settings.plugins.none_sub": {
+      "en": "An MCP server hands Raven tools and data from outside.",
+      "zh": "MCP 服务能给 Raven 接上外部的工具和数据。"
     },
     "gui.settings.plugins.connected": {
       "en": "Connected",

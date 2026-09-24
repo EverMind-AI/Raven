@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import {
-  TwoPane, TwoPaneFind, TwoPaneFoot, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow,
+  TwoPane, TwoPaneFind, TwoPaneFoot, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNoHit, TwoPaneNone, TwoPaneRow,
   TwoPaneSection, TwoPaneSwitch, TwoPaneWait,
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
@@ -75,6 +75,10 @@ function removeThenList(j: CronJob): void {
   )
 }
 
+const CLOCK_GLYPH = (
+  <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></svg>
+)
+
 export function CronApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
@@ -89,6 +93,17 @@ export function CronApp(): JSX.Element {
     if (s.viewId && !job) store.backToList()
   }, [s.viewId, job])
   const draft = job && s.draft && s.draft.id === job.id ? s.draft : null
+  /* No jobs and none being drafted: one column, and no form to fill in -- a
+     job is something to ask Raven for in a conversation, so that is the whole
+     of what the empty state says. A search over nothing and a "+" beside it
+     were two halves of a page with nothing in it. */
+  if (s.loaded && !s.rows.length && !(s.sheet && !s.parked)) {
+    return (
+      <TwoPane>
+        <TwoPaneNone icon={CLOCK_GLYPH} title={t('gui.cron.none_t')}>{t('gui.cron.none')}</TwoPaneNone>
+      </TwoPane>
+    )
+  }
   return (
     <TwoPane side={<CronSide rows={s.rows} loaded={s.loaded} q={q} onQ={setQ} viewId={s.viewId} />}>
       {/* A job being created stands in the right column, where a job being
@@ -100,8 +115,6 @@ export function CronApp(): JSX.Element {
       ) : job && draft ? (
         <CronDetail key={`${job.id}:${s.epoch}`} job={job} draft={draft} rev={s.rev} lang={pageLang} />
       ) : (
-        /* "Nothing here yet" is the list's line, not this one: said in both
-           columns it reads as two separate emptinesses. */
         <TwoPaneNone>{t('gui.cron.pick')}</TwoPaneNone>
       )}
     </TwoPane>
@@ -242,7 +255,7 @@ function CronSide({ rows, loaded, q, onQ, viewId }: {
       />
       <TwoPaneList>
         {!loaded && !rows.length ? <TwoPaneWait /> : shown.length === 0 ? (
-          <div className="empty-note">{t(rows.length ? 'gui.cron.f_none' : 'gui.cron.none')}</div>
+          rows.length ? <TwoPaneNoHit>{t('gui.cron.f_none')}</TwoPaneNoHit> : null
         ) : (
           <>
             {on.length ? <TwoPaneGroup>{t('gui.cron.g_on')}</TwoPaneGroup> : null}

@@ -23,14 +23,17 @@ import { t } from '../i18n/t'
 import type { JSX, ReactNode } from 'react'
 
 export function TwoPane({ side, children }: {
-  /* The left column: a search row, then a list. */
-  side: ReactNode
+  /* The left column: a search row, then a list. Absent when there is nothing
+     for a list to hold -- no rows at all, or no way to read them -- and the
+     frame is then one column: an empty search box over an empty list beside
+     the state that explains them was two halves saying one thing, lopsided. */
+  side?: ReactNode
   /* The right column: the picked row, or a line saying to pick one. */
   children: ReactNode
 }): JSX.Element {
   return (
-    <div className="two-pane">
-      <div className="two-pane-side">{side}</div>
+    <div className={side === undefined ? 'two-pane two-pane-solo' : 'two-pane'}>
+      {side === undefined ? null : <div className="two-pane-side">{side}</div>}
       <div className="two-pane-main">{children}</div>
     </div>
   )
@@ -244,7 +247,46 @@ export function TwoPaneSwitch({ on, label, disabled, onChange }: {
   )
 }
 
-/** Nothing picked, or nothing to pick. */
-export function TwoPaneNone({ children }: { children: ReactNode }): JSX.Element {
-  return <div className="two-pane-none">{children}</div>
+/* The right column with nothing in it: either nothing is picked yet, or there
+   is nothing to pick. Both used to be one grey sentence at the top of an empty
+   column -- the second one a paragraph -- which read as a leftover rather than
+   as a state. So it is a mark, a line saying what the state is, a line saying
+   how it ends, and the one control that ends it, centred in the column. */
+export function TwoPaneNone({ icon, title, action, detail, children }: {
+  /* The section's own mark; the picking glyph when absent. */
+  icon?: ReactNode
+  /* What the state is. Absent on "pick one", where the line below is all of it. */
+  title?: string
+  action?: { label: string; onClick(): void }
+  /* The machine's own words for a failure, under the sentence a reader acts on. */
+  detail?: string
+  /* How the state ends. */
+  children?: ReactNode
+}): JSX.Element {
+  return (
+    <div className={title ? 'two-pane-none' : 'two-pane-none two-pane-quiet'}>
+      <span className="two-pane-glyph" aria-hidden="true">{icon ?? PICK_GLYPH}</span>
+      {title ? <div className="two-pane-nt">{title}</div> : null}
+      {children ? <div className="two-pane-ns">{children}</div> : null}
+      {detail ? <div className="two-pane-nd">{detail}</div> : null}
+      {action ? (
+        <button type="button" className="mini go" onClick={action.onClick}>{action.label}</button>
+      ) : null}
+    </div>
+  )
+}
+
+const PICK_GLYPH = (
+  <svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15M6 8.5h1M6 11.5h1" /></svg>
+)
+
+/* The list with no row matching the search. The rows' own column, so a mark
+   and a line where the first row would be rather than a paragraph. */
+export function TwoPaneNoHit({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <div className="two-pane-nohit">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4M8.5 11h5" /></svg>
+      <span>{children}</span>
+    </div>
+  )
 }

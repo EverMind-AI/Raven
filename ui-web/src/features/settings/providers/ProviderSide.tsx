@@ -15,6 +15,7 @@
 import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
 import { show as menuAt } from '../../../state/menu'
+import { Empty, GLYPH } from '../Fields'
 import * as store from '../store'
 import { groupOf } from './Providers'
 
@@ -97,7 +98,7 @@ export function ProviderSide(): JSX.Element {
           ))}
         </div>
       ) : (
-        <div className="settings-tp-empty">{t('gui.model.prov_no_match')}</div>
+        <Empty icon={GLYPH.nohit}>{t('gui.model.prov_no_match')}</Empty>
       )}
     </div>
   )

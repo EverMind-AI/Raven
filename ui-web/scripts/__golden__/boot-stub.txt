@@ -272,7 +272,12 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
                       span.two-pane-wbar
                       span.two-pane-wbar
           div.two-pane-main
-            div.two-pane-none
+            div.two-pane-none.two-pane-quiet
+              span.two-pane-glyph
+                svg
+                  rect
+                  path
+              div.two-pane-ns
       div#cronBody.spanels[data-for=cron]
       div#memoryBody.spanels[data-for=memory]
 div#veil.veil[data-open=false]

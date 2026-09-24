@@ -140,5 +140,10 @@ exports[`cron island > keeps its rendered shape, list 1`] = `
             span.ds
         button.two-pane-swi
   div.two-pane-main
-    div.two-pane-none"
+    div.two-pane-none.two-pane-quiet
+      span.two-pane-glyph
+        svg
+          rect
+          path
+      div.two-pane-ns"
 `;

@@ -38,5 +38,10 @@ exports[`memory island > keeps its rendered shape 1`] = `
           span.two-pane-when
     div.memnote
   div.two-pane-main
-    div.two-pane-none"
+    div.two-pane-none.two-pane-quiet
+      span.two-pane-glyph
+        svg
+          rect
+          path
+      div.two-pane-ns"
 `;

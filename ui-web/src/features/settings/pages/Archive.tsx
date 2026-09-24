@@ -6,7 +6,7 @@ import { t } from '../../../i18n/t'
 import * as confirm from '../../../state/confirm'
 import { refreshList } from '../../../state/session/registry'
 import { whenLabel } from '../../rail/source'
-import { Card, Row, Rov, Switch } from '../Fields'
+import { Card, Empty, GLYPH, Row, Switch } from '../Fields'
 import { ArchiveWait } from '../Skeletons'
 import * as store from '../store'
 
@@ -52,7 +52,9 @@ export function Archive(): JSX.Element {
     <>
       <Card title={t('gui.settings.archive.title')}>
         {rows === null && <ArchiveWait />}
-        {rows && rows.length === 0 && <Row><Rov>{t('gui.settings.archive.empty')}</Rov></Row>}
+        {rows && rows.length === 0 && (
+          <Empty icon={GLYPH.archive} title={t('gui.settings.archive.empty')}>{t('gui.settings.archive.empty_sub')}</Empty>
+        )}
         {rows && rows.map((r) => (
           <Row key={r.id} label={<>{rowTitle(r)} <span className="settings-kk">{whenLabel(r.updated_at)}</span></>}>
             <span className="settings-taglist">
