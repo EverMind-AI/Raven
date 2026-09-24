@@ -460,6 +460,14 @@ describe('a credential refusal the handshake measured', () => {
     expect(stageOf(fullRow({ ...refused, configured: true, enabled: true }))).toBe('live')
     /* An endpoint's credential is the key field, settled by its own probe. */
     expect(stageOf(fullRow({ ...refused, kind: 'openai' }))).toBe('key')
+    /* Off the roster with a preset that moved transport: stale before keyless,
+       since the migration is written from the preset and needs no key -- but
+       not before a refused handshake, which only a sign-in settles. */
+    expect(stageOf(fullRow({ kind: 'openai', configured: true, enabled: false, has_api_key: false, upgrade_to: 'acp' }))).toBe('stale')
+    expect(stageOf(fullRow({ ...refused, configured: true, enabled: false, upgrade_to: 'cli' }))).toBe('unauthorized')
+    /* The flag only ever lands on a stored row, so a preset carrying one is
+       still an add, not a migration of a row that does not exist. */
+    expect(stageOf(fullRow({ kind: 'cli', configured: false, enabled: false, upgrade_to: 'acp' }))).toBe('add')
     /* The same row without the refusal is a preset to add. */
     expect(stageOf(fullRow({ ...refused, needs_auth: false }))).toBe('add')
   })

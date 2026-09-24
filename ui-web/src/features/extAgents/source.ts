@@ -84,10 +84,6 @@ export function stageOf(row: ExtAgentRow): Stage {
     if (row.probe_status === 'missing') return 'install'
     return row.enabled ? 'live' : 'off'
   }
-  /* An HTTP agent cannot answer without its key, so it is not connected by
-     writing an entry -- the key is the missing part, whether the entry exists
-     yet or not. */
-  if (row.kind === 'openai' && !row.has_api_key) return 'key'
   /* Named, not offered: the handshake already refused this agent for want of
      a credential, and the remedy -- signing in -- is outside this page, so a
      Connect here would spend a launch to arrive at the same sentence. Only
@@ -95,15 +91,24 @@ export function stageOf(row: ExtAgentRow): Stage {
      its credential has since done. The way back is the card's Test, which
      re-measures. */
   if (!row.enabled && (row.kind === 'cli' || row.kind === 'acp') && row.needs_auth) return 'unauthorized'
-  if (!row.configured) return 'add'
-  if (row.enabled) return 'live'
   /* Out of service and its preset has moved to another transport. Connecting it
      is a remove plus an add, not a flag, so it is its own stage rather than a
      variant of `off` -- the flag left `upgrade_to` standing and the old command
      line in place, which is an agent the card offered to migrate and never did.
-     After `live`, so an agent still in service keeps offering the one verb its
-     state calls for, which is disconnect. */
-  if (row.upgrade_to) return 'stale'
+     Off the roster only, so an agent still in service keeps offering the one
+     verb its state calls for, which is disconnect; configured, because the
+     flag only ever lands on a stored row and a preset must stay an add. After
+     `unauthorized`: a refused handshake is settled by signing in, not by a
+     migration this row cannot pass either. Before the key stage: the
+     migration is written from the preset and needs no key, and a key taken
+     here would be stored on, and switch on, the old command line. */
+  if (row.configured && !row.enabled && row.upgrade_to) return 'stale'
+  /* An HTTP agent cannot answer without its key, so it is not connected by
+     writing an entry -- the key is the missing part, whether the entry exists
+     yet or not. */
+  if (row.kind === 'openai' && !row.has_api_key) return 'key'
+  if (!row.configured) return 'add'
+  if (row.enabled) return 'live'
   return 'off'
 }
 

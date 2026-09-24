@@ -400,17 +400,19 @@ function testPress(row: ExtAgentRow, shown: Shown): string {
   return t(stageOf(row) === 'unauthorized' ? 'gui.agent.test_label' : 'gui.agent.connect')
 }
 
-function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown): NoteSpec | null {
+/* `press` is the primary's current label, so a refused write's note names the
+   press the reader will actually make: Retry, or Connect once a key is typed
+   beside it. */
+function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string): NoteSpec | null {
   const agent = row.name
   const failed = s.failed[row.name]
   if (failed) {
-    const button = t('gui.retry')
-    const spec = remedied(agent, failed.remedy || null, button, failed.detail)
+    const spec = remedied(agent, failed.remedy || null, press, failed.detail)
     if (spec) return spec
     const write = refusedWrite(failed)
     return {
       title: write === 'save' ? t('gui.agent.bad_save') : t(write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', { agent }),
-      lead: write === 'save' ? t('gui.agent.said_save') : t(write === 'disconnect' ? 'gui.agent.said_disconnect' : 'gui.agent.said_connect', { button }),
+      lead: write === 'save' ? t('gui.agent.said_save') : t(write === 'disconnect' ? 'gui.agent.said_disconnect' : 'gui.agent.said_connect', { button: press }),
       raw: failed.detail,
       folded: false,
     }
@@ -535,15 +537,34 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   const shown = shownOf(row, s)
   const stage = stageOf(row)
   const testing = s.testing.includes(row.name) || row.test_running
-  const note = noteOf(row, s, shown)
   const saveKey = (): void => {
     const api_key = keyRef.current ? keyRef.current.value.trim() : ''
-    store.saveKey(row, api_key)
+    void store.saveKey(row, api_key)
   }
-  const needsKey = stage === 'key'
-  const primaryDisabled = shown === 'pending' || (needsKey && !keyTyped)
+  /* The field is drawn at every stage but live and stale, not only where a
+     key is missing: a stored key the endpoint rejects has no other way to be
+     replaced from here, and the refusal's own sentence says to replace it.
+     Not at stage live, whatever the row's last write did -- there the button
+     retries that write, and a key typed beside it would displace it. Not at
+     stale either: that connect is a migration, and a key would let the press
+     put the old command line on the roster instead. A missing key and a
+     write in flight hold the button; a key typed into the field is what the
+     press means, and the button says so rather than promising a retry it
+     will not make. */
+  const keyField = row.kind === 'openai' && stage !== 'live' && stage !== 'stale'
+  const keyMissing = stage === 'key'
+  const primaryDisabled = shown === 'pending' || (keyMissing && !keyTyped)
+  const verb = keyTyped ? 'gui.agent.connect' : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect'
+  /* A key typed beside a refusal supersedes every retry but a connect's: the
+     press will connect with the key, not save the refused change again, so
+     that refusal leaves the head and the note -- both read a state without
+     it, and say what they would have said otherwise. */
+  const failed = s.failed[row.name]
+  const refusalStands = !keyTyped || !failed || refusedWrite(failed) === 'connect'
+  const lineState = refusalStands ? s : { ...s, failed: Object.fromEntries(Object.entries(s.failed).filter(([name]) => name !== row.name)) }
+  const note = noteOf(row, lineState, shownOf(row, lineState), t(verb))
   const primary = (): void => {
-    if (needsKey) saveKey()
+    if (keyTyped) saveKey()
     else if (shown === 'failed') store.retry(row)
     else connect(row)
   }
@@ -603,7 +624,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
     actions = (
       <button className="mini go" disabled={primaryDisabled} onClick={primary}>
         {shown === 'pending' ? <Spin /> : null}
-        {t(shown === 'pending' ? pendingLabel(row, s) : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect')}
+        {t(shown === 'pending' ? pendingLabel(row, s) : verb)}
       </button>
     )
   }
@@ -614,7 +635,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
         <Tile row={row} />
         <div className="extAgents-meta">
           <h3>{row.name}</h3>
-          <StatusLine row={row} s={s} shown={shown} />
+          <StatusLine row={row} s={lineState} shown={shownOf(row, lineState)} />
         </div>
       </div>
       <div className="extAgents-body">
@@ -635,14 +656,14 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
             <ModelPill busy={shown === 'pending'} row={asAsked(row, s)} />
-            {needsKey ? (
+            {keyField ? (
               <label className="extAgents-fld">
                 <span className="extAgents-k">{t('gui.agent.key')}</span>
                 <KeyInput
                   aria-label={t('gui.agent.key')}
                   onChange={(e) => setKeyTyped(!!e.target.value.trim())}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && keyTyped) saveKey()
+                    if (e.key === 'Enter' && keyTyped && !primaryDisabled) saveKey()
                   }}
                   placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
                   ref={keyRef}

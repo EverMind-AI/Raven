@@ -163,6 +163,35 @@ describe('connectRow', () => {
   })
 })
 
+describe('saveKey', () => {
+  it('follows a key edit on a row that is off with the switch, and leaves a row that is on alone', async () => {
+    const off = row({ name: 'off', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const on = row({ name: 'on', kind: 'openai', configured: true, enabled: true, has_api_key: true })
+    const { acts } = install([off, on])
+    await store.saveKey(off, 'sk-1')
+    await store.saveKey(on, 'sk-2')
+    expect(acts).toEqual([
+      ['update', 'off', { api_key: 'sk-1' }],
+      ['toggle', 'off', { enabled: true }],
+      ['update', 'on', { api_key: 'sk-2' }],
+    ])
+  })
+
+  it('writes a preset from its key with the description drafted for it, and does not switch on behind a refused edit', async () => {
+    const preset = row({ name: 'p', kind: 'openai' })
+    const off = row({ name: 'off', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const { acts } = install([preset, off], (op) => (op === 'update' ? 'no' : null))
+    store.describe(preset, 'Odd jobs')
+    await store.saveKey(preset, 'sk-1')
+    await store.saveKey(off, 'sk-2')
+    expect(acts).toEqual([
+      ['connect', 'p', { api_key: 'sk-1', description: 'Odd jobs' }],
+      ['update', 'off', { api_key: 'sk-2' }],
+    ])
+    expect(store.get().failed.off?.op).toBe('update')
+  })
+})
+
 describe('recheck', () => {
   it('re-measures the machine and remembers a row that is still absent', async () => {
     const r = row({ probe_status: 'missing' })

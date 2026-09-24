@@ -256,10 +256,20 @@ export function disconnectRow(row: ExtAgentRow): void {
 
 /* The credential, and the connect that spends it: an entry that exists takes
    the key as an edit; one that does not is written from its preset with the
-   key in hand. */
-export function saveKey(row: ExtAgentRow, api_key: string): void {
+   key in hand, and with whatever the reader wrote about it while it was still
+   a preset. An edit on a row that is off is followed by the switch: the
+   server does not prove a key written to a row that is off -- only the switch
+   asks the endpoint -- so the edit alone would store it untried and leave the
+   row off, and to the reader the two are one press. Not when the edit itself
+   was refused. */
+export async function saveKey(row: ExtAgentRow, api_key: string): Promise<void> {
   if (!api_key) return
-  void act(row, row.configured ? 'update' : 'connect', { api_key })
+  if (!row.configured) {
+    const description = get().drafts[row.name]
+    return act(row, 'connect', description ? { api_key, description } : { api_key })
+  }
+  await act(row, 'update', { api_key })
+  if (!row.enabled && !get().failed[row.name]) await act(row, 'toggle', { enabled: true })
 }
 
 /* What this agent is good at, as the reader words it. A row that exists takes
