@@ -7,7 +7,7 @@ import { show as menuAt } from '../../state/menu'
 import { show as toast } from '../../state/toast'
 import * as deliveries from './deliveries'
 import {
-  RENDERED, appFor, canOpenInApp, copyToClip, extOf, fileURL, pageURL,
+  RENDERED, TWO_VIEWS, appFor, canOpenInApp, copyToClip, extOf, fileURL, pageURL,
   hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
 } from './store'
 import * as store from './store'
@@ -436,7 +436,7 @@ function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Eleme
         <span className="nm">{t('gui.ws.file_none')}</span>
       )}
       <span className="fsp" />
-      {f && RENDERED[f.kind] ? (
+      {f && TWO_VIEWS[f.kind] ? (
         <div className="kseg">
           {([[false, 'gui.ws.file_rendered'], [true, 'gui.ws.file_source']] as Array<[boolean, string]>).map(([raw, key]) => (
             <button
@@ -452,24 +452,24 @@ function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Eleme
           ))}
         </div>
       ) : null}
-      {f && (f.kind === 'pdf' || f.kind === 'html') ? (
-        <button
-          className="ghost-ic tipdn"
-          data-tip={t('gui.ws.file_newtab')}
-          aria-label={t('gui.ws.file_newtab')}
-          /* A tab granted the same run the pane was: the reader asked once, for
-             this file, and a tab that still refused would send them to save the
-             file and open it by hand -- which is the longer way round to the
-             same execution, with none of the isolation this one keeps. */
-          onClick={() => window.open(
-            f.kind === 'pptx' ? renderURL(f.path) : running ? runURL(f.path) : fileURL(f.path),
-            '_blank', 'noopener')}
-        >
-          <Ico d={ICO.ext} />
-        </button>
-      ) : null}
       {f ? (
         <span className="workspace-file-acts">
+          {f.kind === 'pdf' || f.kind === 'html' ? (
+            <button
+              className="ghost-ic tipdn"
+              data-tip={t('gui.ws.file_newtab')}
+              aria-label={t('gui.ws.file_newtab')}
+              /* A tab granted the same run the pane was: the reader asked once, for
+                 this file, and a tab that still refused would send them to save the
+                 file and open it by hand -- which is the longer way round to the
+                 same execution, with none of the isolation this one keeps. */
+              onClick={() => window.open(
+                f.kind === 'pptx' ? renderURL(f.path) : running ? runURL(f.path) : fileURL(f.path),
+                '_blank', 'noopener')}
+            >
+              <Ico d={ICO.ext} />
+            </button>
+          ) : null}
           {/* Saved by the browser, so on a remote serve the bytes reach the
               reader's machine rather than the gateway's. The folder button and
               a delivery card do not stand in for it: the folder opens where the
@@ -519,7 +519,7 @@ function diffLineCls(line: string): string {
 
 function FileBody({ f, running, onRun }: { f: WsFile; running: boolean; onRun: () => void }): JSX.Element {
   const [broken, setBroken] = useState(false)
-  const asSource = f.raw || !RENDERED[f.kind]
+  const asSource = TWO_VIEWS[f.kind] ? f.raw : !RENDERED[f.kind]
   const asImage = f.kind === 'img' || (f.kind === 'svg' && !asSource)
   const asFrame = (f.kind === 'pdf' || f.kind === 'html') && !asSource
   const asDeck = f.kind === 'pptx'
