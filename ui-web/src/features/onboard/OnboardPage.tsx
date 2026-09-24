@@ -36,8 +36,14 @@ function useBody(body: StepBody): void {
   useSyncExternalStore(body.subscribe, () => `${body.loaded() ? 1 : 0}:${body.done() ? 1 : 0}`)
 }
 
+/* No gate on `loaded()`. The step's own body knows what it can draw before its
+   data lands, and every one of them is safe on the empty snapshot the store
+   starts with. Gating here cost the whole step: the frame rendered in 77ms and
+   then held one line of text for the 6.4s the settings payload took, because
+   the model step's body is the settings model page and that page waits on the
+   provider catalogue. A reader who has just installed Raven was given a blank
+   screen at the exact moment they were deciding whether the install worked. */
 function Body({ body }: { body: StepBody }): JSX.Element {
-  if (!body.loaded()) return <div className="ob-loading">{t('gui.onb.loading')}</div>
   const Draw = body.Body
   return <Draw />
 }
