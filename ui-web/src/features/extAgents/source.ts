@@ -322,15 +322,24 @@ const REMEDY_KINDS: ReadonlySet<string> = new Set<Remedy['kind']>([
   'silent',
   'upgrade',
   'exited',
+  'runtime',
 ])
 
 /* A remedy off the wire, or null for anything that is not one. Read from a row
    and from a refused call's `data` alike, so both land in the one shape. A step
    to type is kept only beside the command that opens the place to type it. */
 export function remedyOf(raw: unknown): Remedy | null {
-  const r = raw as { kind?: unknown; command?: unknown; then?: unknown } | null | undefined
+  const r = raw as { kind?: unknown; command?: unknown; then?: unknown; needs?: unknown; found?: unknown } | null | undefined
   if (!r || typeof r.kind !== 'string' || !REMEDY_KINDS.has(r.kind)) return null
   const command = typeof r.command === 'string' ? r.command : ''
   const then = command && typeof r.then === 'string' ? r.then : ''
-  return { kind: r.kind as Remedy['kind'], command, ...(then ? { then } : {}) }
+  const needs = typeof r.needs === 'string' ? r.needs : ''
+  const found = typeof r.found === 'string' ? r.found : ''
+  return {
+    kind: r.kind as Remedy['kind'],
+    command,
+    ...(then ? { then } : {}),
+    ...(needs ? { needs } : {}),
+    ...(found ? { found } : {}),
+  }
 }

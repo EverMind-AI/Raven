@@ -4774,6 +4774,10 @@ def test_a_refusal_the_provider_made_is_named_by_the_status_it_gave(answer: str,
     Measured on qwen 0.24.4 against a stand-in endpoint answering each status;
     the first is the connect this was written for, a model withdrawn from a free
     tier. All three came back as the agent's English error and nothing else.
+
+    The step is `/auth`, not `/model`: `/model` picks among the models already
+    registered, and qwen's own OpenRouter preset registers two free models
+    OpenRouter has since withdrawn, so its list offers only dead ones.
     """
     from types import SimpleNamespace
 
@@ -4782,8 +4786,8 @@ def test_a_refusal_the_provider_made_is_named_by_the_status_it_gave(answer: str,
 
     said = f"request failed: [-32603] {answer}"
     text, remedy = probe_mod._refusal(SimpleNamespace(preset="qwen_code", kind="acp"), said, answer)
-    assert remedy == Remedy(kind, "qwen", "/model")
-    assert "run `qwen` in a terminal and type `/model` there" in text
+    assert remedy == Remedy(kind, "qwen", "/auth")
+    assert "run `qwen` in a terminal and type `/auth` there" in text
     assert text.endswith(f"It said: {said}"), "the agent's own words stay in the record"
 
     # No known way to switch this agent's model: what happened, and no command.

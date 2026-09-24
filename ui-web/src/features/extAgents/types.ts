@@ -120,10 +120,26 @@ export interface ExtAgentsSource {
    `model`, `billing`, `quota` and `network` are its model provider refusing or
    out of reach; `silent`, `upgrade` and `exited` are how it failed to answer. */
 export interface Remedy {
-  kind: 'sign_in' | 'setup' | 'api_key' | 'download' | 'model' | 'billing' | 'quota' | 'network' | 'silent' | 'upgrade' | 'exited'
+  kind:
+    | 'sign_in'
+    | 'setup'
+    | 'api_key'
+    | 'download'
+    | 'model'
+    | 'billing'
+    | 'quota'
+    | 'network'
+    | 'silent'
+    | 'upgrade'
+    | 'exited'
+    | 'runtime'
   command: string
   /* What to type once `command` is running, when the fix is a step inside the
      agent rather than the command itself -- Qwen Code's `/auth`. Only ever
      beside a command. */
   then?: string
+  /* For `runtime`: the Node.js the agent's package declares it needs (`22`),
+     and the one this machine launched it with (`18.20.8`). */
+  needs?: string
+  found?: string
 }

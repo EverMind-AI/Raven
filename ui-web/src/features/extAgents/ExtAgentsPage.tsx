@@ -321,7 +321,10 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
    sentence instead of leading into a command that is not there. `then` says the
    command is only the way in and a step follows it. Every key is written out,
    so the catalogue gate reads each one. */
-const FIX_SAY: Record<Remedy['kind'], (vars: { agent: string; button: string }, command: boolean, then: boolean) => string> = {
+const FIX_SAY: Record<
+  Remedy['kind'],
+  (vars: { agent: string; button: string }, command: boolean, then: boolean, remedy: Remedy) => string
+> = {
   sign_in: (v, command) => (command ? t('gui.agent.fix_sign_in', v) : t('gui.agent.fix_sign_in_bare', v)),
   setup: (v, command, then) =>
     !command ? t('gui.agent.fix_sign_in_bare', v) : then ? t('gui.agent.fix_setup_then', v) : t('gui.agent.fix_setup', v),
@@ -334,6 +337,14 @@ const FIX_SAY: Record<Remedy['kind'], (vars: { agent: string; button: string }, 
   silent: (v, command) => (command ? t('gui.agent.fix_silent', v) : t('gui.agent.fix_silent_bare', v)),
   upgrade: (v, command) => (command ? t('gui.agent.fix_upgrade', v) : t('gui.agent.fix_upgrade_bare', v)),
   exited: (v) => t('gui.agent.fix_exited', v),
+  /* Both versions or neither: without them the sentence would name no Node.js,
+     and what is left is a launch that quit. */
+  runtime: (v, command, _then, r) =>
+    !r.needs || !r.found
+      ? t('gui.agent.fix_exited', v)
+      : command
+        ? t('gui.agent.fix_runtime', { ...v, needs: r.needs, found: r.found })
+        : t('gui.agent.fix_runtime_bare', { ...v, needs: r.needs, found: r.found }),
 }
 
 /* A refusal, and the fix when the server named one. The server's sentence is
@@ -357,7 +368,7 @@ function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }
 }): JSX.Element {
   const command = remedy && remedy.kind !== 'api_key' ? remedy.command : ''
   const then = command ? remedy?.then || '' : ''
-  const say = remedy ? FIX_SAY[remedy.kind]({ agent, button }, !!command, !!then) : unknown
+  const say = remedy ? FIX_SAY[remedy.kind]({ agent, button }, !!command, !!then, remedy) : unknown
   return (
     <div className="extAgents-fix">
       <div>{lead(say)}</div>

@@ -1500,15 +1500,15 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_step_run': 'Run in a terminal:',
     'gui.agent.fix_step_type': 'Then type:',
     'gui.agent.fix_model':
-      'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch to another model as below, then press {button}:',
+      'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Set it up again as below and enter a model the provider still serves at the model step, then press {button}:',
     'gui.agent.fix_model_bare':
       'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch it to another model, then press {button}.',
     'gui.agent.fix_billing':
-      "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model as below, then press {button}:",
+      "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or set it up again as below and enter a free or cheaper model at the model step, then press {button}:",
     'gui.agent.fix_billing_bare':
       "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model, then press {button}.",
     'gui.agent.fix_quota':
-      "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch to another model as below:",
+      "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or set it up again as below and enter another model at the model step:",
     'gui.agent.fix_quota_bare':
       "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch it to another model.",
     'gui.agent.fix_network':
@@ -1525,6 +1525,10 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} is too old to be connected: this version does not support ACP yet. Upgrade it to the latest release, then press {button}.',
     'gui.agent.fix_exited':
       '{agent} quit as soon as it started. The original error below has what it said on its way out; once that is fixed, press {button}.',
+    'gui.agent.fix_runtime':
+      '{agent} quit as soon as it started because the Node.js it runs on is too old: it needs Node.js {needs} or newer, and this machine started it with {found}. Upgrade Node.js by running this command in a terminal, then press {button}:',
+    'gui.agent.fix_runtime_bare':
+      '{agent} quit as soon as it started because the Node.js it runs on is too old: it needs Node.js {needs} or newer, and this machine started it with {found}. Install Node.js {needs} or newer from nodejs.org, then press {button}.',
     'gui.agent.fix_unknown_connect':
       '{agent} could not connect. The original error below says why; once it is fixed, press {button}.',
     'gui.agent.fix_unknown_save':
@@ -1543,6 +1547,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.bad_silent': '{agent} did not answer in time',
     'gui.agent.bad_upgrade': '{agent} is too old to connect',
     'gui.agent.bad_exited': '{agent} quit as soon as it started',
+    'gui.agent.bad_runtime': "{agent}'s Node.js is too old",
     'gui.agent.bad_connect': '{agent} could not connect',
     'gui.agent.bad_save': 'The change was not saved',
     'gui.agent.bad_disconnect': '{agent} could not be disconnected',
@@ -3988,15 +3993,15 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_step_run': '在终端运行：',
     'gui.agent.fix_step_type': '进入后输入：',
     'gui.agent.fix_model':
-      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。按下面的步骤换一个模型，然后点「{button}」：',
+      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。按下面的步骤重新配置，在填模型的那一步换一个还能用的模型，然后点「{button}」：',
     'gui.agent.fix_model_bare':
       '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。换一个模型后点「{button}」。',
     'gui.agent.fix_billing':
-      '{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者按下面的步骤换一个模型，然后点「{button}」：',
+      '{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者按下面的步骤重新配置，在填模型的那一步换一个免费或更便宜的模型，然后点「{button}」：',
     'gui.agent.fix_billing_bare':
       '{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者换一个模型，然后点「{button}」。',
     'gui.agent.fix_quota':
-      '{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者按下面的步骤换一个模型：',
+      '{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者按下面的步骤重新配置，在填模型的那一步换一个模型：',
     'gui.agent.fix_quota_bare':
       '{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者换一个模型。',
     'gui.agent.fix_network':
@@ -4012,6 +4017,10 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_upgrade_bare': '{agent} 的版本太旧，还不支持 ACP 接入。升级到最新版后点「{button}」。',
     'gui.agent.fix_exited':
       '{agent} 一启动就退出了。展开下面的原始报错，能看到它退出前说了什么，处理好后点「{button}」。',
+    'gui.agent.fix_runtime':
+      '{agent} 一启动就退出了：启动它的 Node.js 版本太旧。它需要 Node.js {needs} 或更高版本，这台机器上用的是 {found}。在终端运行下面这条命令升级 Node.js，完成后点「{button}」：',
+    'gui.agent.fix_runtime_bare':
+      '{agent} 一启动就退出了：启动它的 Node.js 版本太旧。它需要 Node.js {needs} 或更高版本，这台机器上用的是 {found}。去 nodejs.org 安装 Node.js {needs} 或更高版本，装好后点「{button}」。',
     'gui.agent.fix_unknown_connect': '{agent} 没接入成功。可以展开下面的原始报错排查原因，处理好后点「{button}」。',
     'gui.agent.fix_unknown_save': '这项修改没保存成功。可以展开下面的原始报错查看原因，或点「{button}」再试一次。',
     'gui.agent.fix_unknown_test': '可以展开下面的原始报错排查原因，处理好后再点「{button}」。',
@@ -4028,6 +4037,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.bad_silent': '{agent} 没有及时回复',
     'gui.agent.bad_upgrade': '{agent} 版本太旧',
     'gui.agent.bad_exited': '{agent} 一启动就退出了',
+    'gui.agent.bad_runtime': '{agent} 的 Node.js 版本太旧',
     'gui.agent.bad_connect': '{agent} 没接入成功',
     'gui.agent.bad_save': '这项修改没保存成功',
     'gui.agent.bad_disconnect': '{agent} 没能断开',
