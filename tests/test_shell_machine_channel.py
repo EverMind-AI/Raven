@@ -740,11 +740,22 @@ def test_the_table_agrees_with_the_ssh_on_this_computer(command, expected):
     if not shutil.which("ssh"):
         pytest.skip("no ssh on this computer")
     words = command.split()[1:]
-    out = subprocess.run(["ssh", "-G", *words], capture_output=True, text=True, check=False, timeout=10).stdout
-    seen = dict(line.split(" ", 1) for line in out.splitlines() if line.startswith(("hostname ", "port ")))
-    if "-P" in words and "tag" not in out:
+
+    def resolved(args: list[str]) -> tuple[str, int]:
+        out = subprocess.run(["ssh", "-G", *args], capture_output=True, text=True, check=False, timeout=10).stdout
+        seen = dict(line.split(" ", 1) for line in out.splitlines() if line.startswith(("hostname ", "port ")))
+        return seen.get("hostname", ""), int(seen.get("port", 0) or 0)
+
+    if "tag" in words and resolved(["-P", "tag", "host.invalid"])[0] != "host.invalid":
+        # ``-P`` takes no value before OpenSSH 9.2, where ``tag`` would BE the
+        # host: this row's expectation is the newer client's reading, so it is
+        # skipped rather than failed. Asked as a question rather than read off a
+        # version string, and asked as its own invocation so it cannot perturb
+        # the row's own arguments (reviewed 2026-09-24: the earlier check looked
+        # for the literal "tag" in the output, which an older ssh prints as the
+        # hostname -- so it never skipped).
         pytest.skip("this ssh predates `-P tag` (OpenSSH < 9.2), where P takes no value")
-    assert (seen.get("hostname"), int(seen.get("port", 0))) == expected
+    assert resolved(words) == expected
 
 
 def test_the_value_taking_flags_are_ssh_s_own():
@@ -767,3 +778,33 @@ async def test_a_port_written_after_the_host_is_still_refused(registry, tmp_path
         out = await tool.execute(command=command)
         assert "Error:" in out and "conn_gpu" in out, command
         assert not marker.exists()
+
+
+def test_the_machine_lane_appears_once_a_first_machine_is_added(tmp_path, monkeypatch):
+    """The reviewed shape (2026-09-24): a process that starts with no machine,
+    then gets its first one from ``ops_connection_add``. The registry used to
+    serve exec from the copy it took at registration, so ``machine`` stayed
+    missing until a restart -- while every text after the add sent the model
+    to ``exec(machine=...)``. Written through the real writer and read back
+    through the real registry, not a patched ``load``."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.ops import connection_add, connections
+
+    store = tmp_path / "connections.json"
+    monkeypatch.setattr(connections, "store_path", lambda: store)
+    registry = ToolRegistry()
+    registry.register(ExecTool(working_dir=str(tmp_path)))
+
+    def served() -> dict:
+        (exec_def,) = [d for d in registry.get_definitions() if d["function"]["name"] == "exec"]
+        return exec_def["function"]
+
+    before = served()
+    assert "machine" not in before["parameters"]["properties"]
+    assert "machine" not in before["description"]
+
+    connection_add.write(dict(ROW, transport="ssh"))
+
+    after = served()
+    assert "machine" in after["parameters"]["properties"], "the lane the reply names is in the served schema"
+    assert "pass 'machine'" in after["description"]

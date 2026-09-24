@@ -34,9 +34,10 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
-- The connection registry resolves to the owner's home first
-  (`raven_home()/connections.json`), then beside the instance's own config,
-  then the home again for a first write. A sub-agent runs on a rendered
+- The connection registry falls back to the owner's home
+  (`raven_home()/connections.json`) when there is none beside the instance's
+  own config, and a first write lands there. A list beside the config still
+  comes first, so a `--config` host keeps its own file. A sub-agent runs on a rendered
   config in a state directory of its own and is handed `RAVEN_HOME`, not a
   copy of the file; resolved beside the config alone, Raven-Code read an
   empty directory while the owner's machines sat one level up, and reached

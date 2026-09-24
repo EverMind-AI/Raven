@@ -259,6 +259,19 @@ def test_a_preexisting_own_registry_stays(grounded, tmp_path):
     assert grounded.connections_registry() == own
 
 
+def test_an_own_registry_stays_after_a_home_registry_appears(grounded, tmp_path):
+    """An agent's first add writes a home registry with no owner action; an
+    install that kept its own list must not drop it at the next launch
+    (reviewed 2026-09-24)."""
+    own = tmp_path / "state" / "connections.json"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    own.write_text("[]")
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "connections.json").write_text("[]")
+    assert grounded.connections_registry() == own
+
+
 # --- the visible tool face ----------------------------------------------------
 
 

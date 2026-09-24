@@ -292,18 +292,23 @@ CONNECTIONS_ENV = "RAVEN_CONNECTIONS"
 def store_path() -> Path:
     """Where this instance reads its machines, and where a first add lands.
 
-    The env var when set; else the owner's home (``raven_home()``) when a
-    registry is there; else the one beside this instance's own config when THAT
-    exists; else the owner's home, which is where a machine added now belongs.
+    The env var when set; else the registry beside this instance's own config
+    when one is there; else the owner's home (``raven_home()``), which is also
+    where a machine added now belongs.
 
-    The home comes before "beside the config" because a sub-agent runs on a
-    rendered config of its own, in a state directory of its own, and the host
-    hands it ``RAVEN_HOME`` -- not a copy of the file. Resolved beside the
-    config alone, the coding agent read an empty directory while the owner's
-    machines sat one level up (measured 2026-09-22: ``exec(machine=...)``
-    answered "No connection is registered" on a home that listed two), and
-    the model then reached for the raw address instead. An install that kept
-    its own list beside a config elsewhere stays on it.
+    The home is the fallback rather than a plain "beside the config" because a
+    sub-agent runs on a rendered config in a state directory of its own, where
+    nothing is ever written, and the host hands it ``RAVEN_HOME`` -- not a copy
+    of the file. Resolved beside the config alone, the coding agent read that
+    empty directory while the owner's machines sat in the home (measured
+    2026-09-22: ``exec(machine=...)`` answered "No connection is registered" on
+    a home that listed two), and the model reached for the raw address instead.
+
+    A list beside the config comes first so that one never moves: a host started
+    with ``--config /x/config.json`` beside its own ``/x/connections.json``
+    keeps reading that file after a registry first appears in the home -- which
+    an agent's first add now writes without the owner doing anything (reviewed
+    2026-09-24: home-first switched such a host to the new file, silently).
     """
     override = os.environ.get(CONNECTIONS_ENV, "").strip()
     if override:
@@ -312,14 +317,11 @@ def store_path() -> Path:
     from raven.home import raven_home
 
     home = raven_home() / STORE
-    if home.is_file():
-        return home
     try:
         beside = Path(get_config_path()).expanduser().parent / STORE
     except Exception:  # noqa: BLE001 -- a missing config path is not a failure here
         return home
     return beside if beside.is_file() else home
-
 
 MISSING, UNREADABLE, OK = "missing", "unreadable", "ok"
 

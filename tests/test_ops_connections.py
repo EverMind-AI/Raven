@@ -426,16 +426,23 @@ def test_an_install_that_kept_its_own_list_beside_its_config_stays_on_it(tmp_pat
     assert [r["id"] for r in connections.load()] == ["mine"]
 
 
-def test_the_owners_home_wins_over_a_list_beside_the_config_when_both_exist(tmp_path, monkeypatch):
-    """Two lists, one truth: the owner's. A copy in a state directory is the
-    copy-once bug -- five byte-identical registries on one computer, 2026-08-25
-    -- and reading it would hide every machine the owner added since."""
+def test_a_list_beside_the_config_keeps_winning_after_a_home_registry_appears(tmp_path, monkeypatch):
+    """The reviewed shape (2026-09-24): a host started with ``--config`` beside
+    its own list. An agent's first add now writes a home registry with no
+    owner action, and home-first switched that host to the new file -- its own
+    machines still on disk, no longer read. The list beside the config stays
+    the answer."""
     state = _rendered_config(tmp_path, monkeypatch)
-    (state / "connections.json").write_text(json.dumps({"connections": []}))
-    theirs = tmp_path / "home" / "connections.json"
-    theirs.write_text(json.dumps({"connections": [{"id": "conn_gpu", "display_name": "GPU", "transport": "local"}]}))
+    own = state / "connections.json"
+    own.write_text(json.dumps({"connections": [{"id": "conn_cpu_32c", "display_name": "CPU", "transport": "local"}]}))
+    assert connections.store_path() == own
 
-    assert connections.store_path() == theirs
+    (tmp_path / "home" / "connections.json").write_text(
+        json.dumps({"connections": [{"id": "conn_new", "display_name": "New", "transport": "local"}]})
+    )
+
+    assert connections.store_path() == own
+    assert [r["id"] for r in connections.load()] == ["conn_cpu_32c"]
 
 
 def test_the_env_var_still_outranks_every_default(tmp_path, monkeypatch):

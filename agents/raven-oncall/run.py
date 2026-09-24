@@ -117,13 +117,13 @@ def connections_registry() -> Path:
     would see no machines at all, and a task naming a remote path would be
     read as naming a local one. A pointer rather than a copy: a copy is wrong
     from the first machine the owner adds, with nothing to say so. An install
-    that predates this and keeps its own list stays on it.
+    that predates this and keeps its own list stays on it -- checked first, so a
+    home registry appearing later (an agent's first add writes one) does not
+    quietly take its place (reviewed 2026-09-24: home-first dropped such a list
+    at the next launch, both rows still on disk and unread).
     """
-    host = raven_home() / "connections.json"
-    if host.is_file():
-        return host
     own = state_root() / "connections.json"
-    return own if own.is_file() else host
+    return own if own.is_file() else raven_home() / "connections.json"
 
 
 def seed_guide(workspace: Path) -> None:

@@ -200,14 +200,3 @@ def describe() -> str:
         "machine time, and coming back is ops_check_later. A cron job and a file "
         "of your own do the same arithmetic with none of the record."
     )
-
-
-# What a machine is asked about itself, the moment it is reached. Read off the
-# box rather than typed by the owner, so the row cannot say 64 cores about a
-# machine with 32. Mirrors the CLI's probe line.
-_PROBE = (
-    "echo CORES=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null); "
-    "echo MEM=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}'); "
-    "echo GPU=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | paste -sd'|' -); "
-    "echo LIBC=$(ldd --version 2>/dev/null | head -1)"
-)

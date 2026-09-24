@@ -41,8 +41,9 @@ raven ops connection add --id local-lab --name "Local lab" \
   --non-interactive
 ```
 
-注册会写入 raven 家目录（`RAVEN_HOME`，默认 `~/.raven`）下的 `connections.json`，
-或 `RAVEN_CONNECTIONS` 指定位置；家目录里没有时，仍会读放在别处 config 旁的那份。
+注册表的位置:有 `RAVEN_CONNECTIONS` 就用它指的文件;否则当前 config 旁边有
+`connections.json` 就用那份;都没有时用 raven 家目录(`RAVEN_HOME`,默认 `~/.raven`)下的那份,
+第一次注册也写在这里。
 子代理各自用渲染出的 config 跑在自己的状态目录里、继承家目录，所以读到的是
 主人的注册表，不是一份副本。SSH 注册还可能在 `~/.ssh/config` 写入受管理的别名；
 只记录私钥路径，不记录私钥内容。不要把密钥或密码放进任务消息。

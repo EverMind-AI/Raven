@@ -9,7 +9,8 @@
     "deliver_files"
   ],
   "run": [
-    "exec"
+    "exec",
+    "ops_connection_add"
   ],
   "net": [
     "web_search",
