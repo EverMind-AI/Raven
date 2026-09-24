@@ -21,15 +21,15 @@
   <a href="https://github.com/user-attachments/assets/ed33ed0f-1f28-45cf-bbf5-7de49785def8"><img src="https://github.com/user-attachments/assets/ed33ed0f-1f28-45cf-bbf5-7de49785def8" alt="Raven unified surface and agent workflow" width="100%"></a>
 </p>
 
-<p align="center"><em>一个入口，全领域 Agent 协同：Raven 生成并编排任务 DAG，驱动多个专业 Agent 协作完成复杂任务。</em></p>
+<p align="center"><em>一个入口，连接所有 Agent：Raven 为复杂任务生成 DAG，并编排多个专业 Agent。</em></p>
 
-Raven 是 **The Harness of Harnesses**——一个持续自我演进的多 Agent 编排生态。作为 **Host Agent（宿主 Agent）**，它通过统一入口连接专业 Agent，负责任务委派、执行协调和结果整合。Raven 的长期目标是将这种编排能力扩展到不同设备、环境和领域。
+Raven 是 **The Harness of Harnesses**——一个自我演进的多 Agent 协作生态。作为 **Host Agent（宿主 Agent）**，它通过统一入口汇聚各类专业 Agent，负责委派任务、协调执行并整合结果。长远来看，Raven 希望把这种编排能力延伸到不同的设备、环境与领域。
 
-基于 EverMind 的自进化 harness 引擎，并由 [EverOS](https://github.com/EverMind-AI/EverOS) 提供支持，Raven 跨会话保存上下文，持续改进 Agent harness 与协作工作流。
+Raven 构建于 EverMind 的自进化 harness 引擎之上，由 [EverOS](https://github.com/EverMind-AI/EverOS) 驱动，跨会话保留记忆，并持续改进 Agent harness 与协作工作流。
 
-**内置 Agent：** **Raven-Research**、**Raven-Code**、**Raven-Design** 和 **Raven-Oncall** 支持研究、编程、视觉设计和无人值守流程自动化。
+**内置 Agent：** **Raven-Research**、**Raven-Code**、**Raven-Design** 与 **Raven-Oncall**，分别覆盖研究、编程、视觉设计与无人值守的流程自动化。
 
-> Raven 目前处于 pre-alpha 阶段，接口和配置可能快速变化。
+> Raven 目前处于 pre-alpha 阶段，接口与配置可能会快速变化。
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f"><img src="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
@@ -39,13 +39,13 @@ Raven 是 **The Harness of Harnesses**——一个持续自我演进的多 Agent
 
 ## ❯❯ 内置 Agent
 
-Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内置 Agent 在各自领域提供**先进水平（SOTA）的性能**，结合可复用的 harness 组件、领域专用工具、技能和 Agent 循环。Raven 可以将聚焦任务委派给单个 Agent，也可以在共享工作流中编排多个 Agent。它们共享的 harness 由 **Raven Evolver** 持续改进，这是一个独立工具，将 Raven 作为库调用，并基于基准测试评估候选的 harness 变更；它用于开发这些 Agent，而不是运行在它们内部。
+Raven 采用模块化架构，专为 harness 自进化与子 Agent 创建而设计。四个内置 Agent 将可复用的 harness 组件与各领域专用的工具、技能和 Agent 循环相结合，在各自领域均达到**业界领先（SOTA）水平**。Raven 既可以把单一任务委派给某个 Agent，也可以在同一工作流中编排多个 Agent 协作。这些 Agent 共用的 harness 由 **Raven Evolver** 改进。Evolver 是一个独立工具，以库的形式调用 Raven，并在基准测试上评估候选的 harness 改动；它服务于 Agent 的研发过程，并不运行在 Agent 内部。
 
-> 四个 Agent 均已内置，开箱即可进行编排。
+> 四个 Agent 均已内置，开箱即可参与编排。
 
 ### ❯ Raven-Research
 
-**Raven-Research** 为复杂问题、文献综述与技术分析提供**自主深度研究**能力。它交付清晰、结构化且来源可追溯的研究报告，帮助用户理解陌生领域、比较不同方案，并作出有依据的决策。
+**Raven-Research** 为复杂问题、文献综述与技术分析提供**自主深度研究**能力。它输出清晰、结构化且来源可追溯的研究报告，帮助用户了解陌生领域、比较不同方案，做出有据可依的决策。
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02"><img src="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
@@ -55,7 +55,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 ### ❯ Raven-Code
 
-**Raven-Code** 支持**智能体驱动的软件开发**，将需求转化为可运行、经过测试的代码。它支持功能实现、调试、重构、数据处理与数据分析，帮助用户在遵循项目规范的前提下构建新能力、解决问题并提升代码质量。
+**Raven-Code** 提供 **Agent 驱动的软件开发**能力，把需求转化为可运行、经过测试的代码。它覆盖功能实现、调试、重构、数据处理与数据分析，在遵循项目既有规范的前提下，帮助用户开发新功能、修复问题并提升代码质量。
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e"><img src="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="95%"></a>
@@ -71,7 +71,7 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 ### ❯ Raven-Design
 
-**Raven-Design** 提供**视觉设计**能力，将想法与内容转化为精美的视觉作品。它支持 PowerPoint 幻灯片、品牌素材、图表、示意图和网页界面创作，通过持续优化布局、字体与视觉一致性，帮助用户清晰表达信息，将创意变为作品。
+**Raven-Design** 提供**视觉设计**能力，把想法与内容转化为精美的视觉作品。它可以制作 PowerPoint 演示文稿、品牌素材、图表、示意图和网页界面，并优化布局、字体与视觉一致性，帮助用户清晰传达信息、让创意落地。
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="95%"></a>
@@ -87,13 +87,13 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 ### ❯ Raven-Oncall
 
-**Raven-Oncall** 为实验、优化与持续监控提供**无人值守的流程自动化**能力。它自主推进从启动到完成的整个工作流程，支持持续数小时乃至通宵运行并交付结果，仅在需要人工判断时请用户介入。
+**Raven-Oncall** 为实验、调优与持续监控提供**无人值守的流程自动化**能力。它自主推进工作流从启动到完成的全过程，可连续运行数小时乃至通宵并交付结果，只在需要人工判断时才请用户介入。
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="95%"></a>
 </p>
 
-<p align="center"><em>在 AI4AI 任务上，Raven-Oncall 的性能与成本均显著优于 Claude Code</em></p>
+<p align="center"><em>在 AI4AI 任务上，Raven-Oncall 的质量与成本均显著优于 Claude Code</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="95%"></a>
@@ -103,12 +103,11 @@ Raven 的模块化架构面向 harness 自进化和子 Agent 创建。四个内�
 
 ## ❯❯ 案例展示
 
-真实运行记录，每条都取自 Raven 的任务图。上方展示了 Raven 为该任务生成的多智能体编排图，
-下方是这次运行的产出。
+以下均为真实运行记录，每条都取自 Raven 的任务图。任务图展示 Raven 为该任务生成的编排，下方是本次运行的产出。
 
 <table>
 <tr>
-<td valign="top"><p align="center"><b>用 Godot 4 做的 FPS Boss 竞技场游戏（自主运行约 4 天）</b></p></td>
+<td valign="top"><p align="center"><b>用 Godot 4 开发的 FPS Boss 竞技场游戏（自主运行约 4 天）</b></p></td>
 </tr>
 <tr>
 <td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
@@ -124,8 +123,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>关于宋代居家美学的演示文稿（成本约 5.5 元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>关于古希腊如何被漂白的演示文稿（成本约 5.5 元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>演示文稿：宋代居家美学（成本约 5.5 元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>演示文稿：古希腊是怎样变“白”的（成本约 5.5 元）</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489"><img src="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -139,8 +138,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>关于流行音乐如何被制造出来的演示文稿（成本约 5.5 元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>关于百年抽象艺术的演示文稿（成本约 5.5 元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>演示文稿：流行音乐是如何被制造出来的（成本约 5.5 元）</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>演示文稿：抽象艺术百年（成本约 5.5 元）</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
@@ -154,8 +153,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>关于六个智能体编排框架横向对比的海报</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>关于参数扫描的数据分析</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>海报：六个 Agent 编排框架横向对比</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>数据分析：参数扫描</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4"><img src="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
@@ -169,8 +168,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>关于光污染如何偷走野生动物睡眠的海报</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>关于 GPS 为什么需要四颗卫星的网站</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>海报：光污染如何偷走野生动物的睡眠</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>网站：GPS 为什么需要第四颗卫星</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
@@ -184,8 +183,8 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>梁的极限载荷仿真，用二分法测出</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>溃坝仿真，调到水相不再越界</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>仿真：用二分法求出梁的极限载荷</b></p></td>
+<td width="50%" valign="top"><p align="center"><b>仿真：溃坝模拟，调优至水相不再越界</b></p></td>
 </tr>
 <tr>
 <td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>
@@ -199,7 +198,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 ## ❯❯ 连接第三方 Agent
 
-Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 连接并编排 Agent，并提供 13 个**第三方 Agent**的预设，简化设置、任务委派和共享工作流中的协作。通过统一界面在 Raven 中试用这些 Agent！
+Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 接入并编排 Agent，并内置 13 个**第三方 Agent** 预设，简化接入配置、任务委派以及在共享工作流中的协作。欢迎在 Raven 的统一界面中体验这些 Agent！
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
@@ -209,10 +208,10 @@ Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 连接并编排 Agent，�
 
 ### 🤖 让 Agent 帮你安装
 
-让你自己的 Agent 帮你安装 Raven。把下面这段提示词复制给任意一个能读取网页、执行 shell 命令的 Agent，例如 Claude Code 或 Codex：
+你可以让自己的 Agent 代为安装 Raven。把下面这段提示词发给任意一个能读取网页并执行 shell 命令的 Agent（例如 Claude Code 或 Codex）：
 
 ```text
-阅读 https://evermind-ai.github.io/Raven/zh/quick-start/ 并按照其中的步骤安装 Raven；如果已经安装过，就把它更新到最新版本。
+阅读 https://evermind-ai.github.io/Raven/zh/quick-start/ 并按照其中的步骤安装 Raven；如果已经安装过，就将其更新。
 ```
 
 ### 📦 安装
@@ -235,7 +234,7 @@ Windows PowerShell 5.1 可能拒绝重定向，请改用直连安装地址：
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
-也可以从源码检出安装，适合基于代码做开发，或运行尚未发布的版本：
+如果要基于源码开发，或想使用尚未发布的版本，也可以从源码安装：
 
 ```bash
 git clone https://github.com/EverMind-AI/Raven.git
@@ -243,11 +242,11 @@ cd Raven
 ./install.sh
 ```
 
-以文件方式运行时，`install.sh` 会以可编辑（editable）模式安装该检出目录：Raven 及其内置插件都链接回你的工作树，TUI 包和内置页面也从该目录构建。通过管道运行时，即使身处克隆仓库中也始终安装已发布的 wheel，这样一行命令的安装就不会使用工作树中的任意内容。如需在管道方式下强制使用可编辑安装，请设置 `RAVEN_LOCAL_SRC=<dir>`。
+直接运行本地的 `install.sh` 文件时，脚本会以可编辑（editable）模式安装当前检出目录：Raven 及其内置插件都链接回你的工作树，TUI 包和 Web 页面也从该目录构建。而通过管道运行时，即使当前位于克隆仓库内，也始终安装已发布的 wheel，确保一行命令安装不会误用工作树中的内容。如需在管道方式下强制可编辑安装，请设置 `RAVEN_LOCAL_SRC=<dir>`。
 
-这些 Agent 随 Raven 一同发布：wheel 包包含 `agents/` 产品目录，首次使用时会将其复制到 Raven 主目录；源码安装则直接读取仓库中的目录。配置向导会逐一询问是否启用，并为所选 Agent 注册其适配的模型，或使用当前 Raven 的 LLM。详见 [`agents/README.md`](agents/README.md)。
+内置 Agent 随 Raven 一同分发：wheel 包自带 `agents/` 目录，首次使用时会复制到 Raven 主目录；源码安装则直接读取仓库中的该目录。配置向导会逐个询问：该 Agent 是使用其调优所用的模型（需要单独的 key），还是直接使用当前 Raven 的 LLM。这一步不做注册：只要目录存在，Agent 就会出现在名册中。详见 [`agents/README.md`](agents/README.md)。
 
-在文档站了解更多 Raven 信息。
+在文档站了解更多关于 Raven 的内容。
 
 **[阅读文档](https://evermind-ai.github.io/Raven/zh/)**
 
@@ -255,11 +254,11 @@ cd Raven
 
 | 系统 | 能力 |
 | --- | --- |
-| **Agent 编排** | 协调 Agent，管理任务依赖和并行执行，将多步骤协作沉淀为可复用的工作流。 |
-| **Evolver** | 通过失败诊断、候选改进测试和可复现评估，保留优于基线的变更，推动 harness 自进化。 |
-| **EverOS 记忆** | 跨会话保留用户上下文、Agent 经验和世界知识，为后续任务召回相关记忆与可复用技能。 |
-| **SkillForge** | 从本地技能库、EverOS 记忆以及 [SkillHub 的 **114,190 项技能**](https://github.com/EverMind-AI/SkillCorpus#public-artifacts)中检索相关技能，按需为 Agent 提供专业能力。 |
-| **主动行为** | 结合事件监测与定时执行，预测用户需求，及时发出提醒并发起后续工作。 |
+| **Agent 编排** | 协调多个 Agent，管理任务依赖与并行执行，把多步骤协作沉淀为可复用的工作流。 |
+| **Evolver** | 诊断失败原因、测试候选改进，并保留在可复现评估中优于基线的改动，驱动 harness 自进化。 |
+| **EverOS 记忆** | 跨会话保留用户上下文、Agent 经验与世界知识，在后续任务中召回相关记忆和可复用技能。 |
+| **SkillForge** | 从本地技能库、EverOS 记忆以及 [SkillHub 的 **114,190 项技能**](https://github.com/EverMind-AI/SkillCorpus#public-artifacts)中检索相关技能，按需为 Agent 补充专业能力。 |
+| **主动行为** | 结合事件监测与定时执行，预判用户需求，及时提醒并发起后续工作。 |
 
 <br>
 <div align="right">
@@ -271,25 +270,25 @@ cd Raven
 
 ## ❯❯ 启动 WebUI
 
-Raven 的 WebUI 将对话、多 Agent 协作和工作区管理整合到浏览器中。你可以在同一界面与 Agent 对话、跟踪任务进度、查看文件和输出，以及浏览记忆与技能。
+Raven 的 WebUI 把对话、多 Agent 协作与工作区管理集中到浏览器中。你可以在同一个界面里与 Agent 对话、跟踪任务进度、查看文件与产出，并浏览记忆和技能。
 
 ```bash
 raven web
 ```
 
-该命令会在浏览器中打开 WebUI，并让 Raven 在后台持续运行。使用 `raven web --stop` 停止后台服务。
+该命令会在浏览器中打开 WebUI，并让 Raven 在后台持续运行；执行 `raven web --stop` 即可停止后台服务。
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/79de2a65-076d-4b57-930d-2f8123e3d580"><img src="https://github.com/user-attachments/assets/79de2a65-076d-4b57-930d-2f8123e3d580" alt="Raven WebUI new task page" width="90%"></a>
 </p>
 
-<p align="center"><em>新建任务：一个输入框，技能、剧本、知识库与记忆都在一侧。</em></p>
+<p align="center"><em>新建任务：一个输入框，技能、Playbook、知识库与记忆一键可达。</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/cc16c25a-8931-4e6b-a8df-9fae57997dde"><img src="https://github.com/user-attachments/assets/cc16c25a-8931-4e6b-a8df-9fae57997dde" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
-<p align="center"><em>子智能体：内置与第三方 Agent 汇总在同一张花名册里。</em></p>
+<p align="center"><em>子 Agent：所有已接入的 Agent，无论内置还是第三方，都汇集在同一份名册中。</em></p>
 
 ## ❯❯ EverMind 生态
 
@@ -297,7 +296,7 @@ raven web
   <a href="https://github.com/user-attachments/assets/65a5e3f1-dccb-496f-94f5-9782070ec8b4"><img src="https://github.com/user-attachments/assets/65a5e3f1-dccb-496f-94f5-9782070ec8b4" alt="The EverMind ecosystem: the EverMind mark and its slogan on an orbital field" width="100%"></a>
 </p>
 
-[EverMind](https://evermind.ai/) 将记忆研究、可用于生产环境的产品与实际集成连接为一个开源生态。
+[EverMind](https://evermind.ai/) 将记忆研究、生产级产品与落地集成连接成一个开源生态。
 
 <table>
 <tr>
@@ -305,34 +304,34 @@ raven web
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EverOS">EverOS</a></strong></td>
-<td>优先本地运行、以 Markdown 为原生格式的长期记忆运行时，面向 Agent 与用户。</td>
+<td>面向 Agent 与用户的长期记忆运行时，本地优先、以 Markdown 为原生格式。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
-<td>以记忆为核心、能够自我改进的 Agent harness，支持主动行为、上下文控制和技能演化。</td>
+<td>以记忆为核心、可自我改进的 Agent harness，支持主动行为、上下文控制与技能演化。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
-<td>用于跨设备、跨 Agent 个人记忆的 CLI 与 Agent 插件套件。</td>
+<td>面向跨设备、跨 Agent 个人记忆的 CLI 与 Agent 插件套件。</td>
 </tr>
 <tr>
 <th colspan="2">研究与评估</th>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/SkillCorpus">SkillCorpus</a></strong></td>
-<td>经过整理、可用于检索的 Agent 技能语料库，配套检索与评估工具。</td>
+<td>经过整理、可直接检索的 Agent 技能语料库，附带检索与评估工具。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EverAlgo">EverAlgo</a></strong></td>
-<td>为 EverOS 提供无状态的提取、排序、解析和记忆算子。</td>
+<td>为 EverOS 提供无状态的提取、排序、解析与记忆算子。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/HyperMem">HyperMem</a></strong></td>
-<td>基于超图的分层记忆，支持从粗到细检索长期对话内容。</td>
+<td>基于超图的分层记忆，支持对长期对话进行由粗到细的检索。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/MSA">MSA</a></strong></td>
-<td>Memory Sparse Attention，支持可扩展的潜在记忆与 100M Token 上下文。</td>
+<td>Memory Sparse Attention（记忆稀疏注意力），支持可扩展的潜在记忆与 100M Token 上下文。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EverMemBench">EverMemBench</a></strong></td>
@@ -340,14 +339,14 @@ raven web
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EvoAgentBench">EvoAgentBench</a></strong></td>
-<td>对 Agent 自进化、迁移效率、错误规避和技能使用进行纵向评估。</td>
+<td>从纵向维度评估 Agent 的自进化、迁移效率、错误规避与技能使用。</td>
 </tr>
 <tr>
 <th colspan="2"><a href="https://github.com/EverMind-AI/plugins">集成</a></th>
 </tr>
 <tr>
 <td><strong><a href="https://docs.openclaw.ai">OpenClaw</a></strong></td>
-<td><a href="https://github.com/EverMind-AI/plugins/tree/main/openclaw">OpenClaw 插件</a>，用于自动召回、记忆采集和会话记忆生命周期管理。</td>
+<td><a href="https://github.com/EverMind-AI/plugins/tree/main/openclaw">OpenClaw 插件</a>，支持自动召回、记忆采集与会话记忆的生命周期管理。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a></strong></td>
@@ -363,7 +362,7 @@ raven web
 </tr>
 </table>
 
-这些项目共同构成 EverMind 从研究到运行时的技术体系，将方法与基准转化为可复用的记忆基础设施、产品和 Agent 集成。
+这些项目共同构成了 EverMind 从研究到运行时的技术栈：让方法与基准沉淀为可复用的记忆基础设施、产品与 Agent 集成。
 
 <br>
 <div align="right">
@@ -374,8 +373,8 @@ raven web
 
 ## ❯❯ 参与贡献
 
-欢迎提交 issue 和 pull request。请先阅读[开发工作流](docs/dev.md)，遵循 [AGENTS.md](AGENTS.md) 中的仓库规则，并在 [GitHub Discussions](https://github.com/EverMind-AI/Raven/discussions) 中讨论设计方案。
+欢迎提交 issue 和 pull request。开始前请先阅读[开发工作流](docs/dev.md)并遵循 [AGENTS.md](AGENTS.md) 中的仓库规则；设计方案欢迎到 [GitHub Discussions](https://github.com/EverMind-AI/Raven/discussions) 讨论。
 
 ## ❯❯ 许可证
 
-[Apache 许可证 2.0](LICENSE)
+[Apache License 2.0](LICENSE)

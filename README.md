@@ -254,9 +254,10 @@ install through a pipe.
 
 The agent products ship with raven itself: a wheel carries the `agents/`
 product tree and copies it out to your raven home on first use, and a source
-checkout reads the tree in place. Setup asks about each product and registers
-the ones you take up, on the model it is tuned for or on this raven's LLM.
-See [`agents/README.md`](agents/README.md).
+checkout reads the tree in place. Setup asks, for each product, whether it
+runs on the model it is tuned for, which needs a key of its own, or on this
+raven's LLM. Nothing is registered: a folder is on the roster because it is
+there. See [`agents/README.md`](agents/README.md).
 
 Learn more about Raven on the documentation site.
 
