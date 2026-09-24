@@ -167,6 +167,14 @@ class SubagentRow(_Strict):
     )
     probe_status: Literal["ready", "attention", "missing", "unknown"]
     probe_detail: str
+    probe_missing: str | None = Field(
+        default=None,
+        description=(
+            "The executable the availability probe looked for and did not find, on a `missing` row: what to "
+            "install. For a preset launched through npx it is `npx`, which Node.js brings -- not the agent's own "
+            "installer. Null on every other row, and on a server that predates the field."
+        ),
+    )
     has_api_key: bool
     needs_auth: bool = Field(
         default=False,
@@ -185,8 +193,8 @@ class SubagentRow(_Strict):
         default=None,
         description=(
             "What the reader has to do before the last failed test can pass, as data a page renders in its "
-            "own language. Absent when the failure was not about a credential; last_test_detail stays the "
-            "English record either way."
+            "own language. Absent when no fix is known -- a credential, a provider, a key or a download; "
+            "last_test_detail stays the English record either way."
         ),
     )
     last_test_at_ms: int | None = None
@@ -2785,13 +2793,16 @@ class SubagentsInstanceSetModeResult(_Strict):
 
 
 class SubagentRemedy(_Strict):
-    """What fixes a refusal about a credential, as the page draws it."""
+    """What fixes a refused connect or test, as the page draws it."""
 
-    kind: Literal["sign_in", "setup", "api_key"] = Field(
+    kind: Literal["sign_in", "setup", "api_key", "download"] = Field(
         ...,
         description=(
             "sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive "
-            "setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page."
+            "setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page. download: "
+            "npx could not fetch the agent -- fixed in the network, the npm registry or the proxy; `command` is "
+            "the preset's launch command, which fetches it from a terminal with no time limit, sent only when the "
+            "row's command is the preset's word for word."
         ),
     )
     command: str | None = Field(None, description="The command that makes the fix on this machine, when one is known.")

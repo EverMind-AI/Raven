@@ -29,6 +29,9 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      large volume to stderr before answering.
 - ``flood``        - like ``ok``, but writes one stderr line past the reader's limit,
                      followed by an ordinary one, before answering.
+- ``npm_fetch_fails`` - dies before speaking with what npm 10 printed for an
+                     unreachable registry, stack trace and all: the shape ``npx``
+                     takes when it cannot fetch the adapter it was asked to run.
 - ``asks``         - requests something raven does not implement (``fs/read_text_file``,
                      declared unsupported in ``CLIENT_CAPABILITIES``) and, having been
                      refused, ends the turn with no content and nothing on stderr. This
@@ -110,6 +113,34 @@ import time
 MODE = os.environ.get("ACP_STUB_MODE", "ok")
 
 _INITIALIZED = False
+
+# npm 10.9.8, `npx -y @agentclientprotocol/claude-agent-acp@0.79.0` against
+# `npm_config_registry=http://127.0.0.1:9/`, 2026-09-23 -- verbatim but for the
+# node install prefix and the log path. The code line comes first and the
+# stack trace after it, which is why a reader of the last 400 characters never
+# sees the code.
+_NPM_ECONNREFUSED = """npm error code ECONNREFUSED
+npm error syscall connect
+npm error errno ECONNREFUSED
+npm error FetchError: request to http://127.0.0.1:9/@agentclientprotocol%2fclaude-agent-acp failed, reason: connect ECONNREFUSED 127.0.0.1:9
+npm error     at ClientRequest.<anonymous> (/opt/node/lib/node_modules/npm/node_modules/minipass-fetch/lib/index.js:130:14)
+npm error     at ClientRequest.emit (node:events:519:28)
+npm error     at emitErrorEvent (node:_http_client:108:11)
+npm error     at _destroy (node:_http_client:967:9)
+npm error     at onSocketNT (node:_http_client:987:5)
+npm error     at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+npm error   code: 'ECONNREFUSED',
+npm error   errno: 'ECONNREFUSED',
+npm error   syscall: 'connect',
+npm error   address: '127.0.0.1',
+npm error   port: 9,
+npm error   type: 'system'
+npm error }
+npm error
+npm error If you are behind a proxy, please make sure that the
+npm error 'proxy' config is set properly.  See: 'npm help config'
+npm error A complete log of this run can be found in: /home/someone/.npm/_logs/2026-09-23T14_16_44_007Z-debug-0.log
+"""
 
 # A real server mints a distinct id per session; the counter keeps the stub from
 # making concurrent sessions collide in a way no real agent would.
@@ -610,6 +641,10 @@ def main() -> None:
         # where the adapter's install/startup fails.
         print("stub: cannot start, the registry is unreachable", file=sys.stderr, flush=True)
         sys.exit(3)
+    if MODE == "npm_fetch_fails":
+        sys.stderr.write(_NPM_ECONNREFUSED)
+        sys.stderr.flush()
+        sys.exit(1)
     if MODE == "noisy":
         sys.stdout.write("[plugins] stub diagnostics on stdout\n")
         sys.stdout.flush()

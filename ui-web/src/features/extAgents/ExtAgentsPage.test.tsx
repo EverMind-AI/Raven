@@ -437,7 +437,10 @@ describe('connecting', () => {
     })
     await mount()
     await click(buttonOf('off_one'))
-    expect(lineOf('off_one')).toBe('it did not answer a test message')
+    /* What failed, in the reader's words, and where to look: the card opens the
+       sheet, which has the steps and the server's sentence folded under them. */
+    const what = `gui.agent.bad_connect ${JSON.stringify({ agent: 'off_one' })}`
+    expect(lineOf('off_one')).toBe(`gui.agent.bad_open ${JSON.stringify({ what })}`)
     expect(rowNamed('off_one').querySelector('.extAgents-one')!.className).toContain('extAgents-one-bad')
     expect(controlOf('off_one')).toBe('gui.retry')
     expect(ledOf('off_one')).toBe('extAgents-led extAgents-led-bad')
@@ -505,7 +508,12 @@ describe('the sheet', () => {
       detail.close()
     })
     await openSheet('failed')
-    expect(sheetStatus()).toBe('gui.agent.hd_test_bad {"detail":"it returned nothing"}')
+    /* A failure the server named no fix for is still said in the reader's
+       words, with the server's sentence folded under it rather than shown. */
+    const said = `gui.agent.fix_unknown_test ${JSON.stringify({ button: 'gui.agent.test_label' })}`
+    const fix = sheet()!.querySelector('.extAgents-fix')!
+    expect(fix.firstElementChild!.textContent).toBe(`gui.agent.hd_test_bad ${JSON.stringify({ detail: said })}`)
+    expect(fix.querySelector('details.extAgents-raw')!.textContent).toBe('gui.agent.fix_rawit returned nothing')
     expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-bad')
   })
 
@@ -660,7 +668,12 @@ describe('the sheet', () => {
     await mount()
     await openSheet('ua')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.test_label'))
-    expect(sheetStatus()).toBe('gui.agent.hd_test_bad {"detail":"it connected and then answered nothing"}')
+    const said = `gui.agent.fix_unknown_test ${JSON.stringify({ button: 'gui.agent.test_label' })}`
+    const fix = sheet()!.querySelector('.extAgents-fix')!
+    expect(fix.firstElementChild!.textContent).toBe(`gui.agent.hd_test_bad ${JSON.stringify({ detail: said })}`)
+    expect(fix.querySelector('details.extAgents-raw')!.textContent).toBe(
+      'gui.agent.fix_rawit connected and then answered nothing',
+    )
   })
 })
 
@@ -759,6 +772,128 @@ describe('a refusal that names its fix', () => {
     const lead = say('gui.agent.fix_sign_in_bare', { agent: 'opencode', button: 'gui.agent.test_label' })
     expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
     expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+  })
+  it('says a download npx could not make, and gives the command that makes it with no time limit', async () => {
+    const r = row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false })
+    const command = 'npx -y @agentclientprotocol/claude-agent-acp@0.79.0'
+    const said = 'npx could not download it (ECONNREFUSED); check the network, the npm registry or the proxy'
+    install([r], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: said, remedy: { kind: 'download', command } } }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('Claude Code')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_download', { agent: 'Claude Code', button: 'gui.retry' }))
+    expect(fix()!.querySelector('.extAgents-cmd code')!.textContent).toBe(command)
+    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
+    /* The card says the same thing in a line, and points at the sheet. */
+    const what = say('gui.agent.bad_download', { agent: 'Claude Code' })
+    expect(lineOf('Claude Code')).toBe(say('gui.agent.bad_open', { what }))
+  })
+
+  it('offers no command for a download when the row\'s command is its own, not the preset\'s', async () => {
+    const r = row({ name: 'my-agent', preset: undefined, configured: true, enabled: false })
+    install([r], {
+      act: async (op) => {
+        if (op === 'toggle') throw { data: { detail: 'npx could not download it (ENOTFOUND)', remedy: { kind: 'download' } } }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('my-agent')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_download_bare', { agent: 'my-agent', button: 'gui.retry' }))
+    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+  })
+
+  it.each([
+    ['sign_in', 'gui.agent.bad_sign_in'],
+    ['setup', 'gui.agent.bad_setup'],
+    ['api_key', 'gui.agent.bad_api_key'],
+    ['download', 'gui.agent.bad_download'],
+  ])('puts a %s fix on the card as a line in the reader\'s words', async (kind, key) => {
+    const r = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
+    install([r], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: 'the English sentence', remedy: { kind, command: 'x' } } }
+        return [r]
+      },
+    })
+    await mount()
+    await click(buttonOf('Codex'))
+    expect(lineOf('Codex')).toBe(say('gui.agent.bad_open', { what: say(key, { agent: 'Codex' }) }))
+    expect(rowNamed('Codex').textContent).not.toContain('the English sentence')
+  })
+
+  it('says a failure with no fix in the reader\'s words too, and folds the server\'s sentence', async () => {
+    const r = row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false })
+    const said = 'sub-agent did not answer a test message: it did not answer within 180s'
+    install([r], { refuse: (op) => (op === 'connect' ? said : null) })
+    await mount()
+    await openSheet('Claude Code')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(
+      say('gui.agent.fix_unknown_connect', { agent: 'Claude Code', button: 'gui.retry' }),
+    )
+    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+    expect((fix()!.querySelector('.extAgents-raw') as HTMLDetailsElement).open).toBe(false)
+    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
+    expect(lineOf('Claude Code')).toBe(say('gui.agent.bad_open', { what: say('gui.agent.bad_connect', { agent: 'Claude Code' }) }))
+  })
+
+  it('says a refused disconnect did not disconnect, on the card and in the sheet', async () => {
+    const r = row({ name: 'Codex', preset: 'codex', configured: true, enabled: true })
+    install([r], { refuse: (op) => (op === 'toggle' ? 'subagent not found: Codex' : null) })
+    await mount()
+    await openSheet('Codex')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.disconnect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_unknown_disconnect', { agent: 'Codex', button: 'gui.retry' }))
+    expect(lineOf('Codex')).toBe(say('gui.agent.bad_open', { what: say('gui.agent.bad_disconnect', { agent: 'Codex' }) }))
+  })
+
+  it('says a refused edit was not saved, rather than that the agent did not connect', async () => {
+    const r = row({ name: 'Codex', preset: 'codex' })
+    install([r], { refuse: (op) => (op === 'model' ? 'model x is not on the menu' : null) })
+    await mount()
+    await act(async () => {
+      await store.setModel(r, 'x')
+    })
+    expect(lineOf('Codex')).toBe(say('gui.agent.bad_open', { what: say('gui.agent.bad_save', { agent: 'Codex' }) }))
+    await openSheet('Codex')
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_unknown_save', { agent: 'Codex', button: 'gui.retry' }))
+  })
+})
+
+/* An agent launched through npx is absent for want of Node.js, and its own
+   installer is the wrong thing to offer: without Node.js there is no npm to run
+   it with, and an agent installed some other way still launches through npx. */
+describe('an agent that is missing npx', () => {
+  const inst = (): Element | null => sheet()?.querySelector('.extAgents-inst') ?? null
+
+  it('offers Node.js, not the agent\'s own installer', async () => {
+    install([
+      row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false, probe_status: 'missing', probe_missing: 'npx' }),
+    ])
+    await mount()
+    await openSheet('Claude Code')
+    expect(inst()!.querySelector('.extAgents-about')!.textContent).toBe(
+      'gui.agent.needs_node ' + JSON.stringify({ agent: 'Claude Code', button: 'gui.agent.recheck' }),
+    )
+    expect(inst()!.querySelector('.extAgents-site')!.getAttribute('href')).toBe('https://nodejs.org')
+    expect(inst()!.querySelector('.extAgents-cmd')).toBeNull()
+  })
+
+  it('still offers the agent\'s own installer when the agent is what is missing', async () => {
+    install([
+      row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false, probe_status: 'missing' }),
+    ])
+    await mount()
+    await openSheet('Claude Code')
+    expect(inst()!.querySelector('.extAgents-about')).toBeNull()
+    expect(inst()!.querySelector('.extAgents-cmd code')!.textContent).toBe('npm install -g @anthropic-ai/claude-code')
   })
 })
 

@@ -63,6 +63,8 @@
 @media (prefers-reduced-motion: reduce) { .extAgents-led-busy { animation: none; } }
 .extAgents-one { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .extAgents-one-bad { color: var(--clay); }
+/* A row's refusal can carry a command, so it wraps rather than cutting it off. */
+.extAgents-row .extAgents-one-bad { white-space: normal; }
 .extAgents-one-work { font-family: var(--mono); font-size: 11.5px; color: var(--amber); display: flex; align-items: center; gap: 6px; }
 
 /* One control per row, and the buttons in a column are one size: Connect,
@@ -210,6 +212,7 @@
 /* Not installed: a read-only introduction, then how to get it. */
 .extAgents-about { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
 .extAgents-inst { margin-top: 16px; }
+.extAgents-inst .extAgents-about { margin-bottom: 10px; }
 .extAgents-cmd {
   display: flex; align-items: center; gap: 8px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px 7px 10px;

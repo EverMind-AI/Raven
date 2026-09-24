@@ -9,7 +9,7 @@ import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered, withCurrent } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
-import { CardGrid, Spin, Tile, connect, ordered, pendingLabel, shownOf } from './Rows'
+import { CardGrid, Spin, Tile, connect, ordered, pendingLabel, refusedWrite, shownOf } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
@@ -124,10 +124,15 @@ function CmdCopy({ cmd }: { cmd: string }): JSX.Element {
 /* The install block for an absent agent: the vendor's command with a copy
    button, and the vendor's site. */
 function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
-  const { site, cmd } = installOf(row)
+  const { site, cmd, node } = installOf(row)
   if (!site && !cmd) return null
   return (
     <div className="extAgents-inst">
+      {node ? (
+        <div className="extAgents-about">
+          {t('gui.agent.needs_node', { agent: row.name, button: t('gui.agent.recheck') })}
+        </div>
+      ) : null}
       <span className="extAgents-k">{t('gui.plug.install')}</span>
       {cmd ? <CmdCopy cmd={cmd} /> : null}
       {site ? (
@@ -315,32 +320,39 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
    it is said in the reader's language -- what is missing, the command that
    supplies it on a line of its own, and the button to press after -- with the
    agent's own words folded under it instead of put first. Without a remedy the
-   sentence is all there is, and it is shown as it came. */
-function Refusal({ agent, detail, remedy, button, lead = (say) => say }: {
+   reader is still told in their own language that it failed and what to press
+   (`unknown`), and the server's sentence is folded the same way: shown first it
+   was a red English paragraph, and all a reader could do with it was copy it. */
+function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }: {
   agent: string
   detail: string
   remedy: Remedy | null
   button: string
+  unknown: string
   lead?: (say: string) => string
 }): JSX.Element {
-  if (!remedy) return <>{lead(detail)}</>
-  const command = remedy.kind === 'api_key' ? '' : remedy.command
-  const say =
-    remedy.kind === 'api_key'
+  const command = remedy && remedy.kind !== 'api_key' ? remedy.command : ''
+  const say = !remedy
+    ? unknown
+    : remedy.kind === 'api_key'
       ? t('gui.agent.fix_api_key', { agent, button })
-      : !command
-        ? t('gui.agent.fix_sign_in_bare', { agent, button })
-        : remedy.kind === 'setup'
-          ? t('gui.agent.fix_setup', { agent, button })
-          : t('gui.agent.fix_sign_in', { agent, button })
+      : remedy.kind === 'download'
+        ? t(command ? 'gui.agent.fix_download' : 'gui.agent.fix_download_bare', { agent, button })
+        : !command
+          ? t('gui.agent.fix_sign_in_bare', { agent, button })
+          : remedy.kind === 'setup'
+            ? t('gui.agent.fix_setup', { agent, button })
+            : t('gui.agent.fix_sign_in', { agent, button })
   return (
     <div className="extAgents-fix">
       <div>{lead(say)}</div>
       {command ? <CmdCopy cmd={command} /> : null}
-      <details className="extAgents-raw">
-        <summary>{t('gui.agent.fix_raw')}</summary>
-        {detail}
-      </details>
+      {detail ? (
+        <details className="extAgents-raw">
+          <summary>{t('gui.agent.fix_raw')}</summary>
+          {detail}
+        </details>
+      ) : null}
     </div>
   )
 }
@@ -360,10 +372,25 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
   }
   if (shown === 'failed') {
     const failed = s.failed[row.name]
+    const write = failed ? refusedWrite(failed) : 'connect'
+    const button = t('gui.retry')
     return (
-      <div className={'extAgents-by extAgents-by-bad' + (failed?.remedy ? ' extAgents-by-fix' : '')}>
+      <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
         <span className="extAgents-led extAgents-led-bad" />
-        <Refusal agent={row.name} detail={failed?.detail || ''} remedy={failed?.remedy || null} button={t('gui.retry')} />
+        <Refusal
+          agent={row.name}
+          detail={failed?.detail || ''}
+          remedy={failed?.remedy || null}
+          button={button}
+          unknown={t(
+            write === 'save'
+              ? 'gui.agent.fix_unknown_save'
+              : write === 'disconnect'
+                ? 'gui.agent.fix_unknown_disconnect'
+                : 'gui.agent.fix_unknown_connect',
+            { agent: row.name, button },
+          )}
+        />
       </div>
     )
   }
@@ -374,13 +401,14 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
      verdict measured before the executable went away. */
   if (row.last_test_ok === false && shown !== 'missing') {
     return (
-      <div className={'extAgents-by extAgents-by-bad' + (row.last_test_remedy ? ' extAgents-by-fix' : '')}>
+      <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
         <span className="extAgents-led extAgents-led-bad" />
         <Refusal
           agent={row.name}
           detail={row.last_test_detail || ''}
           remedy={row.last_test_remedy || null}
           button={t('gui.agent.test_label')}
+          unknown={t('gui.agent.fix_unknown_test', { button: t('gui.agent.test_label') })}
           lead={(say) => t('gui.agent.hd_test_bad', { detail: say })}
         />
       </div>

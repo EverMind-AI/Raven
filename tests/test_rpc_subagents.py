@@ -218,6 +218,31 @@ async def test_list_groups_an_installed_but_untested_acp_preset_as_installed(
     assert by_name["OpenClaw"]["group"] == "uninstalled"
 
 
+async def test_a_missing_row_names_the_executable_to_install(config_path: Path, tmp_path: Path, monkeypatch) -> None:
+    """The page reads what to install off the row, and for a shim preset that is npx.
+
+    Codex launches through `npx`, so on a machine with neither npx nor any agent
+    the row is missing for want of Node.js -- which the agent's own installer
+    does not bring. A row that is not `missing` names nothing, and neither does
+    a listing that measured nothing.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / "hermes"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: str(bindir))
+    by_name = {row["name"]: row for row in (await subagents_list({}))["rows"]}
+    assert by_name["Codex"]["probe_status"] == "missing"
+    assert by_name["Codex"]["probe_missing"] == "npx"
+    assert by_name["OpenClaw"]["probe_missing"] == "openclaw"
+    assert by_name["Hermes Agent"]["probe_missing"] is None
+
+    unmeasured = (await subagents_list({"probe": False}))["rows"]
+    assert all(row["probe_missing"] is None for row in unmeasured)
+
+
 async def test_list_surfaces_a_malformed_config_section_instead_of_an_empty_list(
     config_path: Path,
 ) -> None:
@@ -605,6 +630,24 @@ async def test_a_refused_add_carries_the_fix_it_names(config_path: Path, monkeyp
     with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
         await subagents_add({"preset": "opencode"})
     assert "remedy" not in caught.value.data
+
+
+async def test_a_refused_add_that_npx_could_not_fetch_carries_the_download_fix(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    command = "npx -y @agentclientprotocol/codex-acp@1.1.14"
+
+    async def _unfetched(cfg):
+        return PingResult(False, "npx could not download it (ENOTFOUND)", Remedy("download", command))
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _unfetched)
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "codex"})
+    assert caught.value.data["remedy"] == {"kind": "download", "command": command}
 
 
 async def test_a_refused_add_of_a_cli_preset_stores_nothing_either(

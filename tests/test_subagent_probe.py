@@ -78,6 +78,7 @@ async def test_a_missing_executable_says_what_installs_it(tmp_path: Path) -> Non
     res = await probe_one(cfg, source="config", path=str(tmp_path))
     assert res.status == "missing"
     assert res.target == "qodercli"
+    assert res.absent == "qodercli", "what the page offers to install is read from this"
     assert "npm i -g @qoder-ai/qodercli" in res.detail
 
 
@@ -93,6 +94,53 @@ async def test_a_missing_executable_invents_no_install_it_does_not_know(tmp_path
     assert res.status == "missing"
     assert res.detail == "my-own-agent is not on the login shell PATH"
     assert "npm" not in res.detail
+
+
+async def test_a_row_launched_through_npx_names_node_js_when_npx_is_absent(tmp_path: Path) -> None:
+    """The agent's own installer is the wrong answer when what is absent is npx.
+
+    Claude Code and Codex launch through ``npx``, which Node.js brings. With npx
+    taken off one row's PATH (2026-09-23), the page offered
+    ``npm install -g @anthropic-ai/claude-code``: an npm command, on a machine
+    whose npm went with its Node.js -- and an agent installed some other way
+    still launches through npx, so the row stayed absent after it anyway.
+    """
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Claude Code", preset="claude_code", command="npx -y @agentclientprotocol/claude-agent-acp@0.79.0"
+    )
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+    assert res.status == "missing"
+    assert res.absent == "npx"
+    assert (
+        res.detail
+        == "npx is not on the login shell PATH; install with Node.js from https://nodejs.org, which brings npx"
+    )
+
+    # A cli row whose command is npx is the same absence, whatever it runs.
+    cli = await probe_one(_cli("npx some-agent {prompt}"), source="config", path=str(tmp_path))
+    assert cli.absent == "npx"
+    assert "https://nodejs.org" in cli.detail
+
+
+async def test_only_a_lookup_that_found_nothing_names_what_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``absent`` is what to install, so it must not ride on a ``missing`` that came from a handshake.
+
+    A snapshot recorded ``missing`` is an executable that was found and then did
+    not start. Naming it absent would put an installer in front of a reader who
+    already has the thing installed.
+    """
+    npx = _fake_executable(tmp_path, "npx")
+    snapshot = type("Snapshot", (), {"stale": False, "model_menu_measured": True, "status": "missing", "detail": "x"})
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: snapshot)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Codex", preset="codex", command="npx -y @agentclientprotocol/codex-acp@1.1.14"
+    )
+    res = await probe_one(cfg, source="preset", path=str(tmp_path))
+    assert res.status == "missing"
+    assert res.target == str(npx)
+    assert res.absent is None
 
 
 async def test_cli_probe_reports_missing_and_still_names_what_it_looked_for(tmp_path: Path) -> None:
@@ -686,11 +734,13 @@ async def test_ping_fails_on_a_timeout_rather_than_waiting(monkeypatch: pytest.M
     monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Hangs())
     monkeypatch.setattr(probe_mod, "_ENABLE_PING_TIMEOUT_SECONDS", 1)
 
-    cfg = ThirdPartyAcpSubagentConfig(name="hanging-acp", kind="acp", command="fake-agent acp")
+    # The wait is the start window plus the answer's (`_ping_bounds`), so the
+    # row declares a short start window of its own: the hang has to outlast both.
+    cfg = ThirdPartyAcpSubagentConfig(name="hanging-acp", kind="acp", command="fake-agent acp", ready_timeout_ms=1000)
     result = await probe_mod.ping_agent(cfg)
 
     assert result.ok is False
-    assert "did not answer within" in result.detail
+    assert "did not answer within 2s" in result.detail
 
 
 async def test_ping_hands_the_backend_the_same_bound_it_waits_for(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -723,21 +773,38 @@ async def test_ping_hands_the_backend_the_same_bound_it_waits_for(monkeypatch: p
     await probe_mod.ping_agent(tight)
     assert seen["timeout"] == 5
 
-    # The handshake is bounded the same way, or the claim above holds only for
-    # the run: several shipped presets declare a readiness window of 120s, twice
-    # this cap, and a stalled handshake would then be cancelled from outside
-    # instead of the backend saying the agent never became ready.
+    # The handshake gets the row's own start window, uncapped: several shipped
+    # presets declare 120s because `npx` downloads the adapter there on a first
+    # connect, and npm takes about 70s to report a registry it cannot reach. Cut
+    # to the answer's cap, both came back "did not answer within 60s".
     slow_start = ThirdPartyAcpSubagentConfig(
         name="ping-slow-start", kind="acp", command="fake-agent acp", ready_timeout_ms=120000
     )
+    waited: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _spy(awaitable, timeout):
+        waited.append(timeout)
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(probe_mod.asyncio, "wait_for", _spy)
     await probe_mod.ping_agent(slow_start)
-    assert seen["ready_timeout_ms"] == probe_mod._ENABLE_PING_TIMEOUT_SECONDS * 1000
+    assert seen["ready_timeout_ms"] == 120000
+    # ...and the wait around the run leaves room for both inner bounds, so
+    # neither is cancelled from outside before the backend can say which ran out.
+    assert waited == [120 + probe_mod._ENABLE_PING_TIMEOUT_SECONDS]
 
     quick_start = ThirdPartyAcpSubagentConfig(
         name="ping-quick-start", kind="acp", command="fake-agent acp", ready_timeout_ms=4000
     )
     await probe_mod.ping_agent(quick_start)
     assert seen["ready_timeout_ms"] == 4000
+    assert waited[-1] == 4 + probe_mod._ENABLE_PING_TIMEOUT_SECONDS
+
+    # A kind with no handshake is waited on for its answer alone.
+    cli = ThirdPartyCliSubagentConfig(name="ping-cli", kind="cli", command="fake-agent {prompt}")
+    await probe_mod.ping_agent(cli)
+    assert waited[-1] == probe_mod._ENABLE_PING_TIMEOUT_SECONDS
 
 
 async def test_ping_runs_on_a_connection_pool_of_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1560,6 +1627,7 @@ async def test_a_shim_row_is_missing_when_the_agent_it_drives_is_absent(
 
     assert res.status == "missing"
     assert res.target == "pi"
+    assert res.absent == "pi", "npx is there; the agent it drives is what to install"
     assert res.detail == (
         "pi is not on the login shell PATH; install with npm install -g @earendil-works/pi-coding-agent"
     )

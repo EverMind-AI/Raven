@@ -20,7 +20,7 @@ import { isOwnRow, shortOf } from './catalogue'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
-import type { ExtAgentsState } from './store'
+import type { ExtAgentsState, Failure } from './store'
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
 
@@ -95,6 +95,49 @@ function oneLine(row: ExtAgentRow): string {
   const base =
     short || ((row.probe_status === 'attention' || row.probe_status === 'missing') && row.probe_detail) || kindText(row.kind)
   return stale ? `${base} · ${stale}` : base
+}
+
+/* What a refused write comes to, in the reader's language: the fix the server
+   named, by its kind, or what failed when it named none. The server's own
+   sentence is English, and cut to the two lines a card has it said neither
+   what went wrong nor what to do -- so it is shown only in the sheet, folded
+   under the fix. */
+function whatFailed(row: ExtAgentRow, failed: Failure): string {
+  const agent = row.name
+  const kind = failed.remedy?.kind
+  if (kind === 'sign_in') return t('gui.agent.bad_sign_in', { agent })
+  if (kind === 'setup') return t('gui.agent.bad_setup', { agent })
+  if (kind === 'api_key') return t('gui.agent.bad_api_key', { agent })
+  if (kind === 'download') return t('gui.agent.bad_download', { agent })
+  const write = refusedWrite(failed)
+  return t(write === 'save' ? 'gui.agent.bad_save' : write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', {
+    agent,
+  })
+}
+
+/* Which write a refusal refused, which decides its words when no fix is named:
+   a switch-off is not a connect (`disconnects` says so for the pending ring
+   too), and an edit is neither. The sheet asks the same question, so a card and
+   its sheet cannot say two things about one refusal. */
+export function refusedWrite(failed: Failure): 'connect' | 'disconnect' | 'save' {
+  if (store.disconnects(failed)) return 'disconnect'
+  return failed.op === 'model' || failed.op === 'update' ? 'save' : 'connect'
+}
+
+/* The red line itself. A card or row that opens a sheet points there, where
+   the steps and the original error are. The wizard's rows open nothing, so
+   theirs has to carry the step: the command, when it is one to run in a
+   terminal, and the retry to press after. */
+function failureLine(row: ExtAgentRow, failed: Failure, opens: boolean): string {
+  const what = whatFailed(row, failed)
+  if (opens) return t('gui.agent.bad_open', { what })
+  const button = t('gui.retry')
+  const kind = failed.remedy?.kind
+  /* The adapter's own command is too long for a row, and what fixes a
+     download is the network anyway, so the row names where to look. */
+  if (kind === 'download') return t('gui.agent.bad_download_retry', { what, button })
+  const command = kind === 'sign_in' || kind === 'setup' ? failed.remedy?.command : ''
+  return command ? t('gui.agent.bad_run', { what, command, button }) : t('gui.agent.bad_retry', { what, button })
 }
 
 /* Connect, by what the row's stage calls for. The one case with a question in
@@ -197,7 +240,11 @@ function AgentRow({
             {t(pendingLabel(row, s))}
           </div>
         ) : shown === 'failed' && failed ? (
-          <div className="extAgents-one extAgents-one-bad">{failed.detail}</div>
+          /* With no sheet to fold it into, the server's sentence -- all a row
+             with no named fix has to say why -- is kept on hover, not shown. */
+          <div className="extAgents-one extAgents-one-bad" title={open ? undefined : failed.detail}>
+            {failureLine(row, failed, !!open)}
+          </div>
         ) : (
           <div className="extAgents-one">{oneLine(row)}</div>
         )}
@@ -273,7 +320,7 @@ function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Ele
           {t(pendingLabel(row, s))}
         </div>
       ) : shown === 'failed' && failed ? (
-        <div className="extAgents-one extAgents-one-bad">{failed.detail}</div>
+        <div className="extAgents-one extAgents-one-bad">{failureLine(row, failed, true)}</div>
       ) : (
         <div className="extAgents-one">{oneLine(row)}</div>
       )}

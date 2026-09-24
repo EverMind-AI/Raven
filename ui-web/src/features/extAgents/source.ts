@@ -49,6 +49,7 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
     probe_status: r.probe_status || 'unknown',
     upgrade_to: r.upgrade_to || null,
     probe_detail: r.probe_detail || '',
+    ...(r.probe_missing ? { probe_missing: r.probe_missing } : {}),
     has_api_key: !!r.has_api_key,
     needs_auth: !!r.needs_auth,
     description: r.description || '',
@@ -164,13 +165,15 @@ export async function extAgentsFetch(probe: boolean): Promise<ExtAgentRow[]> {
   /* A probe-less list reports every row as "unknown", which would blank the
      health line of a row that was ready a second ago -- connecting an agent
      would look like it broke it. The verdict cannot have changed by writing
-     config, so the last known one is carried over. */
+     config, so the last known one is carried over -- with what it found
+     absent, or a missing row's install falls back to the agent's own. */
   const rows = (res.rows || []).map((r) => {
     const row = extAgentRowOf(r)
     const prev = extAgentsSeen.get(row.name)
     if (row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
       row.probe_status = prev.probe_status
       row.probe_detail = prev.probe_detail
+      if (prev.probe_missing) row.probe_missing = prev.probe_missing
     }
     return row
   })
@@ -272,6 +275,6 @@ export function _resetForTests(): void {
    and from a refused call's `data` alike, so both land in the one shape. */
 export function remedyOf(raw: unknown): Remedy | null {
   const r = raw as { kind?: unknown; command?: unknown } | null | undefined
-  if (!r || (r.kind !== 'sign_in' && r.kind !== 'setup' && r.kind !== 'api_key')) return null
+  if (!r || (r.kind !== 'sign_in' && r.kind !== 'setup' && r.kind !== 'api_key' && r.kind !== 'download')) return null
   return { kind: r.kind, command: typeof r.command === 'string' ? r.command : '' }
 }

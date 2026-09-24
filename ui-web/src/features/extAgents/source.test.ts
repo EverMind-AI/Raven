@@ -66,6 +66,18 @@ describe('one agent row', () => {
     expect('last_test_remedy' in extAgentRowOf(wire({}))).toBe(false)
     const junk = wire({ last_test_remedy: { kind: 'reboot' } as unknown as ExtAgentRowWire['last_test_remedy'] })
     expect('last_test_remedy' in extAgentRowOf(junk)).toBe(false)
+    const fetch = extAgentRowOf(wire({ last_test_remedy: { kind: 'download', command: 'npx -y a@1' } }))
+    expect(fetch.last_test_remedy).toEqual({ kind: 'download', command: 'npx -y a@1' })
+  })
+
+  /* What to install, as the executable the probe did not find. Absent unless
+     sent, so a server that predates it reads as "nothing named". */
+  it('carries the executable a missing row lacks', () => {
+    expect(extAgentRowOf(wire({ probe_status: 'missing', probe_missing: 'npx' })).probe_missing).toBe('npx')
+    expect('probe_missing' in extAgentRowOf(wire({}))).toBe(false)
+    /* The server sends null on every row that is not missing. */
+    const unnamed = wire({ probe_missing: null as unknown as string })
+    expect('probe_missing' in extAgentRowOf(unnamed)).toBe(false)
   })
 
   it('names its kind from the flag when the server sends none', () => {
@@ -110,6 +122,15 @@ describe('refetching the list', () => {
     const [row] = await extAgentsFetch(false)
     expect(probes).toEqual([true, false])
     expect(row).toMatchObject({ probe_status: 'ready', probe_detail: 'v2 on PATH' })
+  })
+
+  /* With what it found absent: dropped, a missing npx row's sheet went back to
+     offering the agent's own installer after any write. */
+  it('carries what a missing row lacks along with its verdict', async () => {
+    listing([wire({ probe_status: 'missing', probe_missing: 'npx' })], [wire({})])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsFetch(false)
+    expect(row).toMatchObject({ probe_status: 'missing', probe_missing: 'npx' })
   })
 
   it('lets a probing answer overwrite what it remembered', async () => {

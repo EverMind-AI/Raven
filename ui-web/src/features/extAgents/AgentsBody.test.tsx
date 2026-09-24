@@ -270,7 +270,18 @@ describe('the onboarding wizard\'s agents step', () => {
     await act(async () => {
       fireEvent.click(control('preset_a'))
     })
-    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.textContent).toBe('did not answer a test message')
+    /* In the reader's words, with the step the row itself has to carry: the
+       wizard opens no sheet, so there is nowhere else for it to be. The
+       server's English sentence is not the line any more. */
+    const what = `gui.agent.bad_connect ${JSON.stringify({ agent: 'preset_a' })}`
+    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.textContent).toBe(
+      `gui.agent.bad_retry ${JSON.stringify({ what, button: 'gui.retry' })}`,
+    )
+    /* ...and the sentence is kept on hover: with no sheet to fold it into, it
+       is the only reason this row has. */
+    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.getAttribute('title')).toBe(
+      'did not answer a test message',
+    )
     expect(control('preset_a').textContent).toBe('gui.retry')
     expect(toastWriter.items).toEqual([])
 
@@ -284,6 +295,54 @@ describe('the onboarding wizard\'s agents step', () => {
     ])
     expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')).toBeNull()
     expect(control('preset_a').textContent).toBe('gui.agent.disconnect')
+  })
+
+  it('puts the command on the row itself, since the wizard opens no sheet to hold it', async () => {
+    const rows = [row({ name: 'Codex', preset: 'codex' })]
+    install(rows)
+    setSources({
+      extAgents: {
+        load: async () => rows,
+        act: async () => {
+          throw { data: { detail: 'English', remedy: { kind: 'sign_in', command: 'codex login' } } }
+        },
+      },
+    })
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+    await act(async () => {
+      fireEvent.click(control('Codex'))
+    })
+    const what = `gui.agent.bad_sign_in ${JSON.stringify({ agent: 'Codex' })}`
+    expect(rowNamed('Codex').querySelector('.extAgents-one-bad')!.textContent).toBe(
+      `gui.agent.bad_run ${JSON.stringify({ what, command: 'codex login', button: 'gui.retry' })}`,
+    )
+  })
+
+  it('says where to look for a download, rather than the adapter\'s long command', async () => {
+    const rows = [row({ name: 'Claude Code', preset: 'claude_code' })]
+    install(rows)
+    setSources({
+      extAgents: {
+        load: async () => rows,
+        act: async () => {
+          throw { data: { detail: 'English', remedy: { kind: 'download', command: 'npx -y @agentclientprotocol/claude-agent-acp@0.79.0' } } }
+        },
+      },
+    })
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+    await act(async () => {
+      fireEvent.click(control('Claude Code'))
+    })
+    const what = `gui.agent.bad_download ${JSON.stringify({ agent: 'Claude Code' })}`
+    expect(rowNamed('Claude Code').querySelector('.extAgents-one-bad')!.textContent).toBe(
+      `gui.agent.bad_download_retry ${JSON.stringify({ what, button: 'gui.retry' })}`,
+    )
   })
 
   it('disconnects a connected row through act(toggle, {enabled: false})', async () => {

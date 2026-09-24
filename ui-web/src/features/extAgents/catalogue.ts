@@ -125,8 +125,14 @@ export function byOf(row: ExtAgentRow): string {
 }
 
 /* Where an absent agent comes from: a command to paste and a site to visit,
-   either or both possibly missing. */
-export function installOf(row: ExtAgentRow): { site?: string; cmd?: string } {
+   either or both possibly missing. `node` when what is absent is `npx`: a
+   preset launched through it needs Node.js, which brings npx, and the agent's
+   own installer is then the wrong answer -- an `npm i -g` cannot run without
+   Node.js, and an agent installed some other way still launches through npx. */
+export function installOf(row: ExtAgentRow): { site?: string; cmd?: string; node?: boolean } {
+  if (row.probe_missing === 'npx') return { site: NODE_SITE, node: true }
   const entry = entryOf(row)
   return entry ? { site: entry.site, cmd: entry.cmd } : {}
 }
+
+const NODE_SITE = 'nodejs.org'

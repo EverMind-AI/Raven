@@ -28,6 +28,7 @@ from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_ba
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.presets import (
+    THIRD_PARTY_SUBAGENT_PRESETS,
     install_hint_for,
     shim_requirement_for,
     sign_in_hint_for,
@@ -58,9 +59,10 @@ Half the explicit-Test budget, because this one is on the path of a settings
 switch a person is waiting on. Two measured agents hang rather than refuse, so
 the cap is what turns "no answer" into an answer.
 
-Handed to the backend as well as to the ``wait_for`` around it, so one number
-means one thing: a backend allowed the longer Test budget could only ever be
-cancelled from outside, never reach its own timeout and describe the failure.
+Handed to the backend as well as counted in the ``wait_for`` around it, so one
+number means one thing: a backend allowed the longer Test budget could only ever
+be cancelled from outside, never reach its own timeout and describe the failure.
+It bounds the answer, not the start -- see `_ping_bounds`.
 """
 
 
@@ -88,6 +90,13 @@ class ProbeResult:
     """The remembered outcome of an explicit test, when one is still valid for this
     exact configuration. Attached by ``probe_all``; ``probe.py`` never reads or
     writes the store itself, which keeps file I/O out of this module."""
+    absent: str | None = None
+    """The executable ``shutil.which`` looked for and did not find, on a ``missing``
+    result that came from that lookup -- ``argv[0]``, or the local agent a shim
+    drives. ``None`` everywhere else, including a ``missing`` recorded off a
+    failed handshake, where something was found and then did not work. A page
+    reads it to say what to install: for a shim preset the absent executable is
+    ``npx``, which Node.js brings, and the agent's own installer does not."""
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -172,7 +181,18 @@ def _missing_exe_detail(cfg: Any, exe: str) -> str:
     them growing the hint alone is the shape a reader would trust and be wrong
     about on the other.
     """
+    from raven.acp_client.capabilities import launches_with_npx
+
+    if launches_with_npx(exe):
+        # A shim preset's argv[0] is npx, and the agent's own installer does not
+        # bring it: without Node.js that installer (an `npm i -g`) cannot run
+        # either, and with the agent installed some other way the row still
+        # launches through npx and is still absent.
+        return _missing_detail(exe, _NODE_HINT)
     return _missing_detail(exe, install_hint_for(cfg))
+
+
+_NODE_HINT = "Node.js from https://nodejs.org, which brings npx"
 
 
 def _said(exc: BaseException) -> tuple[str, str | None]:
@@ -308,7 +328,7 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
-        return done("missing", _missing_exe_detail(cfg, exe), exe)
+        return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
     return done("ready", f"installed at {resolved}", resolved)
 
 
@@ -348,12 +368,12 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
-        return done("missing", _missing_exe_detail(cfg, exe), exe)
+        return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
     requirement = shim_requirement_for(cfg)
     if requirement is not None:
         agent_exe, install = requirement
         if shutil.which(agent_exe, path=cfg_path or path) is None:
-            return done("missing", _missing_detail(agent_exe, install), agent_exe)
+            return replace(done("missing", _missing_detail(agent_exe, install), agent_exe), absent=agent_exe)
 
     snapshot = acp_snapshot_for(cfg)
     if snapshot is None:
@@ -586,6 +606,70 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
     return TestResult(cfg.name, source, "cli", True, "the agent ran and replied", text[:_DETAIL_CAP], elapsed())
 
 
+def _ping_bounds(cfg: Any) -> tuple[int, int, float]:
+    """The ping's three bounds: the handshake's (ms), the answer's (s), and the wait around both (s).
+
+    The answer is capped at `_ENABLE_PING_TIMEOUT_SECONDS`, the number a
+    person waiting on a switch can stand. The handshake is not: an acp row
+    starts within its own ``readyTimeoutMs``, the window every dispatch of it
+    gets (`AcpAgentBackend`), and for an ``npx`` command that window is where
+    the first download happens. Capping it too turned two things into "it did
+    not answer within 60s" -- a first download on a slow line (a cold fetch of
+    the Claude Code adapter is about 260 MB unpacked; 20s on a good line,
+    measured 2026-09-23), and npm's own "cannot reach the registry", which it
+    reports only after about 70s of retries (measured the same day), so the
+    reader never saw it.
+
+    The wait is the two added together, which keeps what the cap once kept:
+    neither inner bound is ever cancelled from outside before the backend can
+    reach it and say which one ran out. A row of another kind has no handshake,
+    so it is waited on for its answer alone, and is handed the old number for a
+    field it ignores.
+    """
+    answer = min(getattr(cfg, "timeout", None) or _ENABLE_PING_TIMEOUT_SECONDS, _ENABLE_PING_TIMEOUT_SECONDS)
+    if getattr(cfg, "kind", None) != "acp":
+        return _ENABLE_PING_TIMEOUT_SECONDS * 1000, answer, float(answer)
+    ready_ms = getattr(cfg, "ready_timeout_ms", None) or _ENABLE_PING_TIMEOUT_SECONDS * 1000
+    return ready_ms, answer, ready_ms / 1000 + answer
+
+
+def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
+    """What a ping that raised is reported as, and the fix when one is known.
+
+    ``npx`` failing to fetch the agent comes first, because it is not the
+    agent's answer at all -- no agent ran -- and it has a fix of its own: the
+    network, the npm registry or the proxy, or the agent's launch command run
+    once in a terminal, where nothing times the download out. Everything else
+    is the agent's refusal, read the way `_refusal` reads it.
+    """
+    from raven.acp_client.capabilities import npx_fetch_failure, npx_fetch_lead
+
+    unfetched = npx_fetch_failure((getattr(cfg, "command", None) or "").strip(), exc)
+    if unfetched is None:
+        return _refusal(cfg, *_said(exc))
+    shipped = _shipped_command(cfg)
+    run = f"`{shipped}`" if shipped else "this agent's launch command"
+    advice = f"connect again, or run {run} once in a terminal to fetch it with no time limit"
+    return f"{npx_fetch_lead(unfetched)}; {advice}. It said: {exc}"[:_DETAIL_CAP], Remedy("download", shipped)
+
+
+def _shipped_command(cfg: Any) -> str | None:
+    """The row's launch command when it is the one this repo ships for its preset, else ``None``.
+
+    A download is best fixed by running that command once in a terminal, so the
+    fix would name it. But a row's command is its operator's execution config,
+    and its arguments can carry a credential (``--token ...``) -- which is why no
+    row the RPC layer sends carries it, and why a refusal must not start to. So
+    it is repeated only when it is the preset's own, word for word: that text is
+    this repo's, and saying it back tells a reader nothing the preset table does
+    not. A row whose command was edited is told to run its launch command
+    without it being quoted.
+    """
+    preset = THIRD_PARTY_SUBAGENT_PRESETS.get(getattr(cfg, "preset", None) or "") or {}
+    shipped = str(preset.get("command") or "").strip()
+    return shipped if shipped and (getattr(cfg, "command", None) or "").strip() == shipped else None
+
+
 @dataclass(frozen=True)
 class PingResult:
     """Whether one agent answered a prompt, and what to tell the operator if not."""
@@ -622,6 +706,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     # is future shelf cargo and must not be named at import time.
     from raven.acp_client import pool as acp_pool
 
+    ready_ms, answer_s, wait_s = _ping_bounds(cfg)
     pool = acp_pool.AcpConnectionPool()
     try:
         with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
@@ -630,24 +715,18 @@ async def ping_agent(cfg: Any) -> PingResult:
                 # A stateful create commits a handle binding; a ping must not leave
                 # that in the file the running gateway reads.
                 registry=InstanceRegistry(path=Path(tmp) / "ping_instances.json"),
-                timeout=min(
-                    getattr(cfg, "timeout", None) or _ENABLE_PING_TIMEOUT_SECONDS,
-                    _ENABLE_PING_TIMEOUT_SECONDS,
-                ),
-                ready_timeout_ms=min(
-                    getattr(cfg, "ready_timeout_ms", None) or _ENABLE_PING_TIMEOUT_SECONDS * 1000,
-                    _ENABLE_PING_TIMEOUT_SECONDS * 1000,
-                ),
+                timeout=answer_s,
+                ready_timeout_ms=ready_ms,
                 pool=pool,
             )
             reply = await asyncio.wait_for(
                 backend.run(PROBE_PROMPT, task_id=f"ping-{uuid.uuid4().hex[:8]}", workspace=Path(tmp), executor=None),
-                timeout=_ENABLE_PING_TIMEOUT_SECONDS,
+                timeout=wait_s,
             )
     except asyncio.TimeoutError:
-        return PingResult(False, f"it did not answer within {_ENABLE_PING_TIMEOUT_SECONDS}s")
+        return PingResult(False, f"it did not answer within {wait_s:.0f}s")
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, *_refusal(cfg, *_said(exc)))
+        return PingResult(False, *_ping_refusal(cfg, exc))
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the
@@ -705,7 +784,13 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         # agent's own answer), so the remedy is read off that verdict rather than
         # off this detail, whose "(auth methods: ...)" suffix names an
         # advertisement every working agent makes too.
-        remedy = _remedy_for(cfg) if snapshot.needs_auth else None
+        remedy = (
+            _remedy_for(cfg)
+            if snapshot.needs_auth
+            else Remedy("download", _shipped_command(cfg))
+            if snapshot.unfetched
+            else None
+        )
         return TestResult(cfg.name, source, "acp", False, snapshot.detail, reply, elapsed(), remedy)
     answered = await ping_agent(cfg)
     # Verdict first on a failure, the handshake after it: "it connected and then

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shlex
 import sys
 import time
 from collections.abc import Iterator
@@ -344,6 +345,221 @@ async def test_a_handshake_refused_over_a_credential_carries_its_fix_into_the_te
     assert other.ok is False
     assert other.remedy is None
     assert "auth methods" in other.detail, "the advertisement is there, and still is not the evidence"
+
+
+def _through_npx(tmp_path: Path, mode: str, **kw: Any) -> ThirdPartyAcpSubagentConfig:
+    """A row whose command is ``npx ...``, run by a stand-in ``npx`` that starts the stub.
+
+    What is under test is how a command that fetches on first use is read, so the
+    launcher has to be named npx; nothing here goes near a registry.
+    """
+    npx = tmp_path / "npx"
+    npx.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n")
+    npx.chmod(0o755)
+    return ThirdPartyAcpSubagentConfig(
+        name=kw.pop("name", "Claude Code"),
+        command=f"{shlex.quote(str(npx))} -y @agentclientprotocol/claude-agent-acp@0.79.0",
+        env={"ACP_STUB_MODE": mode},
+        ready_timeout_ms=kw.pop("ready_timeout_ms", 15000),
+        **kw,
+    )
+
+
+async def test_npx_that_cannot_reach_the_registry_is_a_download_failure_not_a_silent_agent(tmp_path: Path) -> None:
+    """The connect names the network, and the fix, instead of the agent.
+
+    Measured 2026-09-23 with the Claude Code row pointed at a registry it could
+    not reach: npm retried for about 70s, the connect's 60s ran out first, and
+    the page said the agent "did not answer within 60s". With npm's own report
+    let through, what failed is the fetch, and the fix is in the network, the
+    npm registry or the proxy -- or the row's own command, run once in a
+    terminal where nothing times the download out.
+    """
+    from raven.agent.subagent.probe import ping_agent
+    from raven.agent.subagent.probe_state import Remedy
+
+    cfg = _through_npx(tmp_path, "npm_fetch_fails")
+    pinged = await ping_agent(cfg)
+    assert pinged.ok is False
+    # A hand-written row: its command is its operator's, so it is not quoted back.
+    assert pinged.remedy == Remedy("download")
+    assert pinged.detail.startswith(
+        "npx could not download it (ECONNREFUSED); check the network, the npm registry or the proxy; "
+        "connect again, or run this agent's launch command once in a terminal"
+    ), pinged.detail
+    assert str(tmp_path) not in pinged.detail
+    assert "connection ended (exit 1)" in pinged.detail, "the original error is kept for the fold"
+
+    # The same death from a command that fetches nothing is not a download.
+    plain = await ping_agent(stub_config(mode="npm_fetch_fails"))
+    assert plain.ok is False
+    assert plain.remedy is None
+
+
+async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_still_be_running(tmp_path: Path) -> None:
+    """A first download on a slow line is a start that runs out, and says so.
+
+    Not proof of a download -- an adapter can hang on its own -- so the sentence
+    says npx "may still have been downloading", and the fix is the same one: the
+    command in a terminal fetches it with no time limit.
+    """
+    from raven.agent.subagent.probe import ping_agent
+    from raven.agent.subagent.probe_state import Remedy
+
+    cfg = _through_npx(tmp_path, "silent", ready_timeout_ms=1500)
+    pinged = await ping_agent(cfg)
+    assert pinged.ok is False
+    assert pinged.remedy == Remedy("download")
+    assert pinged.detail.startswith("it did not finish starting in time, and npx may still have been downloading it; ")
+
+    # A session that opens and then says nothing started fine: not this story.
+    quiet = await ping_agent(stub_config(mode="silent", ready_timeout_ms=1500))
+    assert quiet.remedy is None
+
+
+async def test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_install(tmp_path: Path) -> None:
+    """The Test button, the boot backfill and the roster read this snapshot.
+
+    Recorded ``missing``, the roster moved the row to "not installed" and offered
+    the agent's own installer -- which fixes nothing when the network is what
+    failed. It is ``attention`` with the fetch named, and Test carries the fix.
+    """
+    from raven.acp_client.capabilities import SnapshotStore
+    from raven.agent.subagent.probe_state import Remedy
+
+    cfg = _through_npx(tmp_path, "npm_fetch_fails")
+    snapshot = await verify_agent(cfg)
+    assert snapshot.status == "attention"
+    assert snapshot.unfetched is True
+    assert snapshot.detail.startswith("npx could not download it (ECONNREFUSED)")
+    # What Test persists and the listing serves back: the row's command is its
+    # operator's (the stand-in npx lives under tmp_path) and is not in it.
+    assert str(tmp_path) not in snapshot.detail
+
+    store = SnapshotStore(tmp_path / "caps.json")
+    store.record(snapshot)
+    assert store.load([cfg])[cfg.name].unfetched is True, "it outlives the process that measured it"
+
+    tested = await run_test(cfg, source="config")
+    assert tested.ok is False
+    assert tested.remedy == Remedy("download")
+    assert str(tmp_path) not in tested.detail
+
+    # A process that dies for any other reason is still reported as before.
+    other = await verify_agent(stub_config(mode="abort"))
+    assert other.status == "missing"
+    assert other.unfetched is False
+
+
+async def test_a_download_fix_names_only_the_preset_s_own_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row's command is its operator's execution config, and can carry a credential.
+
+    No row the RPC layer sends carries it, and a refusal must not start to: the
+    connect returns its detail and remedy over RPC, and Test writes them to the
+    test-state file that the listing reads back. So the command is quoted only
+    when it is the preset's own, word for word, and an edited one is not quoted
+    at all -- in the sentence or in the remedy -- on either path.
+    """
+    import raven.agent.subagent.probe as probe_mod
+    from raven.acp_client.capabilities import CapabilitySnapshot
+    from raven.acp_client.protocol import AcpConnectionError
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.agent.subagent.probe_state import Remedy
+
+    shipped = THIRD_PARTY_SUBAGENT_PRESETS["claude_code"]["command"]
+    died = AcpConnectionError("acp agent 'Claude Code': connection ended (exit 1)", stderr=_NPM9_ENOTFOUND)
+    own = ThirdPartyAcpSubagentConfig(name="Claude Code", preset="claude_code", command=shipped)
+    edited = ThirdPartyAcpSubagentConfig(
+        name="Claude Code", preset="claude_code", command=f"{shipped} --token super-secret"
+    )
+
+    detail, remedy = probe_mod._ping_refusal(own, died)
+    assert remedy == Remedy("download", shipped)
+    assert f"`{shipped}`" in detail
+
+    detail, remedy = probe_mod._ping_refusal(edited, died)
+    assert remedy == Remedy("download")
+    assert "super-secret" not in detail
+
+    def _unfetched(cfg):
+        return CapabilitySnapshot(
+            agent=cfg.name,
+            fingerprint="x",
+            status="attention",
+            detail="npx could not download it",
+            measured_at_ms=1,
+            unfetched=True,
+        )
+
+    monkeypatch.setattr(probe_mod, "record_capabilities", _async(_unfetched))
+    assert (await run_test(own, source="config")).remedy == Remedy("download", shipped)
+    # The detail here is the stub's; the real handshake's is checked, command
+    # and all, in test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_install.
+    assert (await run_test(edited, source="config")).remedy == Remedy("download")
+
+
+def _async(fn):
+    async def wrapped(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    return wrapped
+
+
+# npm 9.9.4 (`npx -y npm@9.9.4 exec ...`) against an unresolvable registry,
+# 2026-09-23: the other spelling of the same report, `npm ERR!` for `npm error`.
+_NPM9_ENOTFOUND = (
+    "npm ERR! code ENOTFOUND\n"
+    "npm ERR! syscall getaddrinfo\n"
+    "npm ERR! errno ENOTFOUND\n"
+    "npm ERR! network request to http://raven-no-such-host.invalid/@agentclientprotocol%2fclaude-agent-acp "
+    "failed, reason: getaddrinfo ENOTFOUND raven-no-such-host.invalid\n"
+    "npm ERR! network This is a problem related to network connectivity.\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "verdict"),
+    [
+        (_NPM9_ENOTFOUND, "ENOTFOUND"),
+        ("npm error code E404\nnpm error 404 Not Found - GET https://registry.example/pkg\n", "E404"),
+        ("npm error code ETARGET\nnpm error notarget No matching version found\n", "ETARGET"),
+        ("npm error network request to https://registry.example failed\n", "network"),
+        # A local failure: no network, registry or proxy setting fixes it.
+        ("npm error code EACCES\nnpm error syscall mkdir\n", None),
+        ("npm error code ENOSPC\n", None),
+        # An adapter that started and then died is not npm's to report.
+        ("Error: something inside the adapter\n    at main (index.js:1:1)\n", None),
+    ],
+)
+def test_a_fetch_failure_is_read_off_npm_s_own_error_code(stderr: str, verdict: str | None) -> None:
+    from raven.acp_client.capabilities import npx_fetch_failure
+    from raven.acp_client.protocol import AcpConnectionError
+
+    died = AcpConnectionError("acp agent 'x': connection ended (exit 1)", stderr=stderr)
+    assert npx_fetch_failure("npx -y some-adapter@1.0.0", died) == verdict
+
+
+def test_only_a_command_that_fetches_and_only_a_start_that_ran_out_are_download_verdicts() -> None:
+    from raven.acp_client.capabilities import npx_fetch_failure
+    from raven.acp_client.protocol import AcpConnectionError, AcpTimeoutError
+
+    died = AcpConnectionError("connection ended (exit 1)", stderr=_NPM9_ENOTFOUND)
+    assert npx_fetch_failure("hermes acp", died) is None, "npm's words from a command that is not npx"
+    assert npx_fetch_failure("/usr/local/bin/npx -y a@1", died) == "ENOTFOUND", "npx wherever it lives"
+
+    start = AcpTimeoutError("initialize timed out after 120s", method="initialize")
+    assert npx_fetch_failure("npx -y a@1", start) == "timeout"
+    later = AcpTimeoutError("session/prompt timed out after 60s", method="session/prompt")
+    assert npx_fetch_failure("npx -y a@1", later) is None, "it started; whatever went quiet, it was not the fetch"
+
+    # Followed through `from`, the way a wrapper that names its cause raises it.
+    try:
+        try:
+            raise died
+        except AcpConnectionError as exc:
+            raise RuntimeError("the run failed") from exc
+    except RuntimeError as wrapped:
+        assert npx_fetch_failure("npx -y a@1", wrapped) == "ENOTFOUND"
 
 
 async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_path: Path) -> None:
