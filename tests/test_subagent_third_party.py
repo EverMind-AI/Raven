@@ -4427,6 +4427,56 @@ def test_a_row_with_one_spelling_is_not_offered_a_second(monkeypatch: pytest.Mon
     assert "None" not in off_path
 
 
+def test_grok_login_is_the_one_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Grok Build signs in with `grok login`, and has no second spelling.
+
+    Read from `grok login --help` on 1.0.41, which titles that command "Sign in
+    to Grok". The row launches `grok agent stdio`, a local install, so a machine
+    without `grok` is told the executable is missing rather than handed an `npx`
+    command. The binary is native, so an exit is not a Node.js problem, and a
+    provider status is not given an in-agent command: none was measured that
+    fixes a missing model, a missing credit and a rate limit together.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import NODE_RUNTIME_PRESETS, SHIM_LAUNCHED_PRESETS, SIGN_IN_HINTS
+    from raven.agent.subagent.probe_state import Remedy
+
+    assert "grok" not in SHIM_LAUNCHED_PRESETS
+    assert "grok" not in NODE_RUNTIME_PRESETS
+    hint = SIGN_IN_HINTS["grok"]
+    assert (hint.exe, hint.local, hint.anywhere, hint.does, hint.then) == ("grok", "grok login", None, "sign_in", None)
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    cfg = SimpleNamespace(preset="grok", kind="acp")
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/opt/homebrew/bin/grok")
+    signed_in = probe_mod._refusal_detail(cfg, said)
+    assert "sign in with `grok login`" in signed_in
+    assert "npx" not in signed_in
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    off_path = probe_mod._refusal_detail(cfg, said)
+    assert "`grok login`" in off_path
+    assert "None" not in off_path
+
+    key = "Incorrect API key provided"
+    assert "sign in with `grok login`" in probe_mod._refusal_detail(cfg, key)
+
+    for other in (
+        "Your subscription has expired. Please renew to continue.",
+        "The model grok-nope does not exist",
+        "Rate limit reached. Please slow down.",
+    ):
+        assert probe_mod._refusal(cfg, other) == (other, None), other
+
+    answer = "Internal error: 404 The model grok-nope does not exist"
+    text, remedy = probe_mod._refusal(cfg, f"request failed: [-32603] {answer}", answer)
+    assert remedy == Remedy("model")
+    assert remedy.command is None
+    assert "switch the model it uses" in text
+
+
 def test_an_endpoint_row_is_told_where_its_key_goes() -> None:
     """A row that is a URL and a key cannot be signed in to, so it is not told to.
 
@@ -4675,6 +4725,7 @@ def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: py
         (SimpleNamespace(preset="claude_code", kind="acp"), Remedy("sign_in", "claude auth login")),
         (SimpleNamespace(preset="codex", kind="acp"), Remedy("sign_in", "npx -y @openai/codex login")),
         (SimpleNamespace(preset="hermes", kind="acp"), Remedy("setup", "hermes model")),
+        (SimpleNamespace(preset="grok", kind="acp"), Remedy("sign_in", "grok login")),
         (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in")),
         (SimpleNamespace(preset="mirothinker", kind="openai"), Remedy("api_key")),
     ]
