@@ -87,11 +87,14 @@ export interface FlattenedSubagentRows {
 
 /** A mutation's follow-up list call passes `probe: false` (no network probe),
  *  so every row comes back `probe_status: 'unknown'`. Carrying forward the
- *  probe columns a caller already had, keyed by name, means a toggle/test/
- *  add/remove does not visibly regress every row to unknown -- only the
+ *  probe columns a caller already had, keyed by name, means a remove or a
+ *  description edit does not visibly regress every row to unknown -- only the
  *  columns that a real probe (initial load or the `r` key) last set are
  *  shown, everything else (enabled, test_running, last_test_*, ...) comes
- *  from the fresh response.
+ *  from the fresh response. Only a row the fresh list reports as `unknown`
+ *  takes the prior columns: a verdict the server did measure is the newer
+ *  evidence, and carrying the old one over it is how a row that had just
+ *  connected kept its `!` until the overlay was reopened.
  *
  *  `group` needs the same treatment, for every kind whose group the backend
  *  derives from `probe_status` -- which is every kind it does not derive some
@@ -121,14 +124,14 @@ export function mergeProbeColumns(
     const prior =
       priorByName.get(row.name) ?? (renamed && row.name === renamed.to ? priorByName.get(renamed.from) : undefined)
 
-    if (!prior) {
+    if (!prior || row.probe_status !== 'unknown') {
       return row
     }
 
     const probed = { ...row, probe_detail: prior.probe_detail, probe_status: prior.probe_status }
     const groupFromProbe = row.kind !== 'openai' && row.kind !== 'builtin'
 
-    return groupFromProbe && row.probe_status === 'unknown' ? { ...probed, group: prior.group } : probed
+    return groupFromProbe ? { ...probed, group: prior.group } : probed
   })
 }
 
@@ -512,14 +515,18 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   }, [load])
 
   // Unlike `load`, a mutation's follow-up list skips the network probe
-  // (`probe: false`) -- a toggle against an unreachable endpoint must not
-  // cost the same up-to-10s-per-entry probe the initial load already paid
-  // for. `mergeProbeColumns` keeps the probe columns already on screen so
-  // the rows do not flash to 'unknown' on every keystroke.
+  // (`probe: false`) unless the write can have moved the verdict -- a remove
+  // or a description edit must not cost the same up-to-10s-per-entry probe
+  // the initial load already paid for, and `mergeProbeColumns` keeps the
+  // probe columns already on screen so the rows do not flash to 'unknown'.
+  // A switch on, a test and a write that carries a key are answered by
+  // running the agent, which leaves a verdict the last probe never saw (an
+  // acp connect records the capability snapshot the probe reads), so their
+  // follow-up asks for the probe and takes the answer whole.
   const refresh = useCallback(
-    (renamed?: { from: string; to: string }) => {
-      gw.request<SubagentsListResult>('subagents.list', { probe: false })
-        .then(r => setRows(prev => mergeProbeColumns(prev, r?.rows ?? [], renamed)))
+    ({ probe = false, renamed }: { probe?: boolean; renamed?: { from: string; to: string } } = {}) => {
+      gw.request<SubagentsListResult>('subagents.list', { probe })
+        .then(r => setRows(prev => (probe ? (r?.rows ?? []) : mergeProbeColumns(prev, r?.rows ?? [], renamed))))
         .catch((e: unknown) => setErr(rpcErrorMessage(e)))
     },
     [gw]
@@ -626,7 +633,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
     gw.request('subagents.toggle', { enabled: !row.enabled, name: row.name })
       .then(() => {
         setErr('')
-        refresh()
+        refresh({ probe: !row.enabled })
       })
       .catch((e: unknown) => setErr(rpcErrorMessage(e)))
       .finally(() => {
@@ -661,7 +668,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
 
           return next
         })
-        refresh()
+        refresh({ probe: true })
       })
   }
 
@@ -728,7 +735,10 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
         setSaving(false)
         setKeyInput('')
         setStage('list')
-        refresh(renamedFrom ? { from: renamedFrom, to: trimmedName } : undefined)
+        refresh({
+          probe: formMode === 'add' || Boolean(trimmedKey),
+          renamed: renamedFrom ? { from: renamedFrom, to: trimmedName } : undefined
+        })
       })
       .catch((e: unknown) => {
         setSaving(false)
