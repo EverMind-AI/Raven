@@ -360,6 +360,13 @@ class SignIn(NamedTuple):
     interactive setup, where a provider is chosen and signed in to. The English
     advice reads the same for both -- this only lets a page that renders the
     remedy itself describe the step truthfully."""
+    then: str | None = None
+    """What to type once the command is running, for an agent whose setup is not
+    the first thing it shows.
+
+    Qwen Code opens on its prompt, not on a sign-in, and the command that reaches
+    its providers is a slash command typed there. Without this a reader told to
+    run ``qwen`` is left at a prompt with nothing saying what to do next."""
 
 
 SIGN_IN_HINTS: dict[str, SignIn] = {
@@ -382,6 +389,14 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # holds a key. Shim-launched it is not: the command is a bare `hermes`, so the
     # local spelling is the only one it can reach.
     "hermes": SignIn(exe="hermes", local="hermes model", does="setup"),
+    # `qwen auth` is gone from 0.24 -- run, it says so and names the replacement:
+    # "Interactive -> run qwen and use /auth to configure providers" (measured
+    # 2026-09-24, qwen 0.24.4). `/auth` ("Connect an LLM provider") is among the
+    # commands the same build advertises over ACP. It covers every credential
+    # refusal qwen gives -- never configured, a provider with its key unset, a
+    # key the provider refuses, an expired Qwen OAuth -- because each is fixed by
+    # choosing the provider again.
+    "qwen_code": SignIn(exe="qwen", local="qwen", does="setup", then="/auth"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -401,6 +416,79 @@ unlisted agent gets the sentence without a command, which is still the
 difference between "go and sign in" and a JSON-RPC error code -- and a command
 that is not there to run is the same mistake as a guessed one.
 """
+
+
+class InAgent(NamedTuple):
+    """A fix made from inside the agent: the command that opens it, and what to type there."""
+
+    command: str
+    then: str | None = None
+
+
+MODEL_SWITCH_HINTS: dict[str, InAgent] = {
+    # `/model` ("Switch the model for this session") writes the pick back to
+    # ~/.qwen/settings.json -- measured: `/model second-model(openai)` over ACP
+    # left `model.name` as `second-model` -- so the next launch raven makes uses
+    # it too, which is what makes it a fix rather than a workaround.
+    "qwen_code": InAgent("qwen", "/model"),
+}
+"""How to change the model the agent a row defers to is set to use, by preset key.
+
+For a provider that answered but would not serve that model: gone from its free
+tier, not found, out of credit or out of quota on it. Read from the installed
+tool, like :data:`SIGN_IN_HINTS`; an unlisted agent is told what happened
+without a command."""
+
+
+DIAGNOSE_HINTS: dict[str, str] = {
+    # Qwen Code retries a refused model call for minutes and says nothing while
+    # it does -- measured, 90 s of ACP traffic under a 429 carried no update and
+    # no stderr -- so a connect that waits 60 s learns nothing. Run in a terminal
+    # the same failure prints its reason: after 91 s for a 429 ("Retrying in 60s
+    # (attempt 1/10): [API Error: 429 ...]"), 93 s for an unresolvable host, 104
+    # s for a provider's 500, a second or two for the rest. The positional prompt
+    # is the one-shot form 0.24's own help names; `-p` is marked deprecated.
+    "qwen_code": "qwen hi",
+}
+"""A command that makes the agent a row defers to say why it is not answering.
+
+For the failure that carries no reason at all: a connect that timed out while
+the agent kept working. Only for an agent measured to fail that way, because
+for the rest a timeout is not known to mean anything in particular."""
+
+
+def model_switch_hint_for(cfg: Any) -> InAgent | None:
+    """How to change this row's model, by provenance like :func:`sign_in_hint_for`."""
+    preset = getattr(cfg, "preset", None)
+    return MODEL_SWITCH_HINTS.get(preset) if preset else None
+
+
+def diagnose_hint_for(cfg: Any) -> str | None:
+    """How to see why this row's agent is silent, by provenance like :func:`sign_in_hint_for`."""
+    preset = getattr(cfg, "preset", None)
+    return DIAGNOSE_HINTS.get(preset) if preset else None
+
+
+def upgrade_hint_for(cfg: Any) -> str | None:
+    """How to move this row's agent to its latest release, or ``None`` when unknown.
+
+    The install hint with the package pinned to ``latest``: an npm global install
+    of a bare package name installs whatever is newest only when nothing is
+    installed yet, so over an old copy the plain hint can leave it where it is.
+    Only for an ``npm i -g <package>`` hint, the one shape whose version is known
+    to go on the package's own word.
+    """
+    hint = install_hint_for(cfg)
+    if not hint:
+        return None
+    words = hint.split()
+    if words[:3] not in (["npm", "i", "-g"], ["npm", "install", "-g"]) or len(words) != 4:
+        return None
+    package = words[3]
+    # A scoped package keeps its leading "@"; a version is the "@" after that.
+    if "@" in package[1:]:
+        return None
+    return f"{hint}@latest"
 
 
 def sign_in_hint_for(cfg: Any) -> SignIn | None:

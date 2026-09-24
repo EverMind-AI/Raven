@@ -315,11 +315,34 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   )
 }
 
+/* The sentence for each kind of fix. `command` says whether a command follows
+   it: a kind that may come without one has a bare spelling that ends the
+   sentence instead of leading into a command that is not there. `then` says the
+   command is only the way in and a step follows it. Every key is written out,
+   so the catalogue gate reads each one. */
+const FIX_SAY: Record<Remedy['kind'], (vars: { agent: string; button: string }, command: boolean, then: boolean) => string> = {
+  sign_in: (v, command) => (command ? t('gui.agent.fix_sign_in', v) : t('gui.agent.fix_sign_in_bare', v)),
+  setup: (v, command, then) =>
+    !command ? t('gui.agent.fix_sign_in_bare', v) : then ? t('gui.agent.fix_setup_then', v) : t('gui.agent.fix_setup', v),
+  api_key: (v) => t('gui.agent.fix_api_key', v),
+  download: (v, command) => (command ? t('gui.agent.fix_download', v) : t('gui.agent.fix_download_bare', v)),
+  model: (v, command) => (command ? t('gui.agent.fix_model', v) : t('gui.agent.fix_model_bare', v)),
+  billing: (v, command) => (command ? t('gui.agent.fix_billing', v) : t('gui.agent.fix_billing_bare', v)),
+  quota: (v, command) => (command ? t('gui.agent.fix_quota', v) : t('gui.agent.fix_quota_bare', v)),
+  network: (v, command) => (command ? t('gui.agent.fix_network', v) : t('gui.agent.fix_network_bare', v)),
+  silent: (v, command) => (command ? t('gui.agent.fix_silent', v) : t('gui.agent.fix_silent_bare', v)),
+  upgrade: (v, command) => (command ? t('gui.agent.fix_upgrade', v) : t('gui.agent.fix_upgrade_bare', v)),
+  exited: (v) => t('gui.agent.fix_exited', v),
+}
+
 /* A refusal, and the fix when the server named one. The server's sentence is
    English and written for a log; a remedy is the same verdict as data, so here
    it is said in the reader's language -- what is missing, the command that
    supplies it on a line of its own, and the button to press after -- with the
-   agent's own words folded under it instead of put first. Without a remedy the
+   agent's own words folded under it instead of put first. A fix made inside
+   the agent is two numbered steps, the command that opens it and what to type
+   there, each with its own copy button: told only to run `qwen`, a reader is
+   left at its prompt with nothing saying what next. Without a remedy the
    reader is still told in their own language that it failed and what to press
    (`unknown`), and the server's sentence is folded the same way: shown first it
    was a red English paragraph, and all a reader could do with it was copy it. */
@@ -332,21 +355,25 @@ function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }
   lead?: (say: string) => string
 }): JSX.Element {
   const command = remedy && remedy.kind !== 'api_key' ? remedy.command : ''
-  const say = !remedy
-    ? unknown
-    : remedy.kind === 'api_key'
-      ? t('gui.agent.fix_api_key', { agent, button })
-      : remedy.kind === 'download'
-        ? t(command ? 'gui.agent.fix_download' : 'gui.agent.fix_download_bare', { agent, button })
-        : !command
-          ? t('gui.agent.fix_sign_in_bare', { agent, button })
-          : remedy.kind === 'setup'
-            ? t('gui.agent.fix_setup', { agent, button })
-            : t('gui.agent.fix_sign_in', { agent, button })
+  const then = command ? remedy?.then || '' : ''
+  const say = remedy ? FIX_SAY[remedy.kind]({ agent, button }, !!command, !!then) : unknown
   return (
     <div className="extAgents-fix">
       <div>{lead(say)}</div>
-      {command ? <CmdCopy cmd={command} /> : null}
+      {then ? (
+        <ol className="extAgents-steps">
+          <li>
+            {t('gui.agent.fix_step_run')}
+            <CmdCopy cmd={command} />
+          </li>
+          <li>
+            {t('gui.agent.fix_step_type')}
+            <CmdCopy cmd={then} />
+          </li>
+        </ol>
+      ) : command ? (
+        <CmdCopy cmd={command} />
+      ) : null}
       {detail ? (
         <details className="extAgents-raw">
           <summary>{t('gui.agent.fix_raw')}</summary>

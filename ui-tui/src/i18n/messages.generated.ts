@@ -1492,6 +1492,36 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this command in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}:',
     'gui.agent.fix_download_bare':
       "{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this agent's launch command once in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}.",
+    'gui.agent.fix_setup_then':
+      '{agent} has no model provider it can use yet, or its API key was refused. Set one up in two steps, then press {button}:',
+    'gui.agent.fix_step_run': 'Run in a terminal:',
+    'gui.agent.fix_step_type': 'Then type:',
+    'gui.agent.fix_model':
+      'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch to another model as below, then press {button}:',
+    'gui.agent.fix_model_bare':
+      'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch it to another model, then press {button}.',
+    'gui.agent.fix_billing':
+      "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model as below, then press {button}:",
+    'gui.agent.fix_billing_bare':
+      "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model, then press {button}.",
+    'gui.agent.fix_quota':
+      "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch to another model as below:",
+    'gui.agent.fix_quota_bare':
+      "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch it to another model.",
+    'gui.agent.fix_network':
+      '{agent} could not reach its model provider. Check the network, the proxy and the address it is set to use, then press {button}. To see the exact cause, run this command in a terminal:',
+    'gui.agent.fix_network_bare':
+      '{agent} could not reach its model provider. Check the network, the proxy and the address it is set to use, then press {button}.',
+    'gui.agent.fix_silent':
+      '{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Run this command in a terminal and it prints the reason within a couple of minutes; once that is fixed, press {button}:',
+    'gui.agent.fix_silent_bare':
+      '{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Once that is fixed, press {button}.',
+    'gui.agent.fix_upgrade':
+      '{agent} is too old to be connected: this version does not support ACP yet. Upgrade it by running this command in a terminal, then press {button}:',
+    'gui.agent.fix_upgrade_bare':
+      '{agent} is too old to be connected: this version does not support ACP yet. Upgrade it to the latest release, then press {button}.',
+    'gui.agent.fix_exited':
+      '{agent} quit as soon as it started. The original error below has what it said on its way out; once that is fixed, press {button}.',
     'gui.agent.fix_unknown_connect':
       '{agent} could not connect. The original error below says why; once it is fixed, press {button}.',
     'gui.agent.fix_unknown_save':
@@ -1503,6 +1533,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.bad_setup': '{agent} has no model provider yet',
     'gui.agent.bad_api_key': '{agent} could not use its API key',
     'gui.agent.bad_download': '{agent} could not be downloaded',
+    'gui.agent.bad_model': 'The model {agent} uses is not available',
+    'gui.agent.bad_billing': "{agent}'s provider account is out of credit",
+    'gui.agent.bad_quota': '{agent} is rate-limited or out of quota',
+    'gui.agent.bad_network': '{agent} could not reach its model provider',
+    'gui.agent.bad_silent': '{agent} did not answer in time',
+    'gui.agent.bad_upgrade': '{agent} is too old to connect',
+    'gui.agent.bad_exited': '{agent} quit as soon as it started',
     'gui.agent.bad_connect': '{agent} could not connect',
     'gui.agent.bad_save': 'The change was not saved',
     'gui.agent.bad_disconnect': '{agent} could not be disconnected',
@@ -1511,6 +1548,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} could not be disconnected. The original error below says why; press {button} to try again.',
     'gui.agent.bad_open': '{what} -- open it to see what to do',
     'gui.agent.bad_run': '{what}: run {command} in a terminal, then press {button}',
+    'gui.agent.bad_run_then': '{what}: run {command} in a terminal and type {then}, then press {button}',
+    'gui.agent.bad_run_diagnose': '{what}: run {command} in a terminal to see why, and press {button} once it is fixed',
     'gui.agent.bad_retry': '{what} -- once it is fixed, press {button}',
     'gui.agent.short_raven': 'General assistant, takes a bit of everything',
     'gui.agent.short_raven_code': 'Writes code, runs it, fixes bugs',
@@ -3938,6 +3977,35 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行下面这条命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」：',
     'gui.agent.fix_download_bare':
       '{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行一次这个智能体的启动命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」。',
+    'gui.agent.fix_setup_then':
+      '{agent} 还没有可用的模型服务商，或者 API key 不对。按下面两步配好，然后点「{button}」：',
+    'gui.agent.fix_step_run': '在终端运行：',
+    'gui.agent.fix_step_type': '进入后输入：',
+    'gui.agent.fix_model':
+      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。按下面的步骤换一个模型，然后点「{button}」：',
+    'gui.agent.fix_model_bare':
+      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。换一个模型后点「{button}」。',
+    'gui.agent.fix_billing':
+      '{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者按下面的步骤换一个模型，然后点「{button}」：',
+    'gui.agent.fix_billing_bare':
+      '{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者换一个模型，然后点「{button}」。',
+    'gui.agent.fix_quota':
+      '{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者按下面的步骤换一个模型：',
+    'gui.agent.fix_quota_bare':
+      '{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者换一个模型。',
+    'gui.agent.fix_network':
+      '{agent} 连不上它的模型服务商。检查网络、代理和它配置的服务地址，处理好后点「{button}」。想看具体原因，可以在终端运行这条命令：',
+    'gui.agent.fix_network_bare':
+      '{agent} 连不上它的模型服务商。检查网络、代理和它配置的服务地址，处理好后点「{button}」。',
+    'gui.agent.fix_silent':
+      '{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。在终端运行下面这条命令，一两分钟内会打印出原因，处理好后点「{button}」：',
+    'gui.agent.fix_silent_bare':
+      '{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。处理好后点「{button}」。',
+    'gui.agent.fix_upgrade':
+      '{agent} 的版本太旧，还不支持 ACP 接入。在终端运行下面这条命令升级到最新版，完成后点「{button}」：',
+    'gui.agent.fix_upgrade_bare': '{agent} 的版本太旧，还不支持 ACP 接入。升级到最新版后点「{button}」。',
+    'gui.agent.fix_exited':
+      '{agent} 一启动就退出了。展开下面的原始报错，能看到它退出前说了什么，处理好后点「{button}」。',
     'gui.agent.fix_unknown_connect': '{agent} 没接入成功。可以展开下面的原始报错排查原因，处理好后点「{button}」。',
     'gui.agent.fix_unknown_save': '这项修改没保存成功。可以展开下面的原始报错查看原因，或点「{button}」再试一次。',
     'gui.agent.fix_unknown_test': '可以展开下面的原始报错排查原因，处理好后再点「{button}」。',
@@ -3947,6 +4015,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.bad_setup': '{agent} 还没选模型服务商',
     'gui.agent.bad_api_key': '{agent} 的 API key 不可用',
     'gui.agent.bad_download': '{agent} 没能下载下来',
+    'gui.agent.bad_model': '{agent} 用的模型不可用',
+    'gui.agent.bad_billing': '{agent} 的服务商余额不足',
+    'gui.agent.bad_quota': '{agent} 被限流或额度用完',
+    'gui.agent.bad_network': '{agent} 连不上模型服务商',
+    'gui.agent.bad_silent': '{agent} 没有及时回复',
+    'gui.agent.bad_upgrade': '{agent} 版本太旧',
+    'gui.agent.bad_exited': '{agent} 一启动就退出了',
     'gui.agent.bad_connect': '{agent} 没接入成功',
     'gui.agent.bad_save': '这项修改没保存成功',
     'gui.agent.bad_disconnect': '{agent} 没能断开',
@@ -3954,6 +4029,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_unknown_disconnect': '{agent} 没能断开。可以展开下面的原始报错查看原因，或点「{button}」再试一次。',
     'gui.agent.bad_open': '{what}，点开看怎么做',
     'gui.agent.bad_run': '{what}：在终端运行 {command}，再点「{button}」',
+    'gui.agent.bad_run_then': '{what}：在终端运行 {command} 并输入 {then}，再点「{button}」',
+    'gui.agent.bad_run_diagnose': '{what}：在终端运行 {command} 查看原因，处理好后点「{button}」',
     'gui.agent.bad_retry': '{what}，处理好后点「{button}」',
     'gui.agent.short_raven': '通用助手，什么活都能接一点',
     'gui.agent.short_raven_code': '写代码、跑代码、修 bug',

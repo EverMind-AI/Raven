@@ -393,7 +393,7 @@ class AcpConnectionPool:
         Serialised per agent so two concurrent first tasks cannot each launch a
         server. A connection whose process has exited is replaced rather than
         handed out: the caller would otherwise get a client whose every request
-        fails with "connection is not open".
+        fails before it is sent.
 
         A connection launched from arguments this call does not share is
         replaced for the same reason. Keyed on the name alone, the `command`,

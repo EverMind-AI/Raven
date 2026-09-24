@@ -20,7 +20,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from loguru import logger
 
@@ -57,8 +57,10 @@ def default_state_path() -> Path:
     return get_config_path().parent / _FILENAME
 
 
-RemedyKind = Literal["sign_in", "setup", "api_key", "download"]
-_REMEDY_KINDS: frozenset[str] = frozenset(("sign_in", "setup", "api_key", "download"))
+RemedyKind = Literal[
+    "sign_in", "setup", "api_key", "download", "model", "billing", "quota", "network", "silent", "upgrade", "exited"
+]
+_REMEDY_KINDS: frozenset[str] = frozenset(get_args(RemedyKind))
 
 
 @dataclass(frozen=True)
@@ -79,13 +81,31 @@ class Remedy:
     command as the way to fetch it in a terminal, where nothing times it out --
     and no command at all for a row whose command was edited, since that is
     its operator's execution config (`probe._shipped_command`).
+
+    The rest are the agent's model provider answering and refusing, as the agent
+    relayed the provider's own HTTP status: ``model`` (404, the model it is set
+    to use is not served -- gone from a free tier, or not found), ``billing``
+    (402, no credit), ``quota`` (429, rate-limited or a daily quota spent), and
+    ``network`` (the provider could not be reached at all). ``silent`` is the
+    one without a reason: the agent kept working past the connect's wait and
+    said nothing, and ``command`` is what makes it say why. ``upgrade`` is an
+    agent too old to know its own ACP flag; ``exited`` is one that quit and
+    left its reason on stderr, which the English detail already carries.
+
+    ``then`` is what to type once ``command`` is running, for an agent whose fix
+    is a step inside it rather than the command itself (`presets.SignIn.then`).
     """
 
     kind: RemedyKind
     command: str | None = None
+    then: str | None = None
 
     def to_wire(self) -> dict[str, str]:
-        return {"kind": self.kind, **({"command": self.command} if self.command else {})}
+        return {
+            "kind": self.kind,
+            **({"command": self.command} if self.command else {}),
+            **({"then": self.then} if self.command and self.then else {}),
+        }
 
     @classmethod
     def from_wire(cls, raw: Any) -> "Remedy | None":
@@ -93,7 +113,9 @@ class Remedy:
         if not isinstance(raw, dict) or raw.get("kind") not in _REMEDY_KINDS:
             return None
         command = raw.get("command")
-        return cls(raw["kind"], command if isinstance(command, str) and command else None)
+        command = command if isinstance(command, str) and command else None
+        then = raw.get("then")
+        return cls(raw["kind"], command, then if command and isinstance(then, str) and then else None)
 
 
 @dataclass(frozen=True)
