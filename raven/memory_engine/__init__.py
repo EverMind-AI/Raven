@@ -61,6 +61,7 @@ if TYPE_CHECKING:
         QueryRewriter,
         SkillForgeRouter,
     )
+    from raven.memory_engine.skill_forge.catalog import render_skill_body
     from raven.memory_engine.skill_forge.refs import resolve_refs
     from raven.memory_engine.skill_forge.types import RouterHit
     from raven.memory_engine.skill_local.registry import (
@@ -94,6 +95,7 @@ __all__ = [
     "parse_episode_line",
     "parse_user_md_sections",
     "render_folded_block",
+    "render_skill_body",
     "resolve_refs",
     "slice_after_day",
     "upsert_section",
@@ -125,6 +127,7 @@ _FACE: dict[str, str] = {
     "parse_episode_line": "raven.memory_engine.consolidate.consolidator",
     "parse_user_md_sections": "raven.memory_engine.consolidate.consolidator",
     "render_folded_block": "raven.memory_engine.consolidate.behaviors",
+    "render_skill_body": "raven.memory_engine.skill_forge.catalog",
     "resolve_refs": "raven.memory_engine.skill_forge.refs",
     "slice_after_day": "raven.memory_engine.consolidate.behaviors",
     "upsert_section": "raven.memory_engine.consolidate.attention",

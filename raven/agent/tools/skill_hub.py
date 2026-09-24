@@ -157,7 +157,7 @@ class ReadSkillTool(Tool):
             # `references/x.md` for the model to place, and three deck runs on two
             # models each went hunting the filesystem for it, one reading another
             # checkout's copy.
-            from raven.memory_engine.skill_forge.catalog import render_skill_body
+            from raven.memory_engine import render_skill_body
 
             return render_skill_body(meta)
 
