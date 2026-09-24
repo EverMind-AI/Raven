@@ -67,8 +67,13 @@ Shell 匹配遵循以下规则：
   `git status * = allow` 生效。
 - 复合命令只有每个 segment 都允许才允许；任一 segment 拒绝会拒绝整个调用。
   `git *` 不会隐式授权 `sudo git ...`。
-- 命令/进程替换、反引号、heredoc 或越界重定向可能导致只使用 fallback 规则。
-  这是保守解析，不能证明命令启动的每个程序都安全。
+- 命令/进程替换、反引号、heredoc 或越界重定向可能导致 `allow` 和 `ask`
+  模式只使用 fallback 规则。这是保守解析，不能证明命令启动的每个程序都安全。
+- `deny` 模式会先于上述处理，针对命令实际运行的每个程序进行判断：包装命令之后
+  （`sudo`、`env`、`bash -c`、`xargs`、`doas`、`watch`）、替换内部、shell
+  关键字之后，或带路径时（`/usr/bin/curl`）。因此 `curl * = deny` 也会拒绝
+  `bash -c "curl ..."` 和 `curl ... > /tmp/out`。程序自己拼出来的命令
+  （`python -c`、脚本文件、alias）仍然看不到。
 
 与 OpenCode 的有序规则不同，Raven **不采用最后匹配优先**。不要直接粘贴另一产品的
 权限 schema 或优先级。除非明确需要宽泛的无人值守执行，否则避免 `"*": "allow"`。
