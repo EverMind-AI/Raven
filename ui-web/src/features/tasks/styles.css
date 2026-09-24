@@ -125,6 +125,24 @@
   cursor: default;
 }
 
+.tklistrow { position: relative; }
+.tklistrow:has(.tkliststop) > .tklistopen { padding-right: 42px; }
+.tkliststop {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--clay) 8%, transparent);
+  color: var(--clay);
+}
+.tkliststop svg { width: 18px; height: 18px; }
+.tkliststop:hover:not(:disabled) { background: color-mix(in oklab, var(--clay) 16%, transparent); }
+
 /* The "why" banner: a red band for a failure, a cooler one for an
    interruption, with a link underneath to the node it happened on. */
 .tkwhy {

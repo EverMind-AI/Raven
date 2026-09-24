@@ -144,23 +144,26 @@ function Row({ row, now, open, onOpen }: {
   const line = [dur != null ? formatDuration(dur) : '', step, productText(productsOf(row))]
     .filter(Boolean).join(' · ')
   return (
-    <button
-      type="button"
-      className="sarow task"
-      data-st={tdotState(row.status)}
-      aria-current={open || undefined}
-      onClick={() => onOpen(row)}
-    >
-      <span className={'dot ' + dotOf(row.status)} />
-      <div className="bd">
-        <div className="tline">
-          <span className="nm">{row.task_summary || row.id}</span>
-          {isGraph(row) ? <GraphTag /> : null}
+    <div className="tklistrow">
+      <button
+        type="button"
+        className="sarow task tklistopen"
+        data-st={tdotState(row.status)}
+        aria-current={open || undefined}
+        onClick={() => onOpen(row)}
+      >
+        <span className={'dot ' + dotOf(row.status)} />
+        <div className="bd">
+          <div className="tline">
+            <span className="nm">{row.task_summary || row.id}</span>
+            {isGraph(row) ? <GraphTag /> : null}
+          </div>
+          <s className="st">{line}</s>
         </div>
-        <s className="st">{line}</s>
-      </div>
-      {row.status === 'failed' || row.status === 'interrupted' ? <ErrorTag /> : null}
-    </button>
+        {row.status === 'failed' || row.status === 'interrupted' ? <ErrorTag /> : null}
+      </button>
+      {row.status === 'running' ? <StopButton row={row} compact /> : null}
+    </div>
   )
 }
 
@@ -953,13 +956,15 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
 
 /* ── the pane ──────────────────────────────────────────────────────────── */
 
-function StopButton({ row }: { row: TaskRow }): JSX.Element {
+function StopButton({ row, compact = false }: { row: TaskRow; compact?: boolean }): JSX.Element {
   const [busy, setBusy] = useState(false)
   return (
     <button
-      className="tkbaract"
+      type="button"
+      className={'tkbaract' + (compact ? ' tkliststop' : '')}
       disabled={busy}
-      title={t('gui.tasks.stop_title')}
+      aria-label={compact ? t('gui.stop') : undefined}
+      title={row.kind === 'dag' ? t('gui.tasks.stop_title') : t('gui.stop')}
       onClick={() => {
         /* Said the moment the request goes out, not once the reconciled row
            lands: the button greying out is not itself an answer to "did that
@@ -967,11 +972,13 @@ function StopButton({ row }: { row: TaskRow }): JSX.Element {
            exactly where the prototype's own toast fires. */
         toast(t('gui.tasks.stop_requested'))
         setBusy(true)
-        void store.stop(row).finally(() => setBusy(false))
+        void store.stop(row)
+          .catch((error: unknown) => toast(error instanceof Error ? error.message : String(error)))
+          .finally(() => setBusy(false))
       }}
     >
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.5 7.5h9v9h-9z" /></svg>
-      {t('gui.tasks.stop')}
+      {compact ? null : t('gui.tasks.stop')}
     </button>
   )
 }
