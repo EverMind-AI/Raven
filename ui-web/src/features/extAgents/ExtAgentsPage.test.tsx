@@ -634,6 +634,41 @@ describe('the sheet', () => {
     expect(acts.map((a) => a.slice(0, 2))).toEqual([['test', 'codex']])
   })
 
+  /* One verdict for the card and the sheet, from `healthOf`: a failed test
+     reddens the card of a connected row the way the sheet already was, an off
+     row keeps its section's word instead, and every dot names its state. */
+  it('paints the card red for a connected row whose last test failed, and nothing for one that is off', async () => {
+    install([
+      row({ name: 'on_bad', last_test_ok: false, last_test_detail: 'no credential' }),
+      row({ name: 'off_bad', enabled: false, last_test_ok: false, last_test_detail: 'no credential' }),
+    ])
+    await mount()
+    expect(ledOf('on_bad')).toBe('extAgents-led extAgents-led-bad')
+    expect(ledOf('off_bad')).toBeNull()
+  })
+
+  it("says in the sheet what the card's gold dot means, with the probe's own words folded under", async () => {
+    install([row({ name: 'on_warn', probe_status: 'attention', probe_detail: 'launch config changed since the last test -- run a test' })])
+    await mount()
+    expect(ledOf('on_warn')).toBe('extAgents-led extAgents-led-warn')
+    await openSheet('on_warn')
+    const line = sheet()!.querySelector('.extAgents-by')!
+    expect(line.querySelector('.extAgents-led')!.className).toBe('extAgents-led extAgents-led-warn')
+    expect(line.textContent).toContain('gui.agent.hd_on_attention')
+    expect(line.querySelector('details.extAgents-raw')!.textContent).toContain('launch config changed since the last test')
+  })
+
+  it('names the dot for a reader who cannot see its colour', async () => {
+    install([row({ name: 'fine' }), row({ name: 'on_warn', probe_status: 'attention' }), row({ name: 'on_bad', last_test_ok: false })])
+    await mount()
+    const nameOf = (name: string): string | null => rowNamed(name).querySelector('.extAgents-led')!.getAttribute('aria-label')
+    expect(nameOf('fine')).toContain('gui.agent.hd_on_by')
+    expect(nameOf('on_warn')).toBe('gui.agent.hd_on_attention')
+    expect(nameOf('on_bad')).toBe('gui.agent.hd_on_test_bad')
+    /* The tooltip is on the name beside the dot, a target a pointer can find. */
+    expect(rowNamed('on_warn').querySelector('.extAgents-nm')!.getAttribute('title')).toBe('gui.agent.hd_on_attention')
+  })
+
   it('keeps its rendered shape, grid', async () => {
     install([
       row({ name: 'Raven', preset: undefined, kind: 'builtin', builtin: true, configured: false, probe_status: 'unknown' }),

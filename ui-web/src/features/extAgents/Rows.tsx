@@ -17,9 +17,11 @@ import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
 import { isOwnRow, shortOf } from './catalogue'
-import { sectionOf, stageOf } from './source'
+import { healthOf, ledClass, pendingLabel, shownOf, whatFailed } from './health'
+import { stageOf } from './source'
 import * as store from './store'
 
+import type { Health, Shown } from './health'
 import type { ExtAgentsState, Failure } from './store'
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
@@ -35,46 +37,24 @@ const kindText = (kind: string): string =>
           : 'gui.agent.kind_cli',
   )
 
-/* The states a row and its sheet are drawn in. `pending` and `failed` are
-   this page's own, about a write in flight or refused; the other three are the
-   section the server's facts put the row in. */
-export type Shown = 'pending' | 'failed' | 'missing' | 'on' | 'off'
-
-/* The word a row wears while its own write is in flight. One `pending` covers
-   every write this page makes, so the word comes from the write rather than
-   from the state: a switch-on waits on the readiness ping and says it is
-   testing, a switch-off waits on its own write alone and says it is
-   disconnecting, and the rest -- a key, a model, a description -- keep the
-   older word, being neither. */
-export function pendingLabel(row: ExtAgentRow, s: ExtAgentsState): string {
-  const write = s.joining[row.name]
-  if (!write) return 'gui.agent.setup_connecting'
-  if (store.probes(write)) return 'gui.agent.testing'
-  return store.disconnects(write) ? 'gui.agent.disconnecting' : 'gui.agent.setup_connecting'
-}
-
-export function shownOf(row: ExtAgentRow, s: ExtAgentsState): Shown {
-  if (row.name in s.joining) return 'pending'
-  if (s.failed[row.name]) return 'failed'
-  const section = sectionOf(row)
-  return section === 'missing' ? 'missing' : section === 'on' ? 'on' : 'off'
-}
-
 export function Spin(): JSX.Element {
   return <span className="extAgents-spin" aria-hidden="true" />
 }
 
-/* The dot: green for a working agent, gold when the probe has a caveat, amber
-   and pulsing while a write is in flight, red for a refusal. None at all for a
-   row that is merely off or absent -- "not connected" is what the section
-   already says. */
-function Led({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
-  if (shown === 'pending') return <span className="extAgents-led extAgents-led-busy" />
-  if (shown === 'failed') return <span className="extAgents-led extAgents-led-bad" />
-  if (shown !== 'on') return null
-  const warn = !row.builtin && row.probe_status === 'attention'
-  return <span className={'extAgents-led' + (warn ? ' extAgents-led-warn' : '')} />
+/* The dot: `healthOf`'s verdict, or nothing. None for a row that is merely
+   off or absent -- "not connected" is what the section already says -- and a
+   failed test is drawn only on a connected row, by the same rule: an off row's
+   section says it is not in use, and its sheet keeps the verdict. A test under
+   way pulses on any row, since the sheet says the same of it. The verdict is
+   the dot's accessible name; the tooltip sits on the name beside it, which is
+   a target a pointer can find. */
+function Led({ health, shown }: { health: Health; shown: Shown }): JSX.Element | null {
+  if (health.tone === 'none' || (health.from === 'test' && shown !== 'on')) return null
+  return <span aria-label={health.label} className={ledClass(health.tone)} role="img" />
 }
+
+const tooltip = (health: Health, shown: Shown): string | undefined =>
+  health.tone === 'none' || (health.from === 'test' && shown !== 'on') ? undefined : health.label
 
 export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
   const own = isOwnRow(row)
@@ -95,33 +75,6 @@ function oneLine(row: ExtAgentRow): string {
   const base =
     short || ((row.probe_status === 'attention' || row.probe_status === 'missing') && row.probe_detail) || kindText(row.kind)
   return stale ? `${base} · ${stale}` : base
-}
-
-/* What a refused write comes to, in the reader's language: the fix the server
-   named, by its kind, or what failed when it named none. The server's own
-   sentence is English, and cut to the two lines a card has it said neither
-   what went wrong nor what to do -- so it is shown only in the sheet, folded
-   under the fix. */
-function whatFailed(row: ExtAgentRow, failed: Failure): string {
-  const agent = row.name
-  const kind = failed.remedy?.kind
-  if (kind === 'sign_in') return t('gui.agent.bad_sign_in', { agent })
-  if (kind === 'setup') return t('gui.agent.bad_setup', { agent })
-  if (kind === 'api_key') return t('gui.agent.bad_api_key', { agent })
-  if (kind === 'download') return t('gui.agent.bad_download', { agent })
-  const write = refusedWrite(failed)
-  return t(write === 'save' ? 'gui.agent.bad_save' : write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', {
-    agent,
-  })
-}
-
-/* Which write a refusal refused, which decides its words when no fix is named:
-   a switch-off is not a connect (`disconnects` says so for the pending ring
-   too), and an edit is neither. The sheet asks the same question, so a card and
-   its sheet cannot say two things about one refusal. */
-export function refusedWrite(failed: Failure): 'connect' | 'disconnect' | 'save' {
-  if (store.disconnects(failed)) return 'disconnect'
-  return failed.op === 'model' || failed.op === 'update' ? 'save' : 'connect'
 }
 
 /* The red line itself. A card or row that opens a sheet points there, where
@@ -209,6 +162,7 @@ function AgentRow({
   row, s, onOpen,
 }: { row: ExtAgentRow; s: ExtAgentsState; onOpen?: (row: ExtAgentRow) => void }): JSX.Element {
   const shown = shownOf(row, s)
+  const health = healthOf(row, s)
   const failed = s.failed[row.name]
   const open = onOpen ? (): void => onOpen(row) : undefined
   return (
@@ -230,8 +184,8 @@ function AgentRow({
     >
       <Tile row={row} />
       <div className="extAgents-who">
-        <div className="extAgents-nm">
-          <Led row={row} shown={shown} />
+        <div className="extAgents-nm" title={tooltip(health, shown)}>
+          <Led health={health} shown={shown} />
           <span className="extAgents-t">{row.name}</span>
         </div>
         {shown === 'pending' ? (
@@ -287,6 +241,7 @@ function CardControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.El
 
 function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
   const shown = shownOf(row, s)
+  const health = healthOf(row, s)
   const failed = s.failed[row.name]
   const open = (): void => store.sheetOpen(row)
   return (
@@ -306,9 +261,9 @@ function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Ele
     >
       <div className="extAgents-ctop">
         <Tile row={row} />
-        <div className="extAgents-nm">
+        <div className="extAgents-nm" title={tooltip(health, shown)}>
           <span className="extAgents-t">{row.name}</span>
-          <Led row={row} shown={shown} />
+          <Led health={health} shown={shown} />
         </div>
         <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
           <CardControl row={row} shown={shown} />
