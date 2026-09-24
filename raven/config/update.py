@@ -664,7 +664,12 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
 
 
 def _everos_consumes_the_pin(path: "Path") -> bool:
-    """Whether the memory backend this config names is EverOS.
+    """Whether an EverOS backend will read the pin this config carries.
+
+    Two things have to hold: the ``everos-memory`` distribution is installed,
+    and the memory backend this config names is EverOS. A knowledge-only
+    install ships without the plugin and still carries the schema default, so
+    the name alone would gate a pin nothing consumes.
 
     Read raw rather than through the loader: the writer already holds the file,
     and the loader's migrations have no business running inside a settings
@@ -675,6 +680,8 @@ def _everos_consumes_the_pin(path: "Path") -> bool:
     """
     from raven.config.raven import MemoryConfig
 
+    if not _everos_plugin_present():
+        return False
     shipped = MemoryConfig.model_fields["backend"].default
     try:
         memory = read_raw_or_raise(path).get("memory") or {}
@@ -682,6 +689,23 @@ def _everos_consumes_the_pin(path: "Path") -> bool:
         return False
     backend = memory["backend"] if "backend" in memory else shipped
     return backend == shipped
+
+
+def _everos_plugin_present() -> bool:
+    """Whether the ``everos-memory`` distribution is present in this install.
+
+    The same question ``raven.core.plugin_stack.everos_plugin_installed``
+    answers, asked the same way -- an imported module is present by definition,
+    and a spec lookup executes no line of the plugin -- and kept as a copy here
+    because ``raven.core`` imports this package and importing back would close
+    a cycle.
+    """
+    import sys
+    from importlib.util import find_spec
+
+    if sys.modules.get("raven_everos") is not None:
+        return True
+    return find_spec("raven_everos") is not None
 
 
 _EMBEDDING_MODEL_CHANGED = (

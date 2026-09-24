@@ -592,6 +592,52 @@ def test_skill_unblock_removes_from_an_existing_snake_blocklist(cfg_path: Path) 
     assert _read(cfg_path)["skill_forge"]["blocklist"] == ["beta"]
 
 
+class TestTheWidthGateIsEverosOnly:
+    """The 1024-width requirement is the memory index's, so it applies only
+    where an EverOS backend will read the pin: the plugin installed and the
+    config naming it (or carrying the schema default)."""
+
+    @staticmethod
+    def _config(tmp_path, *, memory=None):
+        import json
+
+        raw = {"providers": {"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}}}
+        if memory is not None:
+            raw["memory"] = memory
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps(raw), encoding="utf-8")
+        return cfg
+
+    def test_without_the_plugin_a_knowledge_only_install_keeps_any_width(self, tmp_path, monkeypatch) -> None:
+        """A core/knowledge install ships without everos-memory and still
+        carries the schema default; nothing there reads the pin at 1024."""
+        from raven.config.update import set_embedding_endpoint
+        from tests._everos_presence import everos_plugin_absent
+
+        cfg = self._config(tmp_path)
+        monkeypatch.setattr("raven.config.update.probe_embedding_dimensions", lambda url, headers, model: 768)
+
+        with everos_plugin_absent():
+            set_embedding_endpoint(
+                {"model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}, config_path=cfg
+            )
+
+        import json
+
+        assert json.loads(cfg.read_text())["embedding"]["model"] == "deepinfra/BAAI/bge-base-en-v1.5"
+
+    def test_with_the_plugin_and_the_default_backend_the_width_is_required(self, tmp_path, monkeypatch) -> None:
+        from raven.config.update import EmbeddingPinError, set_embedding_endpoint
+
+        cfg = self._config(tmp_path)
+        monkeypatch.setattr("raven.config.update.probe_embedding_dimensions", lambda url, headers, model: 768)
+
+        with pytest.raises(EmbeddingPinError, match="768"):
+            set_embedding_endpoint(
+                {"model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}, config_path=cfg
+            )
+
+
 class TestProbeEmbeddingDimensions:
     """The one request the pin writer makes, against a fake provider."""
 
