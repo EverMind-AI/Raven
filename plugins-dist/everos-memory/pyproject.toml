@@ -17,10 +17,10 @@ classifiers = [
 
 dependencies = [
     "raven",
-    # The substrate this adapter binds. Exact pin, not a range: the adapter
-    # reaches internal (non-public) everos APIs, so an upgrade is a deliberate
-    # act. Same pin the host carried while the plugin lived inside it.
-    "everos[multimodal]==1.2.3",
+    # The substrate this adapter binds, held to one minor line: the adapter
+    # reaches internal (non-public) everos APIs, so a minor or major bump is a
+    # deliberate act; a patch release may follow through `uv lock --upgrade`.
+    "everos[multimodal]>=1.4.1,<1.5",
     "httpx>=0.28.0,<1.0.0",
     "loguru>=0.7.3,<1.0.0",
     "tomli-w>=1.2.0",

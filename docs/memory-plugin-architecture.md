@@ -315,7 +315,7 @@ imported.
 
 ## 7. EverOS version pinning & upgrade SOP
 
-### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.2.3`]**
+### 7.1 Pin to one minor line **[DONE: `everos[multimodal]>=1.4.1,<1.5`]**
 
 The adapter is written against EverOS **internal** APIs, not a stable
 public surface:
@@ -328,27 +328,31 @@ public surface:
   `everos.service.memorize._get_engine`,
   `everos.infra.persistence.sqlite.md_change_state_repo`
 
-Any release — even a patch — can move these symbols. Therefore EverOS
-is pinned to an exact version (`==X.Y.Z`), not a range: upgrades are
-deliberate, re-validated events, never something `uv lock --upgrade`
-can do silently.
+Any release — even a patch — can move these symbols. EverOS is held to
+one minor line (`>=X.Y.Z,<X.(Y+1)`): a patch release may follow through
+`uv lock --upgrade`, which accepts that risk for patches, while a minor
+or major bump stays a deliberate, re-validated event. The lock still
+names one exact version and the release's `raven-constraints.txt` is
+exported from it, so an install from a release gets that version and no
+other.
 
-Single pin: with `raven_everos` removed, EverOS is pinned in **one**
-place (raven's `pyproject.toml`). The upgrade surface is one line.
+Single pin: EverOS is pinned in **one** place, the plugin's
+`plugins-dist/everos-memory/pyproject.toml`. The upgrade surface is one
+line.
 
 ### 7.2 Upgrade procedure
 
 0. **Assess**: read the EverOS changelog; check whether the internal
    symbols above moved, and whether the on-disk schema
    (`~/.everos/.index/` sqlite + lancedb) changed.
-1. **Bump the pin (uv only — never hand-edit pyproject/lock)**:
+1. **Move the range (uv only — never hand-edit pyproject/lock)**:
    ```bash
-   uv add 'everos[multimodal]==1.2.3' && uv sync
+   uv add --package everos-memory 'everos[multimodal]>=1.4.1,<1.5'
    ```
    Always keep the `[multimodal]` extra. Skip `1.2.0`: it shipped a
    path-traversal regression fixed in `1.2.1`.
 2. **Adapt the adapter** if symbols/signatures changed — only
-   `raven/plugin/memory/everos/`. Re-check version assumptions
+   `plugins-dist/everos-memory/raven_everos/`. Re-check version assumptions
    written in adapter comments.
 3. **Test (all three layers)**:
    ```bash
@@ -417,6 +421,26 @@ process supervisor; raven spawns it once per session and
 until the session restarts. And `everos cascade rebuild`, now the
 supported index recovery, refuses to run while a server holds the OME
 lock — while raven exposes no way to stop the server it started.
+
+### 7.4 Record: `1.2.3` -> `1.4.1`
+
+Five lock entries moved: `everos`, `everalgo-boundary` `0.2.0` -> `0.2.1`,
+`everalgo-core` `0.4.0` -> `0.3.0` (everos pins it exactly since `1.3.0`),
+`pyarrow` `24.0.0` -> `25.0.1`, and `msvc-runtime` added on Windows only.
+Every internal symbol listed in 7.1 is present in `1.4.1`, and
+`MemorizeAddRequest.messages` still carries `min_length=1`.
+
+**No data migration.** The `subject_vector` column that `1.4.0`'s
+startup schema check requires already existed in `1.2.3`, so an index
+written by `1.2.3` opens as is. The first server start builds an
+IVF_FLAT index on every vector column past 2000 rows (seconds per 10k
+rows; searches keep working on a flat scan meanwhile). Vector search has
+used cosine on every path since `1.3.0`, so ranking can shift slightly
+on an existing store. `POST /memory/add` answers 422 instead of 500 to a
+`role = "tool"` message without `tool_call_id`; the adapter already
+treated any status error as that one write refused, so nothing changes
+on its side. `1.4.1` itself only pins `openai<3`, which a fresh install
+needs since openai 3.x broke every LLM call.
 
 ---
 

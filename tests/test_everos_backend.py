@@ -1855,7 +1855,7 @@ class TestNotReadyStoresAllReportFalseTheSameWay:
 class _SchemaStrictAdapter:
     """A fake that refuses what production refuses.
 
-    everos 1.2.3 declares ``MemorizeAddRequest.messages`` with
+    everos 1.4.1 declares ``MemorizeAddRequest.messages`` with
     ``min_length=1``, so an add carrying an empty list is a 422 and the flush
     behind it never goes out. A fake that accepts the empty add hides exactly
     that, which is how a shutdown flush that never reached the server passed
