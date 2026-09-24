@@ -169,6 +169,58 @@ describe('the tasks list', () => {
     expect(panes).toHaveLength(1)
     expect(panes[0]!.id).toBe('task:dag:a')
   })
+
+  it.each(['spawn', 'dag'] as const)('stops only the selected %s from the list without opening it', async (kind) => {
+    const running = task({ id: 'a', kind, status: 'running', agent: 'raven', handle: 'worker-a' })
+    const other = task({ id: 'b', kind: 'spawn', status: 'running' })
+    rows = [running, other]
+    await draw()
+    const stop = document.querySelector<HTMLButtonElement>('.tklistrow button[aria-label="gui.stop"]')
+    expect(stop).not.toBeNull()
+    expect(stop!.parentElement?.closest('button')).toBeNull()
+    rows = [{ ...running, status: 'cancelled' }, other]
+    await act(async () => { stop!.click() })
+    expect(stopped).toEqual([running])
+    expect(desk.get().panes).toHaveLength(0)
+    expect(store.byKey(kind, 'a')?.status).toBe('cancelled')
+    expect(store.byKey('spawn', 'b')?.status).toBe('running')
+    expect(document.querySelectorAll('.tklistrow button[aria-label="gui.stop"]')).toHaveLength(1)
+  })
+
+  it('offers no stop action for settled tasks', async () => {
+    rows = (['completed', 'cancelled', 'failed', 'interrupted'] as const)
+      .map((status) => task({ id: status, kind: 'spawn', status }))
+    await draw()
+    expect(document.querySelectorAll('.tklistrow button[aria-label="gui.stop"]')).toHaveLength(0)
+  })
+
+  it('disables stop while pending, reports failure and allows a retry', async () => {
+    const running = task({ id: 'a', kind: 'spawn', status: 'running' })
+    rows = [running]
+    let rejectStop = (_error: Error): void => {}
+    const stopRequest = vi.fn(() => new Promise<boolean>((_resolve, reject) => { rejectStop = reject }))
+    setSources({ tasks: { ...source(), stop: stopRequest } })
+    const toasts = document.createElement('div')
+    toasts.id = 'toasts'
+    document.body.append(toasts)
+    await draw()
+    const stop = document.querySelector<HTMLButtonElement>('.tklistrow button[aria-label="gui.stop"]')
+    expect(stop).not.toBeNull()
+    act(() => { stop!.click() })
+    expect(stop!.disabled).toBe(true)
+    act(() => { stop!.click() })
+    expect(stopRequest).toHaveBeenCalledTimes(1)
+    await act(async () => { rejectStop(new Error('Connection lost')) })
+    expect(stop!.disabled).toBe(false)
+    expect(toastGet().some((n) => n.text.includes('Connection lost'))).toBe(true)
+    expect(store.byKey('spawn', 'a')?.status).toBe('running')
+    stopRequest.mockResolvedValueOnce(true)
+    rows = [{ ...running, status: 'cancelled' }]
+    await act(async () => { stop!.click() })
+    expect(stopRequest).toHaveBeenCalledTimes(2)
+    expect(store.byKey('spawn', 'a')?.status).toBe('cancelled')
+    toasts.remove()
+  })
 })
 
 describe('the running strip', () => {
