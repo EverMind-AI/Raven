@@ -349,10 +349,11 @@ describe('the onboarding wizard\'s agents step', () => {
 
   /* A plan's `command` is the page that sells one: a row that told the reader
      to "run" a URL in a terminal would be telling them to do the wrong thing
-     with the right address, so the row names the problem and the retry, and the
-     link is the sheet's to give. A config's check is a command, and is run. */
+     with the right address, so the row says to open it; without one there is
+     only the retry. A config's check is a command, and is run. */
   it.each([
-    [{ kind: 'plan', command: 'https://www.kimi.com/code/#pricing' }, 'gui.agent.bad_plan', 'gui.agent.bad_retry'],
+    [{ kind: 'plan', command: 'https://www.kimi.com/code/#pricing' }, 'gui.agent.bad_plan', 'gui.agent.bad_plan_link'],
+    [{ kind: 'plan', command: '' }, 'gui.agent.bad_plan', 'gui.agent.bad_retry'],
     [{ kind: 'config', command: 'kimi doctor config' }, 'gui.agent.bad_config', 'gui.agent.bad_run'],
   ])('puts an account or config fix on the row as what it is (%o)', async (remedy, bad, line) => {
     const rows = [row({ name: 'Kimi Code', preset: 'kimi_code' })]
@@ -373,7 +374,8 @@ describe('the onboarding wizard\'s agents step', () => {
       fireEvent.click(control('Kimi Code'))
     })
     const what = `${bad} ${JSON.stringify({ agent: 'Kimi Code' })}`
-    const vars = line === 'gui.agent.bad_retry' ? { what, button: 'gui.retry' } : { what, command: remedy.command, button: 'gui.retry' }
+    const vars =
+      line === 'gui.agent.bad_retry' ? { what, button: 'gui.retry' } : { what, command: remedy.command, button: 'gui.retry' }
     expect(rowNamed('Kimi Code').querySelector('.extAgents-one-bad')!.textContent).toBe(`${line} ${JSON.stringify(vars)}`)
   })
 

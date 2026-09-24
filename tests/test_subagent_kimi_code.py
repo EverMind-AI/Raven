@@ -2,7 +2,9 @@
 
 Every sentence here is one Kimi Code printed, measured 2026-09-24 against a
 stand-in endpoint answering each status and against a real account whose plan
-does not include it. Over ACP it says only "Authentication required" (bare, or
+does not include it -- except a membership's own limits, which no account at
+hand could reach, given in its error reference's words. Over ACP it says only
+"Authentication required" (bare, or
 with the provider's status behind it) or nothing at all; `kimi -p` prints the
 reason as ``error: failed to run prompt: ...``. A stand-in `kimi` plays both
 halves: ``acp`` runs the stub ACP server, ``-p`` prints what the test gives it.
@@ -10,6 +12,7 @@ halves: ``acp`` runs the stub ACP server, ``-p`` prints what the test gives it.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import shlex
 import sys
@@ -38,6 +41,17 @@ def _cfg(command: str = "kimi acp", **kw: Any) -> ThirdPartyAcpSubagentConfig:
     return ThirdPartyAcpSubagentConfig(name="Kimi Code", preset="kimi_code", command=command, **kw)
 
 
+@pytest.fixture(autouse=True)
+def _no_login_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hand the launch and the ask this process's environment rather than a login shell's.
+
+    What is under test is how Kimi Code's words are read, not the capture; the
+    first test to reach it would otherwise spend seconds running the developer's
+    own shell, and the stand-in `kimi` travels on each row's own PATH anyway.
+    """
+    monkeypatch.setattr("raven.agent.subagent.backends.env._LOGIN_ENV", dict(os.environ))
+
+
 @pytest.mark.parametrize(
     "said, remedy",
     [
@@ -54,7 +68,7 @@ def _cfg(command: str = "kimi acp", **kw: Any) -> ThirdPartyAcpSubagentConfig:
         ('Model "moonshotai-cn/no-such-model" is not configured in config.toml.', Remedy("model", *SWITCH)),
         (
             "provider.api_error: 402 This request requires more credits, or fewer max_tokens. You requested up to "
-            "131072 tokens, but can only afford 94272.",
+            "32768 tokens, but can only afford 2048.",
             Remedy("billing", *SWITCH),
         ),
         ("provider.api_error: 404 Not found the model some-model or Permission denied", Remedy("model", *SWITCH)),
@@ -68,6 +82,68 @@ def _cfg(command: str = "kimi acp", **kw: Any) -> ThirdPartyAcpSubagentConfig:
             "recharge your account or check your plan and billing details",
             Remedy("billing", *SWITCH),
         ),
+        (
+            "no provider configured; complete onboarding via /login or the providers endpoint",
+            Remedy("sign_in", "kimi login"),
+        ),
+        # Kimi Code's error reference: a signed-in account's own limits arrive as
+        # 401 or 403 too, and none of them is a key to replace.
+        (
+            "Authentication required: 403 You've reached your 5-hour usage limit. Your quota will reset when the "
+            "current 5-hour window ends.",
+            Remedy("quota", *SWITCH),
+        ),
+        (
+            "Authentication required: 403 You've reached your weekly (7-day) usage limit. Your quota will reset "
+            "when the current 7-day window ends.",
+            Remedy("quota", *SWITCH),
+        ),
+        (
+            "Authentication required: 403 You've reached your monthly usage limit for this billing cycle. Your "
+            "quota will be refreshed in the next cycle.",
+            Remedy("quota", *SWITCH),
+        ),
+        (
+            "Authentication required: 403 You've reached your concurrent request limit. Please wait for your "
+            "ongoing requests to finish and try again.",
+            Remedy("quota", *SWITCH),
+        ),
+        (
+            "Authentication required: 401 Your current subscription does not have access to k3. Upgrade to "
+            "higher-tier Kimi Code plans.",
+            Remedy("model", *SWITCH),
+        ),
+        (
+            "Authentication required: 401 Your current plan supports only k3 up to 256K context. 1M context is "
+            "available on higher-tier Kimi Code plans.",
+            Remedy("model", *SWITCH),
+        ),
+        (
+            "Authentication required: 401 Your current subscription does not have access to "
+            "kimi-for-coding-highspeed. Upgrade to higher-tier Kimi Code plans.",
+            Remedy("model", *SWITCH),
+        ),
+        (
+            "Authentication required: 401 Your model id does not exist, recognized as other:claude-sonnet.",
+            Remedy("model", *SWITCH),
+        ),
+        (
+            "Authentication required: 401 The API Key appears to be invalid or may have expired. Please verify "
+            "your credentials and try again.",
+            Remedy("setup", *EDIT_PROVIDER),
+        ),
+        (
+            "provider.api_error: 402 We're unable to verify your membership benefits at this time. Please ensure "
+            "your membership is active.",
+            Remedy("plan"),
+        ),
+        # Measured with a made-up key: one provider's words for a key it does not
+        # know. Any other 401 is a refused key however it is worded.
+        ("Authentication required: 401 Missing Authentication header", Remedy("setup", *EDIT_PROVIDER)),
+        # A plan refusal wrapped in the provider's JSON, or ending a sentence,
+        # keeps only the address.
+        (f'Authentication required: 403 {{"error": {{"message": "{PLAN}"}}}}', Remedy("plan", PRICING)),
+        (f"Authentication required: 403 {PLAN}.", Remedy("plan", PRICING)),
     ],
 )
 def test_kimi_codes_own_words_name_the_fix(said: str, remedy: Remedy) -> None:
@@ -90,6 +166,10 @@ def test_kimi_codes_own_words_name_the_fix(said: str, remedy: Remedy) -> None:
         "provider.api_error: 400 Invalid request: the max_tokens is too large",
         "Provider safety policy blocked the response.",
         "provider.connection_error: Connection error.",
+        # A 401 or 403 that does not read as a credential is not told as one.
+        "Authentication required: 403 We consider the current URL poses a security risk",
+        # A port is not a status.
+        "connect ECONNREFUSED 127.0.0.1:403",
     ],
 )
 def test_words_that_name_no_fix_are_left_as_they_came(said: str) -> None:
@@ -106,14 +186,16 @@ def _through_kimi(
     message: str | None = None,
     no_acp: bool = False,
     slow_ask: bool = False,
+    ansi: bool = False,
     command: str = "kimi acp",
     **kw: Any,
 ) -> ThirdPartyAcpSubagentConfig:
     """The Kimi Code preset, run by a stand-in `kimi` on PATH.
 
     ``acp`` starts the stub server in ``mode``; ``-p`` prints ``says`` the way
-    Kimi Code 2.1.0 does, or answers when there is nothing to say, and notes
-    that it was asked; ``doctor config`` reports ``doctor`` as its one issue.
+    Kimi Code 2.1.0 does (in colour with ``ansi``), or answers when there is
+    nothing to say, and notes that it was asked; with ``slow_ask`` it notes its
+    pid and never finishes. ``doctor config`` reports ``doctor`` as its one issue.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -123,6 +205,8 @@ def _through_kimi(
         if no_acp
         else f"exec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}"
     )
+    slow = f"    printf '%s\\n' \"$$\" > {shlex.quote(str(tmp_path / 'ask.pid'))}; exec sleep 30\n" if slow_ask else ""
+    red, plain = ("\\033[91m", "\\033[39m") if ansi else ("", "")
     kimi = bin_dir / "kimi"
     kimi.write_text(
         "#!/bin/sh\n"
@@ -130,10 +214,10 @@ def _through_kimi(
         f"  acp) {start} ;;\n"
         "  -p)\n"
         f"    printf '%s\\n' \"$*\" >> {shlex.quote(str(asked))}\n"
-        f"    {'sleep 5' if slow_ask else ':'}\n"
+        f"{slow}"
         '    if [ -n "$KIMI_STUB_SAYS" ]; then\n'
         "      printf '%s\\n' 'kimi version 2.1.0' >&2\n"
-        "      printf '%s\\n' \"error: failed to run prompt: $KIMI_STUB_SAYS\" >&2\n"
+        f"      printf '{red}error: failed to run prompt: %s{plain}\\n' \"$KIMI_STUB_SAYS\" >&2\n"
         "      printf '%s\\n' 'See log: /nowhere/logs/kimi-code.log' >&2\n"
         "      exit 1\n"
         "    fi\n"
@@ -164,6 +248,14 @@ def _through_kimi(
 def _asked(tmp_path: Path) -> list[str]:
     log = tmp_path / "asked"
     return log.read_text().splitlines() if log.exists() else []
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 async def test_a_plan_that_does_not_include_kimi_code_is_named_with_its_page(tmp_path: Path) -> None:
@@ -245,17 +337,60 @@ async def test_an_empty_turn_that_answers_when_asked_again_says_so(tmp_path: Pat
     assert "it answered, so the failure may have passed" in pinged.detail
 
 
+@pytest.mark.production_timing
 async def test_an_ask_that_runs_out_leaves_the_connects_own_verdict(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Retried failures take `kimi -p` about 150 s; the ask gives up rather than hold the connect."""
-    from raven.agent.subagent.probe import ping_agent
+    """Retried failures take `kimi -p` about 150 s; the ask gives up rather than hold the connect.
 
-    monkeypatch.setattr(kimi_code, "_ASK_TIMEOUT_S", 0.5)
+    It waits the cap out, a second here, to prove it holds.
+    """
+    from raven.agent.subagent.probe import PROBE_PROMPT, ping_agent
+
+    monkeypatch.setattr(kimi_code, "_ASK_TIMEOUT_S", 1.0)
     pinged = await ping_agent(_through_kimi(tmp_path, "kimi_not_ready", says=NO_MODEL, slow_ask=True))
     # The general reading of a bare credential refusal, with the preset's sign-in.
     assert pinged.remedy == Remedy("sign_in", "kimi login")
     assert pinged.detail.startswith("it is installed but has no usable credential; ")
+    assert _asked(tmp_path) == [f"-p {PROBE_PROMPT}"]
+    assert not _alive(int((tmp_path / "ask.pid").read_text())), "the `kimi` asked goes when the ask does"
+
+
+async def test_a_connect_that_goes_away_mid_ask_takes_the_kimi_it_asked(tmp_path: Path) -> None:
+    """The page that asked going away cancels the connect; the `kimi -p` it started does not outlive it."""
+    asking = asyncio.create_task(kimi_code.ask(_through_kimi(tmp_path, "ok", slow_ask=True), "hi"))
+    started = tmp_path / "ask.pid"
+    for _ in range(500):
+        if started.exists() and started.read_text().strip():
+            break
+        await asyncio.sleep(0.01)
+    pid = int(started.read_text())
+    assert _alive(pid)
+    asking.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asking
+    assert not _alive(pid)
+
+
+async def test_a_coloured_answer_is_read_like_a_plain_one(tmp_path: Path) -> None:
+    """With FORCE_COLOR set, `kimi -p` prints its error line in colour (measured); the colour is not the reason."""
+    from raven.agent.subagent.probe import ping_agent
+
+    pinged = await ping_agent(_through_kimi(tmp_path, "kimi_not_ready", says=NO_MODEL, ansi=True))
+    assert pinged.remedy == Remedy("sign_in", "kimi login")
+    assert pinged.detail.startswith("it has no model to use: ")
+    assert "\x1b" not in pinged.detail
+
+
+async def test_a_bare_refusal_asked_about_in_words_it_does_not_know_still_reads_as_a_sign_in(
+    tmp_path: Path,
+) -> None:
+    """Asking only adds to the general reading: words it cannot place (made up here) keep "sign in" and are shown."""
+    from raven.agent.subagent.probe import ping_agent
+
+    pinged = await ping_agent(_through_kimi(tmp_path, "kimi_not_ready", says="Something unexpected happened."))
+    assert pinged.remedy == Remedy("sign_in", "kimi login")
+    assert pinged.detail.endswith("asked again with `kimi -p`, it said: Something unexpected happened.")
 
 
 async def test_a_prompt_kimi_code_never_finishes_names_the_command_that_says_why(tmp_path: Path) -> None:

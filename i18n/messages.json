@@ -5192,12 +5192,12 @@
       "zh": "进入后输入："
     },
     "gui.agent.fix_model": {
-      "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch to another model as below, then press {button}:",
-      "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。按下面的步骤换一个模型，然后点「{button}」："
+      "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, a name it does not know, or a model the account's plan does not include). Switch to another model as below, then press {button}:",
+      "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了、模型名不对，或者账号的套餐不含这个模型）。按下面的步骤换一个模型，然后点「{button}」："
     },
     "gui.agent.fix_model_bare": {
-      "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch it to another model, then press {button}.",
-      "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。换一个模型后点「{button}」。"
+      "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, a name it does not know, or a model the account's plan does not include). Switch it to another model, then press {button}.",
+      "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了、模型名不对，或者账号的套餐不含这个模型）。换一个模型后点「{button}」。"
     },
     "gui.agent.fix_billing": {
       "en": "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model as below, then press {button}:",
@@ -5228,8 +5228,8 @@
       "zh": "{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上、服务商故障），它在后台反复重试、什么也不说。在终端运行下面这条命令，几分钟内会打印出原因，处理好后点「{button}」："
     },
     "gui.agent.fix_silent_bare": {
-      "en": "{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Once that is fixed, press {button}.",
-      "zh": "{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。处理好后点「{button}」。"
+      "en": "{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, an address it cannot reach, or an outage -- and it keeps retrying without saying so. Once that is fixed, press {button}.",
+      "zh": "{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上、服务商故障），它在后台反复重试、什么也不说。处理好后点「{button}」。"
     },
     "gui.agent.fix_upgrade": {
       "en": "{agent} is too old to be connected (or another program goes by its name): this version does not support ACP yet. Upgrade it by running this command in a terminal, then press {button}:",
@@ -5354,6 +5354,10 @@
     "gui.agent.bad_run": {
       "en": "{what}: run {command} in a terminal, then press {button}",
       "zh": "{what}：在终端运行 {command}，再点「{button}」"
+    },
+    "gui.agent.bad_plan_link": {
+      "en": "{what}: open {command} in a browser to get a plan, then press {button}",
+      "zh": "{what}：在浏览器打开 {command} 开通套餐，再点「{button}」"
     },
     "gui.agent.bad_run_then": {
       "en": "{what}: run {command} in a terminal and type {then}, then press {button}",

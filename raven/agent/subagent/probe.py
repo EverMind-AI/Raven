@@ -387,7 +387,7 @@ def _silent_detail(said: str, run: str) -> str:
     return (
         f"{said}: it kept working and said nothing, which is how it waits out a model provider that "
         f"keeps refusing it (a spent quota, a rate limit, an unreachable host); run `{run}` in a terminal, "
-        f"which prints the reason within a couple of minutes"
+        f"which prints the reason within a few minutes"
     )[:_DETAIL_CAP]
 
 
@@ -808,7 +808,10 @@ async def ping_agent(cfg: Any) -> PingResult:
     on 2026-09-07 did exactly that.
 
     So this spends one call on the agent's own quota, which is why it is reached
-    only from an explicit switch-on and never from a listing.
+    only from an explicit switch-on and never from a listing. A Kimi Code ping
+    that fails without a reason is asked once more in print mode
+    (`kimi_code.explain`), which is a second call only when the failure has
+    passed in between.
 
     It runs on a pool of its own, closed on the way out. The shared pool keys a
     connection on its launch arguments and ``cwd`` falls back to the caller's
