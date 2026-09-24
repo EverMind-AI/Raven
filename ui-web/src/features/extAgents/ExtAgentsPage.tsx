@@ -345,6 +345,8 @@ const FIX_SAY: Record<
       : command
         ? t('gui.agent.fix_runtime', { ...v, needs: r.needs, found: r.found })
         : t('gui.agent.fix_runtime_bare', { ...v, needs: r.needs, found: r.found }),
+  plan: (v, command) => (command ? t('gui.agent.fix_plan', v) : t('gui.agent.fix_plan_bare', v)),
+  config: (v, command) => (command ? t('gui.agent.fix_config', v) : t('gui.agent.fix_config_bare', v)),
 }
 
 /* A refusal, and the fix when the server named one. The server's sentence is

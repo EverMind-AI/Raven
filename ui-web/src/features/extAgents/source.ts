@@ -323,6 +323,8 @@ const REMEDY_KINDS: ReadonlySet<string> = new Set<Remedy['kind']>([
   'upgrade',
   'exited',
   'runtime',
+  'plan',
+  'config',
 ])
 
 /* A remedy off the wire, or null for anything that is not one. Read from a row

@@ -25,6 +25,7 @@ from typing import Any, Literal
 import aiohttp
 from loguru import logger
 
+from raven.agent.subagent import kimi_code
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
@@ -372,9 +373,13 @@ _EXITED = re.compile(r"connection ended \(exit -?\d+\); stderr tail:\s*(?!<empty
 """A launch that quit and said why on its way out. One that quit without a word
 is left unnamed: pointing a reader at what it said would point at nothing."""
 
-_NO_ACP_FLAG = re.compile(r"unknown (?:argument|option|flag)s?:?\s*['\"]?-{0,2}acp\b", re.IGNORECASE)
-"""An agent too old to know the flag its preset launches it with. yargs, which
-qwen is built on, answers an unknown option "Unknown argument: acp"."""
+_NO_ACP_FLAG = re.compile(
+    r"(?:unknown|no such) (?:argument|option|flag|command)s?:?\s*['\"]?-{0,2}acp\b", re.IGNORECASE
+)
+"""An agent too old to know the flag or subcommand its preset launches it with.
+yargs, which qwen is built on, answers an unknown option "Unknown argument:
+acp"; commander, which Kimi Code's CLI is built on, answers an unknown
+subcommand "error: unknown command 'acp'", and click "No such command 'acp'"."""
 
 _PROMPT_TIMEOUT = re.compile(r"session/prompt timed out after")
 
@@ -384,7 +389,7 @@ def _silent_detail(said: str, run: str) -> str:
     return (
         f"{said}: it kept working and said nothing, which is how it waits out a model provider that "
         f"keeps refusing it (a spent quota, a rate limit, an unreachable host); run `{run}` in a terminal, "
-        f"which prints the reason within a couple of minutes"
+        f"which prints the reason within a few minutes"
     )[:_DETAIL_CAP]
 
 
@@ -406,7 +411,7 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
             up = upgrade_hint_for(cfg)
             how = f" with `{up}`" if up else ""
             return (
-                f"it is too old to be connected: it does not know the flag that starts it in ACP mode; "
+                f"it is too old to be connected: it does not know the flag or command that starts it in ACP mode; "
                 f"upgrade it{how} and connect again. It said: {shown}"
             )[:_DETAIL_CAP], Remedy("upgrade", up)
         stale = _stale_node(cfg)
@@ -835,7 +840,10 @@ async def ping_agent(cfg: Any) -> PingResult:
     on 2026-09-07 did exactly that.
 
     So this spends one call on the agent's own quota, which is why it is reached
-    only from an explicit switch-on and never from a listing.
+    only from an explicit switch-on and never from a listing. A Kimi Code ping
+    that fails without a reason is asked once more in print mode
+    (`kimi_code.explain`), which is a second call only when the failure has
+    passed in between.
 
     It runs on a pool of its own, closed on the way out. The shared pool keys a
     connection on its launch arguments and ``cwd`` falls back to the caller's
@@ -853,6 +861,8 @@ async def ping_agent(cfg: Any) -> PingResult:
 
     ready_ms, answer_s, wait_s = _ping_bounds(cfg)
     pool = acp_pool.AcpConnectionPool()
+    reply: str | None = None
+    failure: Exception | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
             backend = build_third_party_backend(
@@ -873,17 +883,23 @@ async def ping_agent(cfg: Any) -> PingResult:
         run = diagnose_hint_for(cfg)
         return PingResult(False, _silent_detail(said, run), Remedy("silent", run)) if run else PingResult(False, said)
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, *(await asyncio.to_thread(_ping_refusal, cfg, exc)))
+        failure = exc
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the
         # gateway's life -- one per press.
         await pool.close_all()
 
-    text = (reply or "").strip()
-    if not text:
-        return PingResult(False, "it started and then answered nothing")
-    return PingResult(True, "it ran and replied")
+    if failure is None and (reply or "").strip():
+        return PingResult(True, "it ran and replied")
+    # An agent whose ACP answer leaves the reason out is asked for it its own way,
+    # once the pool is closed, so the process asked is not racing the one pinged.
+    if (explained := await kimi_code.explain(cfg, failure, prompt=PROBE_PROMPT)) is not None:
+        detail, remedy = explained
+        return PingResult(False, detail[:_DETAIL_CAP], remedy)
+    if failure is not None:
+        return PingResult(False, *(await asyncio.to_thread(_ping_refusal, cfg, failure)))
+    return PingResult(False, "it started and then answered nothing")
 
 
 async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
@@ -933,8 +949,15 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         # advertisement every working agent makes too. A launch that quit
         # before answering is read the way the connect reads it
         # (`_process_refusal`, off the event loop), so the two buttons name one
-        # crash one way.
-        if snapshot.needs_auth:
+        # crash one way. Kimi Code refuses every session it cannot start with one
+        # bare "Authentication required", signed out and broken config alike, so
+        # it is asked which (`kimi_code.explain_refusal`).
+        explained = await kimi_code.explain_refusal(
+            cfg, snapshot.detail, needs_auth=snapshot.needs_auth, prompt=PROBE_PROMPT
+        )
+        if explained is not None:
+            detail, remedy = explained[0][:_DETAIL_CAP], explained[1]
+        elif snapshot.needs_auth:
             detail, remedy = snapshot.detail, _remedy_for(cfg)
         elif snapshot.unfetched:
             detail, remedy = snapshot.detail, Remedy("download", _shipped_command(cfg))

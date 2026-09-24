@@ -87,6 +87,16 @@ describe('one agent row', () => {
     expect(oldNode.last_test_remedy).toEqual({ kind: 'runtime', command: '', needs: '22', found: '18.20.8' })
   })
 
+  /* The two about the agent's own account and files: a plan carries the page
+     that sells one where a command would go, a broken config the command that
+     says where it is wrong. */
+  it('reads an account whose plan does not include the agent, and a config it cannot read', () => {
+    const plan = extAgentRowOf(wire({ last_test_remedy: { kind: 'plan', command: 'https://www.kimi.com/code/#pricing' } }))
+    expect(plan.last_test_remedy).toEqual({ kind: 'plan', command: 'https://www.kimi.com/code/#pricing' })
+    const config = extAgentRowOf(wire({ last_test_remedy: { kind: 'config', command: 'kimi doctor config' } }))
+    expect(config.last_test_remedy).toEqual({ kind: 'config', command: 'kimi doctor config' })
+  })
+
   /* What to install, as the executable the probe did not find. Absent unless
      sent, so a server that predates it reads as "nothing named". */
   it('carries the executable a missing row lacks', () => {

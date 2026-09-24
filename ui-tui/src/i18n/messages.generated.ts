@@ -1500,9 +1500,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_step_run': 'Run in a terminal:',
     'gui.agent.fix_step_type': 'Then type:',
     'gui.agent.fix_model':
-      'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Set it up again as below and enter a model the provider still serves at the model step, then press {button}:',
+      "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, a name it does not know, or a model the account's plan does not include). Set it up again as below and enter a model the provider still serves at the model step, then press {button}:",
     'gui.agent.fix_model_bare':
-      'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch it to another model, then press {button}.',
+      "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, a name it does not know, or a model the account's plan does not include). Switch it to another model, then press {button}.",
     'gui.agent.fix_billing':
       "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or set it up again as below and enter a free or cheaper model at the model step, then press {button}:",
     'gui.agent.fix_billing_bare':
@@ -1516,19 +1516,26 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_network_bare':
       '{agent} could not reach its model provider. Check the network, the proxy and the address it is set to use, then press {button}.',
     'gui.agent.fix_silent':
-      '{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Run this command in a terminal and it prints the reason within a couple of minutes; once that is fixed, press {button}:',
+      '{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, an address it cannot reach, or an outage -- and it keeps retrying without saying so. Run this command in a terminal and it prints the reason within a few minutes; once that is fixed, press {button}:',
     'gui.agent.fix_silent_bare':
-      '{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Once that is fixed, press {button}.',
+      '{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, an address it cannot reach, or an outage -- and it keeps retrying without saying so. Once that is fixed, press {button}.',
     'gui.agent.fix_upgrade':
-      '{agent} is too old to be connected: this version does not support ACP yet. Upgrade it by running this command in a terminal, then press {button}:',
+      '{agent} is too old to be connected (or another program goes by its name): this version does not support ACP yet. Upgrade it by running this command in a terminal, then press {button}:',
     'gui.agent.fix_upgrade_bare':
-      '{agent} is too old to be connected: this version does not support ACP yet. Upgrade it to the latest release, then press {button}.',
+      '{agent} is too old to be connected (or another program goes by its name): this version does not support ACP yet. Upgrade it to the latest release, then press {button}.',
     'gui.agent.fix_exited':
       '{agent} quit as soon as it started. The original error below has what it said on its way out; once that is fixed, press {button}.',
     'gui.agent.fix_runtime':
       '{agent} quit as soon as it started because the Node.js it runs on is too old: it needs Node.js {needs} or newer, and this machine started it with {found}. Upgrade Node.js by running this command in a terminal, then press {button}:',
     'gui.agent.fix_runtime_bare':
       '{agent} quit as soon as it started because the Node.js it runs on is too old: it needs Node.js {needs} or newer, and this machine started it with {found}. Install Node.js {needs} or newer from nodejs.org, then press {button}.',
+    'gui.agent.fix_plan':
+      "{agent} is signed in, but the account's current plan does not include it. Open this page to get a plan that does, then press {button}:",
+    'gui.agent.fix_plan_bare':
+      "{agent} is signed in, but the account's current plan does not include it. Get a plan that does, then press {button}.",
+    'gui.agent.fix_config':
+      '{agent} cannot read its own config file. Run this command in a terminal to see where it is wrong; once it is fixed, press {button}:',
+    'gui.agent.fix_config_bare': '{agent} cannot read its own config file. Fix it, then press {button}.',
     'gui.agent.fix_unknown_connect':
       '{agent} could not connect. The original error below says why; once it is fixed, press {button}.',
     'gui.agent.fix_unknown_save':
@@ -1548,6 +1555,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.bad_upgrade': '{agent} is too old to connect',
     'gui.agent.bad_exited': '{agent} quit as soon as it started',
     'gui.agent.bad_runtime': "{agent}'s Node.js is too old",
+    'gui.agent.bad_plan': "The account's plan does not include {agent}",
+    'gui.agent.bad_config': "{agent}'s config file is broken",
     'gui.agent.bad_connect': '{agent} could not connect',
     'gui.agent.bad_save': 'The change was not saved',
     'gui.agent.bad_disconnect': '{agent} could not be disconnected',
@@ -1556,6 +1565,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} could not be disconnected. The original error below says why; press {button} to try again.',
     'gui.agent.bad_open': '{what} -- open it to see what to do',
     'gui.agent.bad_run': '{what}: run {command} in a terminal, then press {button}',
+    'gui.agent.bad_plan_link': '{what}: open {command} in a browser to get a plan, then press {button}',
     'gui.agent.bad_run_then': '{what}: run {command} in a terminal and type {then}, then press {button}',
     'gui.agent.bad_run_diagnose': '{what}: run {command} in a terminal to see why, and press {button} once it is fixed',
     'gui.agent.bad_retry': '{what} -- once it is fixed, press {button}',
@@ -3993,9 +4003,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_step_run': '在终端运行：',
     'gui.agent.fix_step_type': '进入后输入：',
     'gui.agent.fix_model':
-      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。按下面的步骤重新配置，在填模型的那一步换一个还能用的模型，然后点「{button}」：',
+      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了、模型名不对，或者账号的套餐不含这个模型）。按下面的步骤重新配置，在填模型的那一步换一个还能用的模型，然后点「{button}」：',
     'gui.agent.fix_model_bare':
-      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。换一个模型后点「{button}」。',
+      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了、模型名不对，或者账号的套餐不含这个模型）。换一个模型后点「{button}」。',
     'gui.agent.fix_billing':
       '{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者按下面的步骤重新配置，在填模型的那一步换一个免费或更便宜的模型，然后点「{button}」：',
     'gui.agent.fix_billing_bare':
@@ -4009,18 +4019,25 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_network_bare':
       '{agent} 连不上它的模型服务商。检查网络、代理和它配置的服务地址，处理好后点「{button}」。',
     'gui.agent.fix_silent':
-      '{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。在终端运行下面这条命令，一两分钟内会打印出原因，处理好后点「{button}」：',
+      '{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上、服务商故障），它在后台反复重试、什么也不说。在终端运行下面这条命令，几分钟内会打印出原因，处理好后点「{button}」：',
     'gui.agent.fix_silent_bare':
-      '{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。处理好后点「{button}」。',
+      '{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上、服务商故障），它在后台反复重试、什么也不说。处理好后点「{button}」。',
     'gui.agent.fix_upgrade':
-      '{agent} 的版本太旧，还不支持 ACP 接入。在终端运行下面这条命令升级到最新版，完成后点「{button}」：',
-    'gui.agent.fix_upgrade_bare': '{agent} 的版本太旧，还不支持 ACP 接入。升级到最新版后点「{button}」。',
+      '{agent} 的版本太旧（或者同名的命令其实是别的程序），还不支持 ACP 接入。在终端运行下面这条命令升级到最新版，完成后点「{button}」：',
+    'gui.agent.fix_upgrade_bare':
+      '{agent} 的版本太旧（或者同名的命令其实是别的程序），还不支持 ACP 接入。升级到最新版后点「{button}」。',
     'gui.agent.fix_exited':
       '{agent} 一启动就退出了。展开下面的原始报错，能看到它退出前说了什么，处理好后点「{button}」。',
     'gui.agent.fix_runtime':
       '{agent} 一启动就退出了：启动它的 Node.js 版本太旧。它需要 Node.js {needs} 或更高版本，这台机器上用的是 {found}。在终端运行下面这条命令升级 Node.js，完成后点「{button}」：',
     'gui.agent.fix_runtime_bare':
       '{agent} 一启动就退出了：启动它的 Node.js 版本太旧。它需要 Node.js {needs} 或更高版本，这台机器上用的是 {found}。去 nodejs.org 安装 Node.js {needs} 或更高版本，装好后点「{button}」。',
+    'gui.agent.fix_plan':
+      '{agent} 已经登录，但账号当前的套餐不包含它。打开下面的链接开通或升级套餐，然后点「{button}」：',
+    'gui.agent.fix_plan_bare': '{agent} 已经登录，但账号当前的套餐不包含它。开通或升级套餐后点「{button}」。',
+    'gui.agent.fix_config':
+      '{agent} 的配置文件有错，它读不出来。在终端运行下面这条命令，会指出出错的位置，改好后点「{button}」：',
+    'gui.agent.fix_config_bare': '{agent} 的配置文件有错，它读不出来。改好后点「{button}」。',
     'gui.agent.fix_unknown_connect': '{agent} 没接入成功。可以展开下面的原始报错排查原因，处理好后点「{button}」。',
     'gui.agent.fix_unknown_save': '这项修改没保存成功。可以展开下面的原始报错查看原因，或点「{button}」再试一次。',
     'gui.agent.fix_unknown_test': '可以展开下面的原始报错排查原因，处理好后再点「{button}」。',
@@ -4038,6 +4055,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.bad_upgrade': '{agent} 版本太旧',
     'gui.agent.bad_exited': '{agent} 一启动就退出了',
     'gui.agent.bad_runtime': '{agent} 的 Node.js 版本太旧',
+    'gui.agent.bad_plan': '账号套餐不含 {agent}',
+    'gui.agent.bad_config': '{agent} 的配置文件有错',
     'gui.agent.bad_connect': '{agent} 没接入成功',
     'gui.agent.bad_save': '这项修改没保存成功',
     'gui.agent.bad_disconnect': '{agent} 没能断开',
@@ -4045,6 +4064,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_unknown_disconnect': '{agent} 没能断开。可以展开下面的原始报错查看原因，或点「{button}」再试一次。',
     'gui.agent.bad_open': '{what}，点开看怎么做',
     'gui.agent.bad_run': '{what}：在终端运行 {command}，再点「{button}」',
+    'gui.agent.bad_plan_link': '{what}：在浏览器打开 {command} 开通套餐，再点「{button}」',
     'gui.agent.bad_run_then': '{what}：在终端运行 {command} 并输入 {then}，再点「{button}」',
     'gui.agent.bad_run_diagnose': '{what}：在终端运行 {command} 查看原因，处理好后点「{button}」',
     'gui.agent.bad_retry': '{what}，处理好后点「{button}」',

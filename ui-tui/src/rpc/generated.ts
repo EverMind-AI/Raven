@@ -1038,7 +1038,7 @@ export interface SubagentRow {
    */
   last_test_remedy?: {
     /**
-     * sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page. download: npx could not fetch the agent -- fixed in the network, the npm registry or the proxy; `command` is the preset's launch command, which fetches it from a terminal with no time limit, sent only when the row's command is the preset's word for word. model: the agent's model provider does not serve the model it is set to use (HTTP 404 -- withdrawn from a free tier, or not found). billing: the provider refused for want of credit (402). quota: the provider is rate-limiting it or its quota is spent (429). For these three `command` opens the agent and `then` is what to type in it to switch model, when known. network: the provider could not be reached; `command`, when sent, prints the cause in a terminal. silent: the agent outlasted the wait without a word, which is how it retries a provider that keeps refusing it; `command` prints the reason in a terminal. upgrade: the agent is too old to know the flag that starts it in ACP mode; `command` upgrades it. exited: the agent quit on starting, and what it said is in the detail. runtime: the agent quit on starting because the Node.js it was launched with is older than its package declares; `needs` is that floor, `found` the version launched, and `command` upgrades that Node.js when its installer is recognisable.
+     * sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page. download: npx could not fetch the agent -- fixed in the network, the npm registry or the proxy; `command` is the preset's launch command, which fetches it from a terminal with no time limit, sent only when the row's command is the preset's word for word. model: the agent's model provider does not serve the model it is set to use (HTTP 404 -- withdrawn from a free tier, or not found), or the account's plan does not include it. billing: the provider refused for want of credit (402). quota: the provider is rate-limiting it or its quota is spent (429, or a plan's usage limit). For these three `command` opens the agent and `then` is what to type in it to switch model, when known. network: the provider could not be reached; `command`, when sent, prints the cause in a terminal. silent: the agent outlasted the wait without a word, which is how it retries a provider that keeps refusing it; `command` prints the reason in a terminal. upgrade: the agent is too old to know the flag that starts it in ACP mode, or never finishes its handshake; `command` upgrades it. exited: the agent quit on starting, and what it said is in the detail. runtime: the agent quit on starting because the Node.js it was launched with is older than its package declares; `needs` is that floor, `found` the version launched, and `command` upgrades that Node.js when its installer is recognisable. plan: the agent is signed in, but the account's plan does not include it or its membership cannot be verified; `command`, when sent, is the page that sells one. config: the agent cannot read its own config file; `command` says where it is wrong.
      */
     kind:
       | 'sign_in'
@@ -1052,7 +1052,9 @@ export interface SubagentRow {
       | 'silent'
       | 'upgrade'
       | 'exited'
-      | 'runtime';
+      | 'runtime'
+      | 'plan'
+      | 'config';
     /**
      * The command that makes the fix on this machine, when one is known.
      */
