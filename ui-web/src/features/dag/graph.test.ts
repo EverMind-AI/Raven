@@ -140,6 +140,63 @@ describe('dag layout', () => {
     expect(height).toBeTypeOf('number')
   })
 
+  /* A real graph from a run: the build step waits on the outline and on all
+     three research steps the outline already waits on. Laid out by centring
+     each layer, the edge from the middle research step to the build ran
+     straight down under the outline's box and the outline's own edge, and
+     could not be seen at all. */
+  const SKIPS = [
+    node('research_llm'), node('research_algo'), node('research_apps'),
+    node('outline', ['research_llm', 'research_algo', 'research_apps']),
+    node('build', ['outline', 'research_llm', 'research_algo', 'research_apps']),
+  ]
+  const MIXED = [
+    node('a'), node('b'), node('c', ['a']), node('d', ['a', 'b']),
+    node('e', ['c', 'd', 'a']), node('f', ['e', 'b']),
+  ]
+  const BOARD: Dims = { W: 196, H: 78, GAP_X: 210, GAP_Y: 122, PAD: 12 }
+
+  describe.each(['down', 'across'] as const)('routing edges, running %s', (flow) => {
+    it.each([['skips', SKIPS], ['mixed', MIXED]] as const)('never draws an edge through a box (%s)', (_, nodes) => {
+      /* Each hop is drawn as a curve inside the box its two points span, so
+         a hop clear of every node box is a curve clear of it too. */
+      const { at, edges } = layout([...nodes], BOARD, flow)
+      expect(edges).toHaveLength(nodes.reduce((k, n) => k + n.depends_on.length, 0))
+      edges.forEach(({ points }) => {
+        for (let i = 1; i < points.length; i++) {
+          const [a, b] = [points[i - 1]!, points[i]!]
+          const x0 = Math.min(a.x, b.x)
+          const x1 = Math.max(a.x, b.x)
+          const y0 = Math.min(a.y, b.y)
+          const y1 = Math.max(a.y, b.y)
+          at.forEach((p) => {
+            const inside = x1 > p.x && x0 < p.x + BOARD.W && y1 > p.y && y0 < p.y + BOARD.H
+            expect(inside).toBe(false)
+          })
+        }
+      })
+    })
+
+    it('lands every edge into one box at its own point on the face', () => {
+      const { edges } = layout(SKIPS, BOARD, flow)
+      const ends = edges.filter((e) => e.to === 'build').map((e) => JSON.stringify(e.points.at(-1)))
+      expect(new Set(ends).size).toBe(4)
+      const starts = edges.filter((e) => e.from === 'research_algo').map((e) => JSON.stringify(e.points[0]))
+      expect(new Set(starts).size).toBe(2)
+    })
+  })
+
+  it('keeps a root on the first layer even when all it feeds is deep', () => {
+    /* A run starts every root at once; one drawn halfway down would read as
+       a step that waits for something. */
+    const { at } = layout([node('a'), node('b', ['a']), node('c', ['b']), node('late'), node('d', ['c', 'late'])], DIMS, 'down')
+    expect(at.get('late')!.y).toBe(at.get('a')!.y)
+  })
+
+  it('draws an edge to a dependency that is not in the graph as nothing', () => {
+    expect(layout([node('only', ['ghost', 'only'])], DIMS).edges).toEqual([])
+  })
+
   /* The task board reads top to bottom, because a pane docked beside a
      conversation has height to spend and not width. Same depths, same
      centring -- only the axis they count along differs. */
