@@ -25,6 +25,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
+from raven.agent.subagent.backends.env import refresh_login_shell_env
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
@@ -384,7 +385,19 @@ async def subagents_list(params: dict) -> dict:
     availability check - the overlay does this on the list call it issues right
     after its own mutation, where a fresh probe would only re-measure what it
     already knows it just wrote.
+
+    ``refresh_login_env`` takes the login shell's environment again before the
+    probe, instead of reading the one this process captured when it started. An
+    agent installed since then is otherwise not found until a restart: its
+    installer adds a PATH line to the shell rc, which only a new capture reads.
+    The page's "Check again" sends it and nothing else does, since the capture
+    runs the user's login shell and can take seconds. It replaces the capture
+    every spawn reads too, so the Connect that follows launches with the PATH
+    the probe just found the agent on. Read as ``is True`` for the reason the
+    ``force`` flags are: a string such as ``"false"`` is truthy in Python.
     """
+    if params.get("refresh_login_env") is True:
+        await asyncio.to_thread(refresh_login_shell_env)
     probe = params.get("probe", True)
     return {"rows": await _rows(probe=bool(probe))}
 

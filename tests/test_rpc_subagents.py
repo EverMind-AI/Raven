@@ -243,6 +243,55 @@ async def test_a_missing_row_names_the_executable_to_install(config_path: Path, 
     assert all(row["probe_missing"] is None for row in unmeasured)
 
 
+async def test_a_recheck_finds_an_agent_installed_after_the_gateway_started(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page's "Check again" reads the shell's PATH as it is now, not as it was at start.
+
+    Measured 2026-09-24 with Kimi Code: installed from a terminal after the
+    gateway had started, its installer adding a PATH line to ~/.zshrc, and the
+    card kept saying "still not found" until a restart -- every probe read the
+    login-shell PATH the gateway captured once. A plain listing still reads that
+    capture, since every page open lists and must not run a login shell to do
+    it; only the flag the re-check sends takes the shell's environment again.
+    """
+    import raven.agent.subagent.backends.env as env_mod
+
+    # The shell itself is the stand-in, and everything above it is real: the
+    # memo, the refresh, and the probe reading the memo (which `_skip_live_probes`
+    # cut off, so it is wired back here, as that fixture says to).
+    shell = {"PATH": "/usr/bin:/bin"}
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", None)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
+    monkeypatch.setattr(env_mod, "_capture", lambda *, consequence: dict(shell))
+    monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: env_mod.login_shell_env().get("PATH", ""))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+
+    def kimi(result: dict) -> dict:
+        return next(row for row in result["rows"] if row["name"] == "Kimi Code")
+
+    assert kimi(await subagents_list({}))["probe_status"] == "missing"
+
+    # The install: the executable lands, and the shell rc now puts its directory on PATH.
+    bindir = tmp_path / "kimi-code" / "bin"
+    bindir.mkdir(parents=True)
+    exe = bindir / "kimi"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    shell["PATH"] = f"{bindir}:/usr/bin:/bin"
+
+    assert kimi(await subagents_list({}))["probe_status"] == "missing", "a plain listing reads the capture from start"
+
+    found = kimi(await subagents_list({"refresh_login_env": True}))
+    assert found["probe_status"] != "missing"
+    assert found["probe_missing"] is None
+
+    # It is now the capture every later listing and spawn reads, and only a real
+    # boolean asks for another: "true" is truthy in Python but is not a request.
+    shell["PATH"] = "/usr/bin:/bin"
+    assert kimi(await subagents_list({"refresh_login_env": "true"}))["probe_status"] != "missing"
+
+
 async def test_list_surfaces_a_malformed_config_section_instead_of_an_empty_list(
     config_path: Path,
 ) -> None:

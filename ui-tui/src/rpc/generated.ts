@@ -3471,6 +3471,7 @@ export interface SubagentContextResult {
  */
 export interface SubagentsListParams {
   probe?: boolean;
+  refresh_login_env?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
