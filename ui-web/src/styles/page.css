@@ -3090,7 +3090,7 @@ textarea:focus, textarea:focus-visible,
    A file the agent produced is opened to be looked at, so each kind renders
    as itself: prose for markdown, the picture for an image, the page for HTML.
    Numbered source lines are the fallback, not the default -- and stay one
-   click away for the kinds that have a rendered form. */
+   click away for the text kinds that also render. */
 .fbar .kseg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; flex: none; }
 .fbar .kseg button { padding: 3px 9px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
 .fbar .kseg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }

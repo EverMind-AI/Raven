@@ -379,6 +379,23 @@ describe('workspace island', () => {
     expect(document.querySelector('.fview .vnote')).toBeNull()
   })
 
+  /* The source flag belongs to the rendered and source pair, and a PDF is not
+     offered the pair: read as text it is its bytes as lines, fetched whole. So
+     a PDF stays framed however the flag came to be set. */
+  it('frames a PDF even when the file asks for its source', async () => {
+    install(emptyWs({
+      file: { path: '/repo/paper.pdf', kind: 'pdf', raw: true, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    const asked = vi.fn(() => new Promise(() => {}))
+    vi.stubGlobal('fetch', asked)
+    await mount()
+    const frame = document.querySelector('.fview iframe')
+    expect(frame).not.toBeNull()
+    expect(frame!.getAttribute('src')).toContain('/file?path=%2Frepo%2Fpaper.pdf')
+    expect(document.querySelector('.fview .code')).toBeNull()
+    expect(asked).not.toHaveBeenCalled()
+  })
+
   /* A deck is its own kind: the page cannot draw one, but the gateway can
      render it as a PDF, and that is what the viewer frames. */
   it('classifies a deck as its own kind and asks the file route for its PDF', () => {
@@ -481,7 +498,7 @@ describe('workspace island', () => {
     /* The deck's own bytes, from its delivery, rather than the PDF it is drawn
        from. */
     expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/files/download?token=deck')
-    expect(document.querySelector('.fbar .kseg')).not.toBeNull()
+    expect(document.querySelector('.fbar .kseg')).toBeNull()
   })
 
   it('keeps the deck bar as it is even when the gateway is this desktop', async () => {
@@ -492,7 +509,7 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     expect(screen.getByLabelText('gui.ws.download')).toBeTruthy()
-    expect(document.querySelector('.fbar .kseg')).not.toBeNull()
+    expect(document.querySelector('.fbar .kseg')).toBeNull()
     expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
     expect(screen.queryByText('gui.ws.open')).toBeNull()
     expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()
@@ -515,6 +532,22 @@ describe('workspace island', () => {
        rule; happy-dom applies no stylesheet, so this pins the markup the rule
        selects and the browser shows the spacing. */
     expect(save.parentElement?.classList.contains('workspace-file-acts')).toBe(true)
+  })
+
+  /* Where the bar offers a new tab, that button joins the group too, in front
+     of the download, so the three squares touch. The same markup pin as above:
+     the browser shows the spacing. */
+  const GROUPED: Array<[string, string[]]> = [
+    ['/repo/out/paper.pdf', ['gui.ws.file_newtab', 'gui.ws.download', 'gui.ws.reveal_finder']],
+    ['/repo/report.html', ['gui.ws.file_newtab', 'gui.ws.download', 'gui.ws.reveal_finder']],
+    ['/repo/out/shot.png', ['gui.ws.download', 'gui.ws.reveal_finder']],
+  ]
+  it.each(GROUPED)('keeps the file actions on %s in one group', async (path, labels) => {
+    install(emptyWs({ file: store.makeFile(path) }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const group = screen.getByLabelText('gui.ws.download').parentElement!
+    expect(group.classList.contains('workspace-file-acts')).toBe(true)
+    expect([...group.children].map((el) => el.getAttribute('aria-label'))).toEqual(labels)
   })
 
   it('names the copy after the file on a Windows gateway too', async () => {
@@ -822,6 +855,53 @@ describe('workspace island', () => {
        is the point of the test. */
     expect(prose.querySelector('h2')?.textContent).toBe('Title')
     expect(prose.querySelector('strong')?.textContent).toBe('this')
+  })
+
+  /* The pair switches between two ways of reading one file, so it is offered
+     only where both exist: text that also renders. A picture and a deck draw
+     the same thing in either position, and a PDF has no source to read, so
+     none of them gets the pair -- nor does a kind with nothing to render. */
+  const PAIRED: Array<[string, boolean]> = [
+    ['/repo/notes.md', true],
+    ['/repo/logo.svg', true],
+    ['/repo/report.html', true],
+    ['/repo/rows.csv', true],
+    ['/repo/rows.tsv', true],
+    ['/repo/data.json', true],
+    ['/repo/out/shot.png', false],
+    ['/repo/out/paper.pdf', false],
+    ['/repo/out/deck.pptx', false],
+    ['/repo/src/app.py', false],
+    ['/repo/fix.diff', false],
+    ['/repo/out/bundle.zip', false],
+  ]
+  it.each(PAIRED)('offers the rendered and source pair on %s: %s', async (path, paired) => {
+    install(emptyWs({ file: store.makeFile(path) }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const pair = [...document.querySelectorAll('.fbar .kseg button')].map((b) => b.textContent)
+    expect(pair).toEqual(paired ? ['gui.ws.file_rendered', 'gui.ws.file_source'] : [])
+  })
+
+  it('flips a markdown file between its prose and its numbered source', async () => {
+    install(emptyWs({
+      file: {
+        path: '/repo/docs/README.md', kind: 'md', raw: false,
+        text: '# Title\n\nbody', err: null, size: null, loading: false, seq: 4,
+      },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const rendered = screen.getByRole('button', { name: 'gui.ws.file_rendered' })
+    const source = screen.getByRole('button', { name: 'gui.ws.file_source' })
+    expect(document.querySelector('.fview .prose h2')?.textContent).toBe('Title')
+
+    await act(async () => { source.click() })
+    expect(source.getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('.fview .prose')).toBeNull()
+    expect(screen.getByText('# Title').closest('.code')).not.toBeNull()
+
+    await act(async () => { rendered.click() })
+    expect(rendered.getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('.fview .prose h2')?.textContent).toBe('Title')
   })
 
   it('shows the viewer error when the file read failed', async () => {
