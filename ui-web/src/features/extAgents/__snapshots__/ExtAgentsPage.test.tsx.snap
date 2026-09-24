@@ -25,6 +25,10 @@ div.extAgents-grid
         span.extAgents-led
       div.extAgents-ctl
     div.extAgents-one
+    div.extAgents-foot-slot
+      div.extAgents-foot.extAgents-foot-quiet
+        span.extAgents-foot-say
+          span.extAgents-foot-k
   div.extAgents-card
     div.extAgents-ctop
       span.extAgents-tile
@@ -35,6 +39,10 @@ div.extAgents-grid
         span.extAgents-led
       div.extAgents-ctl
     div.extAgents-one
+    div.extAgents-foot-slot
+      div.extAgents-foot.extAgents-foot-quiet
+        span.extAgents-foot-say
+          span.extAgents-foot-k
   div.extAgents-card
     div.extAgents-ctop
       span.extAgents-tile
@@ -47,6 +55,10 @@ div.extAgents-grid
           svg
             path
     div.extAgents-one
+    div.extAgents-foot-slot
+      div.extAgents-foot.extAgents-foot-quiet
+        span.extAgents-foot-say
+          span.extAgents-foot-k
   div.extAgents-card
     div.extAgents-ctop
       span.extAgents-tile
@@ -58,7 +70,11 @@ div.extAgents-grid
         button.extAgents-cbtn
           svg
             path
-    div.extAgents-one"
+    div.extAgents-one
+    div.extAgents-foot-slot
+      div.extAgents-foot.extAgents-foot-quiet
+        span.extAgents-foot-say
+          span.extAgents-foot-k"
 `;
 
 exports[`the sheet > keeps its rendered shape, sheet 1`] = `

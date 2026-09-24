@@ -273,15 +273,11 @@ describe('the onboarding wizard\'s agents step', () => {
     /* In the reader's words, with the step the row itself has to carry: the
        wizard opens no sheet, so there is nowhere else for it to be. The
        server's English sentence is not the line any more. */
-    const what = `gui.agent.bad_connect ${JSON.stringify({ agent: 'preset_a' })}`
-    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.textContent).toBe(
-      `gui.agent.bad_retry ${JSON.stringify({ what, button: 'gui.retry' })}`,
-    )
+    expect(rowNamed('preset_a').querySelector('.extAgents-foot-k')!.textContent).toBe('gui.agent.st_connect_bad')
+    expect(rowNamed('preset_a').querySelector('.extAgents-foot-r')!.textContent).toBe('gui.agent.why_hover')
     /* ...and the sentence is kept on hover: with no sheet to fold it into, it
        is the only reason this row has. */
-    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.getAttribute('title')).toBe(
-      'did not answer a test message',
-    )
+    expect(rowNamed('preset_a').querySelector('.extAgents-row2')!.getAttribute('title')).toBe('did not answer a test message')
     expect(control('preset_a').textContent).toBe('gui.retry')
     expect(toastWriter.items).toEqual([])
 
@@ -293,7 +289,7 @@ describe('the onboarding wizard\'s agents step', () => {
       ['connect', 'preset_a', {}],
       ['connect', 'preset_a', {}],
     ])
-    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')).toBeNull()
+    expect(rowNamed('preset_a').querySelector('.extAgents-row2')).toBeNull()
     expect(control('preset_a').textContent).toBe('gui.agent.disconnect')
   })
 
@@ -315,16 +311,18 @@ describe('the onboarding wizard\'s agents step', () => {
     await act(async () => {
       fireEvent.click(control('Codex'))
     })
-    const what = `gui.agent.bad_sign_in ${JSON.stringify({ agent: 'Codex' })}`
-    expect(rowNamed('Codex').querySelector('.extAgents-one-bad')!.textContent).toBe(
-      `gui.agent.bad_run ${JSON.stringify({ what, command: 'codex login', button: 'gui.retry' })}`,
+    /* The command is a piece of code inside the sentence, not part of it. */
+    expect(rowNamed('Codex').querySelector('.extAgents-foot-k')!.textContent).toBe('gui.agent.st_connect_bad')
+    expect(rowNamed('Codex').querySelector('.extAgents-foot-r')!.textContent).toBe(
+      `gui.agent.row_run ${JSON.stringify({ why: 'gui.agent.why_sign_in', command: 'codex login', button: 'gui.retry' })}`,
     )
+    expect(rowNamed('Codex').querySelector('.extAgents-foot-r code')!.textContent).toBe('codex login')
   })
 
   it.each([
-    [{ kind: 'setup', command: 'qwen', then: '/auth' }, 'gui.agent.bad_setup', 'gui.agent.bad_run_then'],
-    [{ kind: 'silent', command: 'qwen hi' }, 'gui.agent.bad_silent', 'gui.agent.bad_run_diagnose'],
-  ])('puts a fix typed inside the agent, or a command that only says why, on the row as that (%o)', async (remedy, bad, line) => {
+    [{ kind: 'setup', command: 'qwen', then: '/auth' }, 'gui.agent.why_setup', 'gui.agent.row_run_then'],
+    [{ kind: 'silent', command: 'qwen hi' }, 'gui.agent.why_silent', 'gui.agent.row_run_diagnose'],
+  ])('puts a fix typed inside the agent, or a command that only says why, on the row as that (%o)', async (remedy, why, line) => {
     const rows = [row({ name: 'Qwen Code', preset: 'qwen_code' })]
     install(rows)
     setSources({
@@ -342,20 +340,25 @@ describe('the onboarding wizard\'s agents step', () => {
     await act(async () => {
       fireEvent.click(control('Qwen Code'))
     })
-    const what = `${bad} ${JSON.stringify({ agent: 'Qwen Code' })}`
-    const vars = 'then' in remedy ? { what, command: remedy.command, then: remedy.then, button: 'gui.retry' } : { what, command: remedy.command, button: 'gui.retry' }
-    expect(rowNamed('Qwen Code').querySelector('.extAgents-one-bad')!.textContent).toBe(`${line} ${JSON.stringify(vars)}`)
+    const vars = 'then' in remedy ? { why, command: remedy.command, then: remedy.then, button: 'gui.retry' } : { why, command: remedy.command, button: 'gui.retry' }
+    const r = rowNamed('Qwen Code')
+    expect(r.querySelector('.extAgents-foot-k')!.textContent).toBe('gui.agent.st_connect_bad')
+    expect(r.querySelector('.extAgents-foot-r')!.textContent).toBe(`${line} ${JSON.stringify(vars)}`)
+    /* Each command is a piece of code inside the sentence, the step after it too. */
+    const codes = [...r.querySelectorAll('.extAgents-foot-r code')].map((c) => c.textContent)
+    expect(codes).toEqual('then' in remedy ? [remedy.command, remedy.then] : [remedy.command])
   })
 
   /* A plan's `command` is the page that sells one: a row that told the reader
      to "run" a URL in a terminal would be telling them to do the wrong thing
      with the right address, so the row says to open it; without one there is
-     only the retry. A config's check is a command, and is run. */
+     only the reason. A config's check is a command that says where the file is
+     wrong, as the sheet puts it, so the row names it as that. */
   it.each([
-    [{ kind: 'plan', command: 'https://www.kimi.com/code/#pricing' }, 'gui.agent.bad_plan', 'gui.agent.bad_plan_link'],
-    [{ kind: 'plan', command: '' }, 'gui.agent.bad_plan', 'gui.agent.bad_retry'],
-    [{ kind: 'config', command: 'kimi doctor config' }, 'gui.agent.bad_config', 'gui.agent.bad_run'],
-  ])('puts an account or config fix on the row as what it is (%o)', async (remedy, bad, line) => {
+    [{ kind: 'plan', command: 'https://www.kimi.com/code/#pricing' }, 'gui.agent.why_plan', 'gui.agent.row_open'],
+    [{ kind: 'plan', command: '' }, 'gui.agent.why_plan', ''],
+    [{ kind: 'config', command: 'kimi doctor config' }, 'gui.agent.why_config', 'gui.agent.row_run_diagnose'],
+  ])('puts an account or config fix on the row as what it is (%o)', async (remedy, why, line) => {
     const rows = [row({ name: 'Kimi Code', preset: 'kimi_code' })]
     install(rows)
     setSources({
@@ -373,10 +376,11 @@ describe('the onboarding wizard\'s agents step', () => {
     await act(async () => {
       fireEvent.click(control('Kimi Code'))
     })
-    const what = `${bad} ${JSON.stringify({ agent: 'Kimi Code' })}`
-    const vars =
-      line === 'gui.agent.bad_retry' ? { what, button: 'gui.retry' } : { what, command: remedy.command, button: 'gui.retry' }
-    expect(rowNamed('Kimi Code').querySelector('.extAgents-one-bad')!.textContent).toBe(`${line} ${JSON.stringify(vars)}`)
+    const r = rowNamed('Kimi Code')
+    expect(r.querySelector('.extAgents-foot-k')!.textContent).toBe('gui.agent.st_connect_bad')
+    const said = r.querySelector('.extAgents-foot-r')!.textContent
+    expect(said).toBe(line ? `${line} ${JSON.stringify({ why, command: remedy.command, button: 'gui.retry' })}` : why)
+    expect([...r.querySelectorAll('.extAgents-foot-r code')].map((c) => c.textContent)).toEqual(remedy.command ? [remedy.command] : [])
   })
 
   it('says where to look for a download, rather than the adapter\'s long command', async () => {
@@ -397,10 +401,11 @@ describe('the onboarding wizard\'s agents step', () => {
     await act(async () => {
       fireEvent.click(control('Claude Code'))
     })
-    const what = `gui.agent.bad_download ${JSON.stringify({ agent: 'Claude Code' })}`
-    expect(rowNamed('Claude Code').querySelector('.extAgents-one-bad')!.textContent).toBe(
-      `gui.agent.bad_download_retry ${JSON.stringify({ what, button: 'gui.retry' })}`,
+    expect(rowNamed('Claude Code').querySelector('.extAgents-foot-k')!.textContent).toBe('gui.agent.st_connect_bad')
+    expect(rowNamed('Claude Code').querySelector('.extAgents-foot-r')!.textContent).toBe(
+      `gui.agent.row_download ${JSON.stringify({ button: 'gui.retry' })}`,
     )
+    expect(rowNamed('Claude Code').querySelector('.extAgents-foot-r code')).toBeNull()
   })
 
   it('disconnects a connected row through act(toggle, {enabled: false})', async () => {
