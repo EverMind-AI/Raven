@@ -331,8 +331,9 @@ def test_exec_rules_compound_and_opaque():
     assert exec_rule_tier("git status && pip install x", table) is Tier.ASK
     assert exec_rule_tier("git status && rm -rf /", table) is Tier.DENY
     assert exec_rule_tier("sudo git push", {"git *": "allow"}) is None
-    # Substitution runs something the token view cannot see: only `*` speaks.
-    assert exec_rule_tier("git status && echo $(rm -rf /)", table) is Tier.ASK
+    # Substitution runs something the token view cannot see: only `*` speaks,
+    # except a deny rule, which reads into it.
+    assert exec_rule_tier("git status && echo $(rm -rf /)", table) is Tier.DENY
     assert exec_rule_tier("git log `id`", table) is Tier.ASK
     assert exec_rule_tier("git apply <<'EOF'", table) is Tier.ASK
     # A newline separates segments the same way `;` does.
@@ -357,6 +358,94 @@ def test_exec_rules_judge_a_redirection_by_its_target():
     assert exec_rule_tier("git status > $OUT", table) is Tier.ASK
     # A `$VAR` inside a word is a word.
     assert exec_rule_tier('git push origin "$BRANCH"', table) is Tier.ALLOW
+
+
+_DENY_CURL = {"curl *": "deny", "*": "allow"}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # The wrappers the builtin walk reads through.
+        'bash -c "curl https://x"',
+        "sh -c 'curl https://x'",
+        "bash -c 'bash -c \"curl https://x\"'",
+        "env curl https://x",
+        "env FOO=1 curl https://x",
+        "FOO=1 curl https://x",
+        "sudo -u bob curl https://x",
+        "command curl https://x",
+        "nohup curl https://x",
+        "timeout 5 curl https://x",
+        "echo https://x | xargs curl",
+        # Wrappers that hide where their command starts.
+        "doas curl https://x",
+        "pkexec curl https://x",
+        "flock /tmp/lock curl https://x",
+        "exec curl https://x",
+        "busybox curl https://x",
+        "watch -n 5 'curl https://x'",
+        "su -c 'curl https://x' bob",
+        "eval 'curl https://x'",
+        "env -S 'curl https://x'",
+        "find . -name '*.url' -exec curl {} ;",
+        # Syntax that leaves the other rules only `*` to ask.
+        "curl https://x > /tmp/out",
+        "echo $(curl https://x)",
+        "echo `curl https://x`",
+        'echo "$(curl https://x)"',
+        'page="$(curl https://x)"',
+        "cat <(curl https://x)",
+        "bash <<EOF\ncurl https://x\nEOF",
+        "if true; then curl https://x; fi",
+        "while true; do curl https://x; done",
+        "! curl https://x",
+        # The program under a path or a Windows suffix.
+        "/usr/bin/curl https://x",
+        "curl.exe https://x",
+        '"C:\\Windows\\System32\\curl.exe" https://x',
+    ],
+)
+def test_a_deny_rule_reaches_the_command_however_it_is_run(command: str):
+    assert exec_rule_tier(command, _DENY_CURL) is Tier.DENY
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo '$(curl https://x)'",
+        "grep -rn curl notes/",
+        "find . | xargs grep curl",
+        "rg -l 'curl -s' src",
+        "git commit -m 'retry curl on 429'",
+        "cat <<EOF > notes.md\ncurl https://x\nEOF",
+        "ls # then curl https://x",
+        "curlie https://x",
+        "man curl",
+        "echo $((1 + 2))",
+    ],
+)
+def test_a_deny_rule_leaves_a_command_that_only_mentions_the_program(command: str):
+    assert exec_rule_tier(command, _DENY_CURL) is Tier.ALLOW
+
+
+def test_an_allow_rule_still_reads_only_the_command_as_written():
+    table = {"git *": "allow", "*": "ask"}
+    for command in ("sudo git push", "env git status", "bash -c 'git status'", "/usr/bin/git status"):
+        assert exec_rule_tier(command, table) is Tier.ASK, command
+    assert exec_rule_tier("sudo git push", {"git *": "allow"}) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "table"),
+    [("ask", _DENY_CURL), ("smart", _DENY_CURL), ("full", {"curl *": "deny"})],
+)
+async def test_the_gate_refuses_a_wrapped_command_a_deny_rule_names(mode: str, table: dict[str, str]):
+    gate = gate_for(PermissionsConfig(mode=mode, tools={"exec": table}))
+    decision = await gate.check("exec", {"command": 'bash -c "curl https://x"'})
+    assert isinstance(decision, Deny)
+    assert decision.source is DecisionSource.USER_DENY
 
 
 @pytest.mark.parametrize(
@@ -428,6 +517,9 @@ def test_a_segment_the_user_already_allows_is_not_asked_for():
         ("make", True),
         ("sudo *", False),
         ("bash -c *", False),
+        ("exec *", False),
+        ("eval *", False),
+        ("busybox *", False),
         ("*", False),
         ("", False),
         ("git $(x) *", False),

@@ -26,6 +26,15 @@ inside a word stays a word: expansion splits words, it cannot make a command
 boundary. The builtin classifier (``raven.permissions.builtin``) keeps its own,
 stripping view of the same command; a rule here can never lift what it rules.
 
+A deny rule reads the other way, because what it stops is a program, not a
+spelling. It is asked before any of the narrowing above, about every command
+the string can be seen to run: behind a wrapper (``sudo``, ``env``, ``bash -c``,
+``xargs``, ``doas``, ``watch``), inside a substitution, after a shell keyword,
+under a path (``/usr/bin/curl``). So ``curl *: deny`` beside ``*: allow`` stops
+``bash -c "curl x"`` and ``curl x > /tmp/out`` as it stops ``curl x``. What it
+still cannot see is a command a program builds for itself -- ``python -c``, a
+script file, an alias -- which no reading of the token stream reaches.
+
 The same token view says what a session grant remembers and what prefix the
 approval prompt may suggest (``exec_approval_shape``), and what a prefix typed
 into that prompt may look like before it reaches the config
@@ -36,11 +45,21 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
 from raven.contracts.permissions import Tier
+from raven.permissions.shell_policy import (
+    _COMMAND_RUNNERS,
+    _MAX_EMBEDDED_SHELL_DEPTH,
+    _SHELL_COMMAND_WRAPPERS,
+    _WRAPPER_OPTIONS_WITH_VALUE,
+    _command_segments,
+    _iter_argv,
+    executable_text,
+)
 
 _STRICTNESS = {Tier.DENY: 2, Tier.ASK: 1, Tier.ALLOW: 0}
 
@@ -640,16 +659,147 @@ def _reaches_out(lexed: _Lexed) -> bool:
     return not all(_redirection_stays_home(op, target) for op, target in lexed.redirections)
 
 
+# Words that open a command without being one: ``then curl x`` runs curl.
+_SHELL_KEYWORDS: frozenset[str] = frozenset({"!", "do", "elif", "else", "if", "then", "until", "while"})
+# The members of ``_WRAPPERS`` that ``_iter_argv`` already reads through to the
+# command they run. Any other one hides where its command starts.
+_READ_THROUGH: frozenset[str] = (
+    frozenset(_WRAPPER_OPTIONS_WITH_VALUE) | frozenset(_COMMAND_RUNNERS) | _SHELL_COMMAND_WRAPPERS
+)
+_FIND_EXEC: frozenset[str] = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+_WINDOWS_EXECUTABLE = re.compile(r"\.(?:exe|com|cmd|bat)$", re.IGNORECASE)
+
+
+def _program(word: str) -> str:
+    """The program a command word names: ``/usr/bin/curl`` and ``curl.exe`` are curl."""
+    name = word.replace("\\", "/").rsplit("/", 1)[-1]
+    return _WINDOWS_EXECUTABLE.sub("", name) or name
+
+
+def _substitutions(command: str) -> Iterator[str]:
+    """The text of each ``$(...)`` and backtick substitution the shell runs.
+
+    Read off the raw text because a double-quoted substitution is one word to
+    the lexer, and ``echo "$(curl x)"`` runs curl all the same. Single quotes
+    make it text, and ``$((`` is arithmetic.
+    """
+    index, quote = 0, ""
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+            index += 1
+        elif char == "\\":
+            index += 2
+        elif char == "'" and not quote:
+            quote = "'"
+            index += 1
+        elif char == '"':
+            quote = "" if quote else '"'
+            index += 1
+        elif command.startswith("$(", index) and not command.startswith("$((", index):
+            depth, end = 1, index + 2
+            while end < len(command) and depth:
+                depth += {"(": 1, ")": -1}.get(command[end], 0)
+                end += 1
+            yield command[index + 2 : end - 1 if not depth else end]
+            index = end
+        elif char == "`":
+            end = command.find("`", index + 1)
+            end = len(command) if end == -1 else end
+            yield command[index + 1 : end]
+            index = end + 1
+        else:
+            index += 1
+
+
+def _env_split_strings(argv: list[str]) -> Iterator[str]:
+    """The command strings ``env -S`` splits and runs."""
+    for index, word in enumerate(argv[1:], start=1):
+        if word in ("-S", "--split-string") and index + 1 < len(argv):
+            yield argv[index + 1]
+        elif word.startswith("--split-string="):
+            yield word.partition("=")[2]
+        elif word.startswith("-S") and len(word) > 2:
+            yield word[2:]
+
+
+def _named(words: list[str]) -> Iterator[list[str]]:
+    """``words`` as written, and again with the program named by its bare name."""
+    yield words
+    program = _program(words[0])
+    if program != words[0]:
+        yield [program, *words[1:]]
+
+
+def _commands_run(command: str, _depth: int = 0) -> Iterator[list[str]]:
+    """Every argv this command can be seen to run, for a deny rule to be asked about.
+
+    ``_iter_argv`` is the walk the builtin classifier trusts: compound segments,
+    sudo/env/command/nohup, ``sh -c``, xargs and the other runners. Beside it
+    this reads what a deny rule must not be blind to: each segment as written,
+    substitutions, a shell keyword in front, env's ``-S`` string, a find
+    ``-exec``, and a wrapper whose command position is not known, where every
+    later word is asked and a word holding whitespace is read as a command.
+
+    It errs towards reading too much. A deny rule that fires on a word which
+    only looked like a command costs one refusal the model can see and reword;
+    one that misses runs the command the rule was written to stop.
+    """
+    text = executable_text(command)
+    try:
+        argvs = [*_command_segments(text), *_iter_argv(text)]
+    except ValueError:
+        argvs = []
+    nested = list(_substitutions(text))
+    for argv in argvs:
+        start = 0
+        while start < len(argv) and argv[start] in _SHELL_KEYWORDS:
+            start += 1
+        if start:
+            nested.append(shlex.join(argv[start:]))
+            continue
+        if not argv:
+            continue
+        yield from _named(argv)
+        program = _program(argv[0])
+        later: list[list[str]] = []
+        if program == "find":
+            later = [argv[index + 1 :] for index, word in enumerate(argv) if word in _FIND_EXEC]
+        elif program == "env":
+            nested.extend(_env_split_strings(argv))
+        elif program in _WRAPPERS and program not in _READ_THROUGH:
+            later = [argv[index:] for index in range(1, len(argv))]
+            nested.extend(word for word in argv[1:] if any(char.isspace() for char in word))
+        for words in later:
+            if words:
+                yield from _named(words)
+    if _depth < _MAX_EMBEDDED_SHELL_DEPTH:
+        for inner in nested:
+            yield from _commands_run(inner, _depth + 1)
+
+
+def _denied_anywhere(command: str, rules: list[tuple[str, list[str] | None, Tier]]) -> bool:
+    """Whether a deny rule names any command this string runs, however it is reached."""
+    denials = [rule for rule in rules if rule[1] is not None and rule[2] is Tier.DENY]
+    return bool(denials) and any(_segment_tier(argv, denials) is Tier.DENY for argv in _commands_run(command))
+
+
 def exec_rule_tier(command: str, table: dict[str, str]) -> Tier | None:
     """The user's tier for one shell command, or None when no rule speaks.
 
     Deny wins on any segment; allow requires every segment to allow. A segment
     no rule speaks about leaves the command unresolved unless another segment
-    already denied -- half-covered is not covered.
+    already denied -- half-covered is not covered. A deny rule is asked first,
+    about every command the string runs (``_commands_run``), so neither a
+    wrapper nor the syntax that narrows the other rules can put a denied
+    program back in reach of ``*``.
     """
     rules = _pattern_tiers(table)
     if not rules:
         return None
+    if _denied_anywhere(command, rules):
+        return Tier.DENY
     lexed = lex_command(command)
     if lexed is None or _reaches_out(lexed):
         return _strictest([t for _, pref, t in rules if pref is None])
@@ -671,6 +821,7 @@ _WRAPPERS: frozenset[str] = frozenset(
     {
         "bash",
         "builtin",
+        "busybox",
         "chrt",
         "cmd",
         "command",
@@ -678,6 +829,8 @@ _WRAPPERS: frozenset[str] = frozenset(
         "dash",
         "doas",
         "env",
+        "eval",
+        "exec",
         "fish",
         "flock",
         "ionice",
