@@ -105,7 +105,11 @@ export interface ExtAgentActArgs {
 }
 
 export interface ExtAgentsSource {
-  load(probe?: boolean): Promise<ExtAgentRow[]>
+  /* `rescan` also has the server take the login shell's environment again before
+     it probes: the one answer to an agent installed since the gateway started,
+     whose installer added a PATH line only a new capture reads. Only an explicit
+     re-check sends it -- the capture runs the user's login shell. */
+  load(probe?: boolean, rescan?: boolean): Promise<ExtAgentRow[]>
   act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
 }
 

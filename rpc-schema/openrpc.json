@@ -2016,6 +2016,13 @@
           "schema": {
             "type": "boolean"
           }
+        },
+        {
+          "name": "refresh_login_env",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {

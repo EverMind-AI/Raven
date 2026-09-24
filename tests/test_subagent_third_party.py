@@ -32,7 +32,7 @@ from raven.agent.subagent.backends import (
     format_agent_listing,
     third_party_agent_meta,
 )
-from raven.agent.subagent.backends.env import login_shell_env
+from raven.agent.subagent.backends.env import login_shell_env, refresh_login_shell_env
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
 from raven.agent.subagent.mcp_grant import McpGrant
@@ -208,6 +208,99 @@ def test_login_shell_env_cache_hit_returns_a_copy(
     first["PATH"] = "poisoned"
     second = login_shell_env()
     assert second["PATH"] == "/usr/bin"
+
+
+def _shell_printing(paths: list[str], calls: list[list[str]]):
+    """A `subprocess.run` stand-in whose login shell prints the next PATH each run."""
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, f"PATH={paths[len(calls) - 1]}\0".encode(), b"")
+
+    return fake_run
+
+
+def test_a_refresh_takes_the_login_env_again_and_swaps_it_in(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """The memo lasts the process; a refresh is the one way to read the shell again.
+
+    What it answers, measured 2026-09-24: Kimi Code's installer appended its PATH
+    line to ~/.zshrc after the gateway had started, and every probe and spawn
+    went on reading the PATH from before it.
+    """
+    calls: list[list[str]] = []
+    monkeypatch.setattr(env_mod.subprocess, "run", _shell_printing(["/usr/bin", "/opt/kimi/bin:/usr/bin"], calls))
+    assert login_shell_env()["PATH"] == "/usr/bin"
+    assert login_shell_env()["PATH"] == "/usr/bin", "still one capture per process by default"
+    assert len(calls) == 1
+
+    assert refresh_login_shell_env() is True
+    assert len(calls) == 2
+    assert login_shell_env()["PATH"] == "/opt/kimi/bin:/usr/bin"
+    assert len(calls) == 2, "and the new capture is the memo, not a one-off"
+
+
+def test_a_failed_refresh_keeps_the_capture_it_had(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A working PATH is not traded for raven's own because one retry failed."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(env_mod.subprocess, "run", _shell_printing(["/usr/bin"], calls))
+    login_shell_env()
+
+    def boom(argv, **kwargs):
+        raise OSError("shell went away")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", boom)
+    monkeypatch.setenv("PATH", "/raven/own/bin")
+    assert refresh_login_shell_env() is False
+    assert login_shell_env()["PATH"] == "/usr/bin"
+
+
+def test_a_refresh_retries_a_capture_that_failed_at_start(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A first capture that failed is sticky for the process; a refresh is its second chance."""
+
+    def boom(argv, **kwargs):
+        raise OSError("profile timed out")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", boom)
+    monkeypatch.setenv("RAVEN_ENV_PROBE", "inherited")
+    assert login_shell_env()["RAVEN_ENV_PROBE"] == "inherited"
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(env_mod.subprocess, "run", _shell_printing(["/opt/kimi/bin"], calls))
+    assert refresh_login_shell_env() is True
+    assert login_shell_env() == {"PATH": "/opt/kimi/bin"}
+
+
+def test_a_reader_during_a_refresh_gets_the_old_capture_not_a_second_one(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """The memo is read without a lock by spawns and probes on other threads.
+
+    Emptied first and filled after, a reader in between would capture again
+    itself -- and the MCP grant path reads it on the event loop, where that is
+    up to fifteen seconds of a stalled gateway. So the old capture stays until
+    the new one replaces it whole.
+    """
+    seen_during: list[str] = []
+    calls: list[list[str]] = []
+    paths = ["/usr/bin", "/opt/kimi/bin:/usr/bin"]
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) == 2:
+            seen_during.append(login_shell_env()["PATH"])
+        return subprocess.CompletedProcess(argv, 0, f"PATH={paths[len(calls) - 1]}\0".encode(), b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    login_shell_env()
+    assert refresh_login_shell_env() is True
+    assert seen_during == ["/usr/bin"]
+    assert len(calls) == 2, "the reader in the middle started no capture of its own"
 
 
 def test_login_shell_env_capture_starts_from_a_minimal_base_not_ravens_env(

@@ -37,16 +37,18 @@ function fullRow(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
 
 /* A transport whose `subagents.list` answers from a queue, so a test can play
    a probing read and the probe-less read that follows it. */
-function listing(...answers: ExtAgentRowWire[][]): { probes: boolean[] } {
+function listing(...answers: ExtAgentRowWire[][]): { probes: boolean[]; sent: Array<Record<string, unknown>> } {
   const probes: boolean[] = []
+  const sent: Array<Record<string, unknown>> = []
   const transport = new FixtureTransport({})
   transport.call = (async (method: string, params: { probe?: boolean }) => {
     expect(method).toBe('subagents.list')
     probes.push(!!params.probe)
+    sent.push({ ...params })
     return { rows: answers.shift() ?? [] }
   }) as typeof transport.call
   setGateway(transport)
-  return { probes }
+  return { probes, sent }
 }
 
 beforeEach(() => {
@@ -131,6 +133,23 @@ describe('refetching the list', () => {
     await extAgentsFetch(true)
     const [row] = await extAgentsFetch(false)
     expect(row).toMatchObject({ probe_status: 'missing', probe_missing: 'npx' })
+  })
+
+  /* Only a re-check asks the server to read the login shell again, and it asks
+     by name: the capture runs the user's shell, which a plain listing on every
+     page open must not pay for. */
+  it('asks for a fresh login-shell capture only when told to', async () => {
+    const { sent } = listing([], [], [])
+    await extAgentsFetch(true, true)
+    await extAgentsFetch(true)
+    /* And through the source the store actually calls, which is where a
+       re-check's second argument has to survive the hop. */
+    await extAgentsSource.load(true, true)
+    expect(sent).toEqual([
+      { probe: true, refresh_login_env: true },
+      { probe: true },
+      { probe: true, refresh_login_env: true },
+    ])
   })
 
   it('lets a probing answer overwrite what it remembered', async () => {

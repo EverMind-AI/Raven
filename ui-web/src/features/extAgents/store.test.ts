@@ -166,22 +166,27 @@ describe('connectRow', () => {
 describe('recheck', () => {
   it('re-measures the machine and remembers a row that is still absent', async () => {
     const r = row({ probe_status: 'missing' })
-    const loads: boolean[] = []
+    const loads: Array<[boolean, boolean]> = []
     setSources({
       extAgents: {
-        load: async (probe) => {
-          loads.push(!!probe)
+        load: async (probe, rescan) => {
+          loads.push([!!probe, !!rescan])
           return [r]
         },
         act: async () => [r],
       },
     })
     await store.recheck(r)
-    expect(loads).toEqual([true])
+    /* Probed, and from the shell's PATH as it is now: the agent was installed
+       while the page was open, and only a new capture sees its PATH line. */
+    expect(loads).toEqual([[true, true]])
     expect(store.get().stillMissing).toEqual(['claude_code'])
     r.probe_status = 'attention'
     await store.recheck(r)
     expect(store.get().stillMissing).toEqual([])
+    /* An ordinary load -- opening the page -- probes without the capture. */
+    await store.load(true)
+    expect(loads.at(-1)).toEqual([true, false])
   })
 })
 

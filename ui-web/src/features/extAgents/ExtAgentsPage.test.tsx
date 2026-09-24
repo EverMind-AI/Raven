@@ -62,10 +62,12 @@ function row(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
 function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> & { refuse?: (op: string) => string | null } = {}) {
   const acts: Array<[string, string, ExtAgentActArgs]> = []
   const loads: boolean[] = []
+  const rescans: boolean[] = []
   const { refuse, ...rest } = over
   const source: ExtAgentsSource = {
-    load: async (probe) => {
+    load: async (probe, rescan) => {
       loads.push(!!probe)
+      rescans.push(!!rescan)
       return rows
     },
     act: async (op, r, args) => {
@@ -98,7 +100,7 @@ function install(rows: ExtAgentRow[], over: Partial<ExtAgentsSource> & { refuse?
     '<section id="extAgentsPage"><div id="extAgentsBody"></div></section>' +
     '<aside id="detail" data-open="false"><b id="dTitle">—</b><div id="dBody"></div></aside>' +
     '<div id="menu" data-open="false"></div>'
-  return { source, acts, loads, toasts, confirms }
+  return { source, acts, loads, rescans, toasts, confirms }
 }
 
 async function mount() {
@@ -589,7 +591,7 @@ describe('the sheet', () => {
 
   it('shows an absent agent how to get installed, and re-checks the machine on request', async () => {
     const rows = [row({ name: 'qwen', preset: 'qwen_code', configured: false, enabled: false, probe_status: 'missing' })]
-    const { loads } = install(rows)
+    const { loads, rescans } = install(rows)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } })
     await mount()
     await openSheet('qwen')
@@ -601,6 +603,10 @@ describe('the sheet', () => {
     expect(sheet()!.querySelector('.extAgents-cmd button')!.textContent).toBe('gui.agent.copied')
     await click(sheet()!.querySelector('.extAgents-act button'))
     expect(loads).toEqual([true, true])
+    /* The re-check reads the shell's PATH as it is now -- the agent was most
+       likely installed while this page was open -- and opening the page did not
+       pay for that. */
+    expect(rescans).toEqual([false, true])
     expect(sheet()!.querySelector('.extAgents-probe')!.textContent).toBe('gui.agent.still_missing')
     rows[0]!.probe_status = 'attention'
     await click(sheet()!.querySelector('.extAgents-act button'))

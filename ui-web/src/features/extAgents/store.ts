@@ -143,11 +143,12 @@ const remedyFrom = (e: unknown): Remedy | null => remedyOf((e as { data?: { reme
 /* `load(true)` re-measures availability. Opening the page is one caller --
    the section heading there is a fresh answer every time the reader arrives --
    the sheet's re-check button is another, and the wizard's agents step a third,
-   on its own schedule rather than through page navigation. */
-export async function load(probe: boolean): Promise<void> {
+   on its own schedule rather than through page navigation. `rescan` is the
+   re-check's alone: see `ExtAgentsSource.load`. */
+export async function load(probe: boolean, rescan = false): Promise<void> {
   set({ loading: true })
   try {
-    const rows = await source().load(probe)
+    const rows = await source().load(probe, rescan)
     set({ rows, epoch: get().epoch + 1, loading: false })
   } catch (e) {
     set({ loading: false })
@@ -283,9 +284,12 @@ export function clearModel(row: ExtAgentRow): Promise<void> {
 export const draftOf = (name: string): string | undefined => get().drafts[name]
 
 /* Measure the machine again for one absent row, and remember when it is still
-   absent afterwards -- that is the one answer the sheet has to say out loud. */
+   absent afterwards -- that is the one answer the sheet has to say out loud.
+   Again means from the shell's PATH as it is now: an agent is usually installed
+   while this page is open, and its installer's PATH line is invisible to the
+   environment the gateway captured when it started. */
 export async function recheck(row: ExtAgentRow): Promise<void> {
-  await load(true)
+  await load(true, true)
   const now = get().rows.find((r) => r.name === row.name)
   const still = !!now && sectionOf(now) === 'missing'
   const rest = get().stillMissing.filter((name) => name !== row.name)

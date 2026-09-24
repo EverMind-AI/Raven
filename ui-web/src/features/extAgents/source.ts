@@ -160,8 +160,8 @@ export function isFound(row: ExtAgentRow): boolean {
    instead of reaching into the array the page is rendering. */
 let extAgentsSeen = new Map<string, ExtAgentRow>()
 
-export async function extAgentsFetch(probe: boolean): Promise<ExtAgentRow[]> {
-  const res = await gateway().call('subagents.list', { probe: !!probe })
+export async function extAgentsFetch(probe: boolean, rescan = false): Promise<ExtAgentRow[]> {
+  const res = await gateway().call('subagents.list', { probe: !!probe, ...(rescan ? { refresh_login_env: true } : {}) })
   /* A probe-less list reports every row as "unknown", which would blank the
      health line of a row that was ready a second ago -- connecting an agent
      would look like it broke it. The verdict cannot have changed by writing
@@ -187,7 +187,7 @@ export function resetExtAgentsSeen(): void {
 }
 
 export const extAgentsSource: ExtAgentsSource = {
-  load: (probe) => extAgentsFetch(!!probe),
+  load: (probe, rescan) => extAgentsFetch(!!probe, !!rescan),
   act: async (op, row, args) => {
     const a = args || {}
     if (op === 'connect') {

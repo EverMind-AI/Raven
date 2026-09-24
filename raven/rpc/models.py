@@ -2569,6 +2569,14 @@ class SubagentsListParams(_Strict):
         default=True,
         description="False skips the network availability probe; rows report probe_status='unknown'.",
     )
+    refresh_login_env: bool = Field(
+        default=False,
+        description=(
+            "True takes the login shell's environment again before listing, so an agent installed since the "
+            "gateway started (its installer added a PATH line to the shell rc) is found without a restart. It "
+            "also replaces the environment spawns read. Costs one login-shell run; sent by an explicit recheck."
+        ),
+    )
 
 
 class SubagentsListResult(_Strict):

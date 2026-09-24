@@ -2636,6 +2636,7 @@ export interface SubagentContextResult {
 }
 export interface SubagentsListParams {
   probe?: boolean;
+  refresh_login_env?: boolean;
 }
 export interface SubagentsListResult {
   rows: SubagentRow[];
