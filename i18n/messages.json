@@ -1440,8 +1440,8 @@
       "zh": "启用"
     },
     "gui.conn.none": {
-      "en": "No channels in the catalogue yet.",
-      "zh": "渠道目录还是空的。"
+      "en": "No channels available yet",
+      "zh": "还没有可用的渠道"
     },
     "gui.conn.none_match": {
       "en": "No channel matches.",
@@ -1736,8 +1736,12 @@
       "zh": "下次 {next}"
     },
     "gui.cron.none": {
-      "en": "No schedules yet. Say \"every morning at 8...\" in a conversation and one is made, or add one here.",
-      "zh": "还没有定时任务。在对话里说「每天早上八点……」就会建一条，也可以在这里新建。"
+      "en": "Ask Raven in a conversation, say \"every morning at 8...\", and it sets one up for you.",
+      "zh": "在对话里跟 Raven 说「每天早上八点……」，它会帮你建一条。"
+    },
+    "gui.cron.none_t": {
+      "en": "No schedules yet",
+      "zh": "暂无定时任务"
     },
     "gui.cron.ok": {
       "en": "Done",
@@ -2643,9 +2647,25 @@
       "zh": "长期记忆当前写不进去，这段时间的对话不会被记住。",
       "en": "Long-term memory is not being written; nothing from here on will be remembered."
     },
+    "gui.mem.off_t": {
+      "en": "Long-term memory is not connected",
+      "zh": "长期记忆没有接上"
+    },
+    "gui.mem.err_t": {
+      "en": "Can't reach the memory service",
+      "zh": "连不上记忆服务"
+    },
+    "gui.mem.err_sub": {
+      "en": "Retry once it is back up.",
+      "zh": "服务恢复后点重试即可。"
+    },
     "gui.mem.empty": {
-      "zh": "这里还没有记忆，先和 Raven 干点活吧",
-      "en": "Nothing here yet - go do some work with Raven"
+      "zh": "和 Raven 一起干点活，这里会慢慢攒起来。",
+      "en": "They build up as you work with Raven."
+    },
+    "gui.mem.empty_t": {
+      "en": "No memories yet",
+      "zh": "暂无记忆"
     },
     "gui.mem.hero": {
       "zh": "数据与记忆",
@@ -5147,6 +5167,70 @@
       "en": "{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this agent's launch command once in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}.",
       "zh": "{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行一次这个智能体的启动命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」。"
     },
+    "gui.agent.fix_setup_then": {
+      "en": "{agent} has no model provider it can use yet, or its API key was refused. Set one up in two steps, then press {button}:",
+      "zh": "{agent} 还没有可用的模型服务商，或者 API key 不对。按下面两步配好，然后点「{button}」："
+    },
+    "gui.agent.fix_step_run": {
+      "en": "Run in a terminal:",
+      "zh": "在终端运行："
+    },
+    "gui.agent.fix_step_type": {
+      "en": "Then type:",
+      "zh": "进入后输入："
+    },
+    "gui.agent.fix_model": {
+      "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch to another model as below, then press {button}:",
+      "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。按下面的步骤换一个模型，然后点「{button}」："
+    },
+    "gui.agent.fix_model_bare": {
+      "en": "The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch it to another model, then press {button}.",
+      "zh": "{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。换一个模型后点「{button}」。"
+    },
+    "gui.agent.fix_billing": {
+      "en": "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model as below, then press {button}:",
+      "zh": "{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者按下面的步骤换一个模型，然后点「{button}」："
+    },
+    "gui.agent.fix_billing_bare": {
+      "en": "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model, then press {button}.",
+      "zh": "{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者换一个模型，然后点「{button}」。"
+    },
+    "gui.agent.fix_quota": {
+      "en": "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch to another model as below:",
+      "zh": "{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者按下面的步骤换一个模型："
+    },
+    "gui.agent.fix_quota_bare": {
+      "en": "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch it to another model.",
+      "zh": "{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者换一个模型。"
+    },
+    "gui.agent.fix_network": {
+      "en": "{agent} could not reach its model provider. Check the network, the proxy and the address it is set to use, then press {button}. To see the exact cause, run this command in a terminal:",
+      "zh": "{agent} 连不上它的模型服务商。检查网络、代理和它配置的服务地址，处理好后点「{button}」。想看具体原因，可以在终端运行这条命令："
+    },
+    "gui.agent.fix_network_bare": {
+      "en": "{agent} could not reach its model provider. Check the network, the proxy and the address it is set to use, then press {button}.",
+      "zh": "{agent} 连不上它的模型服务商。检查网络、代理和它配置的服务地址，处理好后点「{button}」。"
+    },
+    "gui.agent.fix_silent": {
+      "en": "{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Run this command in a terminal and it prints the reason within a couple of minutes; once that is fixed, press {button}:",
+      "zh": "{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。在终端运行下面这条命令，一两分钟内会打印出原因，处理好后点「{button}」："
+    },
+    "gui.agent.fix_silent_bare": {
+      "en": "{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Once that is fixed, press {button}.",
+      "zh": "{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。处理好后点「{button}」。"
+    },
+    "gui.agent.fix_upgrade": {
+      "en": "{agent} is too old to be connected: this version does not support ACP yet. Upgrade it by running this command in a terminal, then press {button}:",
+      "zh": "{agent} 的版本太旧，还不支持 ACP 接入。在终端运行下面这条命令升级到最新版，完成后点「{button}」："
+    },
+    "gui.agent.fix_upgrade_bare": {
+      "en": "{agent} is too old to be connected: this version does not support ACP yet. Upgrade it to the latest release, then press {button}.",
+      "zh": "{agent} 的版本太旧，还不支持 ACP 接入。升级到最新版后点「{button}」。"
+    },
+    "gui.agent.fix_exited": {
+      "en": "{agent} quit as soon as it started. The original error below has what it said on its way out; once that is fixed, press {button}.",
+      "zh": "{agent} 一启动就退出了。展开下面的原始报错，能看到它退出前说了什么，处理好后点「{button}」。"
+    },
     "gui.agent.fix_unknown_connect": {
       "en": "{agent} could not connect. The original error below says why; once it is fixed, press {button}.",
       "zh": "{agent} 没接入成功。可以展开下面的原始报错排查原因，处理好后点「{button}」。"
@@ -5179,6 +5263,34 @@
       "en": "{agent} could not be downloaded",
       "zh": "{agent} 没能下载下来"
     },
+    "gui.agent.bad_model": {
+      "en": "The model {agent} uses is not available",
+      "zh": "{agent} 用的模型不可用"
+    },
+    "gui.agent.bad_billing": {
+      "en": "{agent}'s provider account is out of credit",
+      "zh": "{agent} 的服务商余额不足"
+    },
+    "gui.agent.bad_quota": {
+      "en": "{agent} is rate-limited or out of quota",
+      "zh": "{agent} 被限流或额度用完"
+    },
+    "gui.agent.bad_network": {
+      "en": "{agent} could not reach its model provider",
+      "zh": "{agent} 连不上模型服务商"
+    },
+    "gui.agent.bad_silent": {
+      "en": "{agent} did not answer in time",
+      "zh": "{agent} 没有及时回复"
+    },
+    "gui.agent.bad_upgrade": {
+      "en": "{agent} is too old to connect",
+      "zh": "{agent} 版本太旧"
+    },
+    "gui.agent.bad_exited": {
+      "en": "{agent} quit as soon as it started",
+      "zh": "{agent} 一启动就退出了"
+    },
     "gui.agent.bad_connect": {
       "en": "{agent} could not connect",
       "zh": "{agent} 没接入成功"
@@ -5206,6 +5318,14 @@
     "gui.agent.bad_run": {
       "en": "{what}: run {command} in a terminal, then press {button}",
       "zh": "{what}：在终端运行 {command}，再点「{button}」"
+    },
+    "gui.agent.bad_run_then": {
+      "en": "{what}: run {command} in a terminal and type {then}, then press {button}",
+      "zh": "{what}：在终端运行 {command} 并输入 {then}，再点「{button}」"
+    },
+    "gui.agent.bad_run_diagnose": {
+      "en": "{what}: run {command} in a terminal to see why, and press {button} once it is fixed",
+      "zh": "{what}：在终端运行 {command} 查看原因，处理好后点「{button}」"
     },
     "gui.agent.bad_retry": {
       "en": "{what} -- once it is fixed, press {button}",
@@ -6871,6 +6991,10 @@
       "en": "No archived sessions yet",
       "zh": "还没有归档的会话"
     },
+    "gui.settings.archive.empty_sub": {
+      "en": "Archived conversations are kept here, and any of them can be restored.",
+      "zh": "归档的会话收在这里，随时可以恢复。"
+    },
     "gui.settings.archive.restore": {
       "en": "Restore",
       "zh": "恢复"
@@ -6984,8 +7108,20 @@
       "zh": "这段时间没有记录"
     },
     "gui.settings.usage.unavailable": {
-      "en": "No usage counter behind this page",
-      "zh": "这个页面后面没有用量计数器"
+      "en": "Can't reach the Raven service",
+      "zh": "连不上 Raven 服务"
+    },
+    "gui.settings.usage.unavailable_sub": {
+      "en": "Retry once it is back up.",
+      "zh": "服务恢复后点重试即可。"
+    },
+    "gui.settings.usage.empty_t": {
+      "en": "No usage yet",
+      "zh": "暂无用量数据"
+    },
+    "gui.settings.usage.empty_sub": {
+      "en": "Nothing was used in this range. Try a longer one.",
+      "zh": "这段时间还没有用量，换个时间范围看看。"
     },
     "gui.settings.providers.title": {
       "en": "Providers · {n}",
@@ -7738,6 +7874,10 @@
     "gui.settings.plugins.none": {
       "en": "No MCP server configured",
       "zh": "还没有配置 MCP 服务"
+    },
+    "gui.settings.plugins.none_sub": {
+      "en": "An MCP server hands Raven tools and data from outside.",
+      "zh": "MCP 服务能给 Raven 接上外部的工具和数据。"
     },
     "gui.settings.plugins.connected": {
       "en": "Connected",

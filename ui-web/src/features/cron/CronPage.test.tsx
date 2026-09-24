@@ -100,6 +100,13 @@ afterEach(() => {
 
 /* The name box, and leaving it -- which is what commits an edit: the detail
    saves on the native `change` moment rather than on a button. */
+/* With no jobs installed the page offers no way in -- a job is asked for in a
+   conversation -- so these draft tests open the sheet the way the list's "+"
+   does once a job exists. */
+async function startDraft(): Promise<void> {
+  await act(async () => { store.openSheet() })
+}
+
 const nameBox = (): HTMLInputElement =>
   document.querySelector<HTMLInputElement>('.two-pane-main input.cronname')!
 
@@ -157,10 +164,23 @@ describe('cron island', () => {
     expect(screen.getByText('gui.cron.g_off')).toBeTruthy()
   })
 
-  it('shows the empty note when the source has nothing', async () => {
+  /* No jobs: one column, pointing at the conversation, with no manual way to
+     add -- neither the list's "+" nor a button of its own. A draft opened from
+     elsewhere still brings the list back, since it is named against it. */
+  it('shows the empty state in one column with no manual add when the source has nothing', async () => {
     install([])
     await mount()
-    expect(await screen.findByText('gui.cron.none')).toBeTruthy()
+    const main = document.querySelector('.two-pane-main') as HTMLElement
+    expect(within(main).getByText('gui.cron.none_t')).toBeTruthy()
+    expect(within(main).getByText('gui.cron.none')).toBeTruthy()
+    expect(document.querySelector('.two-pane-side')).toBeNull()
+    expect(screen.queryByLabelText('gui.cron_new')).toBeNull()
+    expect(screen.queryByText('gui.cron_new')).toBeNull()
+    expect(main.querySelector('button')).toBeNull()
+    await startDraft()
+    expect(store.get().sheet).toBeTruthy()
+    expect(nameBox()).toBeTruthy()
+    expect(document.querySelector('.two-pane-side')).toBeTruthy()
   })
 
   /* Two groups and a search, which is what the three filter chips became: the
@@ -226,9 +246,7 @@ describe('cron island', () => {
   it('refuses a blank draft with a note under each empty field', async () => {
     install([])
     await mount()
-    await act(async () => {
-      screen.getByLabelText('gui.cron_new').click()
-    })
+    await startDraft()
     await act(async () => {
       ;(await screen.findByText('gui.cron.create')).click()
     })
@@ -241,14 +259,14 @@ describe('cron island', () => {
      draft there deleted a half-written job to a press that reads like a
      detour. */
   describe('a draft the reader leaves the section with', () => {
-    const draftUp = (): boolean => !!document.querySelector('.two-pane-main button.mini.go')
+    /* The draft's own foot, so no other primary button in the column can pass
+       for it. */
+    const draftUp = (): boolean => !!document.querySelector('.two-pane-main .two-pane-foot button.mini.go')
 
     it('goes off screen and comes back with what was typed in it', async () => {
       install([])
       await mount()
-      await act(async () => {
-        screen.getByLabelText('gui.cron_new').click()
-      })
+      await startDraft()
       const name = nameBox()
       await act(async () => {
         name.value = 'half written'
@@ -271,9 +289,7 @@ describe('cron island', () => {
     it('is gone for good once the reader cancels it', async () => {
       install([])
       await mount()
-      await act(async () => {
-        screen.getByLabelText('gui.cron_new').click()
-      })
+      await startDraft()
       await act(async () => {
         ;(await screen.findByText('gui.cancel')).click()
       })

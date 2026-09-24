@@ -163,13 +163,15 @@ describe('the onboarding wizard', () => {
     expect(button('gui.onb.next').disabled).toBe(false)
   })
 
-  it('shows the loading line until the step body has loaded, then the body', async () => {
+  it('draws the step body before its data lands, and never a loading line', async () => {
     const h = install()
     mount()
     await open()
-    expect(document.querySelector('.ob-loading')).not.toBeNull()
+    expect(document.querySelector('.fake-model')).not.toBeNull()
+    expect(document.querySelector('.ob-loading')).toBeNull()
     await act(async () => { h.model.setLoaded(true) })
     expect(document.querySelector('.fake-model')).not.toBeNull()
+    expect(document.querySelector('.ob-loading')).toBeNull()
   })
 
   it('walks forward and back, and a skipped step is marked so', async () => {

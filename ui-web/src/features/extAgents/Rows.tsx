@@ -109,6 +109,13 @@ function whatFailed(row: ExtAgentRow, failed: Failure): string {
   if (kind === 'setup') return t('gui.agent.bad_setup', { agent })
   if (kind === 'api_key') return t('gui.agent.bad_api_key', { agent })
   if (kind === 'download') return t('gui.agent.bad_download', { agent })
+  if (kind === 'model') return t('gui.agent.bad_model', { agent })
+  if (kind === 'billing') return t('gui.agent.bad_billing', { agent })
+  if (kind === 'quota') return t('gui.agent.bad_quota', { agent })
+  if (kind === 'network') return t('gui.agent.bad_network', { agent })
+  if (kind === 'silent') return t('gui.agent.bad_silent', { agent })
+  if (kind === 'upgrade') return t('gui.agent.bad_upgrade', { agent })
+  if (kind === 'exited') return t('gui.agent.bad_exited', { agent })
   const write = refusedWrite(failed)
   return t(write === 'save' ? 'gui.agent.bad_save' : write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', {
     agent,
@@ -127,7 +134,9 @@ export function refusedWrite(failed: Failure): 'connect' | 'disconnect' | 'save'
 /* The red line itself. A card or row that opens a sheet points there, where
    the steps and the original error are. The wizard's rows open nothing, so
    theirs has to carry the step: the command, when it is one to run in a
-   terminal, and the retry to press after. */
+   terminal, what to type in it when the fix is inside the agent, and the
+   retry to press after. A command that only makes the agent say why it is
+   failing is named as that, not as the fix. */
 function failureLine(row: ExtAgentRow, failed: Failure, opens: boolean): string {
   const what = whatFailed(row, failed)
   if (opens) return t('gui.agent.bad_open', { what })
@@ -136,8 +145,11 @@ function failureLine(row: ExtAgentRow, failed: Failure, opens: boolean): string 
   /* The adapter's own command is too long for a row, and what fixes a
      download is the network anyway, so the row names where to look. */
   if (kind === 'download') return t('gui.agent.bad_download_retry', { what, button })
-  const command = kind === 'sign_in' || kind === 'setup' ? failed.remedy?.command : ''
-  return command ? t('gui.agent.bad_run', { what, command, button }) : t('gui.agent.bad_retry', { what, button })
+  const command = kind && kind !== 'api_key' ? failed.remedy?.command : ''
+  if (!command) return t('gui.agent.bad_retry', { what, button })
+  if (kind === 'network' || kind === 'silent') return t('gui.agent.bad_run_diagnose', { what, command, button })
+  const then = failed.remedy?.then
+  return then ? t('gui.agent.bad_run_then', { what, command, then, button }) : t('gui.agent.bad_run', { what, command, button })
 }
 
 /* Connect, by what the row's stage calls for. The one case with a question in

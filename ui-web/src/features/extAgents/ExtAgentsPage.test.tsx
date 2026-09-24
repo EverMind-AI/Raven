@@ -820,6 +820,13 @@ describe('a refusal that names its fix', () => {
     ['setup', 'gui.agent.bad_setup'],
     ['api_key', 'gui.agent.bad_api_key'],
     ['download', 'gui.agent.bad_download'],
+    ['model', 'gui.agent.bad_model'],
+    ['billing', 'gui.agent.bad_billing'],
+    ['quota', 'gui.agent.bad_quota'],
+    ['network', 'gui.agent.bad_network'],
+    ['silent', 'gui.agent.bad_silent'],
+    ['upgrade', 'gui.agent.bad_upgrade'],
+    ['exited', 'gui.agent.bad_exited'],
   ])('puts a %s fix on the card as a line in the reader\'s words', async (kind, key) => {
     const r = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
     install([r], {
@@ -832,6 +839,97 @@ describe('a refusal that names its fix', () => {
     await click(buttonOf('Codex'))
     expect(lineOf('Codex')).toBe(say('gui.agent.bad_open', { what: say(key, { agent: 'Codex' }) }))
     expect(rowNamed('Codex').textContent).not.toContain('the English sentence')
+  })
+
+  /* Qwen Code's fixes are typed at its own prompt: `qwen` alone leaves the
+     reader there with nothing saying what next. So the sheet gives the way in
+     and the step as two numbered lines, each copyable -- measured on the
+     connect a free model's withdrawal refused. */
+  it('gives a fix made inside the agent as two numbered steps, each with its own copy', async () => {
+    const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
+    const said =
+      "sub-agent 'Qwen Code' did not answer a test message, so it was not added: its model provider does not serve " +
+      'the model it is set to use'
+    install([r], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: said, remedy: { kind: 'model', command: 'qwen', then: '/model' } } }
+        return [r]
+      },
+    })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    await mount()
+    await openSheet('Qwen Code')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_model', { agent: 'Qwen Code', button: 'gui.retry' }))
+    const steps = [...fix()!.querySelectorAll('.extAgents-steps li')]
+    expect(steps.map((li) => li.firstChild!.textContent)).toEqual(['gui.agent.fix_step_run', 'gui.agent.fix_step_type'])
+    expect(steps.map((li) => li.querySelector('.extAgents-cmd code')!.textContent)).toEqual(['qwen', '/model'])
+    await click(steps[1]!.querySelector('.extAgents-cmd button'))
+    expect(writeText).toHaveBeenCalledWith('/model')
+    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
+  })
+
+  it('says an agent with no provider yet is set up at its own prompt, in the same two steps', async () => {
+    install([
+      row({
+        name: 'Qwen Code',
+        preset: 'qwen_code',
+        last_test_ok: false,
+        last_test_at_ms: 1,
+        last_test_detail: 'it is installed but has no usable credential',
+        last_test_remedy: { kind: 'setup', command: 'qwen', then: '/auth' },
+      }),
+    ])
+    await mount()
+    await openSheet('Qwen Code')
+    const lead = say('gui.agent.fix_setup_then', { agent: 'Qwen Code', button: 'gui.agent.test_label' })
+    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
+    expect([...fix()!.querySelectorAll('.extAgents-steps code')].map((c) => c.textContent)).toEqual(['qwen', '/auth'])
+  })
+
+  it.each([
+    ['network', 'qwen hi', 'gui.agent.fix_network'],
+    ['silent', 'qwen hi', 'gui.agent.fix_silent'],
+    ['upgrade', 'npm i -g @qwen-code/qwen-code@latest', 'gui.agent.fix_upgrade'],
+  ])('says a %s refusal and puts its one command on a line of its own', async (kind, command, key) => {
+    const r = row({ name: 'Qwen Code', preset: 'qwen_code', configured: false, enabled: false })
+    install([r], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: 'the English sentence', remedy: { kind, command } } }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('Qwen Code')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry' }))
+    expect([...fix()!.querySelectorAll('.extAgents-cmd code')].map((c) => c.textContent)).toEqual([command])
+    expect(fix()!.querySelector('.extAgents-steps')).toBeNull()
+  })
+
+  it.each([
+    ['model', 'gui.agent.fix_model_bare'],
+    ['billing', 'gui.agent.fix_billing_bare'],
+    ['quota', 'gui.agent.fix_quota_bare'],
+    ['network', 'gui.agent.fix_network_bare'],
+    ['silent', 'gui.agent.fix_silent_bare'],
+    ['upgrade', 'gui.agent.fix_upgrade_bare'],
+    ['exited', 'gui.agent.fix_exited'],
+  ])('says a %s refusal with no command known in a sentence that ends, offering nothing to run', async (kind, key) => {
+    const r = row({ name: 'my-agent', preset: undefined, configured: true, enabled: false })
+    install([r], {
+      act: async (op) => {
+        if (op === 'toggle') throw { data: { detail: 'the English sentence', remedy: { kind, then: '/model' } } }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('my-agent')
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    expect(fix()!.firstElementChild!.textContent).toBe(say(key, { agent: 'my-agent', button: 'gui.retry' }))
+    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain('the English sentence')
   })
 
   it('says a failure with no fix in the reader\'s words too, and folds the server\'s sentence', async () => {

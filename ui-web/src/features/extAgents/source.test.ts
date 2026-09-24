@@ -72,6 +72,19 @@ describe('one agent row', () => {
     expect(fetch.last_test_remedy).toEqual({ kind: 'download', command: 'npx -y a@1' })
   })
 
+  /* The provider's refusals and the failures to answer are fixes too, and a
+     step to type travels only beside the command that opens where to type it:
+     alone it would tell the reader to type into nothing. */
+  it('reads the kinds past a credential, and keeps a step only beside its command', () => {
+    const inAgent = extAgentRowOf(wire({ last_test_remedy: { kind: 'model', command: 'qwen', then: '/model' } }))
+    expect(inAgent.last_test_remedy).toEqual({ kind: 'model', command: 'qwen', then: '/model' })
+    const quit = extAgentRowOf(wire({ last_test_remedy: { kind: 'exited' } }))
+    expect(quit.last_test_remedy).toEqual({ kind: 'exited', command: '' })
+    const stray = extAgentRowOf(wire({ last_test_remedy: { kind: 'setup', then: '/auth' } }))
+    expect(stray.last_test_remedy).toEqual({ kind: 'setup', command: '' })
+    expect('then' in stray.last_test_remedy!).toBe(false)
+  })
+
   /* What to install, as the executable the probe did not find. Absent unless
      sent, so a server that predates it reads as "nothing named". */
   it('carries the executable a missing row lacks', () => {

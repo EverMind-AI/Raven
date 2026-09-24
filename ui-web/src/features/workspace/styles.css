@@ -6,8 +6,9 @@
  * in styles/page.css; a new rule for this domain's markup comes here.
  */
 
-/* The download and folder buttons are one pair -- the file, and the file among
-   the others -- so their squares touch: none of the gap the bar puts between
-   the rest of its controls, and no overlap either, so each square stays its
-   button's whole hit area. */
+/* The download and folder buttons are one group -- the file, and the file among
+   the others -- and so is the new-tab button in front of them on a PDF or an
+   HTML file, the file on a tab of its own. Their squares touch: none of
+   the gap the bar puts between the rest of its controls, and no overlap
+   either, so each square stays its button's whole hit area. */
 .workspace-file-acts { display: flex; align-items: center; flex: none; }

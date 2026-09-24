@@ -271,10 +271,27 @@ export function _resetForTests(): void {
   extAgentsSeen = new Map()
 }
 
+const REMEDY_KINDS: ReadonlySet<string> = new Set<Remedy['kind']>([
+  'sign_in',
+  'setup',
+  'api_key',
+  'download',
+  'model',
+  'billing',
+  'quota',
+  'network',
+  'silent',
+  'upgrade',
+  'exited',
+])
+
 /* A remedy off the wire, or null for anything that is not one. Read from a row
-   and from a refused call's `data` alike, so both land in the one shape. */
+   and from a refused call's `data` alike, so both land in the one shape. A step
+   to type is kept only beside the command that opens the place to type it. */
 export function remedyOf(raw: unknown): Remedy | null {
-  const r = raw as { kind?: unknown; command?: unknown } | null | undefined
-  if (!r || (r.kind !== 'sign_in' && r.kind !== 'setup' && r.kind !== 'api_key' && r.kind !== 'download')) return null
-  return { kind: r.kind, command: typeof r.command === 'string' ? r.command : '' }
+  const r = raw as { kind?: unknown; command?: unknown; then?: unknown } | null | undefined
+  if (!r || typeof r.kind !== 'string' || !REMEDY_KINDS.has(r.kind)) return null
+  const command = typeof r.command === 'string' ? r.command : ''
+  const then = command && typeof r.then === 'string' ? r.then : ''
+  return { kind: r.kind as Remedy['kind'], command, ...(then ? { then } : {}) }
 }

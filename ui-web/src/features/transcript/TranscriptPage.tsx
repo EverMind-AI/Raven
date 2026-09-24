@@ -564,7 +564,7 @@ const DelegRow = memo(function DelegRow({ lane, c }: { lane: Lane; c: CallData }
   const a = c.args as { agent?: string; instance?: string; task?: string; prompt_template?: string; node_id?: string }
   const who = store.spawnAgentOf(a) ? store.spawnAgentOf(a) + (a.instance ? ' @' + a.instance : '') : t('gui.deleg.self')
   const openTask = (): void => {
-    if (c.kind === 'spawn') store.openSpawn(store.spawnAgentOf(a), c.label || '', c.spawnId || a.node_id || '')
+    if (c.kind === 'spawn') store.openSpawn(c.spawnId || a.node_id || '')
   }
   const grid: ReactNode[] = []
   const kv = (key: string, label: string, v: ReactNode, gov?: boolean): void => {

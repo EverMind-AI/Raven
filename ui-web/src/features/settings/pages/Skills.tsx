@@ -4,7 +4,7 @@
 import { t } from '../../../i18n/t'
 import { md } from '../../../lib/prose'
 import * as confirm from '../../../state/confirm'
-import { Card, Crumb, Grow, IconBtn, Search, Switch, Tag } from '../Fields'
+import { Card, Crumb, Empty, GLYPH, Grow, IconBtn, Search, Switch, Tag } from '../Fields'
 import { SkillDetailWait } from '../Skeletons'
 import * as store from '../store'
 
@@ -77,7 +77,7 @@ function SkillList(): JSX.Element {
           </Card>
         )
       })}
-      {!groups.length && <div className="settings-soonbox"><div className="settings-t">{t('gui.settings.skills.none')}</div></div>}
+      {!groups.length && <Empty icon={GLYPH.nohit}>{t('gui.settings.skills.none')}</Empty>}
     </>
   )
 }

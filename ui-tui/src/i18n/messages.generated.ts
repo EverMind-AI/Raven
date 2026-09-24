@@ -545,7 +545,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.conn.disconnect': 'Disconnect',
     'gui.conn.disabled': 'disabled',
     'gui.conn.enabled': 'enabled',
-    'gui.conn.none': 'No channels in the catalogue yet.',
+    'gui.conn.none': 'No channels available yet',
     'gui.conn.none_match': 'No channel matches.',
     'gui.conn.pick': 'Pick a channel on the left',
     'gui.conn.search': 'Search channels…',
@@ -619,8 +619,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.cron.missed_x': 'Missed reminders while Raven was down: {count}',
     'gui.cron.next': '{when} - next {next}',
     'gui.cron.next_only': 'next {next}',
-    'gui.cron.none':
-      'No schedules yet. Say "every morning at 8..." in a conversation and one is made, or add one here.',
+    'gui.cron.none': 'Ask Raven in a conversation, say "every morning at 8...", and it sets one up for you.',
+    'gui.cron.none_t': 'No schedules yet',
     'gui.cron.ok': 'Done',
     'gui.cron.once': 'once at {at}',
     'gui.cron.open_session': 'Open its session',
@@ -849,7 +849,11 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.job.what_ph': 'What to send Raven when it fires - write it the way you would say it',
     'gui.live.busy': 'working · {t}',
     'gui.mem.down': 'Long-term memory is not being written; nothing from here on will be remembered.',
-    'gui.mem.empty': 'Nothing here yet - go do some work with Raven',
+    'gui.mem.off_t': 'Long-term memory is not connected',
+    'gui.mem.err_t': "Can't reach the memory service",
+    'gui.mem.err_sub': 'Retry once it is back up.',
+    'gui.mem.empty': 'They build up as you work with Raven.',
+    'gui.mem.empty_t': 'No memories yet',
     'gui.mem.hero': 'Data & memory',
     'gui.mem.hero_sub': 'The long-term memory Raven builds while working with you, all stored locally',
     'gui.mem.hint_case': 'Task retrospectives',
@@ -1488,6 +1492,36 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this command in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}:',
     'gui.agent.fix_download_bare':
       "{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this agent's launch command once in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}.",
+    'gui.agent.fix_setup_then':
+      '{agent} has no model provider it can use yet, or its API key was refused. Set one up in two steps, then press {button}:',
+    'gui.agent.fix_step_run': 'Run in a terminal:',
+    'gui.agent.fix_step_type': 'Then type:',
+    'gui.agent.fix_model':
+      'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch to another model as below, then press {button}:',
+    'gui.agent.fix_model_bare':
+      'The model {agent} is set to use is not served by its provider (withdrawn from a free tier, say, or a name it does not know). Switch it to another model, then press {button}.',
+    'gui.agent.fix_billing':
+      "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model as below, then press {button}:",
+    'gui.agent.fix_billing_bare':
+      "{agent}'s model provider refused the call because the account is out of credit. Add credit with the provider, or switch to another model, then press {button}.",
+    'gui.agent.fix_quota':
+      "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch to another model as below:",
+    'gui.agent.fix_quota_bare':
+      "{agent}'s model provider is rate-limiting it, or its quota is used up. Wait a while and press {button}, or switch it to another model.",
+    'gui.agent.fix_network':
+      '{agent} could not reach its model provider. Check the network, the proxy and the address it is set to use, then press {button}. To see the exact cause, run this command in a terminal:',
+    'gui.agent.fix_network_bare':
+      '{agent} could not reach its model provider. Check the network, the proxy and the address it is set to use, then press {button}.',
+    'gui.agent.fix_silent':
+      '{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Run this command in a terminal and it prints the reason within a couple of minutes; once that is fixed, press {button}:',
+    'gui.agent.fix_silent_bare':
+      '{agent} did not answer in time. That usually means its model provider keeps refusing it -- quota used up, rate-limited, or an address it cannot reach -- and it keeps retrying without saying so. Once that is fixed, press {button}.',
+    'gui.agent.fix_upgrade':
+      '{agent} is too old to be connected: this version does not support ACP yet. Upgrade it by running this command in a terminal, then press {button}:',
+    'gui.agent.fix_upgrade_bare':
+      '{agent} is too old to be connected: this version does not support ACP yet. Upgrade it to the latest release, then press {button}.',
+    'gui.agent.fix_exited':
+      '{agent} quit as soon as it started. The original error below has what it said on its way out; once that is fixed, press {button}.',
     'gui.agent.fix_unknown_connect':
       '{agent} could not connect. The original error below says why; once it is fixed, press {button}.',
     'gui.agent.fix_unknown_save':
@@ -1499,6 +1533,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.bad_setup': '{agent} has no model provider yet',
     'gui.agent.bad_api_key': '{agent} could not use its API key',
     'gui.agent.bad_download': '{agent} could not be downloaded',
+    'gui.agent.bad_model': 'The model {agent} uses is not available',
+    'gui.agent.bad_billing': "{agent}'s provider account is out of credit",
+    'gui.agent.bad_quota': '{agent} is rate-limited or out of quota',
+    'gui.agent.bad_network': '{agent} could not reach its model provider',
+    'gui.agent.bad_silent': '{agent} did not answer in time',
+    'gui.agent.bad_upgrade': '{agent} is too old to connect',
+    'gui.agent.bad_exited': '{agent} quit as soon as it started',
     'gui.agent.bad_connect': '{agent} could not connect',
     'gui.agent.bad_save': 'The change was not saved',
     'gui.agent.bad_disconnect': '{agent} could not be disconnected',
@@ -1507,6 +1548,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} could not be disconnected. The original error below says why; press {button} to try again.',
     'gui.agent.bad_open': '{what} -- open it to see what to do',
     'gui.agent.bad_run': '{what}: run {command} in a terminal, then press {button}',
+    'gui.agent.bad_run_then': '{what}: run {command} in a terminal and type {then}, then press {button}',
+    'gui.agent.bad_run_diagnose': '{what}: run {command} in a terminal to see why, and press {button} once it is fixed',
     'gui.agent.bad_retry': '{what} -- once it is fixed, press {button}',
     'gui.agent.short_raven': 'General assistant, takes a bit of everything',
     'gui.agent.short_raven_code': 'Writes code, runs it, fixes bugs',
@@ -1936,6 +1979,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.about.storage': 'Storage location',
     'gui.settings.archive.title': 'Archived sessions',
     'gui.settings.archive.empty': 'No archived sessions yet',
+    'gui.settings.archive.empty_sub': 'Archived conversations are kept here, and any of them can be restored.',
     'gui.settings.archive.restore': 'Restore',
     'gui.settings.archive.delete': 'Delete',
     'gui.settings.archive.delete_title': 'Delete {title}?',
@@ -1964,7 +2008,10 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.usage.cache_write': 'Cache write',
     'gui.settings.usage.no_price': 'no price',
     'gui.settings.usage.none': 'Nothing in this range',
-    'gui.settings.usage.unavailable': 'No usage counter behind this page',
+    'gui.settings.usage.unavailable': "Can't reach the Raven service",
+    'gui.settings.usage.unavailable_sub': 'Retry once it is back up.',
+    'gui.settings.usage.empty_t': 'No usage yet',
+    'gui.settings.usage.empty_sub': 'Nothing was used in this range. Try a longer one.',
     'gui.settings.providers.title': 'Providers · {n}',
     'gui.settings.providers.add': '+ Add a provider',
     'gui.settings.providers.none': 'No provider connected yet',
@@ -2159,6 +2206,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.setup.keyless_hint': 'Works without one; a key raises the rate limit',
     'gui.settings.plugins.counter': 'Connected {on} / {total}',
     'gui.settings.plugins.none': 'No MCP server configured',
+    'gui.settings.plugins.none_sub': 'An MCP server hands Raven tools and data from outside.',
     'gui.settings.plugins.connected': 'Connected',
     'gui.settings.plugins.connecting': 'Connecting',
     'gui.settings.plugins.setup': 'Needs setup',
@@ -2990,7 +3038,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.conn.disconnect': '断开',
     'gui.conn.disabled': '停用',
     'gui.conn.enabled': '启用',
-    'gui.conn.none': '渠道目录还是空的。',
+    'gui.conn.none': '还没有可用的渠道',
     'gui.conn.none_match': '没有匹配的渠道。',
     'gui.conn.pick': '在左边选一个渠道',
     'gui.conn.search': '搜索渠道…',
@@ -3064,7 +3112,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.cron.missed_x': 'Raven 停机期间错过的提醒：{count}',
     'gui.cron.next': '{when} · 下次 {next}',
     'gui.cron.next_only': '下次 {next}',
-    'gui.cron.none': '还没有定时任务。在对话里说「每天早上八点……」就会建一条，也可以在这里新建。',
+    'gui.cron.none': '在对话里跟 Raven 说「每天早上八点……」，它会帮你建一条。',
+    'gui.cron.none_t': '暂无定时任务',
     'gui.cron.ok': '完成',
     'gui.cron.once': '单次 {at}',
     'gui.cron.open_session': '打开它的会话',
@@ -3291,7 +3340,11 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.job.what_ph': '到点发给 Raven 的话，像平时对话一样写',
     'gui.live.busy': '输出中 · {t}',
     'gui.mem.down': '长期记忆当前写不进去，这段时间的对话不会被记住。',
-    'gui.mem.empty': '这里还没有记忆，先和 Raven 干点活吧',
+    'gui.mem.off_t': '长期记忆没有接上',
+    'gui.mem.err_t': '连不上记忆服务',
+    'gui.mem.err_sub': '服务恢复后点重试即可。',
+    'gui.mem.empty': '和 Raven 一起干点活，这里会慢慢攒起来。',
+    'gui.mem.empty_t': '暂无记忆',
     'gui.mem.hero': '数据与记忆',
     'gui.mem.hero_sub': 'Raven 与你共事沉淀下来的长期记忆，全部存在本机',
     'gui.mem.hint_case': '任务复盘沉淀的案例',
@@ -3924,6 +3977,35 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行下面这条命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」：',
     'gui.agent.fix_download_bare':
       '{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行一次这个智能体的启动命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」。',
+    'gui.agent.fix_setup_then':
+      '{agent} 还没有可用的模型服务商，或者 API key 不对。按下面两步配好，然后点「{button}」：',
+    'gui.agent.fix_step_run': '在终端运行：',
+    'gui.agent.fix_step_type': '进入后输入：',
+    'gui.agent.fix_model':
+      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。按下面的步骤换一个模型，然后点「{button}」：',
+    'gui.agent.fix_model_bare':
+      '{agent} 现在用的模型，服务商那边不提供了（比如免费版下线了，或者模型名不对）。换一个模型后点「{button}」。',
+    'gui.agent.fix_billing':
+      '{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者按下面的步骤换一个模型，然后点「{button}」：',
+    'gui.agent.fix_billing_bare':
+      '{agent} 的模型服务商拒绝了请求：账户余额不足。去服务商那里充值，或者换一个模型，然后点「{button}」。',
+    'gui.agent.fix_quota':
+      '{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者按下面的步骤换一个模型：',
+    'gui.agent.fix_quota_bare':
+      '{agent} 的模型服务商在限流，或者额度已经用完。等一会儿再点「{button}」，或者换一个模型。',
+    'gui.agent.fix_network':
+      '{agent} 连不上它的模型服务商。检查网络、代理和它配置的服务地址，处理好后点「{button}」。想看具体原因，可以在终端运行这条命令：',
+    'gui.agent.fix_network_bare':
+      '{agent} 连不上它的模型服务商。检查网络、代理和它配置的服务地址，处理好后点「{button}」。',
+    'gui.agent.fix_silent':
+      '{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。在终端运行下面这条命令，一两分钟内会打印出原因，处理好后点「{button}」：',
+    'gui.agent.fix_silent_bare':
+      '{agent} 没有在限定时间内回复。这通常是它的模型服务商一直在拒绝它（额度用完、被限流、地址连不上），它在后台反复重试、什么也不说。处理好后点「{button}」。',
+    'gui.agent.fix_upgrade':
+      '{agent} 的版本太旧，还不支持 ACP 接入。在终端运行下面这条命令升级到最新版，完成后点「{button}」：',
+    'gui.agent.fix_upgrade_bare': '{agent} 的版本太旧，还不支持 ACP 接入。升级到最新版后点「{button}」。',
+    'gui.agent.fix_exited':
+      '{agent} 一启动就退出了。展开下面的原始报错，能看到它退出前说了什么，处理好后点「{button}」。',
     'gui.agent.fix_unknown_connect': '{agent} 没接入成功。可以展开下面的原始报错排查原因，处理好后点「{button}」。',
     'gui.agent.fix_unknown_save': '这项修改没保存成功。可以展开下面的原始报错查看原因，或点「{button}」再试一次。',
     'gui.agent.fix_unknown_test': '可以展开下面的原始报错排查原因，处理好后再点「{button}」。',
@@ -3933,6 +4015,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.bad_setup': '{agent} 还没选模型服务商',
     'gui.agent.bad_api_key': '{agent} 的 API key 不可用',
     'gui.agent.bad_download': '{agent} 没能下载下来',
+    'gui.agent.bad_model': '{agent} 用的模型不可用',
+    'gui.agent.bad_billing': '{agent} 的服务商余额不足',
+    'gui.agent.bad_quota': '{agent} 被限流或额度用完',
+    'gui.agent.bad_network': '{agent} 连不上模型服务商',
+    'gui.agent.bad_silent': '{agent} 没有及时回复',
+    'gui.agent.bad_upgrade': '{agent} 版本太旧',
+    'gui.agent.bad_exited': '{agent} 一启动就退出了',
     'gui.agent.bad_connect': '{agent} 没接入成功',
     'gui.agent.bad_save': '这项修改没保存成功',
     'gui.agent.bad_disconnect': '{agent} 没能断开',
@@ -3940,6 +4029,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.fix_unknown_disconnect': '{agent} 没能断开。可以展开下面的原始报错查看原因，或点「{button}」再试一次。',
     'gui.agent.bad_open': '{what}，点开看怎么做',
     'gui.agent.bad_run': '{what}：在终端运行 {command}，再点「{button}」',
+    'gui.agent.bad_run_then': '{what}：在终端运行 {command} 并输入 {then}，再点「{button}」',
+    'gui.agent.bad_run_diagnose': '{what}：在终端运行 {command} 查看原因，处理好后点「{button}」',
     'gui.agent.bad_retry': '{what}，处理好后点「{button}」',
     'gui.agent.short_raven': '通用助手，什么活都能接一点',
     'gui.agent.short_raven_code': '写代码、跑代码、修 bug',
@@ -4356,6 +4447,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.about.storage': '存储位置',
     'gui.settings.archive.title': '已归档的会话',
     'gui.settings.archive.empty': '还没有归档的会话',
+    'gui.settings.archive.empty_sub': '归档的会话收在这里，随时可以恢复。',
     'gui.settings.archive.restore': '恢复',
     'gui.settings.archive.delete': '删除',
     'gui.settings.archive.delete_title': '删除 {title}？',
@@ -4384,7 +4476,10 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.usage.cache_write': '写入缓存',
     'gui.settings.usage.no_price': '无价格',
     'gui.settings.usage.none': '这段时间没有记录',
-    'gui.settings.usage.unavailable': '这个页面后面没有用量计数器',
+    'gui.settings.usage.unavailable': '连不上 Raven 服务',
+    'gui.settings.usage.unavailable_sub': '服务恢复后点重试即可。',
+    'gui.settings.usage.empty_t': '暂无用量数据',
+    'gui.settings.usage.empty_sub': '这段时间还没有用量，换个时间范围看看。',
     'gui.settings.providers.title': '供应商 · {n}',
     'gui.settings.providers.add': '+ 添加供应商',
     'gui.settings.providers.none': '还没有连接供应商',
@@ -4573,6 +4668,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.setup.keyless_hint': '不配也能用，配了速率限制更宽松',
     'gui.settings.plugins.counter': '已连接 {on} / 共 {total}',
     'gui.settings.plugins.none': '还没有配置 MCP 服务',
+    'gui.settings.plugins.none_sub': 'MCP 服务能给 Raven 接上外部的工具和数据。',
     'gui.settings.plugins.connected': '已连接',
     'gui.settings.plugins.connecting': '连接中',
     'gui.settings.plugins.setup': '待配置',

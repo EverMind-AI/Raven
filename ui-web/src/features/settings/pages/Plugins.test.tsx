@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
-import { install, modelSource, mount, source as settingsSource } from '../../../test/settingsHarness'
+import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
 import { plugChip } from './Plugins'
 
@@ -48,6 +48,15 @@ describe('plugins page', () => {
     expect(screen.getByText('gui.settings.plugins.setup')).toBeTruthy()
     expect(screen.getByText('gui.settings.plugins.failed')).toBeTruthy()
     expect(document.querySelectorAll('.settings-xrow.settings-dim')).toHaveLength(1)
+  })
+
+  /* No server: the empty card says so, and a "0 of 0 connected" count above it
+     was a number about nothing. */
+  it('drops the connected count when there is no server, leaving the empty card', async () => {
+    install(snap({ mcp: [] }))
+    await mount('plugins')
+    expect(screen.getByText('gui.settings.plugins.none')).toBeTruthy()
+    expect(screen.queryByText(/gui\.settings\.plugins\.counter/)).toBeNull()
   })
 
   it('the failed chip is a status, and the reconnect lives in the drawer beside the reason', async () => {

@@ -390,10 +390,11 @@ async def test_npx_that_cannot_reach_the_registry_is_a_download_failure_not_a_si
     assert str(tmp_path) not in pinged.detail
     assert "connection ended (exit 1)" in pinged.detail, "the original error is kept for the fold"
 
-    # The same death from a command that fetches nothing is not a download.
+    # The same death from a command that fetches nothing is not a download: it
+    # is a launch that quit, and what it said on its way out is the reason.
     plain = await ping_agent(stub_config(mode="npm_fetch_fails"))
     assert plain.ok is False
-    assert plain.remedy is None
+    assert plain.remedy == Remedy("exited")
 
 
 async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_still_be_running(tmp_path: Path) -> None:
@@ -3038,6 +3039,37 @@ async def test_the_eof_error_carries_the_exit_code_and_the_last_stderr() -> None
         assert "registry is unreachable" in str(excinfo.value), f"the stderr reason is missing: {excinfo.value}"
     finally:
         await client.close()
+
+
+async def test_a_request_after_the_child_died_still_names_the_exit_and_the_reason() -> None:
+    """The same death, reported the same way whichever side of the race it lands on.
+
+    A child that crashes at startup can be gone before `initialize` is even
+    written. That request failed with "connection is not open" -- no exit
+    code, no stderr -- while a crash a few milliseconds slower got both.
+    Measured on a Qwen Code build that rejects `--acp`: the connect error lost
+    the "Unknown argument" line that says what is wrong.
+    """
+    from raven.acp_client import protocol as acp_protocol
+    from raven.acp_client.client import AcpClient
+    from raven.acp_client.protocol import AcpConnectionError
+
+    cfg = stub_config("abort", mode="abort")
+    client = await AcpClient.launch(name="abort", command=cfg.command, env=dict(cfg.env))
+    try:
+        for _ in range(200):
+            if not client.alive:
+                break
+            await asyncio.sleep(0.025)
+        assert not client.alive, "the stub must be gone before the request, or this tests nothing"
+        with pytest.raises(AcpConnectionError) as excinfo:
+            await client.request("initialize", acp_protocol.initialize_params(), timeout=10)
+        assert "exit 3" in str(excinfo.value), f"the real exit code is missing: {excinfo.value}"
+        assert "registry is unreachable" in str(excinfo.value), f"the stderr reason is missing: {excinfo.value}"
+    finally:
+        await client.close()
+    with pytest.raises(AcpConnectionError, match="connection is not open"):
+        await client.request("initialize", acp_protocol.initialize_params(), timeout=10)
 
 
 async def test_an_unanswered_request_does_not_stall_the_read_loop() -> None:

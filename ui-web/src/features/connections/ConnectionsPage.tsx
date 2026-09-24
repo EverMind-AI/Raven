@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ChannelMark } from '../../components/ChannelMark'
 import { Field } from '../../components/SetupSheet'
 import {
-  TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneSwitch,
+  TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNoHit, TwoPaneNone, TwoPaneRow, TwoPaneSwitch,
   TwoPaneWait,
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
@@ -89,6 +89,10 @@ const APPLY: Record<string, string> = {
   matrix: 'https://app.element.io',
 }
 
+const CHANNEL_GLYPH = (
+  <svg viewBox="0 0 24 24"><path d="M5.5 5.5h13a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3v-3h-1a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z" /><path d="M8 10.5h8M8 13.5h5" /></svg>
+)
+
 export function ConnectionsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
@@ -96,12 +100,15 @@ export function ConnectionsApp(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   const [q, setQ] = useState('')
   const picked = s.viewId ? s.rows.find((c) => c.id === s.viewId) : undefined
+  if (s.loaded && !s.rows.length) {
+    return <TwoPane><TwoPaneNone icon={CHANNEL_GLYPH} title={t('gui.conn.none')} /></TwoPane>
+  }
   return (
     <TwoPane side={<ConnSide rows={s.rows} loaded={s.loaded} q={q} onQ={setQ} pickedId={s.viewId} />}>
       {picked ? (
         <ConnDetail key={`${picked.id}:${s.epoch}`} c={picked} />
       ) : (
-        <TwoPaneNone>{t(s.rows.length ? 'gui.conn.pick' : 'gui.conn.none')}</TwoPaneNone>
+        <TwoPaneNone>{t('gui.conn.pick')}</TwoPaneNone>
       )}
     </TwoPane>
   )
@@ -205,7 +212,7 @@ function ConnSide({ rows, loaded, q, onQ, pickedId }: {
       <TwoPaneFind value={q} onChange={onQ} placeholder={t('gui.conn.search')} />
       <TwoPaneList>
         {!loaded && !rows.length ? <TwoPaneWait /> : shown.length === 0 ? (
-          <div className="empty-note">{t('gui.conn.none_match')}</div>
+          rows.length ? <TwoPaneNoHit>{t('gui.conn.none_match')}</TwoPaneNoHit> : null
         ) : (
           <>
             {on.length ? <TwoPaneGroup>{t('gui.conn.g_on')}</TwoPaneGroup> : null}

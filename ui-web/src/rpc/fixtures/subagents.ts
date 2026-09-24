@@ -71,6 +71,15 @@ const ROSTER: Row[] = [
     last_test_remedy: { kind: 'setup', command: 'hermes model' },
     own: false, model_source: 'fixed', model_choices: [],
     description: 'Hermes Agent CLI - general assistant with tool calling.' },
+  /* A fix typed at the agent's own prompt: the command that opens it, and the
+     step to type there, so the offline sheet has the two-step fix to show. */
+  { name: 'qwen_code', preset: 'qwen_code', kind: 'acp', configured: true, enabled: false,
+    group: 'installed', probe_status: 'ready', probe_detail: '', has_api_key: false, needs_auth: false,
+    mcps: [], allow_mcp_secrets: false, test_running: false, last_test_ok: false,
+    last_test_detail: 'its model provider does not serve the model it is set to use; pick another model: run `qwen` in a terminal and type `/model` there, then connect again.',
+    last_test_remedy: { kind: 'model', command: 'qwen', then: '/model' },
+    own: false, model_source: 'agent', model_choices: [],
+    description: 'Qwen Code CLI - coding agent over ACP.' },
   { name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: false, enabled: false,
     group: 'uninstalled', probe_status: 'unknown', probe_detail: '', has_api_key: false, needs_auth: false,
     mcps: [], allow_mcp_secrets: false, test_running: false, last_test_detail: '',

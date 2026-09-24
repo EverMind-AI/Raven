@@ -113,11 +113,17 @@ export interface ExtAgentsSource {
   act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
 }
 
-/* What fixes a refusal about a credential, as the server classified it: which
-   kind of fix, and the command that makes it on this machine when one is known.
-   The same verdict the server's English sentence spells out, as data, so the
-   sheet can say it in the reader's language. */
+/* What fixes a refusal, as the server classified it: which kind of fix, and
+   the command that makes it on this machine when one is known. The same
+   verdict the server's English sentence spells out, as data, so the sheet can
+   say it in the reader's language. The first four are about the agent itself;
+   `model`, `billing`, `quota` and `network` are its model provider refusing or
+   out of reach; `silent`, `upgrade` and `exited` are how it failed to answer. */
 export interface Remedy {
-  kind: 'sign_in' | 'setup' | 'api_key' | 'download'
+  kind: 'sign_in' | 'setup' | 'api_key' | 'download' | 'model' | 'billing' | 'quota' | 'network' | 'silent' | 'upgrade' | 'exited'
   command: string
+  /* What to type once `command` is running, when the fix is a step inside the
+     agent rather than the command itself -- Qwen Code's `/auth`. Only ever
+     beside a command. */
+  then?: string
 }

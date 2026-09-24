@@ -60,7 +60,9 @@ def _gate_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     Both halves are stood in for, not just the ping: an acp row that answers is
     then measured, and leaving that live spent sixteen seconds per test waiting
     on a handshake with an agent that is not installed. The gate swallows that
-    failure by design, so the only sign was the idle ceiling.
+    failure by design, so the only sign was the idle ceiling. So is the login
+    shell the gate reads again before it asks (`_read_the_shell_again`), which
+    is the machine's rather than the test's.
     """
     import raven.rpc.methods.subagents as subagents_mod
     from raven.agent.subagent.probe import PingResult
@@ -71,8 +73,12 @@ def _gate_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _measured(cfg):
         return None
 
+    async def _shell_not_read(cfg):
+        return None
+
     monkeypatch.setattr(subagents_mod, "ping_agent", _ok)
     monkeypatch.setattr(subagents_mod, "record_capabilities", _measured)
+    monkeypatch.setattr(subagents_mod, "_read_the_shell_again", _shell_not_read)
 
 
 def _fake_agent_meta(choices: tuple[str, ...]):
