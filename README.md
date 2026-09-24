@@ -236,6 +236,20 @@ Windows PowerShell 5.1 may reject the redirect. Use the direct installer URL ins
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
+Or run it in a container, with nothing on the host but Git and Docker:
+
+```bash
+git clone https://github.com/EverMind-AI/Raven.git
+cd Raven
+docker compose -f docker/docker-compose.yml up
+```
+
+Then open `http://localhost:18793` in your browser. Prerequisites are
+[Git](https://git-scm.com/) and [Docker](https://www.docker.com/) with
+[Docker Compose](https://docs.docker.com/compose/). See
+[`docker/README.md`](docker/README.md) for what comes up, how the page signs
+itself in, and how to run it behind a remotely exposed port.
+
 Or install from a source checkout, to develop against the code or to run what
 has not been released yet:
 

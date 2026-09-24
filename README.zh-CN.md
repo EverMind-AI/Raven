@@ -244,6 +244,16 @@ cd Raven
 
 直接运行本地的 `install.sh` 文件时，脚本会以可编辑（editable）模式安装当前检出目录：Raven 及其内置插件都链接回你的工作树，TUI 包和 Web 页面也从该目录构建。而通过管道运行时，即使当前位于克隆仓库内，也始终安装已发布的 wheel，确保一行命令安装不会误用工作树中的内容。如需在管道方式下强制可编辑安装，请设置 `RAVEN_LOCAL_SRC=<dir>`。
 
+如果不想在宿主机上装任何东西，也可以用容器运行，只需 Git 和 Docker：
+
+```bash
+git clone https://github.com/EverMind-AI/Raven.git
+cd Raven
+docker compose -f docker/docker-compose.yml up
+```
+
+然后在浏览器中打开 `http://localhost:18793`。容器里跑了哪些进程、页面如何自动登录，以及端口对外暴露时该怎么配置，详见 [`docker/README.md`](docker/README.md)。前置依赖：[Git](https://git-scm.com/)、[Docker](https://www.docker.com/) 与 [Docker Compose](https://docs.docker.com/compose/)。
+
 内置 Agent 随 Raven 一同分发：wheel 包自带 `agents/` 目录，首次使用时会复制到 Raven 主目录；源码安装则直接读取仓库中的该目录。配置向导会逐个询问：该 Agent 是使用其调优所用的模型（需要单独的 key），还是直接使用当前 Raven 的 LLM。这一步不做注册：只要目录存在，Agent 就会出现在名册中。详见 [`agents/README.md`](agents/README.md)。
 
 在文档站了解更多关于 Raven 的内容。
