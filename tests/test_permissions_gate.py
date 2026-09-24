@@ -422,14 +422,33 @@ def test_a_deny_rule_reaches_the_command_however_it_is_run(command: str):
         'echo "$(echo "$(echo \')\')"; curl https://x)"',
         'echo "$(echo "$(echo ")")"; curl https://x)"',
         'page="$( (echo a); curl https://x)"',
+        'echo "$(case x in x) curl https://x;; esac)"',
+        'echo "$(case x in (x) curl https://x;; esac)"',
+        'echo "$(case x in a) true;; esac; curl https://x)"',
     ],
 )
 def test_a_parenthesis_that_is_text_does_not_end_a_substitution(command: str):
     assert exec_rule_tier(command, _DENY_CURL) is Tier.DENY
 
 
-def test_the_text_after_a_closed_substitution_is_not_read_as_a_command():
-    assert exec_rule_tier('echo "$(date) curl is text here"', _DENY_CURL) is Tier.ALLOW
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "$(date) curl is text here"',
+        'echo "$(echo showcase) curl is text here"',
+        'echo "$(case x in x) echo;; esac) curl is text here"',
+    ],
+)
+def test_the_text_after_a_closed_substitution_is_not_read_as_a_command(command: str):
+    assert exec_rule_tier(command, _DENY_CURL) is Tier.ALLOW
+
+
+@pytest.mark.parametrize(
+    ("body", "close"),
+    [("echo showcase) rest", 13), ("echo case_1) rest", 11), ("case x in x) a;; esac) rest", 21)],
+)
+def test_only_the_shell_words_case_and_esac_suspend_the_count(body: str, close: int):
+    assert rules_module._substitution_close(body, 0) == close
 
 
 @pytest.mark.parametrize(

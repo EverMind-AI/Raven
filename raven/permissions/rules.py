@@ -668,6 +668,8 @@ _READ_THROUGH: frozenset[str] = (
 )
 _FIND_EXEC: frozenset[str] = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 _WINDOWS_EXECUTABLE = re.compile(r"\.(?:exe|com|cmd|bat)$", re.IGNORECASE)
+# ``case`` and ``esac`` as whole shell words, not inside ``showcase`` or ``case_1``.
+_CASE_WORD = re.compile(r"(?<![^\s;&|(])(case|esac)(?![^\s;&|)])")
 
 
 def _program(word: str) -> str:
@@ -716,10 +718,11 @@ def _substitution_close(command: str, start: int) -> int:
     A parenthesis inside quotes or behind a backslash is text, so it neither
     opens nor closes anything; stopping at one would leave the rest of the body
     unread (``$(echo ')'; curl x)`` runs curl). A ``$(`` inside double quotes
-    in the body is its own substitution and is skipped whole. An unclosed body
-    runs to the end of the command.
+    in the body is its own substitution and is skipped whole. Between ``case``
+    and ``esac`` a parenthesis closes a pattern, not the body, so none is
+    counted there. An unclosed body runs to the end of the command.
     """
-    depth, index, quote = 1, start, ""
+    depth, index, quote, cases = 1, start, "", 0
     while index < len(command):
         char = command[index]
         if quote == "'":
@@ -733,6 +736,11 @@ def _substitution_close(command: str, start: int) -> int:
                 index = _substitution_close(command, index + 2)
         elif char in "'\"":
             quote = char
+        elif (word := _CASE_WORD.match(command, index)) is not None:
+            cases += 1 if word.group(1) == "case" else -1 if cases else 0
+            index = word.end() - 1
+        elif cases:
+            pass
         elif char == "(":
             depth += 1
         elif char == ")":
