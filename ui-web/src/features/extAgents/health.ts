@@ -16,7 +16,7 @@ import { sectionOf } from './source'
 import * as store from './store'
 
 import type { ExtAgentsState, Failure } from './store'
-import type { ExtAgentRow } from './types'
+import type { ExtAgentRow, Remedy } from './types'
 
 /* The states a row and its sheet are drawn in. `pending` and `failed` are
    this page's own, about a write in flight or refused; the other three are the
@@ -52,14 +52,10 @@ export function refusedWrite(failed: Failure): 'connect' | 'disconnect' | 'save'
   return failed.op === 'model' || failed.op === 'update' ? 'save' : 'connect'
 }
 
-/* What a refused write comes to, in the reader's language: the fix the server
-   named, by its kind, or what failed when it named none. The server's own
-   sentence is English, and cut to the two lines a card has it said neither
-   what went wrong nor what to do -- so it is shown only in the sheet, folded
-   under the fix. */
-export function whatFailed(row: ExtAgentRow, failed: Failure): string {
-  const agent = row.name
-  const kind = failed.remedy?.kind
+/* What a named fix is about, as a title: the sheet heads its note with it for
+   a refused write and for a failed test alike. Every key is written out, so
+   the catalogue gate reads each one. */
+export function badOf(kind: Remedy['kind'], agent: string): string {
   if (kind === 'sign_in') return t('gui.agent.bad_sign_in', { agent })
   if (kind === 'setup') return t('gui.agent.bad_setup', { agent })
   if (kind === 'api_key') return t('gui.agent.bad_api_key', { agent })
@@ -70,10 +66,27 @@ export function whatFailed(row: ExtAgentRow, failed: Failure): string {
   if (kind === 'network') return t('gui.agent.bad_network', { agent })
   if (kind === 'silent') return t('gui.agent.bad_silent', { agent })
   if (kind === 'upgrade') return t('gui.agent.bad_upgrade', { agent })
-  if (kind === 'exited') return t('gui.agent.bad_exited', { agent })
   if (kind === 'runtime') return t('gui.agent.bad_runtime', { agent })
   if (kind === 'plan') return t('gui.agent.bad_plan', { agent })
   if (kind === 'config') return t('gui.agent.bad_config', { agent })
+  return t('gui.agent.bad_exited', { agent })
+}
+
+/* The kind a remedy is read as. A `runtime` fix without both versions would
+   name no Node.js, so what is left of it is a launch that quit -- the sentence
+   `FIX_SAY` gives it -- and the title and a card's reason say the same. */
+export function kindOf(remedy: Remedy): Remedy['kind'] {
+  return remedy.kind === 'runtime' && (!remedy.needs || !remedy.found) ? 'exited' : remedy.kind
+}
+
+/* What a refused write comes to, in the reader's language: the fix the server
+   named, by its kind, or what failed when it named none. The server's own
+   sentence is English, and cut to the two lines a card has it said neither
+   what went wrong nor what to do -- so it is shown only in the sheet, folded
+   under the fix. */
+export function whatFailed(row: ExtAgentRow, failed: Failure): string {
+  const agent = row.name
+  if (failed.remedy) return badOf(kindOf(failed.remedy), agent)
   const write = refusedWrite(failed)
   return t(write === 'save' ? 'gui.agent.bad_save' : write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', {
     agent,

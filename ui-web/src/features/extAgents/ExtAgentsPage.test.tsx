@@ -126,6 +126,16 @@ const controlOf = (name: string): string | null => {
 }
 const buttonOf = (name: string): HTMLButtonElement | null => rowNamed(name).querySelector('.extAgents-ctl button')
 const lineOf = (name: string): string | null => rowNamed(name).querySelector('.extAgents-one')!.textContent
+/* The card's footer about the last thing that went wrong: the word and the
+   reason. Null when the card carries none; the press is the corner control. */
+const footOf = (name: string): { k: string | null; r: string | null } | null => {
+  const f = rowNamed(name).querySelector('.extAgents-foot')
+  if (!f) return null
+  return {
+    k: f.querySelector('.extAgents-foot-k')?.textContent ?? null,
+    r: f.querySelector('.extAgents-foot-r')?.textContent ?? null,
+  }
+}
 const ledOf = (name: string): string | null => rowNamed(name).querySelector('.extAgents-nm .extAgents-led')?.className ?? null
 /* Which tab lists a card, read by pressing each one in turn -- the filter under
    test -- and coming back to All, where every other helper looks. */
@@ -372,7 +382,8 @@ describe('connecting', () => {
     await mount()
     await click(buttonOf('off_one'))
     expect(buttonOf('off_one')).toBeNull()
-    expect(lineOf('off_one')).toBe('gui.agent.testing')
+    expect(lineOf('off_one')).toBe('gui.agent.short_claude_code')
+    expect(footOf('off_one')).toEqual({ k: 'gui.agent.testing', r: null })
     expect(ledOf('off_one')).toBe('extAgents-led extAgents-led-busy')
     await act(async () => {
       release()
@@ -425,11 +436,68 @@ describe('connecting', () => {
     await mount()
     await openSheet('on_one')
     await click(sheet()!.querySelector('.extAgents-act button.danger'))
-    expect(lineOf('on_one')).toBe('gui.agent.disconnecting')
+    expect(footOf('on_one')).toEqual({ k: 'gui.agent.disconnecting', r: null })
     await act(async () => {
       release()
       await gate
     })
+  })
+
+  /* Before the first answer the grid is placeholders of a card's own shape,
+     one per catalogue entry since the catalogue is the roster on every
+     machine, not the empty message and a jump when the roster lands. Only
+     before the first answer: a reload keeps the rows it has. */
+  it('draws one placeholder card per catalogue entry until the roster arrives', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const rows = [row({ name: 'claude_code' }), row({ name: 'off_one', enabled: false })]
+    install(rows, {
+      load: async () => {
+        await gate
+        return rows
+      },
+    })
+    await mount()
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(18)
+    expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
+    expect(document.querySelector('.extAgents-empty')).toBeNull()
+    expect(document.querySelector('.extAgents-tn')).toBeNull()
+    expect(document.querySelectorAll('.extAgents-tab .extAgents-wtn').length).toBe(2)
+    await act(async () => {
+      release()
+      await gate
+    })
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(0)
+    expect(rowsOf().length).toBe(2)
+    expect(tabLabel(tabNamed('gui.filter.all'))).toBe('gui.filter.all')
+    /* A reload with rows in hand keeps them on screen. */
+    await act(async () => {
+      await store.load(true)
+    })
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(0)
+  })
+
+  /* The slot under the line is never blank: with nothing wrong it says which
+     state the row is in, so a grid reads the same whether or not a card is in
+     trouble, and a strip that later replaces it takes no more room. Not the
+     vendor: the mark beside the name already says that. */
+  it('says how a card is doing under the line about it, when nothing is wrong', async () => {
+    install([
+      row({ name: 'tested', configured: true, enabled: true, last_test_ok: true, last_test_at_ms: Date.now() - 3 * 86400_000 }),
+      row({ name: 'on_one', configured: true, enabled: true }),
+      row({ name: 'off_one', enabled: false }),
+      row({ name: 'gone', preset: 'codex', configured: false, enabled: false, probe_status: 'missing' }),
+    ])
+    await mount()
+    expect(footOf('tested')!.k).toContain('gui.agent.hd_on_tested')
+    expect(footOf('tested')!.k).toContain('gui.time.ago_d')
+    expect(footOf('on_one')!.k).toBe('gui.agent.g_on')
+    expect(footOf('off_one')!.k).toBe('gui.agent.g_avail')
+    expect(footOf('gone')!.k).toBe('gui.agent.g_missing')
+    for (const name of ['tested', 'on_one', 'off_one']) expect(rowNamed(name).querySelector('.extAgents-foot-quiet')).not.toBeNull()
+    expect(buttonOf('tested')).toBeNull()
   })
 
   it('keeps a refusal on the card in red with a retry, and does not toast it', async () => {
@@ -439,11 +507,11 @@ describe('connecting', () => {
     })
     await mount()
     await click(buttonOf('off_one'))
-    /* What failed, in the reader's words, and where to look: the card opens the
-       sheet, which has the steps and the server's sentence folded under them. */
-    const what = `gui.agent.bad_connect ${JSON.stringify({ agent: 'off_one' })}`
-    expect(lineOf('off_one')).toBe(`gui.agent.bad_open ${JSON.stringify({ what })}`)
-    expect(rowNamed('off_one').querySelector('.extAgents-one')!.className).toContain('extAgents-one-bad')
+    /* The line about the agent stays as it was; what failed and the short
+       reason are a footer under it, the sheet has the steps, and the corner,
+       where every press on a card lives, offers the retry. */
+    expect(rowNamed('off_one').querySelector('.extAgents-one')!.className).toBe('extAgents-one')
+    expect(footOf('off_one')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_open' })
     expect(controlOf('off_one')).toBe('gui.retry')
     expect(ledOf('off_one')).toBe('extAgents-led extAgents-led-bad')
     expect(toasts).toEqual([])
@@ -510,13 +578,25 @@ describe('the sheet', () => {
       detail.close()
     })
     await openSheet('failed')
-    /* A failure the server named no fix for is still said in the reader's
-       words, with the server's sentence folded under it rather than shown. */
-    const said = `gui.agent.fix_unknown_test ${JSON.stringify({ button: 'gui.agent.test_label' })}`
-    const fix = sheet()!.querySelector('.extAgents-fix')!
-    expect(fix.firstElementChild!.textContent).toBe(`gui.agent.hd_test_bad ${JSON.stringify({ detail: said })}`)
-    expect(fix.querySelector('details.extAgents-raw')!.textContent).toBe('gui.agent.fix_rawit returned nothing')
+    /* The head says which state it is in; the block at the top of the body
+       says what failed, when, and -- the server having named no fix -- shows
+       its sentence as it came rather than folding the only reason away. */
+    expect(sheetStatus()).toBe('gui.agent.hd_on_test_bad')
     expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-bad')
+    const note = sheet()!.querySelector('.extAgents-note')!
+    expect(note.querySelector('.extAgents-note-t')!.firstChild!.textContent).toBe('gui.agent.st_test_bad')
+    expect(note.querySelector('.extAgents-note-when')!.textContent).toContain('gui.time.ago_d')
+    expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
+      `gui.agent.said_test ${JSON.stringify({ button: 'gui.agent.test_again' })}`,
+    )
+    expect(note.querySelector('.extAgents-note-said')!.textContent).toBe('it returned nothing')
+    expect(note.querySelector('details')).toBeNull()
+    expect(sheetActs()).toEqual(['gui.agent.disconnect', 'gui.agent.test_again'])
+    /* The card says it too, under the line about the agent, with a retest. */
+    expect(rowNamed('failed').querySelector('.extAgents-one')!.className).toBe('extAgents-one')
+    expect(footOf('failed')).toEqual({ k: 'gui.agent.st_test_bad', r: expect.stringContaining('gui.time.ago_d') })
+    expect(controlOf('failed')).toBe('gui.agent.test_again_short')
+    expect(ledOf('failed')).toBe('extAgents-led extAgents-led-bad')
   })
 
   it('runs a test from its action bar, says so while it runs, and offers to stop it', async () => {
@@ -709,12 +789,11 @@ describe('the sheet', () => {
     await mount()
     await openSheet('ua')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.test_label'))
-    const said = `gui.agent.fix_unknown_test ${JSON.stringify({ button: 'gui.agent.test_label' })}`
-    const fix = sheet()!.querySelector('.extAgents-fix')!
-    expect(fix.firstElementChild!.textContent).toBe(`gui.agent.hd_test_bad ${JSON.stringify({ detail: said })}`)
-    expect(fix.querySelector('details.extAgents-raw')!.textContent).toBe(
-      'gui.agent.fix_rawit connected and then answered nothing',
-    )
+    /* Not connected, so the head names the maker rather than "connected". */
+    expect(sheetStatus()).toBe('gui.agent.st_test_bad · Anthropic')
+    const note = sheet()!.querySelector('.extAgents-note')!
+    expect(note.querySelector('.extAgents-note-t')!.textContent).toBe('gui.agent.st_test_bad')
+    expect(note.querySelector('.extAgents-note-said')!.textContent).toBe('it connected and then answered nothing')
   })
 })
 
@@ -725,7 +804,10 @@ describe('the sheet', () => {
    with the wrong words, the wrong agent or the wrong button fails here. */
 describe('a refusal that names its fix', () => {
   const say = (key: string, vars: Record<string, string>): string => `${key} ${JSON.stringify(vars)}`
-  const fix = (): Element | null => sheet()?.querySelector('.extAgents-fix') ?? null
+  const note = (): Element | null => sheet()?.querySelector('.extAgents-note') ?? null
+  const title = (): string | null => note()?.querySelector('.extAgents-note-t')?.firstChild?.textContent ?? null
+  const lead = (): string | null => note()?.querySelector('.extAgents-note-p')?.textContent ?? null
+  const raw = (): HTMLDetailsElement | null => note()?.querySelector('details.extAgents-note-raw') ?? null
   const hermesSaid =
     'connected, but no session could be opened: Internal error: Hermes is not connected to any AI provider yet. ' +
     'Run `hermes model` to pick one (auth methods: hermes-setup)'
@@ -747,13 +829,13 @@ describe('a refusal that names its fix', () => {
     ])
     await mount()
     await openSheet('Hermes Agent')
-    const lead = say('gui.agent.fix_setup', { agent: 'Hermes Agent', button: 'gui.agent.test_label' })
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
-    expect(fix()!.querySelector('.extAgents-cmd code')!.textContent).toBe('hermes model')
-    expect(fix()!.querySelector('.extAgents-raw summary')!.textContent).toBe('gui.agent.fix_raw')
-    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(hermesSaid)
-    expect((fix()!.querySelector('.extAgents-raw') as HTMLDetailsElement).open).toBe(false)
-    expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-fix')
+    expect(title()).toBe(say('gui.agent.bad_setup', { agent: 'Hermes Agent' }))
+    expect(lead()).toBe(say('gui.agent.fix_setup', { agent: 'Hermes Agent', button: 'gui.agent.test_label' }))
+    expect(note()!.querySelector('.extAgents-cmd code')!.textContent).toBe('hermes model')
+    expect(raw()!.querySelector('summary')!.textContent).toBe('gui.agent.fix_raw')
+    expect(raw()!.textContent).toContain(hermesSaid)
+    expect(raw()!.open).toBe(false)
+    expect(sheet()!.querySelector('.extAgents-by')!.className).toContain('extAgents-by-bad')
   })
 
   it('says a refused connect needs a sign-in, names Retry, and copies the command', async () => {
@@ -770,12 +852,14 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Codex')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_sign_in', { agent: 'Codex', button: 'gui.retry' }))
+    expect(sheetStatus()).toBe('gui.agent.st_connect_bad · OpenAI')
+    expect(title()).toBe(say('gui.agent.bad_sign_in', { agent: 'Codex' }))
+    expect(lead()).toBe(say('gui.agent.fix_sign_in', { agent: 'Codex', button: 'gui.retry' }))
     expect(sheetActs()).toEqual(['gui.retry'])
-    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
-    await click(fix()!.querySelector('.extAgents-cmd button'))
+    expect(raw()!.textContent).toContain(said)
+    await click(note()!.querySelector('.extAgents-cmd button'))
     expect(writeText).toHaveBeenCalledWith('npx -y @openai/codex login')
-    expect(fix()!.querySelector('.extAgents-cmd button')!.textContent).toBe('gui.agent.copied')
+    expect(note()!.querySelector('.extAgents-cmd button')!.textContent).toBe('gui.agent.copied')
   })
 
   it('gives an endpoint row no command, since its key is fixed here and not in a terminal', async () => {
@@ -792,9 +876,10 @@ describe('a refusal that names its fix', () => {
     ])
     await mount()
     await openSheet('MiroThinker')
-    const lead = say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.test_label' })
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
-    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+    expect(title()).toBe(say('gui.agent.bad_api_key', { agent: 'MiroThinker' }))
+    /* An endpoint with no key is not connected, so its press is plain Test. */
+    expect(lead()).toBe(say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.test_label' }))
+    expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
   })
 
   it('says to sign in, and offers nothing to run, when no command is known for the agent', async () => {
@@ -810,9 +895,9 @@ describe('a refusal that names its fix', () => {
     ])
     await mount()
     await openSheet('opencode')
-    const lead = say('gui.agent.fix_sign_in_bare', { agent: 'opencode', button: 'gui.agent.test_label' })
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
-    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+    expect(title()).toBe(say('gui.agent.bad_sign_in', { agent: 'opencode' }))
+    expect(lead()).toBe(say('gui.agent.fix_sign_in_bare', { agent: 'opencode', button: 'gui.agent.test_again' }))
+    expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
   })
   it('says a download npx could not make, and gives the command that makes it with no time limit', async () => {
     const r = row({ name: 'Claude Code', preset: 'claude_code', configured: false, enabled: false })
@@ -827,12 +912,14 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Claude Code')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_download', { agent: 'Claude Code', button: 'gui.retry' }))
-    expect(fix()!.querySelector('.extAgents-cmd code')!.textContent).toBe(command)
-    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
-    /* The card says the same thing in a line, and points at the sheet. */
-    const what = say('gui.agent.bad_download', { agent: 'Claude Code' })
-    expect(lineOf('Claude Code')).toBe(say('gui.agent.bad_open', { what }))
+    expect(title()).toBe(say('gui.agent.bad_download', { agent: 'Claude Code' }))
+    expect(lead()).toBe(say('gui.agent.fix_download', { agent: 'Claude Code', button: 'gui.retry' }))
+    expect(note()!.querySelector('.extAgents-cmd code')!.textContent).toBe(command)
+    expect(raw()!.textContent).toContain(said)
+    /* The card keeps its line about the agent and says the rest in a footer:
+       what failed, the short reason, and the retry. */
+    expect(lineOf('Claude Code')).toBe('gui.agent.short_claude_code')
+    expect(footOf('Claude Code')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_download' })
   })
 
   it('offers no command for a download when the row\'s command is its own, not the preset\'s', async () => {
@@ -846,23 +933,25 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('my-agent')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_download_bare', { agent: 'my-agent', button: 'gui.retry' }))
-    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
+    expect(lead()).toBe(say('gui.agent.fix_download_bare', { agent: 'my-agent', button: 'gui.retry' }))
+    expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
   })
 
   it.each([
-    ['sign_in', 'gui.agent.bad_sign_in'],
-    ['setup', 'gui.agent.bad_setup'],
-    ['api_key', 'gui.agent.bad_api_key'],
-    ['download', 'gui.agent.bad_download'],
-    ['model', 'gui.agent.bad_model'],
-    ['billing', 'gui.agent.bad_billing'],
-    ['quota', 'gui.agent.bad_quota'],
-    ['network', 'gui.agent.bad_network'],
-    ['silent', 'gui.agent.bad_silent'],
-    ['upgrade', 'gui.agent.bad_upgrade'],
-    ['exited', 'gui.agent.bad_exited'],
-    ['runtime', 'gui.agent.bad_runtime'],
+    ['sign_in', 'gui.agent.why_sign_in'],
+    ['setup', 'gui.agent.why_setup'],
+    ['api_key', 'gui.agent.why_api_key'],
+    ['download', 'gui.agent.why_download'],
+    ['model', 'gui.agent.why_model'],
+    ['billing', 'gui.agent.why_billing'],
+    ['quota', 'gui.agent.why_quota'],
+    ['network', 'gui.agent.why_network'],
+    ['silent', 'gui.agent.why_silent'],
+    ['upgrade', 'gui.agent.why_upgrade'],
+    ['exited', 'gui.agent.why_exited'],
+    /* Sent without its two versions, a runtime fix names no Node.js, and the
+       card says what the sheet does: a launch that quit. */
+    ['runtime', 'gui.agent.why_exited'],
   ])('puts a %s fix on the card as a line in the reader\'s words', async (kind, key) => {
     const r = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
     install([r], {
@@ -873,8 +962,10 @@ describe('a refusal that names its fix', () => {
     })
     await mount()
     await click(buttonOf('Codex'))
-    expect(lineOf('Codex')).toBe(say('gui.agent.bad_open', { what: say(key, { agent: 'Codex' }) }))
+    expect(lineOf('Codex')).toBe('gui.agent.short_codex')
+    expect(footOf('Codex')).toEqual({ k: 'gui.agent.st_connect_bad', r: key })
     expect(rowNamed('Codex').textContent).not.toContain('the English sentence')
+    expect(controlOf('Codex')).toBe('gui.retry')
   })
 
   /* Qwen Code's fixes are typed at its own prompt: `qwen` alone leaves the
@@ -897,13 +988,13 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Qwen Code')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_model', { agent: 'Qwen Code', button: 'gui.retry' }))
-    const steps = [...fix()!.querySelectorAll('.extAgents-steps li')]
+    expect(lead()).toBe(say('gui.agent.fix_model', { agent: 'Qwen Code', button: 'gui.retry' }))
+    const steps = [...note()!.querySelectorAll('.extAgents-steps li')]
     expect(steps.map((li) => li.firstChild!.textContent)).toEqual(['gui.agent.fix_step_run', 'gui.agent.fix_step_type'])
     expect(steps.map((li) => li.querySelector('.extAgents-cmd code')!.textContent)).toEqual(['qwen', '/auth'])
     await click(steps[1]!.querySelector('.extAgents-cmd button'))
     expect(writeText).toHaveBeenCalledWith('/auth')
-    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
+    expect(raw()!.textContent).toContain(said)
   })
 
   it('says an agent with no provider yet is set up at its own prompt, in the same two steps', async () => {
@@ -919,9 +1010,11 @@ describe('a refusal that names its fix', () => {
     ])
     await mount()
     await openSheet('Qwen Code')
-    const lead = say('gui.agent.fix_setup_then', { agent: 'Qwen Code', button: 'gui.agent.test_label' })
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.hd_test_bad', { detail: lead }))
-    expect([...fix()!.querySelectorAll('.extAgents-steps code')].map((c) => c.textContent)).toEqual(['qwen', '/auth'])
+    /* The note names the press the action bar offers: a connected row's says
+       "again", since its last test is why the note is there. */
+    expect(title()).toBe(say('gui.agent.bad_setup', { agent: 'Qwen Code' }))
+    expect(lead()).toBe(say('gui.agent.fix_setup_then', { agent: 'Qwen Code', button: 'gui.agent.test_again' }))
+    expect([...note()!.querySelectorAll('.extAgents-steps code')].map((c) => c.textContent)).toEqual(['qwen', '/auth'])
   })
 
   it.each([
@@ -941,9 +1034,9 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Qwen Code')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry' }))
-    expect([...fix()!.querySelectorAll('.extAgents-cmd code')].map((c) => c.textContent)).toEqual([command])
-    expect(fix()!.querySelector('.extAgents-steps')).toBeNull()
+    expect(lead()).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry' }))
+    expect([...note()!.querySelectorAll('.extAgents-cmd code')].map((c) => c.textContent)).toEqual([command])
+    expect(note()!.querySelector('.extAgents-steps')).toBeNull()
   })
 
   it.each([
@@ -967,9 +1060,9 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('my-agent')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say(key, { agent: 'my-agent', button: 'gui.retry' }))
-    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
-    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain('the English sentence')
+    expect(lead()).toBe(say(key, { agent: 'my-agent', button: 'gui.retry' }))
+    expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
+    expect(raw()!.textContent).toContain('the English sentence')
   })
 
   /* Measured on Qwen Code 0.24.4 under Node 18.20.8: it dies at import with a
@@ -989,8 +1082,10 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Qwen Code')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry', needs: '22', found: '18.20.8' }))
-    expect([...fix()!.querySelectorAll('.extAgents-cmd code')].map((c) => c.textContent)).toEqual(command ? [command] : [])
+    expect(title()).toBe(say('gui.agent.bad_runtime', { agent: 'Qwen Code' }))
+    expect(lead()).toBe(say(key, { agent: 'Qwen Code', button: 'gui.retry', needs: '22', found: '18.20.8' }))
+    expect([...note()!.querySelectorAll('.extAgents-cmd code')].map((c) => c.textContent)).toEqual(command ? [command] : [])
+    expect(footOf('Qwen Code')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_runtime' })
   })
 
   it('says only that it quit when the versions did not come with the fix', async () => {
@@ -1004,7 +1099,11 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Qwen Code')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_exited', { agent: 'Qwen Code', button: 'gui.retry' }))
+    /* The title and the card say the same as the sentence, not a Node.js
+       they cannot name. */
+    expect(title()).toBe(say('gui.agent.bad_exited', { agent: 'Qwen Code' }))
+    expect(lead()).toBe(say('gui.agent.fix_exited', { agent: 'Qwen Code', button: 'gui.retry' }))
+    expect(footOf('Qwen Code')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_exited' })
   })
 
   it('says a failure with no fix in the reader\'s words too, and folds the server\'s sentence', async () => {
@@ -1014,13 +1113,14 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Claude Code')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(
-      say('gui.agent.fix_unknown_connect', { agent: 'Claude Code', button: 'gui.retry' }),
-    )
-    expect(fix()!.querySelector('.extAgents-cmd')).toBeNull()
-    expect((fix()!.querySelector('.extAgents-raw') as HTMLDetailsElement).open).toBe(false)
-    expect(fix()!.querySelector('.extAgents-raw')!.textContent).toContain(said)
-    expect(lineOf('Claude Code')).toBe(say('gui.agent.bad_open', { what: say('gui.agent.bad_connect', { agent: 'Claude Code' }) }))
+    /* No fix named, so the server's sentence is the reason, and it is shown as
+       it came rather than folded. */
+    expect(title()).toBe(say('gui.agent.bad_connect', { agent: 'Claude Code' }))
+    expect(lead()).toBe(say('gui.agent.said_connect', { button: 'gui.retry' }))
+    expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
+    expect(raw()).toBeNull()
+    expect(note()!.querySelector('.extAgents-note-said')!.textContent).toBe(said)
+    expect(footOf('Claude Code')).toEqual({ k: 'gui.agent.st_connect_bad', r: 'gui.agent.why_open' })
   })
 
   it('says a refused disconnect did not disconnect, on the card and in the sheet', async () => {
@@ -1029,8 +1129,10 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('Codex')
     await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.disconnect'))
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_unknown_disconnect', { agent: 'Codex', button: 'gui.retry' }))
-    expect(lineOf('Codex')).toBe(say('gui.agent.bad_open', { what: say('gui.agent.bad_disconnect', { agent: 'Codex' }) }))
+    expect(sheetStatus()).toBe('gui.agent.st_disconnect_bad · OpenAI')
+    expect(title()).toBe(say('gui.agent.bad_disconnect', { agent: 'Codex' }))
+    expect(lead()).toBe(say('gui.agent.said_disconnect', { button: 'gui.retry' }))
+    expect(footOf('Codex')).toEqual({ k: 'gui.agent.st_disconnect_bad', r: 'gui.agent.why_open' })
   })
 
   it('says a refused edit was not saved, rather than that the agent did not connect', async () => {
@@ -1040,9 +1142,11 @@ describe('a refusal that names its fix', () => {
     await act(async () => {
       await store.setModel(r, 'x')
     })
-    expect(lineOf('Codex')).toBe(say('gui.agent.bad_open', { what: say('gui.agent.bad_save', { agent: 'Codex' }) }))
+    expect(footOf('Codex')).toEqual({ k: 'gui.agent.st_save_bad', r: 'gui.agent.why_open' })
     await openSheet('Codex')
-    expect(fix()!.firstElementChild!.textContent).toBe(say('gui.agent.fix_unknown_save', { agent: 'Codex', button: 'gui.retry' }))
+    expect(title()).toBe('gui.agent.bad_save')
+    expect(lead()).toBe('gui.agent.said_save')
+    expect(note()!.querySelector('.extAgents-note-said')!.textContent).toBe('model x is not on the menu')
   })
 })
 

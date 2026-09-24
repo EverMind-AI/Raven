@@ -48,7 +48,7 @@
 
 /* The brand mark is the tile: the shared component, sized inside this box. */
 .extAgents-tile { flex: none; display: grid; place-items: center; }
-.extAgents-tile .agent-mark { width: 36px; height: 36px; border-radius: 10px; background: var(--paper); border: 1px solid var(--line); }
+.extAgents-tile .agent-mark { width: 36px; height: 36px; border-radius: 10px; background: var(--mark-plate); border: 1px solid var(--mark-plate-line); }
 .extAgents-tile .agent-mark img, .extAgents-tile .agent-mark svg { width: 23px; height: 23px; }
 .extAgents-tile-own .agent-mark img { width: 21px; height: 26px; }
 
@@ -66,10 +66,45 @@
    prefers-reduced-motion. The sheet's smaller dot stays solid. */
 .extAgents-nm .extAgents-led-warn { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--gold); }
 .extAgents-one { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
-.extAgents-one-bad { color: var(--clay); }
-/* A row's refusal can carry a command, so it wraps rather than cutting it off. */
-.extAgents-row .extAgents-one-bad { white-space: normal; }
 .extAgents-one-work { font-family: var(--mono); font-size: 11.5px; color: var(--amber); display: flex; align-items: center; gap: 6px; }
+
+/* The verdict: one word in clay for what went wrong, the reason after a dot
+   in the ordinary grey, and the press that answers it. On a card it is a
+   strip under the line about the agent, on a faint clay wash so a grid of
+   twenty can be scanned for the ones in trouble; on a row it is the second
+   line, where a command is a piece of code rather than part of a sentence.
+   The light by the name is the only other thing that turns red. */
+.extAgents-foot-slot { margin-top: auto; height: 30px; }
+.extAgents-foot {
+  height: 100%; padding: 0 9px; border-radius: 7px; min-width: 0;
+  background: color-mix(in oklab, var(--clay) 6%, var(--paper));
+  display: flex; align-items: center; font-size: 12px; line-height: 1.4;
+}
+/* One line, cut with a dot when the card is narrow for it: the sheet has
+   the whole of it, and the strip's height is what keeps the card's. */
+.extAgents-foot-say { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.extAgents-foot-k { color: var(--clay); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+.extAgents-foot-r { color: var(--muted); }
+.extAgents-foot .extAgents-foot-r { color: color-mix(in oklab, var(--clay) 55%, var(--muted)); }
+/* The dot travels with the word before it: the zero-width space after it
+   gives the line a place to break after the dot, not in front of it. */
+.extAgents-foot-r::before { content: "\00b7\200b"; margin: 0 6px; color: var(--faint); }
+/* Nothing wrong: the same slot says how the row is doing, in the words the
+   sheet's head uses, with no wash. So a card is never blank under its line,
+   and the strip that replaces this when something fails takes no more room. */
+.extAgents-foot-quiet { background: none; padding: 0; }
+.extAgents-foot-quiet .extAgents-foot-k { color: var(--faint); font-weight: 400; }
+/* A test under way is not a failure: the same strip in amber. */
+.extAgents-foot-busy { background: color-mix(in oklab, var(--amber) 8%, var(--paper)); }
+.extAgents-foot-busy .extAgents-foot-k { color: var(--amber); }
+.extAgents-row2 { font-size: 12px; margin-top: 2px; display: flex; align-items: center; min-width: 0; }
+.extAgents-row2.extAgents-foot-busy { background: none; }
+.extAgents-row2 .extAgents-foot-k { flex: none; }
+.extAgents-row2 .extAgents-foot-r { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.extAgents-row2 code {
+  font-family: var(--mono); font-size: 11px; color: var(--text); white-space: nowrap;
+  background: var(--surface); border: 1px solid var(--line-soft); border-radius: 4px; padding: 1px 5px;
+}
 
 /* One control per row, and the buttons in a column are one size: Connect,
    Disconnect, Retry, Install and Re-check differ in length and the frames must
@@ -113,8 +148,34 @@
 }
 .extAgents-empty { padding: 28px 0; font-size: 12.5px; color: var(--faint); }
 
+/* The wait: bars in the places a card's parts go, at the sizes they take, so
+   the eight placeholders stand the same height as the cards that replace
+   them. A translucent wash rather than a named surface, as the settings bars
+   are: a bar in the ground's own grey is invisible until the shimmer's peak
+   sweeps past. */
+.extAgents-wbar {
+  display: block; flex: none; border-radius: 5px;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 7%, transparent) 30%,
+    color-mix(in oklab, var(--text) 15%, transparent) 50%,
+    color-mix(in oklab, var(--text) 7%, transparent) 70%);
+  background-size: 300% 100%; animation: extAgents-wshine 1.3s linear infinite;
+}
+@keyframes extAgents-wshine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .extAgents-wbar { animation: none; } }
+.extAgents-wcard { cursor: default; pointer-events: none; }
+.extAgents-wtile { width: 32px; height: 32px; border-radius: 9px; }
+.extAgents-wname { width: 44%; height: 14px; }
+.extAgents-wline { width: 72%; height: 12px; margin: 13px 0 32px; }
+.extAgents-wfoot { width: 38%; height: 12px; margin-top: 9px; }
+.extAgents-wtn { display: inline-block; width: 14px; height: 10px; border-radius: 3px; margin-left: 6px; vertical-align: -1px; }
+
+/* A column of fixed parts -- the name, two lines of room for the line about
+   the agent, the strip's place -- so every card is one height, with or
+   without a strip, and a row's strips sit level. */
 .extAgents-card {
-  position: relative; min-width: 0; min-height: 104px; padding: 14px 14px 16px;
+  position: relative; min-width: 0; min-height: 104px; padding: 14px 14px 14px;
+  display: flex; flex-direction: column;
   background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
   color: inherit; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease;
 }
@@ -130,10 +191,9 @@
 .extAgents-card .extAgents-tile .agent-mark img, .extAgents-card .extAgents-tile .agent-mark svg { width: 20px; height: 20px; }
 .extAgents-card .extAgents-tile-own .agent-mark img { width: 18px; height: 23px; }
 .extAgents-card .extAgents-one {
-  margin-top: 10px; line-height: 1.55; white-space: normal;
+  margin: 10px 0; line-height: 1.55; min-height: 3.1em; white-space: normal;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
 }
-.extAgents-card .extAgents-one-work { display: flex; }
 
 /* The corner control: a quiet square, always drawn. */
 .extAgents-cbtn {
@@ -144,8 +204,6 @@
 .extAgents-cbtn svg { width: 14px; height: 14px; }
 .extAgents-cbtn:hover { color: var(--text); background: color-mix(in oklab, var(--raised) 70%, var(--line)); }
 .extAgents-cbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
-.extAgents-cbtn-bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
-.extAgents-cbtn-bad:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 18%, transparent); }
 .extAgents-ctag { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
 
 /* The wizard's agents step: a scanning placeholder before the first
@@ -165,7 +223,8 @@
 /* ── the sheet ──────────────────────────────────────────────────── */
 
 /* The panel is the owner's fixed 520x500 box (page.css sizes `.dpanel` off
-   `data-owner`); the sheet fills it, and spends the padding itself. */
+   `data-owner`), whatever the body holds: a note at the top scrolls with the
+   body. The sheet fills it, and spends the padding itself. */
 .extAgents-sheet { width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .extAgents-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 20px 48px 0 20px; }
 .extAgents-head .extAgents-tile .agent-mark { width: 46px; height: 46px; border-radius: 12px; }
@@ -176,22 +235,44 @@
 .extAgents-by { font-size: 11.5px; color: var(--faint); margin-top: 1px; display: flex; align-items: center; gap: 6px; }
 .extAgents-by .extAgents-led { width: 5px; height: 5px; }
 .extAgents-by-bad { color: var(--clay); }
-/* A refusal with a named fix: the sentence, the command on a line of its own,
-   and the agent's own words folded under both. The dot sits on the first line
-   rather than centred against the block. */
+/* A caveat on a connected row: the sheet's line, with the probe's own words
+   folded under it. The dot sits on the first line rather than centred against
+   the block. */
 .extAgents-by-fix { align-items: flex-start; }
 .extAgents-by-fix .extAgents-led { margin-top: 5px; }
 .extAgents-fix { flex: 1; min-width: 0; line-height: 1.5; }
-.extAgents-fix .extAgents-cmd { margin: 6px 0 4px; color: var(--text); }
-/* A fix made inside the agent: the command that opens it, then what to type
-   there. Numbered, each label over its own command. */
-.extAgents-steps { margin: 6px 0 4px; padding-left: 18px; }
-.extAgents-steps li + li { margin-top: 4px; }
-.extAgents-fix .extAgents-steps .extAgents-cmd { margin: 3px 0 0; }
+/* A fix made inside the agent, in the note: the command that opens it, then
+   what to type there. Numbered, each label over its own command. */
+.extAgents-steps { margin: 8px 0 0; padding-left: 18px; color: var(--text); font-size: 12.5px; }
+.extAgents-steps li + li { margin-top: 6px; }
+.extAgents-note .extAgents-steps .extAgents-cmd { margin: 4px 0 0; }
 .extAgents-raw { color: var(--faint); }
 .extAgents-raw summary { cursor: pointer; }
 
 .extAgents-body { flex: 1; overflow-y: auto; padding: 18px 20px 4px; min-height: 0; }
+
+/* What to do about the last thing that went wrong: a block at the top of the
+   body, since the head only says what state the agent is in. The title is
+   the one thing in clay; the sentence is in the ordinary text colour; a
+   command gets a line of its own; and the agent's own words are folded under
+   when the sentence already explains them, or shown as they came -- in a
+   quiet mono block, not as prose in red -- when they are all there is. */
+.extAgents-note {
+  margin: 0 0 18px; padding: 12px 14px; border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--clay) 22%, var(--line));
+  background: color-mix(in oklab, var(--clay) 4%, var(--paper));
+}
+.extAgents-note-t { font-size: 13px; font-weight: 600; color: var(--clay); display: flex; align-items: center; gap: 7px; }
+.extAgents-note-when { font-weight: 400; font-size: 11.5px; color: var(--faint); }
+.extAgents-note-p { font-size: 12.5px; color: var(--text); line-height: 1.6; margin-top: 4px; }
+.extAgents-note .extAgents-cmd { margin-top: 9px; background: var(--paper); }
+.extAgents-note-raw { margin-top: 9px; font-size: 11.5px; color: var(--faint); }
+.extAgents-note-raw summary { cursor: pointer; }
+.extAgents-note-raw pre, .extAgents-note-said {
+  margin: 6px 0 0; padding: 8px 10px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line-soft);
+  font: 11.5px/1.55 var(--mono); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.extAgents-note-said { margin-top: 9px; color: var(--text); }
 .extAgents-fld { display: block; }
 .extAgents-fld + .extAgents-fld { margin-top: 16px; }
 .extAgents-k { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }

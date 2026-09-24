@@ -10,6 +10,10 @@
      content that needs one (tables, diffs). Colour is spent only where
      something is actually happening: a link, a live dot, an error. */
   --ink:      #ffffff;
+  /* The plate under an agent mark. It does not follow the theme: a brand mark
+     is drawn for a light ground, so the dark theme dims the plate and keeps it
+     light rather than recolouring what sits on it. */
+  --mark-plate: #f7f7f7; --mark-plate-line: #f0f0f0;
   --surface:  #f7f7f7;
   --raised:   #f0f0f0;
   --line:     #e7e7e7;
@@ -229,6 +233,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --ink:      #1d1d1d;
+    --mark-plate: #ecebe7; --mark-plate-line: #ecebe7;
     --surface:  #262626;
     --raised:   #303030;
     --line:     #333333;
@@ -310,6 +315,7 @@
 /* the viewer's toggle must win over the media query, both directions */
 :root[data-theme="dark"] {
   --stage-bg: #0e0e11;
+  --mark-plate: #ecebe7; --mark-plate-line: #ecebe7;
   --ink: #1d1d1d; --surface: #262626; --raised: #303030; --line: #333333;
   --line-soft: #282828; --text: #e8e8e6; --muted: #afafad; --faint: #8a8a88;
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
@@ -338,6 +344,7 @@
   --scrim-detail: rgba(6, 6, 8, .55);
 }
 :root[data-theme="light"] {
+  --mark-plate: #f7f7f7; --mark-plate-line: #f0f0f0;
   --bdg-ink: #faf7ee;
   --ink: #ffffff; --surface: #f7f7f7; --raised: #f0f0f0; --line: #e7e7e7;
   --line-soft: #f0f0f0; --text: #1f1f1f; --muted: #6b6b6b; --faint: #9d9d9d;
@@ -5522,44 +5529,28 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    which came with a card of its own and was the one mark with a background
    before every mark had one. */
 .agent-mark { width: 20px; height: 20px; display: grid; place-items: center; flex: none;
-  border: 1px solid var(--line-soft); border-radius: 5px; background: var(--surface);
+  border: 1px solid var(--mark-plate-line); border-radius: 5px; background: var(--mark-plate);
   overflow: hidden; color: var(--muted); }
 .agent-mark svg { display: block; width: 14px; height: 14px; stroke-linecap: round; stroke-linejoin: round; }
 .agent-mark img { display: block; width: 14px; height: 14px; object-fit: contain; }
 /* The two marks that ARE tiles fill the frame instead of sitting a card inside
    one. MiroMind's file is a favicon and carries its own rounded card. */
 .agent-mark img[data-agent="mirothinker"] { width: 100%; height: 100%; }
-/* Only the marks that draw in currentColor, which an <img> resolves against its
-   own document and so renders black. `mono` is every shape, so the whole file
-   inverts, as the provider marks already do. `hybrid` is qoder alone: brand
-   green beside one currentColor tone, where a plain invert takes the green to
-   magenta and the hue rotation puts it back. A file with no currentColor at all
-   carries its own palette and gets neither.
-   Both theme paths need each rule: an explicit choice stamps data-theme, the
-   default setting stamps nothing. Guarded by
+/* Every mark sits on a light plate in both themes, the way the app icon does.
+   A brand mark is drawn for a light ground, and recolouring it for a dark one
+   is a per-file guess that goes wrong silently: inverting a mono file turns an
+   illustration into its negative, and rotating a hue back lands on a different
+   green. So the dark theme changes the plate, not the mark, and no filter
+   reaches an agent mark. `data-tone` stays on the element as the file's fact
+   for the provenance test, not for a rule here.
+   raven.svg and miromind.svg answer prefers-color-scheme from inside the file,
+   which an <img>'s SVG evaluates against the used color-scheme of the element
+   embedding it, not against this page's data-theme. Pinned light on the tile,
+   so each draws its light self on the light plate under either theme and
+   either OS. On the tile rather than on :root: there it would also hand every
+   native scrollbar and form control to one palette. Guarded by
    ui-web/scripts/gates/agent-mark-css.test.mjs. */
-:root[data-theme="dark"] .agent-mark img[data-tone="mono"] { filter: invert(1); }
-:root[data-theme="dark"] .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .agent-mark img[data-tone="mono"] { filter: invert(1); }
-  :root:not([data-theme="light"]) .agent-mark img[data-tone="hybrid"] { filter: invert(1) hue-rotate(180deg); }
-}
-/* miromind.svg answers the theme from inside its own file, with a
-   prefers-color-scheme rule of its own. An
-   <img>'s SVG evaluates that rule against the used color-scheme of the element
-   embedding it, NOT against this page's data-theme, so without these two lines
-   it follows the operating system while the rest of the roster follows the
-   switch -- and since the app's default is explicitly light, a fresh install on
-   a dark OS is a normal way to see it.
-   raven.svg once needed the same treatment for the opposite reason: a black bird
-   sits at 1.2:1 on the dark surface and no tone filter can lift it, because it is
-   not one colour to invert. It now carries an opaque plate, which is theme
-   independent, so these two lines no longer decide anything for it.
-   Declared on the tile rather than on :root: there it would also hand every
-   native scrollbar and form control to the dark palette, which is a change to
-   the whole page and not to a mark. */
-:root[data-theme="dark"] .agent-mark img { color-scheme: dark; }
-:root[data-theme="light"] .agent-mark img { color-scheme: light; }
+.agent-mark img { color-scheme: light; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
   background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); text-transform: lowercase; }
 /* Beside the mode chip in a pane header, in the tabular mono the other elapsed

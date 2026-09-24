@@ -5147,10 +5147,6 @@
       "en": "Not installed · {by}",
       "zh": "本机未安装 · {by}"
     },
-    "gui.agent.hd_test_bad": {
-      "en": "Test failed: {detail}",
-      "zh": "测试没通过：{detail}"
-    },
     "gui.agent.fix_sign_in": {
       "en": "Sign in to {agent} first. Run this command in a terminal and sign in when it opens your browser, then press {button}:",
       "zh": "需要先登录 {agent}。在终端运行下面这条命令，按提示在浏览器里登录，完成后点「{button}」："
@@ -5267,18 +5263,6 @@
       "en": "{agent} cannot read its own config file. Fix it, then press {button}.",
       "zh": "{agent} 的配置文件有错，它读不出来。改好后点「{button}」。"
     },
-    "gui.agent.fix_unknown_connect": {
-      "en": "{agent} could not connect. The original error below says why; once it is fixed, press {button}.",
-      "zh": "{agent} 没接入成功。可以展开下面的原始报错排查原因，处理好后点「{button}」。"
-    },
-    "gui.agent.fix_unknown_save": {
-      "en": "The change was not saved. The original error below says why; press {button} to try again.",
-      "zh": "这项修改没保存成功。可以展开下面的原始报错查看原因，或点「{button}」再试一次。"
-    },
-    "gui.agent.fix_unknown_test": {
-      "en": "the original error below says why; once it is fixed, press {button} again.",
-      "zh": "可以展开下面的原始报错排查原因，处理好后再点「{button}」。"
-    },
     "gui.agent.needs_node": {
       "en": "{agent} runs through npx, which comes with Node.js, and npx was not found on this machine. Install Node.js, then press {button}.",
       "zh": "{agent} 要通过 Node.js 自带的 npx 运行，这台机器上没找到 npx。先安装 Node.js，装好后点「{button}」。"
@@ -5351,37 +5335,129 @@
       "en": "{agent} could not be disconnected",
       "zh": "{agent} 没能断开"
     },
-    "gui.agent.bad_download_retry": {
-      "en": "{what} -- check the network, the npm registry or the proxy, then press {button}",
-      "zh": "{what}，检查网络、npm 源或代理后点「{button}」"
+    "gui.agent.st_connect_bad": {
+      "en": "Could not connect",
+      "zh": "接入失败"
     },
-    "gui.agent.fix_unknown_disconnect": {
-      "en": "{agent} could not be disconnected. The original error below says why; press {button} to try again.",
-      "zh": "{agent} 没能断开。可以展开下面的原始报错查看原因，或点「{button}」再试一次。"
+    "gui.agent.st_save_bad": {
+      "en": "Not saved",
+      "zh": "没保存"
     },
-    "gui.agent.bad_open": {
-      "en": "{what} -- open it to see what to do",
-      "zh": "{what}，点开看怎么做"
+    "gui.agent.st_disconnect_bad": {
+      "en": "Not disconnected",
+      "zh": "断开失败"
     },
-    "gui.agent.bad_run": {
-      "en": "{what}: run {command} in a terminal, then press {button}",
-      "zh": "{what}：在终端运行 {command}，再点「{button}」"
+    "gui.agent.st_test_bad": {
+      "en": "Test failed",
+      "zh": "测试没通过"
     },
-    "gui.agent.bad_plan_link": {
-      "en": "{what}: open {command} in a browser to get a plan, then press {button}",
-      "zh": "{what}：在浏览器打开 {command} 开通套餐，再点「{button}」"
+    "gui.agent.why_sign_in": {
+      "en": "needs sign-in",
+      "zh": "需要先登录"
     },
-    "gui.agent.bad_run_then": {
-      "en": "{what}: run {command} in a terminal and type {then}, then press {button}",
-      "zh": "{what}：在终端运行 {command} 并输入 {then}，再点「{button}」"
+    "gui.agent.why_setup": {
+      "en": "no provider yet",
+      "zh": "还没选模型服务商"
     },
-    "gui.agent.bad_run_diagnose": {
-      "en": "{what}: run {command} in a terminal to see why, and press {button} once it is fixed",
-      "zh": "{what}：在终端运行 {command} 查看原因，处理好后点「{button}」"
+    "gui.agent.why_api_key": {
+      "en": "API key rejected",
+      "zh": "API key 不可用"
     },
-    "gui.agent.bad_retry": {
-      "en": "{what} -- once it is fixed, press {button}",
-      "zh": "{what}，处理好后点「{button}」"
+    "gui.agent.why_download": {
+      "en": "download failed",
+      "zh": "没能下载"
+    },
+    "gui.agent.why_model": {
+      "en": "Model unavailable",
+      "zh": "模型不可用"
+    },
+    "gui.agent.why_billing": {
+      "en": "Out of credit",
+      "zh": "余额不足"
+    },
+    "gui.agent.why_quota": {
+      "en": "Rate-limited",
+      "zh": "被限流或额度用完"
+    },
+    "gui.agent.why_network": {
+      "en": "Can't reach its provider",
+      "zh": "连不上服务商"
+    },
+    "gui.agent.why_silent": {
+      "en": "No reply in time",
+      "zh": "没有及时回复"
+    },
+    "gui.agent.why_upgrade": {
+      "en": "Version too old",
+      "zh": "版本太旧"
+    },
+    "gui.agent.why_exited": {
+      "en": "Quit on start",
+      "zh": "一启动就退出"
+    },
+    "gui.agent.why_runtime": {
+      "en": "Node.js too old",
+      "zh": "Node.js 版本太旧"
+    },
+    "gui.agent.why_plan": {
+      "en": "Plan doesn't include it",
+      "zh": "套餐不含它"
+    },
+    "gui.agent.why_config": {
+      "en": "Config file broken",
+      "zh": "配置文件有错"
+    },
+    "gui.agent.why_open": {
+      "en": "see why",
+      "zh": "点开看原因"
+    },
+    "gui.agent.why_hover": {
+      "en": "hover to see why",
+      "zh": "悬停看原始报错"
+    },
+    "gui.agent.test_again": {
+      "en": "Test again",
+      "zh": "再测一次"
+    },
+    "gui.agent.test_again_short": {
+      "en": "Retest",
+      "zh": "再测"
+    },
+    "gui.agent.row_download": {
+      "en": "download failed; check the network, the npm registry or the proxy, then press {button}",
+      "zh": "没能下载，检查网络、npm 源或代理后点「{button}」"
+    },
+    "gui.agent.row_run": {
+      "en": "{why}; run {command} in a terminal, then press {button}",
+      "zh": "{why}，在终端运行 {command} 后点「{button}」"
+    },
+    "gui.agent.row_run_then": {
+      "en": "{why}; run {command} in a terminal and type {then}, then press {button}",
+      "zh": "{why}，在终端运行 {command} 并输入 {then}，再点「{button}」"
+    },
+    "gui.agent.row_run_diagnose": {
+      "en": "{why}; run {command} in a terminal to see why, then press {button}",
+      "zh": "{why}，在终端运行 {command} 查看原因，处理好后点「{button}」"
+    },
+    "gui.agent.row_open": {
+      "en": "{why}; open {command} in a browser to get a plan, then press {button}",
+      "zh": "{why}，在浏览器打开 {command} 开通套餐，再点「{button}」"
+    },
+    "gui.agent.said_connect": {
+      "en": "It did not answer the test message; its own words are below. Once that is fixed, press {button}.",
+      "zh": "它没有回应测试消息，原话如下。处理好后点「{button}」。"
+    },
+    "gui.agent.said_test": {
+      "en": "Its own words are below. Once that is fixed, press {button}.",
+      "zh": "原话如下。处理好后点「{button}」。"
+    },
+    "gui.agent.said_save": {
+      "en": "The server refused the change; its words are below.",
+      "zh": "服务端拒绝了这项修改，原话如下。"
+    },
+    "gui.agent.said_disconnect": {
+      "en": "The config could not be written; the server's words are below. Once that is fixed, press {button}.",
+      "zh": "配置没写成功，原话如下。处理好后点「{button}」。"
     },
     "gui.agent.short_raven": {
       "en": "General assistant, takes a bit of everything",
@@ -6952,8 +7028,8 @@
       "zh": "语言"
     },
     "gui.settings.general.language_sub": {
-      "en": "Choose the language used in Raven.",
-      "zh": "选择 Raven 使用的语言。"
+      "en": "Choose the language the interface uses.",
+      "zh": "选择界面使用的语言。"
     },
     "gui.settings.general.lang_zh": {
       "en": "中文",

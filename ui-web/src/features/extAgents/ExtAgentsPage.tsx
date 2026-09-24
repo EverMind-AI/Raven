@@ -9,8 +9,8 @@ import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered, withCurrent } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
-import { healthOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
-import { CardGrid, Spin, Tile, connect, ordered } from './Rows'
+import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
+import { CardGrid, Spin, Tile, WaitGrid, ago, connect, ordered, refusedLabel } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
@@ -349,32 +349,78 @@ const FIX_SAY: Record<
   config: (v, command) => (command ? t('gui.agent.fix_config', v) : t('gui.agent.fix_config_bare', v)),
 }
 
-/* A refusal, and the fix when the server named one. The server's sentence is
-   English and written for a log; a remedy is the same verdict as data, so here
-   it is said in the reader's language -- what is missing, the command that
-   supplies it on a line of its own, and the button to press after -- with the
-   agent's own words folded under it instead of put first. A fix made inside
-   the agent is two numbered steps, the command that opens it and what to type
-   there, each with its own copy button: told only to run `qwen`, a reader is
-   left at its prompt with nothing saying what next. Without a remedy the
-   reader is still told in their own language that it failed and what to press
-   (`unknown`), and the server's sentence is folded the same way: shown first it
-   was a red English paragraph, and all a reader could do with it was copy it. */
-function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }: {
-  agent: string
-  detail: string
-  remedy: Remedy | null
-  button: string
-  unknown: string
-  lead?: (say: string) => string
-}): JSX.Element {
-  const command = remedy && remedy.kind !== 'api_key' ? remedy.command : ''
-  const then = command ? remedy?.then || '' : ''
-  const say = remedy ? FIX_SAY[remedy.kind]({ agent, button }, !!command, !!then, remedy) : unknown
+/* What to do about the last thing that went wrong, as the block at the top of
+   the sheet's body draws it. The head only says what state the agent is in;
+   this is the why and the how. */
+interface NoteSpec {
+  title: string
+  /* How long ago, for a remembered test verdict. */
+  when?: string
+  lead: string
+  command?: string
+  /* What to type once `command` runs, when the fix is a step inside the agent:
+     the note then draws two numbered steps, each with its own copy button. */
+  then?: string
+  /* The server's own sentence. Folded under the lead when the lead already
+     explains it (a classified refusal); shown as it came when it is all there
+     is to go on. */
+  raw: string
+  folded: boolean
+}
+
+/* A refusal the server classified: what is missing, in the reader's language,
+   the command that supplies it on a line of its own, and the button to press
+   after -- with the agent's own words folded under, since the sentence is
+   English and written for a log. Null when the server named no fix. */
+function remedied(agent: string, remedy: Remedy | null, button: string, raw: string): NoteSpec | null {
+  if (!remedy) return null
+  const command = remedy.kind === 'api_key' ? '' : remedy.command
+  const then = command ? remedy.then || '' : ''
+  const lead = FIX_SAY[remedy.kind]({ agent, button }, !!command, !!then, remedy)
+  return { title: badOf(kindOf(remedy), agent), lead, command, then, raw, folded: true }
+}
+
+/* The block for this row, or none. A write this page refused comes first; then
+   a test the server remembers failing, which the sheet reports from the
+   unauthorized state too, since Test is offered there and its failure would
+   otherwise leave no trace. Without a fix the reader is told in their own
+   language what failed and what to press, and the server's sentence is shown
+   as it came: it is the only reason there is, and folding it away made the
+   block say nothing. */
+function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown): NoteSpec | null {
+  const agent = row.name
+  const failed = s.failed[row.name]
+  if (failed) {
+    const button = t('gui.retry')
+    const spec = remedied(agent, failed.remedy || null, button, failed.detail)
+    if (spec) return spec
+    const write = refusedWrite(failed)
+    return {
+      title: write === 'save' ? t('gui.agent.bad_save') : t(write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', { agent }),
+      lead: write === 'save' ? t('gui.agent.said_save') : t(write === 'disconnect' ? 'gui.agent.said_disconnect' : 'gui.agent.said_connect', { button }),
+      raw: failed.detail,
+      folded: false,
+    }
+  }
+  if (shown === 'pending' || shown === 'missing' || row.last_test_ok !== false) return null
+  /* The press named is the one the action bar offers: a connected row's says
+     "again", since its last test is the reason this block is here. */
+  const button = t(shown === 'on' ? 'gui.agent.test_again' : 'gui.agent.test_label')
+  const when = ago(row.last_test_at_ms)
+  const spec = remedied(agent, row.last_test_remedy || null, button, row.last_test_detail || '')
+  if (spec) return { ...spec, when }
+  return { title: t('gui.agent.st_test_bad'), when, lead: t('gui.agent.said_test', { button }), raw: row.last_test_detail || '', folded: false }
+}
+
+function Note({ title, when, lead, command, then, raw, folded }: NoteSpec): JSX.Element {
   return (
-    <div className="extAgents-fix">
-      <div>{lead(say)}</div>
-      {then ? (
+    <div className="extAgents-note">
+      <div className="extAgents-note-t">
+        {title}
+        {when ? <span className="extAgents-note-when">{when}</span> : null}
+      </div>
+      <div className="extAgents-note-p">{lead}</div>
+      {command && then ? (
         <ol className="extAgents-steps">
           <li>
             {t('gui.agent.fix_step_run')}
@@ -388,12 +434,14 @@ function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }
       ) : command ? (
         <CmdCopy cmd={command} />
       ) : null}
-      {detail ? (
-        <details className="extAgents-raw">
+      {!raw ? null : folded ? (
+        <details className="extAgents-note-raw">
           <summary>{t('gui.agent.fix_raw')}</summary>
-          {detail}
+          <pre>{raw}</pre>
         </details>
-      ) : null}
+      ) : (
+        <pre className="extAgents-note-said">{raw}</pre>
+      )}
     </div>
   )
 }
@@ -414,42 +462,22 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
       </div>
     )
   }
+  /* The head says only which state: the why and the how are the block at the
+     top of the body (`noteOf`). */
   if (health.from === 'write') {
     const failed = s.failed[row.name]
-    const write = failed ? refusedWrite(failed) : 'connect'
-    const button = t('gui.retry')
     return (
-      <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
+      <div className="extAgents-by extAgents-by-bad">
         {led}
-        <Refusal
-          agent={row.name}
-          detail={failed?.detail || ''}
-          remedy={failed?.remedy || null}
-          button={button}
-          unknown={t(
-            write === 'save'
-              ? 'gui.agent.fix_unknown_save'
-              : write === 'disconnect'
-                ? 'gui.agent.fix_unknown_disconnect'
-                : 'gui.agent.fix_unknown_connect',
-            { agent: row.name, button },
-          )}
-        />
+        {[failed ? refusedLabel(failed) : t('gui.agent.st_connect_bad'), by].filter(Boolean).join(' · ')}
       </div>
     )
   }
   if (health.from === 'test') {
     return (
-      <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
+      <div className="extAgents-by extAgents-by-bad">
         {led}
-        <Refusal
-          agent={row.name}
-          detail={row.last_test_detail || ''}
-          remedy={row.last_test_remedy || null}
-          button={t('gui.agent.test_label')}
-          unknown={t('gui.agent.fix_unknown_test', { button: t('gui.agent.test_label') })}
-          lead={(say) => t('gui.agent.hd_test_bad', { detail: say })}
-        />
+        {shown === 'on' ? t('gui.agent.hd_on_test_bad') : [t('gui.agent.st_test_bad'), by].filter(Boolean).join(' · ')}
       </div>
     )
   }
@@ -495,6 +523,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   const shown = shownOf(row, s)
   const stage = stageOf(row)
   const testing = s.testing.includes(row.name) || row.test_running
+  const note = noteOf(row, s, shown)
   const saveKey = (): void => {
     const api_key = keyRef.current ? keyRef.current.value.trim() : ''
     store.saveKey(row, api_key)
@@ -532,7 +561,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
           </button>
         ) : canTest(row) ? (
           <button className="mini" onClick={() => void store.runTest(row)}>
-            {t('gui.agent.test_label')}
+            {t(row.last_test_ok === false ? 'gui.agent.test_again' : 'gui.agent.test_label')}
           </button>
         ) : null}
       </>
@@ -587,6 +616,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
           </>
         ) : (
           <>
+            {note ? <Note {...note} /> : null}
             <GoodAt
               readOnly={!!row.builtin}
               row={row}
@@ -635,6 +665,9 @@ export function ExtAgentsApp(): JSX.Element {
   const rows: Record<Tab, ExtAgentRow[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
   rows.all = [...rows.on, ...rows.avail, ...rows.missing]
   const current = TABS.find((x) => x.tab === tab)!
+  /* Before the first answer only: a later reload keeps showing the rows it
+     has, the way the wizard's step does. */
+  const scanning = s.loading && s.rows.length === 0
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   return (
     <>
@@ -658,11 +691,11 @@ export function ExtAgentsApp(): JSX.Element {
             type="button"
           >
             {t(x.label)}
-            <span className="extAgents-tn">{String(rows[x.tab].length)}</span>
+            {scanning ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(rows[x.tab].length)}</span>}
           </button>
         ))}
       </div>
-      <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />
+      {scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />}
       {sheetRow ? <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} /> : null}
     </>
   )
