@@ -79,8 +79,15 @@ Shell matching follows these rules:
 - Compound commands allow only when every segment allows; a denied segment
   denies the call. `git *` does not implicitly authorize `sudo git ...`.
 - Command/process substitution, backticks, heredocs, or unconfined redirection
-  may leave only the fallback rule applicable. This is conservative parsing,
-  not a proof about every program a command can launch.
+  may leave only the fallback rule applicable to `allow` and `ask` patterns.
+  This is conservative parsing, not a proof about every program a command can
+  launch.
+- A `deny` pattern is asked about every command the string runs, before any of
+  that: behind a wrapper (`sudo`, `env`, `bash -c`, `xargs`, `doas`, `watch`),
+  inside a substitution, after a shell keyword, or under a path
+  (`/usr/bin/curl`). So `curl * = deny` also refuses `bash -c "curl ..."` and
+  `curl ... > /tmp/out`. It cannot see a command a program builds for itself
+  (`python -c`, a script file, an alias).
 
 Unlike OpenCode's ordered rules, Raven does **not** use last-match-wins. Do not
 paste another product's permission schema or precedence into Raven. Avoid
