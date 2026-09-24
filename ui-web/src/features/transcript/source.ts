@@ -17,11 +17,8 @@ import { unpitch } from '../../state/session/conversation'
 import { open as sessionOpen, rows as sessionRows } from '../../state/session/rows'
 import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
-import { pane } from '../../state/wsPane'
 import { openDeskTab, openDeskTask } from '../desk/store'
 import { draw as sessionDraw } from '../rail/store'
-import { plainTitle } from '../rail/title'
-import * as subagents from '../subagents/store'
 import { history as drawHistory } from './mount'
 import { actLabel as storeActLabel } from './store'
 
@@ -112,39 +109,37 @@ export function spawnList() {
     .then((r) => (r && r.items) || [])
 }
 
-/* "View in workspace" on a spawn row: open the panel on the run's own record,
-   not just on the list. The list may not have caught the new run yet, so a
-   couple of short retries cover the gap between the call and its row. */
-export function openSpawn(agent: string, label: string, nodeId?: string): void {
-  /* The tasks source's own row, when the wire named one: opening it directly
-     is exact, where the label match below is a guess. The seam answers
-     whether it opened, so there is nothing to fall back to once it does. */
-  if (nodeId && ds('tasks').openByNode?.(nodeId)) return
-  /* Same rule as `openDagRun` above: `openRow` below raises the window, and in
-   desk mode that is the whole answer. The panel's agents view is only needed
-   where there are no windows. */
-  if (!document.documentElement.classList.contains('desk-ready')) pane().setOpen(true, 'agents')
-  const match = () => subagents.rows().find((x) => x.kind !== 'dag'
-    && (!label || plainTitle(x.label) === plainTitle(label))
-    && (!agent || (x.agent || 'raven') === (agent || 'raven')))
+/* A spawn opens as its task -- the same pane a graph's card opens through
+   `openDagRun` above, addressed by the record id the card and the delivered row
+   both carry (the call's `node_id`).
+
+   The row may not be in the tasks store yet when the card has just appeared:
+   the pending frame files it under the run's task id, and only the running
+   frame renames it to the record id. So the store is asked first, then the
+   server for that one row, on a short ladder, and the tasks list is where a
+   run that never turns up lands.
+
+   Never the agents panel's instance window. Falling back to a label match there
+   is what made the same click open two different windows depending on how soon
+   after dispatch it came. */
+export function openSpawn(nodeId: string): void {
+  const id = String(nodeId || '')
+  if (!id) { openDeskTab('tasks'); return }
   const attempt = (n: number): void => {
-    const it = match()
-    if (it) { subagents.openRow(it); return }
-    if (n >= 4) {
-      /* Nothing was found, so nothing was opened -- and a click that opens
-       nothing reads as broken. `refresh` keeps the drawn list on a failed
-       read rather than emptying it, so a gateway hiccup or a label the
-       registry spells differently lands here, and the reader is left with a
-       list they can search by hand. Only on this branch: the palette beside
-       a window the reader did get is the thing this whole change removes. */
-      openDeskTab('tasks')
-      return
-    }
-    subagents.refresh(true)
-    setTimeout(() => attempt(n + 1), 700)
+    if (ds('tasks').openByNode?.(id)) return
+    ds('tasks').one('spawn', id)
+      .then((row) => {
+        if (row) { openDeskTask(row); return }
+        if (n >= SPAWN_RETRIES) { openDeskTab('tasks'); return }
+        setTimeout(() => attempt(n + 1), SPAWN_RETRY_MS)
+      })
+      .catch(() => openDeskTab('tasks'))
   }
   attempt(0)
 }
+
+const SPAWN_RETRIES = 4
+const SPAWN_RETRY_MS = 700
 
 /* Forking the open conversation. The island only offers it on the main lane, so
    a delegated run's pane never claims to fork a session it does not have. */
