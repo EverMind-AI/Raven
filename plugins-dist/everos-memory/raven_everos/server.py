@@ -274,6 +274,10 @@ def _everos_executable() -> str:
 _LOG_TAIL_BYTES = 65536
 _EXCEPTION_LINE = re.compile(r"^[\w.]+(Error|Exception)\b")
 _SERVER_CMDLINE = "everos server start"
+# The marker as a command line prints it: bare on POSIX (``.../bin/everos server
+# start``), quoted with an extension on Windows (``"...\\Scripts\\everos.exe" server
+# start``). ``_SERVER_CMDLINE in cmdline`` never matched the second shape.
+_SERVER_CMDLINE_RE = re.compile(r'everos(?:\.exe)?"?\s+server\s+start')
 
 
 def _pidfile_path() -> Path:
@@ -309,27 +313,10 @@ def _is_everos_server(pid: int) -> bool:
 
     A pidfile is stale information: the process it names may have exited and the
     number been handed to something unrelated. Checking the command line is what
-    keeps a port-convergence restart from killing an innocent process. ``ps -p``
-    is POSIX and needs no extra dependency.
-
-    ``-ww`` because the marker sits at the *end* of the command line, after the
-    interpreter path. Without it ``ps`` truncates its output to ``$COLUMNS``,
-    defaulting to 80, and the answer then depends on how deep this raven is
-    installed: past that column the marker is cut off and a genuine server reads
-    as somebody else's process. The failure is the dangerous direction -- the
-    caller concludes its own server is gone and starts a second one.
+    keeps a port-convergence restart from killing an innocent process; reading
+    it is :func:`_cmdline_of`'s business, platform included.
     """
-    ps = shutil.which("ps") or "/bin/ps"
-    try:
-        out = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [ps, "-ww", "-p", str(pid), "-o", "command="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return _SERVER_CMDLINE in out.stdout
+    return _SERVER_CMDLINE_RE.search(_cmdline_of(pid)) is not None
 
 
 class StopOutcome(str, Enum):
@@ -359,6 +346,10 @@ def stop_pid(pid: int, *, timeout: float = 35.0) -> StopOutcome:
 
     The caller is responsible for having established that this pid is an everos
     serving the root in question; both routes in do.
+
+    On native Windows ``os.kill`` is ``TerminateProcess``: no shutdown handler
+    runs in the server. EverOS writes its markdown through atomic saves and
+    rebuilds the index from it, so that is the stop Windows has.
     """
     try:
         os.kill(pid, signal.SIGTERM)
@@ -482,13 +473,29 @@ def _proc_locks_pid(lock: Path) -> int | None:
 def _cmdline_of(pid: int) -> str:
     """The full command line of ``pid``, or an empty string.
 
-    ``-ww`` is what makes "full" true: ``ps`` otherwise truncates to ``$COLUMNS``
-    (80 when unset), which silently turns this into "the first 80 characters".
+    POSIX asks ``ps``. ``-ww`` is what makes "full" true: ``ps`` otherwise
+    truncates to ``$COLUMNS`` (80 when unset), and the marker this is read for
+    sits at the *end* of the line, after the interpreter path -- past that column
+    a genuine server reads as somebody else's process, and the caller concludes
+    its own server is gone and starts a second one.
+
+    Native Windows has no ``ps``; it asks WMI through PowerShell, with the console
+    set to UTF-8 so a path holding non-ASCII survives the round trip.
     """
-    ps = shutil.which("ps") or "/bin/ps"
+    if sys.platform == "win32":
+        argv = [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+            f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}').CommandLine",
+        ]
+    else:
+        argv = [shutil.which("ps") or "/bin/ps", "-ww", "-p", str(pid), "-o", "command="]
     try:
         out = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [ps, "-ww", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=5
+            argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
         )
     except (OSError, subprocess.SubprocessError):
         return ""
@@ -557,7 +564,12 @@ def _proc_net_listening_port(pid: int) -> int | None:
 
 
 def _listening_port(pid: int) -> int | None:
-    """The TCP port ``pid`` listens on, or ``None`` if it serves no HTTP."""
+    """The TCP port ``pid`` listens on, or ``None`` if it serves no HTTP.
+
+    Native Windows has neither ``lsof`` nor ``/proc`` and answers ``None``: the
+    holder is still identified and stopped, only the wizard's "serves on port
+    N" line goes unsaid there.
+    """
     port = _lsof_listening_port(pid)
     if port is not None:
         return port
@@ -640,7 +652,7 @@ def lock_holder(root: Path | str) -> LockHolder | None:
     cmdline = _cmdline_of(pid)
     # Both halves matter: the command has to be an everos server, and it has to
     # be serving *this* root. A pid can be recycled onto anything.
-    if _SERVER_CMDLINE not in cmdline or str(resolved) not in cmdline:
+    if _SERVER_CMDLINE_RE.search(cmdline) is None or str(resolved) not in cmdline:
         return None
     return LockHolder(pid=pid, cmdline=cmdline, port=_listening_port(pid))
 

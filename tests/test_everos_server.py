@@ -1091,6 +1091,51 @@ class TestTheWrittenAddressIsVerified:
             _server._start_server_if_unlocked("http://localhost:18791")
 
 
+class TestWindowsProcessIdentification:
+    """Native Windows has no ``ps``: the command line comes from WMI through
+    PowerShell, and it prints the executable quoted with its extension, which
+    the bare marker never matched."""
+
+    _CMDLINE = '"C:\\py\\python.exe" "C:\\venv\\Scripts\\everos.exe" server start --root C:\\home\\everos-root'
+
+    def test_the_command_line_is_asked_of_wmi(self, monkeypatch) -> None:
+        import subprocess
+
+        from raven_everos.server import _cmdline_of, _is_everos_server
+
+        seen: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout=self._CMDLINE + "\r\n", stderr="")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        assert _cmdline_of(4242) == self._CMDLINE
+        assert _is_everos_server(4242) is True, "the quoted .exe shape is still an everos server"
+        assert seen[0][0] == "powershell" and "ProcessId = 4242" in seen[0][-1]
+
+    def test_the_posix_shape_still_matches(self) -> None:
+        from raven_everos.server import _SERVER_CMDLINE_RE
+
+        assert _SERVER_CMDLINE_RE.search("/Users/x/.venv/bin/python3 /Users/x/.venv/bin/everos server start --root /r")
+        assert _SERVER_CMDLINE_RE.search("/usr/bin/vim everos-notes server start.txt") is None
+
+    def test_a_process_that_is_gone_reads_as_no_command_line(self, monkeypatch) -> None:
+        import subprocess
+
+        from raven_everos.server import _cmdline_of, _is_everos_server
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        )
+
+        assert _cmdline_of(4242) == ""
+        assert _is_everos_server(4242) is False
+
+
 class TestParsingLsofListenOutput:
     """Real ``lsof`` rows, because the shape is what the parser got wrong.
 
