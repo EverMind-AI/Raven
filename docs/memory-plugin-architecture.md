@@ -455,11 +455,18 @@ manages is theirs to restart. `everos cascade sync`, `cascade fix --apply` and
 **Windows.** `1.4.0` runs natively on Windows, so the platform gate raven
 carried (`everos_platform_note`, `ServiceState.UNSUPPORTED`, the wizard's
 WSL notice) is gone and `_everos_executable` looks for `everos.exe` there.
-Spawning, probing and reusing the server work through portable code; the
-stale-server identification and stop path (`lock_holder`, `_is_everos_server`)
-still reads `ps`, `lsof` and `/proc`, which native Windows does not have, so
-restart-on-role-change and orphan cleanup answer "unknown" there until that
-path is ported.
+Spawning, probing and reusing the server were already portable. Identifying
+and stopping a stale server was not: `_cmdline_of` asked `ps`, and the marker
+`everos server start` never matched a Windows command line, which prints the
+executable as `...\Scripts\everos.exe server start`. The command line now
+comes from WMI through PowerShell on `win32` and the marker accepts both
+shapes; the pidfile raven writes at spawn already named the pid. Verified on
+a Windows 11 box: a changed memory role sent the running server through
+"holds credentials raven has since changed; restarting", the old pid exited
+and the new one answered `/health`. `_listening_port` still answers `None`
+there (no `lsof`, no `/proc`), which only silences the wizard's "serves on
+port N" sentence. `os.kill` is `TerminateProcess` on Windows, so the stop is
+not graceful; EverOS saves markdown atomically and rebuilds its index from it.
 
 **One guard added alongside.** The live install was found pinned to a
 768-dimension embedding model against this 1024-wide index, with every store
