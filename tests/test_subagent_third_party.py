@@ -4735,6 +4735,209 @@ def test_the_connect_path_and_the_roster_ask_one_question() -> None:
     assert not looks_like_auth("it started and then answered nothing")
 
 
+def test_qwen_is_set_up_at_its_own_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`qwen auth` is gone from 0.24: the fix is `qwen`, then `/auth` typed at its prompt.
+
+    Measured 2026-09-24 on qwen 0.24.4, where `qwen auth` itself answers "run
+    qwen and use /auth to configure providers". Told only to run `qwen`, a
+    reader lands at a prompt with nothing saying what to type there.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: f"/usr/local/bin/{exe}")
+    answer = "Internal error: 401 No auth credentials found"
+    text, remedy = probe_mod._refusal(
+        SimpleNamespace(preset="qwen_code", kind="acp"), f"request failed: [-32603] {answer}", answer
+    )
+    assert remedy == Remedy("setup", "qwen", "/auth")
+    assert "run `qwen` in a terminal and type `/auth` there, then connect again" in text
+
+
+@pytest.mark.parametrize(
+    ("answer", "kind"),
+    [
+        (
+            "Internal error: 404 This model is unavailable for free. The paid version is available now - use this "
+            "slug instead: <model>",
+            "model",
+        ),
+        ("Internal error: 402 Insufficient credits. Add more using https://provider.example/credits", "billing"),
+        ("Internal error: 429 Rate limit exceeded: free-models-per-day", "quota"),
+    ],
+)
+def test_a_refusal_the_provider_made_is_named_by_the_status_it_gave(answer: str, kind: str) -> None:
+    """The provider's own status picks among three different fixes, made inside the agent.
+
+    Measured on qwen 0.24.4 against a stand-in endpoint answering each status;
+    the first is the connect this was written for, a model withdrawn from a free
+    tier. All three came back as the agent's English error and nothing else.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    said = f"request failed: [-32603] {answer}"
+    text, remedy = probe_mod._refusal(SimpleNamespace(preset="qwen_code", kind="acp"), said, answer)
+    assert remedy == Remedy(kind, "qwen", "/model")
+    assert "run `qwen` in a terminal and type `/model` there" in text
+    assert text.endswith(f"It said: {said}"), "the agent's own words stay in the record"
+
+    # No known way to switch this agent's model: what happened, and no command.
+    text, remedy = probe_mod._refusal(SimpleNamespace(preset="codex", kind="acp"), said, answer)
+    assert remedy == Remedy(kind)
+    assert "switch the model it uses" in text
+
+
+def test_a_provider_out_of_reach_is_named_with_the_command_that_says_why() -> None:
+    """Measured on qwen 0.24.4: a refused port answers "Internal error: Connection error." in five seconds."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    answer = "Internal error: Connection error."
+    said = f"request failed: [-32603] {answer}"
+    text, remedy = probe_mod._refusal(SimpleNamespace(preset="qwen_code", kind="acp"), said, answer)
+    assert remedy == Remedy("network", "qwen hi")
+    assert "`qwen hi` in a terminal prints the cause" in text
+    assert probe_mod._refusal(SimpleNamespace(preset="codex", kind="acp"), said, answer)[1] == Remedy("network")
+
+
+def test_a_status_is_read_only_where_the_agent_gave_one() -> None:
+    """A number in a sentence is not a status, and a launch that died gave none.
+
+    Anchored on the code following ``error:``, so a context window or a frame
+    count is not read as a verdict. And read off the agent's answer alone: a
+    process's stderr can name a host that is not its provider -- a bridge's own
+    gateway -- and calling that "could not reach its model provider" would send
+    the reader to the wrong place.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+
+    qwen = SimpleNamespace(preset="qwen_code", kind="acp")
+    for answer in ("the model has a context window of 404 tokens", "Internal error: 4040 frames dropped"):
+        assert probe_mod._refusal(qwen, answer, answer) == (answer, None), answer
+    died = "acp agent 'OpenClaw': connection ended (exit 1); stderr tail: connect ECONNREFUSED 127.0.0.1:18789"
+    assert probe_mod._refusal(qwen, died) == (died, None)
+
+
+def test_a_launch_that_quit_is_named_by_what_it_said_on_its_way_out() -> None:
+    """An exit that left a reason is an exit, and one refusing its own ACP flag is an old release.
+
+    The flag is the one the preset launches with, so an agent that does not
+    know it predates the release the preset was written against. yargs, which
+    qwen is built on, answers an unknown option "Unknown argument: acp".
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpConnectionError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    qwen = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
+    old = AcpConnectionError("acp agent 'Qwen Code': connection ended (exit 1); stderr tail: Unknown argument: acp")
+    text, remedy = probe_mod._ping_refusal(qwen, old)
+    assert remedy == Remedy("upgrade", "npm i -g @qwen-code/qwen-code@latest")
+    assert "upgrade it with `npm i -g @qwen-code/qwen-code@latest` and connect again" in text
+
+    crashed = AcpConnectionError(
+        "acp agent 'Qwen Code': connection ended (exit 1); stderr tail: Error: Cannot find module 'undici'"
+    )
+    assert probe_mod._ping_refusal(qwen, crashed) == (str(crashed), Remedy("exited"))
+
+    # Quitting without a word leaves nothing to point the reader at.
+    mute = AcpConnectionError("acp agent 'Qwen Code': connection ended (exit 1); stderr tail: <empty>")
+    assert probe_mod._ping_refusal(qwen, mute) == (str(mute), None)
+
+
+def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Over an old copy a bare package name can leave it where it is; `@latest` moves it.
+
+    Only for an `npm i -g <package>` hint: a hint that pins a version already, or
+    installs some other way, is not one this can safely rewrite.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import presets as presets_mod
+
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="qwen_code")) == "npm i -g @qwen-code/qwen-code@latest"
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="claude_code")) is None, "no install hint, no upgrade"
+    for hint, upgrade in (
+        ("npm install -g plain-agent", "npm install -g plain-agent@latest"),
+        ("npm i -g @scope/agent@1.2.3", None),
+        ("npm i -g agent@2", None),
+        ("curl -fsSL https://agent.example/install.sh | sh", None),
+    ):
+        monkeypatch.setitem(presets_mod.ACP_REGISTRY_INSTALL_HINTS, "stand_in", hint)
+        assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="stand_in")) == upgrade, hint
+
+
+async def test_a_connect_that_outlasted_its_wait_says_how_to_hear_why(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Qwen Code retries a refused call for minutes and says nothing while it does.
+
+    Measured on qwen 0.24.4: 90 s of ACP traffic under a 429 carried no update
+    and no stderr, while the same failure run in a terminal printed its reason
+    at 91 s. So what a timeout can usefully say is the command that makes the
+    agent talk -- for an agent measured to go silent that way, and no other.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpTimeoutError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    class _Silent:
+        async def run(self, *args: object, **kwargs: object) -> str:
+            await asyncio.sleep(3600)
+            return ""
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda *args, **kwargs: _Silent())
+    monkeypatch.setattr(probe_mod, "_ping_bounds", lambda cfg: (100, 1, 0.05))
+    qwen = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
+    silent = await probe_mod.ping_agent(qwen)
+    assert silent.remedy == Remedy("silent", "qwen hi")
+    assert "run `qwen hi` in a terminal" in silent.detail
+    other = await probe_mod.ping_agent(SimpleNamespace(name="Codex", preset="codex", kind="acp"))
+    assert (other.detail, other.remedy) == ("it did not answer within 0s", None)
+
+    # The prompt's own budget running out is the same silence, seen from inside.
+    timed_out = AcpTimeoutError("acp agent 'Qwen Code': session/prompt timed out after 60s", method="session/prompt")
+    assert probe_mod._ping_refusal(qwen, timed_out)[1] == Remedy("silent", "qwen hi")
+
+
+async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test fails on the handshake first, and that verdict named no fix for a launch that quit.
+
+    So the two buttons named one crash two ways: Connect said to upgrade, Test
+    printed the English error.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    detail = (
+        "handshake failed: acp agent 'Qwen Code': connection ended (exit 1); stderr tail: Unknown argument: acp; "
+        "stderr: Unknown argument: acp"
+    )
+
+    async def _refused(cfg: object) -> object:
+        return SimpleNamespace(usable=False, needs_auth=False, unfetched=False, detail=detail, available_models=[])
+
+    monkeypatch.setattr(probe_mod, "record_capabilities", _refused)
+    cfg = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
+    result = await probe_mod.run_test(cfg, source="config")
+    assert not result.ok
+    assert result.remedy == Remedy("upgrade", "npm i -g @qwen-code/qwen-code@latest")
+    assert detail in result.detail
+
+
 def test_the_sign_in_command_is_one_the_machine_can_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """A shim row runs where the agent's CLI was never installed globally.
 

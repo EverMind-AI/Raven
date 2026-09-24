@@ -179,6 +179,11 @@
 .extAgents-by-fix .extAgents-led { margin-top: 5px; }
 .extAgents-fix { flex: 1; min-width: 0; line-height: 1.5; }
 .extAgents-fix .extAgents-cmd { margin: 6px 0 4px; color: var(--text); }
+/* A fix made inside the agent: the command that opens it, then what to type
+   there. Numbered, each label over its own command. */
+.extAgents-steps { margin: 6px 0 4px; padding-left: 18px; }
+.extAgents-steps li + li { margin-top: 4px; }
+.extAgents-fix .extAgents-steps .extAgents-cmd { margin: 3px 0 0; }
 .extAgents-raw { color: var(--faint); }
 .extAgents-raw summary { cursor: pointer; }
 

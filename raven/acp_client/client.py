@@ -465,7 +465,16 @@ class AcpClient:
         ``_cancel_turn`` could never tell a real settlement from that.
         """
         if not self.alive:
-            raise AcpConnectionError(f"acp agent {self.name!r}: connection is not open")
+            if self._closed:
+                raise AcpConnectionError(f"acp agent {self.name!r}: connection is not open")
+            # The child ended on its own before this request went out. The read
+            # loop reports that same death with the exit code and the child's
+            # last words, but only to requests already in flight, so which of
+            # the two a caller saw came down to how fast the child died: a
+            # startup crash raced `initialize` and usually read "not open",
+            # the one message that names no reason.
+            await self._settle_exit()
+            raise self._ended_error()
         self._next_id += 1
         request_id = self._next_id
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
@@ -639,25 +648,31 @@ class AcpClient:
             if not self._closed:
                 for task in list(self._answer_tasks):
                     task.cancel()
-                # A dying child closes stdout a beat before it is reaped and
-                # before its last stderr lines are read, so composing the
-                # message immediately reports "exit None; stderr: <empty>" for
-                # a process that has both -- a diagnostic that points nowhere.
-                # Bounded waits: a wrapper that keeps stderr open forever must
-                # not park every in-flight caller behind it.
-                try:
-                    await asyncio.wait_for(asyncio.shield(self._proc.wait()), timeout=1.5)
-                except (asyncio.TimeoutError, ProcessLookupError):
-                    pass
-                if self._stderr_task is not None and not self._stderr_task.done():
-                    await asyncio.wait({self._stderr_task}, timeout=0.5)
-            self._fail_pending(
-                AcpConnectionError(
-                    f"acp agent {self.name!r}: connection ended (exit {self._proc.returncode}); "
-                    f"stderr tail: {self.stderr_tail(400) or '<empty>'}",
-                    stderr=self.stderr_tail() or None,
-                )
-            )
+                await self._settle_exit()
+            self._fail_pending(self._ended_error())
+
+    async def _settle_exit(self) -> None:
+        """Give a child that is ending on its own a beat to be reaped and to finish writing stderr.
+
+        A dying child closes stdout a beat before it is reaped and before its
+        last stderr lines are read, so composing the message immediately
+        reports "exit None; stderr: <empty>" for a process that has both -- a
+        diagnostic that points nowhere. Bounded waits: a wrapper that keeps
+        stderr open forever must not park every caller behind it.
+        """
+        try:
+            await asyncio.wait_for(asyncio.shield(self._proc.wait()), timeout=1.5)
+        except (asyncio.TimeoutError, ProcessLookupError):
+            pass
+        if self._stderr_task is not None and not self._stderr_task.done():
+            await asyncio.wait({self._stderr_task}, timeout=0.5)
+
+    def _ended_error(self) -> AcpConnectionError:
+        return AcpConnectionError(
+            f"acp agent {self.name!r}: connection ended (exit {self._proc.returncode}); "
+            f"stderr tail: {self.stderr_tail(400) or '<empty>'}",
+            stderr=self.stderr_tail() or None,
+        )
 
     async def _read_stderr(self) -> None:
         """Drain the child's stderr for as long as the child is alive.

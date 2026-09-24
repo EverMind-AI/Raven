@@ -321,6 +321,32 @@ describe('the onboarding wizard\'s agents step', () => {
     )
   })
 
+  it.each([
+    [{ kind: 'setup', command: 'qwen', then: '/auth' }, 'gui.agent.bad_setup', 'gui.agent.bad_run_then'],
+    [{ kind: 'silent', command: 'qwen hi' }, 'gui.agent.bad_silent', 'gui.agent.bad_run_diagnose'],
+  ])('puts a fix typed inside the agent, or a command that only says why, on the row as that (%o)', async (remedy, bad, line) => {
+    const rows = [row({ name: 'Qwen Code', preset: 'qwen_code' })]
+    install(rows)
+    setSources({
+      extAgents: {
+        load: async () => rows,
+        act: async () => {
+          throw { data: { detail: 'English', remedy } }
+        },
+      },
+    })
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+    await act(async () => {
+      fireEvent.click(control('Qwen Code'))
+    })
+    const what = `${bad} ${JSON.stringify({ agent: 'Qwen Code' })}`
+    const vars = 'then' in remedy ? { what, command: remedy.command, then: remedy.then, button: 'gui.retry' } : { what, command: remedy.command, button: 'gui.retry' }
+    expect(rowNamed('Qwen Code').querySelector('.extAgents-one-bad')!.textContent).toBe(`${line} ${JSON.stringify(vars)}`)
+  })
+
   it('says where to look for a download, rather than the adapter\'s long command', async () => {
     const rows = [row({ name: 'Claude Code', preset: 'claude_code' })]
     install(rows)

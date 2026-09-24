@@ -11,6 +11,7 @@ be blanked by one unreachable endpoint, so every failure is a return value.
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 import shutil
 import tempfile
@@ -29,10 +30,13 @@ from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
+    diagnose_hint_for,
     install_hint_for,
+    model_switch_hint_for,
     shim_requirement_for,
     sign_in_hint_for,
     third_party_subagent_presets,
+    upgrade_hint_for,
 )
 from raven.agent.subagent.probe_state import LastTest, Remedy
 
@@ -262,8 +266,13 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     """
     from raven.acp_client.capabilities import looks_like_auth
 
-    if not looks_like_auth(said if answer is None else answer):
-        return said[:_DETAIL_CAP], None
+    judged = said if answer is None else answer
+    if not looks_like_auth(judged):
+        # Read off the agent's answer only: a launch that died says nothing
+        # about a provider, and its stderr can name an unreachable host that is
+        # not one -- a bridge's own gateway, say.
+        provider = _provider_refusal(cfg, said, answer) if answer is not None else None
+        return provider or (said[:_DETAIL_CAP], None)
     remedy = _remedy_for(cfg)
     if remedy.kind == "api_key":
         # Nothing was installed and there is nothing to sign in to: this row is
@@ -276,7 +285,9 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     else:
         lead = "it is installed but has no usable credential"
         advice = (
-            f"sign in with `{remedy.command}` and connect again"
+            f"run `{remedy.command}` in a terminal and type `{remedy.then}` there, then connect again"
+            if remedy.command and remedy.then
+            else f"sign in with `{remedy.command}` and connect again"
             if remedy.command
             else "sign in to it and connect again"
         )
@@ -297,7 +308,106 @@ def _remedy_for(cfg: Any) -> Remedy:
     # executable against, so the hint and the probe cannot disagree about what
     # this machine has.
     local = shutil.which(hint.exe, path=_login_path()) is not None
-    return Remedy(hint.does, hint.local if local or hint.anywhere is None else hint.anywhere)
+    return Remedy(hint.does, hint.local if local or hint.anywhere is None else hint.anywhere, hint.then)
+
+
+_PROVIDER_STATUS = re.compile(r"\berror:\s*(402|404|429)\s+\S", re.IGNORECASE)
+"""The model provider's own HTTP verdict, as an agent relays it.
+
+Measured on qwen 0.24.4 against a stand-in endpoint answering each status:
+"[-32603] Internal error: 404 This model is unavailable for free. The paid
+version is available now - use this slug instead: <model>", and the same shape
+for 402 and 429. The status is the provider's, not a guess about the
+agent's prose, which is what lets a reader be told which of three different
+things to do. Anchored on the code following ``error:``, so a number inside a
+sentence -- a context window, a port -- is not read as one."""
+
+_PROVIDER_VERDICTS: dict[str, tuple[Literal["model", "billing", "quota"], str, str]] = {
+    "402": ("billing", "its model provider refused the call for want of credit", "add credit with the provider, or"),
+    "404": ("model", "its model provider does not serve the model it is set to use", "pick another model:"),
+    "429": ("quota", "its model provider is rate-limiting it or its quota is spent", "wait and try again, or"),
+}
+
+_UNREACHED = re.compile(
+    r"\bConnection error\b|\bfetch failed\b|\bENOTFOUND\b|\bECONNREFUSED\b|\bEAI_AGAIN\b|\bgetaddrinfo\b", re.IGNORECASE
+)
+"""The provider was never reached. Measured on qwen 0.24.4: a refused port comes
+back as "Internal error: Connection error." within five seconds; an unresolvable
+host is retried long past the connect's wait (see :data:`presets.DIAGNOSE_HINTS`).
+These are the Node and OpenAI-SDK spellings of the same fact."""
+
+
+def _provider_refusal(cfg: Any, said: str, answer: str) -> tuple[str, Remedy] | None:
+    """A refusal the agent's model provider made, when the agent's answer says which.
+
+    ``None`` for anything else, which `_refusal` then passes through as it came.
+    The fix is the model the agent uses, changed inside the agent where the table
+    knows how (`presets.MODEL_SWITCH_HINTS`), or said without a command where it
+    does not -- the verdict is the provider's either way.
+    """
+    status = _PROVIDER_STATUS.search(answer)
+    if status is not None:
+        kind, lead, advice = _PROVIDER_VERDICTS[status.group(1)]
+        hint = model_switch_hint_for(cfg)
+        how = (
+            f" run `{hint.command}` in a terminal and type `{hint.then}` there"
+            if hint and hint.then
+            else f" run `{hint.command}`"
+            if hint
+            else " switch the model it uses"
+        )
+        remedy = Remedy(kind, hint.command, hint.then) if hint else Remedy(kind)
+        return f"{lead}; {advice}{how}, then connect again. It said: {said}"[:_DETAIL_CAP], remedy
+    if _UNREACHED.search(answer):
+        run = diagnose_hint_for(cfg)
+        how = f"; `{run}` in a terminal prints the cause" if run else ""
+        advice = f"check the network, the proxy and the address it is configured with{how}"
+        return f"it could not reach its model provider; {advice}. It said: {said}"[:_DETAIL_CAP], Remedy("network", run)
+    return None
+
+
+_EXITED = re.compile(r"connection ended \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
+"""A launch that quit and said why on its way out. One that quit without a word
+is left unnamed: pointing a reader at what it said would point at nothing."""
+
+_NO_ACP_FLAG = re.compile(r"unknown (?:argument|option|flag)s?:?\s*['\"]?-{0,2}acp\b", re.IGNORECASE)
+"""An agent too old to know the flag its preset launches it with. yargs, which
+qwen is built on, answers an unknown option "Unknown argument: acp"."""
+
+_PROMPT_TIMEOUT = re.compile(r"session/prompt timed out after")
+
+
+def _silent_detail(said: str, run: str) -> str:
+    """The sentence for an agent that outlasted the wait saying nothing -- and how to make it talk."""
+    return (
+        f"{said}: it kept working and said nothing, which is how it waits out a model provider that "
+        f"keeps refusing it (a spent quota, a rate limit, an unreachable host); run `{run}` in a terminal, "
+        f"which prints the reason within a couple of minutes"
+    )[:_DETAIL_CAP]
+
+
+def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
+    """A launch or a wait that failed without the agent answering, when there is evidence of which.
+
+    An exit carries the agent's own last words on stderr; a flag it does not know
+    means it predates the release its preset launches. A timed-out prompt carries
+    nothing, and is named only for an agent measured to go silent while it
+    retries (`presets.DIAGNOSE_HINTS`), with the command that makes it say why.
+    """
+    if _EXITED.search(shown):
+        if _NO_ACP_FLAG.search(shown):
+            up = upgrade_hint_for(cfg)
+            how = f" with `{up}`" if up else ""
+            return (
+                f"it is too old to be connected: it does not know the flag that starts it in ACP mode; "
+                f"upgrade it{how} and connect again. It said: {shown}"
+            )[:_DETAIL_CAP], Remedy("upgrade", up)
+        return shown[:_DETAIL_CAP], Remedy("exited")
+    if _PROMPT_TIMEOUT.search(shown):
+        run = diagnose_hint_for(cfg)
+        if run:
+            return _silent_detail(shown, run), Remedy("silent", run)
+    return None
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -646,7 +756,10 @@ def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
 
     unfetched = npx_fetch_failure((getattr(cfg, "command", None) or "").strip(), exc)
     if unfetched is None:
-        return _refusal(cfg, *_said(exc))
+        text, remedy = _refusal(cfg, *_said(exc))
+        if remedy is not None:
+            return text, remedy
+        return _process_refusal(cfg, str(exc)) or (text, None)
     shipped = _shipped_command(cfg)
     run = f"`{shipped}`" if shipped else "this agent's launch command"
     advice = f"connect again, or run {run} once in a terminal to fetch it with no time limit"
@@ -724,7 +837,9 @@ async def ping_agent(cfg: Any) -> PingResult:
                 timeout=wait_s,
             )
     except asyncio.TimeoutError:
-        return PingResult(False, f"it did not answer within {wait_s:.0f}s")
+        said = f"it did not answer within {wait_s:.0f}s"
+        run = diagnose_hint_for(cfg)
+        return PingResult(False, _silent_detail(said, run), Remedy("silent", run)) if run else PingResult(False, said)
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
         return PingResult(False, *_ping_refusal(cfg, exc))
     finally:
@@ -783,15 +898,17 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         # The handshake already classified the refusal (`needs_auth`, from the
         # agent's own answer), so the remedy is read off that verdict rather than
         # off this detail, whose "(auth methods: ...)" suffix names an
-        # advertisement every working agent makes too.
-        remedy = (
-            _remedy_for(cfg)
+        # advertisement every working agent makes too. A launch that quit
+        # before answering is read the way the connect reads it
+        # (`_process_refusal`), so the two buttons name one crash one way.
+        detail, remedy = (
+            (snapshot.detail, _remedy_for(cfg))
             if snapshot.needs_auth
-            else Remedy("download", _shipped_command(cfg))
+            else (snapshot.detail, Remedy("download", _shipped_command(cfg)))
             if snapshot.unfetched
-            else None
+            else _process_refusal(cfg, snapshot.detail) or (snapshot.detail, None)
         )
-        return TestResult(cfg.name, source, "acp", False, snapshot.detail, reply, elapsed(), remedy)
+        return TestResult(cfg.name, source, "acp", False, detail, reply, elapsed(), remedy)
     answered = await ping_agent(cfg)
     # Verdict first on a failure, the handshake after it: "it connected and then
     # said nothing" is what went wrong, and the half that succeeded is the
