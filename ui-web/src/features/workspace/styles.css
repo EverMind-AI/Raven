@@ -1,0 +1,13 @@
+/* The workspace domain's own rules.
+ *
+ * Imported by WorkspacePage.tsx and collected by Vite into the one domains
+ * asset build.py inlines after page.css (features/extAgents/styles.css says
+ * how). The file bar's earlier rules -- `.fbar` and its children -- still live
+ * in styles/page.css; a new rule for this domain's markup comes here.
+ */
+
+/* The download and folder buttons are one pair -- the file, and the file among
+   the others -- so their squares touch: none of the gap the bar puts between
+   the rest of its controls, and no overlap either, so each square stays its
+   button's whole hit area. */
+.workspace-file-acts { display: flex; align-items: center; flex: none; }

@@ -478,7 +478,9 @@ describe('workspace island', () => {
     deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
                        download_path: '/files/download?token=deck', size: 9 }])
     await mount()
-    expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
+    /* The deck's own bytes, from its delivery, rather than the PDF it is drawn
+       from. */
+    expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/files/download?token=deck')
     expect(document.querySelector('.fbar .kseg')).not.toBeNull()
   })
 
@@ -489,11 +491,56 @@ describe('workspace island', () => {
       openIn: async () => ({}),
     }, { tab: 'file', open: true, picked: true })
     await mount()
-    expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
+    expect(screen.getByLabelText('gui.ws.download')).toBeTruthy()
     expect(document.querySelector('.fbar .kseg')).not.toBeNull()
     expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
     expect(screen.queryByText('gui.ws.open')).toBeNull()
     expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()
+  })
+
+  /* A file nobody delivered is saved from the route the viewer reads it
+     through. That route answers inline under a name of its own, so the copy's
+     name has to come from the `download` attribute. */
+  it('saves a file nobody delivered from the route the viewer reads it by', async () => {
+    install(emptyWs({
+      file: { path: '/repo/out/shot.png', kind: 'img', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    const save = screen.getByLabelText('gui.ws.download')
+    expect(save.tagName).toBe('A')
+    expect(save.getAttribute('href')).toBe('/file?path=%2Frepo%2Fout%2Fshot.png')
+    expect(save.getAttribute('download')).toBe('shot.png')
+    expect(save.nextElementSibling).toBe(screen.getByRole('button', { name: /gui\.ws\.reveal_/ }))
+    /* One pair, spaced tighter than the rest of the bar by the domain's own
+       rule; happy-dom applies no stylesheet, so this pins the markup the rule
+       selects and the browser shows the spacing. */
+    expect(save.parentElement?.classList.contains('workspace-file-acts')).toBe(true)
+  })
+
+  it('names the copy after the file on a Windows gateway too', async () => {
+    install(emptyWs({
+      file: { path: 'C:\\Users\\me\\out\\shot.png', kind: 'img', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true, hostPlatform: () => 'windows' }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(screen.getByLabelText('gui.ws.download').getAttribute('download')).toBe('shot.png')
+  })
+
+  /* The ordering BinNote meets too: a reopened session can restore the pane
+     before `deliverables.list` answers. The delivery is the better copy -- it
+     has no size cap -- so the link moves onto it once the row lands. */
+  it('moves the download onto the delivery when its row arrives after the pane', async () => {
+    install(emptyWs({
+      file: { path: '/repo/out/shot.png', kind: 'img', raw: false, text: null, err: null, size: 9, loading: false },
+    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/file?path=%2Frepo%2Fout%2Fshot.png')
+
+    await act(async () => {
+      deliveries.seed([{ path: '/repo/out/shot.png', name: 'shot.png', title: 'Shot',
+                         download_path: '/files/download?token=shot', size: 9 }])
+    })
+
+    expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/files/download?token=shot')
   })
 
   it('says why a reveal was refused, not the wire code', async () => {
@@ -636,16 +683,16 @@ describe('workspace island', () => {
     expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
     /* And copying the path, which needs no host at all, stays. */
     expect(screen.getByText('gui.ws.copy_path_do')).toBeTruthy()
-    /* The one download that stays, and this is the case it exists for: the
-       viewer cannot render this kind, the host cannot be asked to open it, and
-       the path in the note is a path on the gateway's machine. Without the
-       link there is no way left to reach the bytes. */
+    /* The bar's download again, in the note's words, and this is the reader
+       the note is for: the viewer cannot render this kind, the host cannot be
+       asked to open it, and the path in the note is a path on the gateway's
+       machine. */
     expect(screen.getByText('gui.ws.save_copy').closest('a')?.getAttribute('href'))
       .toBe('/files/download?token=deck')
   })
 
-  /* And a file that was never delivered has no URL to offer: the viewer reads
-     it through the gateway, but nothing serves a copy of an arbitrary path. */
+  /* And a file that was never delivered gets no save in the note: its copy is
+     the bar's, from the route the viewer reads it through. */
   it('offers no copy to save for a file this session never delivered', async () => {
     install(emptyWs({
       file: {
@@ -662,6 +709,7 @@ describe('workspace island', () => {
     expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
     expect(screen.queryByText('gui.ws.save_copy')).toBeNull()
     expect(document.querySelector('.binote a')).toBeNull()
+    expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/file?path=%2Frepo%2Fvendor%2Fblob.bin')
   })
 
   /* The ordering a session reopen actually produces: `resume()` restores this
