@@ -5131,6 +5131,18 @@
       "en": "Connected · {by}",
       "zh": "已接入 · {by}"
     },
+    "gui.agent.hd_on_attention": {
+      "en": "Connected · needs a check",
+      "zh": "已接入 · 需要检查一下"
+    },
+    "gui.agent.hd_on_test_bad": {
+      "en": "Connected · test failed",
+      "zh": "已接入 · 测试没通过"
+    },
+    "gui.agent.probe_raw": {
+      "en": "What the check found",
+      "zh": "检查结果"
+    },
     "gui.agent.hd_missing_by": {
       "en": "Not installed · {by}",
       "zh": "本机未安装 · {by}"

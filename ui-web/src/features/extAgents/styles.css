@@ -61,6 +61,10 @@
 .extAgents-led-busy { background: var(--amber); animation: extAgentspulse 1.6s ease-in-out infinite; }
 @keyframes extAgentspulse { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .extAgents-led-busy { animation: none; } }
+/* The caveat dot is a ring, so it never reads as the busy dot by hue alone:
+   light gold and amber are a shade apart, and the pulse is off under
+   prefers-reduced-motion. The sheet's smaller dot stays solid. */
+.extAgents-nm .extAgents-led-warn { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--gold); }
 .extAgents-one { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .extAgents-one-bad { color: var(--clay); }
 /* A row's refusal can carry a command, so it wraps rather than cutting it off. */

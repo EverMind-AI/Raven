@@ -9,15 +9,15 @@
    The list is re-fetched after every mutation rather than patched locally: the
    handler recomputes `group`, `enabled` and the probe verdict together, and a
    client that guesses any one of them is how the page starts disagreeing with
-   the config on disk. `probe: false` on that follow-up call skips the
-   availability check, which can cost up to ten seconds per entry and would only
-   re-measure what the write just changed. */
+   the config on disk. That follow-up call asks for the probe only after a
+   write that can have moved the verdict (`remeasures`); a text edit skips the
+   availability check, which can cost up to ten seconds per entry. */
 
 import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 
 import type { ResultOf } from '../../rpc/generated'
-import type { ExtAgentRow, ExtAgentsSource, Remedy } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
 
 /** One agent as `subagents.list` sends it. */
 export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]
@@ -163,14 +163,16 @@ let extAgentsSeen = new Map<string, ExtAgentRow>()
 export async function extAgentsFetch(probe: boolean, rescan = false): Promise<ExtAgentRow[]> {
   const res = await gateway().call('subagents.list', { probe: !!probe, ...(rescan ? { refresh_login_env: true } : {}) })
   /* A probe-less list reports every row as "unknown", which would blank the
-     health line of a row that was ready a second ago -- connecting an agent
-     would look like it broke it. The verdict cannot have changed by writing
-     config, so the last known one is carried over -- with what it found
-     absent, or a missing row's install falls back to the agent's own. */
+     health line of a row that was ready a second ago -- editing a description
+     would look like it broke the agent. Only a read that asked for no probe
+     carries the last verdict over: a write that can move the verdict asks for
+     the probe (`remeasures`), and a probing answer is the newer evidence even
+     when it says "unknown". Carried with what it found absent, or a missing
+     row's install falls back to the agent's own. */
   const rows = (res.rows || []).map((r) => {
     const row = extAgentRowOf(r)
     const prev = extAgentsSeen.get(row.name)
-    if (row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
+    if (!probe && row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
       row.probe_status = prev.probe_status
       row.probe_detail = prev.probe_detail
       if (prev.probe_missing) row.probe_missing = prev.probe_missing
@@ -185,6 +187,43 @@ export async function extAgentsFetch(probe: boolean, rescan = false): Promise<Ex
 export function resetExtAgentsSeen(): void {
   extAgentsSeen = new Map()
 }
+
+/* Whether the server may answer this write by running the agent. The enable
+   gate sends one real prompt through the agent's own backend and waits up to
+   60s for the reply, so the reader is waiting on a test rather than on a
+   connection being opened, and the row should say so (store.ts `probes`).
+
+   `may`, not `will`: the server also asks whether the row is on and whether the
+   value actually moved, and neither fact travels with the write -- the page
+   posts what is in the field, and only the stored row knows what was there
+   before. Mirroring that here would put the same condition in two layers with
+   nothing holding them together. The two wrong answers do not cost the same:
+   answering yes for a write the server settles without asking puts a word on
+   something that returns in milliseconds, while answering no for one it does
+   ask leaves "connecting" on the row for the length of a real ping. So this
+   errs towards yes.
+
+   `migrate` counts because it is a remove plus an add from the preset, so it
+   goes through the same gate any other add does. A credential and a model are
+   the two fields an update can change that the agent has never been asked
+   about; a rename or a description cannot change what it answers. */
+export const runsAgent = (op: ExtAgentOp, args: ExtAgentActArgs): boolean =>
+  op === 'connect' ||
+  op === 'migrate' ||
+  op === 'model' ||
+  (op === 'toggle' && args.enabled === true) ||
+  (op === 'update' && !!args.api_key)
+
+/* Whether the read that ends this write has to probe. A write the gate answers
+   by running the agent leaves a verdict the last probe never saw -- an acp
+   connect records the capability snapshot the probe reads -- and an acp test
+   writes its own; carrying the pre-write verdict over either kept the "not verified"
+   dot on a row that had just connected, until a reload. A rename is here for
+   the memory's sake: it is keyed by name, so the renamed row would otherwise
+   read "unknown" and drop the caveat it had. A description edit is the one
+   write a reader repeats, and it stays on the cheap list. */
+export const remeasures = (op: ExtAgentOp, row: ExtAgentRow, args: ExtAgentActArgs): boolean =>
+  runsAgent(op, args) || op === 'test' || (!!args.new_name && args.new_name !== row.name)
 
 export const extAgentsSource: ExtAgentsSource = {
   load: (probe, rescan) => extAgentsFetch(!!probe, !!rescan),
@@ -262,7 +301,7 @@ export const extAgentsSource: ExtAgentsSource = {
          still going, and the store polls the list while any row carries it. */
       await gateway().call('subagents.build', { name: row.name })
     }
-    return extAgentsFetch(false)
+    return extAgentsFetch(remeasures(op, row, a))
   },
 }
 

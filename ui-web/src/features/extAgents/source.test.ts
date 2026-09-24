@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
-import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource, isFound, sectionOf, stageOf, wizardSection } from './source'
+import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource, isFound, remeasures, sectionOf, stageOf, wizardSection } from './source'
 
 import type { ExtAgentRowWire, Section } from './source'
 import type { ExtAgentRow } from './types'
@@ -175,6 +175,18 @@ describe('refetching the list', () => {
     expect(row).toMatchObject({ probe_status: 'missing', probe_detail: 'not on PATH' })
   })
 
+  /* Once a write's own re-read probes, a genuine "unknown" -- an empty or
+     unparseable command -- is the newer evidence, not a blank to fill in. */
+  it('does not carry a stale verdict onto a probing answer', async () => {
+    listing(
+      [wire({ probe_status: 'attention', probe_detail: 'not verified' })],
+      [wire({ probe_status: 'unknown', probe_detail: 'command is empty' })],
+    )
+    await extAgentsFetch(true)
+    const [row] = await extAgentsFetch(true)
+    expect(row).toMatchObject({ probe_status: 'unknown', probe_detail: 'command is empty' })
+  })
+
   it('remembers nothing about an agent it has not seen', async () => {
     listing([wire({ name: 'claude', probe_status: 'ready' })], [wire({ name: 'codex' })])
     await extAgentsFetch(true)
@@ -223,7 +235,7 @@ describe('the seven writes a card can make', () => {
 
     expect(asked).toEqual([
       ['subagents.add', { preset: 'codex-cli', name: 'mine', description: 'd', api_key: 'k' }],
-      ['subagents.list', { probe: false }],
+      ['subagents.list', { probe: true }],
     ])
   })
 
@@ -286,6 +298,87 @@ describe('the seven writes a card can make', () => {
     await extAgentsSource.act('build', card())
 
     expect(asked[0]).toEqual(['subagents.build', { name: 'codex' }])
+  })
+})
+
+/* A transport for a write and the re-read that ends it: `subagents.list`
+   answers from one queue when asked to probe and from another when not, and
+   every other method is acknowledged and forgotten. */
+function roster(probed: ExtAgentRowWire[][], unprobed: ExtAgentRowWire[][] = []): { probes: boolean[] } {
+  const probes: boolean[] = []
+  const transport = new FixtureTransport({})
+  transport.call = (async (method: string, params: { probe?: boolean }) => {
+    if (method !== 'subagents.list') return {}
+    probes.push(!!params.probe)
+    return { rows: (params.probe ? probed : unprobed).shift() ?? [] }
+  }) as typeof transport.call
+  setGateway(transport)
+  return { probes }
+}
+
+/* The read that ends a write asks for the probe when the write can have moved
+   the verdict, and not otherwise. Read back off the source's own memory, the
+   pre-connect "not verified" stayed on a row that had just connected until a
+   reload -- the connect's own ping had recorded the verdict the last probe
+   never saw. */
+describe('the read that ends a write', () => {
+  const unverified = wire({ probe_status: 'attention', probe_detail: 'capabilities not recorded yet -- run a test' })
+  const verified = wire({ probe_status: 'ready', probe_detail: 'connected over ACP v1' })
+
+  it('re-measures after a connect, so the pre-connect verdict is not read back off its own memory', async () => {
+    const { probes } = roster([[unverified], [verified]])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsSource.act('connect', card({ configured: false }))
+    expect(probes).toEqual([true, true])
+    expect(row).toMatchObject({ probe_status: 'ready', probe_detail: 'connected over ACP v1' })
+  })
+
+  it('re-measures after a test, so a test can clear a caveat instead of restating it', async () => {
+    const { probes } = roster([[unverified], [verified]])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsSource.act('test', card())
+    expect(probes).toEqual([true, true])
+    expect(row?.probe_status).toBe('ready')
+  })
+
+  /* Through the write itself, not only the predicate: `act` decides on its own
+     whether a name is a rename, and the two must not drift apart. */
+  it('re-measures after a rename, whose new name the memory has nothing under', async () => {
+    const { probes } = roster([[unverified], [wire({ name: 'mine', probe_status: 'ready' })]])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsSource.act('update', card(), { new_name: 'mine' })
+    expect(probes).toEqual([true, true])
+    expect(row).toMatchObject({ name: 'mine', probe_status: 'ready' })
+  })
+
+  /* The write a reader repeats, and one of the writes the machine is not
+     re-measured for: the verdict it remembered stands. */
+  it('keeps a description edit on the cheap list, with the verdict it remembered', async () => {
+    const { probes } = roster([[unverified]], [[wire({})]])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsSource.act('update', card(), { description: 'a new line' })
+    expect(probes).toEqual([true, false])
+    expect(row).toMatchObject({ probe_status: 'attention', probe_detail: 'capabilities not recorded yet -- run a test' })
+  })
+
+  it('asks for the probe after exactly the writes that can move the verdict', () => {
+    const on = card()
+    expect(remeasures('connect', on, {})).toBe(true)
+    expect(remeasures('migrate', on, {})).toBe(true)
+    expect(remeasures('model', on, { model: 'v/m2' })).toBe(true)
+    expect(remeasures('model', on, { clear_model: true })).toBe(true)
+    expect(remeasures('toggle', on, { enabled: true })).toBe(true)
+    expect(remeasures('update', on, { api_key: 'sk-new' })).toBe(true)
+    expect(remeasures('test', on, {})).toBe(true)
+    /* The memory is keyed by name: without the probe a renamed row would read
+       "unknown" and drop the caveat it had. A name written back unchanged is
+       not a rename. */
+    expect(remeasures('update', on, { new_name: 'mine' })).toBe(true)
+    expect(remeasures('update', on, { new_name: on.name })).toBe(false)
+    expect(remeasures('update', on, { description: 'new words' })).toBe(false)
+    expect(remeasures('toggle', on, { enabled: false })).toBe(false)
+    expect(remeasures('test_cancel', on, {})).toBe(false)
+    expect(remeasures('build', on, {})).toBe(false)
   })
 })
 

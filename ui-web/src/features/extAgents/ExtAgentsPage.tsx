@@ -9,12 +9,13 @@ import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered, withCurrent } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
-import { CardGrid, Spin, Tile, connect, ordered, pendingLabel, refusedWrite, shownOf } from './Rows'
+import { healthOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
+import { CardGrid, Spin, Tile, connect, ordered } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
-import type { Shown } from './Rows'
+import type { Shown } from './health'
 import type { Section } from './source'
 import type { ExtAgentsState } from './store'
 import type { ExtAgentRow, Remedy } from './types'
@@ -384,26 +385,29 @@ function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }
   )
 }
 
-/* One line under the name in the sheet: what is happening to this agent right
-   now, or who makes it when nothing is. */
+/* One line under the name in the sheet: `healthOf`'s verdict, drawn with the
+   room a sheet has -- a refusal with its fix, a caveat with the probe's own
+   words folded under it -- or who makes the agent when there is nothing to say
+   about it. */
 function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtAgentsState }): JSX.Element {
   const by = byOf(row)
-  const testing = s.testing.includes(row.name) || row.test_running
-  if (shown === 'pending' || testing) {
+  const health = healthOf(row, s)
+  const led = <span aria-hidden="true" className={ledClass(health.tone)} />
+  if (health.tone === 'busy') {
     return (
       <div className="extAgents-by">
         <Spin />
-        {t(testing ? 'gui.agent.testing_head' : pendingLabel(row, s))}
+        {health.label}
       </div>
     )
   }
-  if (shown === 'failed') {
+  if (health.from === 'write') {
     const failed = s.failed[row.name]
     const write = failed ? refusedWrite(failed) : 'connect'
     const button = t('gui.retry')
     return (
       <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
-        <span className="extAgents-led extAgents-led-bad" />
+        {led}
         <Refusal
           agent={row.name}
           detail={failed?.detail || ''}
@@ -421,15 +425,10 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
       </div>
     )
   }
-  /* Not only when connected: the sheet offers Test from the unauthorized state
-     too, and a test pressed there can now fail on the agent's own answer while
-     the handshake passes -- which clears the label and leaves nothing saying the
-     test failed. `missing` keeps its own line, since "not found" outranks a
-     verdict measured before the executable went away. */
-  if (row.last_test_ok === false && shown !== 'missing') {
+  if (health.from === 'test') {
     return (
       <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
-        <span className="extAgents-led extAgents-led-bad" />
+        {led}
         <Refusal
           agent={row.name}
           detail={row.last_test_detail || ''}
@@ -441,11 +440,29 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
       </div>
     )
   }
-  if (shown === 'on') {
+  /* The probe's sentence is English and written for a log, so it is folded
+     under the line the way a refusal's is, not put in it. */
+  if (health.tone === 'warn') {
+    return (
+      <div className="extAgents-by extAgents-by-fix">
+        {led}
+        <div className="extAgents-fix">
+          <div>{health.label}</div>
+          {row.probe_detail ? (
+            <details className="extAgents-raw">
+              <summary>{t('gui.agent.probe_raw')}</summary>
+              {row.probe_detail}
+            </details>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+  if (health.tone === 'good') {
     return (
       <div className="extAgents-by">
-        <span className="extAgents-led" />
-        {row.last_test_ok ? t('gui.agent.hd_on_tested') : t('gui.agent.hd_on_by', { by })}
+        {led}
+        {health.label}
       </div>
     )
   }
