@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 
 import typer
 
+from raven.config.update import REQUIRED_EMBEDDING_DIMENSIONS as _REQUIRED_EMBEDDING_DIM
+from raven.config.update import probe_embedding_dimensions as _probe_embedding_dim
 from raven.plugins import OnboardUI, PluginContext, StepOutcome
 from raven_everos.config import REQUIRED_ROLES, RERANK_PROTOCOLS, VENDORS, recorded_slice, vendors
 
@@ -252,41 +254,6 @@ def _probe_rerank(
     if isinstance(results, list) and results:
         return True, "ok"
     return False, "endpoint returned no results"
-
-
-_REQUIRED_EMBEDDING_DIM = 1024
-
-
-def _probe_embedding_dim(url: str, headers: dict, model: str) -> int | str:
-    """Try embedding with ``dimensions=1024``; fall back to native dim.
-
-    Returns the effective dimension (int) on success, or an error
-    description (str) on failure.
-    """
-    import httpx
-
-    def _try_embed(client: httpx.Client, body: dict) -> int | str:
-        try:
-            resp = client.post(url, json=body, headers=headers)
-            if resp.status_code != 200:
-                return f"HTTP {resp.status_code}"
-            items = resp.json().get("data", [])
-            if not items:
-                return "empty response"
-            first = items[0]
-            if not isinstance(first, dict):
-                return "unexpected response format"
-            return len(first.get("embedding", []))
-        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
-            return str(exc)
-
-    with httpx.Client(timeout=15) as client:
-        result = _try_embed(
-            client, {"model": model, "input": ["dimension check"], "dimensions": _REQUIRED_EMBEDDING_DIM}
-        )
-        if result == _REQUIRED_EMBEDDING_DIM:
-            return result
-        return _try_embed(client, {"model": model, "input": ["dimension check"]})
 
 
 def _verify_embedding_dim(
@@ -1610,18 +1577,6 @@ def _step4_memory(
     quality rather than memory itself.
     """
     _UI.step_header(step_no, _UI.t("EverOS long-term memory"))
-
-    import sys
-
-    if sys.platform == "win32":
-        _UI.console.print(
-            _UI.t(
-                "  [yellow]⚠ EverOS memory engine does not support native Windows.[/yellow]\n"
-                "  [dim]Run Raven inside WSL for full memory support.[/dim]\n"
-                "  [dim]Skipping memory configuration.[/dim]"
-            )
-        )
-        return StepOutcome.DISABLED
 
     questionary = _UI.require_questionary()
     from raven_everos import roots

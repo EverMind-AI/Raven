@@ -80,6 +80,16 @@ class TestEverosExecutable:
 
         assert _everos_executable() == str(path_dir / "everos")
 
+    def test_on_windows_the_sibling_is_everos_exe(self, tmp_path, monkeypatch) -> None:
+        scripts = tmp_path / "venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        _make_executable(scripts / "everos.exe")
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr("sys.executable", str(scripts / "python.exe"))
+        monkeypatch.setenv("PATH", "")
+
+        assert _everos_executable() == str(scripts / "everos.exe")
+
     def test_missing_everywhere_names_the_interpreter_dir(self, tmp_path, monkeypatch) -> None:
         venv_bin = tmp_path / "venv" / "bin"
         venv_bin.mkdir(parents=True)
@@ -1478,17 +1488,6 @@ class TestThePiecesTheChainIsMadeOf:
 
         assert everos_server.precheck_spawn() is None
 
-    def test_the_precheck_refuses_windows_before_asking_anything_else(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The settings-page restart chain reads this first; on Windows it must
-        report the platform, not stop a server and then fail to spawn one."""
-        monkeypatch.setattr("raven_everos.config.everos_role_configured", lambda _s: True)
-        monkeypatch.setattr(everos_server, "_inotify_gate", lambda: None)
-        monkeypatch.setattr(sys, "platform", "win32")
-
-        answer = everos_server.precheck_spawn()
-
-        assert answer and "Windows" in answer
-
     def test_stopping_a_root_nothing_is_serving_is_not_a_failure(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1674,8 +1673,13 @@ class TestRoleDigest:
         everos_server.record_role_digest(tmp_path / "no" / "such" / "root")
 
 
-class TestStaleCredentialRestart:
-    """``ensure_everos_server`` is the door every session passes through."""
+class TestStaleServerRestart:
+    """``ensure_everos_server`` is the door every session passes through.
+
+    A healthy server is adopted only when it holds the credentials raven holds
+    now and runs the everos raven installs now; either being stale sends it
+    through precheck, stop and spawn.
+    """
 
     @pytest.fixture(autouse=True)
     def _no_ambient_role_env(self, monkeypatch) -> None:
@@ -1685,6 +1689,83 @@ class TestStaleCredentialRestart:
         from raven_everos import config as ue
 
         ue._BOUND_HERE.clear()
+
+    @pytest.mark.asyncio
+    async def test_a_server_from_before_the_upgrade_is_replaced(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Raven reuses whatever answers on the port, so moving the everos pin
+        left the old server serving until something unrelated restarted it --
+        every surface green, the new adapter talking to the old substrate. The
+        running version is read from ``/health``, so a server nothing recorded
+        a digest for is covered too."""
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        monkeypatch.setattr(everos_server, "installed_everos_version", lambda: "1.4.1")
+        monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: "1.2.3")
+
+        order: list[str] = []
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: order.append("precheck") or "")
+        monkeypatch.setattr(
+            everos_server,
+            "stop_for_reload",
+            lambda _root: order.append("stop") or everos_server.StopOutcome.STOPPED,
+        )
+        monkeypatch.setattr("raven_everos.server._start_server_if_unlocked", lambda *a, **kw: order.append("spawn"))
+        monkeypatch.setattr("raven_everos.server.get_logs_dir", lambda: tmp_path)
+
+        with (
+            patch("raven_everos.server._probe_health", side_effect=[True, True]),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+        assert order == ["precheck", "stop", "spawn"]
+
+    @pytest.mark.asyncio
+    async def test_a_server_on_the_installed_version_is_adopted(self, everos_toml, monkeypatch) -> None:
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        monkeypatch.setattr(everos_server, "installed_everos_version", lambda: "1.4.1")
+        monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: "1.4.1")
+        stop = MagicMock()
+        monkeypatch.setattr(everos_server, "stop_for_reload", stop)
+
+        with (
+            patch("raven_everos.server._probe_health", return_value=True),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+
+        stop.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_version_that_cannot_be_read_is_not_a_verdict(self, everos_toml, monkeypatch) -> None:
+        """A ``/health`` without a version says nothing about staleness; the
+        credential comparison alone decides, and here it says adopt."""
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        monkeypatch.setattr(everos_server, "installed_everos_version", lambda: "1.4.1")
+        monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: None)
+        stop = MagicMock()
+        monkeypatch.setattr(everos_server, "stop_for_reload", stop)
+
+        with (
+            patch("raven_everos.server._probe_health", return_value=True),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+
+        stop.assert_not_called()
+
+    def test_a_root_the_user_manages_is_never_called_stale(self, everos_toml, monkeypatch) -> None:
+        """Their server, their restart: the version gap is reported nowhere here."""
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: False)
+        monkeypatch.setattr(everos_server, "installed_everos_version", lambda: "1.4.1")
+        monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: "1.2.3")
+
+        assert everos_server.stale_reason("http://localhost:18791", everos_toml.parent) is None
 
     @pytest.mark.asyncio
     async def test_a_stale_credential_stops_and_respawns(self, everos_toml, tmp_path, monkeypatch) -> None:

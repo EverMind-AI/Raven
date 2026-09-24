@@ -203,7 +203,7 @@ class TestActiveBackend:
         )
         assert result.exit_code == 0, result.stdout
         assert "everos-memory" in result.stdout
-        assert "1.2.0" in result.stdout
+        assert "1.4.0" in result.stdout
         assert "entry_points" in result.stdout
 
     def test_shows_active_backend_with_track_ids(

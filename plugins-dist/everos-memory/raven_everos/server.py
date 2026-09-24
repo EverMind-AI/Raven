@@ -258,11 +258,9 @@ def _everos_executable() -> str:
     failure: when PATH carries an everos from a *different* environment,
     ``shutil.which`` would hand back a version that does not match the one
     raven pins.
-
-    POSIX only -- the EverOS path is gated off on native Windows by both
-    callers (``raven_everos.onboard._step4_memory`` and ``EverosBackend.start``).
     """
-    sibling = Path(sys.executable).parent / "everos"
+    name = "everos.exe" if sys.platform == "win32" else "everos"
+    sibling = Path(sys.executable).parent / name
     if sibling.is_file() and os.access(sibling, os.X_OK):
         return str(sibling)
     found = shutil.which("everos")
@@ -312,7 +310,7 @@ def _is_everos_server(pid: int) -> bool:
     A pidfile is stale information: the process it names may have exited and the
     number been handed to something unrelated. Checking the command line is what
     keeps a port-convergence restart from killing an innocent process. ``ps -p``
-    is POSIX and needs no extra dependency; the EverOS path is POSIX-only anyway.
+    is POSIX and needs no extra dependency.
 
     ``-ww`` because the marker sits at the *end* of the command line, after the
     interpreter path. Without it ``ps`` truncates its output to ``$COLUMNS``,
@@ -788,6 +786,62 @@ def roles_changed_since_spawn(root: Path | str) -> bool:
     return recorded != role_env_digest()
 
 
+def installed_everos_version() -> str | None:
+    """The everos this raven would spawn, or ``None`` when none is installed."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("everos")
+    except PackageNotFoundError:
+        return None
+
+
+def running_everos_version(base_url: str) -> str | None:
+    """The version the server at ``base_url`` reports on ``/health``, or ``None``.
+
+    ``None`` is "could not read it", not "old": liveness was settled by the
+    probe before this is asked, and a payload without a version says nothing
+    about staleness.
+    """
+    import httpx
+
+    try:
+        payload = httpx.get(f"{base_url}/health", timeout=_PROBE_TIMEOUT_S).json()
+    except Exception:  # noqa: BLE001 - an unreadable version is unknown, and unknown is not stale
+        return None
+    found = payload.get("version") if isinstance(payload, dict) else None
+    return str(found) if found else None
+
+
+def stale_reason(base_url: str, root: Path | str) -> str | None:
+    """Why the healthy server at ``base_url`` should not be the one this session
+    uses, or ``None`` when it is fine to adopt.
+
+    Two facts a ``/health`` 200 does not settle. Credentials: EverOS builds its
+    model clients at boot, so a key rotated since never reaches the running
+    process (:func:`roles_changed_since_spawn`). Version: raven reuses whatever
+    answers on the port, so moving the ``everos`` pin left the old server
+    serving until something unrelated restarted it, with every surface green
+    and the new adapter talking to the old substrate. The running version is
+    read from ``/health`` rather than from a record raven wrote at spawn, so a
+    server nothing recorded is covered too.
+
+    ``None`` for a root raven does not own: that server is the user's to
+    restart, the rule ``restart_for_config_change`` reads.
+    """
+    from raven_everos.config import everos_owned
+
+    if not everos_owned():
+        return None
+    if roles_changed_since_spawn(root):
+        return "holds credentials raven has since changed"
+    installed = installed_everos_version()
+    running = running_everos_version(base_url)
+    if installed and running and running != installed:
+        return f"runs everos {running} while this raven installs {installed}"
+    return None
+
+
 def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
     """Try to acquire the startup lock and launch the server.
 
@@ -908,23 +962,24 @@ async def ensure_everos_server(
         from raven_everos.config import everos_root
 
         root = everos_root()
-        if not await asyncio.to_thread(roles_changed_since_spawn, root):
+        stale = await asyncio.to_thread(stale_reason, base_url, root)
+        if stale is None:
             logger.info("everos server already running at {}", base_url)
             return None
         # Precheck before the stop, the order `restart_for_config_change` reads:
         # a replacement that cannot boot must not cost the machine the server it
-        # already has. A stale credential serves most of what memory asks; no
-        # server serves none of it.
+        # already has. A stale credential or an older version serves most of
+        # what memory asks; no server serves none of it.
         block = await asyncio.to_thread(precheck_spawn)
         if block:
             logger.warning(
-                "everos at {} holds credentials raven has since changed, and a replacement "
-                "could not start ({}); leaving the old one serving",
+                "everos at {} {}, and a replacement could not start ({}); leaving the old one serving",
                 base_url,
+                stale,
                 block,
             )
             return None
-        logger.info("everos at {} holds credentials raven has since changed; restarting", base_url)
+        logger.info("everos at {} {}; restarting", base_url, stale)
         outcome = await asyncio.to_thread(stop_for_reload, root)
         if outcome is not StopOutcome.STOPPED:
             # ``None`` counts as a failure here and does not in
@@ -935,8 +990,9 @@ async def ensure_everos_server(
             # process holding the port while ``ensure`` probes its ``/health``
             # and reports success for a credential that never took.
             logger.warning(
-                "everos at {} could not be moved onto the current credentials: {}",
+                "everos at {} {} and could not be replaced: {}",
                 base_url,
+                stale,
                 _STOP_REASON.get(outcome, "the process serving it could not be identified"),
             )
             return None
@@ -1020,11 +1076,6 @@ def precheck_spawn() -> str | None:
     machine with no memory service at all, and nothing here would bring one
     back -- spawning happens in ``EverosBackend.start()``, once per session.
     """
-    from raven.core.plugin_stack import everos_platform_note
-
-    platform_block = everos_platform_note()
-    if platform_block is not None:
-        return platform_block
     try:
         _require_llm_configured()
     except EverosNotConfiguredError as exc:

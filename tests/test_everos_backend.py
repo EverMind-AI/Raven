@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2872,59 +2871,3 @@ class TestStoreConventions:
         )
 
         assert (backend._user_id, backend._agent_id) == ("host-user", "host-agent")
-
-
-class TestAnUnsupportedPlatform:
-    """Native Windows: the service cannot run there, and a session must not
-    spend every turn retrying a write that has nowhere to land."""
-
-    @staticmethod
-    def _windows(monkeypatch: pytest.MonkeyPatch) -> None:
-        from raven_everos import config as ue
-
-        monkeypatch.setattr(sys, "platform", "win32")
-        monkeypatch.setattr(ue, "ensure_everos_home", lambda *_a, **_kw: None)
-
-    async def test_start_says_so_once_and_the_session_costs_nothing_after(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._windows(monkeypatch)
-        started: list[int] = []
-
-        async def _ensure(*_a: object, **_kw: object) -> None:
-            started.append(1)
-
-        monkeypatch.setattr("raven_everos.server.ensure_everos_server", _ensure)
-        probed: list[str] = []
-        monkeypatch.setattr(
-            "raven_everos.server.probe_health",
-            lambda u, **_kw: probed.append(u) or ProbeVerdict.REFUSED,
-        )
-
-        b = EverosBackend(_ctx(tmp_path))
-        await b.start()
-
-        assert started == []
-        assert b._state is ServiceState.UNSUPPORTED
-        assert sum("Windows" in n for n in NOTICES) == 1
-        # Not a failed write: there is no memory service to fail. Reporting one
-        # made the host retry five times a turn and then raise the memory
-        # banner over a service that was never going to exist here.
-        assert await b.store("s1", [{"role": "user", "content": "hi"}]) is True
-        assert await b.recall("hi", user_id="default", top_k=3) == []
-        await asyncio.sleep(0)
-        assert probed == []
-
-    async def test_health_names_the_platform_instead_of_a_server_that_starts_on_demand(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        self._windows(monkeypatch)
-        probed: list[str] = []
-        monkeypatch.setattr("raven_everos.health.probe_capabilities", lambda u: probed.append(u))
-
-        health = await EverosBackend(_ctx(tmp_path)).health()
-
-        assert health.ready is False
-        assert probed == []
-        server = next(c for c in health.checks if c.label == "server")
-        assert server.status == "missing" and "Windows" in (server.hint or "")

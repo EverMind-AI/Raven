@@ -315,7 +315,7 @@ imported.
 
 ## 7. EverOS version pinning & upgrade SOP
 
-### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.2.3`]**
+### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.4.1`]**
 
 The adapter is written against EverOS **internal** APIs, not a stable
 public surface:
@@ -333,8 +333,8 @@ is pinned to an exact version (`==X.Y.Z`), not a range: upgrades are
 deliberate, re-validated events, never something `uv lock --upgrade`
 can do silently.
 
-Single pin: with `raven_everos` removed, EverOS is pinned in **one**
-place (raven's `pyproject.toml`). The upgrade surface is one line.
+Single pin: EverOS is pinned in **one** place, the plugin's own
+`plugins-dist/everos-memory/pyproject.toml`. The upgrade surface is one line.
 
 ### 7.2 Upgrade procedure
 
@@ -343,7 +343,7 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
    (`~/.everos/.index/` sqlite + lancedb) changed.
 1. **Bump the pin (uv only — never hand-edit pyproject/lock)**:
    ```bash
-   uv add 'everos[multimodal]==1.2.3' && uv sync
+   uv add --package everos-memory 'everos[multimodal]==1.4.1' && uv sync
    ```
    Always keep the `[multimodal]` extra. Skip `1.2.0`: it shipped a
    path-traversal regression fixed in `1.2.1`.
@@ -417,6 +417,56 @@ process supervisor; raven spawns it once per session and
 until the session restarts. And `everos cascade rebuild`, now the
 supported index recovery, refuses to run while a server holds the OME
 lock — while raven exposes no way to stop the server it started.
+
+### 7.4 Record: `1.2.3` -> `1.4.1`
+
+Five packages moved: `everos` `1.2.3` -> `1.4.1`, `pyarrow` `24.0.0` ->
+`25.0.1` (EverOS's new floor), `everalgo-boundary` `0.2.0` -> `0.2.1` and
+`everalgo-core` `0.4.0` -> `0.3.0` (EverOS now pins its everalgo transitive
+layer with `==`, so the resolver follows it down), and `msvc-runtime` joins
+on `win32` only. `lancedb` stays at `0.34.0`.
+
+**No adapter change.** Every internal symbol the adapter reaches
+(`MemoryRoot`, `episode_repo` / `agent_skill_repo`, `EpisodeWriter` /
+`AgentSkillWriter`, the `init_cmd` templates, the multimodal parser and
+client, the two error classes) is present in `1.4.1` with the same
+signature.
+
+**No data migration.** A copy of a 46 MB store written by `1.2.x` (568
+episodes, 5528 atomic facts, seven LanceDB tables at table schema version 2)
+started under `1.4.1` with no schema complaint and a healthy cascade. The same
+keyword searches returned the same ids in the same order on both versions;
+BM25 scores drift in the third decimal place. First start builds an IVF_FLAT
+index on any vector column past 2000 rows (`atomic_fact` here) -- seconds, and
+searches keep working meanwhile. A real turn through raven then wrote a new
+episode into that store and a fresh session recalled it, alongside episodes
+written months earlier under `1.2.x`. Rollback was not exercised this time;
+`lancedb` did not move, so the file format is the one `1.2.3` already reads.
+
+**A running server from before the upgrade is replaced.** raven used to
+reuse whatever answered on the configured port, so an EverOS `1.2.3` left
+running kept serving after the pin moved, with every surface green.
+`ensure_everos_server` now reads the running server's `/health` version and,
+for a root raven owns, sends a mismatch through the same precheck / stop /
+spawn chain a rotated credential takes (`stale_reason`). A root the user
+manages is theirs to restart. `everos cascade sync`, `cascade fix --apply` and
+`cascade rebuild` refuse to run beside a running server (exit code 3).
+
+**Windows.** `1.4.0` runs natively on Windows, so the platform gate raven
+carried (`everos_platform_note`, `ServiceState.UNSUPPORTED`, the wizard's
+WSL notice) is gone and `_everos_executable` looks for `everos.exe` there.
+Spawning, probing and reusing the server work through portable code; the
+stale-server identification and stop path (`lock_holder`, `_is_everos_server`)
+still reads `ps`, `lsof` and `/proc`, which native Windows does not have, so
+restart-on-role-change and orphan cleanup answer "unknown" there until that
+path is ported.
+
+**One guard added alongside.** The live install was found pinned to a
+768-dimension embedding model against this 1024-wide index, with every store
+and search answering 500. `set_embedding_endpoint` now measures the model's
+width before writing the pin and refuses anything narrower than
+`REQUIRED_EMBEDDING_DIMENSIONS`; the wizard's own check reads the same
+constant and probe.
 
 ---
 

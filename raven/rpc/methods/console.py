@@ -702,7 +702,7 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         checker = _SETTINGS_SIMPLE_KEYS[key]
         fields = checker(value) if key == "embedding" else {key.split(".", 1)[1]: checker(value)}
         try:
-            previous = set_embedding_endpoint(fields)
+            previous = await asyncio.to_thread(set_embedding_endpoint, fields)
         except EmbeddingPinError as exc:
             raise ConfigValidationError(str(exc)) from exc
         warning = embedding_model_change(previous, fields)
@@ -1497,7 +1497,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         )
 
     try:
-        cost = set_role(section, model=model, provider=provider, protocol=protocol)
+        cost = await asyncio.to_thread(set_role, section, model=model, provider=provider, protocol=protocol)
     except EmbeddingPinError as exc:
         # A pair that cannot embed. The embedding branch used to catch this and
         # the rewrite dropped it, which sent the page `internal_error` plus a

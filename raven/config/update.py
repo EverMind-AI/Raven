@@ -469,6 +469,50 @@ class EmbeddingPinError(ValueError):
     """
 
 
+REQUIRED_EMBEDDING_DIMENSIONS = 1024
+"""The width of every vector column in the memory index.
+
+EverOS truncates a wider vector to this on the way in, so a model that returns
+more is fine. One that returns fewer cannot fill the column: every store and
+every search then answers 500 about a mismatched width, and nothing on the
+settings page says why.
+"""
+
+
+def probe_embedding_dimensions(url: str, headers: dict[str, str], model: str) -> int | str:
+    """The width ``model`` answers with at ``url``, or why it could not be asked.
+
+    Asks with ``dimensions=REQUIRED_EMBEDDING_DIMENSIONS`` first -- the API-level
+    truncation MRL-capable models honour -- and falls back to the native width.
+    An int is a measured width; a str is a transport or shape failure, which is
+    not a verdict about the model.
+    """
+    import httpx
+
+    def _try(client: httpx.Client, body: dict[str, Any]) -> int | str:
+        try:
+            resp = client.post(url, json=body, headers=headers)
+            if resp.status_code != 200:
+                return f"HTTP {resp.status_code}"
+            items = resp.json().get("data", [])
+            if not items:
+                return "empty response"
+            first = items[0]
+            if not isinstance(first, dict):
+                return "unexpected response format"
+            return len(first.get("embedding", []))
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+            return str(exc)
+
+    with httpx.Client(timeout=15) as client:
+        result = _try(
+            client, {"model": model, "input": ["dimension check"], "dimensions": REQUIRED_EMBEDDING_DIMENSIONS}
+        )
+        if result == REQUIRED_EMBEDDING_DIMENSIONS:
+            return result
+        return _try(client, {"model": model, "input": ["dimension check"]})
+
+
 def set_embedding_endpoint(
     fields: dict[str, Any],
     *,
@@ -483,8 +527,9 @@ def set_embedding_endpoint(
     rotating a key is one edit somewhere else.
 
     Raises :class:`EmbeddingPinError` when the pair cannot embed: an unknown
-    provider, one with no usable credential, or a model that provider's
-    catalogue describes as something other than an embedding model.
+    provider, one with no usable credential, a model that provider's catalogue
+    describes as something other than an embedding model, or one whose vectors
+    are narrower than the memory index.
 
     Returns the previous block, so a caller can say what changed -- including
     that the model moved, which invalidates every vector stored under the old
@@ -545,11 +590,16 @@ def _clear_embedding_pin(path: "Path") -> dict[str, Any]:
 def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> None:
     """Check the pair before it is stored. Raises, or returns quietly.
 
-    Only what can be answered without a network call: whether the provider is
+    First what can be answered without a network call: whether the provider is
     one this install has, whether it has a credential to call with, and whether
     its catalogue says the model embeds. A model the catalogue has never heard
     of passes -- a local deployment or a release newer than the snapshot is not
     a mistake, and refusing it would make this a gate on the snapshot's age.
+
+    Then one request, for the one fact only the model can answer: how wide its
+    vectors are. Narrower than the index is refused; a probe that could not
+    reach the provider is not a verdict, so the pin is written and the width
+    left to the first real call.
     """
     provider = str(clean.get("provider") or "")
     model = str(clean.get("model") or "")
@@ -583,6 +633,27 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
         raise EmbeddingPinError(
             f"{model!r} is not an embedding model on {provider} (it is described as "
             f"{', '.join(caps)}); pick one that returns vectors"
+        )
+
+    from raven.providers.wire import wire_model
+
+    base_url, api_key = resolved
+    width = probe_embedding_dimensions(
+        base_url.rstrip("/") + "/embeddings",
+        {"Authorization": f"Bearer {api_key}"} if api_key else {},
+        wire_model(model, client_provider=provider),
+    )
+    if isinstance(width, int) and width < REQUIRED_EMBEDDING_DIMENSIONS:
+        raise EmbeddingPinError(
+            f"{model!r} on {provider} returns {width}-dimension vectors and the memory index is "
+            f"{REQUIRED_EMBEDDING_DIMENSIONS} wide; pick a model that can return {REQUIRED_EMBEDDING_DIMENSIONS}"
+        )
+    if not isinstance(width, int):
+        logger.warning(
+            "config/update: could not measure the width {!r} returns on {} ({}); pin written unchecked",
+            model,
+            provider,
+            width,
         )
 
 

@@ -807,6 +807,41 @@ def _no_provider_probe(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _embedding_pin_width_is_fine(monkeypatch):
+    """Keep the embedding pin's width probe off the network.
+
+    `set_embedding_endpoint` asks the provider how wide the model's vectors are
+    before it stores the pair -- one real request per write. A test that pins an
+    embedding is almost never asking about that width, so here every model
+    answers with the width the index wants; a case about the refusal patches
+    `probe_embedding_dimensions` itself.
+    """
+    from raven.config import update
+
+    monkeypatch.setattr(
+        update, "probe_embedding_dimensions", lambda url, headers, model: update.REQUIRED_EMBEDDING_DIMENSIONS
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _running_everos_is_the_installed_one(monkeypatch):
+    """Keep the version comparison in ``ensure_everos_server`` off the network.
+
+    Whether the server answering on the configured port runs the everos this
+    raven installs is read from its ``/health``. A test that stubs the liveness
+    probe to "healthy" has no server there, and on a developer's machine the
+    real one on 18791 may be a version behind, which would turn an adopt into a
+    restart. Here the running server always matches; the cases about a
+    mismatch patch the two readers themselves.
+    """
+    from raven_everos import server as everos_server
+
+    monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: everos_server.installed_everos_version())
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_huggingface_lookup(monkeypatch):
     """Keep LiteLLM's context-window lookup off huggingface.co.
 

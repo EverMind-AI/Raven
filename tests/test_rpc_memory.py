@@ -6,7 +6,6 @@ HTTP; tests replace :func:`memory._post` so no sockets open.
 
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -227,49 +226,6 @@ def _everos_configured(monkeypatch, backend="everos"):
             memory=SimpleNamespace(backend=backend, user_id="u", agent_id="a"), plugins=SimpleNamespace(config={})
         ),
     )
-
-
-@pytest.mark.asyncio
-async def test_windows_says_memory_is_not_here_yet(monkeypatch):
-    """Nothing to probe: the server cannot run on Windows, so the page says so
-    instead of a connection refused and a retry button that cannot help."""
-    monkeypatch.setattr(sys, "platform", "win32")
-    _everos_configured(monkeypatch)
-
-    async def _post(*args, **kwargs):
-        raise AssertionError("no request may leave for a server that cannot run here")
-
-    monkeypatch.setattr(memory, "_post", _post)
-
-    stats = await memory.memory_stats({})
-    listing = await memory.memory_list({"kind": "episode"})
-
-    assert stats["ok"] is False and "Windows" in stats["note"]
-    assert listing["items"] == [] and "Windows" in listing["note"]
-
-
-@pytest.mark.asyncio
-async def test_windows_without_the_plugin_names_the_platform_not_the_install(monkeypatch):
-    """Telling a Windows install to install the plugin sends it to fetch
-    something that cannot run there."""
-    monkeypatch.setattr(sys, "platform", "win32")
-
-    with everos_plugin_absent():
-        stats = await memory.memory_stats({})
-
-    assert "Windows" in stats["note"] and "everos-memory" not in stats["note"]
-
-
-@pytest.mark.asyncio
-async def test_windows_with_another_backend_still_names_that_backend(monkeypatch):
-    """The platform sentence is for an install pointed at EverOS. One whose
-    memory runs on mem0 has memory, and saying otherwise would be false."""
-    monkeypatch.setattr(sys, "platform", "win32")
-    _everos_configured(monkeypatch, backend="mem0")
-
-    stats = await memory.memory_stats({})
-
-    assert "mem0" in stats["note"] and "Windows" not in stats["note"]
 
 
 @pytest.mark.asyncio

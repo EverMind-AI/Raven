@@ -184,10 +184,10 @@ class ServiceState(Enum):
 
     Two axes are folded into one enum because callers only ever act on the
     combination: may I send a request, and is it worth probing again. The
-    states that answer "no" to both -- ``UNCONFIGURED``, ``NO_BINARY``,
-    ``BAD_IDENTITY`` and ``UNSUPPORTED`` -- describe the installation, its
-    config and its platform rather than the process, so no amount of probing
-    resolves them and a stray success must not clear them.
+    states that answer "no" to both -- ``UNCONFIGURED``, ``NO_BINARY`` and
+    ``BAD_IDENTITY`` -- describe the installation and its config rather than
+    the process, so no amount of probing resolves them and a stray success
+    must not clear them.
     """
 
     UNKNOWN = "unknown"
@@ -199,15 +199,12 @@ class ServiceState(Enum):
     NO_BINARY = "no_binary"
     BAD_IDENTITY = "bad_identity"
     FOREIGN = "foreign"
-    UNSUPPORTED = "unsupported"
 
 
 # Probing cannot change these: they are facts about the install, not the
 # process. Letting a probe promote out of them would hide a missing binary
 # behind somebody else's server answering on the same port.
-_TERMINAL_STATES = frozenset(
-    {ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY, ServiceState.UNSUPPORTED}
-)
+_TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
 
 # Minimum gap between out-of-band probes. Coarse on purpose: this exists to
 # stop a task per turn from piling up, not to schedule anything.
@@ -219,7 +216,7 @@ _PROBE_MIN_INTERVAL_S: float = 2.0
 # memory LLM that it dropped turns of memory it never had. BAD_IDENTITY is
 # deliberately not one of these: that service works, the config is wrong, and
 # the turns it refuses really are lost.
-_NO_MEMORY_TO_LOSE = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.UNSUPPORTED})
+_NO_MEMORY_TO_LOSE = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
 
 
 class _HttpEverosAdapter:
@@ -789,19 +786,6 @@ class EverosBackend:
             type(self._adapter).__name__,
         )
         if isinstance(self._adapter, _HttpEverosAdapter):
-            from raven.core.plugin_stack import everos_platform_note
-
-            platform_note = everos_platform_note()
-            if platform_note is not None:
-                # Terminal and nothing to lose: a write here is not a failed
-                # write, or the host retries it for a minute every turn and
-                # then raises the memory banner over a service that was never
-                # going to exist on this platform.
-                self._state = ServiceState.UNSUPPORTED
-                self.notify(platform_note)
-                self._adapter = _NoOpAdapter()
-                return
-
             from raven_everos.server import (
                 EverosBinaryMissingError,
                 EverosNotConfiguredError,
@@ -1009,15 +993,6 @@ class EverosBackend:
         # through the backend contract.
         for note in everos_toml_role_notes():
             checks.append(HealthCheck("everos.toml", "ok", note))
-
-        from raven.core.plugin_stack import everos_platform_note
-
-        platform_note = everos_platform_note()
-        if platform_note is not None:
-            # Nothing to probe: "not running (starts on demand)" would be
-            # false here, and the importer's refusal should say why.
-            checks.append(HealthCheck("server", "missing", platform_note))
-            return BackendHealth(ready=False, checks=checks)
 
         report = await asyncio.to_thread(probe_capabilities, base_url)
         sections = (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS)

@@ -340,7 +340,6 @@ MESSAGES: dict[str, str] = {
     "not running ({where} declared)": "未在运行（配置声明 {where}）",
     "something holds": "有进程占用着",
     "  [yellow]! {pid_line} {a1} but serves no HTTP.[/yellow]\n{detail}  [dim]Stop it and re-run `raven onboard`.[/dim]": "  [yellow]⚠ {pid_line} {a1}，但没有提供 HTTP 服务。[/yellow]\n{detail}  [dim]请先停掉它，然后重跑 raven onboard。[/dim]",
-    "  [yellow]⚠ EverOS memory engine does not support native Windows.[/yellow]\n  [dim]Run Raven inside WSL for full memory support.[/dim]\n  [dim]Skipping memory configuration.[/dim]": "  [yellow]⚠ EverOS 记忆引擎暂不支持 Windows 原生环境。[/yellow]\n  [dim]在 WSL 中运行 Raven 可获得完整记忆支持。[/dim]\n  [dim]已跳过记忆配置。[/dim]",
     "  [yellow]⚠ Long-term memory cannot be configured in this installation.[/yellow]\n  [dim]{note}[/dim]": "  [yellow]⚠ 当前安装无法配置长期记忆。[/yellow]\n  [dim]{note}[/dim]",
     "  [dim]Long-term memory stays off.[/dim]\n  [dim]Run `raven onboard` again whenever you want to configure it.[/dim]": "  [dim]长期记忆保持关闭。[/dim]\n  [dim]随时可以重新运行 raven onboard 配置。[/dim]",
     "  [dim]Looking for a memory directory Raven can take over...[/dim]": "  [dim]正在查找 Raven 可以接管的记忆目录...[/dim]",
