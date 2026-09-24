@@ -522,13 +522,17 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
   // A switch on, a test and a write that carries a key are answered by
   // running the agent, which leaves a verdict the last probe never saw (an
   // acp connect records the capability snapshot the probe reads), so their
-  // follow-up asks for the probe and takes the answer whole.
+  // follow-up asks for the probe and takes the answer whole. It settles when
+  // the rows are on screen: a probing list can wait on the login shell and an
+  // endpoint, and a caller that lifts its guard before then leaves the old row
+  // under the cursor for the length of that wait, where a second press would
+  // send a second billable prompt.
   const refresh = useCallback(
-    ({ probe = false, renamed }: { probe?: boolean; renamed?: { from: string; to: string } } = {}) => {
-      gw.request<SubagentsListResult>('subagents.list', { probe })
+    ({ probe = false, renamed }: { probe?: boolean; renamed?: { from: string; to: string } } = {}): Promise<void> =>
+      gw
+        .request<SubagentsListResult>('subagents.list', { probe })
         .then(r => setRows(prev => (probe ? (r?.rows ?? []) : mergeProbeColumns(prev, r?.rows ?? [], renamed))))
-        .catch((e: unknown) => setErr(rpcErrorMessage(e)))
-    },
+        .catch((e: unknown) => setErr(rpcErrorMessage(e))),
     [gw]
   )
 
@@ -633,7 +637,8 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
     gw.request('subagents.toggle', { enabled: !row.enabled, name: row.name })
       .then(() => {
         setErr('')
-        refresh({ probe: !row.enabled })
+
+        return refresh({ probe: !row.enabled })
       })
       .catch((e: unknown) => setErr(rpcErrorMessage(e)))
       .finally(() => {
@@ -661,6 +666,7 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
         setErr(r && r.ok === false && !r.cancelled ? r.detail : '')
       })
       .catch((e: unknown) => setErr(rpcErrorMessage(e)))
+      .then(() => refresh({ probe: true }))
       .finally(() => {
         setTesting(prev => {
           const next = new Map(prev)
@@ -668,7 +674,6 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
 
           return next
         })
-        refresh({ probe: true })
       })
   }
 
@@ -731,14 +736,16 @@ export function SubagentsHub({ gw, onClose, t }: SubagentsHubProps) {
     const renamedFrom = formMode === 'edit' && selected.name !== trimmedName ? selected.name : undefined
 
     gw.request(formMode === 'add' ? 'subagents.add' : 'subagents.update', params)
-      .then(() => {
-        setSaving(false)
-        setKeyInput('')
-        setStage('list')
+      .then(() =>
         refresh({
           probe: formMode === 'add' || Boolean(trimmedKey),
           renamed: renamedFrom ? { from: renamedFrom, to: trimmedName } : undefined
         })
+      )
+      .then(() => {
+        setSaving(false)
+        setKeyInput('')
+        setStage('list')
       })
       .catch((e: unknown) => {
         setSaving(false)

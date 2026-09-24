@@ -797,6 +797,75 @@ describe('SubagentsHub', () => {
     h.unmount()
   })
 
+  // The probing follow-up can wait on the login shell and an endpoint. Until
+  // it lands the old row is still under the cursor, so the switch stays
+  // guarded for the whole wait, or a second press would connect twice.
+  it("keeps the switch guarded until the probed row is on screen, so a second 'space' cannot connect twice", async () => {
+    const off: SubagentRow = { ...CODER_ROW, enabled: false }
+    let listCalls = 0
+    let release: (r: SubagentsListResult) => void = () => {}
+    const h = mount({
+      listImpl: () => {
+        listCalls += 1
+
+        return listCalls === 1
+          ? undefined
+          : (new Promise<SubagentsListResult>(resolve => {
+              release = resolve
+            }) as unknown as SubagentsListResult)
+      },
+      rows: [off]
+    })
+    await waitForFrame(h, 'Coder')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    await waitForRpcCall(h.gw.request, 'subagents.list')
+    await h.type(' ')
+    await delay(90)
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.toggle')).toHaveLength(1)
+
+    release({ rows: [{ ...off, enabled: true }] })
+    await delay(90)
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.toggle')).toHaveLength(1)
+
+    h.unmount()
+  })
+
+  it("keeps a test guarded until its probed follow-up lands, so a second 't' cannot test twice", async () => {
+    let listCalls = 0
+    let release: (r: SubagentsListResult) => void = () => {}
+    const h = mount({
+      listImpl: () => {
+        listCalls += 1
+
+        return listCalls === 1
+          ? undefined
+          : (new Promise<SubagentsListResult>(resolve => {
+              release = resolve
+            }) as unknown as SubagentsListResult)
+      }
+    })
+    await waitForFrame(h, 'Coder')
+
+    h.gw.request.mockClear()
+    await h.type('t')
+    await waitForRpcCall(h.gw.request, 'subagents.list')
+    await h.type('t')
+    await delay(90)
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.test')).toHaveLength(1)
+
+    release({ rows: ROWS })
+    await delay(90)
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.test')).toHaveLength(1)
+
+    h.unmount()
+  })
+
   it("'t' on Coder tests it, then re-lists with the probe so the test's own verdict is what shows", async () => {
     const h = mount()
     await waitForFrame(h, 'Coder')
