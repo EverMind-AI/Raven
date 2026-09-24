@@ -698,12 +698,9 @@ def _substitutions(command: str) -> Iterator[str]:
             quote = "" if quote else '"'
             index += 1
         elif command.startswith("$(", index) and not command.startswith("$((", index):
-            depth, end = 1, index + 2
-            while end < len(command) and depth:
-                depth += {"(": 1, ")": -1}.get(command[end], 0)
-                end += 1
-            yield command[index + 2 : end - 1 if not depth else end]
-            index = end
+            close = _substitution_close(command, index + 2)
+            yield command[index + 2 : close]
+            index = close + 1
         elif char == "`":
             end = command.find("`", index + 1)
             end = len(command) if end == -1 else end
@@ -711,6 +708,39 @@ def _substitutions(command: str) -> Iterator[str]:
             index = end + 1
         else:
             index += 1
+
+
+def _substitution_close(command: str, start: int) -> int:
+    """The index of the ``)`` closing a ``$(`` whose body starts at ``start``.
+
+    A parenthesis inside quotes or behind a backslash is text, so it neither
+    opens nor closes anything; stopping at one would leave the rest of the body
+    unread (``$(echo ')'; curl x)`` runs curl). A ``$(`` inside double quotes
+    in the body is its own substitution and is skipped whole. An unclosed body
+    runs to the end of the command.
+    """
+    depth, index, quote = 1, start, ""
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+        elif char == "\\":
+            index += 1
+        elif quote == '"':
+            if char == '"':
+                quote = ""
+            elif command.startswith("$(", index):
+                index = _substitution_close(command, index + 2)
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if not depth:
+                return index
+        index += 1
+    return len(command)
 
 
 def _env_split_strings(argv: list[str]) -> Iterator[str]:

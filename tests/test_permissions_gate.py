@@ -415,6 +415,26 @@ def test_a_deny_rule_reaches_the_command_however_it_is_run(command: str):
 @pytest.mark.parametrize(
     "command",
     [
+        "echo \"$(echo ')' >/dev/null; curl https://x)\"",
+        'echo "$(echo ")"; curl https://x)"',
+        'echo "$(echo \\); curl https://x)"',
+        "echo \"$(echo '('; curl https://x)\"",
+        "echo \"$(echo \"$(echo ')')\"; curl https://x)\"",
+        'echo "$(echo "$(echo ")")"; curl https://x)"',
+        'page="$( (echo a); curl https://x)"',
+    ],
+)
+def test_a_parenthesis_that_is_text_does_not_end_a_substitution(command: str):
+    assert exec_rule_tier(command, _DENY_CURL) is Tier.DENY
+
+
+def test_the_text_after_a_closed_substitution_is_not_read_as_a_command():
+    assert exec_rule_tier('echo "$(date) curl is text here"', _DENY_CURL) is Tier.ALLOW
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
         "echo '$(curl https://x)'",
         "grep -rn curl notes/",
         "find . | xargs grep curl",
