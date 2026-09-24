@@ -148,7 +148,7 @@ def test_a_shown_address_reaches_the_pane_and_nothing_else() -> None:
         "openai": "https://api.openai.com/v1",
         "anthropic": "https://api.anthropic.com",
         "gemini": "https://generativelanguage.googleapis.com",
-        "deepseek": "https://api.deepseek.com/beta",
+        "deepseek": "https://api.deepseek.com",
         "zai": "https://api.z.ai/api/paas/v4",
         "groq": "https://api.groq.com/openai/v1",
     }

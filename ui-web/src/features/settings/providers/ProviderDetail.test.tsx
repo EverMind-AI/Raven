@@ -105,6 +105,19 @@ describe('provider detail', () => {
       .toBe('gui.settings.providers.in_use {"roles":"gui.settings.roles.chat, gui.settings.roles.title, gui.settings.roles.gate"}')
   })
 
+  /* And it says so where the button is. The panel's own foot sits under a grid
+     `calc(100vh - 220px)` tall, so a refusal drawn there is a screen below the
+     control that refused: the button appeared to do nothing at all. */
+  it('says the refusal inside the pane, not at the foot of the panel', async () => {
+    install()
+    await open('anthropic')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.disconnect_key')) })
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]!.closest('.settings-tp-main')).not.toBeNull()
+    expect(document.querySelector('.settings-panel > .settings-inline-err')).toBeNull()
+  })
+
   /* And it stands at the foot, not among the fields: the box a reader is
      typing a key into should not have "disconnect and clear the key" under it. */
   it('keeps disconnect at the foot of the pane, away from the key box', async () => {
