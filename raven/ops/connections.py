@@ -321,9 +321,8 @@ def store_path() -> Path:
     override = os.environ.get(CONNECTIONS_ENV, "").strip()
     if override:
         return Path(override).expanduser()
-    from raven.agent.subagent.role import is_subagent_process
     from raven.config.paths import get_config_path
-    from raven.home import raven_home
+    from raven.home import is_subagent_process, raven_home
 
     home = raven_home() / STORE
     if is_subagent_process() and home.is_file():
