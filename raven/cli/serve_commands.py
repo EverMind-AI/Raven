@@ -808,12 +808,18 @@ def _gateway_argv(port: int) -> list[str]:
     resolved in the caller's working directory, and the supervisor outlives that
     directory. The interpreter running this process is the one thing that is
     certain to still be there.
+
+    ``-P`` because ``-m`` puts the working directory first on ``sys.path``: a
+    page started from inside a source checkout would otherwise run that
+    checkout's ``raven`` on the installed environment's dependencies, and the
+    supervisor, which keeps that directory for as long as the page is up,
+    would do it again on every restart.
     """
     import sys
 
     if _gateway_holds_the_lock():
-        return [sys.executable, "-m", "raven", "serve", "--port", str(port)]
-    return [sys.executable, "-m", "raven", "gateway", "--page-port", str(port)]
+        return [sys.executable, "-P", "-m", "raven", "serve", "--port", str(port)]
+    return [sys.executable, "-P", "-m", "raven", "gateway", "--page-port", str(port)]
 
 
 def _spawn_supervisor(port: int) -> None:
@@ -822,6 +828,9 @@ def _spawn_supervisor(port: int) -> None:
     ``start_new_session`` is what makes it resident: without its own session the
     supervisor stays in the terminal's process group and takes the same SIGHUP
     the shell does when the window closes -- taking the page's engine with it.
+
+    ``-P`` for the reason ``_gateway_argv`` gives: this is the process that
+    keeps the working directory it was started from.
     """
     import subprocess
     import sys
@@ -831,7 +840,7 @@ def _spawn_supervisor(port: int) -> None:
     handle = open(log, "a", encoding="utf-8")  # noqa: SIM115 - handed to the child, closed with it
     try:
         subprocess.Popen(  # noqa: S603 - argv is this interpreter plus literals
-            [sys.executable, "-m", "raven", "web", "--supervise", "--port", str(port)],
+            [sys.executable, "-P", "-m", "raven", "web", "--supervise", "--port", str(port)],
             stdout=handle,
             stderr=handle,
             stdin=subprocess.DEVNULL,
