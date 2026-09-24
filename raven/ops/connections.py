@@ -292,31 +292,42 @@ CONNECTIONS_ENV = "RAVEN_CONNECTIONS"
 def store_path() -> Path:
     """Where this instance reads its machines, and where a first add lands.
 
-    The env var when set; else the registry beside this instance's own config
-    when one is there; else the owner's home (``raven_home()``), which is also
-    where a machine added now belongs.
+    The env var when set. Otherwise the answer depends on what this process is,
+    not on which file happens to exist:
 
-    The home is the fallback rather than a plain "beside the config" because a
-    sub-agent runs on a rendered config in a state directory of its own, where
-    nothing is ever written, and the host hands it ``RAVEN_HOME`` -- not a copy
-    of the file. Resolved beside the config alone, the coding agent read that
-    empty directory while the owner's machines sat in the home (measured
-    2026-09-22: ``exec(machine=...)`` answered "No connection is registered" on
-    a home that listed two), and the model reached for the raw address instead.
+    * **a sub-agent** (the host launched it with ``RAVEN_SUBAGENT``) reads the
+      owner's home (``raven_home()``), which the host hands it as
+      ``RAVEN_HOME``, whenever the home holds a registry. Its config is a
+      rendered copy in a state directory of its own, and a registry beside it
+      can only be a copy taken to keep it supplied -- the copy-once bug (five
+      byte-identical registries on one computer, 2026-08-25). Read first, such
+      a copy hid every machine the owner added since, and hid the coding
+      agent's own adds from the on-call agent; read never, the coding agent saw
+      nothing at all (measured 2026-09-22: ``exec(machine=...)`` answered "No
+      connection is registered" on a home that listed two, and the model
+      reached for the raw address). The copy is read only when the home has
+      none, which is an install older than the home registry.
+    * **anything else** -- the host itself, including one started with
+      ``--config /x/config.json`` -- reads the registry beside that config when
+      one is there, else the home. The list beside a config the owner chose is
+      the owner's own, and must not be swapped out when a home registry first
+      appears, which an agent's first add now writes with no owner action.
 
-    A list beside the config comes first so that one never moves: a host started
-    with ``--config /x/config.json`` beside its own ``/x/connections.json``
-    keeps reading that file after a registry first appears in the home -- which
-    an agent's first add now writes without the owner doing anything (reviewed
-    2026-09-24: home-first switched such a host to the new file, silently).
+    Keyed on the process role rather than on file presence (reviewed
+    2026-09-24): a stale copy beside a rendered config and an owner's list
+    beside a ``--config`` file look identical on disk, so each file-presence
+    order broke one of them.
     """
     override = os.environ.get(CONNECTIONS_ENV, "").strip()
     if override:
         return Path(override).expanduser()
+    from raven.agent.subagent.role import is_subagent_process
     from raven.config.paths import get_config_path
     from raven.home import raven_home
 
     home = raven_home() / STORE
+    if is_subagent_process() and home.is_file():
+        return home
     try:
         beside = Path(get_config_path()).expanduser().parent / STORE
     except Exception:  # noqa: BLE001 -- a missing config path is not a failure here

@@ -340,8 +340,9 @@ no subprocess and no launcher.
 A compute host the owner registered — with `raven ops connection add`, or,
 since 2026-09-23, with the `ops_connection_add` tool an agent drives from the
 owner's answers in conversation. The registry is the path `RAVEN_CONNECTIONS`
-points at, else `connections.json` beside the active config, else the one in
-the raven home, where a first registration lands. An on-call-style agent runs
+points at; else, for a sub-agent, the one in the raven home the host hands it,
+and for any other instance the one beside its active config, falling back to
+the home, where a first registration lands. An on-call-style agent runs
 its work outside the dispatching Raven process — on a GPU box, a lab
 workstation, another machine entirely — and the host's whole part in that is
 keeping the registry and handing it over: a launcher points the agent's

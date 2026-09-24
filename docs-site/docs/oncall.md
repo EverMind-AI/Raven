@@ -50,10 +50,11 @@ raven ops connection add --id local-lab --name "Local lab" \
   --non-interactive
 ```
 
-The registry is the path selected by `RAVEN_CONNECTIONS`; else the
-`connections.json` beside the active config, when there is one; else the one in
-the raven home (`RAVEN_HOME`, or `~/.raven`), which is also where a first
-registration lands. Sub-agents run on a
+The registry is the path selected by `RAVEN_CONNECTIONS`. Otherwise a
+sub-agent reads the one in the raven home (`RAVEN_HOME`, or `~/.raven`) that the
+host hands it, and any other instance -- the host itself, including one started
+with `--config` -- reads the `connections.json` beside its config when there is
+one, else the home. A first registration lands in the home. Sub-agents run on a
 rendered config in a state directory of their own and inherit the home, so
 they read the owner's registry rather than a copy of it. SSH registration can
 also write a managed alias in `~/.ssh/config`; the key path is recorded, not

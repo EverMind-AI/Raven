@@ -385,6 +385,8 @@ def _rendered_config(tmp_path, monkeypatch):
     monkeypatch.setattr(home, "_current_config_path", rendered)
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     monkeypatch.delenv(connections.CONNECTIONS_ENV, raising=False)
+    # What the host overlays on every child it launches (``subagent_role_env``).
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
     (tmp_path / "home").mkdir()
     return state
 
@@ -426,13 +428,13 @@ def test_an_install_that_kept_its_own_list_beside_its_config_stays_on_it(tmp_pat
     assert [r["id"] for r in connections.load()] == ["mine"]
 
 
-def test_a_list_beside_the_config_keeps_winning_after_a_home_registry_appears(tmp_path, monkeypatch):
-    """The reviewed shape (2026-09-24): a host started with ``--config`` beside
-    its own list. An agent's first add now writes a home registry with no
-    owner action, and home-first switched that host to the new file -- its own
-    machines still on disk, no longer read. The list beside the config stays
-    the answer."""
+def test_a_config_host_keeps_its_own_list_after_a_home_registry_appears(tmp_path, monkeypatch):
+    """A host started with ``--config`` beside its own list -- not a sub-agent.
+    An agent's first add now writes a home registry with no owner action, and
+    a home-first rule switched that host to the new file, its own machines
+    still on disk and no longer read (reviewed 2026-09-24)."""
     state = _rendered_config(tmp_path, monkeypatch)
+    monkeypatch.delenv("RAVEN_SUBAGENT")
     own = state / "connections.json"
     own.write_text(json.dumps({"connections": [{"id": "conn_cpu_32c", "display_name": "CPU", "transport": "local"}]}))
     assert connections.store_path() == own
@@ -443,6 +445,56 @@ def test_a_list_beside_the_config_keeps_winning_after_a_home_registry_appears(tm
 
     assert connections.store_path() == own
     assert [r["id"] for r in connections.load()] == ["conn_cpu_32c"]
+
+
+def test_a_sub_agent_reads_the_owners_home_over_a_stale_copy_beside_its_config(tmp_path, monkeypatch):
+    """The other half of the same review: beside-the-config-first read a copy
+    left in a sub-agent's state directory and lost every row the owner added
+    to the home since -- the copy-once bug. Six such copies existed on one
+    computer on 2026-09-24. A sub-agent reads the home whenever it has one."""
+    state = _rendered_config(tmp_path, monkeypatch)
+    (state / "connections.json").write_text(
+        json.dumps({"connections": [{"id": "conn_cpu_32c", "display_name": "CPU", "transport": "local"}]})
+    )
+    theirs = tmp_path / "home" / "connections.json"
+    theirs.write_text(
+        json.dumps(
+            {
+                "connections": [
+                    {"id": "conn_cpu_32c", "display_name": "CPU", "transport": "local"},
+                    {"id": "conn_added_since", "display_name": "Added since", "transport": "local"},
+                ]
+            }
+        )
+    )
+
+    assert connections.store_path() == theirs
+    assert [r["id"] for r in connections.load()] == ["conn_cpu_32c", "conn_added_since"]
+
+
+def test_what_one_sub_agent_adds_another_reads(tmp_path, monkeypatch):
+    """The coding agent's add must reach the on-call agent even where a stale
+    copy sits beside the on-call agent's config (reviewed 2026-09-24: with the
+    copy read first, on-call listed the old rows and never the new machine).
+    Two processes, two state directories: the writer's is empty, the reader's
+    holds the copy."""
+    import raven.home as home_mod
+    from raven.ops import connection_add
+
+    _rendered_config(tmp_path, monkeypatch)
+    row = {"id": "conn_cpu_32c", "display_name": "CPU", "transport": "local"}
+    (tmp_path / "home" / "connections.json").write_text(json.dumps({"connections": [row]}))
+    code_state, oncall_state = tmp_path / "code", tmp_path / "oncall"
+    for d in (code_state, oncall_state):
+        d.mkdir()
+        (d / ".config.rendered.json").write_text("{}")
+    (oncall_state / "connections.json").write_text(json.dumps({"connections": [row]}))
+
+    monkeypatch.setattr(home_mod, "_current_config_path", code_state / ".config.rendered.json")
+    connection_add.write({"id": "conn_new", "display_name": "New", "transport": "local"})
+
+    monkeypatch.setattr(home_mod, "_current_config_path", oncall_state / ".config.rendered.json")
+    assert [r["id"] for r in connections.load()] == ["conn_cpu_32c", "conn_new"]
 
 
 def test_the_env_var_still_outranks_every_default(tmp_path, monkeypatch):
