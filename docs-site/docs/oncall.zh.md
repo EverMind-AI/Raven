@@ -41,9 +41,18 @@ raven ops connection add --id local-lab --name "Local lab" \
   --non-interactive
 ```
 
-注册会写入当前 config 旁的 `connections.json`，或 `RAVEN_CONNECTIONS` 指定位置。
-SSH 注册还可能在 `~/.ssh/config` 写入受管理的别名；只记录私钥路径，不记录私钥内容。
-不要把密钥或密码放进任务消息。
+注册表的位置:有 `RAVEN_CONNECTIONS` 就用它指的文件。否则,子代理读宿主交给它的 raven 家目录
+(`RAVEN_HOME`,默认 `~/.raven`)下的那份;其他实例(宿主本身,包括用 `--config` 启动的)
+先读 config 旁边的 `connections.json`,没有再读家目录。第一次注册写在家目录。
+子代理各自用渲染出的 config 跑在自己的状态目录里、继承家目录，所以读到的是
+主人的注册表，不是一份副本。SSH 注册还可能在 `~/.ssh/config` 写入受管理的别名；
+只记录私钥路径，不记录私钥内容。不要把密钥或密码放进任务消息。
+
+agent 也能登记机器。`ops_connection_add` 工具（raven-oncall 与 raven-code 通过
+`tools.connectionAdd` 开启，其他产品关闭）接主人在对话里说的话——是这台电脑还是
+另一台、叫什么、另一台的话地址是什么——用主人自己的 ssh 配置补上没说的端口、
+用户名或密钥路径，先连上机器，连上了才写入。注册表里没有合适的机器时，agent
+会问主人，而不是拿一条原始 ssh 命令自己找路进去。
 
 `doctor` 校验注册表可用性，不会重新执行每台远程环境的连通测试。
 `add --skip-probe` 不联系机器，并明确保留“未验证连接”状态。
@@ -135,4 +144,5 @@ Oncall 的声明、执行检查和升级策略，与宿主[工具权限](permiss
 | 重启后状态不确定 | 重试或停止前读取 ledger 与远程状态 |
 
 实现依据位于 `agents/raven-oncall/plugins/oncall-flow/`、
-`raven/ops/connections.py` 和 `raven/cli/ops_connection_commands.py`。
+`raven/ops/connections.py`、`raven/ops/connection_add.py`、
+`raven/agent/tools/connection_add.py` 和 `raven/cli/ops_connection_commands.py`。

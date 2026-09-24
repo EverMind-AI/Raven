@@ -1,18 +1,17 @@
-"""Add one machine to the registry, from what the owner answered.
+"""Add one machine to the owner's registry, from what the owner answered.
 
-The counterpart of ``ops_connections``' empty-registry reply: that reply asks
-the owner what only they know, and this face takes the answer. Until 2026-09-06
-the host ran ``raven ops connection add --non-interactive`` on the owner's
-behalf before dispatching a spawn; that step went with the pre-dispatch registry
-gate, so an owner who answered in conversation had nothing consuming the answer. Here the write belongs to the instance that needs the machine.
+The counterpart of an empty listing: the listing asks the owner what only they
+know, and this face takes the answer. Until 2026-09-06 the host ran ``raven ops
+connection add --non-interactive`` on the owner's behalf before dispatching a
+sub-agent; that step went with the pre-dispatch registry gate, and the write
+moved into the on-call product. It is trunk's now because the coding agent
+runs on the owner's machines too -- a case is built where the solver is, and
+smoke-tested there -- and it runs BEFORE the on-call agent in the usual chain,
+so a registry nobody has written yet has to be writable from where the need
+first shows up.
 
-Two things keep the ask short. What a machine can say about itself -- cores,
-memory, devices -- is read off it once reached, never typed. And what the owner
-leaves out of the way in -- port, username, key path -- is resolved the way
-their own terminal would resolve it (``ssh -G``, config blocks included), then
-tried: the probe decides, and only what connected is written. Nothing is written
-until the machine itself answers; an unreachable row in the registry is a fact
-every later turn acts on, an absent one is a question the loop knows to ask.
+Opt-in per product (``tools.connectionAdd``): a lane that never runs work on
+the owner's machines has no use for a tool that writes to their ssh config.
 """
 
 from __future__ import annotations
@@ -21,28 +20,31 @@ import asyncio
 from typing import Any
 
 from raven.contracts.tool import Tool
+from raven.ops.connections import _BUDGET_UNITS
 
-_BUDGET_UNITS = ("minute", "core-minute", "gpu-minute")
+TOOL_NAME = "ops_connection_add"
 
 
-class OpsConnectionAddTool(Tool):
+class ConnectionAddTool(Tool):
     """Write one machine the owner described, after reaching it."""
 
     @property
     def name(self) -> str:
-        return "ops_connection_add"
+        return TOOL_NAME
 
     @property
     def description(self) -> str:
         return (
-            "Add a machine to the registry from the owner's own answers, when ops_connections "
-            "lists none that fits. Needed: what they call it, and whether it is this very computer "
-            "or another one reached over ssh; for ssh, its address. Port, username and private-key "
-            "path only when the owner gave them -- left out, ssh's own config is consulted and "
-            "whatever connects is kept, so never invent one: a guess that lands in the registry "
-            "stops being a guess. What is installed, which directories hold their work and how the "
-            "budget is counted are optional; cores, memory and devices are read off the machine. "
-            "Nothing is written until the machine answers. Then hand the new id to ops_declare."
+            "Add a machine to the owner's registry from their own answers, when the machines "
+            "listed include none that fits -- or none is listed at all. Needed: what they call it, "
+            "and whether it is this very computer or another one reached over ssh; for ssh, its "
+            "address. Port, username and private-key path only when the owner gave them -- left "
+            "out, ssh's own config is consulted and whatever connects is kept, so never invent one: "
+            "a guess that lands in the registry stops being a guess. What is installed, which "
+            "directories hold their work and how the budget is counted are optional; cores, memory "
+            "and devices are read off the machine. Nothing is written until the machine answers. "
+            "Then name the machine by the new id wherever one is asked for: exec's 'machine' "
+            "parameter, or the on-call agent's ops_declare."
         )
 
     @property
@@ -104,7 +106,8 @@ class OpsConnectionAddTool(Tool):
         note: str = "",
         **kwargs: Any,
     ) -> str:
-        from oncall_flow import connections
+        from raven.ops import connection_add as adder
+        from raven.ops import connections
         from raven.utils.paths import mint_slug
 
         label = str(name).strip()
@@ -114,7 +117,7 @@ class OpsConnectionAddTool(Tool):
         conn_id = str(id).strip() or mint_slug(label)
         row: dict[str, Any] = {"id": conn_id, "display_name": label, "transport": kind}
         if kind == connections.LOCAL:
-            reached, message, found = await asyncio.to_thread(connections.probe, row)
+            reached, message, found = await asyncio.to_thread(adder.probe, row)
         else:
             host = str(host).strip()
             if not host:
@@ -126,7 +129,7 @@ class OpsConnectionAddTool(Tool):
             given = str(key).strip()
             resolved: dict[str, Any] = {}
             if not (port and str(user).strip() and given):
-                resolved = await asyncio.to_thread(connections.ssh_defaults, host, port=int(port or 0), user=str(user))
+                resolved = await asyncio.to_thread(adder.ssh_defaults, host, port=int(port or 0), user=str(user))
             row.update(
                 {
                     "host": host,
@@ -143,20 +146,21 @@ class OpsConnectionAddTool(Tool):
             reached, message, found = False, "", {}
             for candidate in keys:
                 row["key"] = candidate
-                # A path the owner named is their assertion, and is probed the way a
-                # job will reach the machine -- an agent doing the authenticating is
-                # their setup working. A path this tool picked is a claim of its own,
-                # so it is probed with that key alone: credited otherwise, the row
-                # would hold a key that only looked like the one that opened the
-                # session, and stop working the day the agent or the config changes.
-                reached, message, found = await asyncio.to_thread(connections.probe, row, isolate_key=not given)
+                # A path the owner named is their assertion, and is probed the way
+                # work will reach the machine -- an agent doing the authenticating
+                # is their setup working. A path this tool picked is a claim of its
+                # own, so it is probed with that key alone: credited otherwise, the
+                # row would hold a key that only looked like the one that opened
+                # the session, and stop working the day the agent or the config
+                # changes.
+                reached, message, found = await asyncio.to_thread(adder.probe, row, isolate_key=not given)
                 if reached:
                     break
             if not reached and not given:
                 # Attribution costs the owner's ssh config: a candidate is tried
                 # with no config read, so an alias or a jump host that makes this
                 # machine reachable is not in play here. Naming the key puts the
-                # probe back on the path a job will take.
+                # probe back on the path work will take.
                 message = (
                     f"{message} (tried, each on its own, the key(s) ssh named: {', '.join(keys)}; "
                     "a candidate is probed with no ssh config read, so a machine reached through "
@@ -182,7 +186,7 @@ class OpsConnectionAddTool(Tool):
         if blocking:
             return "REFUSED: " + "; ".join(str(f) for f in blocking) + ". Nothing was written."
         try:
-            written = connections.write(row)
+            written = adder.write(row)
         except ValueError as exc:
             return f"REFUSED: {exc} Nothing was written."
 
@@ -193,11 +197,17 @@ class OpsConnectionAddTool(Tool):
         for fault in faults:
             lines.append(f"Worth telling the owner: {fault}")
         try:
-            alias = connections.write_ssh_alias(row)
+            alias = adder.write_ssh_alias(row)
         except OSError as exc:
             lines.append(f"ssh alias not written ({exc}); transfers will need the address by hand.")
         else:
             if alias:
                 lines.append(f"ssh alias '{alias}' written to ~/.ssh/config, so rsync/scp reach it by id.")
-        lines.append(f"Now hand '{conn_id}' to ops_declare as 'connection'.")
+        lines.append(
+            f"Now name the machine as '{conn_id}': exec's 'machine' parameter runs a command there, "
+            "and the on-call agent's ops_declare takes it as 'connection'."
+        )
         return "\n".join(lines)
+
+
+__all__ = ["TOOL_NAME", "ConnectionAddTool"]

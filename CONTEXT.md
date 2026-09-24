@@ -337,16 +337,20 @@ agents, and nobody registered them; "builtin" — that is the in-process row, wh
 no subprocess and no launcher.
 
 **Machine** (`raven/ops/connections.py`):
-A compute host the owner registered with `raven ops connection add`, held in
-`connections.json` beside the config or wherever `RAVEN_CONNECTIONS` points.
-An on-call-style agent runs its work outside the dispatching Raven
-process — on a GPU box, a lab workstation, another machine entirely — and the
-host's whole part in that is keeping the registry and handing it over: a
-launcher points the agent's `RAVEN_CONNECTIONS` at the owner's store rather
-than copying rows into the agent's own home. Which machine a job lands on,
-and whether it can run at all, is settled inside the agent that runs it.
-Nothing on the dispatch path reads the registry, so no graph and no spawn is
-ever refused over the state of it.
+A compute host the owner registered — with `raven ops connection add`, or,
+since 2026-09-23, with the `ops_connection_add` tool an agent drives from the
+owner's answers in conversation. The registry is the path `RAVEN_CONNECTIONS`
+points at; else, for a sub-agent, the one in the raven home the host hands it,
+and for any other instance the one beside its active config, falling back to
+the home, where a first registration lands. An on-call-style agent runs
+its work outside the dispatching Raven process — on a GPU box, a lab
+workstation, another machine entirely — and the host's whole part in that is
+keeping the registry and handing it over: a launcher points the agent's
+`RAVEN_CONNECTIONS` at the owner's store rather than copying rows into the
+agent's own home, and a sub-agent inherits `RAVEN_HOME` so it resolves the
+same file. Which machine a job lands on, and whether it can run at all, is
+settled inside the agent that runs it. Nothing on the dispatch path reads the
+registry, so no graph and no spawn is ever refused over the state of it.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);

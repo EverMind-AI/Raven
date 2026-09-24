@@ -138,6 +138,16 @@ def _kill_process_tree(proc: subprocess.Popen, grace_s: float = 2.0) -> None:
         pass
 
 
+# The options that make ``-i key`` the ONLY identity ssh may offer. All three
+# are needed: ``-i`` is a preference, not a restriction; ``IdentitiesOnly=yes``
+# is defined as excluding what an agent or a provider adds, not what the
+# owner's config names; and only reading no config at all (``-F /dev/null``)
+# keeps the config's own ``IdentityFile`` lines out. Measured with OpenSSH
+# 9.9p2 against a config carrying two IdentityFile lines: ``-i cand`` with
+# IdentitiesOnly and no agent still resolved to three identities.
+ISOLATE_IDENTITY = ("-F", "/dev/null", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none")
+
+
 def make_ssh_runner(
     host: str,
     port: int,
@@ -145,7 +155,29 @@ def make_ssh_runner(
     *,
     user: str = "root",
     connect_timeout: int = 15,
+    identities_only: bool = False,
+    cap_seconds: float | None = None,
 ) -> CommandRunner:
+    """Run a command over ssh. ``identities_only`` narrows auth to ``key`` alone.
+
+    ``cap_seconds`` bounds the whole call, not only the connect: a machine that
+    accepts the session and then stops answering held the caller forever,
+    because ``ConnectTimeout`` is over once the connection is up (reviewed
+    2026-09-23 -- the registry probe lost the 30 s the old CLI enforced when
+    it moved onto this runner). A cap that fires returns ``TIMED_OUT_RC`` with
+    whatever arrived, the code the local runner uses, so a caller reads one
+    code however the machine is reached. The local ssh client is what gets
+    killed; bounding the far side is the caller's to do (the machine channel
+    wraps its command for that).
+
+    Off by default, which is how work reaches its machine: whatever the owner's
+    ssh would use gets to work, an agent included. Turned on only where the
+    session has to prove WHICH key opened it -- the registry probe trying the
+    keys ssh named when the owner gave no path -- and it takes every option in
+    :data:`ISOLATE_IDENTITY` to get there. The cost is that an alias or a jump
+    host in the owner's config is not in play for that one call.
+    """
+
     def run(cmd: str) -> tuple[int, str]:
         argv = [
             "ssh",
@@ -159,10 +191,18 @@ def make_ssh_runner(
             f"ConnectTimeout={connect_timeout}",
             "-o",
             "StrictHostKeyChecking=accept-new",
+        ]
+        if identities_only:
+            argv += list(ISOLATE_IDENTITY)
+        argv += [
             f"{user}@{host}",
             cmd,
         ]
-        proc = subprocess.run(argv, capture_output=True, text=True)
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=cap_seconds)
+        except subprocess.TimeoutExpired as exc:
+            got = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            return TIMED_OUT_RC, got
         tail = f"\n{proc.stderr}" if proc.stderr and proc.returncode != 0 else ""
         return proc.returncode, proc.stdout + tail
 
@@ -198,4 +238,5 @@ def runner_from(row: dict[str, Any], *, cap_seconds: float | None = None) -> Com
         # A connection names the account to log in as. Dropping it would make
         # that field one more setting that is written, accepted and does nothing.
         user=str(row.get("user") or "root"),
+        cap_seconds=cap_seconds,
     )

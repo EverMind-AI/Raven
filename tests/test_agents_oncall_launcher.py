@@ -53,10 +53,10 @@ def grounded(launcher, tmp_path, monkeypatch):
 #: moved fails exactly as a silent drift would. The A side is a record and is never
 #: edited to make this green (tests/fixtures/vendored_fork/README.md).
 #:
-#: ops_connection_add is this side's own tool. The fork never had it: its host
-#: filled the connection registry from the owner's answer before dispatching, and
-#: that step was removed on 2026-09-06, so the ask now has to name the tool that
-#: consumes the answer.
+#: ops_connection_add is trunk's tool, served here on tools.connectionAdd. The
+#: fork never had it: its host filled the connection registry from the owner's
+#: answer before dispatching, and that step was removed on 2026-09-06, so the
+#: ask now has to name the tool that consumes the answer.
 B_SIDE_ADDITIONS = (
     (
         "for you. A task statement that names no machine is normal.\n",
@@ -259,6 +259,19 @@ def test_a_preexisting_own_registry_stays(grounded, tmp_path):
     assert grounded.connections_registry() == own
 
 
+def test_the_owners_home_wins_over_an_own_copy(grounded, tmp_path):
+    """A list in the state root is a copy (nothing writes there since
+    2026-09-01). Read first, it hid every machine added to the home since,
+    including the coding agent's adds (reviewed 2026-09-24)."""
+    own = tmp_path / "state" / "connections.json"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    own.write_text("[]")
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "connections.json").write_text("[]")
+    assert grounded.connections_registry() == home / "connections.json"
+
+
 # --- the visible tool face ----------------------------------------------------
 
 
@@ -276,8 +289,11 @@ def test_a_preexisting_own_registry_stays(grounded, tmp_path):
 #: ops_connection_add is the one row here the fork never had. Its host filled the
 #: connection registry from the owner's answer before dispatching a spawn; that
 #: step was removed on 2026-09-06, so the instance that needs the machine now
-#: writes the row itself. Listed explicitly, not folded in: a tool reaching this
-#: face without a line saying why is the drift this guard exists to catch.
+#: writes the row itself. Trunk's tool since 2026-09-23 (raven-code needs the
+#: same write, and runs before this product in the usual chain), boarded here by
+#: ``tools.connectionAdd`` in the product config rather than by the plugin.
+#: Listed explicitly, not folded in: a tool reaching this face without a line
+#: saying why is the drift this guard exists to catch.
 #:
 #: tool_call is the one name this face carries that no config row put there:
 #: raven reserves the tool-search meta-pair from tools.disabledTools, because

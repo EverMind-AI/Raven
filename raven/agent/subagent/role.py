@@ -28,12 +28,11 @@ it is the only one of the three that survives the fork/exec.
 
 from __future__ import annotations
 
-import os
-
-#: Set by the host on a child it launches to act as a sub-agent; read only for
-#: truth, so a config ``env`` entry of "0" is the way back to a full registry
-#: (that map is merged after the host's, and so wins).
-SUBAGENT_ENV_VAR = "RAVEN_SUBAGENT"
+# The variable, its reader and its writer live in ``raven.home``, the one module
+# every shelf may import: ``raven.ops`` reads the role to pick whose machine list
+# is authoritative, and ops importing raven.agent would tie the two packages into
+# a cycle. Re-exported here so the sub-agent code keeps its own address for them.
+from raven.home import SUBAGENT_ENV_VAR, is_subagent_process, subagent_role_env
 
 #: Every tool that dispatches work to another agent, or steers a dispatch already
 #: running. Withheld from a sub-agent because a node's whole point is that *this*
@@ -75,22 +74,6 @@ WITHHELD_FROM_SUBAGENT = frozenset(
         "a2a_send",
     }
 )
-
-
-def is_subagent_process() -> bool:
-    """Whether the host launched this process to serve as a sub-agent."""
-    return os.environ.get(SUBAGENT_ENV_VAR, "").strip().lower() in ("1", "true", "yes", "on")
-
-
-def subagent_role_env() -> dict[str, str]:
-    """What the host overlays on a child it launches to answer as a sub-agent.
-
-    Written next to the reader above rather than beside the other environment
-    builders: the two are one contract, and a variable named in two files is one
-    rename away from a child that is told nothing and silently keeps the full
-    registry -- the failure this exists to close, and one no error reports.
-    """
-    return {SUBAGENT_ENV_VAR: "1"}
 
 
 __all__ = ["SUBAGENT_ENV_VAR", "WITHHELD_FROM_SUBAGENT", "is_subagent_process", "subagent_role_env"]
