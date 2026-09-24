@@ -46,7 +46,9 @@ export function pendingLabel(row: ExtAgentRow, s: ExtAgentsState): string {
 /* Which write a refusal refused, which decides its words when no fix is named:
    a switch-off is not a connect (`disconnects` says so for the pending ring
    too), and an edit is neither. The sheet asks the same question, so a card and
-   its sheet cannot say two things about one refusal. */
+   its sheet never name one refusal differently -- though the sheet drops a
+   refusal that is not a connect's while a typed key supersedes it there, and
+   the card keeps it until that key is pressed. */
 export function refusedWrite(failed: Failure): 'connect' | 'disconnect' | 'save' {
   if (store.disconnects(failed)) return 'disconnect'
   return failed.op === 'model' || failed.op === 'update' ? 'save' : 'connect'

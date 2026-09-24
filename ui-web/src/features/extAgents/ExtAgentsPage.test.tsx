@@ -669,6 +669,128 @@ describe('the sheet', () => {
     expect(acts).toEqual([['connect', 'mirothinker', { api_key: 'sk-1' }]])
   })
 
+  /* A key the endpoint rejects is stored all the same, and used to take the
+     field with it: the sheet then offered Connect, the gate refused the key,
+     and the sentence said to change a key there was no field for. */
+  it('lets an endpoint whose key is already stored type another, and switches it on with it', async () => {
+    const { acts } = install([
+      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true }),
+    ])
+    await mount()
+    await openSheet('mirothinker')
+    const field = sheet()!.querySelector('.extAgents-fld input') as HTMLInputElement
+    expect(field.placeholder).toBe('gui.agent.key_set')
+    const go = sheet()!.querySelector('.extAgents-act button') as HTMLButtonElement
+    expect(go.textContent).toBe('gui.agent.connect')
+    expect(go.disabled).toBe(false)
+    await typeInto(field, ' sk-2 ')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(acts).toEqual([
+      ['update', 'mirothinker', { api_key: 'sk-2' }],
+      ['toggle', 'mirothinker', { enabled: true }],
+    ])
+  })
+
+  it('keeps a plain press on a keyed endpoint as the connect it was', async () => {
+    const { acts } = install([
+      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true }),
+    ])
+    await mount()
+    await openSheet('mirothinker')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(acts).toEqual([['toggle', 'mirothinker', { enabled: true }]])
+  })
+
+  it('does not switch a row on behind a key edit the server refused', async () => {
+    const { acts } = install(
+      [row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })],
+      { refuse: (op) => (op === 'update' ? 'no' : null) },
+    )
+    await mount()
+    await openSheet('mirothinker')
+    await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(acts).toEqual([['update', 'mirothinker', { api_key: 'sk-2' }]])
+    expect(sheetActs()).toEqual(['gui.retry'])
+  })
+
+  it('draws no key field on an endpoint that is connected', async () => {
+    install([row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: true, has_api_key: true })])
+    await mount()
+    await openSheet('mirothinker')
+    expect(sheet()!.querySelector('.extAgents-fld input')).toBeNull()
+  })
+
+  /* On a connected row the button retries whatever write was refused, and a
+     key field beside it would let a stray keystroke displace that retry with
+     a credential change nothing asked for. */
+  it('keeps Retry for a connected endpoint whose description edit was refused, and draws no key field', async () => {
+    const { acts } = install(
+      [row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: true, has_api_key: true })],
+      { refuse: (op) => (op === 'update' ? 'no' : null) },
+    )
+    await mount()
+    await openSheet('mirothinker')
+    await typeInto(sheetTextarea(), 'Odd jobs')
+    await blur(sheetTextarea())
+    expect(sheetActs()).toEqual(['gui.retry'])
+    expect(sheet()!.querySelector('.extAgents-fld input')).toBeNull()
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(acts).toEqual([
+      ['update', 'mirothinker', { description: 'Odd jobs' }],
+      ['update', 'mirothinker', { description: 'Odd jobs' }],
+    ])
+  })
+
+  it('ignores Enter while the key it took is still being written', async () => {
+    const r = row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const sent: string[] = []
+    let land: (() => void) | null = null
+    install([r], {
+      act: (op) => {
+        sent.push(op)
+        return new Promise<ExtAgentRow[]>((resolve) => {
+          land = () => resolve([r])
+        })
+      },
+    })
+    await mount()
+    await openSheet('mirothinker')
+    const field = sheet()!.querySelector('.extAgents-fld input')
+    await typeInto(field, 'sk-2')
+    await pressEnter(field)
+    await pressEnter(field)
+    expect(sent).toEqual(['update'])
+    expect((sheet()!.querySelector('.extAgents-act button') as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => land!())
+    expect(sent).toEqual(['update', 'toggle'])
+    await act(async () => land!())
+  })
+
+  it.each([true, false])('draws no key field on an endpoint whose preset moved transport (key stored: %s), and connects it by migrating', async (has_api_key) => {
+    const { acts, confirms } = install([
+      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key, upgrade_to: 'acp' }),
+    ])
+    await mount()
+    await openSheet('mirothinker')
+    expect(sheet()!.querySelector('.extAgents-fld input')).toBeNull()
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(confirms).toEqual(['gui.agent.migrate_do'])
+    expect(acts).toEqual([['migrate', 'mirothinker', {}]])
+  })
+
+  it('still takes a key for an endpoint that is on the roster without one', async () => {
+    const { acts } = install([
+      row({ name: 'mirothinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: true, has_api_key: false }),
+    ])
+    await mount()
+    await openSheet('mirothinker')
+    expect((sheet()!.querySelector('.extAgents-act button') as HTMLButtonElement).disabled).toBe(true)
+    await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-3')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(acts).toEqual([['update', 'mirothinker', { api_key: 'sk-3' }]])
+  })
+
   it('shows an absent agent how to get installed, and re-checks the machine on request', async () => {
     const rows = [row({ name: 'qwen', preset: 'qwen_code', configured: false, enabled: false, probe_status: 'missing' })]
     const { loads, rescans } = install(rows)
@@ -906,6 +1028,115 @@ describe('a refusal that names its fix', () => {
     expect(lead()).toBe(say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.connect' }))
     expect(sheetActs()).toEqual(['gui.agent.connect'])
     expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
+  })
+
+  it('offers the field again when the stored key is what the server refused', async () => {
+    const r = row({ name: 'MiroThinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const sent: string[] = []
+    install([r], {
+      act: async (op) => {
+        sent.push(op)
+        if (op === 'toggle' && sent.length === 1) {
+          throw { data: { detail: 'HTTP 401: invalid api key', remedy: { kind: 'api_key', command: '' } } }
+        }
+        if (op === 'toggle') r.enabled = true
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('MiroThinker')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.retry' }))
+    expect(sheetActs()).toEqual(['gui.retry'])
+    await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
+    expect(sheetActs()).toEqual(['gui.agent.connect'])
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.connect' }))
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(sent).toEqual(['toggle', 'update', 'toggle'])
+    expect(sheet()!.querySelector('.extAgents-fld input')).toBeNull()
+    expect(note()).toBeNull()
+  })
+
+  it('names Connect in a bare connect refusal too, once a key is typed', async () => {
+    const r = row({ name: 'MiroThinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const sent: string[] = []
+    install([r], {
+      act: async (op) => {
+        sent.push(op)
+        if (op === 'toggle' && sent.length === 1) throw { data: { detail: 'HTTP 451: unavailable for legal reasons' } }
+        if (op === 'toggle') r.enabled = true
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('MiroThinker')
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(note()!.querySelector('.extAgents-note-t')!.textContent).toBe(say('gui.agent.bad_connect', { agent: 'MiroThinker' }))
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.said_connect', { button: 'gui.retry' }))
+    expect(note()!.querySelector('.extAgents-note-said')!.textContent).toBe('HTTP 451: unavailable for legal reasons')
+    await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
+    expect(sheetActs()).toEqual(['gui.agent.connect'])
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.said_connect', { button: 'gui.agent.connect' }))
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(sent).toEqual(['toggle', 'update', 'toggle'])
+  })
+
+  /* A key typed beside an unrelated refusal is still the connect that spends
+     it, so the button says Connect rather than the Retry the press would not
+     make, and the refusal, whose retry that press will never be, leaves the
+     head and the note. */
+  it('names Connect, not Retry, once a key is typed beside a refused description, and drops that refusal', async () => {
+    const r = row({ name: 'MiroThinker', preset: 'mirothinker', kind: 'openai', configured: true, enabled: false, has_api_key: true })
+    const sent: string[] = []
+    install([r], {
+      act: async (op, _row, args) => {
+        sent.push(op)
+        if (op === 'update' && args?.description !== undefined) throw { data: { detail: 'disk full' } }
+        if (op === 'toggle') r.enabled = true
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('MiroThinker')
+    await typeInto(sheetTextarea(), 'Odd jobs')
+    await blur(sheetTextarea())
+    expect(sheetActs()).toEqual(['gui.retry'])
+    expect(note()!.querySelector('.extAgents-note-t')!.textContent).toBe('gui.agent.bad_save')
+    await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
+    expect(sheetActs()).toEqual(['gui.agent.connect'])
+    expect(note()).toBeNull()
+    expect(sheet()!.querySelector('.extAgents-led-bad')).toBeNull()
+    await click(sheet()!.querySelector('.extAgents-act button'))
+    expect(sent).toEqual(['update', 'update', 'toggle'])
+  })
+
+  it('falls back to the failed test, not to nothing, once a typed key has superseded a refused description', async () => {
+    const r = row({
+      name: 'MiroThinker',
+      preset: 'mirothinker',
+      kind: 'openai',
+      configured: true,
+      enabled: false,
+      has_api_key: true,
+      last_test_ok: false,
+      last_test_at_ms: 1,
+      last_test_detail: 'it returned nothing',
+    })
+    install([r], {
+      act: async (op, _row, args) => {
+        if (op === 'update' && args?.description !== undefined) throw { data: { detail: 'disk full' } }
+        return [r]
+      },
+    })
+    await mount()
+    await openSheet('MiroThinker')
+    await typeInto(sheetTextarea(), 'Odd jobs')
+    await blur(sheetTextarea())
+    expect(note()!.querySelector('.extAgents-note-t')!.textContent).toBe('gui.agent.bad_save')
+    await typeInto(sheet()!.querySelector('.extAgents-fld input'), 'sk-2')
+    expect(note()!.querySelector('.extAgents-note-t')!.firstChild!.textContent).toBe('gui.agent.st_test_bad')
+    expect(note()!.querySelector('.extAgents-note-p')!.textContent).toBe(say('gui.agent.said_test', { button: 'gui.agent.connect' }))
+    expect(note()!.querySelector('.extAgents-note-said')!.textContent).toBe('it returned nothing')
   })
 
   it('says to sign in, and offers nothing to run, when no command is known for the agent', async () => {
