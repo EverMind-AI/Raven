@@ -240,6 +240,41 @@ describe('the model verbs', () => {
     expect(store.get().failed.claude_code!.detail).toBe('did not answer')
   })
 
+  it('a write whose read came back after a later write landed reads the roster again', async () => {
+    /* Two Connects pressed at once. The first one's probing read began before
+       the second landed, so it still has the second row off; painted as read,
+       the second agent would be offered as connectable again though its write
+       succeeded. The second, landing with nothing newer under it, paints what
+       it read and reads nothing again. */
+    const first = row({ name: 'claude_code' })
+    const second = row({ name: 'codex', preset: 'codex' })
+    const both = [{ ...first, configured: true, enabled: true }, { ...second, configured: true, enabled: true }]
+    let finishFirst: (rows: ExtAgentRow[]) => void = () => {}
+    const loads: boolean[] = []
+    setSources({
+      extAgents: {
+        load: async (probe) => {
+          loads.push(!!probe)
+          return both
+        },
+        act: (_op, r) => (r.name === 'claude_code'
+          ? new Promise((resolve) => { finishFirst = resolve })
+          : Promise.resolve(both)),
+      },
+    })
+    store.set({ rows: [first, second] })
+
+    const slow = store.act(first, 'connect')
+    await store.act(second, 'connect')
+    expect(store.get().rows.find((r) => r.name === 'codex')!.enabled).toBe(true)
+    expect(loads).toEqual([])
+    finishFirst([{ ...first, configured: true, enabled: true }, second])
+    await slow
+
+    expect(loads).toEqual([true])
+    expect(store.get().rows.map((r) => [r.name, r.enabled])).toEqual([['claude_code', true], ['codex', true]])
+  })
+
   it('keeps the rows on screen, not the ones it started from, when the listing cannot be read after a refusal', async () => {
     const r = row()
     const other = row({ name: 'codex', preset: 'codex' })
