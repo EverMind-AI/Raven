@@ -175,6 +175,9 @@ const hubText = (v: unknown): string =>
 interface AuthContribution {
   kind: string
   auth?: { fields?: AuthField[] }
+  /* An http or sse server carries a url; a stdio one carries the command. */
+  connection?: { url?: string; command?: string; args?: string[] }
+  tools_preview?: string[]
 }
 
 const settingsErr = (e: unknown): string => {
@@ -240,11 +243,10 @@ export const settingsSource: SettingsSource = {
     const r = await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })
     await loadSettings()
     void pushPermMode()
-    /* The server says when a save costs something -- a reload-only key, a
-       swapped embedding model that invalidates every stored vector.
-       Discarding the answer and toasting a fixed "saved" is how that reached
-       nobody. */
-    toast(r.warning || t('gui.settings.saved'))
+    /* Only when the server says a save costs something -- a reload-only key,
+       a swapped embedding model that invalidates every stored vector. A plain
+       save says nothing: the control already shows the new value. */
+    if (r.warning) toast(r.warning)
     return settingsSnapshot()
   })()),
   /* A null model means "clear the role" (optional roles only). */
@@ -254,7 +256,7 @@ export const settingsSource: SettingsSource = {
       : { section, clear: true }
     const r = await gateway().call('settings.everosSet', p)
     await loadEveros()
-    toast(r.warning || t('gui.settings.saved'))
+    if (r.warning) toast(r.warning)
     return settingsSnapshot()
   })()),
   usage: (range) => gateway().call('settings.usage', { from: range.from, to: range.to }),
@@ -268,9 +270,11 @@ export const settingsSource: SettingsSource = {
     else throw new Error(`no provider op ${String(op)}`)
     return afterProviders()
   })()),
-  /* A read, so no reload after it: the fetched list is the sheet's own state
-     and the page behind it has not changed. */
-  fetchModels: (slug) => gateway().call('model.fetch_models', { slug }),
+  /* A read, so no reload after it here: the fetched list is the sheet's own
+     state. What it taught the server's cache reaches the offer through
+     `reloadProviders`, which the store runs once the read succeeds. */
+  fetchModels: (slug, verify) => gateway().call('model.fetch_models', verify ? { slug, verify: true } : { slug }),
+  reloadProviders: afterProviders,
   addModels: (slug, models) => run(gateway().call('model.add_models', { slug, models }).then(afterProviders)),
   setFields: (slug, fields) => run(
     gateway().call('model.set_fields', { slug, fields: fields as ParamsOf<'model.set_fields'>['fields'] })
@@ -298,17 +302,26 @@ export const settingsSource: SettingsSource = {
     .then((r) => (r.info || {}) as SkillDetail)),
   openSkillFile: (name, file) => run(gateway().call('skills.manage', { action: 'open', query: name, file })
     .then(() => undefined)),
+  revealPlace: (place) => run(gateway().call('fs.reveal', { place }).then(() => undefined)),
   uninstallSkill: (name) => run(gateway().call('skillhub.remove', { name }).then(afterExt)),
-  serverAuthFields: (name) => gateway().call('plughub.detail', { id: name })
+  serverDetail: (name) => gateway().call('plughub.detail', { id: name })
     .then((r) => {
       const entry = r.item as unknown as { contributes?: AuthContribution[] }
       const mcp = (entry.contributes || []).find((c) => c.kind === 'mcp')
-      return ((mcp && mcp.auth && mcp.auth.fields) || []).map((f) => ({ ...f, label: hubText(f.label) }))
+      const conn = (mcp && mcp.connection) || {}
+      const command = conn.command ? [conn.command, ...(conn.args || [])].join(' ') : undefined
+      return {
+        known: true,
+        fields: ((mcp && mcp.auth && mcp.auth.fields) || []).map((f) => ({ ...f, label: hubText(f.label) })),
+        address: conn.url || command,
+        tools: (mcp && mcp.tools_preview) || [],
+      }
     })
-    /* A server the catalogue does not carry is the ordinary case, not a
-       failure to report: the panel says so itself when the list comes back
-       empty. */
-    .catch(() => []),
+    /* A server the catalogue does not carry is ordinary -- anything added by
+       hand is one -- so this is a miss, not a failure. It is reported as a
+       miss rather than as an empty entry because the panel must not read it
+       as "takes no credential". */
+    .catch(() => ({ known: false, fields: [], tools: [] })),
   toggleServer: (name, on) => run(gateway().call('plug.toggle', { name, enabled: on }).then(afterExt)),
   retryServer: (name) => run(gateway().call('plug.retry', { name }).then(afterExt)),
   revokeServer: (name) => run(gateway().call('plug.revoke', { name }).then(afterExt)),
@@ -398,6 +411,12 @@ export const keySet = (tool: string, vendor: string, raw: Record<string, unknown
    step already has a key on file for either web tool's vendor. */
 export function modelStepDone(): boolean {
   return defaultProviders().some((p) => p.on) && !!defaultModel()
+}
+
+/* Whether the wizard's data-sync step may import: it asks for an embedding
+   model before an import is distilled into memories. */
+export function memoryStepDone(): boolean {
+  return !!everosLive?.sections?.embedding?.model
 }
 
 export function webStepDone(): boolean {

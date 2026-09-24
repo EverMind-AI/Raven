@@ -78,6 +78,11 @@ export interface LiveDagRun {
   startedAtMs?: number
   /** The graph's one-line goal (`task_summary`), when the run reported one. */
   summary?: string
+  /** The multi-round run this graph is one round of. Absent on an ordinary
+   * graph, which is every graph a tool call dispatched. */
+  stintId?: string
+  /** Which round of that run this graph is, counting from one. */
+  roundIndex?: number
 }
 
 export const $dagRuns = atom<LiveDagRun[]>([])
@@ -319,13 +324,15 @@ const patchDagRun = (runId: string, seed: boolean, mut: (run: LiveDagRun) => Liv
 
 const applyDagRunEvent = (event: DagEvent, now: number): void => {
   if (event.type === 'dag.run_started') {
-    const { nodes, run_id, task_summary } = event.payload
+    const { nodes, round_index, run_id, stint_id, task_summary } = event.payload
 
     patchDagRun(run_id, true, run => ({
       ...run,
       nodes: nodes.reduce((acc, node) => mergeNodeStatus(acc, node.id, 'pending'), run.nodes),
       startedAtMs: run.startedAtMs ?? now,
-      summary: task_summary ?? run.summary
+      summary: task_summary ?? run.summary,
+      ...(stint_id ? { stintId: stint_id } : {}),
+      ...(round_index ? { roundIndex: round_index } : {})
     }))
 
     return

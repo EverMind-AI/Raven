@@ -1007,6 +1007,16 @@ class TestDoctorWithoutTheMemoryPlugin:
         assert "not installed" not in r.stdout
 
 
+def _libreoffice_row(stdout: str) -> str:
+    """The LibreOffice row of the External tools section, wrapped lines included.
+
+    It is the section's first row and Chromium's comes next, so the text before
+    that heading is this row and no other: the section as a whole also carries
+    the Cairo row, whose own "not found" is not LibreOffice's.
+    """
+    return stdout.split("External tools")[1].split("Chromium:")[0]
+
+
 def test_doctor_names_the_libreoffice_it_found(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The row exists to answer "will my decks render", so it prints the path
     that would be run rather than a tick."""
@@ -1016,7 +1026,7 @@ def test_doctor_names_the_libreoffice_it_found(healthy_config: Path, monkeypatch
 
     assert "LibreOffice" in result.stdout
     assert "/usr/bin/soffice" in result.stdout
-    assert "not found" not in result.stdout.split("External tools")[1]
+    assert "not found" not in _libreoffice_row(result.stdout)
 
 
 def test_doctor_reports_libreoffice_missing_with_the_command_that_installs_it(
@@ -1030,9 +1040,9 @@ def test_doctor_reports_libreoffice_missing_with_the_command_that_installs_it(
 
     result = runner.invoke(app, ["doctor"])
 
-    external = result.stdout.split("External tools")[1]
-    assert "not found" in external
-    assert "apt install libreoffice" in external
+    row = _libreoffice_row(result.stdout)
+    assert "not found" in row
+    assert "apt install libreoffice" in row
 
 
 def test_doctor_finds_the_windows_install_the_remedy_it_prints_creates(
@@ -1055,6 +1065,32 @@ def test_doctor_finds_the_windows_install_the_remedy_it_prints_creates(
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "Program Files"))
 
     assert doctor_commands._gather_external_tools().soffice == str(launcher)
+
+
+def test_doctor_names_the_libcairo_it_found(healthy_config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("raven.utils.cairo.libcairo_path", lambda: "/opt/homebrew/lib/libcairo.2.dylib")
+
+    result = runner.invoke(app, ["doctor"])
+
+    external = " ".join(result.stdout.split("External tools")[1].split())
+    assert "Cairo: /opt/homebrew/lib/libcairo.2.dylib" in external
+
+
+def test_doctor_reports_libcairo_missing_with_what_it_costs_and_the_fix(
+    healthy_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing libcairo is reported and does not move the exit code: only a fetched
+    SVG is refused, and the remedy is a system package `uv` will not fetch."""
+    monkeypatch.setattr("raven.utils.cairo.libcairo_path", lambda: None)
+    monkeypatch.setattr("raven.utils.cairo.install_hint", lambda: "brew install cairo")
+
+    result = runner.invoke(app, ["doctor"])
+    report = runner.invoke(app, ["doctor", "--json"])
+
+    external = " ".join(result.stdout.split("External tools")[1].split("Gateway")[0].split())
+    assert "Cairo: not found" in external
+    assert "SVG" in external and "brew install cairo" in external
+    assert json.loads(report.stdout)["external_tools"]["cairo"] is None
 
 
 # --------------------------------------------------------------------------- chromium

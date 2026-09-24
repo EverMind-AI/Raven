@@ -26,8 +26,10 @@ class AgentCapabilities:
     injectable_skills: bool = True
     injectable_mcps: bool = True
     """Whether per-node ``skills`` / ``mcps`` can be pushed into this agent's
-    session at all. Only an in-process raven loop has a skill menu raven controls;
-    a cli or acp agent's is its own business, so a list aimed at one does nothing."""
+    session. ``injectable_skills`` decides the delivery, not whether there is
+    one: a menu raven controls is narrowed, any other agent has the skills
+    quoted into its prompt. ``injectable_mcps`` false means the server list is
+    withheld, with a notice."""
 
 
 def check_path_placeholders(

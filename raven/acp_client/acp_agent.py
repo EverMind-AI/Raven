@@ -956,6 +956,32 @@ class AcpAgentBackend:
         self._unprompted_announce: Any = None
 
     @property
+    def _follows_parent(self) -> bool:
+        """Whether this agent runs on the parent's providers, and so on its model.
+
+        Two conditions, and they are the two the listing draws its model rule
+        from (``raven.rpc.methods.subagents._model_rule``) -- deliberately the
+        same pair, because a row saying its model is managed elsewhere while
+        every dispatch moves it is worse than either answer on its own.
+
+        The handshake names raven: a product built on ``raven acp`` says so
+        whatever its row is called here.
+
+        And its folder lends it no chat credential of its own. One that does is
+        launched on that key with the provider and model beside it, and pushing
+        the host's model at it is not merely pointless: a product keying the
+        same vendor the host uses (Raven-Research files its key under
+        ``providers.openrouter``) takes the switch and answers on the host's
+        model, paid for by its own key -- which is the one thing its folder's
+        configuration exists to decide.
+        """
+        if getattr(self._snapshot, "agent_name", "") != "raven":
+            return False
+        from raven.agent.subagent.vendored_agents import product_llm_key
+
+        return not product_llm_key(self.name)
+
+    @property
     def pool(self) -> Any:
         """The connection pool this backend's turns are served from.
 
@@ -1415,6 +1441,20 @@ class AcpAgentBackend:
                 parent_protocol = str(getattr(provider, "api_protocol", "") or "")
                 if parent_protocol:
                     binding["RAVEN_PARENT_PROTOCOL"] = parent_protocol
+                # One of raven's own with no pin of its own follows the parent.
+                # The binding above puts a fresh worker on the parent's model at
+                # launch; this says the same to the session on every route in,
+                # because a resumed session keeps whatever it was last put on --
+                # a pin since cleared, kept in the agent's own session record
+                # across a host restart that forgot it ever pushed one -- and the
+                # page then reads "follows the main Raven" over a session that
+                # answers on something else. The value is the child's own
+                # spelling, `<slug>/<id>`; a parent whose provider names no slug
+                # gives it nothing to route by, so nothing is pushed and the
+                # launch binding stands. A third party is left alone: the
+                # parent's model is not one of its choices.
+                if not session_model and model and parent_provider and self._follows_parent:
+                    session_model = model if model.startswith(f"{parent_provider}/") else f"{parent_provider}/{model}"
                 connection = await self.pool.acquire(
                     name=self.name,
                     command=self.command,

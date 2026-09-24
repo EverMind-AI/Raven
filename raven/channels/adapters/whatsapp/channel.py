@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 from collections import OrderedDict
 from typing import Any
 
@@ -23,6 +22,9 @@ from raven.channels.errors import transient_network
 from raven.channels.media import safe_name
 
 _MAX_PROCESSED_IDS = 1000
+_RECONNECT_SECONDS = 5
+_BRIDGE_READY_SECONDS = 30.0
+_LOGIN_POLL_SECONDS = 0.5
 
 
 class WhatsAppChannel(ChannelBase):
@@ -37,6 +39,8 @@ class WhatsAppChannel(ChannelBase):
         super().__init__(config)
         self._ws = None
         self._connected = False
+        self._bridge_up = False
+        self._bridge_proc: asyncio.subprocess.Process | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
         self._lid_to_phone: dict[str, str] = {}
         self._bridge_token: str | None = None
@@ -49,6 +53,11 @@ class WhatsAppChannel(ChannelBase):
         channel task merely running (which is true before the QR is scanned)."""
         return self._connected
 
+    def _auth_dir(self) -> str:
+        from raven.config.paths import get_runtime_subdir
+
+        return str(get_runtime_subdir("whatsapp-auth"))
+
     def _effective_bridge_token(self) -> str:
         """Resolve the bridge token, minting a local secret on first use."""
         if self._bridge_token is None:
@@ -59,21 +68,69 @@ class WhatsAppChannel(ChannelBase):
     # ── login (interactive QR via the bridge) ─────────────────────────
 
     async def login(self, force: bool = False) -> bool:
-        from raven.config.paths import get_runtime_subdir
-
-        try:
-            bridge_dir = bridge.ensure_bridge_dir()
-        except RuntimeError as e:
-            logger.error("Bridge setup failed: {}", e)
-            return False
-        if not shutil.which("npm"):
-            logger.error("npm not found. Please install Node.js.")
-            return False
-
+        """Pair by QR from a terminal: run the same bridge the gateway runs and
+        wait until it reports a paired session (the bridge prints the code)."""
         logger.info(f"{__logo__} Starting WhatsApp bridge for QR login...")
-        return bridge.run_login(bridge_dir, self._effective_bridge_token(), str(get_runtime_subdir("whatsapp-auth")))
+        task = asyncio.create_task(self.start())
+        try:
+            while not task.done() and not self._connected:
+                await asyncio.sleep(_LOGIN_POLL_SECONDS)
+            paired = self._connected
+        finally:
+            await self.stop()
+            task.cancel()
+            (outcome,) = await asyncio.gather(task, return_exceptions=True)
+            if isinstance(outcome, Exception):
+                logger.error("WhatsApp bridge client failed: {}", outcome)
+        return paired
 
     # ── lifecycle ─────────────────────────────────────────────────────
+
+    async def _ensure_bridge_process(self) -> bool:
+        """Make sure something serves ``bridge_url``, starting the bridge as our
+        own child when the URL is local and nothing listens there.
+
+        False means the bridge is not usable on this machine (no node, no bridge
+        source, a failed build, a child that never listens), which retrying
+        would only repeat, or that the channel was stopped while it came up.
+        """
+        if not bridge.is_local_bridge(self.config.bridge_url):
+            return True
+        if self._bridge_proc is not None and self._bridge_proc.returncode is None:
+            return True
+        host, port = bridge.bridge_endpoint(self.config.bridge_url)
+        if await bridge.port_is_open(host, port):
+            return True
+        try:
+            bridge_dir = await asyncio.to_thread(bridge.ensure_bridge_dir)
+            self._bridge_proc = await bridge.spawn_bridge(
+                bridge_dir, self._effective_bridge_token(), self._auth_dir(), port
+            )
+        except Exception as e:
+            logger.error("Cannot run the WhatsApp bridge: {}", e)
+            return False
+        logger.info("Started the WhatsApp bridge on port {} (pid {})", port, self._bridge_proc.pid)
+        try:
+            listening = await bridge.wait_for_port(host, port, _BRIDGE_READY_SECONDS)
+        except asyncio.CancelledError:
+            await self._discard_bridge_process()
+            raise
+        if not listening:
+            logger.error("The WhatsApp bridge never listened on port {}; giving up", port)
+            await self._discard_bridge_process()
+            return False
+        if not self._running:
+            # stop() ran while the build/spawn was in flight, so it found no
+            # process to stop; this child is ours to clean up or it outlives
+            # the gateway holding the WhatsApp session.
+            await self._discard_bridge_process()
+            return False
+        return True
+
+    async def _discard_bridge_process(self) -> None:
+        if self._bridge_proc is not None:
+            await bridge.terminate_bridge(self._bridge_proc)
+            self._bridge_proc = None
 
     async def start(self) -> None:
         import websockets
@@ -81,11 +138,16 @@ class WhatsAppChannel(ChannelBase):
         logger.info("Connecting to WhatsApp bridge at {}...", self.config.bridge_url)
         self._running = True
         while self._running:
+            if not await self._ensure_bridge_process():
+                self._running = False
+                return
+            if not self._running:
+                return  # stopped while the bridge came up, which can take minutes
             try:
                 async with websockets.connect(self.config.bridge_url) as ws:
                     self._ws = ws
                     await ws.send(json.dumps({"type": "auth", "token": self._effective_bridge_token()}))
-                    self._connected = True
+                    self._bridge_up = True
                     logger.info("Connected to WhatsApp bridge")
                     async for frame in ws:
                         try:
@@ -95,26 +157,31 @@ class WhatsAppChannel(ChannelBase):
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                logger.warning("WhatsApp bridge connection error: {}", e)
+            finally:
+                self._bridge_up = False
                 self._connected = False
                 self._ws = None
-                logger.warning("WhatsApp bridge connection error: {}", e)
-                if self._running:
-                    logger.info("Reconnecting in 5 seconds...")
-                    await asyncio.sleep(5)
+            if self._running:
+                logger.info("Reconnecting in {} seconds...", _RECONNECT_SECONDS)
+                await asyncio.sleep(_RECONNECT_SECONDS)
 
     async def stop(self) -> None:
         self._running = False
         self._connected = False
+        self._bridge_up = False
         if self._ws:
             await self._ws.close()
             self._ws = None
+        await self._discard_bridge_process()
 
     # ── outbound ──────────────────────────────────────────────────────
 
     async def send(self, chat_id: str, content: str, media: list[str] | None = None) -> None:
-        if not self._ws or not self._connected:
-            logger.warning("WhatsApp bridge not connected")
-            return
+        if not self._ws or not self._bridge_up:
+            # Raised, not swallowed: the delivery hub retries the send and,
+            # when the bridge stays down, counts the reply as dropped.
+            raise ConnectionError("WhatsApp bridge is not connected")
         text = content
         media = media or []
         if media:

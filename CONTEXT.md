@@ -526,12 +526,6 @@ plugin tools built by `PluginRegistry.build_tool` (`core/plugin_stack.py`), and 
 registers MCP tools per connected server.
 _Avoid_: a fourth door -- a tool reaching the table any other way skips admission.
 
-**Deep Research** (`agent/tools/deep_research.py`):
-Opt-in tool delegating an open-ended research question to the MiroThinker API; returns a
-finished, cited answer. Streamed inline on CLI/TUI, async on channels (background run +
-verbatim `deliver_text` push). Configured via `raven deep-research`.
-_Avoid_: "Subagent" — it is a single long-running tool, not a spawned agent.
-
 **Checkpoint** (`agent/loop/checkpoint.py`):
 A once-per-turn commit of the session workspace into a shadow git repo (separate from the
 user's `.git`), so an interrupted or failed turn can be rolled back. One `CheckpointService`
@@ -544,7 +538,11 @@ The opt-in policy for when the model returns no text: re-feed its reasoning (PRE
 inject a nudge after a tool call (NUDGE), or plain RETRY — each bounded by
 `RecoveryLimits`. A response with text in it, or recovery switched off, COMPLETEs;
 spending every budget with nothing ever returned is FAIL, and the Agent Loop ends the turn
-with status `error` and a reply naming the failure. PREFILL is asked of the provider first
+with status `error` and a sentence saying how many attempts went into it. Either way a turn
+that reaches its end with no text raises `AnswerlessTurnError` rather than replying -- unless
+one of its tools already put an answer in front of the reader (the message tool's
+`sent_in_turn`, or an inline research answer the turn itself streamed).
+PREFILL is asked of the provider first
 (`LLMProvider.supports_assistant_prefill`): the Anthropic family rejects a trailing
 assistant message while thinking is on, and through a gateway that rejection can arrive as
 a stream that never yields a byte, so a provider that answers no never gets PREFILL -- the
@@ -561,6 +559,17 @@ any call produced no tool result to carry it.
 _Avoid_: calling the whole mechanism a "nudge" — nudge is one of its modes; and reading
 FAIL as a fourth mode — it is the answer given when there is nothing left to try;
 `OUTPUT_LIMIT_NUDGE` rides RETRY rather than being the NUDGE mode.
+
+**Model-Error Ladder** (`agent/loop/turn_path.py`, `RecoveryLimits.llm_error_retry_delays`):
+The waits the Agent Loop spends on a model call that came back an *error* before it gives the
+turn up. The provider's own retries are seconds long and suit a dropped connection; a gateway
+serving error pages outlasts them, so a retryable verdict buys one rung of this ladder and the
+same ask goes out again — the messages are untouched, so nothing is appended for the failed
+call. The wait is announced as a `NoticeKind.LLM_RETRY` notice carrying the error *category*,
+which is how a surface can say the runtime is still working rather than showing nothing for
+minutes. A non-retryable verdict, or a spent ladder, ends the turn.
+_Avoid_: "retry" unqualified — Empty-Response Recovery's RETRY is a different mechanism, for a
+call that *succeeded* and returned no text; this one answers a call that failed.
 
 **Call Record** (`contracts/llm_provider.py`, `providers/call_record.py`):
 What the transport did on one model call, carried on `LLMResponse.call_record` and stored
@@ -619,6 +628,9 @@ The single backbone every turn flows through: one entry
 A handle resolves three ways: the `TurnOutcome` of a turn that answered, the `TurnFailed`
 its Lane filed for a turn that failed with a name, or `None` when it was cancelled or never
 ran (a queued turn drained by a stop, an inject merged into a turn that did not answer).
+A `TurnFailed` is `reported` when the runner worded `error` itself (an `AnswerlessTurnError`)
+rather than it being whatever a crash carried — in-process only, so a consumer deciding what to
+show a stranger can quote a report and refuse to quote a crash.
 Per-conversation **Lanes** are the unit of both ordering and cancellation. Deliberately
 not a broadcast bus.
 _Avoid_: "the bus" — there is no Bus; "queue" for Lane — Lane is a serial+cancel domain.
@@ -645,9 +657,13 @@ those are emitted by the Spine worker, not a runner.
 **AnswerlessTurnError**:
 The exception a runner raises to say the turn it ran ended with no answer and that its message is
 already the report a reader should see — the model call the loop gave up on, in the provider's words,
-or the loop's when the provider gave none.
-`describe_failure` passes its text through unchanged, and the `turn_ended` marker that says so is
-filed before the failure leaves the loop.
+or the loop's when the provider gave none; or an empty-response recovery that spent its budgets, in the
+loop's one-sentence account of the attempts.
+`describe_failure` passes its text through unchanged (it arrives bounded from the layer that built
+it), and the `turn_ended` marker that says so is filed before the failure leaves the loop. The marker
+is worded twice, for its two readers: `turn_ended.reason` keeps the provider's account for whoever is
+diagnosing the failure, while the entry text the model reads back names the failure's category and
+endpoint only — a vendor body is not history the model should spend context on or try to answer.
 _Avoid_: conflating AnswerlessTurnError with `TurnFailed`, the lifecycle event the Spine worker
 emits for any exception a runner lets out, this one included.
 
@@ -1335,8 +1351,13 @@ one announce path while the tools ride the plugin contract.
 The `PluginRegistry` discovers manifests, activates those not in `plugins.disabled`,
 resolves each `module:callable` factory by dynamic import, and registers
 contributions into per-kind tables — deduping plugins by `id` and contributions by `name`
-(`PluginConflictError` on collision). `build_memory_backend()` / `build_tool()` construct a
-contribution with a fresh `PluginContext`.
+(on collision the plugin activated first keeps the name). Activation is per plugin: one
+whose factory will not import or whose name collides is rolled back whole and recorded as
+a `PluginActivationFailure` (`activation_failures()`), and every other plugin still
+activates; `build_plugin_registry` says each one to the host's notifier. A product
+launcher's render inherits the host's `plugins.disabled`, except its own engine plugin
+(`product_render.inherit_plugin_opt_outs`). `build_memory_backend()` / `build_tool()`
+construct a contribution with a fresh `PluginContext`.
 
 **Service** (`raven/contracts/services.py`):
 A plugin's background-service contribution (the `services` kind): a resident host runs it
@@ -1748,6 +1769,59 @@ _Avoid_: "task judge" as a class name — the class is `EvalJudge`.
 The three-state outcome an EvalJudge returns: `completed` (goal addressed), `failed`
 (visible error / missed objective), or `unknown` (indeterminate). The `AfterIterationHook`
 writes completed/failed (never unknown) into `HISTORY.md`.
+
+### Stint (a playbook that takes many rounds)
+
+**Stint** (`mode: stint`):
+A playbook's third mode. It declares roles rather than nodes, and the driver compiles one
+sub-agent graph per round, so a run of thirty rounds is thirty graphs on the shared dispatch
+path rather than one long process. Entrance `raven playbook run <name>`; design doc
+`docs/specs/2026-09-17-playbook-rounds-design.md`.
+
+**Stint record** (`raven/stint/record.py`):
+One multi-round run: an id, a checkout of its own, and a record on disk. `RUNNING`, `PAUSED`,
+`STOPPED`, `FINISHED` or `INTERRUPTED`; *unfinished* is anything but `FINISHED` and `STOPPED`,
+*live* is `RUNNING` or `INTERRUPTED`. The record is what lets any process take a plan up again,
+so nothing depends on the process that started it still being alive.
+
+**Round**:
+One pass of every role, in dependency order. Each role opens a fresh conversation, so what one
+round learned reaches the next only by being written down.
+
+**Role** (`roles[]`):
+A named seat in a round -- `as` names it, `name` says which roster entry plays it. The model,
+the tools and the servers come from that roster row, never from the playbook, so a playbook
+somebody hands you cannot overrule your own settings.
+
+**Journal** (`memory[]` with `append: true`):
+The append-only file the roles hand over through. Only the most recent rounds reach a prompt
+(`recentRounds`, `maxChars`); the rest is in the commit log.
+
+**Ownership** (`owns` / `appends`, `raven/stint/ownership.py`):
+What a role may write, what it may only add to, and everything else, which it may not touch.
+One path has one owner. Declared in the playbook, rendered into the role's prompt, measured by
+the role's own checks, and undone afterwards -- three layers, because a prompt is not a fence.
+Nothing refuses a write before it lands: a charter narrows a role's tools only where the
+playbook declares one, and `owns` is not turned into a charter.
+
+**Violation** (`violations/`):
+A write outside a role's paths, found by comparing the stage's own commits and worktree against
+what the role declared. The change is reverted and the file it wrote is kept as evidence.
+
+**Check** (`verify[]`, `raven/stint/verify.py`):
+A real command -- a build, a test run -- that a role's work is measured by before any model
+judges it. The one signal in a round that is not a model's opinion.
+
+**Handback** (`maxHandbacks`):
+A failed check returned to the role that caused it, with the failure text, up to a budget.
+Once that budget is spent the round moves on with the failure on the record rather than failing
+the node: a failed node skips every role downstream, and a failed build is exactly what the reviewer
+downstream has to see. The record carries it to the next round's prompt and to a person reading the stint.
+
+**Backlog** (`.stint/backlog.json`):
+The one structured thing the roles share: cards moving through a state machine, one transition
+per role. `raven playbook stint task` is how a person or a role moves one.
+
 
 ### Trajectory
 
@@ -2198,13 +2272,19 @@ statement about the agent right now.
 **Unattended Approval** (`raven/acp_client/permissions.py`):
 How raven answers an ACP Subagent's `session/request_permission`: it approves, choosing
 from the options the agent offered by their protocol `kind` (`allow_always`, then
-`allow_once`) and never by `optionId`, which is the agent's own vocabulary. There is no
-third answer - a dispatch has no operator and no surface that could render a prompt - and
-*not* answering is not one either: measured on `codex-acp`, any error to this request,
+`allow_once`) and never by `optionId`, which is the agent's own vocabulary. It never asks
+a person - a dispatch has no operator and no surface that could render a prompt - and
+*not* answering is no answer either: measured on `codex-acp`, any error to this request,
 including the `method not found` raven used to send, cancels the whole turn. Presets that
 take a launch-time never-ask setting carry it too, so the question is not asked at all.
 The same trust boundary the cli transport already ran under (`codex -a never`,
 `claude --permission-mode auto`), stated in one place instead of per command template.
+The one request it refuses is one naming a shell command (`toolCall.rawInput.command`,
+codex's `commandActions`) that the host's own deny rules refuse - the builtin list with
+`tools.exec.extraDenyPatterns`, or a `deny` entry in `permissions.tools`: refusing needs no
+operator, so it is answered with the agent's reject option. Raven's own products carry the
+same refusals in their rendered config (`product_render.inherit_host_denials`), because a call
+their own gate allows never reaches this handler.
 Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.

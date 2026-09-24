@@ -183,7 +183,7 @@ const SHARED = new Set([
 // counted is not.
 const LEGACY_SHARED = {
   a: 3, btn: 2, cap: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2, k: 3,
-  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, key: 2, lb: 3, n: 3, rm: 2, row: 2,
+  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, key: 2, lb: 3, n: 2, rm: 2, row: 2,
   shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 3, wkg: 3,
   wsnote: 2,
 }
@@ -267,7 +267,8 @@ const LEGACY_LOCAL = {
      vocabulary, shared with the popovers beside it. */
   model: 4,
   onboard: 0,
-  rail: 11,
+  /* Down one: an empty group is its heading alone, so `.grp-empty` is gone. */
+  rail: 9,
   settings: 0,
   /* Up one the same way: `.chev` was shared with the schedules island's run
      list, whose rows carry a prefixed stamp and note now instead of the
@@ -298,7 +299,7 @@ const LEGACY_LOCAL = {
      Up to 71 with the dag renderer's default node box gone: `.tm` was
      shared with it, and the timestamp on a folded turn's own head is this
      domain's alone now. */
-  transcript: 71,
+  transcript: 60,
   /* Up from 37 with the playbooks page gone: `.t` was shared with it. */
   workspace: 38,
 }
@@ -322,7 +323,9 @@ const LEGACY_EXPR = {
   extAgents: 0,
   importSync: 0,
   installed: 0,
-  memory: 1,
+  /* Down from 1 with the initial tile gone: `.pmtile`, written only from
+     inside a `className={...}` expression, left with it. */
+  memory: 0,
   model: 0,
   onboard: 0,
   rail: 2,
@@ -333,7 +336,7 @@ const LEGACY_EXPR = {
   subagents: 6,
   /* Down from 24 with the node panel: `.tpl`, written only from inside a
      `className={...}` expression, left with it. */
-  transcript: 23,
+  transcript: 20,
   workspace: 7,
 }
 
@@ -370,7 +373,9 @@ const LEGACY_CHROME_EXPR = {
      while the playbooks and agents pages both wrote the class; the agents page
      writes its own names now, so the name is playbooks' alone and the
      component's use of it counts here instead. */
-  components: 11,
+  /* Down one with the letter tile gone: `.pmtile`, written from inside an
+     expression in SetupRow.tsx, left with it. */
+  components: 10,
 }
 
 // A class the markup writes that styles/page.css does not define -- page.css

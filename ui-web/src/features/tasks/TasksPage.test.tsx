@@ -169,6 +169,58 @@ describe('the tasks list', () => {
     expect(panes).toHaveLength(1)
     expect(panes[0]!.id).toBe('task:dag:a')
   })
+
+  it.each(['spawn', 'dag'] as const)('stops only the selected %s from the list without opening it', async (kind) => {
+    const running = task({ id: 'a', kind, status: 'running', agent: 'raven', handle: 'worker-a' })
+    const other = task({ id: 'b', kind: 'spawn', status: 'running' })
+    rows = [running, other]
+    await draw()
+    const stop = document.querySelector<HTMLButtonElement>('.tklistrow button[aria-label="gui.stop"]')
+    expect(stop).not.toBeNull()
+    expect(stop!.parentElement?.closest('button')).toBeNull()
+    rows = [{ ...running, status: 'cancelled' }, other]
+    await act(async () => { stop!.click() })
+    expect(stopped).toEqual([running])
+    expect(desk.get().panes).toHaveLength(0)
+    expect(store.byKey(kind, 'a')?.status).toBe('cancelled')
+    expect(store.byKey('spawn', 'b')?.status).toBe('running')
+    expect(document.querySelectorAll('.tklistrow button[aria-label="gui.stop"]')).toHaveLength(1)
+  })
+
+  it('offers no stop action for settled tasks', async () => {
+    rows = (['completed', 'cancelled', 'failed', 'interrupted'] as const)
+      .map((status) => task({ id: status, kind: 'spawn', status }))
+    await draw()
+    expect(document.querySelectorAll('.tklistrow button[aria-label="gui.stop"]')).toHaveLength(0)
+  })
+
+  it('disables stop while pending, reports failure and allows a retry', async () => {
+    const running = task({ id: 'a', kind: 'spawn', status: 'running' })
+    rows = [running]
+    let rejectStop = (_error: Error): void => {}
+    const stopRequest = vi.fn(() => new Promise<boolean>((_resolve, reject) => { rejectStop = reject }))
+    setSources({ tasks: { ...source(), stop: stopRequest } })
+    const toasts = document.createElement('div')
+    toasts.id = 'toasts'
+    document.body.append(toasts)
+    await draw()
+    const stop = document.querySelector<HTMLButtonElement>('.tklistrow button[aria-label="gui.stop"]')
+    expect(stop).not.toBeNull()
+    act(() => { stop!.click() })
+    expect(stop!.disabled).toBe(true)
+    act(() => { stop!.click() })
+    expect(stopRequest).toHaveBeenCalledTimes(1)
+    await act(async () => { rejectStop(new Error('Connection lost')) })
+    expect(stop!.disabled).toBe(false)
+    expect(toastGet().some((n) => n.text.includes('Connection lost'))).toBe(true)
+    expect(store.byKey('spawn', 'a')?.status).toBe('running')
+    stopRequest.mockResolvedValueOnce(true)
+    rows = [{ ...running, status: 'cancelled' }]
+    await act(async () => { stop!.click() })
+    expect(stopRequest).toHaveBeenCalledTimes(2)
+    expect(store.byKey('spawn', 'a')?.status).toBe('cancelled')
+    toasts.remove()
+  })
 })
 
 describe('the running strip', () => {
@@ -425,6 +477,63 @@ describe('a task pane', () => {
       expect(panes).toHaveLength(1)
       expect((panes[0]! as { change: WsChange }).change.kind).toBe('delete')
       expect((panes[0]! as { change: WsChange }).change.hunks.at(-1)).toMatchObject({ add: 0, del: 2 })
+    })
+
+    describe('folding a long strip', () => {
+      const manyFiles = (n: number): TaskRow => task({
+        id: 'a', kind: 'dag', status: 'completed',
+        nodes: [node({
+          node_id: 'n1', status: 'completed',
+          files: Array.from({ length: n }, (_, i) => ({ path: `/w/f${i}.png`, op: 'write' as const, add: 0, del: 0, size: 1024 })),
+        })],
+      })
+      /* happy-dom lays nothing out, so the strip is 300px wide and every file
+         chip 100px, three to a line -- and the +N chip 40px. */
+      let rect: ReturnType<typeof vi.spyOn>
+      beforeEach(() => {
+        rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+          const w = this.classList.contains('tkstrip') ? 300
+            : this.classList.contains('tkfold') ? 40
+              : this.classList.contains('tkover') || this.classList.contains('wchip') ? 100 : 0
+          return { width: w, height: 29, top: 0, left: 0, right: w, bottom: 29, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+        })
+      })
+      afterEach(() => { rect.mockRestore() })
+
+      const visible = (): Element[] => Array.from(document.querySelectorAll('.tkstrip > .wchip:not(.tkfold)'))
+
+      it('keeps every chip when two lines hold them, with no +N chip to click', () => {
+        render(<TaskPane task={manyFiles(6)} />)
+        expect(visible()).toHaveLength(6)
+        const more = document.querySelector('.tkfold') as HTMLElement
+        expect(more.classList.contains('tkover')).toBe(true)
+        expect(more.tabIndex).toBe(-1)
+      })
+
+      it('folds to two lines and leaves the last slot to a +N chip', () => {
+        render(<TaskPane task={manyFiles(8)} />)
+        expect(visible()).toHaveLength(5)
+        expect(document.querySelectorAll('.tkstrip > .tkover')).toHaveLength(3)
+        const more = document.querySelector('.tkfold') as HTMLElement
+        expect(more.textContent).toBe('+3')
+        expect(more.getAttribute('aria-label')).toBe('gui.tasks.files_more {"n":3}')
+      })
+
+      it('unfolds into a box capped at six lines, and folds back from outside it', () => {
+        render(<TaskPane task={manyFiles(40)} />)
+        act(() => { (document.querySelector('.tkfold') as HTMLElement).click() })
+        expect(visible()).toHaveLength(40)
+        expect(document.querySelector('.tkfold')).toBeNull()
+        expect(document.querySelector('.tkchips')?.hasAttribute('data-open')).toBe(true)
+        const strip = document.querySelector('.tkstrip') as HTMLElement
+        expect(strip.style.getPropertyValue('--tkopen-h')).toBe(`${29 * 6}px`)
+        const less = document.querySelector('.tkchips > .tkless') as HTMLElement
+        expect(less.parentElement).not.toBe(strip)
+
+        act(() => { less.click() })
+        expect(visible()).toHaveLength(5)
+        expect(document.querySelector('.tkless')).toBeNull()
+      })
     })
 
     it('draws no chip strip for a task that left nothing behind', () => {
@@ -778,10 +887,11 @@ describe('the node panel', () => {
       expect(document.querySelector('.tkans')?.textContent).toBe('second answer')
     })
 
-    /* A spawn's lane sends no per-step event -- `subagent.status` moves on
-       pending, running and the terminal word only -- so a running spawn's
-       record is re-read on a beat, the transcript's spawn card's own
-       cadence, rather than left at whatever the first read saw. */
+    /* No lane sends a per-step event -- `subagent.status` moves on pending,
+       running and the terminal word only, and `dag.node_updated` marks a dag
+       node's transitions -- so a running node's record is re-read on a beat,
+       the transcript's spawn card's own cadence, rather than left at whatever
+       the first read saw. */
     it("a running spawn's record is re-read on a beat, so its steps keep arriving", async () => {
       vi.useFakeTimers()
       try {
@@ -831,10 +941,13 @@ describe('the node panel', () => {
       }
     })
 
-    it('a running dag node is not re-read on a beat: its node_updated events already do that', async () => {
+    /* The dag lane too: its frames mark a node's transitions only, so a node
+       opened as it started used to freeze at its dispatch until it settled. */
+    it("a running dag node's record is re-read on the beat as well, so its steps keep arriving", async () => {
       vi.useFakeTimers()
       try {
         const calls: string[] = []
+        record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
         setSources({
           tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
           workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
@@ -844,8 +957,56 @@ describe('the node panel', () => {
         })
         pick(running)
         await act(async () => {})
-        await act(async () => { vi.advanceTimersByTime(3000) })
         expect(calls).toEqual(['fetch'])
+
+        record = { dispatch: 'go', steps: [{ kind: 'say', text: 'first step' }], answer: null, outputTruncated: false }
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch'])
+        expect(document.querySelector('.tkprocb .tkans')?.textContent).toBe('first step')
+
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch', 'fetch'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("stops a dag node's beat once its terminal frame lands, after the one read that frame earns", async () => {
+      vi.useFakeTimers()
+      try {
+        const calls: string[] = []
+        record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
+        setSources({
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+        })
+        const running = task({
+          id: 'r1', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000 })],
+        })
+        rows = [running]
+        store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
+        pick(running)
+        await act(async () => {})
+        await act(async () => { vi.advanceTimersByTime(1000) })
+        expect(calls).toEqual(['fetch', 'fetch'])
+
+        record = { dispatch: 'go', steps: [], answer: 'the answer', outputTruncated: false }
+        rows = [{
+          ...running, status: 'completed',
+          nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000 })],
+        }]
+        await act(async () => {
+          store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'completed', started_at: 1000, ended_at: 2000 })
+        })
+        /* The frame itself earns a read (the status key and the version bump
+           each re-run the effect); what matters here is that nothing follows. */
+        const onSettle = calls.length
+        expect(onSettle).toBeGreaterThan(2)
+        expect(document.querySelector('.tkanswer .tkans')?.textContent).toBe('the answer')
+
+        /* Settled: the beat has nothing left to follow. */
+        await act(async () => { vi.advanceTimersByTime(3000) })
+        expect(calls.length).toBe(onSettle)
       } finally {
         vi.useRealTimers()
       }
@@ -1184,6 +1345,22 @@ describe('a node record still being written', () => {
   }
   const body = (): HTMLElement => document.querySelector('.tkbody') as HTMLElement
 
+  /* A reader moving the box: the press that did it, the scroll it caused, and
+     letting go. All three, because only a gesture makes the scroll theirs and
+     a press is theirs until it is released. */
+  const reader = (top: number): void => {
+    body().dispatchEvent(new Event('pointerdown'))
+    body().scrollTop = top
+    body().dispatchEvent(new Event('scroll'))
+    window.dispatchEvent(new Event('pointerup'))
+  }
+
+  /* What the browser does on its own: a scroll with no gesture behind it. */
+  const browser = (top: number): void => {
+    body().scrollTop = top
+    body().dispatchEvent(new Event('scroll'))
+  }
+
   /* A running node open on its context tab, with its first read already in. */
   const opened = async (over: Partial<NodeRecord> = {}): Promise<void> => {
     const running = task({
@@ -1210,8 +1387,7 @@ describe('a node record still being written', () => {
        above it and had to drag back down, every single time. */
     await opened()
     sized(body(), 5090, 687)
-    body().scrollTop = 4403
-    act(() => { body().dispatchEvent(new Event('scroll')) })
+    act(() => { reader(4403) })
 
     await readAgain('second')
     expect(body().scrollTop).toBe(5090)
@@ -1221,13 +1397,174 @@ describe('a node record still being written', () => {
     expect(body().scrollTop).toBe(6200)
   })
 
+  it('is not talked out of following by a scroll the reader did not make', async () => {
+    /* Measured in Safari against a running node: the browser moved the offset
+       up by itself -- 48px, 146px, and once 1,025px -- with the content the
+       same height on both sides of the move and nothing in this code writing
+       to it. Each of those fired a `scroll`, and reading one as the reader
+       walking away ended the follow for good: the pane sat 152px short of the
+       end and stayed there. A reader who has not touched the box has not
+       changed their mind about where they want to be. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    /* Their hand is off the box -- the nudges landed seconds after the drag. */
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a press that scrolled nothing', async () => {
+    /* A gesture arms the scrolls that follow it, and only the scrolling
+       stopping disarms it again -- so a gesture that never scrolls has to
+       disarm on its own. A press on a fold inside the box, or a key the page
+       handles, is a gesture with no scroll after it; left armed, the next
+       move the browser makes by itself reads as the reader walking away, and
+       the follow ends for good, the defect this whole hook exists for. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => {
+      body().dispatchEvent(new Event('pointerdown'))
+      window.dispatchEvent(new Event('pointerup'))
+    })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a long press that scrolled nothing', async () => {
+    /* Held past the settle, the press's own deadline has already come and
+       gone while it was held, so it is letting go that has to start the
+       count -- or the gesture stays armed for good. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new Event('pointerdown')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 400)) })
+    act(() => { window.dispatchEvent(new Event('pointerup')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('is not talked out of following by a key that scrolled nothing', async () => {
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(3378) })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(5090)
+  })
+
+  it('still lets a reader scroll away with a gesture that does scroll', async () => {
+    /* The other half: disarming a gesture that scrolled nothing must not
+       disarm one that is scrolling. A wheel starts, its scroll follows inside
+       the settle window, and that is the reader leaving. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => {
+      body().dispatchEvent(new Event('wheel'))
+      body().scrollTop = 900
+      body().dispatchEvent(new Event('scroll'))
+    })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(900)
+  })
+
+  it('lets a reader drag away after holding the bar still', async () => {
+    /* The press is what makes a drag the reader's. Timed from the press
+       alone, a bar held still for longer than the settle would disarm before
+       the drag began, and every scroll of the drag would then be answered as
+       the browser's -- the reader pinned to the end, unable to leave it. */
+    await opened()
+    sized(body(), 5090, 687)
+    act(() => { reader(4403) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { body().dispatchEvent(new Event('pointerdown')) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 400)) })
+    act(() => {
+      body().scrollTop = 900
+      body().dispatchEvent(new Event('scroll'))
+      window.dispatchEvent(new Event('pointerup'))
+    })
+    await readAgain('second')
+
+    expect(body().scrollTop).toBe(900)
+  })
+
+  it('puts a reader back the moment the browser moves them', async () => {
+    /* Measured in Safari against a running node: the content is 172px shorter
+       for an instant inside a paint, the browser clamps `scrollTop` to the end
+       that implies -- 2,728 where the end is 2,900 -- and the height coming
+       back leaves the offset there. Both heights read the same on either side
+       of the move, so nothing reports a resize; the move is the only evidence
+       there is. It repeated every few seconds, which on screen is a pane that
+       will not stay at the end. Answered without waiting for the next read,
+       because the next read can be seconds away. */
+    await opened()
+    sized(body(), 4077, 1177)
+    act(() => { reader(2900) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    act(() => { browser(2728) })
+
+    expect(body().scrollTop).toBe(4077)
+  })
+
+  it('holds the end through a paint that empties the box', async () => {
+    /* What Safari actually does, measured: a paint takes the content down to
+       the height of the viewport -- the record gone for an instant -- and the
+       browser clamps the offset to 0 against it. The content comes back and
+       the offset does not: nothing scrolled, so no event fires, and both
+       heights read the same either side of it, so no observer reports
+       anything. The reader ended up at the top of a record whose end they had
+       been reading, and every few seconds it happened again. */
+    await opened()
+    sized(body(), 3711, 1177)
+    act(() => { reader(2534) })
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)) })
+
+    /* The collapse, the clamp it implies, and the content coming back --
+       none of it announced. */
+    sized(body(), 1177, 1177)
+    act(() => { body().scrollTop = 0 })
+    sized(body(), 3711, 1177)
+    await act(async () => { await new Promise((done) => requestAnimationFrame(() => done(undefined))) })
+
+    expect(body().scrollTop).toBe(3711)
+  })
+
   it('leaves a reader who scrolled up where they are', async () => {
     /* The thing a naive fix breaks: they are reading the step above, and the
        next read is not an invitation to go anywhere. */
     await opened()
     sized(body(), 5090, 687)
-    body().scrollTop = 900
-    act(() => { body().dispatchEvent(new Event('scroll')) })
+    act(() => { reader(900) })
 
     await readAgain('second')
     expect(body().scrollTop).toBe(900)
@@ -1251,8 +1588,7 @@ describe('a node record still being written', () => {
        reading what they opened, rather than sent to the end of it. */
     await opened({ steps: [{ kind: 'think', text: 'first, check the dates' }] })
     sized(body(), 5090, 687)
-    body().scrollTop = 4403
-    act(() => { body().dispatchEvent(new Event('scroll')) })
+    act(() => { reader(4403) })
 
     fireEvent.click(document.querySelector('.tkprock') as Element)
     expect(body().scrollTop).toBe(4403)
@@ -1263,8 +1599,7 @@ describe('a node record still being written', () => {
        the end over would open the order somewhere down its middle. */
     await opened()
     sized(body(), 5090, 687)
-    body().scrollTop = 4403
-    act(() => { body().dispatchEvent(new Event('scroll')) })
+    act(() => { reader(4403) })
 
     fireEvent.click(document.querySelectorAll('.tktabs button')[1] as Element)
     await readAgain('second')

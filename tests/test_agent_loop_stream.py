@@ -696,6 +696,58 @@ async def test_a_stream_cut_before_its_terminal_chunk_is_a_transport_failure() -
     assert any("without the upstream's terminal chunk" in line and "20 chars of reasoning" in line for line in logged)
 
 
+async def test_a_cut_stream_that_showed_its_reasoning_is_not_asked_again() -> None:
+    """The same rule the raising exits hold, on the exit that hands the failure
+    back instead. A watcher whose client renders reasoning has already read the
+    thought; left retryable, the loop's ladder asks again and the thinking is
+    drawn a second time from the top."""
+    provider = _FakeProvider(
+        [
+            ChatDelta(content=None, reasoning_content="working out the deck"),
+            ChatDelta(content=None, finish_reason="stop", finish_synthesized=True),
+        ]
+    )
+
+    async def on_reasoning(_text: str) -> None:
+        return None
+
+    response = await _bind_helper(provider)(
+        messages=[], tools=None, model="m", on_token_delta=None, on_reasoning_delta=on_reasoning
+    )
+
+    assert response.finish_reason == "error"
+    assert response.error_classification is not None
+    assert response.error_classification.category == "network"
+    assert response.error_classification.retryable is False
+    assert response.error_classification.should_fallback is True
+
+
+async def test_a_cut_stream_stays_retryable_for_a_caller_that_asked_for_it() -> None:
+    """A caller that asked for retries after output keeps the cut stream's retry
+    even though its thought reached the watcher; the duplicate is its choice."""
+    provider = _FakeProvider(
+        [
+            ChatDelta(content=None, reasoning_content="working out the deck"),
+            ChatDelta(content=None, finish_reason="stop", finish_synthesized=True),
+        ]
+    )
+    fake_self = SimpleNamespace(
+        provider=provider,
+        _MAX_STREAM_RECONNECTS=AgentLoop._MAX_STREAM_RECONNECTS,
+        _recovery_limits=RecoveryLimits(llm_retry_after_output=True),
+    )
+
+    async def on_reasoning(_text: str) -> None:
+        return None
+
+    response = await AgentLoop._llm_call_stream.__get__(fake_self)(
+        messages=[], tools=None, model="m", on_token_delta=None, on_reasoning_delta=on_reasoning
+    )
+
+    assert response.error_classification is not None
+    assert response.error_classification.retryable is True
+
+
 async def test_a_made_up_stop_after_content_still_delivers_the_content() -> None:
     """Content that did arrive is the reply; only the finish reason is left unknown,
     because the upstream never said why it ended."""

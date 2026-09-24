@@ -59,13 +59,66 @@
   --hover:    #ececea;   /* a row the pointer is on */
   --selected: #eaeae7;   /* a row that is the one open */
   --text-3:   #8a8a88;   /* a group label: quieter than muted, louder than faint */
+  /* The rail's own row ramp, from the design (Figma: Raven / AppSidebar): a
+     label, the same label on a hovered or open row, the quiet grey of a group
+     heading and an idle row action, and the two grounds a row steps through. */
+  --rail-ink:    #333333;
+  --rail-ink-on: #1a1a1a;
+  --rail-quiet:  #999999;
+  --rail-hover:  #f7f7f7;
+  --rail-on:     #f0f0f0;
+  --rail-tip:    #1a1a1a;
+  --rail-tip-ink: #ffffff;
+  /* The settings dialog's nav, and the composer card and its bar (Figma: Raven
+     / ChatComposer, SendButton). */
+  --snav-bg:        #fafafa;
+  --settings-nav-on:  #f0f0f0;
+  --settings-nav-ico: #666666;
+  --composer-bg:    rgba(255, 255, 255, .8);
+  --composer-line:  #e6e6e6;
+  --composer-sh:    rgba(0, 0, 0, .08);
+  --composer-ink:   #1a1a1a;
+  --composer-ph:    #908f8c;
+  --composer-hover: #f7f7f7;
+  --att-bg:         #f0f0f0;
+  --send-off:       #bdbbb8;
+  --send-off-ink:   #faf9f5;
+  --send-on:        #1a1a1a;
+  --send-on-ink:    #ffffff;
   --ph:       #b8b8b8;   /* placeholder text in a field */
   /* The one high-contrast pair on the page: the send button, and the message
      the reader wrote. Both invert in dark, which is why they are tokens and
      not literals. */
   --black:    #111111;
-  --bubble-me:    #2e2e2e;
+  --bubble-me:    #333333;
   --bubble-me-fg: #ffffff;
+  /* The conversation's own ramp (Figma: Raven / UserMessage, AssistantMessage,
+     Thinking): the ink a reply is set in, the one quiet grey every line of
+     process work shares and the band that sweeps it while a thought is live,
+     the design's danger red, the half-pixel rule and head ground a table or a
+     listing is boxed in, the two greys of a delivered file's name and size,
+     and the tag a sent file wears inside the bubble. */
+  --chat-ink:       #1a1a1a;
+  --chat-quiet:     #999999;
+  --chat-shine:     #e6e6e6;
+  --chat-danger:    #d84520;
+  --chat-rule:      #e0e0e0;
+  --chat-head:      #f7f7f7;
+  --chat-head-ink:  #666666;
+  --chat-file-ink:  #333333;
+  --chat-file-meta: #908f8c;
+  --bubble-att:     rgba(255, 255, 255, .2);
+  --bubble-att-on:  rgba(255, 255, 255, .3);
+  --bubble-att-ink: #f0f0f0;
+  /* A listing's syntax colours (lib/highlight.ts), in the design's roles: a
+     keyword or selector, a property, a string, a tag or type, a comment, and a
+     removed line in a diff. */
+  --code-keyword:   #94129d;
+  --code-property:  #b8812c;
+  --code-string:    #488c4b;
+  --code-tag:       #1b6ed5;
+  --code-comment:   #8a8a88;
+  --code-deleted:   #d84520;
   /* A card is lifted by a shadow in light and by a brighter rim in dark -- the
      same job, two drawings -- so the rule names these and never a colour. */
   --ring:     rgba(0, 0, 0, .03);
@@ -113,7 +166,7 @@
      two rules below both spell `calc(var(--col) + 72px)`. Transcript, banner
      and composer all read from this one token, so the column and the field it
      is typed into always share an edge. */
-  --col: 760px;
+  --col: 1112px;
 
   /* Ink and surface roles hoisted from rule-level hex literals. Rules that
      keep literal colors on purpose (theme-preview swatches, mask gradients,
@@ -194,15 +247,54 @@
     /* The dark counterparts of the light block's surfaces -- see there. */
     --page:     #141414;
     --wash:     linear-gradient(180deg, #151515, #121212);
-    --side-bg:  #171717;
+    --side-bg:  #333333;
     --paper:    #202020;
     --hover:    #242424;
     --selected: #2e2e2e;
     --text-3:   #9b9b9b;
+    --rail-ink:    #f7f7f7;
+    --rail-ink-on: #ffffff;
+    --rail-quiet:  #999999;
+    --rail-hover:  #474747;
+    --rail-on:     #474747;
+    --rail-tip:    #1a1a1a;
+    --rail-tip-ink: #ffffff;
+    --snav-bg:        #262626;
+    --settings-nav-on:  #333333;
+    --settings-nav-ico: #999999;
+    --composer-bg:    rgba(32, 32, 32, .85);
+    --composer-line:  #333333;
+    --composer-sh:    rgba(0, 0, 0, .45);
+    --composer-ink:   #e8e8e6;
+    --composer-ph:    #7a7a78;
+    --composer-hover: #2e2e2e;
+    --att-bg:         #303030;
+    --send-off:       #4a4a4a;
+    --send-off-ink:   #8a8a88;
+    --send-on:        #e8e8e6;
+    --send-on-ink:    #1a1a1a;
     --ph:       #6e6e6e;
     --black:    #e8e8e6;
     --bubble-me:    #343434;
     --bubble-me-fg: #ededeb;
+    --chat-ink:       #e8e8e6;
+    --chat-quiet:     #8a8a88;
+    --chat-shine:     #d6d6d4;
+    --chat-danger:    #e0775e;
+    --chat-rule:      #333333;
+    --chat-head:      #262626;
+    --chat-head-ink:  #afafad;
+    --chat-file-ink:  #e8e8e6;
+    --chat-file-meta: #8a8a88;
+    --bubble-att:     rgba(255, 255, 255, .12);
+    --bubble-att-on:  rgba(255, 255, 255, .2);
+    --bubble-att-ink: #ededeb;
+    --code-keyword:   #d68fe0;
+    --code-property:  #e2b265;
+    --code-string:    #8fcf8a;
+    --code-tag:       #7fb0f0;
+    --code-comment:   #7a7a78;
+    --code-deleted:   #e0775e;
     --ring:     rgba(255, 255, 255, .07);
     --ring-2:   rgba(255, 255, 255, .14);
     --sh-soft:  rgba(0, 0, 0, .5);
@@ -223,9 +315,21 @@
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
   --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
-  --side-bg: #171717; --paper: #202020; --hover: #242424;
+  --side-bg: #333333; --paper: #202020; --hover: #242424;
   --selected: #2e2e2e; --text-3: #9b9b9b; --ph: #6e6e6e; --black: #e8e8e6;
+  --rail-ink: #f7f7f7; --rail-ink-on: #ffffff; --rail-quiet: #999999;
+  --rail-hover: #474747; --rail-on: #474747; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
+  --snav-bg: #262626; --settings-nav-on: #333333; --settings-nav-ico: #999999;
+  --composer-bg: rgba(32, 32, 32, .85); --composer-line: #333333; --composer-sh: rgba(0, 0, 0, .45);
+  --composer-ink: #e8e8e6; --composer-ph: #7a7a78; --composer-hover: #2e2e2e; --att-bg: #303030;
+  --send-off: #4a4a4a; --send-off-ink: #8a8a88; --send-on: #e8e8e6; --send-on-ink: #1a1a1a;
   --bubble-me: #343434; --bubble-me-fg: #ededeb;
+  --chat-ink: #e8e8e6; --chat-quiet: #8a8a88; --chat-shine: #d6d6d4; --chat-danger: #e0775e;
+  --chat-rule: #333333; --chat-head: #262626; --chat-head-ink: #afafad;
+  --chat-file-ink: #e8e8e6; --chat-file-meta: #8a8a88;
+  --bubble-att: rgba(255, 255, 255, .12); --bubble-att-on: rgba(255, 255, 255, .2); --bubble-att-ink: #ededeb;
+  --code-keyword: #d68fe0; --code-property: #e2b265; --code-string: #8fcf8a; --code-tag: #7fb0f0;
+  --code-comment: #7a7a78; --code-deleted: #e0775e;
   --ring: rgba(255, 255, 255, .07); --ring-2: rgba(255, 255, 255, .14);
   --sh-soft: rgba(0, 0, 0, .5); --seg-on: #333333;
   --elev: 0 1px 2px rgba(0, 0, 0, .45), 0 6px 16px -8px rgba(0, 0, 0, .5);
@@ -246,7 +350,19 @@
     radial-gradient(40% 45% at 70% 90%, rgba(242, 233, 214, .5), rgba(242, 233, 214, 0) 70%),
     linear-gradient(180deg, #fafaf8 0%, #f7f7f5 100%);
   --selected: #eaeae7; --text-3: #8a8a88; --ph: #b8b8b8; --black: #111111;
-  --bubble-me: #2e2e2e; --bubble-me-fg: #ffffff;
+  --rail-ink: #333333; --rail-ink-on: #1a1a1a; --rail-quiet: #999999;
+  --rail-hover: #f7f7f7; --rail-on: #f0f0f0; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
+  --snav-bg: #fafafa; --settings-nav-on: #f0f0f0; --settings-nav-ico: #666666;
+  --composer-bg: rgba(255, 255, 255, .8); --composer-line: #e6e6e6; --composer-sh: rgba(0, 0, 0, .08);
+  --composer-ink: #1a1a1a; --composer-ph: #908f8c; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
+  --send-off: #bdbbb8; --send-off-ink: #faf9f5; --send-on: #1a1a1a; --send-on-ink: #ffffff;
+  --bubble-me: #333333; --bubble-me-fg: #ffffff;
+  --chat-ink: #1a1a1a; --chat-quiet: #999999; --chat-shine: #e6e6e6; --chat-danger: #d84520;
+  --chat-rule: #e0e0e0; --chat-head: #f7f7f7; --chat-head-ink: #666666;
+  --chat-file-ink: #333333; --chat-file-meta: #908f8c;
+  --bubble-att: rgba(255, 255, 255, .2); --bubble-att-on: rgba(255, 255, 255, .3); --bubble-att-ink: #f0f0f0;
+  --code-keyword: #94129d; --code-property: #b8812c; --code-string: #488c4b; --code-tag: #1b6ed5;
+  --code-comment: #8a8a88; --code-deleted: #d84520;
   --ring: rgba(0, 0, 0, .03); --ring-2: rgba(0, 0, 0, .05);
   --sh-soft: rgba(0, 0, 0, .06); --seg-on: #ffffff;
   --shadow: 0 14px 34px -22px rgba(26,26,26,.35);
@@ -332,7 +448,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .rail {
   background: var(--side-bg);
   border-right: 1px solid var(--line-soft);
-  padding: 8px 4px 10px;
+  padding: 0 4px;
   display: flex; flex-direction: column; min-height: 0; position: relative;
 }
 
@@ -364,13 +480,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    collapsed-rail twin in the chat header uses it too. */
 /* Same height as the chat header, or the toggle jumps vertically when the rail
    closes and its twin in that header takes over. */
-.railtop { display: flex; align-items: center; justify-content: flex-start; gap: 2px;
-  flex: none; height: 44px; padding: 0 var(--edge); }
+.railtop { display: flex; align-items: center; justify-content: flex-start; gap: 4px;
+  flex: none; height: 64px; padding: 20px 12px 16px; }
 /* Pushes the two chores to the far end of the row, which is what puts the name
    at the window's corner and the buttons where the design has them. */
-.wordmark { display: flex; align-items: center; gap: 8px; margin-right: auto; padding: 0 6px;
-  font-size: 13px; font-weight: 600; letter-spacing: .06em; color: var(--text); }
+.wordmark { display: flex; align-items: center; gap: 6px; margin-right: auto;
+  font-size: 14px; font-weight: 600; color: var(--text); }
 .wordmark svg { display: block; flex: none; }
+.railtop .ghost-ic { color: var(--rail-quiet); border-radius: 8px; }
+.railtop .ghost-ic:hover { color: var(--rail-ink-on); background: var(--rail-hover); }
+.railtop .ghost-ic svg { width: 16px; height: 16px; }
 /* The collapsed-rail twin is lifted out of this row's flow (see #railShow), so
    the space it stood in has to be reserved: --edge, the button, and the gap. */
 .app[data-rail="off"] .top { padding-left: calc(var(--edge) + 35px); }
@@ -386,7 +505,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Desktop shell hides the OS title bar, so this row shares the traffic-light
    band: --tl-row / --tl-pad are measured from the real buttons and injected by
    the shell, and the fallbacks match a standard macOS title bar. */
-:root[data-shell="1"] .railtop { height: var(--tl-row, 38px); padding-left: var(--tl-pad, 78px); }
+:root[data-shell="1"] .railtop { height: var(--tl-row, 38px); padding-top: 0; padding-bottom: 0;
+  padding-left: var(--tl-pad, 78px); }
 :root[data-shell="1"] .top { height: var(--tl-row, 38px); }
 /* In the shell this band IS the title bar: it drags the window (see the
    pointerdown handler by the popover closers), so its text must not be
@@ -405,7 +525,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    nothing. One rule here rather than a size at every call site. */
 .ghost-ic svg { width: 15px; height: 15px; }
 
-.rail-nav { display: grid; gap: 2px; padding: 0 8px 4px; }
+.rail-nav { display: grid; gap: 4px; padding: 8px 8px 4px; }
 .rail-nav + .find { margin-top: 0; }
 
 /* The new-task action is a row in this list, not a control dropped on top of
@@ -422,7 +542,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .find input:hover { border-color: var(--line); }
 .find input:focus { border-color: var(--muted); background: var(--ink); }
 .find input::placeholder { color: var(--faint); }
-.find .ic { position: absolute; left: 8px; top: 5px; color: var(--faint); pointer-events: none; }
+.find .ic { position: absolute; left: 8px; top: 6px; display: grid; color: var(--faint); pointer-events: none; }
 .find .clr { position: absolute; right: 5px; top: 2px; color: var(--faint); padding: 2px 4px; border-radius: 4px; }
 .find .clr:hover { color: var(--text); }
 
@@ -432,38 +552,36 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    caret are what separate a heading from the session rows under it. */
 /* padding-left carries what the caret used to: the glyph now sits after the
    count (see features/rail/RailPage.tsx), and the label holds the same x it
-   held when the caret led -- which is what keeps it lined up with `.grp-empty`
-   and with the whole column. */
+   held when the caret led -- which is what keeps it lined up with the whole
+   column. */
 .list .grp {
-  display: flex; align-items: center; gap: 5px;
-  padding: 17px 10px 4px; cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 4px; height: 28px;
+  margin: 16px 0 4px; padding: 0 8px; border-radius: 8px; cursor: pointer; user-select: none;
 }
-.list .grp:first-child { padding-top: 7px; }
-.list .grp .car { display: grid; place-items: center; flex: none; color: var(--faint);
-  opacity: 0; transition: opacity .15s ease; }
-.list .grp[aria-expanded="false"] .car, .list .grp:hover .car,
-.list .grp:focus-visible .car { opacity: 1; }
-.list .grp .car svg {
-  width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2.2;
-  stroke-linecap: round; stroke-linejoin: round;
-  transform: rotate(90deg); transition: transform .18s ease;
-}
-.list .grp[aria-expanded="false"] .car svg { transform: rotate(0deg); }
+.list .grp:first-child { margin-top: 12px; }
+.list .grp:hover { background: var(--rail-hover); }
+.list .grp .car { display: grid; place-items: center; flex: none; color: var(--rail-quiet); }
+.list .grp .car svg { width: 16px; height: 16px; transition: transform .18s ease; }
+.list .grp[aria-expanded="false"] .car svg { transform: rotate(-90deg); }
 @media (prefers-reduced-motion: reduce) { .list .grp .car, .list .grp .car svg { transition: none; } }
 /* The rail's group headings keep the page's tracking but drop its monospace
    and its capitals: a session list is already a column of short strings, and a
    mono uppercase row over it reads as a second kind of name rather than as the
    drawer they are filed in. */
 .list .grp .lab {
-  padding: 0; flex: none; font-family: var(--sans); font-size: 11px;
-  font-weight: 600; letter-spacing: .09em; text-transform: none; color: var(--faint);
+  padding: 0; flex: none; font-family: var(--sans); font-size: 12px;
+  font-weight: 400; letter-spacing: normal; text-transform: none; color: var(--rail-quiet);
 }
 /* The caret carries the push to the far end of the row, now that the hairline
    which used to do it is gone -- one element fewer than a spacer would be. */
 .list .grp .car { margin-right: auto; }
-.list .grp:hover .lab, .list .grp:hover .car { color: var(--muted); }
-.list .grp:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; border-radius: 6px; }
-.grp-empty { font-size: 12px; color: var(--faint); padding: 3px 10px 5px 10px; }
+.list .grp:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; }
+.list .sess + .sess { margin-top: 2px; }
+/* An empty group's heading folds nothing: no hand and no hover ground, and
+   with no caret to push the Manage verb to the far end, the label does it. */
+.list .grp[data-empty] { cursor: default; }
+.list .grp[data-empty]:hover { background: none; }
+.list .grp[data-empty] .lab { margin-right: auto; }
 /* The one heading that has a verb keeps it out of sight until the pointer is on
    the row: a link beside every list would read as part of the heading, and it
    is an errand rather than a destination. Focus reveals it too -- a keyboard has
@@ -477,7 +595,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 @media (prefers-reduced-motion: reduce) { .grp .grp-go { transition: none; } }
 .grp-more {
   display: block; width: 100%; text-align: left; font-size: 12px; color: var(--faint);
-  padding: 6px 10px; border-radius: 8px; margin-top: 1px;
+  padding: 6px 8px; border-radius: 8px; margin-top: 2px;
 }
 .grp-more:hover { color: var(--text); background: var(--surface); }
 
@@ -498,17 +616,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   min-height: 1lh;
 }
 .sess .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The stamp is a fixed-width note on the row, so it keeps its own weight when
-   the row goes bold. */
-.sess .w {
-  flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
-  font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap;
-}
-.sess[aria-current="true"] .w { color: var(--muted); }
-/* The two common actions replace the timestamp in place on hover, keeping the
+.sess .w { flex: none; }
+/* The row actions replace the turn marker in place on hover, keeping the
    row width stable while making pin and archive one-click operations.
 
-   The stamp yields on exactly the condition that brings the actions up, and
+   The marker yields on exactly the condition that brings the actions up, and
    nothing else. Reading `.sess:focus-within` instead was the same thought
    written one selector too wide: a row is a div[role=button][tabindex=0], so
    CLICKING a session leaves the row itself focused -- which took the stamp
@@ -519,27 +631,30 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    opacity-0, not hidden, so tabbing on from the row focuses one and both
    halves of this pair fire together. */
 .sess .quick {
-  display: flex; align-items: center; gap: 2px; position: absolute; right: 6px;
+  display: flex; align-items: center; gap: 4px; position: absolute; right: 6px;
   opacity: 0; pointer-events: none; top: 50%; transform: translateY(-50%);
 }
 .sess:hover .quick, .sess .quick:focus-within { opacity: 1; pointer-events: auto; }
 .sess:hover .w, .sess:has(.quick:focus-within) .w { display: none; }
-.sess:hover .t, .sess:has(.quick:focus-within) .t { padding-right: 48px; }
+.sess:hover .t, .sess:has(.quick:focus-within) .t { padding-right: 76px; }
 .sess .quick button {
-  display: grid; place-items: center; position: relative; width: 22px; height: 22px; border-radius: 5px;
-  color: var(--faint);
+  display: grid; place-items: center; position: relative; width: 20px; height: 20px; border-radius: 5px;
+  color: var(--rail-quiet);
 }
-.sess .quick button:hover, .sess .quick button:focus-visible { color: var(--text); background: var(--selected); }
+.sess .quick button:hover, .sess .quick button:focus-visible { color: var(--rail-ink); }
 .sess .quick button::after {
-  content: attr(aria-label); position: absolute; left: 50%; bottom: calc(100% + 5px);
+  content: attr(aria-label); position: absolute; left: 50%; bottom: calc(100% + 6px);
   z-index: 2; opacity: 0; transform: translate(-50%, 2px); pointer-events: none;
-  padding: 3px 6px; border-radius: 5px; background: var(--text); color: var(--ink);
-  font-size: 10px; font-weight: 400; line-height: 1.25; white-space: nowrap;
+  padding: 5px 10px; border-radius: 8px; background: var(--rail-tip); color: var(--rail-tip-ink);
+  box-shadow: 0 0 10px rgba(0, 0, 0, .12);
+  font-size: 13px; font-weight: 400; line-height: 18px; white-space: nowrap;
   transition: opacity .08s ease .12s, transform .08s ease .12s;
 }
 .sess .quick button:hover::after, .sess .quick button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
 .sess .quick button[data-active] { color: var(--amber); }
-.sess .quick svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.sess .quick svg { width: 16px; height: 16px; }
+/* The design lays the pin on its side. */
+.sess .quick .quick-pin svg { transform: rotate(45deg); }
 .sess:has(.ren) .quick { display: none; }
 .sess:has(.ren) .t { padding-right: 0; }
 /* As wide as the name it holds, not as wide as the rail.
@@ -568,20 +683,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   border-color: var(--muted); outline: 0;
 }
 
-/* Streaming and just-finished take the stamp's slot rather than the dot's.
-   A row that is working is worth watching, and the tail is where the eye
-   already goes for the time -- while the answer is still coming the clock is
-   the least interesting thing the row can say. The stamp comes back the
-   moment the session has been read, so this never accumulates.
-
-   The stamp text stays in the box and is hidden rather than removed, and the
-   marker is absolutely positioned over it. A stamp is anywhere from "昨天"
-   (21px) to "2026年12月30日" (83px), so swapping the text out for a marker
-   would resize the tail and shove the title -- the row visibly twitched on
-   every transition. Holding the text's box keeps the swap free of reflow
-   without pinning every row to the width of the longest possible date. */
-.sess .w[data-sig] { position: relative; }
-.sess .w[data-sig] .wt { visibility: hidden; }
+/* A turn that is streaming, just finished, failed or asking marks the row's
+   tail with one dot; a row with nothing to report has no tail at all. */
+.sess .w[data-sig] { position: relative; width: 6px; height: 6px; }
 .sess .w[data-sig] i {
   position: absolute; right: 0; top: 50%; margin-top: -3px;
   width: 6px; height: 6px; border-radius: 50%; display: block;
@@ -629,14 +733,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* No seam above the identity row: the list ends in whitespace and the foot is
    a glyph and one word, so there is nothing for a rule to separate that the gap
    does not separate already. */
-.rail-foot { display: grid; gap: 2px; padding: 6px 8px 8px; margin-top: 4px; flex: none; }
+.rail-foot { display: grid; gap: 2px; padding: 16px 6px; flex: none; }
 
 .rail-foot .me {
-  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-  padding: 5px 8px; border-radius: 7px;
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; text-align: left;
+  padding: 0 8px; border-radius: 8px; color: var(--rail-ink);
 }
-.rail-foot .me:hover { background: var(--raised); }
-.rail-foot .me[aria-expanded="true"] { background: var(--raised); }
+.rail-foot .me:hover { background: var(--rail-hover); color: var(--rail-ink-on); }
+.rail-foot .me[aria-expanded="true"] { background: var(--rail-on); color: var(--rail-ink-on); }
 .rail-foot .me .av {
   flex: none; width: 24px; height: 24px; border-radius: 50%;
   background: var(--amber-dp); color: var(--amber);
@@ -645,11 +749,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* No account sits behind this row, so the glyph is a nav row's glyph: no plate,
    no circle, the same 16px mark and the same muted ink as every other row. */
 .rail-foot .me .av.anon {
-  width: 16px; height: 16px; border-radius: 0; background: none; color: var(--muted);
+  width: 16px; height: 16px; border-radius: 0; background: none; color: inherit;
 }
-.rail-foot .me .av.anon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.rail-foot .me .av.anon svg { width: 16px; height: 16px; }
 .rail-foot .me .who { flex: 1; min-width: 0; display: grid; }
-.rail-foot .me .who .n { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-foot .me .who .n { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot .me .who .s {
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -677,9 +781,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
     0 24px 56px -22px rgba(0, 0, 0, .3);
 }
 
-/* 更多 opens in place: its three rows are rail rows, indented one step under
-   the button that revealed them, so the group reads as part of the column it
-   belongs to rather than as a floating panel beside it. */
+/* The More group opens in place: its three rows are rail rows, indented one
+   step under the button that revealed them, so the group reads as part of the
+   column it belongs to rather than as a floating panel beside it. */
 /* The group unfolds into the list rather than beside it: its rows are .navi
    rows like the four above them -- same indent, same glyph slot, same lift when
    current -- so opening it lengthens one list instead of revealing a second,
@@ -720,25 +824,24 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* One row shape for the whole rail -- the new-task action, the module links and
    every session line -- so the column reads as one list instead of three. */
 .navi, .sess {
-  position: relative; display: flex; align-items: center; gap: 10px; width: 100%;
-  height: 32px; padding: 0 10px; border-radius: 8px; text-align: left; cursor: pointer;
-  font-size: 14px; color: var(--text);
+  position: relative; display: flex; align-items: center; gap: 8px; width: 100%;
+  height: 32px; padding: 0 8px; border-radius: 8px; text-align: left; cursor: pointer;
+  font-size: 13px; color: var(--rail-ink);
 }
 /* A row's label is the page's own text colour, and the glyph beside it is the
    quiet one: the list reads as a list of names, with the icons as marks against
    them rather than as a second column of equal weight. */
-.navi svg { width: 16px; height: 16px; color: var(--muted); }
-.navi:hover, .sess:hover { background: var(--hover); color: var(--text); }
+.navi svg { width: 16px; height: 16px; }
+.navi:hover, .sess:hover { background: var(--rail-hover); color: var(--rail-ink-on); }
 /* Selected and hovered are the same move at two depths -- one flat step of
    ground, --hover then --selected -- and the weight of the label carries the
    rest. The lift this row used to have (a ring plus a shadow, and an amber
    glyph) was a third treatment on a surface that now has only two, and on a
    white rail the ring had nothing left to separate the row from. */
 .navi[aria-current="true"], .sess[aria-current="true"] {
-  background: var(--selected); color: var(--text); font-weight: 500;
+  background: var(--rail-on); color: var(--rail-ink-on); font-weight: 500;
 }
-.navi[aria-current="true"]:hover, .sess[aria-current="true"]:hover { background: var(--selected); }
-.navi[aria-current="true"] svg { color: var(--text); }
+.navi[aria-current="true"]:hover, .sess[aria-current="true"]:hover { background: var(--rail-on); }
 /* A module page covers the chat, so the page is where you are; the session
    behind it keeps a readable label but drops the lift rather than leaving two
    rows looking selected at once. */
@@ -1014,7 +1117,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .col {
   max-width: calc(var(--col) + 72px); margin: 0 auto; min-width: 0;
   padding: 26px 36px calc(var(--lift, 96px) + 26px);
-  display: flex; flex-direction: column; gap: 14px;
+  display: flex; flex-direction: column; gap: 12px;
 }
 
 .banner {
@@ -1087,21 +1190,38 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    this column is meant to be the exchange, not the sentence. */
 .turn { display: flex; flex-direction: column; min-width: 0; }
 .turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
-.turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; }
+.turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; gap: 6px; }
+/* The design's bubble (Figma: Raven / UserMessage): #333 at a 12px radius, and
+   the reply's 1.8 line so a long question reads at the same measure as its
+   answer. The inset is what keeps a one-liner at the design's 40px. */
 .msg.me {
   background: var(--bubble-me); color: var(--bubble-me-fg);
-  border-radius: 9px; padding: 11px 16px; font-size: 14px; line-height: 22px;
+  border-radius: 12px; padding: 7.4px 12px; font-size: 14px; line-height: 1.8;
   white-space: pre-wrap; overflow-wrap: break-word;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .08);
 }
-/* Lifted off the page rather than drawn on it: a contact shadow plus a hairline
-   rim, which is one treatment with two drawings -- the shadow carries it in
-   light, the rim in dark, where a shadow on a dark ground says nothing. */
+/* A white card on the wash, flat the way the design lays it (Figma: Raven /
+   AssistantMessage): 16px all round and one 12px gap between what is in it --
+   the fold, a step, the answer -- so nothing inside carries a margin of its
+   own. The rim is for dark, where a card needs an edge; in light it is all but
+   invisible. */
 .msg.ai {
-  background: var(--ink); border-radius: 12px; padding: 6px 16px 12px;
+  display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  background: var(--ink); border-radius: 12px; padding: 16px;
   font-size: 14px; line-height: 26px;
-  box-shadow: 0 1px 4px var(--sh-soft), 0 0 0 1px var(--ring); color: var(--text);
+  box-shadow: 0 0 0 1px var(--ring); color: var(--chat-ink);
 }
+.msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer, .msg.ai > .sdlv { margin: 0; }
+/* A card holding nothing yet but a live thought, folded, is the design's small
+   "thinking" card: the row alone, at its own width, 40px tall. */
+.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer, .sdlv)):has(.think.live) {
+  width: fit-content; min-height: 40px; padding: 10px 16px; justify-content: center;
+}
+/* The design draws the line alone; the caret that says it opens arrives with
+   the pointer. */
+.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer, .sdlv)) .think.live > .cv {
+  opacity: 0; transition: opacity .12s;
+}
+.msg.ai .think.live:hover > .cv, .msg.ai .think.live:focus-visible > .cv { opacity: 1; }
 /* Folded long message: ~12 lines, fading out instead of cutting mid-glyph. */
 .msg.me.clip {
   max-height: 20em; overflow: hidden;
@@ -1114,14 +1234,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .turn.me .qfold:hover { color: var(--text); background: var(--surface); }
 
-.step { margin: 10px 0; min-width: 0; }
+.step { display: flex; flex-direction: column; gap: 8px; margin: 0; min-width: 0; }
 /* One spacing for every step, deliberately not "more room once this step has
    spoken": a rule that keys off content changes its own layout the instant the
    first token lands, and the whole transcript below it visibly jumps down.
    12px is the same gap the rows inside a step use, so crossing a step boundary
    does not read as an extra blank line -- a turn is one narrative, and the
    model's call count is not something the reader should feel. */
-.step + .step { margin-top: 12px; }
+.step + .step { margin-top: 0; }
 
 /* quiet mono row: the subagent panel's running glyph and the hub card footer.
    The transcript's own notices left for .tnote -- a stop and a failure reading
@@ -1143,15 +1263,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 
 /* thinking: a shimmering one-liner while streaming, a quiet fold after */
 .think {
-  display: flex; align-items: center; gap: 7px;
-  font-size: 13.5px; color: var(--muted);
-  padding: 3px 8px; margin: 2px -8px; border-radius: 7px;
+  display: flex; align-items: center; gap: 4px;
+  font-size: 14px; line-height: 22px; color: var(--chat-quiet);
+  padding: 0; margin: 0; border-radius: 0;
 }
 .think { width: fit-content; max-width: 100%; }
-.think .g { color: var(--faint); flex: none; width: 10px; font-size: 11px; }
+.think .g { color: var(--faint); flex: none; width: 12px; font-size: 14px; }
 .think .lb { flex: none; }
 .think.live .lb {
-  background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
+  background: linear-gradient(90deg, var(--chat-quiet) 30%, var(--chat-shine) 50%, var(--chat-quiet) 70%);
   background-size: 200% 100%; -webkit-background-clip: text; background-clip: text;
   color: transparent; animation: shine 1.6s linear infinite;
 }
@@ -1160,8 +1280,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* the opened thought is quiet prose behind a hairline, not a filled card: it is
    the model muttering, and it should not outweigh what it actually said */
 .cot {
-  font-size: 13px; line-height: 1.75; color: var(--muted);
-  border-left: 1px solid var(--line); padding: 2px 0 2px 13px; margin: 4px 0 10px;
+  font-size: 12px; line-height: 1.7; color: var(--muted);
+  border-left: 1px solid var(--line); padding: 2px 0 2px 12px; margin: 0;
   white-space: pre-wrap; max-height: 220px; overflow-y: auto;
 }
 
@@ -1172,8 +1292,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    exchange beside it, the rows behind it -- declared once on the container.
    Per-child margins had the summary sitting tighter to the first row than the
    rows sat to each other, which reads as a misalignment. */
-.wk { margin: 12px 0; min-width: 0; display: grid; gap: 5px; grid-template-columns: minmax(0, 1fr); }
-.wkin { display: grid; gap: 5px; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.wk { margin: 0; min-width: 0; display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+.wkin { display: grid; gap: 8px; min-width: 0; grid-template-columns: minmax(0, 1fr); }
+/* A step's parts are always drawn and only sometimes say anything; an empty one
+   would still spend the step's gap. */
+.step > .say:empty, .step > .wk:not(:has(> :not([hidden]))) { display: none; }
 /* The icon is what this line leads with, so the icon is what sits on the
    transcript's left edge. fit-content keeps a hover or focus state hugging its
    own line instead of growing a full-width bar.
@@ -1186,25 +1309,30 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    744px column: the track went to 923px and the row with it. The sibling
    fit-content rows (.think, .tfh) sit in block parents, where 100% is already
    the column, which is why only this one needed it. */
+/* The design's process line (Figma: Raven / Thinking): the one quiet grey, a
+   glyph the size of the type, 4px between the parts and 8px between the lines.
+   It reads at the answer's own 14px: a reader who opens the fold is reading the
+   trail, not glancing past it, and type below the copy it sits in made them
+   lean in for the one thing they had asked to see. */
 .wrow {
-  display: flex; align-items: center; gap: 7px; color: var(--muted);
+  display: flex; align-items: center; gap: 4px; color: var(--chat-quiet);
   width: fit-content; max-width: 100%; min-width: 0;
-  font-size: 13.5px; line-height: 1.5; padding: 3px 8px; margin: 0 -8px;
-  border-radius: 7px; text-align: left;
+  font-size: 14px; line-height: 22px; padding: 0; margin: 0;
+  border-radius: 0; text-align: left;
 }
 .wrow.tog:hover .vb, .wrow.tog:hover .ar { color: var(--text); }
 .wrow.tog:hover .ic, .wrow.tog:hover .cv { color: var(--muted); }
-.wrow .ic { width: 13px; height: 13px; flex: none; color: var(--faint); }
+.wrow .ic { width: 14px; height: 14px; flex: none; color: var(--chat-quiet); }
 .wrow.run .ic { animation: breathe 1.5s ease-in-out infinite; }
 /* The one animation in this file with no reduced-motion answer, which mattered
    while it was the only sign a step was alive. The clock beside it is not an
    animation, so honouring the setting here now costs nothing. */
 @media (prefers-reduced-motion: reduce) { .wrow.run .ic { animation: none; opacity: .62; } }
-.wrow .g { color: var(--faint); flex: none; width: 12px; font-size: 11px; }
+.wrow .g { color: var(--faint); flex: none; width: 14px; font-size: 14px; }
 /* the verb is the quiet part; what it acted on is what the eye wants */
 .wrow .vb { flex: none; }
 .wrow .vb .srv { color: var(--faint); }
-.wrow .ar { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wrow .ar { color: inherit; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── delegation detail ────────────────────────────────────────────
    spawn and run_subagent_dag are rows like every other call -- same verb,
@@ -1212,27 +1340,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    was handed the work, its state, and -- for a graph -- every node with its
    own chip, painted live off the dag.* events. */
 .dtl.dlg .bd { padding: 9px 12px 10px; }
-/* ── a spawn's live second line ───────────────────────────────────
-   The row above says what was dispatched and never changes; this says what the
-   run is doing and changes constantly. Indented under the row's icon so the two
-   read as one card, and clipped to one line: it is a pulse, not a transcript --
-   the transcript is behind the caret. */
-.dlgtail {
-  display: flex; align-items: center; gap: 7px; cursor: pointer;
-  margin: 1px 0 2px 20px; min-width: 0; max-width: 100%;
-  color: var(--faint); font-size: 11.5px; line-height: 1.5;
-}
-.dlgtail:hover { color: var(--muted); }
-.dlgtail .tl { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dlgtail .wkg { flex: none; }
-/* The run's own conversation inside the fold. Its own scroll so a long run
-   cannot push the rest of the trail off screen, and a rule down the left so it
-   reads as a quotation of another agent rather than as this one's own turn. */
-.dlgchat {
-  margin-top: 8px; padding-left: 10px; border-left: 1px solid var(--line-soft);
-  max-height: 340px; overflow-y: auto; overscroll-behavior: contain;
-}
-.dlgchat > .wsempty { padding: 6px 0; color: var(--faint); font-size: 11.5px; }
 .dlg .dgr { display: grid; grid-template-columns: max-content 1fr; gap: 3px 16px; font-size: 11.5px; }
 .dlg .dgr .k { color: var(--faint); }
 .dlg .dgr .v {
@@ -1352,248 +1459,97 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 @media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
 
 /* ── the turn's products ──────────────────────────────────────────────
-   The closing line of a turn that wrote files: one tile per file, showing
-   what the file IS. Four documents out of one turn are four identical names
-   and four different miniatures, and that difference is what the tiles buy
-   over a list.
-   Tiles wrap; they never scroll sideways. A file name has no length limit and
-   the reading column is fixed, which is exactly how the delegated row grew
-   past the page. */
-.arts {
-  margin: 22px 0 2px; padding: 12px; min-width: 0;
-  border: 1px solid var(--line); border-radius: 14px; background: var(--ink);
-  container: artifacts / inline-size;
-}
-.arts .asec + .asec {
-  margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line-soft);
-}
-.arts .ahd {
-  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
-  font-size: 12px; line-height: 1.5; color: var(--faint);
-}
-.arts .ahd .ahm { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; }
-.arts .ahd .lb { color: var(--muted); font-weight: 500; }
-.arts .ahd .n {
-  min-width: 18px; padding: 1px 5px; border-radius: 999px; background: var(--ink);
-  color: var(--faint); font-family: var(--mono); font-size: 10.5px; line-height: 16px;
-  text-align: center; font-variant-numeric: tabular-nums;
-}
-/* One tile, two arrangements. A single delivery keeps the headline row it
-   earns -- it IS the turn's product -- and several become a grid, but the two
-   share a preview ratio, a type scale and a spacing rule, so going from one
-   file to two is a rearrangement rather than a different component. The shared
-   half lives in these variables. */
-.atiles {
-  --atile-ratio: 16 / 10;
-  --atile-pad: 11px 14px;
-  --atile-nm: 14px;
-  --atile-ds: 12.5px;
-  display: grid; gap: 8px; min-width: 0;
-  /* Tracks fill the row between a floor and the column's own width, which is
-     what makes a turn's products read as one block rather than as tiles
-     scattered on a shelf. */
-  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
-}
+   What a turn delivered, as the design lays it out (Figma: Raven /
+   AssistantMessage, the output-file variants; the flattened layout): no panel
+   and no heading, one small white card per file under the reply -- the file's
+   mark or its picture, its name and size, and what can be done with it. */
+.arts { display: flex; flex-direction: column; gap: 6px; margin: 0; min-width: 0; }
+.atiles { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+/* One width for every card, so a stack of them reads as a list rather than a
+   ragged edge; a long name gives way inside it. */
 .atile {
-  position: relative; display: grid; min-width: 0; overflow: hidden;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--ink);
-  transition: border-color .14s, box-shadow .14s, transform .14s;
+  position: relative; display: flex; align-items: center; gap: 12px;
+  width: min(340px, 100%); min-width: 0; padding: 16px;
+  border-radius: 12px; background: var(--ink); box-shadow: 0 0 0 1px var(--ring);
+  transition: box-shadow .14s;
   animation: artifact-in .18s ease-out;
 }
 @keyframes artifact-in { from { opacity: 0; transform: translateY(3px); } }
-.atile:hover { border-color: var(--faint); box-shadow: var(--elev-up); transform: translateY(-1px); }
+.atile:hover { box-shadow: 0 0 0 1px var(--ring), var(--elev); }
 .atile.missing { opacity: .72; }
-.atile.missing:hover { border-color: var(--line); box-shadow: none; transform: none; }
-@media (prefers-reduced-motion: reduce) {
-  .atile { animation: none; }
-  .atile:hover { transform: none; }
-}
-/* One keyboard stop and one accessible name for the whole tile, laid over it
-   -- which also leaves the picture free to be block content, since a <button>
-   may not contain any. */
+.atile.missing:hover { box-shadow: 0 0 0 1px var(--ring); }
+@media (prefers-reduced-motion: reduce) { .atile { animation: none; } }
+/* One keyboard stop and one accessible name for the whole card, laid over it;
+   the card's own buttons sit above it. */
 .atile .hit {
   position: absolute; inset: 0; border: 0; background: none; padding: 0;
   cursor: pointer; border-radius: inherit;
 }
 .atile .hit:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
 .atile .hit:disabled { cursor: default; }
-/* The preview is 16:10 wherever it has the room, and never taller than
-   --atile-pic-max. Both halves matter: the ratio is what stops the same
-   document being drawn as a square in one card and a slice in the next, and
-   the ceiling is what stops a tile that has stretched across a wide column
-   from turning its picture into a 269px wall. */
+/* The file's mark, or its picture at the mark's height: an image as itself, a
+   deck or a pdf by its first page. */
 .atile .pic {
-  --atile-pic-max: 124px;
-  /* The width is stated, not left to the ratio. With only `aspect-ratio` and
-     `max-height`, capping the height silently capped the WIDTH too (124 x 1.6
-     = 198px), so a tile that had stretched across the row carried a preview
-     that had not -- the blank right half. Stated width, ratio for the height,
-     cap for the ceiling. */
-  display: block; width: 100%; aspect-ratio: var(--atile-ratio);
-  max-height: var(--atile-pic-max);
-  overflow: hidden; position: relative;
-  background: var(--paper); border-bottom: 1px solid var(--line-soft); border: 1px solid var(--line-soft); border-radius: 6px;
+  flex: none; position: relative; display: grid; place-items: center;
+  height: 34px; min-width: 29px; overflow: hidden;
 }
-.atile .pic.none { place-content: center; justify-items: center; gap: 5px; display: grid; background: var(--surface); border-style: dashed; }
-.atile .pic.none .fi { width: 16px; height: 16px; stroke: var(--faint); }
-.atile .pic.none .ft {
-  color: var(--faint); font-family: var(--mono); font-size: 9px; font-weight: 600;
-  letter-spacing: .08em;
-}
-/* ONE surface. The preview used to be a grey mount with a white page inset in
-   it -- two nested rectangles for one picture, and at this size the inner one
-   read as a rendering fault rather than as paper. The box's own border and
-   radius are the frame; the document fills it. */
-.atile .pic.doc { background: var(--surface); place-items: start; }
-.atile .pic.shot { background: var(--surface); }
-.atile .pic.shot img { display: block; width: 100%; height: 100%; object-fit: cover; }
-/* The miniature: the file rendered small and then SCALED down again, so a
-   101px square shows the SHAPE of the document -- a title, a rule, a list --
-   rather than four words of it at reading size. Body type is set here; the
-   prose headings keep their own absolute sizes, so a heading is still visibly
-   a heading and the document still looks like itself.
-
-   NOT `.mini`, which this used to be called: that is the page's small BUTTON
-   (see below, ~line 3040), and the miniature was quietly wearing its border,
-   its 8px radius, its 12px type, its hover background and -- the visible one --
-   its `white-space: nowrap`, which every paragraph in the rendered document
-   inherited. The document could not wrap, so it was clipped mid-word at the
-   tile's edge whatever width it was given.
-
-   Its own padding is divided by the scale: this box is drawn at 250% and shown
-   at 40%, so the margin the text keeps from the paper's edge has to be stated
-   at 250% too. */
-.atile .amini {
-  --mini-scale: .4;
-  font-size: 12px; line-height: 1.6;
-  position: relative; display: block; width: calc(100% / var(--mini-scale));
-  height: calc(100% / var(--mini-scale)); padding: calc(8px / var(--mini-scale)) calc(9px / var(--mini-scale));
-  transform: scale(var(--mini-scale)); transform-origin: top left; pointer-events: none;
-  /* Faded rather than cut, the same way a folded question ends: a hard edge
-     mid-glyph reads as the render having broken, a fade as a page continuing. */
-  -webkit-mask-image: linear-gradient(180deg, #000 68%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 68%, transparent 100%); color: var(--muted);
-}
-.atile .amini .raw {
-  display: block; font-family: var(--mono); font-size: 12px; line-height: 1.6;
-  color: var(--muted); white-space: pre; overflow: hidden;
-}
-/* A long unbroken token (a URL, a path) still has to give way rather than run
-   past the paper. */
-.atile .amini.prose { overflow-wrap: anywhere; }
-.atile .amini.prose > :first-child { margin-top: 0; }
-.atile .cap { display: grid; gap: 2px; align-content: center; padding: var(--atile-pad); min-width: 0; }
-/* One row each, cut with an ellipsis. This is what keeps the card's height
-   independent of the window: a wrapping title grew the card as the column
-   narrowed, so the same delivery was 155px tall at one width and 175px at
-   another. How much of the title survives is the width's business; how tall
-   the card is, is not. */
+.atile .pic.shot { border-radius: 4px; background: var(--surface); box-shadow: 0 0 0 .5px var(--chat-rule); }
+/* Sized from its height, so the picture states its own width and the slot is
+   the shape of what is in it: nothing is cropped away. */
+.atile .pic.shot img { display: block; width: auto; height: 100%; max-width: 60px; object-fit: contain; }
+.atile .pic.skel { min-width: 46px; }
+.atile .pic.skel .sk { position: absolute; inset: 0; border-radius: 0; }
+.atile .cap { display: grid; gap: 2px; align-content: center; min-width: 0; flex: 1; }
 .atile .cap .nm {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
-  color: var(--text); font-size: var(--atile-nm); font-weight: 600; line-height: 1.5;
+  color: var(--chat-file-ink); font-size: 13px; font-weight: 500; line-height: 17px;
 }
-/* Drawn wherever there is one. It used to be a single delivery's privilege, so
-   the one sentence saying what a file IS vanished the moment a turn produced a
-   second file -- exactly when telling them apart starts to matter. */
 .atile .cap .ds {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
-  color: var(--muted); font-size: var(--atile-ds); line-height: 1.5;
+  color: var(--muted); font-size: 11px; line-height: 15px;
 }
-.atile .cap .mt {
-  font-family: var(--mono); font-size: 10.5px; line-height: 1.5; color: var(--faint);
-  font-variant-numeric: tabular-nums; margin-top: 2px;
-}
-/* The headline row: the preview beside the caption rather than above it, and
-   CENTRED in its column at the shared ratio. The caption decides how tall the
-   row is -- a title and a file size no longer pay for the height of a square
-   picture, which is what made every single-delivery card the same 155px
-   whatever it actually said. */
-/* One delivery is the turn's product, so its row takes the whole width rather
-   than sitting as a lone 190px tile in an empty grid. */
-.atiles.single { grid-template-columns: minmax(0, 1fr); }
-/* A fixed column, not a fraction of the container: a preview sized in cqi grew
-   with the window, and since it is the taller half of this row it carried the
-   whole card's height up with it -- the same delivery was 133px tall in a desk
-   pane and 147px in a wide window. */
-.atiles.single .atile {
-  grid-template-columns: 92px minmax(0, 1fr);
-  align-items: center; gap: 0;
-  transition: grid-template-columns .2s ease, border-color .14s, box-shadow .14s, transform .14s;
-}
-/* `width: auto`, not the 100% the grid tile needs: this preview carries
-   margins inside a fixed column, so a stated full width put it 22px past the
-   column and over the title beside it.
-   And `aspect-ratio: auto`, which is the other half of the same fault. The
-   grid tile's 16:10 is a ratio for a preview drawn ABOVE its caption; here the
-   preview stands beside one, in a 92px column, at a stated 98px tall -- and a
-   ratio plus a definite height resolves the auto width from the ratio rather
-   than from the column, so the box came out 157px wide and lay across the
-   title it stands next to. A page beside a caption is portrait: the column
-   gives the width, the 98px gives the height. */
-.atiles.single .atile .pic {
-  width: auto; aspect-ratio: auto; margin: 12px 0 12px 12px; border-bottom: 0; border-radius: 7px;
-  border: 1px solid var(--line-soft); height: 98px;
-}
-/* A rendered page or a photo keeps the tile's 16:10 ratio at that height, which
-   is wider than the 92px column the document face fits in -- left there, the
-   picture ran over the title beside it. The column follows the picture. */
-.atiles.single .atile:has(> .pic.shot) { grid-template-columns: auto minmax(0, 1fr); }
-/* And what the column follows has to be the picture's own shape. The grid
-   tile's image fills a box whose ratio is already the box's (`width: 100%`,
-   `cover`), so it states no width of its own -- and a column told to follow it
-   had nothing to follow and took the whole row instead. The box then stayed
-   98px tall at 688 wide, and `cover` cropped a 16:9 slide to the middle
-   quarter of itself: a delivered deck arrived as a letterboxed strip with its
-   own title cut in half.
-   Sized from the height instead, the image resolves its width from its own
-   ratio, the auto column resolves from that, and the box is the shape of what
-   is in it -- so `contain` and `cover` agree and there is nothing to crop. */
-.atiles.single .atile .pic.shot img { width: auto; height: 100%; object-fit: contain; }
-.atiles.single .atile .cap { align-content: center; padding: 13px 16px; }
-/* No narrow-container type step. Every caption row is one ellipsised line now,
-   so a narrow card already fits without shrinking anything -- and shrinking the
-   type here was the last thing making a delivery's card a different height in a
-   desk pane than in the chat column. */
-@media (prefers-reduced-motion: reduce) { .atiles.single .atile { transition: none; } }
-/* Where it opens, said before the click rather than after it. */
-.atile .cap .away { font-family: var(--mono); font-size: 10px; color: var(--sky); }
-/* An image is the one tile that can be slow, so it gets the same shimmering
-   placeholder the rail and the hub cards use -- a tile that jumps from blank
-   to full reads as the page having been broken until that moment. */
-.atile .pic.skel .sk { position: absolute; inset: 0; border-radius: 0; }
-.achanges { overflow: hidden; border: 1px solid var(--line-soft); border-radius: 10px; }
-.achange {
-  display: grid; grid-template-columns: 48px minmax(0, 1fr) 34px 34px 34px; align-items: center;
-  width: 100%; min-width: 0; min-height: 33px; padding: 5px 9px;
-  border: 0; border-bottom: 1px solid var(--line-soft); background: var(--ink);
-  color: var(--muted); text-align: left; cursor: pointer;
-  transition: background-color .14s, color .14s;
-}
-.achange:last-child { border-bottom: 0; }
-.achange:hover { color: var(--text); background: var(--surface); }
-.achange .ck { font-size: 10.5px; font-weight: 600; color: var(--amber); }
-.achange .ck.new { color: var(--moss); }
-.achange .ck.deleted { color: var(--clay); }
-.achange .cn {
-  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text); font-size: 13px; font-weight: 500;
-}
-.achange .ct, .achange .ca, .achange .cd {
-  color: var(--muted); font-family: var(--mono); font-size: 9.5px; text-align: right;
+.atile .cap .mt { font-size: 11px; line-height: 15px; color: var(--chat-file-meta); font-variant-numeric: tabular-nums; }
+/* A process line's glyph, where the design draws one from its own icon set
+   (Figma: Raven / Thinking): the same 12px and the same grey as the drawn
+   glyphs beside it, and the same three states. */
+.wrow .transcript-ic { width: 14px; height: 14px; flex: none; color: var(--chat-quiet); }
+.wrow.tog:hover .transcript-ic { color: var(--muted); }
+.wrow.bad .transcript-ic { color: var(--chat-danger); }
+.wrow.run .transcript-ic { animation: breathe 1.5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .wrow.run .transcript-ic { animation: none; opacity: .62; } }
+
+/* The files a question was sent with, as tags heading its sentence inside the
+   bubble (Figma: Raven / UserMessage, the attachment variant). */
+.msg.me:has(> .transcript-files) { padding-block: 12px; }
+.msg.me .transcript-files { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; white-space: normal; }
+
+/* When the reader came back: a centred date between two questions a long way
+   apart (Figma: Raven / Chat, dates between long-gap messages). */
+.transcript-date {
+  align-self: center; font-size: 11px; line-height: 40px; color: var(--chat-quiet);
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
-.achange .ct { padding-left: 4px; color: var(--faint); font-family: var(--mono); font-size: 9.5px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* A delivered file's mark, when there is no picture of it to draw. */
+.atile .pic.transcript-mark svg { display: block; }
+/* A delivery card's own buttons, above the card's hit area and 30px off the
+   name the way the design spaces them: open in a browser, download, open. */
+.transcript-acts {
+  position: relative; z-index: 1; flex: none; display: flex; align-items: center; gap: 8px;
+  margin-left: 18px;
+}
+.transcript-act {
+  width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0;
+  border-radius: 6px; background: none; color: var(--chat-quiet); cursor: pointer;
+  transition: color .12s, background .12s;
+}
+.transcript-act:hover { color: var(--text); background: var(--surface); }
+.transcript-act:focus-visible { outline: 1px solid var(--amber); outline-offset: 1px; }
 .amore {
   display: inline-flex; margin: 8px 0 0; padding: 2px 0; border: 0; background: none;
   font-size: 12px; line-height: 1.5; color: var(--faint); cursor: pointer;
 }
 .amore:hover { color: var(--text); }
-@container artifacts (max-width: 430px) {
-  .achange {
-    grid-template-columns: 44px minmax(0, 1fr) 32px 32px 32px;
-    padding-inline: 7px;
-  }
-}
 
 /* an empty target would still spend a flex gap, opening a hole after the verb */
 .wrow .ar:empty { display: none; }
@@ -1609,22 +1565,22 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    rows are fit-content, so the line's own end is the one edge every row
    actually has; icons keep the hard left edge for the kind of work. */
 .cv {
-  flex: none; width: 11px; height: 11px; color: var(--faint);
+  flex: none; width: 12px; height: 12px; color: var(--chat-quiet);
   transition: transform .16s ease, color .12s;
 }
 .open > .cv, .tfold.open > .tfh > .cv { transform: rotate(90deg); }
 /* How long a step in flight has been going. Monospace so the digits do not
    shuffle the row as they tick, and `flex: none` so a long verb clips before
    this does -- the number is the part that says the step is alive. */
-.wrow .runms { flex: none; font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
-.wrow .chip { flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 8px; line-height: 16px; }
+.wrow .runms { flex: none; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--chat-quiet); }
+.wrow .chip { flex: none; font-size: 12px; padding: 0 7px; border-radius: 9px; line-height: 18px; }
 /* diff counts read as plain numbers next to the path, not as a pill */
-.wrow .diffn { flex: none; font-family: var(--mono); font-size: 11.5px; }
+.wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: 14px; }
 .wrow .diffn .a { color: var(--moss); }
 .wrow .diffn .d { color: var(--clay); }
 .chip.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
-.wrow.bad .vb, .wrow.bad .ic, .wrow.bad .g { color: var(--clay); }
-.wrow .err { color: var(--clay); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wrow.bad .vb, .wrow.bad .ic, .wrow.bad .g { color: var(--chat-danger); }
+.wrow .err { color: var(--chat-danger); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wrow.wait .vb, .wrow.wait .ic { color: var(--amber); }
 
 /* detail card: the only place raw commands, paths and output appear. A titled
@@ -1682,18 +1638,19 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    version, or sources the served page is behind; a quiet amber row in the rail
    foot whose action is always the reader's click (app/updates.ts) */
 .upnote {
-  display: flex; align-items: center; gap: 8px; width: 100%;
-  padding: 7px 10px; margin-bottom: 6px; border-radius: 8px;
-  border: 1px solid var(--line); border-left: 2px solid var(--amber);
-  background: var(--surface); font-size: 12px; color: var(--muted);
-  cursor: pointer; text-align: left;
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 32px;
+  padding: 0 8px; margin-bottom: 4px; border-radius: 8px;
+  background: color-mix(in oklab, var(--amber) 9%, transparent);
+  font-size: 13px; color: var(--rail-ink-on); cursor: pointer; text-align: left;
 }
-.upnote:hover { color: var(--text); border-color: var(--faint); }
-.upnote .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--amber);
-  flex: none; animation: breathe 1.4s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .upnote .pip { animation: none; } }
-.upnote .t { flex: 1; min-width: 0; }
-.upnote .rl { color: var(--amber); font-weight: 600; flex: none; }
+.upnote:hover { background: color-mix(in oklab, var(--amber) 15%, transparent); }
+/* The dot sits in the 16px glyph slot the settings row below uses, so the two
+   labels start on the same line. Still, not breathing: the tint and the action
+   word already say "something here", and nothing about it is urgent. */
+.upnote .pip { flex: none; width: 16px; height: 16px; display: grid; place-items: center; }
+.upnote .pip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.upnote .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upnote .rl { color: var(--amber); font-weight: 600; font-size: 12.5px; flex: none; }
 
 /* upgrade shade: the server is being replaced under us, so the page holds
    still until serve answers again. A bar and one line -- there is nothing to
@@ -1736,38 +1693,40 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .upshade .cmd button:hover { color: var(--text); }
 .upshade .foot { display: flex; justify-content: flex-end; margin-top: 14px; }
 
-/* turn fold: once the answer lands, everything that led to it collapses to a
-   single line, and a hairline separates that line from the answer below */
-.tfold { margin: 14px 0 12px; }
+/* turn fold: once the answer lands, everything that led to it collapses to the
+   design's one quiet line -- the verdict and the clock -- at the head of the
+   card, and opens into the process lines under it (Figma: Raven / Thinking). */
+.tfold { margin: 0; }
+.tfold.open { margin-bottom: 4px; }
 /* One hard left edge for the transcript: whatever a line leads with — an icon,
    a chevron, or its own first word — starts on that edge. Its rows sit right
    underneath, so the gap stays small enough to read as one block. */
 .tfh {
-  display: flex; align-items: center; gap: 7px; width: fit-content; max-width: 100%;
-  text-align: left; color: var(--faint); font-size: 13px;
-  padding: 3px 8px; margin: 0 -8px 6px;
-  border: 0; border-radius: 7px; background: none; cursor: pointer;
+  display: flex; align-items: center; gap: 4px; width: fit-content; max-width: 100%;
+  text-align: left; color: var(--chat-quiet); font-size: 14px; line-height: 22px;
+  padding: 0; margin: 0;
+  border: 0; border-radius: 0; background: none; cursor: pointer;
 }
-.tfb > .step:first-child { margin-top: 0; }
+.tfh > .cv { margin-left: -2px; }
+.tfb { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .tfb .step > .wk { margin-top: 0; }
 .tfh:hover .cv { color: var(--muted); }
-.tfold::after { content: ''; display: block; height: 1px; background: var(--line); }
 .tfb[hidden] { display: none; }
-.tfb { margin-bottom: 12px; }
 
 /* One type for every line that stands in for finished work -- "thought",
-   "done", a stretch summary. They had drifted to 13 / 13.5px in two different
-   greys, which made three lines of the same kind read as three kinds of thing.
-   Declared together so they cannot drift again. */
-.think, .tfh, .wrow.sum { font-size: 13px; color: var(--muted); }
-.tfh .tm { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+   "done", a stretch summary. They had once drifted to 13 / 13.5px in two
+   different greys, which made three lines of the same kind read as three kinds
+   of thing. Declared together so they cannot drift again: change the size here
+   and every line of the kind moves with it. */
+.think, .tfh, .wrow.sum { font-size: 14px; color: var(--chat-quiet); }
+.tfh .tm { color: var(--chat-quiet); font-size: 14px; font-variant-numeric: tabular-nums; }
 /* An empty clock still spends its flex gap, which pushed the caret one whole
    gap further from the label on every line whose time happened to be blank --
    two folds side by side then looked like two different components. */
 .tfh .tm:empty { display: none; }
 .think:hover, .tfh:hover, .wrow.sum:hover { color: var(--text); }
 /* the phrase is a summary of the rows underneath, not a target of its own */
-.wrow.sum .ar { color: var(--muted); font-size: 13px; }
+.wrow.sum .ar { color: inherit; font-size: 14px; }
 .wrow.sum:hover .ar { color: var(--text); }
 
 /* the turn is never silent: a breathing dot fills the gap before events */
@@ -1880,12 +1839,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .backpill[hidden] { display: none; }
 
-/* mid-turn narration is speech, not metadata: it reads at full strength, like
-   the reference transcripts do — only the answer footer marks the final say */
-.say { margin: 12px 0 2px; font-size: 13.5px; line-height: 1.72; }
+/* mid-turn narration: what the agent said on the way, set between the process
+   lines and the answer. It used to sit a step under the reply and a step over
+   the process trail, which worked while that trail was 11px -- 11, 12, 14 read
+   as a ladder. Once the trail took the answer's 14px the middle rung became the
+   smallest type in the card, with a larger tool row above and below it, so a
+   sentence the agent actually said was harder to read than the calls around it.
+   It takes the reply's own size and measure now, and stays the quieter grey:
+   what separates narration from the answer is colour, not size. */
+.step > .say.prose { margin: 0; color: var(--muted); }
 .cot { overflow-wrap: anywhere; }
 
-.answer { position: relative; margin-top: 18px; }
+.answer { position: relative; margin: 0; }
 .acts { display: flex; align-items: center; gap: 1px; margin-top: 8px; }
 .acts button {
   position: relative; width: 27px; height: 27px; display: grid; place-items: center;
@@ -1981,20 +1946,24 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* break-word, not anywhere: an unbroken token longer than the line (a URL, a
    hash) wraps instead of pushing the column sideways, while normal words
    still break only at their own boundaries. */
-.prose { line-height: 1.72; overflow-wrap: break-word; }
+.prose { line-height: 1.8; overflow-wrap: break-word; }
 .prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+/* A reply's own type (Figma: Raven / AssistantMessage): 14/1.8 prose with 8px
+   between paragraphs, and a 16/22 semibold heading in the same face. */
+.msg.ai .prose { color: var(--chat-ink); }
 .prose h2 {
-  font-family: var(--mono); font-size: var(--step-1); font-weight: 600;
-  letter-spacing: -.02em; margin: 26px 0 10px; text-wrap: balance;
+  font-family: var(--sans); font-size: 16px; line-height: 22px; font-weight: 600;
+  letter-spacing: 0; margin: 20px 0 12px; text-wrap: balance;
 }
-.prose h3 { font-size: var(--step-0); margin: 20px 0 6px; color: var(--text); }
-.prose p { margin: 10px 0; }
+.prose h3 { font-size: 14px; line-height: 22px; font-weight: 600; margin: 16px 0 8px; color: inherit; }
+.prose p { margin: 8px 0; }
 .prose .brk { height: 14px; }
-.prose ul, .prose ol { margin: 10px 0; padding-left: 18px; }
+.prose ul, .prose ol { margin: 8px 0; padding-left: 18px; }
 /* A list is a column of rows, not prose: at the paragraph reading measure an
    item that is one code chip floats in a line box half again its own height,
    and the stack of chips then reads as a row of buttons. */
-.prose li { margin: 2px 0; line-height: 1.5; }
+.prose li { margin: 2px 0; line-height: 1.8; }
 .prose li code { padding: 0 4px; }
 /* A nested level belongs to its parent item, not to the section, so it sits
    tighter than a top-level list. */
@@ -2026,12 +1995,13 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   font-family: var(--mono); font-size: 12.5px; background: var(--raised);
   padding: 1px 5px; border-radius: 4px;
 }
-/* Code is content, not a caption: it reads at text weight on a filled block,
-   with no outline competing with the prose rules around it. */
+/* Code is content, not a caption: it reads at text weight in the design's
+   listing box (Figma: Raven / AssistantMessage, the code variant) -- the table's
+   head ground, its half-pixel rule and radius, 13/1.8 mono. */
 .prose pre {
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.75; margin: 14px 0;
-  background: var(--raised); border-radius: 10px; color: var(--text);
-  padding: 12px 15px; overflow-x: auto; tab-size: 2;
+  font-family: var(--mono); font-size: 13px; line-height: 1.8; margin: 16px 0;
+  background: var(--chat-head); border: .5px solid var(--chat-rule); border-radius: 12px;
+  color: var(--chat-ink); padding: 10px 16px; overflow-x: auto; tab-size: 2;
 }
 /* Mathematics, which the browser sets itself from MathML: nothing here picks a
    typeface or a size, because the reader's own math font is the one that pairs
@@ -2053,23 +2023,32 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    block itself: with it on the <pre> the margin collapses through and every
    offset here is measured from the wrong edge -- which is what put the button
    below the middle of a one-line block. */
-.cblk { position: relative; margin: 14px 0; }
+.cblk { position: relative; margin: 16px 0; }
 .cblk > pre { margin: 0; padding-right: 46px; }
 /* A fence that names its language is a listing: it gets a header to name it,
    and the button moves into that header so it never sits over the code. A bare
    fence is usually one command or a line of output -- no header, and the button
    stays out of the way until the pointer is on the block. */
-.cblk.lang { background: var(--raised); border-radius: 10px; overflow: hidden; }
-.cblk.lang > pre { background: none; border-radius: 0; padding: 11px 15px 13px; }
-/* The header is a tone shift inside the same box, not a ruled bar: the label
-   strip reads as part of the block, with the seam carried by the colour step
-   alone. */
+.cblk.lang {
+  background: var(--chat-head); border: .5px solid var(--chat-rule); border-radius: 12px; overflow: hidden;
+}
+.cblk.lang > pre {
+  background: none; border: 0; border-top: .5px solid var(--chat-rule); border-radius: 0;
+  padding: 10px 16px;
+}
+/* The header is the design's 40px strip on the same ground, ruled off from the
+   listing by the box's own half-pixel line, and it names the language the way
+   the design writes it: `< CSS >`. */
 .cbhd {
   display: flex; align-items: center; justify-content: space-between;
-  height: 31px; padding: 0 5px 0 15px;
-  background: color-mix(in oklab, var(--text) 4%, transparent);
+  height: 40px; padding: 0 7px 0 16px; background: var(--chat-head);
 }
-.cblang { font-size: 11.5px; color: var(--muted); letter-spacing: .01em; }
+.cblang {
+  font-family: var(--mono); font-size: 13px; font-weight: 500; line-height: 26px;
+  color: var(--chat-file-ink); text-transform: uppercase;
+}
+.cblang::before { content: '< '; }
+.cblang::after { content: ' >'; }
 /* Borderless, icon-only, square: a bordered pill with a word in it reads as a
    form control dropped onto the code. Always drawn, never revealed on hover --
    a button that exists only while the pointer is already inside the block is a
@@ -2147,29 +2126,31 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   text-decoration-color: color-mix(in oklab, var(--link) 45%, transparent);
 }
 .prose a:hover { text-decoration-color: var(--link); }
-.tw { overflow-x: auto; margin: 14px 0; border: 1px solid var(--line-soft); border-radius: 9px; }
-.prose table { border-collapse: collapse; width: 100%; font-size: 13px; }
-.prose th, .prose td { padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
+/* The design's table (Figma: Raven / AssistantMessage, the table variant): one
+   half-pixel rule boxing it at a 12px radius and dividing every cell, a head
+   row on the page's grey, and 40px rows of 13/26 text. The cells wrap --
+   models routinely put a whole sentence in one, and nowrap turned a table that
+   fitted into one that scrolls sideways; the head row does not, so a column
+   is never narrower than its own name. */
+.tw { overflow-x: auto; margin: 16px 0; border: .5px solid var(--chat-rule); border-radius: 12px; }
+.prose table { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 26px; }
+.prose th, .prose td {
+  padding: 7px 16px; text-align: left; vertical-align: top;
+  border: 0; border-right: .5px solid var(--chat-rule);
+}
+.prose th:last-child, .prose td:last-child { border-right: 0; }
+.prose tbody td { border-top: .5px solid var(--chat-rule); color: var(--chat-ink); }
 .prose th {
-  font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--faint); background: var(--surface); white-space: nowrap;
+  font-weight: 400; color: var(--chat-head-ink); background: var(--chat-head); white-space: nowrap;
 }
-/* An identifier is quoted, not styled: the header row is already mono and
-   uppercased for emphasis, and both of those are wrong for code -- uppercasing
-   renames `run_subagent_dag`, and a filled chip inside the tinted header reads
-   as a stray box. In the header, code sheds the chip and keeps its own case. */
+/* An identifier is quoted, not styled: a filled chip inside the tinted header
+   reads as a stray box, so in the header code sheds the chip. */
 .prose th code {
-  background: none; padding: 0; font-size: inherit;
-  text-transform: none; letter-spacing: 0; color: var(--muted);
+  background: none; padding: 0; font-size: inherit; color: inherit;
 }
-/* Same reasoning inside a heading: a 12.5px filled box under a 17px mono
-   heading sits below its cap line and reads as debris. */
+/* Same reasoning inside a heading: a 12.5px filled box under a 16px heading
+   sits below its cap line and reads as debris. */
 .prose h2 code, .prose h3 code { background: none; padding: 0; font-size: inherit; }
-.prose tr:last-child td { border-bottom: 0; }
-/* First column carries the row's subject, so it leads -- but it wraps: models
-   routinely put a whole sentence there, and nowrap turned a table that fitted
-   into one that scrolls sideways. */
-.prose td:first-child { font-weight: 600; }
 /* In a data cell the chip is the only thing marking the value as code, so it
    stays -- just tight enough that a lone identifier sits on the same line as
    the plain text in the cell beside it. */
@@ -2236,24 +2217,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   display: none;
 }
 .dock-in { max-width: var(--col); margin: 0 auto; position: relative; pointer-events: auto;
-  /* Slightly denser at the top: the glass reads as a material with a light
-     source, not a flat translucent rect. The inset white line is the rim
-     catching that light -- it is what sells the pane as glass in dark mode
-     and disappears harmlessly into the light theme. */
-  background: var(--paper);
-  border: 0; border-radius: 20px;
-  padding: 12px 12px 10px 16px;
+  /* Frosted glass, the way the design draws it (Figma: Raven / ChatComposer):
+     a mostly opaque white over a heavy blur, a half-pixel rule and one soft
+     shadow all round. The card has no padding of its own; each band inside it
+     carries its own inset, so the field and the bar line up with the design's
+     16px edges. */
+  background: var(--composer-bg);
+  -webkit-backdrop-filter: blur(50px);
+  backdrop-filter: blur(50px);
+  border: .5px solid var(--composer-line); border-radius: 16px;
+  padding: 0;
   transition: box-shadow .15s;
-  box-shadow: 0 2px 14px var(--sh-soft), 0 0 0 1px var(--ring);
+  box-shadow: 0 0 20px var(--composer-sh);
 }
-/* The card answers focus by deepening, which is the only state it has. The blur
-   and the rim light it used to carry were reading the transcript through it,
-   and a composer that shows what is behind it competes with the one thing on
-   this page the reader is actually making. */
-.dock-in:focus-within { box-shadow: 0 4px 20px var(--sh-soft), 0 0 0 1px var(--ring-2); }
+.dock-in:focus-within { box-shadow: 0 0 24px var(--composer-sh); }
 /* Drag-over highlight moved up from the field: the card is the drop target
    the reader sees. */
-.dock-in:has(.field.drop) { box-shadow: 0 4px 20px var(--sh-soft), 0 0 0 1px var(--amber); }
+.dock-in:has(.field.drop) { box-shadow: 0 0 20px var(--composer-sh), 0 0 0 1px var(--amber); }
 
 /* ── the work indicator ───────────────────────────────────────────────────
    One glyph for "this is happening now", in every place that used to say it in
@@ -2302,6 +2282,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .turnlive .wkg { color: var(--amber); }
 
 .queued { margin-bottom: 9px; display: grid; gap: 3px; }
+.dock-in .queued { margin: 0; padding: 0 16px; }
+.dock-in .queued:not(:empty) { padding-top: 12px; }
 .qrow {
   display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px;
   color: var(--muted); border-left: 2px solid var(--faint); padding: 2px 0 2px 9px;
@@ -2318,6 +2300,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   border: 0; border-radius: 0; background: none; box-shadow: none;
   padding: 4px 8px 0;
 }
+.dock-in .field { padding: 16px 16px 0; }
+.dock-in .atts:not([hidden]) + .field { padding-top: 8px; }
 .field .c { font-family: var(--mono); color: var(--amber); padding-bottom: 3px; }
 /* The ceiling is viewport-relative on purpose: a fixed 168px eats a third of a
    short window, and what it eats is the tail of the transcript the reader is
@@ -2330,9 +2314,14 @@ textarea {
   min-height: 46px; max-height: min(200px, 24vh); padding: 2px 0; line-height: 1.6;
 }
 textarea::placeholder { color: var(--faint); }
-/* The composer's own field: one line's leading, and the space under the last
-   line that keeps a descender off the row of controls below it. */
-.dock-in textarea { line-height: 22px; padding: 4px 0 6px; }
+/* The composer's own field: the design's 14/26 body, two lines at rest and
+   about eleven before it scrolls -- still viewport-bounded, so a short window
+   keeps the transcript it is writing about. */
+.dock-in textarea {
+  font-size: 14px; line-height: 26px; padding: 0; color: var(--composer-ink);
+  min-height: 52px; max-height: min(286px, 36vh);
+}
+.dock-in textarea::placeholder { color: var(--composer-ph); }
 /* WebKit paints its own focus ring on text controls; ours is the container
    border, so suppress it where we already show focus. */
 textarea:focus, textarea:focus-visible,
@@ -2342,6 +2331,17 @@ textarea:focus, textarea:focus-visible,
 
 /* attachments staged above the composer */
 .atts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.dock-in .atts { gap: 10px; margin: 0; padding: 16px 16px 0; }
+/* A file is a small tag, not a card: its type badge, its name, and a remove
+   button that takes the badge's place while the pointer is on the tag. */
+.dock-in .att:not(.img) {
+  height: 22px; max-width: none; gap: 4px; padding: 0 6px 0 4px;
+  background: var(--att-bg); border: 0; border-radius: 6px;
+  font-size: 13px; line-height: 18px; color: var(--composer-ink);
+}
+.dock-in .att:not(.img) .nm { max-width: 100px; }
+.dock-in .att:not(.img):hover .cp-ik > svg { visibility: hidden; }
+.dock-in .att:not(.img):hover .cp-ik .rm { display: grid; }
 .att {
   display: inline-flex; align-items: center; gap: 7px; max-width: 260px;
   background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px;
@@ -2367,6 +2367,7 @@ textarea:focus, textarea:focus-visible,
 }
 .att.img:hover .rm, .att.img .rm:focus-visible { opacity: 1; }
 .ansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; margin-left: -5px; flex-wrap: wrap; }
+.turn.ai > .ansfoot { margin-top: 0; }
 .ansfoot .acts { margin-top: 0; }
 /* Mirrored against the right edge the bubble is aligned to. */
 .turn.me > .ansfoot { flex-direction: row-reverse; margin-left: 0; margin-right: -5px; }
@@ -2378,29 +2379,61 @@ textarea:focus, textarea:focus-visible,
 }
 .dock-in:focus-within .tool-btn, .tool-btn:hover { opacity: 1; }
 .tool-btn:hover { color: var(--text); background: var(--raised); }
+/* Send, in the design's four states (Figma: Raven / SendButton): a grey disc
+   while there is nothing to send, an ink one once there is, and the same ink
+   disc holding a spinner while the turn is on its way and a stop square once
+   it is streaming. */
 .go {
-  flex: none; width: 30px; height: 30px; border-radius: 50%; margin-left: 6px;
-  background: var(--black); color: var(--ink); display: grid; place-items: center;
-  transition: opacity .15s, background .15s;
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  background: var(--send-on); color: var(--send-on-ink); display: grid; place-items: center;
+  transition: background .15s, color .15s;
 }
-.go:disabled { opacity: .22; cursor: default; }
-.go.halt { background: var(--clay); color: var(--ink-on-accent); }
+.go:disabled { background: var(--send-off); color: var(--send-off-ink); cursor: default; }
+.go[data-state="sending"] svg { animation: go-spin 1s linear infinite; }
+@keyframes go-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .go[data-state="sending"] svg { animation-duration: 2.4s; } }
 
-/* wraps instead of pushing the usage line past the edge on a narrow window */
 /* Pulled left of the field it sits under, so the first control's own padding
-   lines its glyph up with the text above rather than with its box. */
-.under { display: flex; align-items: center; gap: 4px; margin: 8px 0 0 -4px; padding: 0; flex-wrap: wrap; }
-/* The "+" (src/chrome/PlusMenu.tsx): a square the size of the chips' line. */
-.plus { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--muted); }
-.plus:hover, .plus[aria-expanded="true"] { color: var(--text); background: var(--raised); }
-.plus svg { width: 16px; height: 16px; }
+   lines its glyph up with the text above rather than with its box.
+
+   One row at every width the document allows, never wrapped: a row that may
+   wrap picks its breaks from its items' whole widths before any of them
+   shrinks, so the send button, last in the row, is what a narrow column would
+   drop onto a line of its own. The items whose width is their text -- the
+   folder, the mode, the meter and the model -- give instead, each taking an
+   equal share of what the fixed controls leave and never more than its own
+   width, so a short name stays whole while a long one ends in an ellipsis. */
+.under { display: flex; align-items: center; gap: 4px; margin: 0; padding: 16px 16px 16px 8px; }
+.under > .chrome-anch:has(> .chip), .under > .chip.model, .under > .meter {
+  flex: 1 1 0; min-width: 0; max-width: max-content;
+}
+/* The chip gives with the anchor it hangs in, and only its name clips: the
+   anchor must not, because its popover stands outside the anchor's box. */
+.under > .chrome-anch > .chip { flex-shrink: 1; min-width: 0; }
+#wdName, #permName, #modelName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The "+" (src/chrome/PlusMenu.tsx): a 30px round target; open, its cross turns
+   into a close mark. */
+.plus { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--rail-ink); }
+.plus:hover, .plus[aria-expanded="true"] { color: var(--composer-ink); background: var(--composer-hover); }
+.plus svg { width: 18px; height: 18px; transition: transform .15s ease; }
+.plus[aria-expanded="true"] svg { transform: rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { .plus svg { transition: none; } }
 /* The chips under the field read as words rather than as code: the value each
    carries is a name from the catalogue or a model's display name. */
-.under .chip { font-family: var(--sans); font-size: 12px; padding: 4px 8px; border-radius: 8px; }
-.under .chip .pico { width: 14px; height: 14px; }
-.under .chip.model { color: var(--text); font-weight: 500; gap: 7px; }
-.under .chip.model .provider-icon { width: 15px; height: 15px; }
-.under .chip.model .chrome-model-caret { width: 12px; height: 12px; flex: none; opacity: .6; margin-left: -2px; }
+/* Each is a 30px row that turns into a pill under the pointer (Figma: Raven /
+   attachment-01): quiet grey words at rest, the secondary ink on hover. */
+.under .chip {
+  font-family: var(--sans); font-size: 12px; height: 30px; padding: 0 12px; gap: 6px;
+  border-radius: 12px; color: var(--rail-quiet);
+}
+.under .chip:hover, .under .chip[aria-expanded="true"] {
+  color: var(--rail-ink); background: var(--composer-hover); border-radius: 100px;
+}
+.under .chip .pico { width: 12px; height: 12px; }
+.under .chip.model { color: var(--composer-ink); font-weight: 400; }
+.under .chip.model:hover, .under .chip.model[aria-expanded="true"] { color: var(--composer-ink); }
+.under .chip.model .provider-icon { width: 16px; height: 16px; }
+.under .chip.model .chrome-model-caret { display: grid; flex: none; color: var(--rail-quiet); }
 .tries { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .try {
   border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px;
@@ -2413,6 +2446,22 @@ textarea:focus, textarea:focus-visible,
 .meter { font-family: var(--mono); font-size: 11px; color: var(--faint);
   font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto;
   min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Past sharing, the bar gives things up whole, in the order they matter
+   least, rather than ellipsizing every label to a stub: the usage line and
+   the words of the folder and permission chips first (their icons stay, the
+   name is the chip's label and a click away), then the folder chip, the
+   context ring and the permission chip, in that order. The "+", the model
+   and send never go -- the model's name keeps its ellipsis instead. Measured
+   on the dock rather than the window, because the desk pane narrows the chat
+   and the window stays put. */
+@container dock (max-width: 480px) {
+  .under .meter { visibility: hidden; width: 0; }
+  .under #permName, .under #wdName { display: none; }
+  .under #permChip, .under #wdChip { padding: 0 9px; }
+}
+@container dock (max-width: 360px) { .under .chrome-anch:has(#wdChip) { display: none; } }
+@container dock (max-width: 320px) { .under #ctxChip { display: none; } }
+@container dock (max-width: 280px) { .under .chrome-anch:has(#permChip) { display: none; } }
 
 /* capability popover above the composer */
 /* model picker: provider column + model column, fixed height so a provider
@@ -2604,9 +2653,9 @@ textarea:focus, textarea:focus-visible,
   gap: 14px; pointer-events: none; z-index: 4;
 }
 .chat[data-fresh] #brand { display: flex; animation: brandin .5s cubic-bezier(.2, .7, .3, 1) backwards; }
-/* The mark is the silhouette (components/RavenMark.tsx), inked in the page's
-   own text colour, with its eyes cut to the ground it stands on. */
-#brand .mk { flex: none; display: block; color: var(--text); --mark-eye: var(--page); }
+/* The mark is the tile (components/RavenMark.tsx), which brings its own ground. */
+#brand .mk { flex: none; display: block; }
+#brand .mk svg { display: block; }
 /* A greeting, not a hero. The 70px serif wordmark this replaced was the single
    largest thing on the page, and it was announcing the product to someone who
    had already opened it. */
@@ -3345,49 +3394,34 @@ details[open] summary { margin-bottom: 8px; }
 .pmcard.dim { opacity: .68; }
 .pmcard.pmbad { border-left: 2px solid var(--clay); }
 .pmhead { display: flex; align-items: center; gap: 11px; min-width: 0; }
-/* Brand tile: one steady hue per plugin (hashed from its name in JS via a
-   .th0-.th7 class), a soft top light for material, and the mono display face.
-   Colour identifies the row before the name is read -- same trick as the
-   skill-market category icons. */
-.pmtile {
-  width: 38px; height: 38px; border-radius: 11px; flex: none;
-  display: flex; align-items: center; justify-content: center;
-  background-color: var(--raised); color: var(--muted);
-  background-image: linear-gradient(160deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, 0) 58%);
-  box-shadow: inset 0 0 0 1px rgba(28, 27, 25, .06);
-  font-family: var(--mono); font-weight: 700; font-size: 15px; letter-spacing: -.02em;
+/* An entrance's app icon (components/ChannelMark.tsx). A store icon is a tile
+   already, so it fills the frame, and the hairline is drawn OVER it: the five on a white or near-white
+   ground -- Feishu, WeCom, QQ, Telegram, Slack -- otherwise have no edge on the
+   light theme's list. */
+.channel-mark {
+  position: relative; width: 38px; height: 38px; border-radius: 11px; flex: none;
+  display: grid; place-items: center; overflow: hidden;
 }
-:root[data-theme="dark"] .pmtile { background-image: linear-gradient(160deg, rgba(255, 255, 255, .1), rgba(255, 255, 255, 0) 58%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
+.channel-mark::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(28, 27, 25, .08);
+}
+:root[data-theme="dark"] .channel-mark::after { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .pmtile { background-image: linear-gradient(160deg, rgba(255, 255, 255, .1), rgba(255, 255, 255, 0) 58%); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
+  :root:not([data-theme="light"]) .channel-mark::after { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
 }
-.pmtile.th0 { background-color: #f6edd8; color: #8a6410; }
-.pmtile.th1 { background-color: #f7e6e2; color: #a03d2c; }
-.pmtile.th2 { background-color: #e9f0e4; color: #3d6e2c; }
-.pmtile.th3 { background-color: #e3edf5; color: #2d648f; }
-.pmtile.th4 { background-color: #ede9f6; color: #5b4b9c; }
-.pmtile.th5 { background-color: #e2f0ee; color: #2b7568; }
-.pmtile.th6 { background-color: #f6e7ef; color: #9c3a68; }
-.pmtile.th7 { background-color: #eaecef; color: #4c5560; }
-:root[data-theme="dark"] .pmtile.th0 { background-color: #46390f; color: #ecc95c; }
-:root[data-theme="dark"] .pmtile.th1 { background-color: #47241c; color: #e89684; }
-:root[data-theme="dark"] .pmtile.th2 { background-color: #25381c; color: #9ccb84; }
-:root[data-theme="dark"] .pmtile.th3 { background-color: #1d3346; color: #8fc0e8; }
-:root[data-theme="dark"] .pmtile.th4 { background-color: #302946; color: #b3a4e8; }
-:root[data-theme="dark"] .pmtile.th5 { background-color: #1b3c37; color: #86cfc2; }
-:root[data-theme="dark"] .pmtile.th6 { background-color: #43202f; color: #e392b8; }
-:root[data-theme="dark"] .pmtile.th7 { background-color: #2b2f35; color: #aeb8c4; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .pmtile.th0 { background-color: #46390f; color: #ecc95c; }
-  :root:not([data-theme="light"]) .pmtile.th1 { background-color: #47241c; color: #e89684; }
-  :root:not([data-theme="light"]) .pmtile.th2 { background-color: #25381c; color: #9ccb84; }
-  :root:not([data-theme="light"]) .pmtile.th3 { background-color: #1d3346; color: #8fc0e8; }
-  :root:not([data-theme="light"]) .pmtile.th4 { background-color: #302946; color: #b3a4e8; }
-  :root:not([data-theme="light"]) .pmtile.th5 { background-color: #1b3c37; color: #86cfc2; }
-  :root:not([data-theme="light"]) .pmtile.th6 { background-color: #43202f; color: #e392b8; }
-  :root:not([data-theme="light"]) .pmtile.th7 { background-color: #2b2f35; color: #aeb8c4; }
-}
-/* name + publisher stack beside the tile */
+.channel-mark img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* The marks that are not tiles, set on a plate of the frame's own: Matrix's
+   bracketed m, and the envelope mail is drawn with. */
+.channel-mark-inset { background: var(--paper); color: var(--muted); }
+.channel-mark-inset img, .channel-mark-inset svg { width: 22px; height: 22px; }
+.channel-mark-inset svg { stroke-linecap: round; stroke-linejoin: round; }
+/* matrix.svg flips its ink with a prefers-color-scheme rule inside the file,
+   which an <img> evaluates against its own used color-scheme rather than the
+   root's data-theme -- the same hand-over .agent-mark img makes. */
+:root[data-theme="dark"] .channel-mark img { color-scheme: dark; }
+:root[data-theme="light"] .channel-mark img { color-scheme: light; }
+/* name + publisher stack beside the mark */
 .pmid { min-width: 0; display: grid; gap: 1px; }
 .pmnm { display: flex; align-items: center; gap: 5px; min-width: 0;
   font-family: var(--mono); font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
@@ -3445,9 +3479,8 @@ details[open] summary { margin-bottom: 8px; }
   justify-content: center; padding: 0 4px;
 }
 .pmdhead { display: flex; align-items: center; gap: 13px; margin-bottom: 10px; }
-.pmdhead .pmtile { width: 46px; height: 46px; font-size: 19px; border-radius: 13px; }
-/* A brand mark stands in for the letter tile here as it does in a row, so it
-   takes the header's geometry rather than its own roster size -- left at 20px
+/* A brand mark takes the header's geometry rather than its own roster size,
+   as it does in a row -- left at 20px
    the card's identity came out smaller than the 28px mark on the row that
    opened it, which reads as the header mattering less. */
 .pmdhead > .agent-mark { width: 46px; height: 46px; border-radius: 13px; }
@@ -3532,7 +3565,6 @@ details[open] summary { margin-bottom: 8px; }
 .chrow + .chrow { border-top: 1px solid var(--line); }
 .chrow:hover { background: var(--raised); }
 .chrow:focus-visible { outline: 1px solid var(--amber); outline-offset: -1px; }
-.chrow > .pmtile { flex: none; }
 .chrow > .bd { flex: 1; min-width: 0; }
 .chrow .nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .chrow .nm .tt { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3582,11 +3614,10 @@ details[open] summary { margin-bottom: 8px; }
 /* A row that cannot run wears the mark on its edge, not as a red wash: the
    state line already says what is wrong, in words. */
 .surow.bad { box-shadow: inset 2px 0 0 var(--clay); }
-.surow > .pmtile { grid-column: 1; grid-row: 1 / span 2; width: 28px; height: 28px; font-size: 12px; border-radius: 8px; }
-/* A brand mark is the other thing that can fill that one slot, so it takes the
-   same cell at the same size rather than its own 20px roster size -- one column
-   of marks down a page whose other lists draw letter tiles. Spanning both rows
-   is what stops a row with a second line from hanging its mark off the first. */
+/* A brand mark fills that one slot at the row's own size rather than its own
+   20px roster size, so a list draws one even column of marks down its edge.
+   Spanning both rows is what stops a row with a second line from hanging its
+   mark off the first. */
 .surow > .agent-mark { grid-column: 1; grid-row: 1 / span 2; width: 28px; height: 28px; border-radius: 8px; }
 .surow > .agent-mark img { width: 20px; height: 20px; }
 .surow > .nm {
@@ -3698,7 +3729,6 @@ details[open] summary { margin-bottom: 8px; }
   width: 30px; height: 30px; border-radius: 8px; background: var(--raised);
   display: grid; place-items: center; font-family: var(--mono); font-size: 13px; color: var(--muted);
 }
-.card .pmtile { grid-column: 1; grid-row: 1 / span 3; width: 30px; height: 30px; font-size: 13px; border-radius: 9px; }
 .card .nm {
   grid-column: 2; grid-row: 1;
   display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 13.5px; font-weight: 600;
@@ -3723,9 +3753,13 @@ details[open] summary { margin-bottom: 8px; }
 .card .st.warn { color: var(--gold); }
 .card .st.bad { color: var(--clay); }
 .card .st.new { color: var(--sky); }
+/* The width is not a no-op: the filled button is `.mini.go`, and `.go` is also
+   the composer's Send disc, which fixes its width at 30px. This rule comes
+   later and ties on specificity, so stating the width here is what lets the
+   button grow to its label instead of stopping at the floor. */
 .mini {
   border: 1px solid var(--line); border-radius: 7px; padding: 0 12px;
-  height: 28px; min-width: 68px; justify-content: center; white-space: nowrap;
+  height: 28px; width: auto; min-width: 68px; justify-content: center; white-space: nowrap;
   font-size: 12.5px; color: var(--text); background: var(--ink);
   display: inline-flex; align-items: center; gap: 6px;
   transition: background .13s ease, color .13s ease, border-color .13s ease;
@@ -3896,7 +3930,7 @@ details[open] summary { margin-bottom: 8px; }
    white is the boundary, no rule. */
 .snav {
   display: grid; grid-template-rows: auto 1fr auto; min-height: 0;
-  background: var(--surface);
+  background: var(--snav-bg);
 }
 /* Inside the settings dialog a small button is the control standard's size,
    the way the prototype's settings document sizes it -- 32 and 8, beside a
@@ -3924,11 +3958,9 @@ details[open] summary { margin-bottom: 8px; }
 .smodal .mini.go:hover:not(:disabled) {
   filter: brightness(1.18); border-color: var(--text); background: var(--text);
 }
-.snav .brandrow { padding: 14px 16px 6px; }
-.snav .wm {
-  font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: -.01em;
-}
-.snavlist { overflow-y: auto; min-height: 0; padding: 0 8px 8px; display: grid; gap: 0; align-content: start; }
+.snav .brandrow { display: flex; align-items: center; height: 64px; padding: 0 24px; }
+.snav .wm { font-size: 16px; font-weight: 600; color: var(--composer-ink); }
+.snavlist { overflow-y: auto; min-height: 0; padding: 0 16px 16px; display: grid; gap: 2px; align-content: start; }
 /* Tight enough that all 14 sections fit without the rail scrolling: a section
    list you have to scroll to see hides half the settings. */
 .snav button.sitem {
@@ -4899,8 +4931,21 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   background: color-mix(in oklab, var(--surface) 25%, transparent); color: var(--surface);
 }
 
-.veil { position: fixed; inset: 0; background: var(--scrim); display: none; place-items: center; z-index: var(--z-veil); }
+/* The page behind is dimmed and blurred the way the settings dialog's is
+   (.setveil), not blacked out. */
+.veil { position: fixed; inset: 0; background: var(--scrim-soft); backdrop-filter: blur(3px);
+  display: none; place-items: center; z-index: var(--z-veil); }
 .veil[data-open="true"] { display: grid; }
+/* The confirm dialog's own card, sized like the upgrade shade's card
+   (.upshade .upcard) because that card is what replaces it when the question
+   was an upgrade, so the two read as one surface. Placed before .btn.key /
+   .btn.bad so their colours still win over the plain button's. */
+.veil .sheet { width: min(420px, calc(100vw - 48px)); border-radius: 14px; }
+.veil .sheet header { padding: 18px 20px 0; font-size: 15px; }
+.veil .sheet .body { padding: 8px 20px 0; line-height: 1.6; }
+.veil .sheet footer { padding: 20px 20px 18px; gap: 8px; }
+.veil .btn { padding: 6px 14px; border-radius: 8px; color: var(--text); background: var(--surface); }
+.veil .btn:not(.key, .bad):hover { background: var(--raised); }
 /* Bounded, and the fields scroll inside it. A channel's form is as long as that
    channel has fields -- slack specs nine, three of them nested -- and an
    unbounded sheet grew taller than the window with its own save button below
@@ -4996,6 +5041,9 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .btn { border: 1px solid var(--line); border-radius: 7px; padding: 7px 15px; font-size: 13px; }
 .btn:hover { border-color: var(--faint); }
 .btn.key { background: var(--text); border-color: var(--text); font-weight: 600; color: var(--ink); }
+/* Waiting on an answer: the send button's grey (.go:disabled) under an ink the
+   label survives in -- the send tokens dress an icon, this one dresses a word. */
+.btn.key:disabled { background: var(--send-off); border-color: var(--send-off); color: var(--muted); cursor: default; }
 .btn.bad { background: var(--clay); border-color: var(--clay); color: var(--ink-on-accent); font-weight: 600; }
 
 .toasts { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
@@ -5117,30 +5165,12 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 @keyframes nojs-over-splash {
   to { z-index: var(--z-noscript); }
 }
-/* The mark, near the size its own drawing carries: assets/raven.png is 86x86 --
-   square, because the same file is the favicon and a tab scales it into a
-   square box -- with the bird 68px of that and the rest transparent air. So a
-   box much past 86 is upscaling a flat silhouette; the old illustrated crow was
-   960px wide and could take 132. Square here too, or the padding stretches. */
-.sp-rv { width: 111px; height: 111px; user-select: none;
+/* The mark is assets/raven-mark.svg, the tile the rail wears: a vector, so the
+   splash can draw it at any size without upscaling a bitmap, and a tile with
+   its own ground, so it needs no inverting on the dark one. */
+.sp-rv { width: 88px; height: 88px; user-select: none;
   filter: drop-shadow(0 12px 10px rgba(17, 21, 30, .22));
   animation: spfloat 3.2s ease-in-out infinite; }
-/* Inverted on the dark ground, the way the page's own mono marks are
-   (`.agent-mark[data-tone="mono"]`, pinned by scripts/gates/agent-mark-css).
-   The mark is a silhouette -- one solid body with the eyes cut out of it -- so
-   on --ink at #1d1d1d the body measures 1.25:1 and what is left is two white
-   eyes floating on black. Inverting takes the body to 16.9:1 and turns the eyes
-   into the holes they are, which is what RavenMark draws from `currentColor`
-   and `--mark-eye` on the rest of the page. Both dark paths, because they are
-   not one rule: an explicit choice stamps `data-theme` and the system setting
-   stamps nothing. The shadow rides after the invert so it is not inverted too,
-   and it is restated because `filter` takes one list. */
-:root[data-theme="dark"] .sp-rv {
-  filter: invert(1) drop-shadow(0 12px 10px rgba(17, 21, 30, .22)); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .sp-rv {
-    filter: invert(1) drop-shadow(0 12px 10px rgba(17, 21, 30, .22)); }
-}
 .sp-wl { margin-top: 20px; font-family: var(--serif); font-size: 30px;
   letter-spacing: -.008em; color: var(--text); line-height: 1; }
 .sp-bar { margin-top: 36px; width: 104px; height: 2px; border-radius: 1px;
@@ -5561,7 +5591,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 
 .desk-grid { --desk-pad: 0px; --desk-gap: 6px; --desk-half-gap: 3px;
   position: absolute; inset: 0; display: grid; gap: var(--desk-gap); padding: 0;
-  overflow: hidden; pointer-events: none; background: transparent; }
+  pointer-events: none; background: transparent; }
 .desk-grid.n1 { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
 /* The half gap is subtracted from the percentage track the way the absolute
    n3/n4 rules subtract it, so the seam is CENTRED on the split percentage for
@@ -5781,6 +5811,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    `.wrap` is every page's centred reading column, and the pages that really
    are documents want to keep it. */
 #kbPage .work { overflow: hidden; }
+/* The agent connector's column is the composer's: the same `--col` cap and
+   the same 36px gutters `.dock` gives it, so the grid's edges line up with the
+   input box the reader just left rather than sitting inside a narrower one. */
+#extAgentsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
 #kbPage .wrap {
   max-width: none; height: 100%; min-height: 0;
   display: flex; flex-direction: column; padding: 18px 22px 22px;
@@ -6241,7 +6275,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    Everything under it steps down in real jumps -- a page whose whole range is
    11px to 13px has no emphasis anywhere, only uniform grey. */
 .pbhead { display: flex; align-items: center; gap: 15px; margin: 2px 0 13px; }
-.pbhead .pmtile { width: 48px; height: 48px; border-radius: 14px; font-size: 18px; flex: none; }
 .pbhead h1 {
   margin: 0; font-family: var(--mono); font-size: var(--step-3); font-weight: 700;
   letter-spacing: -.025em; line-height: 1.15; min-width: 0; overflow-wrap: anywhere;
@@ -6572,8 +6605,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkview:not(.full) .tkrunchip { display: none; }
 .tkline { font-size: 11.5px; color: var(--faint); }
 .tkview > .tkchips { margin: 2px 0 4px; }
-.tkchips .add { color: var(--moss); font-style: normal; }
-.tkchips .del { color: var(--clay); font-style: normal; }
 /* Why a run stopped, at the top, where a reader looks before reading the
    steps. One line: the steps below say the rest. */
 .tkfail { font-size: 12px; line-height: 1.6; color: var(--clay);
@@ -6749,7 +6780,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkdetail .kv .k { color: var(--faint); }
 .tkdetail .kv .v { color: var(--muted); font-family: var(--mono); }
 .tknote { margin: 8px 0 0; font-size: 12px; line-height: 1.7; color: var(--muted); }
-.tkchips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 /* A door, not a label: each chip opens the thing it names -- the product in the
    preview, the changed file in its diff -- so it is a control and wears the
    affordances of one. */

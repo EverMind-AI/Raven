@@ -12,9 +12,12 @@
  */
 
 import { dockLift } from '../../features/composer/store'
+import { PANE_KEY } from '../../state/paneWidth'
 import { sync } from './scrollbars'
 
-export type PaneName = 'rail' | 'ws'
+import type { PaneName } from '../../state/paneWidth'
+
+export type { PaneName }
 
 interface Pane {
   v: string
@@ -25,8 +28,8 @@ interface Pane {
 }
 
 export const PANE: Record<PaneName, Pane> = {
-  rail: { v: '--rail', min: 190, max: 420, key: 'raven.gui.railw', edge: 'left' },
-  ws: { v: '--wsw', min: 320, max: 1200, key: 'raven.gui.wsw', edge: 'right' },
+  rail: { v: '--rail', min: 190, max: 420, key: PANE_KEY.rail, edge: 'left' },
+  ws: { v: '--wsw', min: 320, max: 1200, key: PANE_KEY.ws, edge: 'right' },
 }
 
 const names = Object.keys(PANE) as PaneName[]

@@ -37,16 +37,18 @@ function fullRow(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
 
 /* A transport whose `subagents.list` answers from a queue, so a test can play
    a probing read and the probe-less read that follows it. */
-function listing(...answers: ExtAgentRowWire[][]): { probes: boolean[] } {
+function listing(...answers: ExtAgentRowWire[][]): { probes: boolean[]; sent: Array<Record<string, unknown>> } {
   const probes: boolean[] = []
+  const sent: Array<Record<string, unknown>> = []
   const transport = new FixtureTransport({})
   transport.call = (async (method: string, params: { probe?: boolean }) => {
     expect(method).toBe('subagents.list')
     probes.push(!!params.probe)
+    sent.push({ ...params })
     return { rows: answers.shift() ?? [] }
   }) as typeof transport.call
   setGateway(transport)
-  return { probes }
+  return { probes, sent }
 }
 
 beforeEach(() => {
@@ -55,6 +57,31 @@ beforeEach(() => {
 })
 
 describe('one agent row', () => {
+  /* A remedy is data the sheet renders, so only a well-formed one is kept: a
+     kind the sheet has no words for would draw an empty fix where the server's
+     sentence used to be. */
+  it('reads the fix a failed test named, and drops anything that is not one', () => {
+    const fixed = extAgentRowOf(wire({ last_test_remedy: { kind: 'setup', command: 'hermes model' } }))
+    expect(fixed.last_test_remedy).toEqual({ kind: 'setup', command: 'hermes model' })
+    const keyOnly = extAgentRowOf(wire({ last_test_remedy: { kind: 'api_key' } }))
+    expect(keyOnly.last_test_remedy).toEqual({ kind: 'api_key', command: '' })
+    expect('last_test_remedy' in extAgentRowOf(wire({}))).toBe(false)
+    const junk = wire({ last_test_remedy: { kind: 'reboot' } as unknown as ExtAgentRowWire['last_test_remedy'] })
+    expect('last_test_remedy' in extAgentRowOf(junk)).toBe(false)
+    const fetch = extAgentRowOf(wire({ last_test_remedy: { kind: 'download', command: 'npx -y a@1' } }))
+    expect(fetch.last_test_remedy).toEqual({ kind: 'download', command: 'npx -y a@1' })
+  })
+
+  /* What to install, as the executable the probe did not find. Absent unless
+     sent, so a server that predates it reads as "nothing named". */
+  it('carries the executable a missing row lacks', () => {
+    expect(extAgentRowOf(wire({ probe_status: 'missing', probe_missing: 'npx' })).probe_missing).toBe('npx')
+    expect('probe_missing' in extAgentRowOf(wire({}))).toBe(false)
+    /* The server sends null on every row that is not missing. */
+    const unnamed = wire({ probe_missing: null as unknown as string })
+    expect('probe_missing' in extAgentRowOf(unnamed)).toBe(false)
+  })
+
   it('names its kind from the flag when the server sends none', () => {
     expect(extAgentRowOf(wire({ builtin: true })).kind).toBe('builtin')
     expect(extAgentRowOf(wire({})).kind).toBe('cli')
@@ -97,6 +124,32 @@ describe('refetching the list', () => {
     const [row] = await extAgentsFetch(false)
     expect(probes).toEqual([true, false])
     expect(row).toMatchObject({ probe_status: 'ready', probe_detail: 'v2 on PATH' })
+  })
+
+  /* With what it found absent: dropped, a missing npx row's sheet went back to
+     offering the agent's own installer after any write. */
+  it('carries what a missing row lacks along with its verdict', async () => {
+    listing([wire({ probe_status: 'missing', probe_missing: 'npx' })], [wire({})])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsFetch(false)
+    expect(row).toMatchObject({ probe_status: 'missing', probe_missing: 'npx' })
+  })
+
+  /* Only a re-check asks the server to read the login shell again, and it asks
+     by name: the capture runs the user's shell, which a plain listing on every
+     page open must not pay for. */
+  it('asks for a fresh login-shell capture only when told to', async () => {
+    const { sent } = listing([], [], [])
+    await extAgentsFetch(true, true)
+    await extAgentsFetch(true)
+    /* And through the source the store actually calls, which is where a
+       re-check's second argument has to survive the hop. */
+    await extAgentsSource.load(true, true)
+    expect(sent).toEqual([
+      { probe: true, refresh_login_env: true },
+      { probe: true },
+      { probe: true, refresh_login_env: true },
+    ])
   })
 
   it('lets a probing answer overwrite what it remembered', async () => {

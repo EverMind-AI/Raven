@@ -24,6 +24,8 @@
 .extAgents-sec:first-of-type { margin-top: 0; }
 .extAgents-hd { display: flex; align-items: baseline; gap: 9px; margin-bottom: 12px; }
 .extAgents-hd b { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .12em; text-transform: uppercase; }
+/* A heading that is a sentence, not a label: set as written. */
+.extAgents-hd-say b { font-family: inherit; font-size: 12.5px; letter-spacing: 0; text-transform: none; }
 .extAgents-n { font-family: var(--mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
 
 /* The rows sit on the line-soft colour with a 1px gap, so the gap is the divider. */
@@ -61,6 +63,8 @@
 @media (prefers-reduced-motion: reduce) { .extAgents-led-busy { animation: none; } }
 .extAgents-one { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
 .extAgents-one-bad { color: var(--clay); }
+/* A row's refusal can carry a command, so it wraps rather than cutting it off. */
+.extAgents-row .extAgents-one-bad { white-space: normal; }
 .extAgents-one-work { font-family: var(--mono); font-size: 11.5px; color: var(--amber); display: flex; align-items: center; gap: 6px; }
 
 /* One control per row, and the buttons in a column are one size: Connect,
@@ -80,11 +84,73 @@
 .extAgents-ctl .mini.danger:hover:not(:disabled), .extAgents-act .mini.danger:hover:not(:disabled) { border-color: var(--clay); background: color-mix(in oklab, var(--clay) 8%, transparent); }
 .extAgents-state { font-family: var(--mono); font-size: 11px; color: var(--faint); }
 
+/* ── the hub: tabs over a grid of cards ─────────────────────────── */
+
+.extAgents-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
+.extAgents-tab {
+  height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: none;
+  font: inherit; font-size: 13px; color: var(--muted); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.extAgents-tab:hover { color: var(--text); }
+.extAgents-tab[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 500; }
+.extAgents-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-tn { font-size: 11.5px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.extAgents-tn::before { content: "("; }
+.extAgents-tn::after { content: ")"; }
+
+/* The column is the composer's width (`#extAgentsPage .wrap` in page.css).
+   Four cards a row at most -- the track floor is a quarter of the row less its
+   three gaps -- and never narrower than 200px, so a narrow window steps down
+   to three, two, one rather than squeezing four. */
+.extAgents-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(max(200px, calc((100% - 36px) / 4)), 1fr));
+}
+.extAgents-empty { padding: 28px 0; font-size: 12.5px; color: var(--faint); }
+
+.extAgents-card {
+  position: relative; min-width: 0; min-height: 104px; padding: 14px 14px 16px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+  color: inherit; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease;
+}
+.extAgents-card:hover, .extAgents-card[aria-current="true"] {
+  border-color: color-mix(in oklab, var(--line) 60%, var(--muted));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .06);
+}
+.extAgents-card:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.extAgents-ctop { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.extAgents-ctop .extAgents-nm { flex: 1; }
+.extAgents-ctop .extAgents-t { font-size: 14px; font-weight: 600; }
+.extAgents-card .extAgents-tile .agent-mark { width: 32px; height: 32px; border-radius: 9px; }
+.extAgents-card .extAgents-tile .agent-mark img, .extAgents-card .extAgents-tile .agent-mark svg { width: 20px; height: 20px; }
+.extAgents-card .extAgents-tile-own .agent-mark img { width: 18px; height: 23px; }
+.extAgents-card .extAgents-one {
+  margin-top: 10px; line-height: 1.55; white-space: normal;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.extAgents-card .extAgents-one-work { display: flex; }
+
+/* The corner control: a quiet square, always drawn. */
+.extAgents-cbtn {
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 7px;
+  background: var(--raised); color: var(--muted); cursor: pointer;
+  display: grid; place-items: center;
+}
+.extAgents-cbtn svg { width: 14px; height: 14px; }
+.extAgents-cbtn:hover { color: var(--text); background: color-mix(in oklab, var(--raised) 70%, var(--line)); }
+.extAgents-cbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.extAgents-cbtn-bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
+.extAgents-cbtn-bad:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 18%, transparent); }
+.extAgents-ctag { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+
 /* The wizard's agents step: a scanning placeholder before the first
    `subagents.list` answer lands, and the same ring again on a row's own
    connect button while its write is in flight. The roster and the sheet wear
    the same ring. */
 .extAgents-scan { display: flex; align-items: center; gap: 8px; padding: 14px 16px; }
+.extAgents-empty { padding: 18px 16px; margin-bottom: 12px; border: 1px dashed var(--line); border-radius: 10px;
+  color: var(--faint); font-size: 13px; text-align: center; }
 .extAgents-spin { display: inline-block; width: 11px; height: 11px; margin-right: 7px; vertical-align: -1px;
   border: 1.5px solid var(--line); border-top-color: var(--amber); border-radius: 50%;
   animation: extAgentsspin .8s linear infinite; flex: none; }
@@ -106,27 +172,47 @@
 .extAgents-by { font-size: 11.5px; color: var(--faint); margin-top: 1px; display: flex; align-items: center; gap: 6px; }
 .extAgents-by .extAgents-led { width: 5px; height: 5px; }
 .extAgents-by-bad { color: var(--clay); }
+/* A refusal with a named fix: the sentence, the command on a line of its own,
+   and the agent's own words folded under both. The dot sits on the first line
+   rather than centred against the block. */
+.extAgents-by-fix { align-items: flex-start; }
+.extAgents-by-fix .extAgents-led { margin-top: 5px; }
+.extAgents-fix { flex: 1; min-width: 0; line-height: 1.5; }
+.extAgents-fix .extAgents-cmd { margin: 6px 0 4px; color: var(--text); }
+.extAgents-raw { color: var(--faint); }
+.extAgents-raw summary { cursor: pointer; }
 
 .extAgents-body { flex: 1; overflow-y: auto; padding: 18px 20px 4px; min-height: 0; }
 .extAgents-fld { display: block; }
 .extAgents-fld + .extAgents-fld { margin-top: 16px; }
 .extAgents-k { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-/* The field's own controls only -- the picker that opens under the model pill
+/* Three looks, one per kind of value, so a glance says what can be changed:
+   a white framed box is a field the reader types into or picks from -- its
+   edge darkens under the pointer and rings amber while it has focus; plain
+   text with no frame is a value the agent owns and the sheet only reports; a
+   grey block is a command to copy. A field that is only locked for now, while
+   a write runs, keeps its frame and dims.
+
+   The field's own controls only -- the picker that opens under the model pill
    lives inside a field too, and its search box keeps the component's look. */
 .extAgents-fld > textarea, .extAgents-fld .keyfield input {
-  width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  width: 100%; background: var(--paper); border: 1px solid var(--line); border-radius: var(--ctl-r);
   padding: 8px 10px; outline: 0; font-size: 13px; color: var(--text); box-sizing: border-box;
+  transition: border-color .12s ease, box-shadow .12s ease;
 }
 .extAgents-fld > textarea { font-family: var(--sans); resize: none; height: 104px; line-height: 1.65; font-size: 12.5px; overflow-y: auto; }
-.extAgents-fld > textarea[readonly] { color: var(--muted); }
-.extAgents-fld .keyfield input { font-family: var(--mono); font-size: 12.5px; }
-.extAgents-fld > textarea:focus, .extAgents-fld .keyfield input:focus { border-color: var(--muted); }
+/* The eye sits in the input's right end, so the text stops short of it. */
+.extAgents-fld .keyfield input { font-family: var(--mono); font-size: 12.5px; height: var(--ctl-h); padding: 0 32px 0 10px; }
+.extAgents-fld > textarea:hover, .extAgents-fld .keyfield input:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
+.extAgents-fld > textarea:focus, .extAgents-fld .keyfield input:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.extAgents-ro { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The key field is the shared component; its eye button keeps its own styling. */
 .extAgents-fld .keyfield { display: flex; width: 100%; }
 
 /* Not installed: a read-only introduction, then how to get it. */
 .extAgents-about { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
 .extAgents-inst { margin-top: 16px; }
+.extAgents-inst .extAgents-about { margin-bottom: 10px; }
 .extAgents-cmd {
   display: flex; align-items: center; gap: 8px;
   background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px 7px 10px;
@@ -146,39 +232,57 @@
 /* ── the model pill ─────────────────────────────────────────────── */
 
 /* The settings page's pill, in this domain's clothes: id and provider inside
-   one frame, a chevron that gives way to the clear control on hover. */
+   one frame, a chevron that gives way to the clear control on hover. It is a
+   field like the ones above it, so it wears their frame and their edges. */
 .extAgents-pill {
   position: relative; display: inline-flex; align-items: stretch; width: 320px; max-width: 100%;
-  border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--text); overflow: hidden;
+  height: var(--ctl-h); box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: var(--ctl-r); background: var(--paper); color: var(--text); overflow: hidden;
+  transition: border-color .12s ease, box-shadow .12s ease;
 }
-.extAgents-pill:hover:not(.extAgents-pill-fixed) { border-color: var(--amber); }
-.extAgents-pill-fixed { color: var(--faint); }
-.extAgents-pill-dim { background: none; }
+.extAgents-pill:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
+.extAgents-pill:has(.extAgents-pm[aria-expanded="true"]), .extAgents-pill:has(.extAgents-pm:focus-visible) {
+  border-color: var(--amber); box-shadow: var(--ctl-focus);
+}
 .extAgents-pm {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
   font: inherit; color: inherit; background: none; border: 0;
-  padding: 5px 8px 5px 10px; cursor: pointer; text-align: left;
+  padding: 0 8px 0 10px; cursor: pointer; text-align: left;
 }
-.extAgents-pm:disabled { cursor: default; }
-.extAgents-pm:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-pm:focus-visible { outline: 0; }
+/* Locked while a connect or a model write runs: still a field, just not now. */
+.extAgents-pill-busy { opacity: .55; }
+.extAgents-pill-busy:hover { border-color: var(--line); }
+.extAgents-pill-busy .extAgents-pm { cursor: not-allowed; }
+/* No menu to pick from: not a field at all, so no frame -- the value sits
+   under its label as text, flush with it. */
+.extAgents-pill-fixed, .extAgents-pill-fixed:hover { width: auto; border-color: transparent; background: none; }
+.extAgents-pill-fixed .extAgents-pm { padding-left: 0; cursor: default; }
 .extAgents-mid {
   flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .extAgents-pill-dim .extAgents-mid { font-family: var(--sans); font-weight: 400; color: var(--muted); }
 .extAgents-mpv { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
-.extAgents-mch { color: var(--faint); font-size: 11px; margin-left: 2px; }
+.extAgents-mch { color: var(--faint); font-size: 11px; margin-left: 2px; width: 14px; flex: none; text-align: center; }
 .extAgents-mx {
   position: absolute; top: 0; right: 0; bottom: 0; width: 30px;
   font: inherit; font-size: 15px; line-height: 1; border: 0;
   background: var(--paper); color: var(--faint); cursor: pointer; display: none;
 }
 .extAgents-pill-clearable:hover .extAgents-mx, .extAgents-pill-clearable:focus-within .extAgents-mx { display: block; }
-.extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { visibility: hidden; }
-/* The clear control sits over the pill's right edge; the provider steps back
-   from under it while it is showing. */
-.extAgents-pill-clearable:hover .extAgents-mpv, .extAgents-pill-clearable:focus-within .extAgents-mpv { margin-right: 18px; }
+/* The clear control sits over the pill's right edge: on hover the chevron
+   leaves the row and the button's padding takes its exact place (gap 7 +
+   margin 2 + slot 14 + padding 8 = 31, one past the control's 30), so the
+   provider ellipsizes short of it and its right edge does not move. */
+.extAgents-pill-clearable:hover .extAgents-mch, .extAgents-pill-clearable:focus-within .extAgents-mch { display: none; }
+.extAgents-pill-clearable:hover .extAgents-pm, .extAgents-pill-clearable:focus-within .extAgents-pm { padding-right: 31px; }
 .extAgents-mx:hover { color: var(--clay); }
+/* A menuless row can still carry a model, and clearing it is the one write
+   left. With no frame to hover there is nothing to reveal the control, so it
+   stands after the value, always drawn. */
+.extAgents-pill-fixed .extAgents-mx { position: static; display: block; width: 24px; background: none; }
+.extAgents-pill-fixed.extAgents-pill-clearable .extAgents-pm { padding-right: 0; }
 
 /* The shared picker, sized to hang under the pill inside the 520px sheet: the
    settings dialog's 720x560 would neither fit below the pill nor above it. */
@@ -186,3 +290,6 @@
    from the field's left edge to inside the card's right edge and gives up
    height to the shelf below the field, so a fixed size here would fight it. */
 .extAgents-sheet .model-picker { max-width: calc(100vw - 32px); }
+
+/* The wizard's agents step opens on what connecting buys, in the page's words. */
+.extAgents-lede { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.55; }

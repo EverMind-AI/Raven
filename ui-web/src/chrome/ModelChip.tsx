@@ -18,23 +18,43 @@
  * which is what that guard answers.
  */
 
-import { useSyncExternalStore } from 'react'
+import { ArrowDown01Icon } from '@hugeicons/core-free-icons'
+import { useRef, useSyncExternalStore } from 'react'
 
+import { Icon } from '../components/Icon'
 import { ProviderIcon } from '../components/ProviderMark'
 import { paint } from '../features/model/chip'
 import { openModelsForMissingProvider } from '../features/model/source'
 import * as model from '../features/model/store'
+import { sameModel } from '../features/model/types'
 
 import type { Provider } from '../features/model/types'
 import type { JSX } from 'react'
 
-const CHEVRON = 'M6 9l6 6 6-6'
 
-/* The provider serving the current model, or null while no list is installed
-   (the served frame, and a test that never installs one). */
-function serving(current: string): Provider | null {
+/* The provider serving the current model and the id as that provider spells it,
+   or null while no list is installed (the served frame, and a test that never
+   installs one).
+
+   By the backend's identity rather than by string, the way the column is built
+   (features/model/store.ts): a list mixes ids added by hand with ids the vendor
+   reports, so the conversation's spelling and the account's need not match. The
+   account's spelling comes back with it because `labels` is keyed by that one --
+   looking the label up under the conversation's spelling misses and falls
+   through to the raw id. */
+function serving(current: string): { provider: Provider; id: string } | null {
   try {
-    return model.source().providers().find((p) => model.column(p).includes(current)) ?? null
+    const rows = model.source().providers()
+    const named = model.currentProvider()
+    /* The account a pick or the gateway named first, because two accounts can
+       list one id and only that one answers which the conversation is on. The
+       scan behind it is for a page that has been told neither. */
+    const order = named ? [...rows.filter((p) => p.id === named), ...rows.filter((p) => p.id !== named)] : rows
+    for (const p of order) {
+      const id = model.column(p).find((m) => sameModel(p, m, current))
+      if (id !== undefined) return { provider: p, id }
+    }
+    return null
   } catch {
     return null
   }
@@ -43,25 +63,26 @@ function serving(current: string): Provider | null {
 export function ModelChip(): JSX.Element {
   useSyncExternalStore(model.subscribe, model.version)
   useSyncExternalStore(paint.subscribe, paint.get)
+  const me = useRef<HTMLButtonElement>(null)
   const current = model.current()
-  const provider = serving(current)
-  const label = provider?.labels?.[current]?.label || model.short(current)
+  const at = serving(current)
+  const label = at?.provider.labels?.[at.id]?.label || model.short(current)
   return (
     <button
+      ref={me}
       className="chip model"
       id="modelChip"
       title={current}
       aria-haspopup="true"
+      aria-expanded={model.openedFrom(me.current) ? 'true' : 'false'}
       onClick={() => {
         if (openModelsForMissingProvider()) return
         model.open(null)
       }}
     >
-      {provider ? <ProviderIcon id={provider.id} name={provider.name} /> : null}
+      {at ? <ProviderIcon id={at.provider.id} name={at.provider.name} /> : null}
       <span id="modelName">{label}</span>
-      <svg className="chrome-model-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-        <path d={CHEVRON} />
-      </svg>
+      <span className="chrome-model-caret"><Icon icon={ArrowDown01Icon} size={12} /></span>
     </button>
   )
 }

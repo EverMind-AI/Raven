@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shlex
 import sys
 import time
 from collections.abc import Iterator
@@ -300,6 +301,265 @@ async def test_a_refusal_about_anything_else_is_not_a_credential_verdict() -> No
 
     credential = await verify_agent(stub_config(mode="no_session"))
     assert credential.needs_auth is True
+
+
+async def test_the_roster_and_the_connect_button_read_one_answer() -> None:
+    """One refusal, one verdict, whichever of the two asks.
+
+    Both ACP SDKs refuse with the placeholder Internal error and the reason
+    in data.details. The connect button came to read data while the
+    roster still read the message alone, and on the measured hermes refusal the
+    two disagreed: Connect said "no usable credential", the row did not say
+    Unauthorized, and Test showed the placeholder. Both read `reason_of` now,
+    through the same rule, so this runs one agent process through both.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    reason = "Stub is not connected to any AI provider yet"
+
+    snapshot = await verify_agent(stub_config(mode="no_session_sdk"))
+    assert snapshot.needs_auth is True, "the roster reads the reason, not the placeholder"
+    assert reason in snapshot.detail, "and Test and the saved row detail show it"
+
+    pinged = await ping_agent(stub_config(mode="no_session_sdk"))
+    assert pinged.ok is False
+    assert "no usable credential" in pinged.detail
+    assert reason in pinged.detail
+
+
+async def test_a_handshake_refused_over_a_credential_carries_its_fix_into_the_test() -> None:
+    """Test is the sheet's way back for an unauthorized row, so its verdict names the fix.
+
+    Read off the handshake's own classification (`needs_auth`), not off the
+    detail: that ends in "(auth methods: ...)", an advertisement a working agent
+    makes too, so a refusal about anything else must not grow a sign-in fix --
+    which the second half pins against the same advertising stub.
+    """
+    from raven.agent.subagent.probe_state import Remedy
+
+    refused = await run_test(stub_config(mode="no_session_sdk"), source="config")
+    assert refused.ok is False
+    assert refused.remedy == Remedy("sign_in"), "no command is known for the stub, so the fix names none"
+
+    other = await run_test(stub_config(mode="no_session_other"), source="config")
+    assert other.ok is False
+    assert other.remedy is None
+    assert "auth methods" in other.detail, "the advertisement is there, and still is not the evidence"
+
+
+def _through_npx(tmp_path: Path, mode: str, **kw: Any) -> ThirdPartyAcpSubagentConfig:
+    """A row whose command is ``npx ...``, run by a stand-in ``npx`` that starts the stub.
+
+    What is under test is how a command that fetches on first use is read, so the
+    launcher has to be named npx; nothing here goes near a registry.
+    """
+    npx = tmp_path / "npx"
+    npx.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n")
+    npx.chmod(0o755)
+    return ThirdPartyAcpSubagentConfig(
+        name=kw.pop("name", "Claude Code"),
+        command=f"{shlex.quote(str(npx))} -y @agentclientprotocol/claude-agent-acp@0.79.0",
+        env={"ACP_STUB_MODE": mode},
+        ready_timeout_ms=kw.pop("ready_timeout_ms", 15000),
+        **kw,
+    )
+
+
+async def test_npx_that_cannot_reach_the_registry_is_a_download_failure_not_a_silent_agent(tmp_path: Path) -> None:
+    """The connect names the network, and the fix, instead of the agent.
+
+    Measured 2026-09-23 with the Claude Code row pointed at a registry it could
+    not reach: npm retried for about 70s, the connect's 60s ran out first, and
+    the page said the agent "did not answer within 60s". With npm's own report
+    let through, what failed is the fetch, and the fix is in the network, the
+    npm registry or the proxy -- or the row's own command, run once in a
+    terminal where nothing times the download out.
+    """
+    from raven.agent.subagent.probe import ping_agent
+    from raven.agent.subagent.probe_state import Remedy
+
+    cfg = _through_npx(tmp_path, "npm_fetch_fails")
+    pinged = await ping_agent(cfg)
+    assert pinged.ok is False
+    # A hand-written row: its command is its operator's, so it is not quoted back.
+    assert pinged.remedy == Remedy("download")
+    assert pinged.detail.startswith(
+        "npx could not download it (ECONNREFUSED); check the network, the npm registry or the proxy; "
+        "connect again, or run this agent's launch command once in a terminal"
+    ), pinged.detail
+    assert str(tmp_path) not in pinged.detail
+    assert "connection ended (exit 1)" in pinged.detail, "the original error is kept for the fold"
+
+    # The same death from a command that fetches nothing is not a download.
+    plain = await ping_agent(stub_config(mode="npm_fetch_fails"))
+    assert plain.ok is False
+    assert plain.remedy is None
+
+
+async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_still_be_running(tmp_path: Path) -> None:
+    """A first download on a slow line is a start that runs out, and says so.
+
+    Not proof of a download -- an adapter can hang on its own -- so the sentence
+    says npx "may still have been downloading", and the fix is the same one: the
+    command in a terminal fetches it with no time limit.
+    """
+    from raven.agent.subagent.probe import ping_agent
+    from raven.agent.subagent.probe_state import Remedy
+
+    cfg = _through_npx(tmp_path, "silent", ready_timeout_ms=1500)
+    pinged = await ping_agent(cfg)
+    assert pinged.ok is False
+    assert pinged.remedy == Remedy("download")
+    assert pinged.detail.startswith("it did not finish starting in time, and npx may still have been downloading it; ")
+
+    # A session that opens and then says nothing started fine: not this story.
+    quiet = await ping_agent(stub_config(mode="silent", ready_timeout_ms=1500))
+    assert quiet.remedy is None
+
+
+async def test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_install(tmp_path: Path) -> None:
+    """The Test button, the boot backfill and the roster read this snapshot.
+
+    Recorded ``missing``, the roster moved the row to "not installed" and offered
+    the agent's own installer -- which fixes nothing when the network is what
+    failed. It is ``attention`` with the fetch named, and Test carries the fix.
+    """
+    from raven.acp_client.capabilities import SnapshotStore
+    from raven.agent.subagent.probe_state import Remedy
+
+    cfg = _through_npx(tmp_path, "npm_fetch_fails")
+    snapshot = await verify_agent(cfg)
+    assert snapshot.status == "attention"
+    assert snapshot.unfetched is True
+    assert snapshot.detail.startswith("npx could not download it (ECONNREFUSED)")
+    # What Test persists and the listing serves back: the row's command is its
+    # operator's (the stand-in npx lives under tmp_path) and is not in it.
+    assert str(tmp_path) not in snapshot.detail
+
+    store = SnapshotStore(tmp_path / "caps.json")
+    store.record(snapshot)
+    assert store.load([cfg])[cfg.name].unfetched is True, "it outlives the process that measured it"
+
+    tested = await run_test(cfg, source="config")
+    assert tested.ok is False
+    assert tested.remedy == Remedy("download")
+    assert str(tmp_path) not in tested.detail
+
+    # A process that dies for any other reason is still reported as before.
+    other = await verify_agent(stub_config(mode="abort"))
+    assert other.status == "missing"
+    assert other.unfetched is False
+
+
+async def test_a_download_fix_names_only_the_preset_s_own_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row's command is its operator's execution config, and can carry a credential.
+
+    No row the RPC layer sends carries it, and a refusal must not start to: the
+    connect returns its detail and remedy over RPC, and Test writes them to the
+    test-state file that the listing reads back. So the command is quoted only
+    when it is the preset's own, word for word, and an edited one is not quoted
+    at all -- in the sentence or in the remedy -- on either path.
+    """
+    import raven.agent.subagent.probe as probe_mod
+    from raven.acp_client.capabilities import CapabilitySnapshot
+    from raven.acp_client.protocol import AcpConnectionError
+    from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+    from raven.agent.subagent.probe_state import Remedy
+
+    shipped = THIRD_PARTY_SUBAGENT_PRESETS["claude_code"]["command"]
+    died = AcpConnectionError("acp agent 'Claude Code': connection ended (exit 1)", stderr=_NPM9_ENOTFOUND)
+    own = ThirdPartyAcpSubagentConfig(name="Claude Code", preset="claude_code", command=shipped)
+    edited = ThirdPartyAcpSubagentConfig(
+        name="Claude Code", preset="claude_code", command=f"{shipped} --token super-secret"
+    )
+
+    detail, remedy = probe_mod._ping_refusal(own, died)
+    assert remedy == Remedy("download", shipped)
+    assert f"`{shipped}`" in detail
+
+    detail, remedy = probe_mod._ping_refusal(edited, died)
+    assert remedy == Remedy("download")
+    assert "super-secret" not in detail
+
+    def _unfetched(cfg):
+        return CapabilitySnapshot(
+            agent=cfg.name,
+            fingerprint="x",
+            status="attention",
+            detail="npx could not download it",
+            measured_at_ms=1,
+            unfetched=True,
+        )
+
+    monkeypatch.setattr(probe_mod, "record_capabilities", _async(_unfetched))
+    assert (await run_test(own, source="config")).remedy == Remedy("download", shipped)
+    # The detail here is the stub's; the real handshake's is checked, command
+    # and all, in test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_install.
+    assert (await run_test(edited, source="config")).remedy == Remedy("download")
+
+
+def _async(fn):
+    async def wrapped(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    return wrapped
+
+
+# npm 9.9.4 (`npx -y npm@9.9.4 exec ...`) against an unresolvable registry,
+# 2026-09-23: the other spelling of the same report, `npm ERR!` for `npm error`.
+_NPM9_ENOTFOUND = (
+    "npm ERR! code ENOTFOUND\n"
+    "npm ERR! syscall getaddrinfo\n"
+    "npm ERR! errno ENOTFOUND\n"
+    "npm ERR! network request to http://raven-no-such-host.invalid/@agentclientprotocol%2fclaude-agent-acp "
+    "failed, reason: getaddrinfo ENOTFOUND raven-no-such-host.invalid\n"
+    "npm ERR! network This is a problem related to network connectivity.\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "verdict"),
+    [
+        (_NPM9_ENOTFOUND, "ENOTFOUND"),
+        ("npm error code E404\nnpm error 404 Not Found - GET https://registry.example/pkg\n", "E404"),
+        ("npm error code ETARGET\nnpm error notarget No matching version found\n", "ETARGET"),
+        ("npm error network request to https://registry.example failed\n", "network"),
+        # A local failure: no network, registry or proxy setting fixes it.
+        ("npm error code EACCES\nnpm error syscall mkdir\n", None),
+        ("npm error code ENOSPC\n", None),
+        # An adapter that started and then died is not npm's to report.
+        ("Error: something inside the adapter\n    at main (index.js:1:1)\n", None),
+    ],
+)
+def test_a_fetch_failure_is_read_off_npm_s_own_error_code(stderr: str, verdict: str | None) -> None:
+    from raven.acp_client.capabilities import npx_fetch_failure
+    from raven.acp_client.protocol import AcpConnectionError
+
+    died = AcpConnectionError("acp agent 'x': connection ended (exit 1)", stderr=stderr)
+    assert npx_fetch_failure("npx -y some-adapter@1.0.0", died) == verdict
+
+
+def test_only_a_command_that_fetches_and_only_a_start_that_ran_out_are_download_verdicts() -> None:
+    from raven.acp_client.capabilities import npx_fetch_failure
+    from raven.acp_client.protocol import AcpConnectionError, AcpTimeoutError
+
+    died = AcpConnectionError("connection ended (exit 1)", stderr=_NPM9_ENOTFOUND)
+    assert npx_fetch_failure("hermes acp", died) is None, "npm's words from a command that is not npx"
+    assert npx_fetch_failure("/usr/local/bin/npx -y a@1", died) == "ENOTFOUND", "npx wherever it lives"
+
+    start = AcpTimeoutError("initialize timed out after 120s", method="initialize")
+    assert npx_fetch_failure("npx -y a@1", start) == "timeout"
+    later = AcpTimeoutError("session/prompt timed out after 60s", method="session/prompt")
+    assert npx_fetch_failure("npx -y a@1", later) is None, "it started; whatever went quiet, it was not the fetch"
+
+    # Followed through `from`, the way a wrapper that names its cause raises it.
+    try:
+        try:
+            raise died
+        except AcpConnectionError as exc:
+            raise RuntimeError("the run failed") from exc
+    except RuntimeError as wrapped:
+        assert npx_fetch_failure("npx -y a@1", wrapped) == "ENOTFOUND"
 
 
 async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_path: Path) -> None:
@@ -3377,6 +3637,190 @@ async def test_an_observer_that_raises_still_yields_the_approval() -> None:
     assert answer == {"outcome": {"outcome": "selected", "optionId": "allow_always"}}
 
 
+# ---- the host's own refusals bind what it approves --------------------------
+
+
+@pytest.fixture()
+def host_rules(tmp_path, monkeypatch):
+    """Write the host's config; the approver reads it live, as the host's gate does."""
+    from raven.acp_client import permissions
+
+    home = tmp_path / "host-home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    permissions._host_policy.cache_clear()
+
+    def write(config: dict[str, Any]) -> None:
+        (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    write({})
+    yield write
+    permissions._host_policy.cache_clear()
+
+
+def _asking(command: str | None, options: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    tool: dict[str, Any] = {"toolCallId": "t1", "kind": "execute", "status": "pending"}
+    if command is not None:
+        tool["rawInput"] = {"command": command}
+    offered = [
+        {"optionId": "always", "kind": "allow_always"},
+        {"optionId": "once", "kind": "allow_once"},
+        {"optionId": "no", "kind": "reject_once"},
+    ]
+    return {"sessionId": "s1", "toolCall": tool, "options": offered if options is None else options}
+
+
+def test_every_spelling_of_the_requested_command_is_read() -> None:
+    """The quoted raw form codex sends, the same without its quotes, and each
+    parsed action -- a compound command's refused segment need not be first."""
+    from raven.acp_client.permissions import requested_commands
+    from tests import acp_frames
+
+    assert requested_commands(acp_frames.CODEX_READ_PERMISSION) == [
+        "\"sed -n '1,200p' calc.py\"",
+        "sed -n '1,200p' calc.py",
+    ]
+    compound = {
+        "toolCall": {"rawInput": {"command": '"cd src && curl -s https://example.com"'}},
+        "_meta": {
+            "codex": {"params": {"commandActions": [{"command": "cd src"}, {"command": "curl -s https://example.com"}]}}
+        },
+    }
+    assert "curl -s https://example.com" in requested_commands(compound)
+    assert requested_commands(_asking(None)) == []
+    assert requested_commands({"toolCall": {"rawInput": {"command": ["curl", "x"]}}}) == []
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"permissions": {"tools": {"exec": {"curl *": "deny"}}}},
+        {"permissions": {"tools": {"exec": "deny"}}},
+        {"tools": {"exec": {"extraDenyPatterns": [r"\bcurl\b"]}}},
+    ],
+    ids=["user-rule", "whole-tool", "extra-pattern"],
+)
+async def test_a_command_the_host_denies_is_answered_with_the_reject_option(host_rules, config) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules(config)
+    handle = auto_approver("stub")
+    answer = await handle("session/request_permission", _asking("curl -s https://example.com"))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
+
+
+async def test_the_host_mode_does_not_lift_a_deny_rule(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"mode": "full", "tools": {"exec": {"curl *": "deny"}}}})
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x"))
+    assert answer["outcome"]["optionId"] == "no"
+
+
+async def test_a_parsed_segment_the_host_denies_refuses_the_whole_request(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    params = _asking('"cd src && curl -s x"')
+    params["_meta"] = {"codex": {"params": {"commandActions": [{"command": "cd src"}, {"command": "curl -s x"}]}}}
+    answer = await auto_approver("codex")("session/request_permission", params)
+    assert answer["outcome"]["optionId"] == "no"
+
+
+async def test_the_builtin_catastrophe_list_holds_for_a_sub_agent_too(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    answer = await auto_approver("stub")("session/request_permission", _asking("rm -rf /"))
+    assert answer["outcome"]["optionId"] == "no"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [None, "git status", "curlx --version", 'echo "unterminated'],
+    ids=["no-command", "not-denied", "prefix-is-not-a-token", "parse-error"],
+)
+async def test_what_no_deny_rule_names_is_still_approved(host_rules, command) -> None:
+    """A parse error is the host model's to fix in its own turn, not grounds to
+    refuse an adapter's quoting."""
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    answer = await auto_approver("stub")("session/request_permission", _asking(command))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "always"}}
+
+
+async def test_a_denied_command_with_no_reject_offered_is_cancelled_not_allowed(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    only_allows = [{"optionId": "always", "kind": "allow_always"}]
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x", only_allows))
+    assert answer == {"outcome": {"outcome": "cancelled"}}
+    reject_always = [*only_allows, {"optionId": "never", "kind": "reject_always"}]
+    answer = await auto_approver("stub")("session/request_permission", _asking("curl x", reject_always))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "never"}}
+
+
+async def test_a_deny_check_that_raises_refuses(host_rules, monkeypatch) -> None:
+    from raven.acp_client import permissions
+
+    def broken(params: dict[str, Any]) -> str | None:
+        raise RuntimeError("rules unreadable")
+
+    monkeypatch.setattr(permissions, "host_refusal", broken)
+    answer = await permissions.auto_approver("stub")("session/request_permission", _asking("git status"))
+    assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
+
+
+async def test_the_logged_refusal_and_approval_carry_no_credential(host_rules) -> None:
+    """The command is the sub-agent's to author and the log is retained."""
+    from raven.acp_client.permissions import auto_approver
+
+    secret = "sk-ant-api03-AAAABBBBCCCCDDDDEEEE"
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    lines: list[str] = []
+    sink = logger.add(lambda message: lines.append(str(message)), level="DEBUG", format="{message}")
+    try:
+        denied = _asking(f'curl -H "Authorization: Bearer {secret}" https://x')
+        denied["toolCall"]["title"] = denied["toolCall"]["rawInput"]["command"]
+        allowed = _asking(f'git -c http.extraHeader="Authorization: Bearer {secret}" fetch')
+        allowed["toolCall"]["title"] = allowed["toolCall"]["rawInput"]["command"]
+        handle = auto_approver("stub")
+        assert (await handle("session/request_permission", denied))["outcome"]["optionId"] == "no"
+        assert (await handle("session/request_permission", allowed))["outcome"]["optionId"] == "always"
+    finally:
+        logger.remove(sink)
+    logged = [line for line in lines if "refusing" in line or "approving" in line]
+    assert len(logged) == 2, lines
+    assert all(secret not in line for line in logged), logged
+    assert all("[redacted]" in line for line in logged), logged
+
+
+async def test_a_rule_tightened_while_running_binds_the_next_request(host_rules) -> None:
+    from raven.acp_client.permissions import auto_approver
+
+    handle = auto_approver("stub")
+    first = await handle("session/request_permission", _asking("curl x"))
+    assert first["outcome"]["optionId"] == "always"
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    second = await handle("session/request_permission", _asking("curl x"))
+    assert second["outcome"]["optionId"] == "no"
+
+
+async def test_a_pooled_agent_asking_to_run_a_denied_command_is_refused(host_rules, tmp_path: Path) -> None:
+    """Through the pool's own dispatcher and a real agent process: the stub
+    reports the option it was answered with."""
+    host_rules({"permissions": {"tools": {"exec": {"curl *": "deny"}}}})
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="a",
+        command=f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": "permission", "ACP_STUB_COMMAND": "curl -s https://example.com"},
+        ready_timeout_ms=15000,
+    )
+    out = await build_third_party_backend(cfg).run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert out == "chose:no"
+
+
 # ---- cancelling a turn on the agent, not only locally -----------------------
 
 
@@ -4796,6 +5240,152 @@ async def test_no_model_asked_for_sends_no_frame(tmp_path: Path) -> None:
         name="quietmodel", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
     )
     assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
+def _own_backend(cfg: Any) -> AcpAgentBackend:
+    """A row of raven's own: the same build as the roster's, with a handshake that named raven."""
+    return AcpAgentBackend(
+        name=cfg.name,
+        command=cfg.command,
+        env=dict(cfg.env),
+        ready_timeout_ms=cfg.ready_timeout_ms,
+        snapshot=replace(_snapshot(cfg.name, cfg, can_resume=False), agent_name="raven"),
+    )
+
+
+_PARENT = {"RAVEN_PARENT_MODEL": "model-b", "RAVEN_PARENT_PROVIDER": "stub"}
+
+
+async def _parent_bound_connection(cfg: Any, tmp_path: Path) -> Any:
+    """The connection a run under the parent binding above was served from.
+
+    The pool keys a connection on its binding, so reading the frames of that
+    run means asking for the same binding; a bare acquire would launch a second,
+    silent process."""
+    return await get_pool().acquire(
+        name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), binding=_PARENT, ready_timeout_s=15.0
+    )
+
+
+async def test_one_of_ravens_own_with_no_pin_is_put_on_the_parents_binding(tmp_path: Path) -> None:
+    """The row reads "follows the main Raven" while it carries no pin, and the
+    launch binding makes a fresh worker do so. A resumed session does not: it
+    keeps whatever it was last put on. So the parent's binding is said to the
+    session itself on every route in, as `<slug>/<id>`, the value the child's
+    own selector takes. (The stub refuses that spelling, which is fine here:
+    the frame is logged on entry, and a refused switch still runs the task.)"""
+    cfg = stub_config("ownfollow")
+    backend = _own_backend(cfg)
+
+    reply = await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    connection = await _parent_bound_connection(cfg, tmp_path)
+    assert reply == "pong"
+    assert "session/set_config_option model=stub/model-b" in connection.client.stderr_tail()
+
+
+async def test_a_product_on_its_own_key_is_not_moved_onto_the_parents_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The reason this is a refusal and not a no-op: a product files its own key
+    under a vendor section (Raven-Research uses `providers.openrouter`), so when
+    the host is on that vendor too the switch SUCCEEDS -- the child answers on
+    the host's model, billed to the product's key, off the model its folder was
+    configured to run. The listing already says such a row manages its own
+    model; the dispatch has to agree."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = tmp_path / "agents"
+    folder = root / "raven-ownkey"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "ownkey", "kind": "acp", "description": "d", "command": "x"}), encoding="utf-8"
+    )
+    (folder / ".env").write_text("OWNKEY_API_KEY=sk-its-own\n", encoding="utf-8")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.delenv("OWNKEY_API_KEY", raising=False)
+
+    cfg = stub_config("ownkey")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    assert "session/set_config_option" not in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail()
+
+
+async def test_a_pin_on_one_of_ravens_own_outranks_the_parents_binding(tmp_path: Path) -> None:
+    cfg = stub_config("ownpinned")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+        session_model="stub:model-a",
+    )
+
+    frames = [
+        ln
+        for ln in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail(4000).splitlines()
+        if "set_config_option" in ln
+    ]
+    assert frames == ["stub: session/set_config_option model=stub:model-a"]
+
+
+async def test_a_parent_provider_with_no_slug_leaves_the_launch_binding_to_speak(tmp_path: Path) -> None:
+    """Nothing to route by, so nothing is pushed: a value with no slug is a
+    refusal on every turn, and the launch binding already carries the model."""
+    cfg = stub_config("ownnoslug")
+    backend = _own_backend(cfg)
+
+    await backend.run(
+        "ping", task_id="t1", workspace=tmp_path, executor=None, provider=SimpleNamespace(), model="model-b"
+    )
+
+    connection = await get_pool().acquire(
+        name=cfg.name,
+        command=cfg.command,
+        cwd=str(tmp_path),
+        env=dict(cfg.env),
+        binding={"RAVEN_PARENT_MODEL": "model-b"},
+        ready_timeout_s=15.0,
+    )
+    assert "session/set_config_option" not in connection.client.stderr_tail()
+
+
+async def test_a_third_party_under_a_parent_binding_is_left_on_its_own_model(tmp_path: Path) -> None:
+    """The parent's model is not one of a third party's choices; the frame would
+    be refused on every dispatch, and its own default is the right answer."""
+    cfg = stub_config("thirdfollow")
+    backend = build_third_party_backend(cfg)
+
+    await backend.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        provider=SimpleNamespace(provider_name="stub"),
+        model="model-b",
+    )
+
+    assert "session/set_config_option" not in (await _parent_bound_connection(cfg, tmp_path)).client.stderr_tail()
 
 
 async def test_clearing_a_model_puts_the_session_back_on_the_agents_own(tmp_path: Path) -> None:

@@ -449,6 +449,120 @@ describe('the clarify sheet as a form', () => {
     expect(asked()).toBe('which targets?')
   })
 
+  /* The guard on Next reads the step on screen, and the chips can carry the
+     reader past a step they came back to and emptied. Submit is the guard for
+     the whole form. */
+  it('holds Submit while a step the reader came back to and emptied is unanswered', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    opts()[0]!.click()
+    opts()[0]!.click()
+    submit().click()
+    opts()[0]!.click()
+    expect(submit().disabled).toBe(false)
+
+    chips()[0]!.click()
+    /* Typing over the pick is what drops it; the blank then leaves the step
+       with nothing. */
+    type('x')
+    type('')
+
+    expect(submit().disabled).toBe(true)
+    expect(chips()[0]!.classList.contains('cp-done')).toBe(false)
+    chips()[2]!.click()
+    expect(submit().textContent).toBe('gui.clarify.submit')
+    expect(submit().disabled).toBe(true)
+    submit().click()
+    expect(said).toEqual([])
+    type('later')
+    field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(said).toEqual([])
+
+    chips()[0]!.click()
+    opts()[1]!.click()
+    chips()[2]!.click()
+    expect(submit().disabled).toBe(false)
+    submit().click()
+    expect(said).toEqual([['release', 'mac', 'later']])
+  })
+
+  it('lands a Skip on the last step on the step still unanswered, and reports nothing', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    opts()[0]!.click()
+    opts()[0]!.click()
+    submit().click()
+    chips()[0]!.click()
+    type('x')
+    type('')
+    chips()[2]!.click()
+
+    skipper().click()
+
+    expect(said).toEqual([])
+    expect(sheets().length).toBe(1)
+    expect(asked()).toBe('which build?')
+    expect(chips()[2]!.classList.contains('cp-skip')).toBe(true)
+  })
+
+  /* The skip stands once the step it was waiting on is answered: Submit reports
+     it as skipped, not as the pick that was left behind under it. */
+  it('reports the last step as skipped once the step it was waiting on is answered', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    opts()[0]!.click()
+    opts()[0]!.click()
+    submit().click()
+    opts()[0]!.click()
+    chips()[0]!.click()
+    type('x')
+    type('')
+    chips()[2]!.click()
+    skipper().click()
+
+    expect(asked()).toBe('which build?')
+    opts()[1]!.click()
+    chips()[2]!.click()
+    expect(chips()[2]!.classList.contains('cp-skip')).toBe(true)
+    expect(submit().disabled).toBe(false)
+    submit().click()
+
+    expect(said).toEqual([['release', 'mac', SKIPPED]])
+  })
+
+  /* A batch whose questions carry no options is still a form -- the broker
+     sends `choices: []` -- and its steps are answered by typing alone. */
+  it('waits for typed text on a step without options, and on every step before Submit', () => {
+    const batch = [
+      { question: 'topic?', header: 'topic', choices: [] },
+      { question: 'length?', header: 'length', choices: [] },
+    ]
+    open({ ...batch[0]!, batch, index: 0, request_id: 'q1', total: 2 }, () => {})
+
+    expect(chips().map((c) => c.textContent)).toEqual(['topic', 'length'])
+    expect(opts()).toEqual([])
+    expect(field().placeholder).toBe('gui.clarify.ph')
+    expect(submit().textContent).toBe('gui.clarify.next')
+    expect(submit().disabled).toBe(true)
+    type('   ')
+    expect(submit().disabled).toBe(true)
+    type('an investor deck')
+    expect(submit().disabled).toBe(false)
+    type('')
+    expect(submit().disabled).toBe(true)
+
+    type('an investor deck')
+    submit().click()
+    expect(submit().textContent).toBe('gui.clarify.submit')
+    expect(submit().disabled).toBe(true)
+    type('ten slides')
+    expect(submit().disabled).toBe(false)
+    chips()[0]!.click()
+    type('')
+    chips()[1]!.click()
+    expect(submit().disabled).toBe(true)
+  })
+
   it('toggles a multi-select step rather than moving on, and joins what it holds', () => {
     const said: string[][] = []
     open(frame(), (a) => said.push(a))

@@ -81,7 +81,10 @@ export function createChannels(_env: FixtureEnv): ChannelsFixture {
         if (params.fields && Object.keys(params.fields).length) filled.add(params.name)
         if (params.enabled) on.add(params.name)
         else on.delete(params.name)
-        return { applied: true }
+        /* The word a live gateway answers with. This world applies the switch
+           on the spot, so the outcome is never one of the refusals -- which is
+           also why nothing here carries the `detail` a refusal comes with. */
+        return { applied: true, outcome: params.enabled ? 'started' : 'stopped' }
       },
       /* No code: the canvas has no adapter to mint one, and the island draws
          the same waiting frame it draws for a gateway that cannot be asked. */

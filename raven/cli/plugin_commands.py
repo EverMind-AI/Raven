@@ -26,6 +26,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from raven.cli._helpers import load_runtime_config
@@ -169,6 +170,7 @@ def _render_plugin_table(
         table.add_column("Factory")
 
     activated_ids = set(registry.activated_ids())
+    failures = {f.plugin_id: f for f in registry.activation_failures()}
     for record in discovered:
         mf = record.manifest
         pid = mf.id
@@ -176,6 +178,8 @@ def _render_plugin_table(
             status = "[red]disabled[/red]"
         elif pid in activated_ids:
             status = "[green]activated[/green]"
+        elif pid in failures:
+            status = "[red]failed[/red]"
         else:
             status = "[yellow]not activated[/yellow]"
         backends = ", ".join(c.name for c in mf.contributes.memory_backends) or "(none)"
@@ -192,6 +196,10 @@ def _render_plugin_table(
             row.append(factories or "(none)")
         table.add_row(*row)
     console.print(table)
+    for failure in failures.values():
+        console.print(
+            f"[red]{escape(failure.plugin_id)}[/red] failed to load: {escape(failure.reason)}", highlight=False
+        )
 
 
 def _source_label(source) -> str:

@@ -61,8 +61,8 @@ export function setChipPainter(fn: () => void): void {
 }
 
 /* The chip the composer shows and the settings default both write. */
-export const showModel = (model: string): void => {
-  setCurrent(model)
+export const showModel = (model: string, provider = ''): void => {
+  setCurrent(model, provider)
   paintChip()
 }
 
@@ -102,7 +102,7 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
     kind: p.auth_type || 'api_key', needsBase: !!p.needs_api_base,
     // The catalogue page's filter, and the picker's answer to "whose column
     // does the running model belong in": both are facts only the registry has.
-    gateway: !!p.gateway, current: !!p.is_current,
+    gateway: !!p.gateway, current: !!p.is_current, routes: p.route_names || [],
     // Addresses to choose between. A provider that has them is asked which
     // storefront the key came from instead of being handed a host field --
     // the key does not say, and the three are separate accounts.
@@ -124,8 +124,27 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
    list, and a dialog (or the first-run wizard) that opened inside that window
    coalesced onto the dropped load and showed no provider to connect. */
 export async function loadDefaultProviders(): Promise<void> {
-  const mo = await gateway().call('model.options', {})
+  const mo = await readOptions({})
   defaultProvidersLive = rowsOf(mo.providers || [])
+}
+
+/* One catalogue read per distinct question at a time. The boot asks the
+   default-scoped question from three places inside the same second -- the
+   draft's own switch, the settings refresh, and the settings dialog's first
+   draw -- and each answer is a full catalogue build on the gateway: 0.4s on a
+   home with many providers, and three at once slow every other call on the
+   socket eightfold while they run. Callers asking the same question while one
+   is in flight share its answer; a different question is its own call. */
+const inFlight = new Map<string, Promise<ResultOf<'model.options'>>>()
+
+function readOptions(params: ParamsOf<'model.options'>): Promise<ResultOf<'model.options'>> {
+  const key = JSON.stringify(params)
+  let read = inFlight.get(key)
+  if (!read) {
+    read = gateway().call('model.options', params).finally(() => { inFlight.delete(key) })
+    inFlight.set(key, read)
+  }
+  return read
 }
 
 export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
@@ -140,13 +159,13 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   // generation it captured then -- the answer is about that older view, and a
   // ticket taken here would read as current.
   const ticket = gen !== undefined ? gen : generation()
-  const mo = await gateway().call('model.options', target ? { session_id: target } : {})
+  const mo = await readOptions(target ? { session_id: target } : {})
   // model.options does its catalogue work off-thread, so responses can land out
   // of click order. A refresh keyed to a superseded view must not repaint the
   // page the reader has since moved to.
   if (ticket !== generation()) return
   providersLive = rowsOf(mo.providers || [])
-  if (mo.model) showModel(mo.model)
+  if (mo.model) showModel(mo.model, mo.provider || '')
 }
 
 /* provider is required -- a bare model id does not name whose credential serves
@@ -190,7 +209,7 @@ export async function persistModel(
     // leaving the draft for a conversation of its own advances the generation
     // (every view switch does) -- so without this the resolved draft write
     // repaints a chip that has since been loaded correctly for someone else.
-    if (!sid && !staging().model && gen === generation()) showModel(m)
+    if (!sid && !staging().model && gen === generation()) showModel(m, provider)
     /* The write landed in a process with no agent loop -- a first run, where
        the gateway started before there was a model to build one from. Said
        back so the onboarding wizard can tell the reader, instead of the next

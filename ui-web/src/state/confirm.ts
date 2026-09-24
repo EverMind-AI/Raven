@@ -23,6 +23,12 @@
 
 import { makeStore } from './store'
 
+/* What answering yes does to the reader, which is what the yes button's colour
+   says. `danger` loses something (the clay button every caller had before this
+   existed), `primary` goes ahead with something they asked for, and `notice`
+   is not a question at all -- one button that only puts the sheet down. */
+export type ConfirmTone = 'danger' | 'primary' | 'notice'
+
 export type ConfirmState = {
   readonly open: boolean
   /** Null until something has asked, so the served literal stands. */
@@ -31,9 +37,10 @@ export type ConfirmState = {
   readonly body: string
   /** The yes button's label, null while the served literal stands. */
   readonly label: string | null
+  readonly tone: ConfirmTone
 }
 
-const store = makeStore<ConfirmState>({ open: false, title: null, body: '', label: null })
+const store = makeStore<ConfirmState>({ open: false, title: null, body: '', label: null, tone: 'danger' })
 
 /* The answer, beside the state rather than in it: nothing renders it. Only yes
    has one -- no caller of this dialog has ever wanted a no branch. */
@@ -50,12 +57,14 @@ function paint(): void {
 
 /* Asking, in the order confirmAsk wrote it: the question first, then the veil,
    then the focus. The cancel button takes the focus so that a stray Enter or
-   Escape answers no -- Escape reaches the chain, which clicks it. */
-export function ask(title: string, body: string, label: string, fn: () => void): void {
-  set({ open: true, title, body, label })
+   Escape answers no -- Escape reaches the chain, which clicks it. A notice
+   hides cancel, so its one button takes the focus instead: every key there
+   means the same thing. */
+export function ask(title: string, body: string, label: string, fn: () => void, tone: ConfirmTone = 'danger'): void {
+  set({ open: true, title, body, label, tone })
   onYes = fn
   paint()
-  document.getElementById('cfNo')?.focus()
+  document.getElementById(tone === 'notice' ? 'cfYes' : 'cfNo')?.focus()
 }
 
 /* Answering, in the order the two buttons did it: the veil comes down first and

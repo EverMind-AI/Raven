@@ -62,7 +62,7 @@ _ENV_ALLOWLIST = (
     "http_proxy",
     "https_proxy",
     "no_proxy",
-    # Windows OS basics: absent on POSIX (filtered out by _baseline_env), but
+    # Windows OS basics: absent on POSIX (filtered out by baseline_env), but
     # required on Windows for cmd.exe/PowerShell and any spawned tool to
     # resolve temp dirs, the user profile, and system DLLs. Omitting these
     # leaves the child with no SystemRoot/TEMP/etc. (temp files land in cwd,
@@ -89,7 +89,8 @@ _ENV_ALLOWLIST = (
 )
 
 
-def _baseline_env() -> dict[str, str]:
+def baseline_env() -> dict[str, str]:
+    """The host environment a command may see: the allowlist above, nothing else."""
     return {k: v for k in _ENV_ALLOWLIST if (v := os.environ.get(k)) is not None}
 
 
@@ -263,7 +264,7 @@ class DirectExecutor(SandboxExecutor):
             _DEFAULT_TIMEOUT if timeout is None else timeout,
             _MAX_TIMEOUT,
         )
-        process, exited, transport = await self._spawn(command, cwd, {**_baseline_env(), **(env or {})})
+        process, exited, transport = await self._spawn(command, cwd, {**baseline_env(), **(env or {})})
         # Read before the first await: this is the last point where the pid is
         # guaranteed to still belong to the shell we just spawned.
         pgid = process.pid

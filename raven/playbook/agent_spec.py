@@ -34,7 +34,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from raven.agent.harness_capabilities import function_enabled, parameter_enabled
-from raven.playbook.types import CamelBase
+from raven.playbook.base import CamelBase
 
 AGENT_SPEC_VERSION = 1
 

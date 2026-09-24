@@ -266,6 +266,95 @@ async def test_a_definition_with_neither_command_nor_url_never_reaches_the_detai
     assert carried["real"]["type"] == "streamableHttp"
 
 
+def _rounds_spec(name: str = "rounds") -> PlaybookSpec:
+    return PlaybookSpec.model_validate(
+        {
+            "name": name,
+            "description": "push a project forward one round at a time",
+            "taskSummary": "run the next round of the project",
+            "mode": "stint",
+            "confirm": True,
+            "triggers": {"keywords": ["round"]},
+            "memory": [{"path": "JOURNAL.md", "append": True, "recentRounds": 2}],
+            "verify": [{"name": "build", "run": "python3 -m compileall -q src", "timeoutSec": 300}],
+            "roles": [
+                {
+                    "as": "planner",
+                    "name": "Raven",
+                    "promptTemplate": "stint",
+                    "owns": ["reports/brief_{NN}.md"],
+                },
+                {
+                    "as": "verifier",
+                    "name": "Raven",
+                    "dependsOn": ["planner"],
+                    "promptTemplate": "judge",
+                    "appends": [".stint/FIXLOG.md"],
+                    "reads": [".stint/SPEC.md"],
+                    "verifyAfter": ["build"],
+                },
+            ],
+            "stop": {"maxRounds": 30, "until": "NOTHING-LEFT"},
+        }
+    )
+
+
+async def test_get_carries_what_a_multi_round_run_asks_to_be_approved(library: PlaybookStore) -> None:
+    """The page had a binary view of a playbook -- a graph or assembly guidance
+    -- and a rounds file is neither, so it drew an empty prompts box for a file
+    full of roles and shell commands."""
+    library.save(_rounds_spec())
+
+    got = (await mod.playbooks_get({"name": "rounds"}))["playbook"]
+
+    stint = got["stint"]
+    assert [role["label"] for role in stint["roles"]] == ["planner", "verifier"]
+    assert stint["roles"][1]["depends_on"] == ["planner"]
+    assert stint["roles"][0]["owns"] == ["reports/brief_{NN}.md"]
+    assert stint["roles"][1]["appends"] == [".stint/FIXLOG.md"]
+    assert stint["roles"][1]["verify_after"] == ["build"]
+    # The command runs on the reader's machine, and this is the one moment they
+    # are asked to approve that, so it goes out whole rather than named.
+    assert stint["checks"] == [
+        {"name": "build", "run": "python3 -m compileall -q src", "timeout_sec": 300.0, "needs_display": False}
+    ]
+    assert stint["carried"] == [{"path": "JOURNAL.md", "append": True, "recent_rounds": 2, "max_chars": 16000}]
+    assert (stint["max_rounds"], stint["until"], stint["report"]) == (30, "NOTHING-LEFT", "round")
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_get_marks_only_the_role_that_can_end_the_plan(library: PlaybookStore) -> None:
+    """The stint reads the output of the roles nothing waits on, and only those.
+    A page that marked every role would say two of them can end it."""
+    library.save(_rounds_spec())
+
+    stint = (await mod.playbooks_get({"name": "rounds"}))["playbook"]["stint"]
+
+    assert {role["label"]: role["terminal"] for role in stint["roles"]} == {"planner": False, "verifier": True}
+
+
+async def test_get_says_nothing_about_rounds_for_a_playbook_that_has_none(library: PlaybookStore) -> None:
+    """An empty block would read as no roles, no checks and a budget of zero --
+    three statements about a stint that does not exist."""
+    library.save(_spec())
+
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+
+    assert "stint" not in got
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_list_draws_a_multi_round_playbook_from_its_roles(library: PlaybookStore) -> None:
+    """It stores no nodes -- a round is compiled into them when it is dispatched
+    -- and answering with an empty shape drew a card with nothing on it."""
+    library.save(_rounds_spec())
+
+    [row] = (await mod.playbooks_list({}))["playbooks"]
+
+    assert row["nodes"] == [{"id": "planner", "depends_on": []}, {"id": "verifier", "depends_on": ["planner"]}]
+    METHOD_MODELS["playbooks.list"][1].model_validate({"playbooks": [row]})
+
+
 async def test_get_reports_no_carried_servers_as_an_empty_mapping(library: PlaybookStore) -> None:
     """Which is most playbooks: every ``mcps`` name resolves against the machine."""
     library.save(_spec())
@@ -1370,3 +1459,322 @@ async def test_creating_with_no_runtime_refuses(library: PlaybookStore) -> None:
 
 def test_the_create_contract_is_mirrored_by_a_model_pair() -> None:
     assert "playbooks.create" in METHOD_MODELS
+
+
+class TestWhereThePageLooks:
+    """The glob behind ``_stint_stores``, which the fixture below stands in for."""
+
+    async def test_a_plan_started_in_any_conversation_reaches_the_page(self, tmp_path: Path, monkeypatch) -> None:
+        """A stint lives beside the conversation that started it, and the page
+        lists the machine's. Reading one conversation's store showed an empty
+        page while a stint was running."""
+        from raven.agent.subagent.history import dag_root
+        from raven.config.loader import set_config_path
+        from raven.session.manager import SessionManager
+        from raven.stint.record import STINTS_DIRNAME, StintRecord, StintStore
+
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"agents": {"defaults": {"workspace": str(tmp_path)}}}), encoding="utf-8")
+        set_config_path(config)
+        sessions = SessionManager(tmp_path)
+        for key, stint_id in (("", "stint-terminal"), ("local:default", "stint-tui")):
+            store = StintStore(dag_root(sessions.session_dir(key)) / STINTS_DIRNAME)
+            store.write(StintRecord(stint_id=stint_id, playbook="game-dev", spec={"mode": "stint"}))
+        try:
+            answer = await mod.playbooks_stints_list({})
+            opened = await mod.playbooks_stints_get({"stint_id": "stint-tui"})
+        finally:
+            set_config_path(None)  # type: ignore[arg-type]
+
+        assert {row["stint_id"] for row in answer["stints"]} == {"stint-terminal", "stint-tui"}
+        assert opened["stint"]["stint_id"] == "stint-tui"
+
+
+class TestStints:
+    """``playbooks.stints.*`` -- the page's view of a multi-round run."""
+
+    @pytest.fixture
+    def stints(self, tmp_path: Path, monkeypatch):
+        """A stint store the handlers resolve to, without an agent stack."""
+        from raven.stint.record import StintRecord, StintStore
+
+        store = StintStore(tmp_path / "stints")
+        monkeypatch.setattr(mod, "_stint_stores", lambda: [store])
+        record = StintRecord(
+            stint_id="stint-a",
+            playbook="game-dev",
+            spec={"mode": "stint", "stop": {"maxRounds": 30}},
+            workdir=str(tmp_path / "tree"),
+            branch="stint/stint-a",
+            round_index=2,
+            questions=[
+                {"round": 1, "role": "planner", "text": "which of the two?", "answer": ""},
+                {"round": 1, "role": "verifier", "text": "is this good enough?", "answer": "yes"},
+            ],
+        )
+        first = record.open_round(1, "run-1")
+        first.status = "completed"
+        first.verify = [{"name": "build", "status": "failed"}, {"name": "tests", "status": "ok"}]
+        first.violations = ["builder wrote 1 path(s) it may not write: reports/verifier.md"]
+        record.open_round(2, "run-2")
+        store.write(record)
+        return store
+
+    async def test_the_list_answers_what_a_row_needs_without_a_second_call(self, stints) -> None:
+        result = await mod.playbooks_stints_list({})
+
+        [row] = result["stints"]
+        assert row["stint_id"] == "stint-a"
+        assert row["round_index"] == 2 and row["max_rounds"] == 30
+        assert row["live"] is True
+        assert row["open_questions"] == 1, "answered ones are not what a badge counts"
+        assert row["branch"] == "stint/stint-a"
+
+    async def test_the_detail_carries_every_round_and_what_it_undid(self, stints) -> None:
+        detail = await mod.playbooks_stints_get({"stint_id": "stint-a"})
+
+        assert [entry["index"] for entry in detail["rounds"]] == [1, 2]
+        assert detail["rounds"][0]["checks"] == ["build=failed", "tests=ok"]
+        assert "may not write" in detail["rounds"][0]["violations"][0]
+        assert [q["answer"] for q in detail["questions"]] == ["", "yes"]
+
+    async def test_an_unknown_plan_is_an_error_not_an_empty_detail(self, stints) -> None:
+        with pytest.raises(RpcError):
+            await mod.playbooks_stints_get({"stint_id": "stint-nope"})
+
+    async def test_a_stop_lands_on_the_file_and_leaves_the_round_in_flight_alone(self, stints) -> None:
+        """The round is another process's; throwing away one already paid for
+        would be the worse of the two answers."""
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+
+        assert detail["stint"]["status"] == "stopped"
+        assert detail["stint"]["live"] is False
+        assert stints.read("stint-a").stop_reason == "a person stopped the stint"
+        assert [entry["run_id"] for entry in detail["rounds"]] == ["run-1", "run-2"]
+
+    async def test_stopping_twice_is_not_an_error_and_does_not_rewrite_why(self, stints) -> None:
+        await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+        record = stints.read("stint-a")
+        record.stop_reason = "the round budget of 30 is spent"
+        stints.write(record)
+
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+
+        assert detail["stint"]["stop_reason"] == "the round budget of 30 is spent"
+
+    async def test_a_pause_leaves_the_stint_unfinished_so_it_can_be_taken_up(self, stints) -> None:
+        """The whole difference between this and `stop`: what `resume` acts on.
+        Both let the round in flight finish and neither opens another."""
+        detail = await mod.playbooks_stints_pause({"stint_id": "stint-a"})
+
+        assert detail["stint"]["status"] == "paused"
+        assert stints.read("stint-a").unfinished is True
+        assert stints.read("stint-a").stop_reason == "a person paused the stint"
+        assert [entry["run_id"] for entry in detail["rounds"]] == ["run-1", "run-2"]
+
+    async def test_a_plain_stop_leaves_the_round_in_flight_alone(self, stints) -> None:
+        """The default is the one that keeps a round already paid for."""
+        cancelled: list[str] = []
+
+        class _Loop:
+            def cancel_dag_run(self, run_id: str) -> bool:
+                cancelled.append(run_id)
+                return True
+
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a"}, agent_loop_factory=lambda: _Loop())
+
+        assert detail["stint"]["status"] == "stopped"
+        assert cancelled == [], "nothing was asked to stop where it is"
+
+    async def test_stopping_with_now_cuts_the_round_in_flight_short(self, stints) -> None:
+        """`now` is the ask that reaches the round, through the graph's own cancel
+        so the round lands on the path that knows what a cut round means."""
+        cancelled: list[str] = []
+
+        class _Loop:
+            def cancel_dag_run(self, run_id: str) -> bool:
+                cancelled.append(run_id)
+                return True
+
+        record = stints.read("stint-a")
+        running = record.round(record.round_index)
+
+        detail = await mod.playbooks_stints_stop(
+            {"stint_id": "stint-a", "now": True}, agent_loop_factory=lambda: _Loop()
+        )
+
+        assert detail["stint"]["status"] == "stopped"
+        assert cancelled == [running.run_id]
+
+    async def test_a_now_that_reaches_no_round_here_still_stops_the_stint(self, stints) -> None:
+        """A stint held by somebody's terminal is not addressable from a gateway,
+        and the record is what ends it either way."""
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a", "now": True}, agent_loop_factory=None)
+
+        assert detail["stint"]["status"] == "stopped"
+        assert stints.read("stint-a").unfinished is False
+
+    async def test_a_paused_stint_can_still_be_stopped(self, stints) -> None:
+        """`unfinished` is the guard, not `live`. A paused stint is not live and
+        still owns its branch, so with `live` there guarding it nothing on any
+        surface could end it -- and the page draws Stop off the same fact."""
+        await mod.playbooks_stints_pause({"stint_id": "stint-a"})
+
+        detail = await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+
+        assert detail["stint"]["status"] == "stopped"
+        assert detail["stint"]["unfinished"] is False
+        assert stints.read("stint-a").unfinished is False
+
+    async def test_a_stopped_stint_is_not_reopened_by_pausing_it(self, stints) -> None:
+        """`live` is the guard on both verbs, so the later call is a read. Without
+        it, pausing something already over would make it unfinished again -- and
+        an unfinished stint on a project is what refuses the next one."""
+        await mod.playbooks_stints_stop({"stint_id": "stint-a"})
+
+        detail = await mod.playbooks_stints_pause({"stint_id": "stint-a"})
+
+        assert detail["stint"]["status"] == "stopped"
+        assert stints.read("stint-a").unfinished is False
+
+    @staticmethod
+    def _engine(driver):
+        """An agent loop as the handlers see it: a playbook runtime carrying the driver."""
+
+        class Runtime:
+            rounds = driver
+
+        class Loop:
+            _playbooks = Runtime()
+
+            def session_workdir(self, _key):
+                return None
+
+            def binding_for_session(self, _key):
+                return None
+
+        return lambda: Loop()
+
+    @staticmethod
+    def _driver():
+        class Driver:
+            calls: list[tuple] = []
+
+            async def resume(self, stint_id, session_key):
+                self.calls.append(("resume", stint_id, session_key))
+                return f"Stint {stint_id} is running round 2 again."
+
+            async def extend(self, stint_id, rounds, session_key):
+                self.calls.append(("extend", stint_id, rounds, session_key))
+                return f"Stint {stint_id} may now run {rounds} more."
+
+        return Driver()
+
+    async def test_resume_takes_the_stint_up_in_the_engine_answering_the_call(self, stints) -> None:
+        """A round runs in the process that opens it. A terminal running its own
+        driver put the round in a shell nobody watched; this puts it in the
+        engine whose conversation started the stint, and hands back what the
+        driver said beside the detail, because "nothing left to take up" is an
+        answer too."""
+        record = stints.read("stint-a")
+        record.origin = {"session_key": "web:abc"}
+        stints.write(record)
+        driver = self._driver()
+
+        result = await mod.playbooks_stints_resume({"stint_id": "stint-a"}, agent_loop_factory=self._engine(driver))
+
+        assert driver.calls == [("resume", "stint-a", "web:abc")]
+        assert result["reply"] == "Stint stint-a is running round 2 again."
+        assert result["stint"]["stint_id"] == "stint-a" and "rounds" in result
+
+    async def test_extend_hands_the_count_to_the_same_engine(self, stints) -> None:
+        driver = self._driver()
+
+        result = await mod.playbooks_stints_extend(
+            {"stint_id": "stint-a", "rounds": 3}, agent_loop_factory=self._engine(driver)
+        )
+
+        assert driver.calls == [("extend", "stint-a", 3, None)]
+        assert "3 more" in result["reply"]
+
+    async def test_a_host_with_no_engine_refuses_to_take_a_stint_up(self, stints) -> None:
+        """Unlike pause and stop, which only write the file, this opens a round --
+        and a driver built for the call would run it in the RPC handler."""
+        with pytest.raises(RpcError):
+            await mod.playbooks_stints_resume({"stint_id": "stint-a"}, agent_loop_factory=None)
+
+    async def test_an_answer_is_kept_and_the_badge_drops(self, stints) -> None:
+        detail = await mod.playbooks_stints_answer({"stint_id": "stint-a", "question": 0, "text": "the second one"})
+
+        assert detail["questions"][0]["answer"] == "the second one"
+        assert detail["stint"]["open_questions"] == 0
+        assert stints.read("stint-a").questions[0]["answered_at"]
+
+    async def test_answering_a_question_that_is_not_there_is_refused(self, stints) -> None:
+        with pytest.raises(RpcError):
+            await mod.playbooks_stints_answer({"stint_id": "stint-a", "question": 9, "text": "x"})
+
+    async def test_every_plan_answer_satisfies_its_published_result_schema(self, stints) -> None:
+        for method, params in (
+            ("playbooks.stints.list", {}),
+            ("playbooks.stints.get", {"stint_id": "stint-a"}),
+            ("playbooks.stints.pause", {"stint_id": "stint-a"}),
+            ("playbooks.stints.stop", {"stint_id": "stint-a"}),
+            ("playbooks.stints.answer", {"stint_id": "stint-a", "question": 0, "text": "ok"}),
+        ):
+            handler = {
+                "playbooks.stints.list": mod.playbooks_stints_list,
+                "playbooks.stints.get": mod.playbooks_stints_get,
+                "playbooks.stints.pause": mod.playbooks_stints_pause,
+                "playbooks.stints.stop": mod.playbooks_stints_stop,
+                "playbooks.stints.answer": mod.playbooks_stints_answer,
+            }[method]
+            METHOD_MODELS[method][1].model_validate(await handler(params))
+
+
+class TestTheMethodSurface:
+    """What the page can reach, pinned as a list.
+
+    A canary rather than a description. The `playbooks.*` family grew a
+    `stints.*` sub-family that acts on a running multi-round run, and the
+    difference between the two halves matters: the library methods read and
+    write files in the playbook store, and the stint methods reach the engine.
+    A method added to either half should be a decision somebody took, not a line
+    that arrived with a feature -- and a method that disappears should fail here
+    rather than in a page that stops working.
+    """
+
+    @staticmethod
+    def _registered() -> list[str]:
+        from raven.rpc.dispatcher import Dispatcher
+
+        d = Dispatcher()
+        mod.register_playbooks_methods(d)
+        return [name for name in d.methods() if name.startswith("playbooks.")]
+
+    def test_the_library_half(self) -> None:
+        assert [name for name in self._registered() if not name.startswith("playbooks.stints.")] == [
+            "playbooks.create",
+            "playbooks.credentials.clear",
+            "playbooks.credentials.get",
+            "playbooks.credentials.set",
+            "playbooks.delete",
+            "playbooks.get",
+            "playbooks.list",
+            "playbooks.oauth.authorize",
+            "playbooks.oauth.clear",
+            "playbooks.run",
+            "playbooks.set_enabled",
+            "playbooks.validate",
+        ]
+
+    def test_the_stint_half(self) -> None:
+        assert [name for name in self._registered() if name.startswith("playbooks.stints.")] == [
+            "playbooks.stints.answer",
+            "playbooks.stints.extend",
+            "playbooks.stints.get",
+            "playbooks.stints.list",
+            "playbooks.stints.pause",
+            "playbooks.stints.resume",
+            "playbooks.stints.stop",
+        ]

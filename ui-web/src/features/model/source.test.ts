@@ -359,6 +359,41 @@ describe('providers the page does not offer', () => {
   })
 })
 
+describe('one catalogue read per question', () => {
+  const row = (slug: string) => ({ slug, name: slug, authenticated: true, models: [`${slug}/m`] })
+
+  it('two default-scoped reads in flight share one model.options call', async () => {
+    /* The boot asks this question from three places within a second, and each
+       was a full catalogue build on the gateway. */
+    const h = await live()
+    const chip = h.settings.loadProviders(null)
+    const snapshot = h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options'])
+
+    await h.settle(0, { model: 'deepseek/d', provider: 'deepseek', providers: [row('deepseek')] })
+    await Promise.all([chip, snapshot])
+
+    expect(h.settings.providersLive.map((p) => p.id)).toEqual(['deepseek'])
+    expect(h.settings.defaultProvidersLive.map((p) => p.id)).toEqual(['deepseek'])
+  })
+
+  it('a read for a conversation is its own question', async () => {
+    const h = await live()
+    void h.settings.loadProviders('sess-1')
+    void h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options', 'model.options'])
+  })
+
+  it('asks again once the shared answer has landed', async () => {
+    const h = await live()
+    const first = h.settings.loadDefaultProviders()
+    await h.settle(0, { providers: [row('deepseek')] })
+    await first
+    void h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options', 'model.options'])
+  })
+})
+
 describe('the two provider scopes', () => {
   const row = (slug: string, current = false) =>
     ({ slug, name: slug, authenticated: true, models: [`${slug}/m`], is_current: current })
@@ -384,6 +419,31 @@ describe('the two provider scopes', () => {
 
     expect(h.settings.providersLive.filter((p) => p.current).map((p) => p.id)).toEqual(['gemini'])
     expect(h.settings.defaultProvidersLive.filter((p) => p.current).map((p) => p.id)).toEqual(['deepseek'])
+  })
+})
+
+describe('the default-scoped provider read', () => {
+  const row = (slug: string, current = false) => ({ slug, name: slug, authenticated: true, current, models: [] })
+  it('asks once when the page and the picker both refresh with no conversation open', async () => {
+    /* A provider write refreshes both; with no session the two reads are the
+       same live round trip to every vendor, most of a second each. */
+    const h = await live({ session: null })
+    const a = h.settings.loadDefaultProviders()
+    const b = h.settings.loadProviders()
+    expect(h.inFlight()).toEqual(['model.options'])
+    await h.settle(0, { model: 'deepseek/d', provider: 'deepseek', providers: [row('deepseek', true)] })
+    await Promise.all([a, b])
+    expect(h.settings.defaultProvidersLive.map((p) => p.id)).toEqual(['deepseek'])
+    expect(h.settings.providersLive.map((p) => p.id)).toEqual(['deepseek'])
+  })
+
+  it('asks again once the shared read has answered', async () => {
+    const h = await live({ session: null })
+    const a = h.settings.loadDefaultProviders()
+    await h.settle(0, { providers: [] })
+    await a
+    void h.settings.loadDefaultProviders()
+    expect(h.inFlight()).toEqual(['model.options', 'model.options'])
   })
 })
 

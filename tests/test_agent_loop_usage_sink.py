@@ -12,19 +12,21 @@ import json
 import tempfile
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
 
 import raven.agent.loop.turn_path as agent_loop_main
+from raven.agent.harness.action import DefaultAction
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.config.raven import ContextConfig
 from raven.contracts.llm_provider import ToolCallRequest
 from raven.contracts.token_strategy import UsageSnapshot
 from raven.contracts.tool import Tool
-from raven.providers import rates
+from raven.providers import rates, usage_record
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.binding import ModelBinding, use_binding
 from raven.spine.message import ChatType, Source
@@ -557,8 +559,9 @@ def _costing_agent(
 
     The Curator is dropped because its Slow Path is a bounded agent loop of its
     own on the same provider, and a scripted provider cannot tell its calls from
-    the turn's. Neither its calls nor the watch-work judgement's reach the usage
-    recorder at all, so neither is part of what this file pins.
+    the turn's. Its calls, like the watch-work judgement's, reach the usage
+    recorder only through the provider seam (``raven.providers.usage_record``),
+    which a test here installs only when the seam is what it pins.
     """
     return _make_agent(
         workspace,
@@ -619,6 +622,88 @@ async def test_a_delegating_turn_costs_what_it_delegated(workspace):
 
     assert sink["cost_usd"] == pytest.approx(0.025), "0.002 + 0.003 of its own, plus the 0.02 it delegated"
     assert sink["cost_missing_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_turn_is_billed_once_while_the_provider_seam_listens_too(workspace):
+    """Production installs the loop's own registry at the provider seam as well
+    as binding it for the turn, so the seam and the loop hear the same call. The
+    seam's row is the one kept, under the turn's session, and the loop adds
+    none."""
+    tracker = UsageTracker(persist=False)
+    registry = StrategyRegistry([tracker])
+    usage_record.install(registry.after_llm_call)
+    agent = _costing_agent(
+        workspace,
+        [_asks_for("list_dir", 0.002, path="."), _says("done", 0.003)],
+        strategies=registry,
+    )
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert agent.provider.calls == 2
+    billed = tracker.snapshot("s1")
+    assert billed.calls == 2, "one row per model call, not one from the loop and one from the seam"
+    assert billed.cost_usd == pytest.approx(0.005)
+    assert tracker.total.calls == 2
+    assert sink["cost_usd"] == pytest.approx(0.005)
+
+
+@pytest.mark.asyncio
+async def test_a_serving_generation_is_billed_alone_after_a_candidate_installs(workspace):
+    """A candidate generation's assembly installs its registry process-wide
+    before it is known to be usable, and the generation it would replace goes
+    on serving. That generation's turn is billed to its own registry only: the
+    seam used to record it into the candidate's, and the loop, no longer
+    matching the installed sink, recorded it again into its own."""
+    serving_tracker = UsageTracker(persist=False)
+    serving = StrategyRegistry([serving_tracker])
+    candidate_tracker = UsageTracker(persist=False)
+    usage_record.install(StrategyRegistry([candidate_tracker]).after_llm_call)
+    agent = _costing_agent(
+        workspace,
+        [_asks_for("list_dir", 0.002, path="."), _says("done", 0.003)],
+        strategies=serving,
+    )
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert agent.provider.calls == 2
+    assert serving_tracker.total.calls == 2, "each call once, to the generation that made it"
+    assert candidate_tracker.total.calls == 0, "the candidate billed nothing it did not make"
+
+
+class _BestOfTwoAction(DefaultAction):
+    """An Action that asks twice and keeps the second answer -- the shape
+    ``ActionRequest`` names (best-of-n, a critic pass): one decision, two
+    requests, one response handed back to the loop."""
+
+    async def decide(self, request):
+        await super().decide(request)
+        return await super().decide(request)
+
+
+@pytest.mark.asyncio
+async def test_every_call_a_multi_call_action_makes_is_billed(workspace):
+    """The loop records the one response ``decide`` returns. A claim over the
+    whole decision would bill that one and lose the other request; the seam
+    records both, under the turn's session, and the loop adds nothing."""
+    tracker = UsageTracker(persist=False)
+    registry = StrategyRegistry([tracker])
+    usage_record.install(registry.after_llm_call)
+    agent = _costing_agent(workspace, [_says("draft", 0.002), _says("final", 0.003)], strategies=registry)
+    agent.harness = replace(agent.harness, action=_BestOfTwoAction())
+    sink: dict = {}
+
+    await _turn(agent, sink)
+
+    assert agent.provider.calls == 2
+    billed = tracker.snapshot("s1")
+    assert billed.calls == 2, "both requests of the one decision, each once"
+    assert billed.cost_usd == pytest.approx(0.005)
+    assert tracker.total.calls == 2
 
 
 @pytest.mark.asyncio

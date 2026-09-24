@@ -107,13 +107,24 @@ const SEARCH = 'M10.5 3.5a7 7 0 1 0 0 14 7 7 0 1 0 0-14ZM15.6 15.6 20.5 20.5'
    340px list and the reader who needs the exact string hovers. A recent row
    names its account at the right, since the list above it is not grouped by
    one: the same id can be served by two accounts, and a pick names one. */
-function Row({ p, m, current, account }: { p: Provider; m: string; current: string; account?: boolean }): JSX.Element {
+function Row({ p, m, current, owner, account }: { p: Provider; m: string; current: string; owner?: Provider; account?: boolean }): JSX.Element {
+  /* `owner` is the account the conversation is on, where the page knows which:
+     two accounts can list one id, and the model alone cannot tell their rows
+     apart. Without one every account listing it is marked, which is what this
+     did before the pick started naming one. */
+  const ticked = (!owner || owner.id === p.id) && sameModel(p, m, current)
   return (
-    <button className="row" title={store.short(m)} onClick={() => void store.choose(m, p.id)}>
+    <button
+      className="row"
+      role="radio"
+      aria-checked={ticked ? 'true' : 'false'}
+      title={store.short(m)}
+      onClick={() => void store.choose(m, p.id)}
+    >
       <span className="nm">{label(p, m)}</span>
       <ModelTags facts={p.labels?.[m]} />
       {account ? <span className="ct">{p.name}</span> : null}
-      {m === current ? <span className="tick">✓</span> : null}
+      {ticked ? <span className="tick" aria-hidden="true">✓</span> : null}
     </button>
   )
 }
@@ -138,7 +149,12 @@ function Pick(): JSX.Element {
   })
   const anyHit = hits.some((h) => h.length > 0)
   const firstAt = hits.findIndex((h) => h.length > 0)
-  const currentProvider = providers.find((p) => store.column(p).includes(current))
+  /* The account the conversation is on: the one a pick or the gateway named,
+     else whichever lists the model. A slot opening the picker states its own
+     pair, which outranks the conversation's. */
+  const named = at.offer.current?.provider ?? store.currentProvider()
+  const currentProvider = providers.find((p) => p.id === named && store.column(p).some((m) => sameModel(p, m, current)))
+    ?? providers.find((p) => store.column(p).some((m) => sameModel(p, m, current)))
   /* Where a typed id goes: the provider serving the current model, which is
      the account the reader is already on, else the first listed. One row for
      it rather than one per group, because an id is added to one provider. */
@@ -158,7 +174,7 @@ function Pick(): JSX.Element {
   const recents = !q && !at.offer.title
     ? recent().flatMap((r) => {
       const p = providers.find((x) => x.id === r.provider)
-      const m = p ? store.column(p).find((x) => sameModel(p.id, x, r.model)) : undefined
+      const m = p ? store.column(p).find((x) => sameModel(p, x, r.model)) : undefined
       return p && m ? [{ p, m }] : []
     })
     : []
@@ -269,13 +285,20 @@ function Pick(): JSX.Element {
   const shown = (p: Provider, list: string[]): { rows: string[]; more: number } => {
     if (q || unfolded.has(p.id) || list.length <= FOLD) return { rows: list, more: 0 }
     const head = list.slice(0, FOLD)
-    const cur = list.find((m) => m === current)
+    const cur = list.find((m) => sameModel(p, m, current))
     if (cur && !head.includes(cur)) head.push(cur)
     return { rows: head, more: list.length - head.length }
   }
 
   return (
-    <div className="mpick" role="dialog" ref={box}>
+    /* The popover says what is being chosen: the slot's name where one opened it,
+       the word for a model otherwise. Through `t` and not `lang.attr`, which the
+       chip popovers name themselves with -- that one withholds the text until a
+       reader picks a language, because the markup it writes over is served with
+       words already. Nothing here is served: the picker does not exist until it
+       is opened, so there is no served text to leave standing and a reader who
+       never picks a language would get no name at all. */
+    <div className="mpick" role="dialog" aria-label={at.offer.title || t('gui.picker.title')} ref={box}>
       <ModelTagDefs />
       <div className="find">
         {at.offer.title ? <span className="model-slot">{at.offer.title}</span> : null}
@@ -284,7 +307,7 @@ function Pick(): JSX.Element {
         </svg>
         <input
           ref={field}
-          placeholder={t('gui.picker.search_ph')}
+          placeholder={typedTo ? t('gui.picker.search_or_type_ph') : t('gui.picker.search_ph')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -308,9 +331,9 @@ function Pick(): JSX.Element {
       </div>
       <div className="models">
         {recents.length ? (
-          <div className="model-group model-recent">
+          <div className="model-group model-recent" role="radiogroup" aria-label={t('gui.picker.recent')}>
             <div className="model-group-hd"><span className="nm">{t('gui.picker.recent')}</span></div>
-            {recents.map(({ p, m }) => <Row key={`${p.id}/${m}`} p={p} m={m} current={current} account />)}
+            {recents.map(({ p, m }) => <Row key={`${p.id}/${m}`} p={p} m={m} current={current} owner={currentProvider} account />)}
           </div>
         ) : null}
         {providers.map((p, i) => {
@@ -320,14 +343,23 @@ function Pick(): JSX.Element {
              on the way. */
           if (q && !list.length) return null
           const { rows, more } = shown(p, list)
+          /* A set per account rather than one for the picker: a model listed by
+             an account is also listed under Recent, and both are marked, so one
+             set for the whole list would hold two checked members. */
           return (
-            <div className="model-group" key={p.id} data-provider={p.id}>
+            <div
+              className="model-group"
+              key={p.id}
+              data-provider={p.id}
+              role={rows.length ? 'radiogroup' : undefined}
+              aria-label={rows.length ? p.name : undefined}
+            >
               <div className="model-group-hd">
                 <ProviderIcon id={p.id} name={p.name} />
                 <span className="nm">{p.name}</span>
                 <span className="ct">{String(list.length)}</span>
               </div>
-              {rows.map((m) => <Row key={m} p={p} m={m} current={current} />)}
+              {rows.map((m) => <Row key={m} p={p} m={m} current={current} owner={currentProvider} />)}
               {more ? (
                 <button className="row model-more" onClick={() => setUnfolded(new Set([...unfolded, p.id]))}>
                   <span className="nm">{t('gui.picker.show_all', { n: String(list.length) })}</span>

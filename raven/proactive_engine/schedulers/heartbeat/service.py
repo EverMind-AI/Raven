@@ -1,8 +1,18 @@
-"""Heartbeat service - periodic agent wake-up to check for tasks."""
+"""Heartbeat service - periodic agent wake-up to check for tasks.
+
+What counts as "no tasks" is decided by :func:`has_tasks` below: a file of
+nothing but the shipped scaffolding is empty of tasks, and the tick that finds
+one spends no LLM call. The shipped template promises exactly that -- "If this
+file has no tasks (only headers and comments), the agent will skip the
+heartbeat" -- while the service used to read only whether the file had any
+bytes, so an untouched template cost one call every interval.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import functools
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
@@ -13,6 +23,53 @@ if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
     from raven.proactive_engine.system_events import SystemEvent, SystemEventQueue
     from raven.proactive_engine.wake import WakeScheduler
+
+# The session a heartbeat's own decision call is billed to, and the
+# conversation its execution turn already runs under (gateway_commands).
+HEARTBEAT_SESSION = "heartbeat"
+
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# A list marker with nothing after it is a placeholder, not a task.
+_EMPTY_ITEMS = frozenset({"-", "*", "+", "- [ ]", "* [ ]"})
+
+
+def _content_lines(text: str) -> list[str]:
+    stripped = (line.strip() for line in _COMMENT_RE.sub("", text).splitlines())
+    return [line for line in stripped if line and line not in _EMPTY_ITEMS]
+
+
+@functools.cache
+def _scaffold_lines() -> frozenset[str]:
+    """The lines of the shipped template, read from the template itself.
+
+    Read rather than restated, so the template and this check cannot drift
+    apart. Unreadable, it is empty: every line then counts as a task and the
+    heartbeat asks the model, which is what it did before this check existed.
+    """
+    from importlib.resources import files
+
+    try:
+        text = (files("raven") / "templates" / "HEARTBEAT.md").read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001 - a missing template costs a call, never the heartbeat
+        return frozenset()
+    return frozenset(_content_lines(text))
+
+
+def has_tasks(content: str | None) -> bool:
+    """Whether ``content`` holds anything beyond the shipped scaffolding.
+
+    Scaffolding is blank lines, HTML comments, empty list markers and the lines
+    of the shipped template verbatim -- its headings and its introductory prose.
+    Anything else is a task, including a heading the template does not have: a
+    task written as a heading, or a section of the user's own, still reaches
+    the model. The check errs towards asking, because a missed call costs one
+    request and a missed task costs the task.
+    """
+    if not content:
+        return False
+    scaffold = _scaffold_lines()
+    return any(line not in scaffold for line in _content_lines(content))
+
 
 _HEARTBEAT_TOOL = [
     {
@@ -123,17 +180,22 @@ class HeartbeatService:
                 "notice, choose 'run' and describe it in `tasks`. If the "
                 "events need no action, choose 'skip'."
             )
-        response = await self.provider.chat_with_retry(
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision.",
-                },
-                {"role": "user", "content": user_msg},
-            ],
-            tools=_HEARTBEAT_TOOL,
-            model=self.model,
-        )
+        from raven.token_wise import usage_context
+
+        # Billed as the heartbeat's own: this call runs outside any turn, so no
+        # session is bound, and the provider seam records under whatever is.
+        with usage_context.bind(HEARTBEAT_SESSION):
+            response = await self.provider.chat_with_retry(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision.",
+                    },
+                    {"role": "user", "content": user_msg},
+                ],
+                tools=_HEARTBEAT_TOOL,
+                model=self.model,
+            )
 
         if not response.has_tool_calls:
             return "skip", ""
@@ -220,8 +282,8 @@ class HeartbeatService:
         """
         events = events or []
         content = self._read_heartbeat_file()
-        if not content and not events:
-            logger.debug("Heartbeat: HEARTBEAT.md missing or empty")
+        if not has_tasks(content) and not events:
+            logger.debug("Heartbeat: HEARTBEAT.md holds no tasks")
             return
 
         logger.info("Heartbeat: checking for tasks (reason: {})...", reason)
@@ -243,7 +305,7 @@ class HeartbeatService:
         """Manually trigger a heartbeat."""
         content = self._read_heartbeat_file()
         events = self._peek_events()
-        if not content and not events:
+        if not has_tasks(content) and not events:
             return None
         action, tasks = await self._decide(content or "", events)
         if action != "run" or not self.on_execute:

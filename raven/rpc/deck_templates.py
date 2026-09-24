@@ -14,6 +14,12 @@ first page of each template, rendered through the deck viewer's own PDF cache
 (``pdf_preview``) and rasterised with PyMuPDF where the engine's dependency
 brought it (imported lazily, so the host's own dependency face stays as it
 is) -- a host without either shows the names alone.
+
+A cover is a LibreOffice run, and ten of them started on every host that had
+never opened the picker. The engine's build renders them once instead
+(``scripts/bake_deck_template_covers.py``) and its wheel carries them, so
+``shipped_cover`` answers before anything is started; the rendering below is
+what a template or a language the build did not see still goes through.
 """
 
 from __future__ import annotations
@@ -319,6 +325,19 @@ def _cover_key(path: Path) -> str:
     return hashlib.sha256(f"{path}\0{st.st_size}\0{st.st_mtime_ns}\0{COVER_WIDTH_PX}".encode()).hexdigest()[:32]
 
 
+def _drawn_key(path: Path) -> str:
+    """The key for a picture, as against the key for the deck it was drawn from.
+
+    A translated copy is the same file whatever fonts the host has, so it keeps
+    :func:`_cover_key`. A picture is not: the boxes a host drew before it could
+    set Chinese have the same source and would be served in place of the render
+    that fixed them.
+    """
+    from raven.utils import office
+
+    return f"{_cover_key(path)}-{office.render_fingerprint()}"
+
+
 def _write_page(page: Any, target: Path, *, width: int, quality: int) -> None:
     """One PDF page as a JPEG ``width`` wide, written atomically."""
     pymupdf = _pymupdf()
@@ -365,6 +384,19 @@ def _rasteriser_available() -> bool:
         return False
 
 
+async def draw_cover(template: Template, target: Path, language: str = SOURCE_LANGUAGE) -> None:
+    """Render this template's first page into ``target``, for this reader's language.
+
+    The build's half of :func:`shipped_cover` and the fallback's, written once
+    so a cover the wheel carries and a cover a host drew are the same picture.
+    Raises what the conversion raises; both callers decide what that means.
+    """
+    from raven.rpc import pdf_preview
+
+    pdf = await pdf_preview.pdf_for(source_for(template, language))
+    await asyncio.to_thread(_rasterise_first_page, pdf, target)
+
+
 async def cover_for(template: Template, language: str = SOURCE_LANGUAGE) -> Path | None:
     """The template's cover as a cached JPEG, or None where this host cannot draw one.
 
@@ -372,18 +404,19 @@ async def cover_for(template: Template, language: str = SOURCE_LANGUAGE) -> Path
     reasons a cover is missing (no LibreOffice, no PyMuPDF, a render that timed
     out) are the host's, logged once here and not worth failing the list for.
     """
+    shipped = shipped_cover(template, language)
+    if shipped is not None:
+        return shipped
     source = source_for(template, language)
-    cached = cover_cache_dir() / f"{_cover_key(source)}.jpg"
+    cached = cover_cache_dir() / f"{_drawn_key(source)}.jpg"
     if cached.is_file():
         return cached
     if not _rasteriser_available():
         return None
-    from raven.rpc import pdf_preview
 
     try:
         async with _render_gate:
-            pdf = await pdf_preview.pdf_for(source)
-            await asyncio.to_thread(_rasterise_first_page, pdf, cached)
+            await draw_cover(template, cached, language)
     except Exception as exc:  # noqa: BLE001 - a missing picture must not fail the list
         _failed.add(f"{template.name}:{language}")
         logger.warning("deck template {!r}: no cover ({}: {})", template.name, type(exc).__name__, exc)
@@ -402,7 +435,7 @@ async def pages_for(template: Template, language: str = SOURCE_LANGUAGE) -> list
     if not _rasteriser_available():
         return []
     source = source_for(template, language)
-    stem = cover_cache_dir() / _cover_key(source)
+    stem = cover_cache_dir() / _drawn_key(source)
     from raven.rpc import pdf_preview
 
     try:
@@ -425,6 +458,31 @@ _drawing: dict[str, asyncio.Task[Path | None]] = {}
 _failed: set[str] = set()
 
 
+def shipped_cover_name(template: Template, language: str = SOURCE_LANGUAGE) -> str:
+    """What the build calls this template's cover for this reader, without the suffix.
+
+    The template alone where the reader reads the file as it ships, and the
+    language beside it where a phrasebook rewrites the page first -- the two
+    cases ``source_for`` already splits on. The build writes these names and
+    ``shipped_cover`` reads them, so they are computed in one place.
+    """
+    return f"{template.name}-{language}" if phrasebook(language) else template.name
+
+
+def shipped_cover(template: Template, language: str = SOURCE_LANGUAGE) -> Path | None:
+    """The cover the engine's wheel carries for this template and reader, or None.
+
+    None for a template nobody built a cover for -- one dropped into the
+    directory by hand, a language added after the wheel -- and those still draw
+    their own below.
+    """
+    root = templates_dir()
+    if root is None:
+        return None
+    cover = root / "covers" / f"{shipped_cover_name(template, language)}.jpg"
+    return cover if cover.is_file() else None
+
+
 def cached_cover(template: Template, language: str = SOURCE_LANGUAGE) -> Path | None:
     """The cover already on disk, or None; never renders and never translates.
 
@@ -432,13 +490,16 @@ def cached_cover(template: Template, language: str = SOURCE_LANGUAGE) -> Path | 
     the question is answered without building one: this is the cheap half of the
     listing, and drawing is the other half's business.
     """
+    shipped = shipped_cover(template, language)
+    if shipped is not None:
+        return shipped
     if phrasebook(language):
         source = translated_dir() / f"{_cover_key(template.path)}-{language}.pptx"
         if not source.is_file():
             return None
     else:
         source = template.path
-    cached = cover_cache_dir() / f"{_cover_key(source)}.jpg"
+    cached = cover_cache_dir() / f"{_drawn_key(source)}.jpg"
     return cached if cached.is_file() else None
 
 
@@ -580,11 +641,14 @@ __all__ = [
     "cover_for",
     "data_url",
     "deposit",
+    "draw_cover",
     "find",
     "label_for",
     "listing",
     "pages_for",
     "phrasebook",
+    "shipped_cover",
+    "shipped_cover_name",
     "source_for",
     "templates_dir",
     "stop_warming",

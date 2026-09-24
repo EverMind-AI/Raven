@@ -21,8 +21,7 @@ Three constraints shape what is kept:
   list would not have thought of -- so the name is tested against
   :data:`_SECRET_HEADER` and a hit keeps the name with its value replaced. The
   body goes through :func:`_scrub`, deliberately a handful of patterns rather
-  than the full table in ``raven.acp.redact``: the import contract forbids
-  ``raven.providers`` reaching a surface package, and a response body is not a
+  than the full table in ``raven.security.redact``: a response body is not a
   config file. The one realistic echo is a 401 quoting the request's own
   ``Authorization`` header, which is what the patterns are chosen for.
 * **No image payloads.** A picture reaches here only inside the request, which

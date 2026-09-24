@@ -670,7 +670,7 @@ describe('the attachment tray', () => {
     expect(attachmentCache.get('uploads/shot.png')).toMatch(/^data:image\/png/)
   })
 
-  it('shows a non-image as a name and a size', async () => {
+  it('shows a non-image as a name, with its size in the tooltip', async () => {
     wire({ upload: async () => ({ path: 'uploads/notes.txt', size: 300 }) })
     const box = mountTray()
     await act(async () => {
@@ -678,7 +678,8 @@ describe('the attachment tray', () => {
       await flush()
     })
     expect(box.querySelector('.att .nm')!.textContent).toBe('notes.txt')
-    expect(box.querySelector('.att .sz')!.textContent).toBe('300 B')
+    expect(box.querySelector('.att .sz')).toBeNull()
+    expect(box.querySelector('.att')!.getAttribute('title')).toBe('notes.txt · 300 B')
     expect((box.querySelector('.att') as HTMLElement).classList.contains('img')).toBe(false)
     expect(box.querySelector('.att .rm')!.getAttribute('aria-label')).toBe('移除 notes.txt')
   })

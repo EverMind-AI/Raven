@@ -24,6 +24,7 @@ from loguru import logger
 
 from raven.core.plugin_stack import (
     SHIPPED_DEFAULT_BACKEND,
+    everos_platform_note,
     everos_plugin_installed,
     everos_plugin_missing_note,
     maybe_build_memory_backend,
@@ -146,8 +147,16 @@ async def import_scan(params: dict) -> dict:
         counts[p]["skills"] = await _skill_count(p)
 
     ready = memory_enabled(workspace, ec_config)
+    reason = "" if ready else _no_backend_reason(ec_config)
+    if ready and ec_config.memory.backend == SHIPPED_DEFAULT_BACKEND:
+        # A configured EverOS on a platform it cannot run on would earn the
+        # wizard's sync step and fail it at the first write; say so here, and
+        # the step is not offered.
+        platform_note = everos_platform_note()
+        if platform_note is not None:
+            ready, reason = False, platform_note
     platforms = [{"platform": p.value, "scannable": p in scannable, **counts[p]} for p in Platform]
-    return {"ready": ready, "reason": "" if ready else _no_backend_reason(ec_config), "platforms": platforms}
+    return {"ready": ready, "reason": reason, "platforms": platforms}
 
 
 async def import_run(params: dict) -> dict:

@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.1.13"
+version = "0.2.0"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -95,7 +95,7 @@ channel-slack = [
     "slackify-markdown>=0.2.0,<1.0.0",
 ]
 channel-discord = ["websockets>=16.0,<17.0"]
-channel-whatsapp = []
+channel-whatsapp = ["websockets>=16.0,<17.0"]
 channel-matrix = [
     "matrix-nio>=0.25.2; sys_platform != 'win32'",
     "mistune>=3.0.0,<4.0.0",
@@ -613,6 +613,11 @@ source_modules = [
     # The outbound shelf, seated as `acp_client`'s mirror: `a2a_client/` is
     # raven calling somebody else's agent, `a2a/` is the entrance.
     "raven.a2a_client",
+    # What one stint needs over a workspace -- the ownership grades, the journal
+    # window, the project git and the checks. Consumed by `mode: stint` through
+    # `raven.playbook`, by the CLI and RPC surfaces that read a stint's record,
+    # and by the dispatch path that carries its ref; it imports no surface itself.
+    "raven.stint",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp", "raven.a2a"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill

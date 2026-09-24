@@ -63,6 +63,16 @@ describe('settings source', () => {
     expect(toasts).toEqual(['Applies after a restart'])
   })
 
+  it('a test asks fetch_models to confirm the key; the model sheet does not', async () => {
+    const mod = await load({ 'model.fetch_models': { models: [], status: 'ok' } })
+    await mod.settingsSource.fetchModels('openrouter', true)
+    await mod.settingsSource.fetchModels('openrouter')
+    expect(seen).toEqual([
+      ['model.fetch_models', { slug: 'openrouter', verify: true }],
+      ['model.fetch_models', { slug: 'openrouter' }],
+    ])
+  })
+
   it('a settings write reloads the config and leaves the provider catalogue alone', async () => {
     /* `model.options` is a live read of every configured vendor -- seconds on
        a home with several -- and no settings key changes what it answers.
@@ -74,13 +84,34 @@ describe('settings source', () => {
     expect(seen.map(([m]) => m).filter((m) => m !== 'config.get')).toEqual(['settings.set', 'settings.get'])
   })
 
-  it('set with no warning says saved, and a refusal toasts the detail and throws handled', async () => {
+  it('a plain save says nothing, and a refusal toasts the detail and throws handled', async () => {
     const mod = await load({ 'settings.set': { applied: true, previous: null } })
     await mod.settingsSource.set('language', 'en')
-    expect(toasts).toEqual(['gui.settings.saved'])
+    expect(toasts).toEqual([])
     await fakeGateway(async () => { throw { message: 'nope', data: { detail: 'tools.web.proxy is not editable here' } } })
     await expect(mod.settingsSource.set('tools.web.proxy', 'x')).rejects.toEqual({ handled: true })
-    expect(toasts[1]).toContain('tools.web.proxy is not editable here')
+    expect(toasts[0]).toContain('tools.web.proxy is not editable here')
+  })
+
+  it('the data-sync step can import once an embedding model is set, and not on the extraction model alone', async () => {
+    const bare = await load({})
+    await bare.settingsSource.load()
+    expect(bare.memoryStepDone()).toBe(false)
+    const llmOnly = await load({ 'settings.everos': { sections: { llm: { model: 'm', provider: 'p' } }, config_path: '', available: true } })
+    await llmOnly.settingsSource.load()
+    expect(llmOnly.memoryStepDone()).toBe(false)
+    const set = await load({ 'settings.everos': { sections: { embedding: { model: 'e', provider: 'p' } }, config_path: '', available: true } })
+    await set.settingsSource.load()
+    expect(set.memoryStepDone()).toBe(true)
+  })
+
+  it('a memory model pick says nothing unless the server warns', async () => {
+    const mod = await load({ 'settings.everosSet': { ok: true } })
+    await mod.settingsSource.everosSet('llm', 'm', 'openrouter')
+    expect(toasts).toEqual([])
+    const warned = await load({ 'settings.everosSet': { ok: true, warning: 'stored vectors will be rebuilt' } })
+    await warned.settingsSource.everosSet('embedding', 'e', 'openrouter')
+    expect(toasts).toEqual(['stored vectors will be rebuilt'])
   })
 
   it('a settings load moves the default pair and leaves the conversation chip alone', async () => {

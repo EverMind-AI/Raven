@@ -1000,12 +1000,51 @@ def test_the_acp_render_pins_the_ask_tier(grounded):
     is not one of them: the person is in an editor watching an agent work on
     their checkout, and the prompt is how they see each write before it lands.
     Raven dispatching a sub-agent is unaffected either way, since
-    ``raven/acp_client/permissions.py`` answers every prompt itself."""
+    ``raven/acp_client/permissions.py`` answers the ask tier itself."""
     from raven.config.loader import load_config
 
     config = load_config(_render(grounded))
     assert config.permissions.mode == "ask"
     assert "permissions" not in json.loads((RUN_PY.parent / "config.json").read_text())
+
+
+@pytest.mark.parametrize(
+    ("host_rule", "source"),
+    [
+        ({"permissions": {"tools": {"exec": {"curl *": "deny"}}}}, "user_deny"),
+        ({"tools": {"exec": {"extraDenyPatterns": [r"\bcurl\b"]}}}, "builtin_deny"),
+    ],
+    ids=["user-rule", "extra-pattern"],
+)
+@pytest.mark.parametrize("hosting", ["acp", "one-shot"])
+async def test_a_command_the_host_denies_is_refused_by_the_products_own_gate(
+    grounded, tmp_path, host_rule, source, hosting
+):
+    """The host answers the product's approval requests itself, so a host
+    deny rule has to be in the product's own gate or a denied command runs
+    once it is handed over -- and it holds in the one-shot hosting too, whose
+    mode is full."""
+    from raven.config.live import LiveConfig, exec_extra_deny_patterns, permissions_config
+    from raven.contracts.permissions import Deny
+    from raven.permissions import BuiltinRulings, PermissionGate
+
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps(host_rule), encoding="utf-8")
+    if hosting == "acp":
+        rendered = _render(grounded)
+    else:
+        rendered = grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "cli", unattended=True)
+
+    live = LiveConfig(rendered)
+    gate = PermissionGate(
+        config_source=lambda: permissions_config(live),
+        builtin=BuiltinRulings(extra_deny_source=lambda: exec_extra_deny_patterns(live)),
+    )
+    decision = await gate.check("exec", {"command": "curl -s https://example.com"})
+    assert isinstance(decision, Deny) and decision.source.value == source, decision
+    allowed = await gate.check("exec", {"command": "git status"})
+    assert not isinstance(allowed, Deny), "only what the host refused is refused"
 
 
 def test_the_one_shot_render_opens_the_ask_tier_because_nobody_can_answer(grounded, tmp_path):

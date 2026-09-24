@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import sys
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from raven.core.plugin_stack import (
     build_plugin_hooks,
     build_plugin_registry,
     build_plugin_tools,
+    everos_platform_note,
     everos_plugin_installed,
     everos_plugin_missing_note,
     maybe_build_memory_backend,
@@ -276,6 +278,124 @@ class TestConfiguredDirs:
 
 
 # ---------------------------------------------------------------------------
+# One broken plugin
+# ---------------------------------------------------------------------------
+
+
+def _broken_plugin_root(tmp_path: Path, *, backend: str | None = None) -> Path:
+    """A named root holding plugin ``wreck``, whose factory module raises on import."""
+    package = f"_wreck_{tmp_path.name.replace('-', '_')}"
+    root = tmp_path / "plugins"
+    plug = root / "wreck"
+    (plug / package).mkdir(parents=True)
+    (plug / package / "__init__.py").write_text("raise ImportError('boom')\n", encoding="utf-8")
+    kind, name = ("memory_backends", backend) if backend else ("tools", "wreck_tool")
+    (plug / "raven-plugin.toml").write_text(
+        f'[plugin]\nid = "wreck"\nversion = "0.1.0"\n'
+        f'[[plugin.contributes.{kind}]]\nname = "{name}"\nfactory = "{package}:make"\n',
+        encoding="utf-8",
+    )
+    return root
+
+
+class TestOneBrokenPlugin:
+    def test_the_rest_of_the_registry_survives_and_the_host_hears_it(self, tmp_path: Path) -> None:
+        heard: list[str] = []
+        reg = build_plugin_registry(_config(dirs=[str(_broken_plugin_root(tmp_path))]), notify=heard.append)
+
+        assert "wreck" not in reg.activated_ids()
+        assert {"everos-memory", "playbook"} <= set(reg.activated_ids())
+        assert [f.plugin_id for f in reg.activation_failures()] == ["wreck"]
+        [message] = heard
+        assert "'wreck' did not load" in message
+        assert "boom" in message
+        assert "plugins.disabled" in message
+
+    def test_two_broken_plugins_each_get_a_notice_that_claims_nothing_about_the_other(self, tmp_path: Path) -> None:
+        root = _broken_plugin_root(tmp_path)
+        twin = root / "wreck2"
+        (root / "wreck").rename(twin)
+        (twin / "raven-plugin.toml").write_text(
+            (twin / "raven-plugin.toml").read_text(encoding="utf-8").replace('"wreck"', '"wreck2"'), encoding="utf-8"
+        )
+        _broken_plugin_root(tmp_path / "second")
+        heard: list[str] = []
+        reg = build_plugin_registry(
+            _config(dirs=[str(root), str(tmp_path / "second" / "plugins")]), notify=heard.append
+        )
+
+        assert [f.plugin_id for f in reg.activation_failures()] == ["wreck", "wreck2"]
+        assert len(heard) == 2
+        for message in heard:
+            assert "loaded normally" not in message
+            assert "Other plugins continue loading" in message
+
+    def test_without_a_notifier_it_reaches_stderr(self, tmp_path: Path, capsys) -> None:
+        build_plugin_registry(_config(dirs=[str(_broken_plugin_root(tmp_path))]))
+        assert "'wreck' did not load" in capsys.readouterr().err
+
+    def test_a_disabled_broken_plugin_is_not_touched(self, tmp_path: Path) -> None:
+        heard: list[str] = []
+        reg = build_plugin_registry(
+            _config(dirs=[str(_broken_plugin_root(tmp_path))], disabled=["wreck"]), notify=heard.append
+        )
+        assert reg.activation_failures() == []
+        assert heard == []
+
+    def test_a_backend_whose_plugin_failed_is_not_called_uninstalled(self, tmp_path: Path) -> None:
+        cfg = _config(memory_backend="wreckmem", dirs=[str(_broken_plugin_root(tmp_path, backend="wreckmem"))])
+        heard: list[str] = []
+        reg = build_plugin_registry(cfg, notify=heard.append)
+
+        assert maybe_build_memory_backend(tmp_path, cfg, registry=reg, notify=heard.append) is None
+        memory_notice = heard[-1]
+        assert "provided by plugin 'wreck', which did not load: importing" in memory_notice
+        assert "boom" in memory_notice
+        assert "no installed plugin provides it" not in memory_notice
+
+    def test_build_runtime_hands_the_hosts_notifier_to_the_registry(self, tmp_path: Path, monkeypatch) -> None:
+        from raven.agent.loop.bundles import HostWiring
+        from raven.contracts.llm_provider import LLMResponse
+        from raven.core import plugin_stack, runtime
+        from raven.providers.base import LLMProvider
+
+        root = _broken_plugin_root(tmp_path)
+        monkeypatch.setattr(
+            plugin_stack,
+            "plugin_discovery_sources",
+            lambda: {
+                "bundled_dir": tmp_path / "none",
+                "user_dir": root,
+                "project_dir": tmp_path / "none",
+                "entry_points_group": None,
+            },
+        )
+        monkeypatch.setattr(runtime.token_wise_stack, "install_from_config", lambda *a, **k: None)
+        monkeypatch.setattr(runtime.token_wise_stack, "caching_probe", lambda *a, **k: False)
+
+        class _Provider(LLMProvider):
+            def __init__(self) -> None:
+                super().__init__(api_key="test")
+
+            async def chat(self, messages, **kwargs):
+                return LLMResponse(content="ok", finish_reason="stop")
+
+            def get_default_model(self) -> str:
+                return "fake/default"
+
+        config = Config()
+        config.agents.defaults.workspace = str(tmp_path / "ws")
+        heard: list[str] = []
+        rt = runtime.build_runtime(
+            config, _config(memory_backend=None), provider=_Provider(), host=HostWiring(notify=heard.append)
+        )
+        try:
+            assert any("'wreck' did not load" in m for m in heard)
+        finally:
+            rt.discard()
+
+
+# ---------------------------------------------------------------------------
 # The provider grant
 # ---------------------------------------------------------------------------
 
@@ -414,6 +534,14 @@ class TestEverosPresence:
         note = everos_plugin_missing_note()
         assert "everos-memory" in note
         assert "memory.backend" in note
+
+    def test_windows_gets_a_platform_note_and_everywhere_else_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        note = everos_platform_note()
+        assert note and "Windows" in note
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert everos_platform_note() is None
 
 
 def test_build_plugin_tools_stamps_the_contributing_plugin(tmp_path):

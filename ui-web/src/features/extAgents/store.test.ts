@@ -92,6 +92,27 @@ describe('act', () => {
     expect(store.get().joining).toEqual({})
   })
 
+  /* The fix a refusal names travels with the refusal, and only when there is
+     one: a write refused for any other reason keeps the entry it always had. */
+  it('keeps the fix a refusal names beside its sentence', async () => {
+    const r = row()
+    const said = 'it is installed but has no usable credential'
+    const source: ExtAgentsSource = {
+      load: async () => [r],
+      act: async () => {
+        throw { data: { detail: said, remedy: { kind: 'sign_in', command: 'claude auth login' } } }
+      },
+    }
+    setSources({ extAgents: source })
+    await store.act(r, 'connect', {})
+    expect(store.get().failed.claude_code).toEqual({
+      op: 'connect',
+      args: {},
+      detail: said,
+      remedy: { kind: 'sign_in', command: 'claude auth login' },
+    })
+  })
+
   it('sends the refused write again on retry, and clears the refusal once it lands', async () => {
     const r = row()
     let refusals = 1
@@ -145,22 +166,27 @@ describe('connectRow', () => {
 describe('recheck', () => {
   it('re-measures the machine and remembers a row that is still absent', async () => {
     const r = row({ probe_status: 'missing' })
-    const loads: boolean[] = []
+    const loads: Array<[boolean, boolean]> = []
     setSources({
       extAgents: {
-        load: async (probe) => {
-          loads.push(!!probe)
+        load: async (probe, rescan) => {
+          loads.push([!!probe, !!rescan])
           return [r]
         },
         act: async () => [r],
       },
     })
     await store.recheck(r)
-    expect(loads).toEqual([true])
+    /* Probed, and from the shell's PATH as it is now: the agent was installed
+       while the page was open, and only a new capture sees its PATH line. */
+    expect(loads).toEqual([[true, true]])
     expect(store.get().stillMissing).toEqual(['claude_code'])
     r.probe_status = 'attention'
     await store.recheck(r)
     expect(store.get().stillMissing).toEqual([])
+    /* An ordinary load -- opening the page -- probes without the capture. */
+    await store.load(true)
+    expect(loads.at(-1)).toEqual([true, false])
   })
 })
 
@@ -185,6 +211,51 @@ describe('the model verbs', () => {
     expect(toastWriter.items).toEqual([])
     expect(store.get().failed.claude_code).toEqual({ op: 'model', args: { model: 'v/bogus' }, detail: 'it offers 3' })
     expect(store.get().joining).toEqual({})
+  })
+
+  it('a write that fails after another landed keeps what landed', async () => {
+    /* Five Connects pressed at once: the slow one that fails must not put back
+       the rows from before the fast ones connected. */
+    const slow = row({ name: 'claude_code' })
+    const fast = row({ name: 'codex', preset: 'codex' })
+    let failSlow: (e: unknown) => void = () => {}
+    const listing = [slow, { ...fast, configured: true, enabled: true }]
+    setSources({
+      extAgents: {
+        load: async () => listing,
+        act: (_op, r) => (r.name === 'claude_code'
+          ? new Promise((_, reject) => { failSlow = reject })
+          : Promise.resolve(listing)),
+      },
+    })
+    store.set({ rows: [slow, fast] })
+
+    const first = store.act(slow, 'connect')
+    await store.act(fast, 'connect')
+    expect(store.get().rows.find((r) => r.name === 'codex')!.enabled).toBe(true)
+    failSlow({ data: { detail: 'did not answer' } })
+    await first
+
+    expect(store.get().rows.find((r) => r.name === 'codex')!.enabled).toBe(true)
+    expect(store.get().failed.claude_code!.detail).toBe('did not answer')
+  })
+
+  it('keeps the rows on screen, not the ones it started from, when the listing cannot be read after a refusal', async () => {
+    const r = row()
+    const other = row({ name: 'codex', preset: 'codex' })
+    let refuse: (e: unknown) => void = () => {}
+    setSources({
+      extAgents: {
+        load: async () => { throw new Error('offline') },
+        act: () => new Promise((_, reject) => { refuse = reject }),
+      },
+    })
+    store.set({ rows: [r, other] })
+    const pending = store.act(r, 'connect')
+    store.set({ rows: [r, { ...other, enabled: true, configured: true }] })
+    refuse({ data: { detail: 'refused' } })
+    await pending
+    expect(store.get().rows.find((x) => x.name === 'codex')!.enabled).toBe(true)
   })
 
   it('repaints from the listing when a pick is refused, so the sheet leaves the menu that failed behind', async () => {

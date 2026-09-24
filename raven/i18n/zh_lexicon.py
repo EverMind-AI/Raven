@@ -241,3 +241,15 @@ however long it runs. Read by ``raven.agent.loop.dead_end.REFUSAL_MARKERS``, whi
 matches by substring rather than prefix: the disclaimer is sometimes led by a
 courtesy sentence.
 """
+
+SAYS_WHAT_IS_REQUIRED: tuple[str, ...] = (
+    "必须",  # bi xu: "must"
+    "应当",  # ying dang: "shall"
+    "应该",  # ying gai: "should"
+    "需求",  # xu qiu: "requirement"
+    "验收",  # yan shou: "acceptance"
+    "目标",  # mu biao: "goal"
+    "范围",  # fan wei: "scope"
+)
+"""Words a Chinese document uses when it is saying what has to be true, counted
+to tell a specification from a changelog (`raven.stint.bootstrap`)."""

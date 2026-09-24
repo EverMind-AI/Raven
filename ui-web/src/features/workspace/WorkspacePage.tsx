@@ -11,6 +11,7 @@ import {
   hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
 } from './store'
 import * as store from './store'
+import './styles.css'
 
 import type { MenuItem } from '../../state/menu'
 import type { WsChange, WsFile, WsShared } from './types'
@@ -323,13 +324,11 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
           <button className="mini ghost" onPointerUp={pick}>{t('gui.ws.open_with_pick')}</button>
         </div>
       ) : null}
-      {/* The one place a download still belongs. This note is what a file the
-          viewer cannot render gets, and on a gateway that is not this desktop
-          the offer above is withheld -- so without this the reader is left with
-          a path on somebody else's machine and no way to reach the bytes. Read
+      {/* The bar's download again, in words, where this note's reader looks:
+          the viewer cannot render the file, and on a gateway that is not this
+          desktop the offer above is withheld. Only a delivered file's, read
           from the registry by path rather than carried on the pane: the same
-          file is one pane whichever door opened it, and only a file this
-          session delivered has a URL to serve it from. */}
+          file is one pane whichever door opened it. */}
       {saveAt ? (
         <a className="mini ghost" href={saveAt} download={f.path.split('/').pop() || ''}>
           {t('gui.ws.save_copy')}
@@ -391,14 +390,17 @@ const whySaid = (e: unknown): string => {
   return said?.data?.detail || said?.message || String(e)
 }
 
-/* A deck adds nothing to the bar: no application picker, no viewer toolbar
-   in the frame below, no download control. The deck is read here and changed
-   by talking to the agent; what a reader still needs from the bar is the
-   file, or the file among the others in the file manager, and the folder
-   button every kind gets covers the second. So a deck's bar reads as the
-   same bar an image or a PDF gets. */
+/* A deck adds nothing to the bar: no application picker and no viewer toolbar
+   in the frame below. The deck is read here and changed by talking to the
+   agent; what a reader still needs from the bar is the file, or the file among
+   the others in the file manager, and the download and folder buttons every
+   kind gets cover both. So a deck's bar reads as the same bar an image or a
+   PDF gets. */
 function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Element {
   const platform = hostPlatform()
+  /* Subscribed for the same reason BinNote is: the delivery row the download
+     prefers can arrive after the pane mounts. */
+  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
   const rel = f ? store.source().shortPath(f.path) : ''
@@ -466,19 +468,37 @@ function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Eleme
           <Ico d={ICO.ext} />
         </button>
       ) : null}
-      {/* Reveal runs where the GATEWAY runs, like every fs call, so on a remote
-          serve it shows the file on that host. */}
       {f ? (
-        <button
-          className="ghost-ic tipdn"
-          data-tip={revealTip}
-          aria-label={revealTip}
-          onClick={() => {
-            store.source().reveal?.(f.path).then(() => {}, (e: unknown) => toast(whySaid(e)))
-          }}
-        >
-          <Ico d={ICO.reveal} />
-        </button>
+        <span className="workspace-file-acts">
+          {/* Saved by the browser, so on a remote serve the bytes reach the
+              reader's machine rather than the gateway's. The folder button and
+              a delivery card do not stand in for it: the folder opens where the
+              gateway runs, and a card saves only the binary kinds. A delivered
+              file comes from its delivery, which has no size cap; any other
+              from the route the viewer reads it through, whose inline answer
+              `download` turns into a save under the file's own name. */}
+          <a
+            className="ghost-ic tipdn"
+            href={deliveries.byPath(f.path)?.downloadPath || fileURL(f.path)}
+            download={f.path.split(/[\\/]/).pop() || ''}
+            data-tip={t('gui.ws.download')}
+            aria-label={t('gui.ws.download')}
+          >
+            <Ico d={ICO.save} />
+          </a>
+          {/* Reveal runs where the GATEWAY runs, like every fs call, so on a
+              remote serve it shows the file on that host. */}
+          <button
+            className="ghost-ic tipdn"
+            data-tip={revealTip}
+            aria-label={revealTip}
+            onClick={() => {
+              store.source().reveal?.(f.path).then(() => {}, (e: unknown) => toast(whySaid(e)))
+            }}
+          >
+            <Ico d={ICO.reveal} />
+          </button>
+        </span>
       ) : null}
     </div>
   )

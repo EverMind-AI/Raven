@@ -1291,6 +1291,7 @@ def test_provider(
     config_path: Path | None = None,
     transport: httpx.BaseTransport | None = None,
     full_catalogue: bool = False,
+    check_credential: bool = False,
 ) -> dict[str, Any]:
     """Verify a provider's credentials via a free GET request to ``/v1/models``.
 
@@ -1423,6 +1424,20 @@ def test_provider(
             "error": "api_key is empty",
         }
 
+    if api_key and not api_key.isascii():
+        # A header carries ASCII only, so such a key can never be sent: it is
+        # text pasted from the wrong place, and httpx raising on it surfaced as
+        # an internal error instead of a verdict on the key.
+        return {
+            "ok": False,
+            "status": "invalid_key",
+            "elapsed_ms": 0,
+            "http_status": None,
+            "models_count": None,
+            "model_ids": None,
+            "error": "api_key contains non-ASCII characters",
+        }
+
     extras = _CATALOGUE_EXTRAS.get(spec.name, ()) if (spec and full_catalogue) else ()
     shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
     if shape and api_key and not api_base:
@@ -1493,6 +1508,8 @@ def test_provider(
         headers["x-api-key"] = api_key
 
     result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+    if check_credential and api_key and result.get("status") == "valid":
+        result = _confirm_credential(spec, api_base, url, headers, result, timeout_s=timeout_s, transport=transport)
     if derived_api_base and result.get("status") == "http_404":
         # The address LiteLLM sends completions to is not always where the
         # catalogue lives -- DeepSeek's is `/beta`, which has no `/models`. A 404
@@ -1587,6 +1604,93 @@ _CATALOGUE_SHAPES: dict[str, Any] = {
 }
 
 
+#: Where a vendor whose catalogue is public checks a key: a path under its
+#: api_base that answers 401 to a key it does not know.
+_CREDENTIAL_CHECKS: dict[str, str] = {
+    "openrouter": "/key",
+}
+
+#: Sent in place of the real key to learn whether an endpoint looks at keys at
+#: all. Shaped like no vendor's key, so no vendor can accept it.
+_DECOY_KEY = "raven-credential-check-not-a-key"
+
+
+def _confirm_credential(
+    spec: Any,
+    api_base: str,
+    url: str,
+    headers: dict[str, str],
+    result: dict[str, Any],
+    *,
+    timeout_s: float,
+    transport: httpx.BaseTransport | None,
+) -> dict[str, Any]:
+    """Whether a 200 from a models endpoint says anything about the key.
+
+    Some catalogues are public -- OpenRouter's answers anyone, with any key or
+    none -- so a key of "111" read as verified. The same request with a key no
+    vendor could accept tells the two apart: refused, and the first answer was
+    about the key; answered too, and it was not. A vendor with a path that does
+    check keys is asked there instead; any other is reported as unchecked
+    rather than as verified.
+    """
+    decoy = {name: (f"Bearer {_DECOY_KEY}" if name.lower() == "authorization" else _DECOY_KEY) for name in headers}
+    control = _probe_models_endpoint(url, decoy, timeout_s=timeout_s, transport=transport)
+    if control.get("status") != "valid":
+        return result
+    check = _CREDENTIAL_CHECKS.get(spec.name) if spec else None
+    if check:
+        verdict = _probe_models_endpoint(
+            api_base.rstrip("/") + check, headers, timeout_s=timeout_s, transport=transport
+        )
+        if verdict.get("status") == "valid":
+            return result
+        if verdict.get("status") == "invalid_key":
+            return {**result, "ok": False, "status": "invalid_key", "http_status": verdict.get("http_status")}
+    return {
+        **result,
+        "ok": False,
+        "status": "key_unchecked",
+        "error": "this vendor's models endpoint answers without checking the key",
+    }
+
+
+def _env_proxy_for(url: str) -> str | None:
+    """The proxy httpx takes from the environment for ``url``, or None.
+
+    Verbatim, credentials included: only for matching against error text and
+    for ``_without_userinfo`` -- never for a result that leaves this module.
+    """
+    import urllib.request
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if not parts.hostname or urllib.request.proxy_bypass(parts.hostname):
+        return None
+    proxies = urllib.request.getproxies()
+    return proxies.get(parts.scheme) or proxies.get("all") or None
+
+
+def _without_userinfo(url: str) -> str:
+    """``url`` with any ``user:password@`` dropped.
+
+    A proxy is commonly configured as ``http://user:password@host:port``, and a
+    probe's error travels to the browser, where it is shown as a tooltip.
+    httpx also takes one with no scheme (``user:password@host:port``, read as
+    http://), which ``urlsplit`` files under the path, so that form is split by
+    hand.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    if "://" not in url:
+        authority, sep, rest = url.partition("/")
+        return authority.rsplit("@", 1)[-1] + sep + rest
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
 def _probe_models_endpoint(
     url: str,
     headers: dict[str, str],
@@ -1617,6 +1721,26 @@ def _probe_models_endpoint(
         with httpx.Client(**client_kwargs) as client:
             resp = client.get(url, headers=headers)
     except httpx.HTTPError as exc:
+        # A proxy from the environment that is not listening fails as a plain
+        # "connection refused", which reads as the vendor being down or the key
+        # being wrong. Naming the proxy is the only thing that points the reader
+        # at the real fault.
+        raw_proxy = _env_proxy_for(url) if transport is None else None
+        proxy = _without_userinfo(raw_proxy) if raw_proxy else None
+        # Also covers httpx quoting a scheme-less proxy with the http:// it
+        # assumed: the value as set is a substring of that.
+        detail = str(exc).replace(raw_proxy, proxy) if raw_proxy and proxy else str(exc)
+        if proxy and isinstance(exc, (httpx.ProxyError, httpx.ConnectError, httpx.ConnectTimeout)):
+            return {
+                "ok": False,
+                "status": "proxy_unreachable",
+                "elapsed_ms": int((time.monotonic() - start) * 1000),
+                "http_status": None,
+                "models_count": None,
+                "model_ids": None,
+                "error": f"proxy {proxy} is not reachable: {detail}",
+                "proxy": proxy,
+            }
         return {
             "ok": False,
             "status": "network_error",
@@ -1624,7 +1748,7 @@ def _probe_models_endpoint(
             "http_status": None,
             "models_count": None,
             "model_ids": None,
-            "error": str(exc),
+            "error": detail,
         }
 
     elapsed_ms = int((time.monotonic() - start) * 1000)

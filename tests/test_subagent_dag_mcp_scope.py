@@ -693,3 +693,25 @@ async def test_a_carried_server_whose_secret_is_unset_is_withheld_with_the_place
         assert resolve_grant(["tokened"], source, target).granted == ()
         gaps.clear()
         assert [g.name for g in resolve_grant(["tokened"], source, target).granted] == ["tokened"]
+
+
+@pytest.mark.asyncio
+async def test_a_round_of_a_stint_resolves_its_grant_against_the_definitions_it_was_handed(tmp_path: Path) -> None:
+    """`run_round` is the driver's door, and it takes the same hand-off as
+    `execute`: a stint's own `mcpServers` reached its rounds from the CLI (whose
+    pre-flight wires them into the host source) and not from a conversation."""
+    from raven.stint.record import StintRef
+
+    host: dict[str, MCPServerConfig] = {}
+    backend = _Backend(mcp_source=_loop_source(host, ToolRegistry()))
+    tool = _tool(_NoDispatch, backend, tmp_path)
+
+    result = await tool.run_round(
+        _nodes(),
+        stint=StintRef(stint_id="stint-1", round_index=1, session_key="cli:direct"),
+        task_summary="audit",
+        mcp_servers={"local-pg": _pg("run")},
+    )
+
+    assert not str(result).startswith("Error"), result
+    assert backend.seen == ["run"]

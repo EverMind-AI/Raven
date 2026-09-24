@@ -13,9 +13,6 @@ from raven.agent.loop._shared import (
     AsyncExitStack,
     Callable,
     ContextBuilder,
-    DeepResearchManager,
-    DeepResearchOfferTool,
-    DeepResearchTool,
     DirectChatHandoff,
     LLMProvider,
     MemoryConsolidator,
@@ -55,11 +52,7 @@ from raven.agent.subagent.delegate import delegate_scope
 if TYPE_CHECKING:
     from raven.agent.hook import CompositeHook
     from raven.agent.loop.checkpoint import CheckpointService
-    from raven.config.schema import (
-        DeepResearchToolConfig,
-    )
     from raven.context_engine import ContextEngine
-    from raven.contracts.asking import QuestionResponder
     from raven.contracts.harness import HarnessModules
     from raven.contracts.memory import MemoryBackend
     from raven.contracts.tool import Tool
@@ -188,7 +181,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         disabled_tools = tools.disabled_tools
         tool_search_config = tools.tool_search_config
         media_config = tools.media_config
-        deep_research_config = tools.deep_research_config
         plugin_tools = tools.plugin_tools
         plugin_tool_gates = tools.plugin_tool_gates
         deliverables = tools.deliverables
@@ -268,10 +260,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.image_search = image_search
         self.connection_add = connection_add
         from raven.config.raven import MemoryConfig, SubagentDagConfig, SubagentQuestionsConfig
-        from raven.config.schema import DeepResearchToolConfig, MediaGenConfig
+        from raven.config.schema import MediaGenConfig
 
         self.media_config = media_config or MediaGenConfig()
-        self.deep_research_config = deep_research_config or DeepResearchToolConfig()
         self.subagent_dag_config = subagent_dag_config or SubagentDagConfig()
         self.subagent_questions_config = subagent_questions_config or SubagentQuestionsConfig()
         # Stored, not only forwarded to the context engine: the autofill resolver
@@ -771,116 +762,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception as exc:  # noqa: BLE001 -- teardown must not die on bookkeeping
                 logger.warning("Error marking MCP servers after executor close: %s", exc)
 
-    def _register_deep_research_offer(self) -> None:
-        """Register the offer stand-in with the broker this host wired.
-
-        The broker arrives after construction (``set_deep_research_broker``),
-        which applies it to whatever is registered at that moment. A stand-in
-        registered later -- when a credential is cleared mid-session -- is past
-        that call, so it has to be handed the stored one here. Without it
-        ``_ask_search_mode`` answers None and the offer degrades to regular
-        search silently, for the rest of the process.
-        """
-        offer = DeepResearchOfferTool()
-        if self._deep_research_broker is not None:
-            offer.set_broker(self._deep_research_broker)
-        self.tools.register(offer)
-
-    def _register_real_deep_research(self, cfg: DeepResearchToolConfig) -> None:
-        """Build the working deep_research tool (+ async manager) and register it.
-        Shared by initial registration and mid-session promotion."""
-        self.deep_research_manager = DeepResearchManager(cfg, workspace=self.workspace, proxy=self.web_proxy)
-        # Inherit the gateway's async-delivery handle if it was wired before this
-        # manager existed (i.e. a promotion after startup), so a channel keeps the
-        # async path instead of falling back to a blocking synchronous run.
-        if self._deep_research_submit is not None:
-            self.deep_research_manager.set_submit(self._deep_research_submit)
-        tool = DeepResearchTool(cfg, workspace=self.workspace, proxy=self.web_proxy, manager=self.deep_research_manager)
-        # Inherit the deep-vs-regular ask broker too, else the promoted tool would
-        # silently skip the ask and run the paid engine unprompted.
-        if self._deep_research_broker is not None:
-            tool.set_broker(self._deep_research_broker)
-        self.tools.register(tool)
-
-    def set_deep_research_submit(self, submit: Callable[[Any], Any]) -> None:
-        """Wire the async-delivery submit handle (gateway only). Stored on the loop
-        and applied to the current manager, so a later promotion inherits it too."""
-        self._deep_research_submit = submit
-        if self.deep_research_manager is not None:
-            self.deep_research_manager.set_submit(submit)
-
-    def set_deep_research_broker(self, broker: QuestionResponder) -> None:
-        """Wire the deep-vs-regular ask broker (TUI/gateway). Stored on the loop and
-        applied to the currently-registered deep_research tool, so a tool built
-        later by promotion inherits it too (mirrors ``set_deep_research_submit``)."""
-        self._deep_research_broker = broker
-        if callable(getattr(tool := self.tools.get("deep_research"), "set_broker", None)):
-            tool.set_broker(broker)
-
-    def _maybe_promote_deep_research(self) -> None:
-        """Take the deep-research key the file has now, on the next turn.
-
-        Swaps the offer stand-in for the working tool once a key appears, so a
-        mid-session ``raven deep-research enable`` is picked up without a
-        restart -- and swaps it back when the credential is cleared, so a
-        removed key stops being spent rather than outliving its removal. Called from ``run_turn`` before the per-turn tool wiring, so
-        the tool gets this turn's stream callback and routing.
-
-        A key *replaced* counts too: the working tool holds the key it was built
-        with, so rotating one on the settings page used to leave every call on
-        the old credential until a restart -- the same "saved and nothing
-        happened" the promotion path exists to prevent, one step later.
-
-        Re-reads config (the in-memory copy is fixed at startup); a corrupt config
-        must not fail the turn, so a read error just skips promotion. The promoted
-        manager inherits the gateway's async-delivery handle via
-        ``set_deep_research_submit``, so a channel keeps the async path."""
-        from raven.config.loader import ConfigReadError
-        from raven.config.schema import DeepResearchToolConfig
-        from raven.config.update_tools import get_deep_research
-
-        try:
-            cfg = DeepResearchToolConfig(**get_deep_research(redact=False))
-        except ConfigReadError as exc:
-            logger.warning("deep_research: skipping promotion, config unreadable: {}", exc)
-            return
-        # Identity, not the name: a plugin that shadows ``deep_research``, or a
-        # test double that replaced it, owns that entry and none of this is
-        # about it. Only the two tools this method registers are its to move.
-        current = self.tools.get("deep_research")
-        working = isinstance(current, DeepResearchTool)
-        offered = isinstance(current, DeepResearchOfferTool)
-        if not working and not offered:
-            return
-        if not DeepResearchTool.is_configured(cfg):
-            if not working:
-                return
-            # Cleared on the settings page. Returning here would leave the
-            # working tool registered on the credential that was just removed,
-            # and it would keep spending against it until a restart.
-            self.tools.unregister("deep_research")
-            self.deep_research_config = cfg
-            self.deep_research_manager = None
-            self._register_deep_research_offer()
-            logger.info("deep_research: credential cleared; the offer stand-in is back")
-            return
-        # The whole section, not the credential alone: an endpoint or a model
-        # moved is the same "saved and nothing happened" one field over, and
-        # comparing the section keeps configuredness where it belongs (it was
-        # settled by ``is_configured`` above).
-        if working and cfg == self.deep_research_config:
-            return
-        self.deep_research_config = cfg
-        if working:
-            # The registry refuses a duplicate name, so the tool this replaces
-            # has to go first.
-            self.tools.unregister("deep_research")
-        self._register_real_deep_research(cfg)
-        logger.info(
-            "deep_research: {} (configured mid-session)",
-            "promoted offer stand-in to the working tool" if offered else "rebuilt the tool on the new section",
-        )
-
     async def run(self) -> None:
         """Bring the agent runtime up and stay alive.
 
@@ -935,7 +816,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         drain: Drain,
         *,
         stream: bool = True,
-        inline_tool_stream: bool = False,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
     ) -> "TurnOutcome":
@@ -957,14 +837,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
         flush = True
         try:
-            # Pick up a mid-session `deep-research enable` BEFORE the freeze below
-            # captures the turn's pairs. The promotion re-registers the offer
-            # stand-in's name with the working tool; inside the scope that reads as
-            # a mid-turn replacement and waits a turn, but here no model call has
-            # happened yet -- it is a turn-boundary action, and the working tool
-            # becomes this turn's entry instance (the stream-callback wiring in
-            # turn_path then finds it in place).
-            self._maybe_promote_deep_research()
             # The tools a session brought with it become visible here, for the same
             # reason the model binding does: this is where the turn's task begins.
             # The request handler that accepted them cannot open the scope itself --
@@ -1008,7 +880,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     emit,
                     drain,
                     stream=stream,
-                    inline_tool_stream=inline_tool_stream,
                     usage_sink=usage_sink,
                     text_sink=text_sink,
                 )

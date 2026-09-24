@@ -80,8 +80,11 @@ factory = "example_agent_flow.plugin:make_hook"
 未知配置键可能警告后透传。
 
 新工具名加插件/Agent 前缀。使用内置同名工具会有意替换内置实现；两个插件贡献同名工具
-会冲突。Activation 失败后宿主仍可能继续运行并记录警告，因此既要检查启动，也要检查
-实际工具 roster。
+会冲突：先激活的插件保留该名字，另一个被跳过。Activation 失败的插件（工厂无法导入或名字冲突）
+只跳过它自己：宿主继续运行，其他插件照常加载，宿主会打印一条写明插件与原因的提示，
+`raven plugins` 将其列为 `failed`。因此既要检查启动，也要检查实际工具 roster。
+把它的 id 加进 `plugins.disabled` 可让宿主不再加载它，宿主派发的产品子代理也会继承这项
+禁用（产品不会继承针对自身引擎插件的禁用）。
 
 ## Hook 与逐轮 participant { #hooks-and-per-turn-participants }
 

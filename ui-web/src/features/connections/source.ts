@@ -10,7 +10,8 @@ import { gateway } from '../../rpc/gateway'
 import { show as toast } from '../../state/toast'
 import { CHANNELS, chanName } from './catalogue'
 
-import type { ConnectionsSource } from './types'
+import type { ChannelsConfigureResult } from '../../rpc/generated'
+import type { ConnChannel, ConnectionsSource } from './types'
 
 /* Merged onto the catalogue's own objects rather than into fresh ones: they
    are what `rows()` has always answered with and what the island is already
@@ -45,6 +46,47 @@ export async function loadChannels(): Promise<void> {
 
 let gatewayRunningLive = false
 
+/* The refusals a reader can do something about, in their own words; the words
+   keyed here are the channel manager's (raven/gateway/manager.py). Any other
+   refusal keeps the gateway's word verbatim, which is what a bug report needs
+   and what a new one will read as until it earns a sentence. */
+const OUTCOME_SAY: Record<string, string> = {
+  missing_dep: 'gui.conn.out_missing_dep',
+  bad_config: 'gui.conn.out_bad_config',
+  deny_all: 'gui.conn.out_deny_all',
+}
+
+/* Why the adapter is not up, for a write that asked for it and did not get it
+   -- null when there is nothing of the kind to report. The reason was thrown
+   away here, so a channel whose SDK is missing went red on the page while the
+   sentence that fixes it went to the gateway log nobody has open. */
+function refusalOf(on: boolean, r: ChannelsConfigureResult): string | null {
+  const outcome = r.outcome
+  /* Switching off is done the moment the config says so, whatever the gateway
+     had in its table; and an outcome nobody answered is the next-launch case
+     below, not a refusal. */
+  if (!on || !outcome || outcome === 'unreachable' || outcome === 'started' || outcome === 'already') return null
+  const why = OUTCOME_SAY[outcome]
+  const said = why ? t(why) : t('gui.conn.out_refused', { outcome })
+  return r.detail ? `${said} ${r.detail}` : said
+}
+
+/* What the switch actually did, which the toast used to guess at: it told every
+   reader to reopen the app, including the one whose channel was already
+   running by the time they read it. Only a write nobody applied is left for the
+   next launch, and only that one keeps the old sentence. */
+function sayOutcome(c: ConnChannel, on: boolean, r: ChannelsConfigureResult): void {
+  const name = chanName(c)
+  const refused = refusalOf(on, r)
+  if (refused) {
+    toast(t('gui.conn.toggle_failed', { name, detail: refused }))
+    return
+  }
+  const state = t(on ? 'gui.conn.enabled' : 'gui.conn.disabled')
+  const applied = !!r.outcome && r.outcome !== 'unreachable'
+  toast(t(applied ? 'gui.conn.toggled_now' : 'gui.conn.toggled', { name, state }))
+}
+
 export const connSource: ConnectionsSource = {
   /* `initial` is the page-open fetch: only that one toasts a failed load or
      warns about a gateway that is not receiving -- a background reload (the
@@ -78,7 +120,16 @@ export const connSource: ConnectionsSource = {
   toggle: (c, on) => {
     c.on = on
     return gateway().call('channels.configure', { name: c.id, fields: {}, enabled: on })
-      .then(() => toast(t('gui.conn.toggled', { name: chanName(c), state: t(on ? 'gui.conn.enabled' : 'gui.conn.disabled') })))
+      .then(async (r) => {
+        /* The write is hot-applied, so what the row says about it is a fact the
+           gateway already has: reading it back is the difference between the
+           row the reader is looking at and whatever the last section entry
+           happened to see. Its own failure stays quiet and stays out of the
+           catch below -- the write landed, and taking the switch back over a
+           status read would report the opposite of what happened. */
+        await loadChannels().catch(() => {})
+        sayOutcome(c, on, r)
+      })
       .catch((e) => {
         c.on = !on
         toast(t('gui.op.save_failed', { detail: e.message || e }))
@@ -91,12 +142,21 @@ export const connSource: ConnectionsSource = {
   apply: async (c, patch, enable) => {
     try {
       const fields = patch && Object.keys(patch).length ? patch : {}
-      await gateway().call('channels.configure', { name: c.id, fields, enabled: !!enable })
+      const r = await gateway().call('channels.configure', { name: c.id, fields, enabled: !!enable })
       if (Object.keys(fields).length) toast(t('gui.conn.saved_x', { name: chanName(c) }))
       await loadChannels()
+      /* Saved and not started are two different things, and this path said only
+         the first: the pane's own state line then had to carry a refusal it has
+         no words for. The write itself was applied either way, which is what
+         the caller's boolean says; whether the adapter then came up is the
+         row's to show. */
+      const refused = refusalOf(!!enable, r)
+      if (refused) toast(t('gui.conn.toggle_failed', { name: chanName(c), detail: refused }))
+      return true
     } catch (e) {
       const err = e as { data?: { detail?: string }; message?: string }
       toast(t('gui.op.save_failed', { detail: (err.data && err.data.detail) || err.message || String(e) }))
+      return false
     }
   },
   /* One scan-code read; the island polls this while the dialog is open. Null

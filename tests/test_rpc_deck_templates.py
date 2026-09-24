@@ -198,6 +198,87 @@ async def test_cover_for_is_none_where_the_host_cannot_draw(templates: Path, mon
     assert await deck_templates.cover_for(deck_templates.bundled()[0]) is None
 
 
+# --- the covers the engine's wheel carries ---------------------------------------
+
+
+async def _never_drawn(*_args, **_kwargs) -> None:
+    raise AssertionError("a cover the wheel carries must not be drawn again")
+
+
+def test_shipped_cover_name_carries_the_language_only_where_a_phrasebook_does(templates: Path) -> None:
+    template = deck_templates.bundled()[0]
+    assert deck_templates.shipped_cover_name(template) == "amber_wave"
+    assert deck_templates.shipped_cover_name(template, "en") == "amber_wave", (
+        "no phrasebook means the reader reads the shipped file, which is the cover already named"
+    )
+
+    (templates / "i18n").mkdir()
+    (templates / "i18n" / "en.json").write_text(json.dumps({"seasons": "quarters"}), encoding="utf-8")
+    assert deck_templates.shipped_cover_name(template, "en") == "amber_wave-en"
+
+
+async def test_a_shipped_cover_answers_without_drawing_anything(templates: Path, monkeypatch) -> None:
+    """The point of the whole arrangement: a host that was handed the picture
+    never starts LibreOffice to make one, and never writes a cache entry for it."""
+    template = deck_templates.bundled()[0]
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "draw_cover", _never_drawn)
+
+    assert deck_templates.shipped_cover(template) is None
+    assert deck_templates.cached_cover(template) is None
+
+    (templates / "covers").mkdir()
+    shipped = templates / "covers" / "amber_wave.jpg"
+    shipped.write_bytes(b"\xff\xd8shipped")
+
+    assert deck_templates.shipped_cover(template) == shipped
+    assert deck_templates.cached_cover(template) == shipped
+    assert await deck_templates.cover_for(template) == shipped
+    assert not deck_templates.cover_cache_dir().exists(), "nothing was drawn, so nothing was cached"
+
+
+async def test_a_language_the_build_did_not_cover_still_draws_its_own(templates: Path, monkeypatch) -> None:
+    """A template dropped in by hand, or a language added after the wheel: the
+    fallback is the whole reason `shipped_cover` answers None rather than raising."""
+    from raven.rpc import pdf_preview
+
+    template = deck_templates.bundled()[0]
+    (templates / "i18n").mkdir()
+    (templates / "i18n" / "en.json").write_text(json.dumps({"seasons": "quarters"}), encoding="utf-8")
+    (templates / "covers").mkdir()
+    (templates / "covers" / "amber_wave.jpg").write_bytes(b"\xff\xd8shipped")
+
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "translated_dir", lambda: templates.parent / "copies")
+    monkeypatch.setattr(deck_templates, "_swap_text", lambda source, target, table: target.write_bytes(b"PKen"))
+
+    async def pdf_for(path: Path, **_) -> Path:
+        return path.with_suffix(".pdf")
+
+    monkeypatch.setattr(pdf_preview, "pdf_for", pdf_for)
+    monkeypatch.setattr(
+        deck_templates,
+        "_rasterise_first_page",
+        lambda pdf, target: (target.parent.mkdir(parents=True, exist_ok=True), target.write_bytes(b"\xff\xd8drawn")),
+    )
+
+    assert deck_templates.shipped_cover(template, "en") is None
+    cover = await deck_templates.cover_for(template, "en")
+    assert cover is not None and cover.read_bytes() == b"\xff\xd8drawn"
+
+
+async def test_warming_draws_nothing_when_the_wheel_carried_the_covers(templates: Path, monkeypatch) -> None:
+    monkeypatch.setattr(deck_templates, "_rasteriser_available", lambda: True)
+    monkeypatch.setattr(deck_templates, "cover_for", _never_drawn)
+    (templates / "covers").mkdir()
+    (templates / "covers" / "amber_wave.jpg").write_bytes(b"\xff\xd8shipped")
+
+    task = deck_templates.warm_covers_in_background(delay_s=0)
+    assert task is not None
+    await task
+    assert deck_templates._drawing == {}
+
+
 async def test_pages_for_renders_every_page_or_none(templates: Path, monkeypatch) -> None:
     from raven.rpc import pdf_preview
 
@@ -260,7 +341,7 @@ async def test_warming_draws_only_the_covers_that_are_missing(tmp_path: Path, mo
     two = deck_templates.find("two")
     assert two is not None
     (tmp_path / "covers").mkdir()
-    (tmp_path / "covers" / f"{deck_templates._cover_key(two.path)}.jpg").write_bytes(b"\xff\xd8")
+    (tmp_path / "covers" / f"{deck_templates._drawn_key(two.path)}.jpg").write_bytes(b"\xff\xd8")
     drawn: list[str] = []
 
     async def draw(template, *_):
@@ -281,7 +362,7 @@ async def test_warming_draws_nothing_when_every_cover_is_on_disk(templates: Path
     template = deck_templates.bundled()[0]
     covers = deck_templates.cover_cache_dir()
     covers.mkdir(parents=True, exist_ok=True)
-    (covers / f"{deck_templates._cover_key(template.path)}.jpg").write_bytes(b"\xff\xd8")
+    (covers / f"{deck_templates._drawn_key(template.path)}.jpg").write_bytes(b"\xff\xd8")
     drawn: list[str] = []
 
     async def draw(t, *_):
@@ -563,3 +644,44 @@ def test_a_width_is_read_in_ems_whatever_the_writing(tmp_path: Path, monkeypatch
     assert deck_templates._width("\u76ee\u5f55") == 2
     assert deck_templates._width("Contents") == pytest.approx(8 * deck_templates.LATIN_WIDTH)
     assert deck_templates._width("") == 0
+
+
+def test_a_picture_drawn_without_chinese_is_not_served_after_the_host_can_draw_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The source deck is byte-identical either side of a font fix, so a key made
+    only of its path, size and mtime keeps serving the boxes. The upgrade would
+    land, the pictures would not change, and nothing would say why."""
+    from raven.utils import office
+
+    deck = tmp_path / "deck.pptx"
+    deck.write_bytes(b"PK placeholder")
+
+    monkeypatch.setattr(office, "RENDER_GENERATION", 1)
+    boxes = deck_templates._drawn_key(deck)
+
+    monkeypatch.setattr(office, "RENDER_GENERATION", 2)
+    drawn = deck_templates._drawn_key(deck)
+
+    assert boxes != drawn, "a cover drawn with no Han face would be served for one drawn with it"
+    assert deck_templates._cover_key(deck) in boxes
+    assert deck_templates._cover_key(deck) in drawn
+
+
+def test_a_translated_copy_is_not_redone_just_because_the_fonts_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half: the copy is a deck, not a picture. Its text swap does not
+    depend on what the host can draw, so putting the font state in its name
+    would rebuild every translation on a machine that only gained a font."""
+    from raven.utils import office
+
+    deck = tmp_path / "deck.pptx"
+    deck.write_bytes(b"PK placeholder")
+
+    monkeypatch.setattr(office, "RENDER_GENERATION", 1)
+    before = deck_templates._cover_key(deck)
+
+    monkeypatch.setattr(office, "RENDER_GENERATION", 2)
+
+    assert deck_templates._cover_key(deck) == before

@@ -1984,7 +1984,12 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
         because the shape they emit is the whole question: an earlier version of
         this test handed the translator a notice carrying a ``turn_id`` the
         production producer does not send, so it passed while the defect it named
-        stayed reachable."""
+        stayed reachable.
+
+        Both wire kinds go through it. ``llm_retry`` is the one the outlet emits
+        while the turn is still running, so latching anything on it would answer
+        a prompt whose turn has not finished -- and ACP has nowhere to draw a
+        transient status, so it must also write no content."""
         from raven.rpc.spine import RpcOutlet
         from raven.rpc.subscriptions import COALESCE_WINDOW_S, SubscriptionEmitter
         from raven.spine.events import Notice, NoticeKind
@@ -1998,6 +2003,11 @@ class TestOnlyTheTurnThisPromptStartedCanSettleIt:
         future = translator.begin_turn("acp:s1")
         translator.accept_turn("acp:s1", "mine")
         try:
+            await outlet.deliver(Notice(kind=NoticeKind.LLM_RETRY, detail="server", conversation_id="acp:s1"))
+            await asyncio.sleep(COALESCE_WINDOW_S * 3)
+            assert not future.done(), "a retry wait says the turn is still running"
+            assert not written, "ACP has no transient status; the wait is not written into the answer"
+
             await outlet.deliver(Notice(kind=NoticeKind.ACTION_BLOCKED, detail="not mine", conversation_id="acp:s1"))
             await outlet.emit_complete("acp:s1", "mine", {})
             await asyncio.sleep(COALESCE_WINDOW_S * 3)

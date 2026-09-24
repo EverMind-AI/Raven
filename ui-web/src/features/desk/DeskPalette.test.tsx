@@ -735,6 +735,36 @@ describe('a task\'s own files, in the diff tab and not on the shelf', () => {
     expect(chip.className).toContain('delete')
   })
 
+  /* A file a command left behind is known only from listing the directory
+     around it: there is no patch, so the row carries the A and the count the
+     listing took and nothing else. */
+  it('chips a file a command created with A and its line count, patch or no patch', async () => {
+    taskRows = []
+    workspace.shared().changes.push({ ...change('/w/tally.txt'), kind: 'add', add: 4, del: 0, hunks: [] })
+    await diffTab()
+
+    const row = document.querySelector('.desk-diff-row') as HTMLElement
+    expect(row.querySelector('.chgc')?.textContent).toBe('A')
+    expect(row.querySelector('.chgs')?.textContent).toBe('+4')
+  })
+
+  /* And clicking it opens the file, because an empty patch pane says nothing
+     the row had not already said. */
+  it('opens the file for a row a listing made, not a blank patch', async () => {
+    taskRows = []
+    workspace.shared().changes.push({ ...change('/w/tally.txt'), kind: 'add', add: 4, del: 0, hunks: [] })
+    await diffTab()
+
+    await act(async () => {
+      (document.querySelector('.desk-diff-row') as HTMLElement).click()
+    })
+
+    const panes = desk.get().panes
+    expect(panes).toHaveLength(1)
+    expect(panes[0]?.kind).toBe('file')
+    expect(panes[0]?.id).toBe('file:/w/tally.txt')
+  })
+
   it('opens a task diff through the tasks source, the way the pane\'s own chip does', async () => {
     taskRows = [taskWithFile('t1', { path: '/w/deep/mod.py', op: 'edit', add: 2, del: 1 })]
     await diffTab()

@@ -295,6 +295,32 @@ class TestDisabledList:
 
 
 # ---------------------------------------------------------------------------
+# A plugin that fails to load gets its own row, not the whole table
+# ---------------------------------------------------------------------------
+
+
+class TestFailedPlugin:
+    def test_a_broken_plugin_reads_failed_with_its_reason(self, tmp_path: Path) -> None:
+        package = "_cli_wreck_pkg"
+        plug = tmp_path / "shelf" / "wreck"
+        (plug / package).mkdir(parents=True)
+        (plug / package / "__init__.py").write_text("raise ImportError('boom [red]')\n", encoding="utf-8")
+        (plug / "raven-plugin.toml").write_text(
+            '[plugin]\nid = "wreck"\nversion = "0.1.0"\n'
+            f'[[plugin.contributes.tools]]\nname = "wreck_tool"\nfactory = "{package}:make"\n',
+            encoding="utf-8",
+        )
+
+        result = _invoke(_make_runner_args(tmp_path, {"plugins": {"dirs": [str(tmp_path / "shelf")]}}), tmp_path)
+
+        assert result.exit_code == 0, result.stdout
+        rows = {line.split()[1]: line for line in result.stdout.splitlines() if line.startswith("│")}
+        assert "failed" in rows["wreck"]
+        assert "activated" in rows["everos-memory"]
+        assert "wreck failed to load: plugin 'wreck': importing '_cli_wreck_pkg' failed: boom [red]" in result.stdout
+
+
+# ---------------------------------------------------------------------------
 # Verbose flag shows factory references
 # ---------------------------------------------------------------------------
 

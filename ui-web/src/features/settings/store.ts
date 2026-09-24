@@ -22,6 +22,7 @@ import { statedTags } from '../model/types'
 import type { Kind } from '../model/types'
 import type {
   ArchivedSession,
+  ConnectProbe,
   ModelCandidate,
   SettingsSnapshot,
   SettingsSource,
@@ -72,8 +73,9 @@ export interface Sheet {
   items: ModelCandidate[]
   /* The kind tab in force, or every kind. */
   kind: 'all' | Kind
-  /* Vendor groups the reader has collapsed, by prefix. */
-  folded: Record<string, boolean>
+  /* Ticked and not yet added, by model id. Kept across a search or a kind
+     tab, so narrowing the list to find the next one does not drop the last. */
+  picked: string[]
   /* What a typed id would be added as, once the reader has said; null means
      the guess from its name still stands. */
   typed: Kind | null
@@ -117,6 +119,10 @@ export interface SettingsState {
   provFilt: ProvFilter
   /* The slug picked in the add-provider block, or null when it is closed. */
   provAdd: string | null
+  /* The last credential check per provider, this session only: what a
+     connect or a "check again" heard back. A provider with none was connected
+     before this page loaded, and says nothing it has not asked. */
+  probes: Record<string, ConnectProbe>
   sheet: Sheet | null
   hdrAdd: string | null
   /* Which provider has its advanced fold open. One at a time, and closed by
@@ -130,6 +136,10 @@ export interface SettingsState {
   skq: string
   toolOpen: string | null
   plugOpen: string | null
+  /* The provider whose model list is shown in full rather than folded. Here,
+     not in the list's own state: a removal redraws the page from a new
+     snapshot, and a fold kept in the component snapped shut on every one. */
+  modelsAll: string | null
   archived: ArchivedSession[] | null
 }
 
@@ -152,6 +162,7 @@ const initial = (): SettingsState => ({
   provQ: '',
   provFilt: 'all',
   provAdd: null,
+  probes: {},
   sheet: null,
   hdrAdd: null,
   adv: null,
@@ -163,6 +174,7 @@ const initial = (): SettingsState => ({
   skq: '',
   toolOpen: null,
   plugOpen: null,
+  modelsAll: null,
   archived: null,
 })
 
@@ -289,7 +301,7 @@ export function setTab(id: string): void {
   settingsTab.id = id
   set({
     tab: curTab(), err: '', provider: null, provQ: '', provFilt: 'all', provAdd: null, sheet: null, hdrAdd: null, ovlAdd: null, adv: null,
-    skill: null, detail: null, toolOpen: null, plugOpen: null,
+    skill: null, detail: null, toolOpen: null, plugOpen: null, modelsAll: null,
   })
   if (moved) settingsDialog.enterSection(id)
 }
@@ -353,11 +365,59 @@ export async function skillOpen(name: string): Promise<void> {
   }
 }
 
+const setProbe = (slug: string, probe: ConnectProbe | null): void => {
+  const probes = { ...get().probes }
+  if (probe) probes[slug] = probe
+  else delete probes[slug]
+  set({ probes })
+}
+
+/* Store a credential, then test it on the side. The save is the connect: a
+   check can be wrong -- a public catalogue, a proxy, a vendor that is down --
+   so its answer never holds the key back. The row says "testing" until the
+   verdict lands, and a failed one is marked and offers a retry. */
+export async function connect(key: string, slug: string, params: Record<string, unknown>): Promise<boolean> {
+  /* A header carries ASCII only: a key with anything else in it is text pasted
+     from the wrong place and could never be sent, so it is refused here rather
+     than stored for the test to trip over. */
+  if (typeof params.api_key === 'string' && /[^\x20-\x7e]/.test(params.api_key)) {
+    refuse(t('gui.settings.providers.key_not_ascii'))
+    return false
+  }
+  const stored = await run(key, () => source().provider('save_key', params))
+  if (stored) void recheck(slug)
+  return stored
+}
+
+/* A live read that succeeded wrote what the vendor serves to the server's
+   cache, which the offer every picker draws from unions in; reloaded so the
+   role slots and the composer's picker list it without a page reload. */
+const reloadOffer = (): void => {
+  void source().reloadProviders().then(
+    (snap) => set({ snap, epoch: get().epoch + 1 }),
+    () => { /* the pickers keep the list they have */ },
+  )
+}
+
+export const dropProbe = (slug: string): void => { if (get().probes[slug]) setProbe(slug, null) }
+
+/* Ask a connected provider again, through the same read the model sheet
+   makes; "ok" there is the vendor answering the stored credential. */
+export async function recheck(slug: string): Promise<void> {
+  await run(`probe:${slug}`, async () => {
+    const r = await source().fetchModels(slug, true)
+    setProbe(slug, r.status === 'ok'
+      ? { ok: true, status: 'valid', models_count: (r.models || []).filter((m) => m.source === 'live').length }
+      : { ok: false, status: r.status, error: r.error ?? null })
+    if (r.status === 'ok') reloadOffer()
+  })
+}
+
 /* Open the vendor-list sheet for a provider and ask what it serves. A vendor
    with no list endpoint answers a status other than ok, and the sheet then
    takes a typed id alone. */
 export async function sheetOpen(slug: string): Promise<void> {
-  set({ sheet: { slug, q: '', state: 'loading', items: [], kind: 'all', folded: {}, typed: null } })
+  set({ sheet: { slug, q: '', state: 'loading', items: [], kind: 'all', picked: [], typed: null } })
   let items: ModelCandidate[] = []
   let ok = false
   try {
@@ -369,6 +429,7 @@ export async function sheetOpen(slug: string): Promise<void> {
   }
   const sheet = get().sheet
   if (sheet && sheet.slug === slug) set({ sheet: { ...sheet, state: ok ? 'ready' : 'failed', items } })
+  if (ok) reloadOffer()
 }
 
 /* One row, one write. `add_model` states the kind for a typed id the

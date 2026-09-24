@@ -28,6 +28,7 @@ from raven.agent.subagent.mcp_grant import (
     resolve_grant,
 )
 from raven.agent.subagent.tool_vocabulary import RAVEN_NAME
+from raven.agent.tools import snapshot
 from raven.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from raven.agent.tools.registry import ToolRegistry, call_failed
 from raven.agent.tools.removals import RemovalWatch
@@ -567,7 +568,12 @@ class RavenLoopBackend:
                     # one it already gave up on. Raised rather than returned: the
                     # error text would otherwise be the run's answer and the
                     # record would read completed (see SubagentNoAnswerError).
-                    activity.note_usage(response.usage)
+                    await activity.note_provider_usage(
+                        response.usage,
+                        model=str(model or ""),
+                        session_key=session_key,
+                        task_id=task_id,
+                    )
                     verdict = response.error_classification
                     raise SubagentNoAnswerError(
                         "sub-agent's model call failed"
@@ -604,7 +610,12 @@ class RavenLoopBackend:
                     # call's tokens were still spent -- a cut mid-thought is 11-15k
                     # reasoning tokens -- so they are billed before the reply is
                     # replaced.
-                    activity.note_usage(response.usage)
+                    await activity.note_provider_usage(
+                        response.usage,
+                        model=str(model or ""),
+                        session_key=session_key,
+                        task_id=task_id,
+                    )
                     verdict = response.error_classification
                     if verdict is None and (classify := getattr(provider, "classify_error", None)) is not None:
                         verdict = classify(content=response.content or None)
@@ -633,7 +644,12 @@ class RavenLoopBackend:
                         model=model,
                     )
                     if response.finish_reason == "error" and not response.has_tool_calls:
-                        activity.note_usage(response.usage)
+                        await activity.note_provider_usage(
+                            response.usage,
+                            model=str(model or ""),
+                            session_key=session_key,
+                            task_id=task_id,
+                        )
                         raise SubagentNoAnswerError(
                             "sub-agent's model call failed in transport twice: " + (response.content or "")[:200]
                         )
@@ -641,7 +657,12 @@ class RavenLoopBackend:
             # the model once per round and the run's cost is their sum, unlike an
             # ACP agent's one cumulative report for the whole turn. Both arms
             # land here -- a streamed reply costs the same as a waited-for one.
-            activity.note_usage(response.usage)
+            await activity.note_provider_usage(
+                response.usage,
+                model=str(model or ""),
+                session_key=session_key,
+                task_id=task_id,
+            )
             cut_at_ceiling = response.truncated
             if response.has_tool_calls:
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
@@ -665,12 +686,15 @@ class RavenLoopBackend:
                     # touched, and walking the workspace twice per call would cost
                     # a run far more than the one change it could find. Off the
                     # loop, because the walk is tens of milliseconds of it and
-                    # every other session on this process waits behind them.
-                    before_files = (
-                        await asyncio.to_thread(take_snapshot, workspace)
+                    # every other session on this process waits behind them. The
+                    # directory is the one the command runs in, which the tool
+                    # itself resolves: the workspace unless the call names another.
+                    exec_root = (
+                        snapshot.root_for(tools.get(tool_call.name), tool_call.arguments, workspace)
                         if RAVEN_NAME.get(tool_call.name, tool_call.name) == "exec"
                         else None
                     )
+                    before_files = await asyncio.to_thread(take_snapshot, exec_root) if exec_root is not None else None
                     result = await tools.execute(tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta)
                     # What this call already accounted for by name, so the listing
                     # below does not report the same change a second time.
@@ -710,7 +734,7 @@ class RavenLoopBackend:
                     if before_files is not None:
                         activity.record_snapshot_changes(
                             before_files,
-                            await asyncio.to_thread(take_snapshot, workspace),
+                            await asyncio.to_thread(take_snapshot, exec_root),
                             workspace,
                             already=accounted,
                         )
@@ -795,10 +819,20 @@ class RavenLoopBackend:
                 model=model,
             )
             if wrap_up.finish_reason == "error":
-                activity.note_usage(wrap_up.usage)
+                await activity.note_provider_usage(
+                    wrap_up.usage,
+                    model=str(model or ""),
+                    session_key=session_key,
+                    task_id=task_id,
+                )
                 raise SubagentNoAnswerError("sub-agent's wrap-up model call failed: " + (wrap_up.content or "")[:200])
             final_result = (wrap_up.content or "").strip() or None
-            activity.note_usage(wrap_up.usage)
+            await activity.note_provider_usage(
+                wrap_up.usage,
+                model=str(model or ""),
+                session_key=session_key,
+                task_id=task_id,
+            )
             cut_at_ceiling = wrap_up.truncated
         # Reported before the raise below, so a run that ends with no answer at
         # all carries the reason as well -- that is the shape this exists for.

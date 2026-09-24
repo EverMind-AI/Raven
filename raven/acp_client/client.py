@@ -478,7 +478,9 @@ class AcpClient:
                 return await asyncio.shield(future)
             return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
         except asyncio.TimeoutError:
-            raise AcpTimeoutError(f"acp agent {self.name!r}: {method} timed out after {timeout}s") from None
+            raise AcpTimeoutError(
+                f"acp agent {self.name!r}: {method} timed out after {timeout}s", method=method
+            ) from None
         except asyncio.CancelledError:
             if cancel_session is not None:
                 await self._cancel_turn(cancel_session, future)
@@ -652,7 +654,8 @@ class AcpClient:
             self._fail_pending(
                 AcpConnectionError(
                     f"acp agent {self.name!r}: connection ended (exit {self._proc.returncode}); "
-                    f"stderr tail: {self.stderr_tail(400) or '<empty>'}"
+                    f"stderr tail: {self.stderr_tail(400) or '<empty>'}",
+                    stderr=self.stderr_tail() or None,
                 )
             )
 

@@ -1444,3 +1444,47 @@ async def test_a_transport_with_no_undo_is_not_asked_for_one(no_grants, monkeypa
     bind(reporting)
     assert await gate.enforce("exec", {"command": "git fetch origin && git rebase origin/main"}) is None
     assert reporting.grants == [], "allow once writes nothing, so there is nothing to undo"
+
+
+@pytest.mark.asyncio
+async def test_every_refusal_leaves_the_turn_a_record_and_an_allow_leaves_none():
+    """A refusal replaces the tool's result, so the turn goes on and ends the
+    way an allowed one would. On a surface nobody watches -- a one-shot -- the
+    turn's record is the only way a caller learns what was turned down."""
+    gate = gate_for(PermissionsConfig(tools={"exec": {"git push *": "deny"}}))
+    turn = start_permission_turn(None, conversation_id="conv-1", turn_id="turn-1")
+
+    assert await gate.enforce("read_file", {"path": "a.txt"}) is None
+    assert turn.refusals == []
+
+    write = {"path": "a.txt", "content": "x"}
+    await gate.enforce("write_file", write)
+    await gate.enforce("exec", {"command": "git push origin main"})
+    await gate.enforce("exec", {"command": "dd if=/dev/zero of=/dev/sda"})
+
+    assert [(r.tool_name, r.source) for r in turn.refusals] == [
+        ("write_file", DecisionSource.UNATTENDED.value),
+        ("exec", DecisionSource.USER_DENY.value),
+        ("exec", DecisionSource.BUILTIN_DENY.value),
+    ]
+    first = turn.refusals[0]
+    # The same line an approval prompt would have shown, and the sentence the
+    # model was given, minus the instruction appended to every refusal.
+    assert first.action == action_line("write_file", write)
+    assert first.reason.endswith("but this turn is not interactive")
+    assert not first.reason.startswith("Error:")
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_answered_by_a_person_is_recorded_with_its_own_source():
+    gate = gate_for(PermissionsConfig())
+    turn = start_permission_turn(
+        Responder(ApprovalOutcome(ApprovalChoice.DENY, feedback="not in prod")),
+        conversation_id="conv-1",
+        turn_id="turn-1",
+    )
+    await gate.enforce("write_file", {"path": "a.txt", "content": "x"})
+    await gate.enforce("write_file", {"path": "a.txt", "content": "x"})
+
+    assert [r.source for r in turn.refusals] == ["approval_denied", "denied_earlier"]
+    assert "not in prod" in turn.refusals[0].reason

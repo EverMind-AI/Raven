@@ -771,7 +771,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("deepseek",),
         env_key="DEEPSEEK_API_KEY",
         display_name="DeepSeek",
-        shown_api_base="https://api.deepseek.com/beta",
+        shown_api_base="https://api.deepseek.com",
         homepage="https://deepseek.com/",
         skip_prefixes=("deepseek/",),  # avoid double-prefix
         env_extras=(),
@@ -1449,10 +1449,7 @@ def find_by_name(name: str | None) -> ProviderSpec | None:
     canonicalizing here is the only way a rename reaches all of them.
     """
     name = normalize_provider_name(canonical_provider_name(name))
-    for spec in PROVIDERS:
-        if normalize_provider_name(spec.name) == name:
-            return spec
-    return None
+    return _tables()[0].get(name)
 
 
 def canonical_provider_name(name: str | None) -> str:
@@ -1465,7 +1462,26 @@ def canonical_provider_name(name: str | None) -> str:
     config section, which is written in the underscored form.
     """
     normalized = normalize_provider_name(name)
-    for spec in PROVIDERS:
-        if normalized in {normalize_provider_name(a) for a in spec.name_aliases}:
-            return spec.name
-    return normalized
+    return _tables()[1].get(normalized, normalized)
+
+
+_TABLES: "tuple[tuple[int, int], dict[str, ProviderSpec], dict[str, str]] | None" = None
+
+
+def _tables() -> "tuple[dict[str, ProviderSpec], dict[str, str]]":
+    """The two lookups above as tables: current name by normalized name, and
+    current name by normalized alias.
+
+    Both used to scan every spec per call, and between them they were reached
+    some 22,000 times while one ``model.options`` answered -- a fifth of that
+    answer's time went into normalizing the same fifty-five names over and
+    over. Keyed on the tuple's identity so a registry a test installs is read
+    rather than remembered.
+    """
+    global _TABLES
+    key = (id(PROVIDERS), len(PROVIDERS))
+    if _TABLES is None or _TABLES[0] != key:
+        by_name = {normalize_provider_name(spec.name): spec for spec in PROVIDERS}
+        by_alias = {normalize_provider_name(alias): spec.name for spec in PROVIDERS for alias in spec.name_aliases}
+        _TABLES = (key, by_name, by_alias)
+    return _TABLES[1], _TABLES[2]

@@ -273,6 +273,85 @@ class TestWhereTheTreeIs:
 
         assert _REAL_AGENTS_ROOT() == clone / "agents"
 
+    def test_an_empty_unstamped_home_tree_does_not_shadow_the_checkout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare directory is not an installed tree.
+
+        Nothing raven writes leaves ``agents/`` both empty and unstamped: the
+        copy-out stamps it and a scaffold lands a folder in it. Preferring such
+        a directory over the checkout beside the package discovered nothing at
+        all on an editable install, with no error to say why -- so it falls
+        through to the tree that has the products.
+        """
+        home = tmp_path / "home"
+        (home / "agents").mkdir(parents=True)
+        clone = tmp_path / "clone"
+        (clone / "agents").mkdir(parents=True)
+        (clone / "raven").mkdir()
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
+
+        assert _REAL_AGENTS_ROOT() == clone / "agents"
+
+    def test_a_hand_assembled_home_tree_wins_without_a_stamp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One manifest is enough: a tree a person put together by hand was
+        never stamped, and it is theirs to use."""
+        home = tmp_path / "home"
+        _product(home / "agents", "raven-probe")
+        clone = tmp_path / "clone"
+        (clone / "agents").mkdir(parents=True)
+        (clone / "raven").mkdir()
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
+
+        assert _REAL_AGENTS_ROOT() == home / "agents"
+
+    def test_a_killed_scaffolds_hidden_partial_does_not_make_the_home_tree_win(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Crash residue is not a product, for the chooser and the scanner alike.
+
+        ``raven agents new`` assembles under ``.<name>.partial-*`` and a SIGKILL
+        can orphan that directory with a finished manifest inside. The scanner
+        skips dot-directories, so a chooser that counted one would pick a home
+        tree discovery then finds empty -- the shadowing this guard exists to
+        end, back through the side door.
+        """
+        home = tmp_path / "home"
+        _product(home / "agents", ".raven-probe.partial-k1ll3d")
+        clone = tmp_path / "clone"
+        _product(clone / "agents", "raven-probe")
+        (clone / "raven").mkdir()
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
+
+        assert _REAL_AGENTS_ROOT() == clone / "agents"
+        assert va.discover_product_rows(home / "agents") == [], "the residue is not a row either"
+
+    def test_a_stamped_home_tree_with_every_folder_removed_still_wins(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The stamp is what tells a deliberate deletion from a bare directory.
+
+        A user who removed every product under the same raven version keeps
+        that decision (``_install_packaged_tree`` documents it); the checkout
+        beside the package must not bring the products back through the side
+        door.
+        """
+        home = tmp_path / "home"
+        (home / "agents").mkdir(parents=True)
+        (home / "agents" / ".raven-version").write_text("0.0.0-test", encoding="utf-8")
+        clone = tmp_path / "clone"
+        (clone / "agents").mkdir(parents=True)
+        (clone / "raven").mkdir()
+        monkeypatch.setenv("RAVEN_HOME", str(home))
+        monkeypatch.setattr("raven.__file__", str(clone / "raven" / "__init__.py"))
+
+        assert _REAL_AGENTS_ROOT() == home / "agents"
+
     def test_a_wheel_with_the_tree_gets_it_installed_out_to_the_home(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1347,3 +1426,86 @@ class TestWhatAFolderCanDrawWith:
         for suffix in ("IMAGE_API_KEY", "API_KEY", "IMAGE_API_BASE", "API_BASE"):
             assert f'"{va.env_prefix("raven-ppt")}_{suffix}"' in launcher
         assert f'_IMAGE_GATEWAY = "{va._IMAGE_GATEWAY}"' in launcher
+
+
+class TestOwnKeyIsOneFactPerFolder:
+    """``product_llm_key`` reads a convention -- ``<PREFIX>_API_KEY`` in the
+    folder -- to answer a question only the launcher truly decides: does this
+    product run on its own chat credential, or inherit the host's whole LLM
+    block? The host is not going to parse ``run.py`` at dispatch time, so what
+    keeps the convention honest is this: every shipped folder has to say the
+    same thing twice, and the two sayings are checked against each other here.
+
+    That is what makes the reader safe from a product changing its mind. A
+    folder that starts taking its own key, or stops, fails this test in its own
+    tree; nothing in the host enumerates which products do which, so nothing in
+    the host has to be edited when one of them changes.
+    """
+
+    @staticmethod
+    def _required_secrets(launcher: Path) -> set[str]:
+        """The launcher's own ``REQUIRED_SECRETS``, read as the literal it is.
+
+        Parsed rather than pattern-matched: this is the tuple the branch reads
+        (``llm_key = REQUIRED_SECRETS[0]``), and a test that matched text would
+        pass on a mention in a comment.
+        """
+        import ast
+
+        tree = ast.parse(launcher.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(isinstance(t, ast.Name) and t.id == "REQUIRED_SECRETS" for t in node.targets):
+                continue
+            return {v for v in ast.literal_eval(node.value) if isinstance(v, str)}
+        return set()
+
+    @staticmethod
+    def _offered(env_example: Path) -> set[str]:
+        if not env_example.is_file():
+            return set()
+        return {
+            line.split("=", 1)[0].strip()
+            for line in env_example.read_text(encoding="utf-8").splitlines()
+            if "=" in line and not line.lstrip().startswith("#")
+        }
+
+    def test_every_shipped_folder_offers_the_key_its_launcher_branches_on(self) -> None:
+        tree = Path(__file__).resolve().parent.parent / "agents"
+        folders = sorted(f for f in tree.iterdir() if f.is_dir() and (f / "subagent.json").is_file())
+        assert folders, "the shipped product tree is what this test is about"
+
+        for folder in folders:
+            launcher = folder / "run.py"
+            assert launcher.is_file(), f"{folder.name} ships no launcher"
+            var = va.api_key_var(folder.name)
+            branches = var in self._required_secrets(launcher)
+            offered = var in self._offered(folder / ".env.example")
+            assert branches == offered, (
+                f"{folder.name}: its launcher {'branches on' if branches else 'ignores'} {var} while its "
+                f".env.example {'offers' if offered else 'does not offer'} it. `product_llm_key` reads the "
+                f"second to predict the first, so the two have to agree."
+            )
+            if branches:
+                # The constant is the branch's, not a leftover: this is the line
+                # that turns it into "take my own key" rather than "inherit".
+                assert "REQUIRED_SECRETS[0]" in launcher.read_text(encoding="utf-8"), (
+                    f"{folder.name} declares {var} but its launcher never branches on it"
+                )
+
+    def test_the_shipped_tree_still_has_both_kinds(self) -> None:
+        """The test above would also pass on a tree where every folder answered
+        the same way, which is a tree that proves nothing. Today one product
+        inherits unconditionally and four take their own key when given one; if
+        that ever collapses to one kind, the reader's two branches stop being
+        exercised by the shipped tree and this says so.
+        """
+        tree = Path(__file__).resolve().parent.parent / "agents"
+        kinds = {
+            va.api_key_var(f.name) in self._required_secrets(f / "run.py")
+            for f in tree.iterdir()
+            if f.is_dir() and (f / "run.py").is_file()
+        }
+
+        assert kinds == {True, False}

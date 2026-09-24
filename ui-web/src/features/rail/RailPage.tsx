@@ -1,9 +1,12 @@
+import { ArrowDown01Icon, MoreHorizontalIcon, Pin02Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { ArchiveGlyph, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { current, setCurrent } from '../../lib/session'
 import { term as findTerm } from '../../state/find'
 import * as lang from '../../state/lang'
+import { show as showMenu } from '../../state/menu'
 import * as page from '../../state/page'
 import { askingIn, askingVersion, watchAsking } from '../../state/sheetRack'
 import { show as toast } from '../../state/toast'
@@ -89,8 +92,8 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
   // where the reader cares most. `que` stays a leading dot -- it is a
   // condition of the session, not the state of a turn just watched.
   const tail = live === 'run' || live === 'done' || live === 'err' || live === 'ask' ? live : null
-  // The state is only colour and motion otherwise, and the stamp behind it
-  // is visibility:hidden, so name it for a reader who gets the row as text.
+  // The state is only colour and motion otherwise, so name it for a reader
+  // who gets the row as text.
   const label = tail
     ? t(tail === 'ask'
       ? 'gui.sess.asking'
@@ -193,13 +196,13 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
           <span key="txt">{plainTitle(s.title)}</span>
         )}
       </div>
-      {/* The stamp is always rendered -- it is what gives the tail its width.
-          A marker hides the text in place rather than replacing the element,
-          so the row does not resize when a turn starts or ends. */}
-      <span className="w" data-sig={tail ?? undefined} aria-label={label} title={label}>
-        <span className="wt">{s.when}</span>
-        {tail ? <i /> : null}
-      </span>
+      {/* No clock on the row (the design has none); the tail is there only
+          while a turn has something to say. */}
+      {tail ? (
+        <span className="w" data-sig={tail} aria-label={label} title={label}>
+          <i />
+        </span>
+      ) : null}
       <div className="quick" onDoubleClick={e => e.stopPropagation()}>
         <button
           className="quick-pin"
@@ -210,9 +213,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
             togglePin(s)
           }}
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m14.5 4.5 5 5-3 2.5v3l-2 2-3-3-5 5-1.5-1.5 5-5-3-3 2-2h3z" />
-          </svg>
+          <Icon icon={Pin02Icon} />
         </button>
         <button
           aria-label={t('gui.sess.archive')}
@@ -221,9 +222,20 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
             archiveSession(s)
           }}
         >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 8h14v11H5zM4 4h16v4H4zm5 8h6" />
-          </svg>
+          <ArchiveGlyph />
+        </button>
+        {/* The rest of the row's menu -- rename, delete -- from the same list
+            the context menu reads, dropped under the button that raised it. */}
+        <button
+          aria-label={t('gui.sess.more')}
+          aria-haspopup="menu"
+          onClick={e => {
+            e.stopPropagation()
+            const r = e.currentTarget.getBoundingClientRect()
+            showMenu(r.left, r.bottom + 4, sessItems(s))
+          }}
+        >
+          <Icon icon={MoreHorizontalIcon} />
         </button>
       </div>
     </div>
@@ -235,7 +247,10 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
    eyebrow starts on the word the eye is looking for; the label's own x is held
    by the row's left padding instead (see `.list .grp` in styles/page.css). The
    cron and recent groups are permanent fixtures of the rail (rendered even
-   when empty); pinned only exists while something is pinned. */
+   when empty); pinned only exists while something is pinned. An empty group
+   is its heading alone: a plain label with no caret, press or focus stop, and
+   nothing under it, since there is nothing to fold open. A verb it carries
+   (the cron group's Manage) stays. */
 function Group({
   label,
   items,
@@ -256,6 +271,25 @@ function Group({
   busy: boolean
 }): JSX.Element | null {
   if (!items.length && !always) return null
+  const manage = action ? (
+    <button
+      className="grp-go"
+      onClick={e => {
+        e.stopPropagation()
+        action()
+      }}
+    >
+      {t('gui.rail.manage')}
+    </button>
+  ) : null
+  if (!items.length) {
+    return (
+      <div className="grp" data-empty="">
+        <span className="lab">{label}</span>
+        {manage}
+      </div>
+    )
+  }
   const folded = store.isFolded(gid)
   const open = store.isOpen(gid)
   // A long tail of old sessions buries the rail's other groups, so a group
@@ -278,25 +312,11 @@ function Group({
             that is already bounded by its own whitespace. What is left is the
             name and the caret that folds it. */}
         <span className="car">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M8.5 5.5 15 12l-6.5 6.5" />
-          </svg>
+          <Icon icon={ArrowDown01Icon} />
         </span>
-        {action ? (
-          <button
-            className="grp-go"
-            onClick={e => {
-              e.stopPropagation()
-              action()
-            }}
-          >
-            {t('gui.rail.manage')}
-          </button>
-        ) : null}
+        {manage}
       </div>
-      {folded ? null : !items.length ? (
-        <div className="grp-empty">{t('gui.rail.none')}</div>
-      ) : (
+      {folded ? null : (
         <>
           {shown.map(s => (
             <Row key={s.id} s={s} cur={cur} busy={busy} />

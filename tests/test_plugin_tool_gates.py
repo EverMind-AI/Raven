@@ -33,7 +33,6 @@ from raven.plugins import (
     Contributes,
     DiscoveredPlugin,
     ManifestOrigin,
-    PluginConflictError,
     PluginManifest,
     PluginRegistry,
     ToolGateContribution,
@@ -191,11 +190,15 @@ class TestRegistryToolGates:
         assert built == "gate-instance"
         assert seen["config"] == {"mode": "strict"}
 
-    def test_cross_plugin_name_conflict_raises(self) -> None:
+    def test_cross_plugin_name_conflict_skips_the_later_plugin(self) -> None:
         _install_module("_pg_b", {"make": lambda ctx: None})
         reg = PluginRegistry()
-        with pytest.raises(PluginConflictError, match="tool_gate 'same'"):
-            reg.activate([_discovered("one", [("same", "_pg_b:make")]), _discovered("two", [("same", "_pg_b:make")])])
+        reg.activate([_discovered("one", [("same", "_pg_b:make")]), _discovered("two", [("same", "_pg_b:make")])])
+        assert reg.activated_ids() == ["one"]
+        assert reg.tool_gate_plugin_id("same") == "one"
+        [failure] = reg.activation_failures()
+        assert failure.plugin_id == "two"
+        assert "tool_gate 'same' contributed by both 'one' and 'two'" in failure.reason
 
 
 class TestBuildPluginToolGates:

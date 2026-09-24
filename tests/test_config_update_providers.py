@@ -571,6 +571,186 @@ def test_test_provider_200_returns_ok_with_models_count(cfg_path: Path) -> None:
     assert result["http_status"] == 200
 
 
+def test_test_provider_names_an_environment_proxy_that_is_not_listening(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import socket
+
+    # The autouse fence swaps the probe out; this one reaches only a closed
+    # localhost port, so it runs the real one.
+    monkeypatch.undo()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        dead = f"http://127.0.0.1:{sock.getsockname()[1]}"
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", dead)
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert dead in result["error"]
+
+
+def test_test_provider_never_returns_the_proxy_credentials(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe's error reaches the browser as a tooltip, so a proxy written as
+    user:password@host must come back as host alone, in every field."""
+    import json
+    import socket
+
+    monkeypatch.undo()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", f"http://alice:s3cr@t@127.0.0.1:{port}")
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert result["proxy"] == f"http://127.0.0.1:{port}"
+    dumped = json.dumps(result)
+    assert "s3cr" not in dumped and "alice" not in dumped
+
+
+def test_a_proxy_error_that_quotes_the_proxy_is_redacted_too(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Some proxy failures name the proxy in their own message; that copy of the
+    address loses its credentials as well."""
+    import json
+
+    monkeypatch.undo()
+    raw = "http://alice:s3cret@proxy.invalid:3128"
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", raw)
+
+    def refuse(self, url, **kwargs):
+        raise httpx.ProxyError(f"could not tunnel through {raw}")
+
+    monkeypatch.setattr(httpx.Client, "get", refuse)
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert "http://proxy.invalid:3128" in result["error"]
+    assert "s3cret" not in json.dumps(result)
+
+
+def test_a_scheme_less_proxy_quoted_with_the_assumed_scheme_is_redacted(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    monkeypatch.undo()
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "alice:s3cret@proxy.invalid:3128")
+
+    def refuse(self, url, **kwargs):
+        raise httpx.ProxyError("could not tunnel through http://alice:s3cret@proxy.invalid:3128")
+
+    monkeypatch.setattr(httpx.Client, "get", refuse)
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert "http://proxy.invalid:3128" in result["error"]
+    assert "s3cret" not in json.dumps(result)
+
+
+def test_without_userinfo_leaves_a_plain_address_alone() -> None:
+    from raven.config.update_providers import _without_userinfo
+
+    assert _without_userinfo("http://127.0.0.1:7897") == "http://127.0.0.1:7897"
+    assert _without_userinfo("socks5://u:p@proxy.local:1080/") == "socks5://proxy.local:1080/"
+    # httpx takes a proxy with no scheme and reads it as http://; urlsplit files
+    # the userinfo of that form under the path, not the netloc.
+    assert _without_userinfo("alice:secret@127.0.0.1:9") == "127.0.0.1:9"
+    assert _without_userinfo("alice:s@cret@127.0.0.1:9/x") == "127.0.0.1:9/x"
+
+
+def test_a_scheme_less_proxy_loses_its_credentials_in_every_field(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import socket
+
+    monkeypatch.undo()
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", f"alice:s3cret@127.0.0.1:{port}")
+    _seed_key(cfg_path)
+    result = probe_provider("openrouter", config_path=cfg_path, timeout_s=5)
+    assert result["status"] == "proxy_unreachable"
+    assert result["proxy"] == f"127.0.0.1:{port}"
+    dumped = json.dumps(result)
+    assert "s3cret" not in dumped and "alice" not in dumped
+
+
+def _public_catalogue(good_key: str):
+    """A vendor whose /models answers anyone, and whose /key checks the key."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/key"):
+            ok = request.headers.get("Authorization") == f"Bearer {good_key}"
+            return httpx.Response(200 if ok else 401, json={"data": {}})
+        return httpx.Response(200, json={"data": [{"id": "m1"}, {"id": "m2"}]})
+
+    return _mock_transport(handler)
+
+
+def test_a_public_catalogue_does_not_verify_a_made_up_key(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="111")
+    result = probe_provider(
+        "openrouter", config_path=cfg_path, transport=_public_catalogue("sk-real"), check_credential=True
+    )
+    assert result["status"] == "invalid_key"
+    assert result["http_status"] == 401
+
+
+def test_a_public_catalogue_verifies_a_real_key_at_its_check_path(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="sk-real")
+    result = probe_provider(
+        "openrouter", config_path=cfg_path, transport=_public_catalogue("sk-real"), check_credential=True
+    )
+    assert result["status"] == "valid"
+    assert result["models_count"] == 2
+
+
+def test_a_public_catalogue_with_no_check_path_reports_the_key_unchecked(cfg_path: Path) -> None:
+    set_provider_fields("custom", {"api_key": "anything", "api_base": "https://proxy.test/v1"}, config_path=cfg_path)
+    result = probe_provider("custom", config_path=cfg_path, transport=_public_catalogue("x"), check_credential=True)
+    assert result["status"] == "key_unchecked"
+    assert result["ok"] is False
+
+
+def test_a_catalogue_that_refuses_the_decoy_keeps_its_verdict(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="sk-real")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        ok = request.headers.get("Authorization") == "Bearer sk-real"
+        return httpx.Response(200 if ok else 401, json={"data": [{"id": "m1"}]})
+
+    result = probe_provider(
+        "openrouter", config_path=cfg_path, transport=_mock_transport(handler), check_credential=True
+    )
+    assert result["status"] == "valid"
+    assert not any(path.endswith("/key") for path in seen)
+
+
+def test_without_check_credential_a_public_catalogue_is_asked_once(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="111")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"data": []})
+
+    probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
+    assert len(seen) == 1
+
+
 def test_test_provider_200_extracts_model_ids(cfg_path: Path) -> None:
     _seed_key(cfg_path)
 
@@ -688,6 +868,17 @@ def test_test_provider_401_returns_invalid_key(cfg_path: Path) -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": "bad key"})
+
+    result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
+    assert result["ok"] is False
+    assert result["status"] == "invalid_key"
+
+
+def test_test_provider_non_ascii_key_is_invalid_not_a_crash(cfg_path: Path) -> None:
+    _seed_key(cfg_path, key="\U0001f916 Generated with Claude Code")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("a key that cannot be put in a header must not be sent")
 
     result = probe_provider("openrouter", config_path=cfg_path, transport=_mock_transport(handler))
     assert result["ok"] is False

@@ -34,6 +34,9 @@ class _StubProvider:
 
 
 class _DummyExecutor:
+    # Host execution: ExecTool reads this at construction.
+    is_sandboxed = False
+
     async def __aenter__(self) -> "_DummyExecutor":
         return self
 

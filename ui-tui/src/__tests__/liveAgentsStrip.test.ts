@@ -8,6 +8,7 @@ import type { LiveAgentRow, LiveDagRun } from '../app/liveAgentsStore.js'
 import type { InstanceRow } from '../rpc/generated.js'
 
 import {
+  currentRounds,
   dagLineName,
   dagLineStats,
   isDagRunActive,
@@ -377,5 +378,42 @@ describe('isHereLine', () => {
     const { lines } = stripLines([], [], instances, active)
 
     expect(hereOf(lines, active)).toEqual(['h4'])
+  })
+})
+
+describe('a stint on the strip', () => {
+  const round = (roundIndex: number, over: Partial<LiveDagRun> = {}): LiveDagRun =>
+    dagRun({ roundIndex, runId: `run-${roundIndex}`, seq: roundIndex, stintId: 'stint-a', ...over })
+
+  it('draws the round in flight and not the rounds behind it', () => {
+    // Measured on a live run: a thirty-round stint put one graph line per round
+    // on a strip that draws a handful, so the round actually running was found
+    // by reading summaries -- and every ordinary graph was pushed off.
+    const kept = currentRounds([round(1), round(2), round(3)])
+
+    expect(kept.map(run => run.runId)).toEqual(['run-3'])
+  })
+
+  it('keeps the later arrival when a resumed round repeats its number', () => {
+    const first = round(2, { runId: 'run-2' })
+    const retry = round(2, { runId: 'run-2x1', seq: 9 })
+
+    expect(currentRounds([first, retry]).map(run => run.runId)).toEqual(['run-2x1'])
+  })
+
+  it('leaves a graph with no stint alone, which is every graph a tool call dispatched', () => {
+    const ordinary = dagRun({ runId: 'plain', seq: 7 })
+
+    const kept = currentRounds([round(1), ordinary, round(2)])
+
+    expect(kept.map(run => run.runId)).toEqual(['plain', 'run-2'])
+  })
+
+  it('keeps each stint of two, not the newest of both', () => {
+    const other = dagRun({ roundIndex: 1, runId: 'other-1', seq: 4, stintId: 'stint-b' })
+
+    const kept = currentRounds([round(1), round(2), other])
+
+    expect(kept.map(run => run.runId)).toEqual(['run-2', 'other-1'])
   })
 })

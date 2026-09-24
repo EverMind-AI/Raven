@@ -1,14 +1,15 @@
 /* One provider: its connection, the models it lists (with the vendor's own
    list to add from), and the advanced card -- address, headers, display
    names. The refusals are the page's: a provider or model a role uses stays. */
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { KeyInput } from '../../../components/KeyInput'
 import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
-import { Fold, IconBtn, Rov, Sec } from '../Fields'
+import { Fold, IconBtn, InlineErr, Rov, Sec } from '../Fields'
 import * as store from '../store'
-import { AZURE, OauthNote, kindOf, needsKey, takesBase, takesKey } from './Providers'
+import { ownId } from './AddModelPop'
+import { AZURE, OauthNote, ProbeNote, kindOf, needsKey, takesBase, takesKey } from './Providers'
 import { roleName, rolesUsing } from './Roles'
 
 import type { ProviderRow } from '../types'
@@ -76,6 +77,7 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [key, setKey] = useState('')
   const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
   const kind = kindOf(p)
+  const checking = store.isBusy(busy(p.id))
   const save = (): void => {
     const k = key.trim()
     const b = base.trim()
@@ -84,9 +86,10 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
     if (b) params.api_base = b
-    void store.run(busy(p.id), () => store.source().provider('save_key', params)).then((ok) => { if (ok) setKey('') })
+    void store.connect(busy(p.id), p.id, params).then((ok) => { if (ok) setKey('') })
   }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')
+  const tested = !!store.get().probes[p.id] || store.isBusy(`probe:${p.id}`)
   return (
     <>
       {kind === 'oauth' && (
@@ -117,13 +120,26 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           <span className="settings-taglist">
             <KeyInput className="settings-tbox" value={key} aria-label={t('gui.settings.providers.api_key')}
               placeholder={p.on ? t('gui.settings.key_set_ph') : t('gui.settings.providers.paste_key')}
-              onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-            {needsKey(p) && <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>}
-            {!needsKey(p) && <button type="button" className="mini ghost" disabled={store.isBusy(busy(p.id))} onClick={save}>{t('gui.settings.update')}</button>}
+              onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !checking) save() }} />
+            {needsKey(p) && <button type="button" className="mini" disabled={checking} onClick={save}>{btn}</button>}
+            {!needsKey(p) && <button type="button" className="mini ghost" disabled={checking} onClick={save}>{t('gui.settings.update')}</button>}
           </span>
         </Sec>
       )}
-      {kind !== 'oauth' && !takesKey(p) && (
+      {kind !== 'oauth' && p.on && (
+        <div className="settings-pline">
+          {tested ? <ProbeNote slug={p.id} /> : (
+            <button type="button" className="settings-plink" onClick={() => void store.recheck(p.id)}>
+              {t('gui.settings.providers.probe_check')}
+            </button>
+          )}
+        </div>
+      )}
+      {/* The address for a provider that takes no key -- unless the block above
+          has already drawn it: a local server that takes an address and no
+          key met both conditions and showed "Server address" twice, each with
+          its own Connect. */}
+      {kind !== 'oauth' && !takesKey(p) && !(!needsKey(p) && takesBase(p)) && (
         <Sec label={t('gui.settings.providers.base')}>
           <span className="settings-taglist">
             <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
@@ -171,10 +187,13 @@ function AzureFields({ p }: { p: ProviderRow }): JSX.Element {
   )
 }
 
+const MODELS_FOLDED = 8
+
 function Models({ p }: { p: ProviderRow }): JSX.Element {
   const s = store.get()
   const listed = p.configured || []
   const open = !!s.sheet && s.sheet.slug === p.id
+  const all = s.modelsAll === p.id
   const remove = (m: string): void => {
     const used = rolesUsing(s.snap, p.id, m)
     if (used.length) { store.refuse(t('gui.settings.providers.model_in_use', { roles: used.map(roleName).join(', '), model: m })); return }
@@ -190,11 +209,23 @@ function Models({ p }: { p: ProviderRow }): JSX.Element {
         </button>
       }>
       {/* The chips are the list -- a second heading over them ("models
-          available") said what the section's own label already says. */}
+          available") said what the section's own label already says.
+          Folded past a few: a gateway takes models by the dozen, and a list
+          that only ever grew pushed everything under it off the pane. A fold,
+          not a scrolling box -- the pane is itself the scroller, and a second
+          one inside it is a place the wheel gets stuck. Each chip names the
+          model as the provider's own list does, without the provider's name in
+          front of every one; the full id is its title. */}
       <span className="settings-taglist">
-        {listed.map((m) => (
-          <span key={m} className="settings-tag2">{m}<span className="settings-x" role="button" aria-label={t('gui.settings.providers.remove_model', { model: m })} onClick={() => remove(m)}>{'\u00d7'}</span></span>
+        {(all ? listed : listed.slice(0, MODELS_FOLDED)).map((m) => (
+          <span key={m} className="settings-tag2" title={m}>{ownId(p, m)}<span className="settings-x" role="button" aria-label={t('gui.settings.providers.remove_model', { model: m })} onClick={() => remove(m)}>{'\u00d7'}</span></span>
         ))}
+        {listed.length > MODELS_FOLDED && (
+          <button type="button" className="settings-tagmore" aria-expanded={all}
+            onClick={() => store.set({ modelsAll: all ? null : p.id })}>
+            {all ? t('gui.settings.providers.models_less') : t('gui.settings.providers.models_more', { n: String(listed.length - MODELS_FOLDED) })}
+          </button>
+        )}
         {!listed.length && <span className="settings-tp-empty">{t('gui.settings.providers.no_models_yet')}</span>}
       </span>
     </Sec>
@@ -333,7 +364,13 @@ function Head({ p }: { p: ProviderRow }): JSX.Element {
   const state = p.on
     ? t('gui.settings.providers.connected')
     : t(kindOf(p) === 'oauth' ? 'gui.settings.providers.needs_auth' : kindOf(p) === 'local' ? 'gui.settings.providers.needs_base' : 'gui.settings.providers.needs_key')
-  const link = p.keyUrl || p.homepage
+  /* One way out of the page, not two. The name's arrow was `keyUrl ||
+     homepage`, so on any provider with a key page it opened the same page as
+     "Get a key" two lines below it. It stays only where the key section has no
+     link of its own to offer -- a browser-authorized or local provider, or one
+     the registry knows no key page for -- and then it is the vendor's site. */
+  const keyLinked = kindOf(p) !== 'oauth' && takesKey(p) && !!p.keyUrl
+  const link = keyLinked ? null : (p.homepage || p.keyUrl)
   return (
     <div className="settings-tp-head">
       <ProviderIcon id={p.id} name={p.name} />
@@ -353,7 +390,7 @@ function Foot({ p }: { p: ProviderRow }): JSX.Element {
   const disconnect = (): void => {
     const used = rolesUsing(store.get().snap, p.id)
     if (used.length) { store.refuse(t('gui.settings.providers.in_use', { roles: used.map(roleName).join(', ') })); return }
-    void store.run(busy(p.id), () => store.source().provider('disconnect', { slug: p.id }))
+    void store.run(busy(p.id), () => store.source().provider('disconnect', { slug: p.id })).then((ok) => { if (ok) store.dropProbe(p.id) })
   }
   return (
     <div className="settings-tp-foot">
@@ -364,6 +401,23 @@ function Foot({ p }: { p: ProviderRow }): JSX.Element {
       </button>
     </div>
   )
+}
+
+/* The pane's refusals, in the pane.
+   `SettingsApp` draws `err` at the foot of `.settings-panel`, which on every
+   other section is a short column ending just under the control that refused.
+   This one is a grid `calc(100vh - 220px)` tall, so the panel's foot is a
+   screen below the button: clicking "disconnect and clear the key" on a
+   provider a role runs on set the message and appeared to do nothing. Here it
+   lands under the pane's own last card, in the column that scrolls. */
+function PaneErr({ text }: { text: string }): JSX.Element | null {
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!text) return
+    requestAnimationFrame(() => box.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }))
+  }, [text])
+  if (!text) return null
+  return <div ref={box}><InlineErr text={text} /></div>
 }
 
 export function ProviderDetail({ slug }: { slug: string }): JSX.Element | null {
@@ -382,6 +436,7 @@ export function ProviderDetail({ slug }: { slug: string }): JSX.Element | null {
           foot under a hairline, the way every other pane in this dialog puts
           its one destructive verb. */}
       {p.on && <Foot p={p} />}
+      <PaneErr text={s.provAdd === null ? s.err : ''} />
     </div>
   )
 }

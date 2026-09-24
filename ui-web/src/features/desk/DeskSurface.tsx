@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { createPortal, flushSync } from 'react-dom'
 
 import { t } from '../../i18n/t'
+import { storedWidth } from '../../state/paneWidth'
 import { InstanceMode } from '../subagents/InstanceMode'
 import { InstanceModel } from '../subagents/InstanceModel'
 import * as agents from '../subagents/store'
@@ -368,8 +369,9 @@ export function DeskSurface(): JSX.Element | null {
     const rootStyle = getComputedStyle(document.documentElement)
     const current = parseFloat(rootStyle.getPropertyValue('--wsw')) || host.getBoundingClientRect().width
     const configuredChatMin = parseFloat(rootStyle.getPropertyValue('--chat-min'))
+    const splitWidth = split.getBoundingClientRect().width
     const available = workspaceAvailableWidth(
-      split.getBoundingClientRect().width,
+      splitWidth,
       window.innerWidth,
       Number.isFinite(configuredChatMin) ? configuredChatMin : undefined,
     )
@@ -378,6 +380,8 @@ export function DeskSurface(): JSX.Element | null {
       previousColumns: previousColumns.current,
       nextColumns,
       availableWidth: available,
+      splitWidth,
+      rememberedWidth: storedWidth('ws'),
       firstPane: state.panes[0],
     })
     if (Math.abs(next - current) > 0.5) document.documentElement.style.setProperty('--wsw', `${next}px`)

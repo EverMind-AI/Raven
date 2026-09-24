@@ -513,7 +513,7 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
     seed_soul(partition)
     seed_conduct(partition, defaults.get("model"))
     render.sweep_stale_renders(partition)
-    return render.write_rendered(config, partition)
+    return render.write_rendered(config, partition, own_plugins=(FLOW_PLUGIN_ID,))
 
 
 def render_acp_config(source: Path, mode: str | None = None) -> Path:

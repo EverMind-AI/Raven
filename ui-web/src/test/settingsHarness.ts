@@ -78,7 +78,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     raw: {
       agents: { defaults: { model: 'claude-opus-4-5', provider: 'anthropic', reasoningEffort: 'low', maxToolIterations: 40 } },
       context: { curatorModel: 'anthropic/claude-sonnet-4-5', curatorProvider: 'openrouter' },
-      tools: { disabledTools: ['image_generate', 'deep_research'], web: { search: { provider: 'serper' } } },
+      tools: { disabledTools: ['image_generate', 'write_file'], web: { search: { provider: 'serper' } } },
       skillForge: { blocklist: ['sql-style'] },
       sessions: { autoArchiveAfterDays: null },
       providers: { anthropic: { modelOverlay: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one' } } } },
@@ -104,7 +104,6 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       { id: 'exec', name: 'exec', group: 'run', reach: 'local', one: 'runs', on: true, danger: true },
       { id: 'web_search', name: 'search', group: 'net', reach: 'net', one: 'searches', on: true },
       { id: 'web_fetch', name: 'fetch', group: 'net', reach: 'net', one: 'fetches', on: true },
-      { id: 'deep_research', name: 'research', group: 'net', reach: 'net', one: 'researches', on: false },
       { id: 'image_generate', name: 'draw', group: 'generate', reach: 'net', one: 'draws', on: false },
       { id: 'spawn', name: 'spawn', group: 'collab', reach: 'local', one: 'spawns', on: true },
       /* The two sides `builtin` tells apart. `tool_search` is a meta-tool, so
@@ -167,7 +166,8 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
       rec('everosSet', { section, model, provider, ...(protocol ? { protocol } : {}) }),
     usage: async (range) => { calls.push(['usage', range]); return null },
     provider: async (op, params) => rec('provider', { op, ...params }),
-    fetchModels: async (slug) => { calls.push(['fetchModels', slug]); return { models: [], status: 'ok' } },
+    fetchModels: async (slug, verify) => { calls.push([verify ? 'fetchModels:verify' : 'fetchModels', slug]); return { models: [], status: 'ok' } },
+    reloadProviders: async () => data,
     addModels: async (slug, models) => rec('addModels', { slug, models }),
     setFields: async (slug, fields) => rec('setFields', { slug, fields }),
     oauthLogin: async (slug) => { calls.push(['oauthLogin', slug]); return { verification_uri: 'https://v.example/device', user_code: 'ABCD', expires_in: 900 } },
@@ -179,10 +179,16 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     removeSession: async (id) => { calls.push(['removeSession', id]) },
     inspectSkill: async (name) => { calls.push(['inspectSkill', name]); return { name, description: 'd', path: `/skills/${name}`, body: '# Hi\n\nbody', files: ['SKILL.md', 'notes.md'], always: false, install: null } },
     openSkillFile: async (name, file) => { calls.push(['openSkillFile', { name, file }]) },
+    revealPlace: async (place) => { calls.push(['revealPlace', place]) },
     uninstallSkill: async (name) => rec('uninstallSkill', name),
     /* A read the credential panel makes on its own, so it is not recorded: a
        case asserting what a row's buttons wrote would have to skip past it. */
-    serverAuthFields: async () => [{ key: 'token', label: 'Token', help_url: 'https://github.com/settings/tokens' }],
+    serverDetail: async () => ({
+      known: true,
+      fields: [{ key: 'token', label: 'Token', help_url: 'https://github.com/settings/tokens' }],
+      address: 'https://api.githubcopilot.com/mcp',
+      tools: ['list_issues', 'get_pr'],
+    }),
     toggleServer: async (name, on) => rec('toggleServer', { name, on }),
     retryServer: async (name) => rec('retryServer', name),
     revokeServer: async (name) => rec('revokeServer', name),

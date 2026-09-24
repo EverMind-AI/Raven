@@ -1,15 +1,17 @@
 /* The provider list and the inline "add a provider" block. Connected
    providers only; adding one picks a vendor and connects it in one card. */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 import { KeyInput } from '../../../components/KeyInput'
+import { ProviderIcon } from '../../../components/ProviderMark'
 import { t } from '../../../i18n/t'
 import { Card, Chip, KeyLink, Row, Rov, Tag } from '../Fields'
 import * as store from '../store'
 
 import type { ProvFilter } from '../store'
-import type { ProviderRow } from '../types'
-import type { JSX } from 'react'
+import type { ConnectProbe, ProviderRow } from '../types'
+import type { JSX, KeyboardEvent } from 'react'
 
 export const AZURE = 'azure_openai'
 
@@ -54,6 +56,137 @@ export function OauthNote({ slug }: { slug: string }): JSX.Element | null {
   )
 }
 
+/* The vendor dropdown. Not a native <select>: fifty-odd vendors open as a
+   popup the height of the screen, and a native popup's height is the OS's to
+   decide. The list is portalled to the body because the card it sits in clips
+   its overflow, and flips above the field when there is no room below. */
+const LIST_H = 300
+
+function VendorPick({ rows, value, onPick }: { rows: ProviderRow[]; value: string; onPick: (id: string) => void }): JSX.Element {
+  const btn = useRef<HTMLButtonElement>(null)
+  const list = useRef<HTMLDivElement>(null)
+  const [at, setAt] = useState<{ left: number; width: number; top?: number; bottom?: number } | null>(null)
+  const cur = rows.find((x) => x.id === value)
+  const close = (): void => setAt(null)
+  const open = (): void => {
+    const r = btn.current!.getBoundingClientRect()
+    const below = window.innerHeight - r.bottom
+    const width = Math.max(r.width, 240)
+    setAt(below < LIST_H + 12 && r.top > below
+      ? { left: r.left, width, bottom: window.innerHeight - r.top + 4 }
+      : { left: r.left, width, top: r.bottom + 4 })
+  }
+  const pick = (id: string): void => { close(); btn.current?.focus(); if (id !== value) onPick(id) }
+  useEffect(() => {
+    if (!at) return
+    const box = list.current
+    const sel = box?.querySelector<HTMLElement>('[aria-selected="true"]')
+    if (box && sel) box.scrollTop = sel.offsetTop - (box.clientHeight - sel.offsetHeight) / 2
+    sel?.focus({ preventScroll: true })
+    const inside = (n: EventTarget | null): boolean => !!n && (!!list.current?.contains(n as Node) || !!btn.current?.contains(n as Node))
+    const away = (e: Event): void => { if (!inside(e.target)) close() }
+    const moved = (e: Event): void => { if (!list.current?.contains(e.target as Node)) close() }
+    /* Captured at the document so the Escape that closes the list is not also
+       the one that closes the dialog around it. */
+    const esc = (e: globalThis.KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.preventDefault(); e.stopPropagation(); close(); btn.current?.focus()
+    }
+    document.addEventListener('mousedown', away, true)
+    document.addEventListener('keydown', esc, true)
+    window.addEventListener('scroll', moved, true)
+    window.addEventListener('resize', close)
+    return () => {
+      document.removeEventListener('mousedown', away, true)
+      document.removeEventListener('keydown', esc, true)
+      window.removeEventListener('scroll', moved, true)
+      window.removeEventListener('resize', close)
+    }
+  }, [at])
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    e.preventDefault()
+    const opts = [...(list.current?.querySelectorAll<HTMLElement>('[role="option"]') || [])]
+    const i = opts.indexOf(document.activeElement as HTMLElement)
+    opts[Math.min(opts.length - 1, Math.max(0, i + (e.key === 'ArrowDown' ? 1 : -1)))]?.focus()
+  }
+  return (
+    <>
+      <button ref={btn} type="button" className="sel settings-vpick" aria-haspopup="listbox" aria-expanded={!!at}
+        aria-label={t('gui.settings.providers.vendor')}
+        onClick={() => (at ? close() : open())}
+        onKeyDown={(e) => { if ((e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') && !at) { e.preventDefault(); open() } }}>
+        {cur ? <><ProviderIcon id={cur.id} name={cur.name} /><span>{cur.name}</span></> : null}
+      </button>
+      {at && createPortal(
+        <div ref={list} className="settings-vlist" role="listbox" aria-label={t('gui.settings.providers.vendor')} onKeyDown={onKey}
+          style={{ left: at.left, width: at.width, top: at.top, bottom: at.bottom, maxHeight: LIST_H }}>
+          {GROUPS.map(([kind, label]) => {
+            const group = rows.filter((x) => groupOf(x) === kind)
+            return group.length ? (
+              <div key={kind} role="group" aria-label={t(label)}>
+                <div className="settings-vgrp">{t(label)}</div>
+                {group.map((x) => (
+                  <button key={x.id} type="button" role="option" aria-selected={x.id === value} className="settings-vopt" onClick={() => pick(x.id)}>
+                    <ProviderIcon id={x.id} name={x.name} /><span>{x.name}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null
+          })}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
+
+/* What a credential check means to the reader, one sentence per outcome.
+   Only a rejection at connect time refuses the key; everything else was
+   stored and says what is still worth knowing. */
+const PROBE_TONE: Record<string, 'ok' | 'warn' | 'muted'> = {
+  valid: 'ok', no_probe_endpoint: 'muted', key_unchecked: 'muted',
+}
+const probeTone = (p: ConnectProbe | undefined): 'ok' | 'warn' | 'muted' | null =>
+  p ? PROBE_TONE[p.status] || 'warn' : null
+function probeText(p: ConnectProbe): string {
+  switch (p.status) {
+    case 'valid':
+      return p.models_count
+        ? t('gui.settings.providers.probe_valid', { n: p.models_count })
+        : t('gui.settings.providers.probe_valid_plain')
+    case 'invalid_key': return t('gui.settings.providers.probe_invalid_saved')
+    case 'no_credits': return t('gui.settings.providers.probe_no_credits')
+    case 'rate_limited': return t('gui.settings.providers.probe_rate_limited')
+    case 'network_error': return t('gui.settings.providers.probe_unreachable')
+    case 'proxy_unreachable': return t('gui.settings.providers.probe_proxy')
+    case 'no_probe_endpoint': return t('gui.settings.providers.probe_no_endpoint')
+    case 'key_unchecked': return t('gui.settings.providers.probe_unchecked')
+    default: return t('gui.settings.providers.probe_unknown', { status: p.status })
+  }
+}
+
+/* A connected provider's test: "testing" while it runs, then its verdict,
+   with a way to ask again when the answer was anything but a plain yes.
+   Nothing when it was not tested this session. */
+export function ProbeNote({ slug }: { slug: string }): JSX.Element | null {
+  const probe = store.get().probes[slug]
+  const busy = store.isBusy(`probe:${slug}`)
+  if (busy) return <span className="settings-pnote" data-tone="muted">{t('gui.settings.providers.probe_checking')}</span>
+  if (!probe) return null
+  const again = PROBE_TONE[probe.status] === undefined
+  return (
+    <span className="settings-pnote" data-tone={probeTone(probe)!} title={probe.error || undefined}>
+      {probeText(probe)}
+      {again && (
+        <button type="button" className="settings-plink" onClick={() => void store.recheck(slug)}>
+          {t('gui.settings.providers.probe_recheck')}
+        </button>
+      )}
+    </span>
+  )
+}
+
 function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }): JSX.Element {
   const s = store.get()
   const rows = s.snap.providers.filter((p) => !p.on)
@@ -69,32 +202,23 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
     const b = base.trim()
     if (needsKey(p) && !k) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
-    void store.run(`connect:${p.id}`, async () => {
-      const params: Record<string, unknown> = { slug: p.id }
-      if (k) params.api_key = k
-      if (b) params.api_base = b
-      const snap = await store.source().provider('save_key', params)
+    const params: Record<string, unknown> = { slug: p.id }
+    if (k) params.api_key = k
+    if (b) params.api_base = b
+    void (async () => {
+      if (!await store.connect(`connect:${p.id}`, p.id, params)) return
       if (p.id === AZURE && (deploy.trim() || ver.trim())) {
-        return store.source().setFields(p.id, { deployment: deploy.trim(), api_version: ver.trim() })
+        await store.run(`connect:${p.id}`, () => store.source().setFields(p.id, { deployment: deploy.trim(), api_version: ver.trim() }))
       }
-      return snap
-    }).then((ok) => { if (ok) close() })
+      close()
+    })()
   }
+  const saving = store.isBusy(`connect:${p.id}`)
   return (
     <div className="settings-cfg settings-padd">
       <Row label={t('gui.settings.providers.vendor')}>
         <span className="selw">
-          <select className="sel" value={p.id} aria-label={t('gui.settings.providers.vendor')}
-            onChange={(e) => { store.set({ provAdd: e.currentTarget.value }); setKey(''); const n = rows.find((x) => x.id === e.currentTarget.value); setBase(n ? (n.apiBase || n.defaultApiBase || '') : '') }}>
-            {GROUPS.map(([kind, label]) => {
-              const group = rows.filter((x) => groupOf(x) === kind)
-              return group.length ? (
-                <optgroup key={kind} label={t(label)}>
-                  {group.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-                </optgroup>
-              ) : null
-            })}
-          </select>
+          <VendorPick rows={rows} value={p.id} onPick={(id) => store.set({ provAdd: id })} />
         </span>
       </Row>
       {kindOf(p) === 'oauth' ? (
@@ -110,7 +234,7 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
           {takesKey(p) && (
             <Row label={<>{t('gui.settings.providers.api_key')}<KeyLink url={p.keyUrl} /></>}>
               <KeyInput className="settings-tbox" value={key} placeholder={t(needsKey(p) ? 'gui.settings.providers.paste_key' : 'gui.settings.providers.key_optional_ph')} aria-label={t('gui.settings.providers.api_key')}
-                onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') connect() }} />
+                onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !saving) connect() }} />
             </Row>
           )}
           {(takesBase(p) || p.gateway || p.kind === 'endpoint') && (
@@ -137,10 +261,11 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
         <span className="settings-taglist">
           {!hideCancel && <button type="button" className="mini ghost" onClick={close}>{t('gui.cancel')}</button>}
           {kindOf(p) !== 'oauth' && (
-            <button type="button" className="mini" disabled={store.isBusy(`connect:${p.id}`)} onClick={connect}>
+            <button type="button" className="mini" disabled={saving} onClick={connect}>
               {t('gui.settings.providers.connect')}
             </button>
           )}
+          {s.err && <span className="settings-padderr" role="alert">{s.err}</span>}
         </span>
       </Row>
     </div>
@@ -168,18 +293,21 @@ export function Providers({ setup }: { setup?: boolean }): JSX.Element {
         <button type="button" className="mini ghost" onClick={openAdd}>{t('gui.settings.providers.add')}</button>
       ) : undefined}
     >
-      {s.provAdd !== null && <AddBlock slug={s.provAdd} hideCancel={setup && !on.length} />}
+      {/* Keyed by the vendor: the form seeds its address from the one it mounted
+          on, and a role row can point an already open form at another vendor. */}
+      {s.provAdd !== null && <AddBlock key={s.provAdd} slug={s.provAdd} hideCancel={setup && !on.length} />}
       {!on.length && s.provAdd === null && <div className="settings-rows"><Row><Rov>{t('gui.settings.providers.none')}</Rov></Row></div>}
       {on.map((p) => (
         <div key={p.id} className="settings-prow2">
-          <Chip state="on">{t('gui.settings.providers.connected')}</Chip>
-          <span className="settings-pn2">{p.name}</span><span className="settings-kk">{p.id}</span>
+          <Chip state={!store.isBusy(`probe:${p.id}`) && probeTone(s.probes[p.id]) === 'warn' ? 'warn' : 'on'}>{t('gui.settings.providers.connected')}</Chip>
+          <span className="settings-pn2">{p.name}</span>
           {kindOf(p) === 'oauth' && <Tag>{t('gui.settings.providers.subscription')}</Tag>}
           {(p.configured || []).length > 0 && <span className="settings-kk">{t('gui.settings.providers.n_models', { n: (p.configured || []).length })}</span>}
+          <ProbeNote slug={p.id} />
           <span style={{ flex: 1 }} />
           {setup ? (
             <button type="button" className="mini ghost" disabled={store.isBusy(`disconnect:${p.id}`)}
-              onClick={() => void store.run(`disconnect:${p.id}`, () => store.source().provider('disconnect', { slug: p.id }))}>
+              onClick={() => void store.run(`disconnect:${p.id}`, () => store.source().provider('disconnect', { slug: p.id })).then((ok) => { if (ok) store.dropProbe(p.id) })}>
               {t('gui.settings.providers.disconnect')}
             </button>
           ) : (

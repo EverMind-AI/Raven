@@ -10,6 +10,7 @@ import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import * as toastStore from '../../state/toast'
 import { CHANNELS, chanName } from './catalogue'
 import { connSource, loadChannels } from './source'
 
@@ -20,6 +21,11 @@ setTranslator((key: string, vars?: Record<string, unknown> | null) =>
 (vars ? `${key}(${Object.entries(vars).map(([k, v]) => `${k}=${v}`).join(',')})` : key))
 vi.spyOn(pageStore, 'show').mockImplementation(() => {})
 vi.spyOn(confirmStore, 'ask').mockImplementation(() => {})
+/* The notices, which are the switch's whole report to the reader. */
+const said: string[] = []
+vi.spyOn(toastStore, 'show').mockImplementation((text: string) => {
+  said.push(text)
+})
 
 function answering(channels: StatusRow[], gatewayRunning = true): void {
   const transport = new FixtureTransport({})
@@ -27,9 +33,23 @@ function answering(channels: StatusRow[], gatewayRunning = true): void {
   setGateway(transport)
 }
 
+/* Both halves of a switch press: the write, answered with the word the gateway
+   sent back, and the status read that follows it. */
+function switching(result: Record<string, unknown>, after: StatusRow[], gatewayRunning = true): string[] {
+  const asked: string[] = []
+  const transport = new FixtureTransport({})
+  transport.call = (async (method: string) => {
+    asked.push(method)
+    return method === 'channels.configure' ? result : { channels: after, gateway_running: gatewayRunning }
+  }) as typeof transport.call
+  setGateway(transport)
+  return asked
+}
+
 const row = (id: string) => CHANNELS.find((c) => c.id === id)!
 
 beforeEach(() => {
+  said.length = 0
   /* The rows are one shared array for the life of the page, so a case starts
      from the state the last one left -- the same thing a redraw does. */
   CHANNELS.forEach((c) => {
@@ -48,11 +68,11 @@ describe('the catalogue', () => {
     expect(new Set(CHANNELS.map((c) => c.id)).size).toBe(12)
   })
 
-  /* Two spellings: a catalogue key for the channels whose names differ by
-     language, a brand name used verbatim for the rest. */
-  it('names a row by whichever of the two spellings it carries', () => {
+  /* One spelling: a brand whose name is the same in both languages is still
+     named through the message catalogue, not written into the row. */
+  it('names every row through the message catalogue', () => {
     expect(chanName(row('feishu'))).toBe('gui.chan.feishu')
-    expect(chanName(row('slack'))).toBe('Slack')
+    expect(chanName(row('slack'))).toBe('gui.chan.slack')
   })
 
   it('marks the two that sign in by scanning a code', () => {
@@ -116,5 +136,90 @@ describe('merging one status answer', () => {
     setGateway(transport)
     await expect(connSource.rows()).resolves.toBe(CHANNELS)
     expect(row('slack').on).toBe(true)
+  })
+})
+
+/* The switch used to be a write and a guess: it flipped the flag, toasted
+   "reopen the Raven app", and left every live fact on the row at whatever the
+   last section entry had read. The gateway applies the write on the spot and
+   answers with a word, so both halves of that are now readable. */
+describe('the row switch', () => {
+  it('reads the status back, so the row is not the previous load\'s', async () => {
+    const asked = switching({ applied: true, outcome: 'started' }, [
+      { name: 'slack', enabled: true, running: true, connected: null },
+    ])
+    await connSource.toggle(row('slack'), true)
+    expect(asked).toEqual(['channels.configure', 'channels.status'])
+    expect(row('slack')).toMatchObject({ on: true, running: true, connected: null })
+  })
+
+  it('says what the gateway did rather than what the reader should do about it', async () => {
+    switching({ applied: true, outcome: 'started' }, [{ name: 'slack', enabled: true, running: true }])
+    await connSource.toggle(row('slack'), true)
+    expect(said).toEqual(['gui.conn.toggled_now(name=gui.chan.slack,state=gui.conn.enabled)'])
+  })
+
+  /* The one case the old sentence was true of: nobody applied the write, so the
+     next launch is what honours it. */
+  it('keeps the reopen advice for the write no gateway took', async () => {
+    switching({ applied: true, outcome: 'unreachable' }, [{ name: 'slack', enabled: true }], false)
+    await connSource.toggle(row('slack'), true)
+    expect(said).toEqual(['gui.conn.toggled(name=gui.chan.slack,state=gui.conn.enabled)'])
+  })
+
+  /* A refusal has a reason and something to do about it; both were dropped, and
+     the row went red with neither. */
+  it('names why an adapter would not start, with the server sentence', async () => {
+    switching({ applied: true, outcome: 'missing_dep', detail: 'Run: uv sync --inexact --extra channels' }, [
+      { name: 'slack', enabled: true, running: false },
+    ])
+    await connSource.toggle(row('slack'), true)
+    expect(said).toEqual([
+      'gui.conn.toggle_failed(name=gui.chan.slack,detail=gui.conn.out_missing_dep Run: uv sync --inexact --extra channels)',
+    ])
+  })
+
+  it('keeps an outcome it has no sentence for readable', async () => {
+    switching({ applied: true, outcome: 'no_manager' }, [{ name: 'slack', enabled: true }])
+    await connSource.toggle(row('slack'), true)
+    expect(said).toEqual([
+      'gui.conn.toggle_failed(name=gui.chan.slack,detail=gui.conn.out_refused(outcome=no_manager))',
+    ])
+  })
+
+  /* The reload rides on the write's promise, so its failure would otherwise
+     arrive as the write's: switch back, "could not save", neither of them
+     true. */
+  it('keeps the write when the status read that follows it fails', async () => {
+    const transport = new FixtureTransport({})
+    transport.call = (async (method: string) => {
+      if (method === 'channels.configure') return { applied: true, outcome: 'started' }
+      throw new Error('offline')
+    }) as typeof transport.call
+    setGateway(transport)
+    await connSource.toggle(row('slack'), true)
+    expect(row('slack').on).toBe(true)
+    expect(said).toEqual(['gui.conn.toggled_now(name=gui.chan.slack,state=gui.conn.enabled)'])
+  })
+
+  /* The pane's Connect is the same write, and it is where a wheel install meets
+     this: the credentials were saved and the adapter never came up. */
+  it('says why the pane\'s connect did not start anything either', async () => {
+    switching({ applied: true, outcome: 'missing_dep', detail: 'Run: the installer' }, [
+      { name: 'slack', enabled: true, running: false },
+    ])
+    await connSource.apply(row('slack'), { bot_token: 'x' }, true)
+    expect(said).toEqual([
+      'gui.conn.saved_x(name=gui.chan.slack)',
+      'gui.conn.toggle_failed(name=gui.chan.slack,detail=gui.conn.out_missing_dep Run: the installer)',
+    ])
+  })
+
+  /* Switching off is done the moment the config says so, whatever the gateway
+     had in its table. */
+  it('reports a stop as a stop', async () => {
+    switching({ applied: true, outcome: 'absent' }, [{ name: 'slack', enabled: false }])
+    await connSource.toggle(row('slack'), false)
+    expect(said).toEqual(['gui.conn.toggled_now(name=gui.chan.slack,state=gui.conn.disabled)'])
   })
 })

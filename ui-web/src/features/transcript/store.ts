@@ -9,9 +9,9 @@ import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
 
-import type { DeliveryRow, WsChange } from '../workspace/types'
+import type { DeliveryRow } from '../workspace/types'
 import type {
-  AnswerData, ArtifactRow, ArtifactsSource, ArtsData, AskData, CallData, CallHandle,
+  AnswerData, ArtsData, AskData, CallData, CallHandle,
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
   SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
@@ -25,64 +25,6 @@ import type {
  */
 
 const source = (): TranscriptSource => ds('transcript')
-
-/* Tolerated missing rather than thrown on: a page that has installed no
-   artifacts source has no products to show, and the bar is drawn from the same
-   boot sequence that installs it. */
-function artifactsSource(): ArtifactsSource {
-  try {
-    return ds('artifacts')
-  } catch {
-    return { changes: () => [] }
-  }
-}
-
-/* The file's own first lines, out of the row the workspace record already
-   holds. A write tool's hunk IS what it wrote -- hunkFromWrite keeps the first
-   forty lines as rows and folds the rest into one gap row -- so a text product
-   draws a miniature of itself with nothing fetched, live and on replay both
-   (session.resume carries the write's arguments, and the panel's replay
-   rebuilds the same hunk from them). Null when the row carries no content, and
-   then the tile shows the file's kind rather than inventing a picture. */
-function artifactHead(c: WsChange): string | null {
-  const out: string[] = []
-  for (const h of c.hunks || []) {
-    for (const r of h.rows || []) {
-      if (r[0] === 'add') out.push(String(r[1] == null ? '' : r[1]))
-      else if (r[0] === 'gap' && Array.isArray(r[1])) for (const l of r[1]) out.push(String(l))
-    }
-  }
-  return out.length ? out.join('\n') : null
-}
-
-/* Every file this turn created or edited. The workspace record already owns
-   that classification and survives live/replay through the same tool rows. */
-export function artifactsOf(lane: Lane, turn: number): ArtifactRow[] {
-  if (!lane.main) return []
-  let rows: WsChange[] = []
-  try {
-    rows = artifactsSource().changes(turn) || []
-  } catch {
-    return []
-  }
-  return rows.filter(Boolean).map((c) => {
-    const shown = `${c.dir || ''}${c.name || ''}` || String(c.key || '')
-    const name = String(c.name || shown)
-    const dot = name.lastIndexOf('.')
-    return {
-      path: String(c.key || ''),
-      dir: String(c.dir || ''),
-      name,
-      ext: dot > 0 ? name.slice(dot + 1).toLowerCase() : '',
-      head: artifactHead(c),
-      lines: c.add || 0,
-      deleted: c.del || 0,
-      /* Only a write onto nothing is new: a whole-file write over a file that
-         was already there replaced its contents, which is an edit. */
-      change: c.kind === 'add' ? 'new' : c.kind === 'delete' ? 'deleted' : 'edit',
-    }
-  })
-}
 
 /* Not held here: the desk's shelf lists the same rows for the whole session, so
    the registry they live in is shared ground (workspace/deliveries.ts).
@@ -160,7 +102,7 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
     case 'grep': return s('pattern') + (a.glob ? '  ' + s('glob') : '')
     case 'find': return s('pattern')
     case 'exec': return String(a.intent || a.command || '')
-    case 'web_search': case 'deep_research': case 'tool_search':
+    case 'web_search': case 'tool_search':
       return a.query ? '“' + s('query') + '”' : ''
     case 'web_fetch': return s('url').replace(/^https?:\/\//, '')
     case 'understand_media': {
@@ -389,13 +331,14 @@ function push(lane: Lane, seg: Seg): void {
 
 function ask(
   lane: Lane, body: string, atts: string[], when?: string | null,
-  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean } | null,
+  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean; at?: number } | null,
 ): AskData {
   const o = opts || {}
   const seg: AskData = {
     v: 0, id: nextId(), kind: 'ask', ...(o.auto ? { auto: o.auto } : {}),
     ...(o.midTurn ? { midTurn: true } : {}), body, atts,
-    when: when != null ? when : stamp(Date.now()), expanded: false,
+    when: when != null ? when : stamp(Date.now()),
+    at: o.at != null ? o.at : when != null ? 0 : Date.now(), expanded: false,
     clipped: body.length > 640 || body.split('\n').length > 12,
     clipOpen: false,
   }
@@ -458,9 +401,11 @@ export function cronReminder(text: string): { note: string; said: string } | nul
    What it says is the origin, and for a schedule the instruction that fired,
    which is the reader's own sentence. Every other origin has a shape of its
    own that nothing here reads, so the row is the chip alone. */
-export function askAuto(lane: Lane, origin: string, text: string, when?: string | null): void {
+export function askAuto(lane: Lane, origin: string, text: string, when?: string | null, at?: number): void {
   const said = origin === 'cron' ? cronReminder(text) : null
-  ask(lane, said ? said.said : '', [], when, { auto: { origin, note: said ? said.note : '' } })
+  ask(lane, said ? said.said : '', [], when, {
+    auto: { origin, note: said ? said.note : '' }, ...(at != null ? { at } : {}),
+  })
 }
 
 export function note(lane: Lane, label: string, detail: string, opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
@@ -549,23 +494,24 @@ export function toggleDelivered(lane: Lane, seg: DeliveredData): void {
   bump(lane, seg)
 }
 
-/* The turn's products, as its closing line. Appended once the turn is over and
-   only when it produced something: a bar reading "0 products" is furniture the
-   reader learns to skip, and then skips on the turn that had some.
+/* The turn's deliveries, as its closing line. Appended once the turn is over and
+   only when it delivered something: a bar reading "0 products" is furniture the
+   reader learns to skip, and then skips on the turn that had some. The check
+   can be made here because every delivery is recorded off its tool result,
+   which always lands before the turn ends.
 
-   Nothing is copied in. The row list is read from the source when the tiles
-   draw, so a reload -- which rebuilds the workspace record from history -- and
-   a live turn cannot disagree about what a turn produced. */
+   Nothing is copied in. The row list is read from the registry when the tiles
+   draw, so a reload and a live turn cannot disagree about what a turn
+   delivered. */
 export function artifacts(lane: Lane, turn: number): void {
-  if (!artifactsOf(lane, turn).length && !deliveriesOf(lane, turn).length) return
+  if (!deliveriesOf(lane, turn).length) return
   push(lane, {
-    v: 0, id: nextId(), kind: 'arts', turn, deliveriesOpen: false, changesOpen: false,
+    v: 0, id: nextId(), kind: 'arts', turn, deliveriesOpen: false,
   } satisfies ArtsData)
 }
 
-export function toggleArts(lane: Lane, seg: ArtsData, section: 'deliveries' | 'changes'): void {
-  if (section === 'deliveries') seg.deliveriesOpen = !seg.deliveriesOpen
-  else seg.changesOpen = !seg.changesOpen
+export function toggleArts(lane: Lane, seg: ArtsData): void {
+  seg.deliveriesOpen = !seg.deliveriesOpen
   bump(lane, seg)
 }
 
@@ -808,12 +754,16 @@ const fromListStatus = (raw: unknown): string => LIST_STATUS[String(raw || '')] 
    in the same tick share one request. */
 let spawnRoster: Promise<SpawnListRow[]> | null = null
 
-/* Turn a restored card's task id into the record id its stream is read by.
+/* Find the record a restored card's run wrote, which is what fills its header
+   and clock: a conversation restored from history saw no `subagent.status`
+   frame, so nothing else says which instance ran or for how long.
 
-   A spawn record's directory is `<stamp>-<task_id>` (the manager's own
-   `make_call_id`), and the task id is what the tool's result sentence names --
-   stamped onto the transcript row as `spawn_task_id` by the server that writes
-   that sentence. So the row is found by suffix, the same match
+   A record is named by the call's own `node_id` -- required on every spawn, and
+   unique in the conversation because it doubles as the record's filename -- so
+   the arguments name the row exactly. Records written before the id was the
+   model's word are `<stamp>-<task_id>` (the manager's own `make_call_id`), and
+   for those the task id the tool's result sentence names -- stamped onto the
+   transcript row as `spawn_task_id` -- is found by suffix, the same match
    ui-tui/src/domain/spawnRun.ts makes.
 
    Called on open, not at restore: a transcript can hold a dozen delegated calls
@@ -825,14 +775,17 @@ let spawnRoster: Promise<SpawnListRow[]> | null = null
    never the instance. Nothing the card already knows is overwritten -- a live
    card never comes here, and if one did, the event is the fresher word. */
 export function resolveSpawn(lane: Lane, c: CallData): void {
-  if (c.spawnId || !c.spawnTaskId || c.spawnAsked) return
+  const node = String(c.args.node_id || c.args.call_id || '')
+  if (c.spawnId || (!node && !c.spawnTaskId) || c.spawnAsked) return
   const read = source().spawnList
   if (!read) return
   c.spawnAsked = true
   if (!spawnRoster) spawnRoster = read()
-  const want = `-${c.spawnTaskId}`
+  const suffix = c.spawnTaskId ? `-${c.spawnTaskId}` : ''
   spawnRoster.then((rows) => {
-    const row = (rows || []).find((r) => (r.kind || 'spawn') === 'spawn' && String(r.id || '').endsWith(want))
+    const spawns = (rows || []).filter((r) => (r.kind || 'spawn') === 'spawn' && r.id)
+    const row = (node ? spawns.find((r) => String(r.id) === node) : undefined)
+      || (suffix ? spawns.find((r) => String(r.id).endsWith(suffix)) : undefined)
     if (!row || !row.id) return
     c.spawnId = String(row.id)
     c.spawnAgent = c.spawnAgent || String(row.agent || '')
@@ -842,7 +795,6 @@ export function resolveSpawn(lane: Lane, c: CallData): void {
     c.spawnT0 = c.spawnT0 || msOfIso(row.started_at)
     c.spawnT1 = c.spawnT1 || msOfIso(row.ended_at)
     bump(lane, c)
-    readSpawn(lane, c)
   }).catch(() => {
     /* Asked again if the reader reopens the card, and the memoised promise goes
        with it -- kept, every later card would inherit this one rejection. */
@@ -850,76 +802,6 @@ export function resolveSpawn(lane: Lane, c: CallData): void {
     spawnRoster = null
   })
 }
-
-/* Read one spawned run's messages, once.
-
-   Called on a beat by the card that draws it, not by a store-owned timer: the
-   card's own mount decides when the read is worth making, so a run scrolled out
-   of the trail or a session left mid-run stops costing anything without a
-   reaper.
-
-   `reading` rather than a queue: a read slower than the beat is answered by the
-   next beat, and stacking them would multiply requests against a sub-agent that
-   is already the slow part. A failure clears the flag and keeps whatever the card
-   had -- the failure is about the read, not about the run. */
-export function readSpawn(lane: Lane, c: CallData): void {
-  const read = source().spawnRecord
-  if (!read || !c.spawnId || c.reading) return
-  c.reading = true
-  read(c.spawnId).then((rec) => {
-    c.reading = false
-    const msgs = (rec && rec.messages) || []
-    /* Length, not identity: the method rebuilds the list from the activity
-       collector on every call, so every answer is a fresh array and a reference
-       check would repaint on every beat. A stream only ever grows, and the last
-       row's own text moves as it streams -- so both are compared. */
-    if (msgs.length === c.stream.length && tailText(msgs) === tailText(c.stream)) return
-    c.stream = msgs
-    bump(lane, c)
-  }).catch(() => {
-    c.reading = false
-  })
-}
-
-/* The newest thing the run said, flattened to one line for the collapsed row.
-
-   Three sources in falling order of "is this what it is doing right now": the
-   message's own text, the thought it is forming, and failing both the tool it
-   just reached for. The third matters most -- a sub-agent spends most of a run
-   inside tool calls, where there is no text yet, and a tail that went blank
-   there would stop moving during exactly the stretch the reader is watching.
-
-   Scanned from the newest backwards rather than reading the last row: the last
-   row can be one with nothing to show yet, and taking it would blank a tail that
-   had been moving. */
-export function tailText(msgs: HistoryMessage[]): string {
-  for (let i = msgs.length - 1; i >= 0; i -= 1) {
-    const m = msgs[i] as HistoryMessage
-    const body = flat(m.text) || flat(m.reasoning_content) || flat(toolNames(m))
-    if (!body) continue
-    /* A tool's result named by the tool that produced it. The name alone is the
-       row before this one; what makes this row worth a line is that an answer
-       came back, and whose. */
-    return m.role === 'tool' && m.name ? `${m.name} · ${body}` : body
-  }
-  return ''
-}
-
-
-
-/* The calls one message reached for, named. Joined rather than counted: a name
-   says what is happening, `2 calls` does not. */
-function toolNames(m: HistoryMessage): string {
-  return (m.tool_calls || []).map((call) => call && call.name).filter(Boolean).join(', ')
-}
-
-/* `defence` and not a marker-stripping regex: the fence is nonce-tagged on both
-   ends precisely so a forged close cannot end it, and the one place that check
-   lives is `defence`. Without it the tail spent whole tool calls showing
-   `[BEGIN UNTRUSTED list_dir #7d8064e3 - everything below until the matching...]`
-   -- a boundary written for the model -- instead of what the run had found. */
-const flat = (v: unknown): string =>
-  (typeof v === 'string' ? defence(v).replace(/\s+/g, ' ').trim() : '')
 
 /* The header one spawn card carries: `Spawn <instance>@<agent>: <task_summary>`.
 
@@ -1140,7 +1022,7 @@ function newCallData(
     open: false, t0: Date.now(), runId: null, runTitle: '', nodes: [], live: false, asked: false,
     callId: callId ? String(callId) : '',
     spawnAgent: '', spawnInstance: '', spawnLabel: '', spawnStatus: '', spawnId: '',
-    spawnTaskId: '', spawnAsked: false, spawnT0: 0, spawnT1: 0, stream: [], reading: false,
+    spawnTaskId: '', spawnAsked: false, spawnT0: 0, spawnT1: 0,
   }
   if (kind === 'dag') c.runTitle = String(a.task_summary || '')
   if (kind === 'spawn') {
@@ -1198,12 +1080,12 @@ export function newStep(lane: Lane): StepHandle {
   }
   push(lane, seg)
 
+  /* A live thought is shown folded: the design's small "thinking" card (Figma:
+     Raven / Thinking) is what a turn opens with, and the thought itself is one
+     click away -- where it follows its newest line for as long as it grows. */
   const reveal = (): void => {
     seg.thinkShown = true
-    if (!seg.thinkLive) {
-      seg.thinkLive = true
-      if (!seg.thinkPinned) seg.thinkOpen = true
-    }
+    if (!seg.thinkLive) seg.thinkLive = true
     poke(lane)
     bump(lane, seg)
   }
@@ -1231,10 +1113,7 @@ export function newStep(lane: Lane): StepHandle {
       seg.hasThink = true
       seg.think += text || ''
       seg.thinkShown = true
-      if (!seg.thinkLive) {
-        seg.thinkLive = true
-        if (!seg.thinkPinned) seg.thinkOpen = true
-      }
+      if (!seg.thinkLive) seg.thinkLive = true
       poke(lane)
       scheduleFlush(lane, seg)
     },
@@ -1322,11 +1201,10 @@ function shutAutoFolds(lane: Lane, except: FoldData | null): void {
  * A sub-agent still running under it does not keep it open: that run is
  * followed on the task rows, not here.
  *
- * Replay opens at most one -- see :func:`openLastFold`, the turn a reopened
- * conversation ends on -- and a live turn shuts any fold the runtime opened
- * before it, so at most one runtime-opened body is ever built. The weight is
- * what a SESSION accumulates: a forty-turn session built 7361 nodes and 6400 of
- * them sat in shut fold bodies. */
+ * Replay opens none: a reopened conversation arrives with every turn shut, the
+ * last one included, the same as a turn watched live ends. That is also what
+ * the weight asks for -- a forty-turn session built 7361 nodes and 6400 of them
+ * sat in shut fold bodies. */
 export function collapse(lane: Lane, time?: string | null, live = false): void {
   const segs = lane.segs
   const loose: StepData[] = []
@@ -1383,36 +1261,6 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
     f.steps.push(s)
   })
   bumpList(lane)
-}
-
-/* The fold over the turn a replayed conversation ends on, opened.
- *
- * Same reason as the live one -- the reader is looking at the bottom of the
- * conversation and that is the turn they came back for -- and the same limit:
- * ONE body built, not a session's worth, so the weight the shut default is for
- * is still not there.
- *
- * Only when the last turn is the one that fold belongs to. The scan stops at a
- * question or a delivery exactly as `collapse`'s does, because it is asking the
- * same thing from the other end: a conversation whose final turn answered with
- * no work of its own has its last fold one turn further back, and opening that
- * would open a turn the reader did not return to.
- *
- * Marked `auto`, so the reader's first question shuts it like any other -- it
- * is the runtime's, not theirs, until they touch it. */
-export function openLastFold(lane: Lane): void {
-  for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
-    const s = lane.segs[i] as Seg
-    /* Not an opening, same as in collapse: the fold this scan is after may be
-       the one over the work that came before the reader's correction. */
-    if (s.kind === 'ask' && (s as AskData).midTurn) continue
-    if (s.kind === 'ask' || s.kind === 'sdlv') return
-    if (s.kind !== 'fold') continue
-    s.open = true
-    s.auto = true
-    bump(lane, s)
-    return
-  }
 }
 
 const isSilent = (s: StepData): boolean =>
@@ -1824,7 +1672,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
            measured from here. `turnNo` stays put: the workspace-turn
            bookkeeping belongs to the delegated shape, as the note above says. */
         turnAt = msOf(m.timestamp)
-        askAuto(lane, String(m.origin || ''), m.text || '', stamp(m.timestamp as string))
+        askAuto(lane, String(m.origin || ''), m.text || '', stamp(m.timestamp as string), msOf(m.timestamp))
       }
       return
     }
@@ -1838,7 +1686,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
          arm does with its own: the work that follows the message belongs below
          it, and appending it to the step above would put the reader's
          correction after the calls it asked for. */
-      askText(lane, m.text, stamp(m.timestamp as string), { midTurn: true })
+      askText(lane, m.text, stamp(m.timestamp as string), { midTurn: true, at: msOf(m.timestamp) })
       toolRun = null
       return
     }
@@ -1848,7 +1696,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       closeProducts()
       turnNo += 1
       turnAt = msOf(m.timestamp)
-      askText(lane, m.text, stamp(m.timestamp as string))
+      askText(lane, m.text, stamp(m.timestamp as string), { at: msOf(m.timestamp) })
       return
     }
     if (m.role === 'assistant' && m.notice) {
@@ -1933,7 +1781,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
  * Reading those as the question is what a reload used to show -- the note, the
  * paths and the engine's line, all as prose (src/lib/attachments.ts). */
 export function askText(
-  lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean } | null,
+  lane: Lane, text: string, when?: string | null, opts?: { midTurn?: boolean; at?: number } | null,
 ): AskData {
   const { body, atts } = readMessage(String(text))
   return ask(lane, body, atts, when, opts)
@@ -2184,9 +2032,9 @@ export function openDagRun(runId: string): void {
   try { source().openDagRun?.(runId) } catch { /* no opener wired */ }
 }
 
-export function openSpawn(agent: string, label: string): void {
+export function openSpawn(agent: string, label: string, nodeId?: string): void {
   const src = source()
-  if (src.openSpawn) { src.openSpawn(agent, label); return }
+  if (src.openSpawn) { src.openSpawn(agent, label, nodeId); return }
   pane().show('agents')
 }
 

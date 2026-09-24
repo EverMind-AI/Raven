@@ -110,7 +110,7 @@ def render_config(source: Path) -> Path:
 
     root.mkdir(parents=True, exist_ok=True)
     render.sweep_stale_renders(root)
-    return render.write_rendered(config, root)
+    return render.write_rendered(config, root, own_plugins=(FLOW_PLUGIN_ID,))
 
 
 def main() -> int:

@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from loguru import logger
 
-from raven.spine.events import RunnerEvent, TurnEnded, TurnEvent, TurnFailed, TurnStarted
+from raven.spine.events import RunnerEvent, TurnEnded, TurnEvent, TurnFailed, TurnStarted, bound_failure_text
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
 from raven.spine.turn import AnswerlessTurnError, BusyPolicy, Origin, TurnRequest
 
@@ -30,7 +30,9 @@ def describe_failure(exc: BaseException) -> str:
     that as a crash of whatever tool call it saw last.
 
     An ``AnswerlessTurnError`` is the runner's own wording of the failure and
-    is carried as it is.
+    is carried as it is -- bounded where it was built, by the layer that knows
+    what it cut. A crash's message is bounded here instead: it is arbitrary, and
+    this text reaches a chat reply and a cron job record, not only a log.
     """
     text = str(exc).strip()
     name = type(exc).__name__
@@ -43,8 +45,8 @@ def describe_failure(exc: BaseException) -> str:
     # than by the provider layer's own prefix rule: the kernel does not import
     # providers.
     if text.startswith(f"{name}:") or text.startswith(f"{name} ") or text == name:
-        return text
-    return f"{name}: {text}"
+        return bound_failure_text(text)
+    return bound_failure_text(f"{name}: {text}")
 
 
 def conversation_id(req: TurnRequest) -> str:
@@ -425,7 +427,7 @@ class Lane:
         # Resolve the turn's identity here, once, and put it back on the request so
         # the runner and the lifecycle events agree on one value. Minted when the
         # submitter supplied none: a turn the runtime submits onto a busy lane (a
-        # sub-agent announce, a deep-research delivery) must still be
+        # sub-agent announce, a runtime-submitted verbatim reply) must still be
         # distinguishable from the client turn queued behind it, or a consumer keyed
         # on a per-lane slot ends the wrong turn.
         # Falsy, not just None: turn_id is a public field and an empty string
@@ -507,6 +509,10 @@ class Lane:
                 cancelled=False,
                 conversation_id=self._conversation_id,
                 turn_id=turn_id,
+                # The runner worded this one itself, so a consumer may quote it;
+                # every other exception here is a crash whose message names
+                # hosts and paths.
+                reported=isinstance(exc, AnswerlessTurnError),
             )
             await self._sink(failed)
             self._payload_reported = True

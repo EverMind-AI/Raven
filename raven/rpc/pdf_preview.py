@@ -195,7 +195,11 @@ def forget_source(document_id: str) -> None:
 
 def cache_key(source: Path) -> str:
     st = source.stat()
-    digest = hashlib.sha256(f"{source}\0{st.st_size}\0{st.st_mtime_ns}".encode()).hexdigest()
+    # The font state belongs in the key: a deck whose Chinese came out as boxes
+    # has the same path, size and mtime as the one that draws it, so without
+    # this the host keeps serving the boxes after the fix that ended them.
+    fingerprint = office.render_fingerprint()
+    digest = hashlib.sha256(f"{source}\0{st.st_size}\0{st.st_mtime_ns}\0{fingerprint}".encode()).hexdigest()
     return digest[:32]
 
 

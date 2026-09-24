@@ -217,7 +217,7 @@ function CronSide({ rows, loaded, q, onQ, viewId }: {
         sub={
           broke && last
             ? `${t('gui.cron.failed')} · ${last.at}`
-            : j.on ? cronWhen(j) : `${cronWhen(j)} · ${t('gui.cron.paused')}`
+            : cronWhen(j)
         }
         {...(broke ? { tone: 'bad' as const } : {})}
         onOpen={() => store.openDetail(j)}

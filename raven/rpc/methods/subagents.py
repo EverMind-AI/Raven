@@ -25,6 +25,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
+from raven.agent.subagent.backends.env import refresh_login_shell_env
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
@@ -346,6 +347,12 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "upgrade_to": _upgrade_transport(cfg, source),
                 "probe_status": result.status,
                 "probe_detail": result.detail,
+                # What to install, as the executable the lookup did not find: for
+                # a shim preset that is `npx`, which Node.js brings and the
+                # agent's own installer does not. Only on a row still `missing`
+                # -- a vendored row demoted to `attention` above is not offered
+                # an install at all.
+                "probe_missing": result.absent if result.status == "missing" else None,
                 "has_api_key": bool((getattr(cfg, "api_key", "") or "").strip()),
                 # Measured by the handshake, not guessed from the status: an
                 # `attention` row is equally "wants a credential" and "installed
@@ -358,6 +365,7 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,
                 "last_test_detail": None if last is None else last.detail,
+                "last_test_remedy": None if last is None or last.remedy is None else last.remedy.to_wire(),
                 "last_test_at_ms": None if last is None else last.tested_at_ms,
                 "test_running": task is not None and not task.done(),
                 "model": getattr(cfg, "model", None),
@@ -377,7 +385,19 @@ async def subagents_list(params: dict) -> dict:
     availability check - the overlay does this on the list call it issues right
     after its own mutation, where a fresh probe would only re-measure what it
     already knows it just wrote.
+
+    ``refresh_login_env`` takes the login shell's environment again before the
+    probe, instead of reading the one this process captured when it started. An
+    agent installed since then is otherwise not found until a restart: its
+    installer adds a PATH line to the shell rc, which only a new capture reads.
+    The page's "Check again" sends it and nothing else does, since the capture
+    runs the user's login shell and can take seconds. It replaces the capture
+    every spawn reads too, so the Connect that follows launches with the PATH
+    the probe just found the agent on. Read as ``is True`` for the reason the
+    ``force`` flags are: a string such as ``"false"`` is truthy in Python.
     """
+    if params.get("refresh_login_env") is True:
+        await asyncio.to_thread(refresh_login_shell_env)
     probe = params.get("probe", True)
     return {"rows": await _rows(probe=bool(probe))}
 
@@ -420,7 +440,8 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     the same one real prompt `subagents.toggle` sends, through this entry's own
     backend, and a refusal in the agent's own words when nothing answers. So
     this spends one call on that agent's own quota, and can hold the add for up
-    to `_ENABLE_PING_TIMEOUT_SECONDS`. `force: true` bypasses it, as on the
+    to the row's own start window plus `_ENABLE_PING_TIMEOUT_SECONDS`
+    (`probe._ping_bounds`). `force: true` bypasses it, as on the
     switch. A refusal stores nothing at all -- not the row disabled -- because
     the surface that calls this offers one verb per row: an added row is
     connected, and a row that could not be proved has to stay one Connect away
@@ -513,22 +534,32 @@ def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
     vocabulary: one of raven's own also takes a host-qualified id under either
     rule, since it runs on raven's providers whatever it advertised.
 
-    The rule is the row's, not its kind's: an acp row picks from the choices its
-    handshake advertised, except when it is one of raven's own and advertised
-    none. Those run on raven's own provider catalogue -- a product installed
-    beside this raven inherits its providers -- so an empty menu there is a
-    handshake that predates the catalogue rather than an agent with nothing to
-    offer, and falling back to raven's own ids gives the reader the same menu
-    the built-in row gets. A third party that advertised none is taken at its
-    word: its own credentials decide what it can run, and raven's ids would be
-    refused by the agent itself.
+    The rule is the row's, not its kind's: a third-party acp row picks from the
+    choices its handshake advertised, and one of raven's own picks from raven's
+    own provider catalogue whatever it advertised. An own row runs on this
+    host's providers -- a product installed beside this raven inherits them --
+    so the catalogue is the live list of what it can serve, while its handshake
+    is a launch-time capture of the same list: measured once on a probe
+    session, capped per provider, and stale from the first credential edit
+    after it. Drawing that capture beside the composer's live picker put two
+    different menus on one catalogue. A third party that advertised none is
+    taken at its word: its own credentials decide what it can run, and raven's
+    ids would be refused by the agent itself.
     """
     if cfg.kind == "builtin":
         return "raven"
+    # A product whose folder carries its own chat credential is not on this
+    # host's catalogue at all: its launcher takes that key with the provider and
+    # model beside it and never reads what the host would have lent. Nothing
+    # here can name what it answers with, and a pick made from raven's ids would
+    # be pushed at a session whose own config has never heard of them -- so the
+    # model is the folder's, the way an openai row's is its section's.
+    from raven.agent.subagent.vendored_agents import product_llm_key
+
+    if product_llm_key(getattr(cfg, "name", "") or ""):
+        return "fixed"
     if cfg.kind != "acp":
         return "fixed"
-    if meta.model_choices:
-        return "agent"
     return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
 
 
@@ -681,7 +712,11 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             proposed = str(params["model"])
             choices = [c.value for c in meta.model_choices]
             own_acp = cfg_for_meta.kind == "acp" and getattr(snapshot, "agent_name", "") == "raven"
-            if rule == "agent" and proposed in choices:
+            # An id the agent advertised is one it serves, whichever menu the
+            # page drew. Not keyed on the rule: that names the menu, and keying
+            # the write to it meant an own row stopped taking its own
+            # handshake's ids the moment its menu became raven's catalogue.
+            if proposed in choices:
                 target["model"] = proposed
             elif rule == "agent" and not own_acp:
                 # Mirrors ``SubagentManager.set_instance_model``'s own message: the
@@ -904,10 +939,12 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
     # `data` from `detail` only when a handler passed no `data` of its own, so a
     # call site passing both drops the human-readable half.
     detail = f"sub-agent {name!r} did not answer a test message, {refusal}: {result.detail}"
-    raise SubagentNotReadyError(
-        detail,
-        data={"name": name, "field": "enabled", "detail": detail},
-    )
+    # `remedy` beside the sentence: the same verdict as data, for a page that
+    # draws the fix in its reader's language instead of printing the English.
+    data: dict[str, Any] = {"name": name, "field": "enabled", "detail": detail}
+    if result.remedy is not None:
+        data["remedy"] = result.remedy.to_wire()
+    raise SubagentNotReadyError(detail, data=data)
 
 
 def _read_agents() -> list[dict]:
@@ -1004,7 +1041,8 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     backend and refuses the enable, in the agent's own words, when nothing
     answers: the roster's entry criterion is that the agent works now, not that
     it is installed. So this spends one call on that agent's own quota and can
-    hold the switch for up to `_ENABLE_PING_TIMEOUT_SECONDS`. Exempt: switching
+    hold the switch for up to the row's own start window plus
+    `_ENABLE_PING_TIMEOUT_SECONDS` (`probe._ping_bounds`). Exempt: switching
     off, a `builtin` row (this process, with no backend to reach), and
     `force: true`, the operator's override for an agent whose provider is
     briefly down. A refusal writes nothing.
@@ -1157,6 +1195,7 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
         ok=result.ok,
         detail=result.detail,
         tested_at_ms=int(time.time() * 1000),
+        remedy=result.remedy,
     )
     # Exactly the case where `_test_acp` wrote a capability snapshot. What an acp
     # test changes is measured capability, which lives in that store -- and the

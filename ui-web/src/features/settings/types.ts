@@ -29,6 +29,12 @@ export interface ProviderRow {
      catalogue. What the settings page manages is `configured` below. */
   models: string[]
   configured?: string[]
+  /* Every model-id prefix that names this provider, carried so a page asking
+     whether two spellings are one model can ask what the backend answers
+     (`features/model/types.ts`'s `ModelHost`). These rows are the model
+     feature's own (`features/model/source.ts` builds them), so the field is
+     here to be read rather than to be filled in again. */
+  routes?: readonly string[]
   /* Name and tags per model id, straight off `model.options`. A model with no
      entry is one the registry knows nothing about and nobody has described --
      it lists as its id with no icons. */
@@ -151,6 +157,8 @@ export interface ModelCandidate extends ModelTagFacts {
   kind: string
   added: boolean
   description?: string
+  /* Whether the vendor named it just now or it comes from the bundled catalogue. */
+  source?: string
 }
 
 /* `status` is the probe's own vocabulary -- `ok`, or why the vendor did not
@@ -159,6 +167,18 @@ export interface ModelCandidate extends ModelTagFacts {
 export interface ModelCatalogue {
   models: ModelCandidate[]
   status: string
+  error?: string | null
+}
+
+/* What a provider's credential check answered, after a connect or on a
+   "check again". `status` is the probe's word -- valid, invalid_key,
+   key_unchecked, no_credits, rate_limited, network_error, proxy_unreachable,
+   no_probe_endpoint, http_<code>. */
+export interface ConnectProbe {
+  ok: boolean
+  status: string
+  http_status?: number | null
+  models_count?: number | null
   error?: string | null
 }
 
@@ -176,6 +196,18 @@ export interface AuthField {
   help_url?: string
 }
 
+/* What the catalogue knows about one installed server, beside what the runtime
+   row already carries. `known` is the difference between "this server takes no
+   credential" and "the catalogue has no entry for it": both leave `fields`
+   empty, and only one of them is a thing to tell the reader. */
+export interface McpDetail {
+  known: boolean
+  fields: AuthField[]
+  /* A URL for an http or sse server, a command line for a stdio one. */
+  address?: string
+  tools: string[]
+}
+
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
@@ -190,7 +222,10 @@ export interface SettingsSource {
   provider(op: ProviderOp, params: Record<string, unknown>): Promise<SettingsSnapshot>
   /* Ask the provider what it serves right now. A read: nothing is written
      until a row is added. */
-  fetchModels(slug: string): Promise<ModelCatalogue>
+  fetchModels(slug: string, verify?: boolean): Promise<ModelCatalogue>
+  /* The provider offer again, with no write before it: what a live read put in
+     the server's served-models cache changes it. */
+  reloadProviders(): Promise<SettingsSnapshot>
   addModels(slug: string, models: string[]): Promise<SettingsSnapshot>
   /* The non-credential fields: api_base, deployment, api_version, and an
      extra_headers patch ({name: value | null}). */
@@ -208,10 +243,14 @@ export interface SettingsSource {
   removeSession(id: string): Promise<void>
   inspectSkill(name: string): Promise<SkillDetail>
   openSkillFile(name: string, file: string): Promise<void>
+  /* One of raven's own locations in the host's file manager: the config file
+     shown selected, agent home opened. Named rather than sent as a path -- the
+     gateway resolves both itself, so this reaches nothing else. */
+  revealPlace(place: 'config' | 'workspace'): Promise<void>
   uninstallSkill(name: string): Promise<SettingsSnapshot>
   /* The credential fields the catalogue declares for this server, empty for
      one nobody installed from the catalogue. A read, so no snapshot back. */
-  serverAuthFields(name: string): Promise<AuthField[]>
+  serverDetail(name: string): Promise<McpDetail>
   toggleServer(name: string, on: boolean): Promise<SettingsSnapshot>
   retryServer(name: string): Promise<SettingsSnapshot>
   revokeServer(name: string): Promise<SettingsSnapshot>

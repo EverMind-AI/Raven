@@ -16,6 +16,7 @@ with it. Such a row carries ``error`` and an empty ``nodes``.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -53,8 +54,77 @@ def _shape(spec: PlaybookSpec) -> list[dict[str, Any]]:
 
     The card's diagram needs no prompt and no agent name, and a list that
     carried them would ship every template in the library on page open.
+
+    A ``rounds`` playbook answers with its roles. It has no ``nodes`` -- a round
+    is compiled into them when it is dispatched -- but the picture the reader
+    wants is the same picture: who runs, and in what order. Answering with an
+    empty list drew a card with nothing on it, which reads as a playbook that
+    does nothing.
     """
+    if spec.mode == "stint":
+        return [{"id": role.label, "depends_on": list(role.depends_on)} for role in (spec.roles or [])]
     return [{"id": node.id, "depends_on": list(node.depends_on)} for node in (spec.nodes or [])]
+
+
+def _stint_wire(spec: PlaybookSpec) -> dict[str, Any]:
+    """The four sections `mode: stint` adds, as the page reads them.
+
+    Explicit rather than ``model_dump`` for the reason ``_node_wire`` is: the
+    page's contract must not change shape because a spec model grew a field.
+
+    ``run`` goes out in full. It is a shell command the stint will execute on the
+    reader's machine, and the one moment they are asked to approve that is the
+    moment they are looking at this.
+    """
+    from raven.playbook.stint import terminal_roles
+    from raven.playbook.stint_spec import DEFAULT_MAX_ROUNDS
+
+    last = terminal_roles(spec)
+    stop = spec.stop
+    return {
+        "roles": [
+            {
+                "label": role.label,
+                "agent": role.name,
+                "node_summary": role.node_summary,
+                "depends_on": list(role.depends_on),
+                "owns": list(role.owns),
+                "appends": list(role.appends),
+                "reads": list(role.reads),
+                "enforce_read": role.enforce.read,
+                "enforce_write": role.enforce.write,
+                "journal_section": role.journal_section,
+                "verify_after": list(role.verify_after),
+                "max_handbacks": role.max_handbacks,
+                "terminal": role.label in last,
+            }
+            for role in (spec.roles or [])
+        ],
+        "carried": [
+            {
+                "path": entry.path,
+                "append": entry.append,
+                "recent_rounds": entry.recent_rounds,
+                "max_chars": entry.max_chars,
+            }
+            for entry in (spec.memory or [])
+        ],
+        "checks": [
+            {
+                "name": check.name,
+                # A check may be declared by description instead, and then the
+                # command is the project's rather than the playbook's: the page
+                # is showing the file, so it shows what the file says.
+                "run": check.run or f"({check.description})",
+                "timeout_sec": check.timeout_sec,
+                "needs_display": check.needs_display,
+            }
+            for check in (spec.verify or [])
+        ],
+        "max_rounds": stop.max_rounds if stop is not None else DEFAULT_MAX_ROUNDS,
+        "until": stop.until if stop is not None else "",
+        "report": stop.report if stop is not None else "round",
+    }
 
 
 def _row(store: PlaybookStore, name: str, disabled: set[str]) -> dict[str, Any]:
@@ -154,6 +224,11 @@ async def playbooks_get(params: dict) -> dict:
             },
             "nodes": [_node_wire(n) for n in (spec.nodes or [])],
             "prompts": spec.prompts or "",
+            # Only where there is one. A page that reads this key on a dag
+            # playbook is asking about a section the file does not have, and an
+            # empty one would answer "no roles, no checks, stops after 0 rounds"
+            # -- three statements about a stint that does not exist.
+            **({"stint": _stint_wire(spec)} if spec.mode == "stint" else {}),
             # The declarations, not resolved values: a carried server references
             # a credential through `{{ params.X }}` and the run supplies it, so
             # what the file holds is the reference and that is what goes out. A
@@ -758,6 +833,292 @@ async def playbooks_create(
     }
 
 
+def _stint_stores() -> list[Any]:
+    """Every stint store on this machine, one per conversation.
+
+    A stint is kept beside the conversation that started it, and the page lists
+    the machine's stints rather than one conversation's. Reading a single store
+    showed an empty page while a stint was running, which reads as "nothing has
+    run" and not as "you are looking in the wrong place".
+
+    Still only files: a stint is read far more often than it is run -- what round
+    is it on, what did it undo, what is it waiting for -- and constructing the
+    sub-agent stack to answer would make opening the page cost what a dispatch
+    costs.
+    """
+    from raven.agent.subagent.history import dag_root
+    from raven.config.loader import load_config
+    from raven.session.manager import SessionManager
+    from raven.stint.record import STINTS_DIRNAME, StintStore
+
+    sessions = SessionManager(load_config().workspace_path).sessions_dir
+    roots = [dag_root(path) / STINTS_DIRNAME for path in sorted(sessions.glob("*/*")) if path.is_dir()]
+    return [StintStore(root) for root in roots if root.is_dir()]
+
+
+#: The shape `make_stint_id` mints, and what a store file is named after.
+STINT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _stint_row(record: Any) -> dict[str, Any]:
+    from raven.playbook.stint_spec import DEFAULT_MAX_ROUNDS
+
+    stop = record.spec.get("stop") if isinstance(record.spec, dict) else None
+    if not isinstance(stop, dict):
+        stop = {}
+    return {
+        "stint_id": record.stint_id,
+        "playbook": record.playbook,
+        "round_index": record.round_index,
+        # The budget the driver runs to, which a spec with no `stop:` section
+        # still has: reporting nought there drew "round 3 of 0" on the page.
+        "max_rounds": int(stop.get("maxRounds") or stop.get("max_rounds") or DEFAULT_MAX_ROUNDS),
+        "status": record.status,
+        "live": record.live,
+        # What `stop` acts on, which is wider than `live`: a paused stint is not
+        # live and still has to be stoppable, or the page draws no way to end it.
+        "unfinished": record.unfinished,
+        "stop_reason": record.stop_reason,
+        "workdir": record.workdir,
+        "branch": record.branch,
+        "started_at_ms": record.started_at_ms,
+        "ended_at_ms": record.ended_at_ms,
+        "open_questions": sum(1 for q in record.questions if not str(q.get("answer") or "").strip()),
+    }
+
+
+def _stint_detail(record: Any) -> dict[str, Any]:
+    return {
+        "stint": _stint_row(record),
+        "rounds": [
+            {
+                "index": entry.index,
+                "run_id": entry.run_id,
+                "attempt": entry.attempt,
+                "status": entry.status,
+                "checks": [f"{row.get('name')}={row.get('status')}" for row in entry.verify],
+                "violations": list(entry.violations),
+            }
+            for entry in record.rounds
+        ],
+        "questions": [
+            {
+                "round": int(question.get("round") or 0),
+                "role": str(question.get("role") or ""),
+                "text": str(question.get("text") or ""),
+                "answer": str(question.get("answer") or ""),
+            }
+            for question in record.questions
+        ],
+    }
+
+
+def _require_stint(params: dict) -> tuple[Any, Any]:
+    """The stint and the store holding it, so a writer writes back where it read."""
+    from raven.rpc.errors import ConfigValidationError
+    from raven.stint.record import mark_adrift
+
+    stint_id = str(params.get("stint_id") or "").strip()
+    if not stint_id:
+        raise ConfigValidationError("stint_id is required")
+    if not STINT_ID_RE.fullmatch(stint_id):
+        # A stint id names a file under the store; one carrying a separator
+        # reached `path_for`, which refused it as a traceback rather than an answer.
+        raise ConfigValidationError(f"{stint_id!r} is not a stint id")
+    stores = _stint_stores()
+    mark_adrift(stores)
+    for store in stores:
+        record = store.read(stint_id)
+        if record is not None:
+            return store, record
+    raise ConfigValidationError(f"no stint {stint_id} on this machine")
+
+
+async def playbooks_stints_list(params: dict) -> dict:
+    """Every stint, newest first.
+
+    Stints whose holder has gone quiet are marked on the way past, so the page
+    stops showing a corpse as work in progress. Marking only: taking one up
+    again spends money and hours and stays a person's call.
+    """
+    from raven.stint.record import mark_adrift
+
+    stores = _stint_stores()
+    mark_adrift(stores)
+    found = [record for store in stores for record in store.list()]
+    found.sort(key=lambda record: (record.started_at_ms, record.stint_id), reverse=True)
+    return {"stints": [_stint_row(record) for record in found]}
+
+
+async def playbooks_stints_get(params: dict) -> dict:
+    """One stint, whole."""
+    return _stint_detail(_require_stint(params)[1])
+
+
+async def playbooks_stints_stop(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Open no further rounds, and with ``now`` cut the round in flight short.
+
+    Without ``now`` the round in flight is left alone: it finishes and reports,
+    and the hand-over that would have opened the next one reads this and ends the
+    stint instead. Throwing away a round already paid for is the worse of the two
+    answers, which is why it is the verb the caller has to ask for.
+
+    ``now`` is that ask. It reaches the round only where this process is the one
+    running it -- a stint dispatched from a conversation on this gateway. A stint
+    held by somebody's `raven playbook run` terminal is not addressable from
+    here, and Ctrl-C there is what stops it; the record is still written either
+    way, so the stint ends after the round however it was reached.
+    """
+    from raven.stint.record import STOPPED
+
+    store, record = _require_stint(params)
+    now = bool(params.get("now"))
+    # `unfinished`, not `live`: a paused stint is not live, and it still owns its
+    # branch and refuses a second stint on the project, so `stop` is the one verb
+    # that has to reach it. Guarding on `live` left it with no way out at all.
+    if record.unfinished:
+        record.status = STOPPED
+        record.stop_reason = "a person stopped the stint"
+        store.write(record)
+    if now:
+        _cut_the_round_short(record, agent_loop_factory)
+    return _stint_detail(record)
+
+
+def _cut_the_round_short(record: Any, agent_loop_factory: "AgentLoopFactory | None") -> bool:
+    """Signal the round in flight to stop where it is. False when out of reach.
+
+    The same signal the graph's own cancel sends, so the round lands on the path
+    that already knows what a cut round means: the roles that finished stay
+    committed, the one that was cut leaves its work in the tree, and the record
+    says which round was stopped before it finished.
+    """
+    from raven.agent.subagent.dag_live import cancel_run
+
+    entry = record.round(record.round_index)
+    if entry is None or not entry.run_id or agent_loop_factory is None:
+        return False
+    try:
+        loop = agent_loop_factory()
+    except Exception:  # noqa: BLE001 - no loop is out of reach, not a failure
+        return False
+    return cancel_run(loop, entry.run_id)
+
+
+async def playbooks_stints_pause(params: dict) -> dict:
+    """Open no further rounds, and keep the stint so it can be taken up again.
+
+    ``stop`` and this differ in one thing and it is not what happens now: both
+    let the round in flight finish and neither opens another. ``stop`` ends the
+    stint, and ``pause`` leaves it unfinished, which is what ``resume`` acts on.
+    So a person who is not sure they are done wants this one, and the record is
+    the only place that difference is written down.
+
+    Like ``stop``, a file write and nothing else: the process holding the round
+    reads the record at the hand-over. Nothing here reaches the engine, which is
+    why it can answer on a gateway that is not the one running the stint.
+    """
+    from raven.stint.record import PAUSED
+
+    store, record = _require_stint(params)
+    if record.live:
+        record.status = PAUSED
+        record.stop_reason = "a person paused the stint"
+        store.write(record)
+    return _stint_detail(record)
+
+
+def _driver_in_this_process(agent_loop_factory: "AgentLoopFactory | None") -> Any:
+    """The multi-round driver of the engine answering this call, or a refusal.
+
+    Unlike ``pause`` and ``stop``, which write the file and let whoever holds
+    the round read it, taking a stint up *opens* a round -- and a round runs
+    in the process that opened it. So this has to be the engine's own driver:
+    a driver built here for the call would run the round in the RPC handler
+    and report to nobody.
+    """
+    from raven.rpc.errors import ConfigValidationError
+
+    loop = None
+    if agent_loop_factory is not None:
+        try:
+            loop = agent_loop_factory()
+        except Exception:  # noqa: BLE001 - no loop is a refusal, not a crash
+            loop = None
+    runtime = getattr(loop, "_playbooks", None)
+    driver = getattr(runtime, "rounds", None) if runtime is not None else None
+    if driver is None:
+        raise ConfigValidationError("playbooks are not running on this host, so no stint can be taken up here")
+    return loop, driver
+
+
+async def _take_up(params: dict, agent_loop_factory: "AgentLoopFactory | None", verb: str) -> dict:
+    """``resume`` and ``extend`` share everything but the driver method they call."""
+    from raven.agent import workdir
+    from raven.providers.binding import use_binding
+
+    store, record = _require_stint(params)
+    loop, driver = _driver_in_this_process(agent_loop_factory)
+    session_key = str(record.origin.get("session_key") or "") or None
+    # The same two contexts ``playbooks.run`` enters, for the same reason: the
+    # round's nodes resolve their model through the active binding, and the
+    # stint was started in this conversation, not in the RPC handler's absence
+    # of one. A conversation whose directory cannot be resolved still gets its
+    # round -- the stint carries its own workdir -- just on the default binding.
+    try:
+        session_workdir = loop.session_workdir(session_key) if session_key else None
+    except Exception:  # noqa: BLE001 - a bad override is not this verb's to fix
+        session_workdir = None
+    binding = loop.binding_for_session(session_key) if session_key else None
+
+    async def go() -> str:
+        if verb == "extend":
+            return await driver.extend(record.stint_id, int(params.get("rounds") or 0), session_key)
+        return await driver.resume(record.stint_id, session_key)
+
+    if session_workdir is not None and binding is not None:
+        with workdir.bind(session_workdir), use_binding(binding):
+            reply = await go()
+    else:
+        reply = await go()
+    after = store.read(record.stint_id) or record
+    return {**_stint_detail(after), "reply": str(reply or "")}
+
+
+async def playbooks_stints_resume(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Take a stint up again, in this engine, from the node it stopped at.
+
+    The roles that finished are named rather than re-run, and the round reports
+    to the conversation the stint was started in -- which is what a person who
+    restarted raven and came back to that conversation expects, and what a
+    terminal running its own driver could not give them.
+    """
+    return await _take_up(params, agent_loop_factory, "resume")
+
+
+async def playbooks_stints_extend(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Give a stint more rounds; a stint that is over opens the next one here."""
+    return await _take_up(params, agent_loop_factory, "extend")
+
+
+async def playbooks_stints_answer(params: dict) -> dict:
+    """Answer a question a round left, for the round after this one to read."""
+    import time
+
+    from raven.rpc.errors import ConfigValidationError
+
+    store, record = _require_stint(params)
+    if params.get("question") is None:
+        raise ConfigValidationError("question is required: the number `stints get` lists it under")
+    position = int(params.get("question"))
+    if not 0 <= position < len(record.questions):
+        raise ConfigValidationError(f"{record.stint_id} has no question {position}")
+    record.questions[position]["answer"] = str(params.get("text") or "")
+    record.questions[position]["answered_at"] = int(time.time() * 1000)
+    store.write(record)
+    return _stint_detail(record)
+
+
 def register_playbooks_methods(
     dispatcher: Dispatcher,
     *,
@@ -787,9 +1148,28 @@ def register_playbooks_methods(
         return await playbooks_create(p, agent_loop_factory=agent_loop_factory)
 
     dispatcher.register("playbooks.create", _create)
+    dispatcher.register("playbooks.stints.list", playbooks_stints_list)
+    dispatcher.register("playbooks.stints.get", playbooks_stints_get)
+
+    async def _stop(p: dict) -> dict:
+        return await playbooks_stints_stop(p, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("playbooks.stints.stop", _stop)
+    dispatcher.register("playbooks.stints.pause", playbooks_stints_pause)
+
+    async def _resume(p: dict) -> dict:
+        return await playbooks_stints_resume(p, agent_loop_factory=agent_loop_factory)
+
+    async def _extend(p: dict) -> dict:
+        return await playbooks_stints_extend(p, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("playbooks.stints.resume", _resume)
+    dispatcher.register("playbooks.stints.extend", _extend)
+    dispatcher.register("playbooks.stints.answer", playbooks_stints_answer)
 
 
 __all__ = [
+    "playbooks_create",
     "playbooks_credentials_clear",
     "playbooks_credentials_get",
     "playbooks_credentials_set",
@@ -797,7 +1177,11 @@ __all__ = [
     "playbooks_list",
     "playbooks_oauth_authorize",
     "playbooks_oauth_clear",
-    "playbooks_create",
+    "playbooks_stints_answer",
+    "playbooks_stints_get",
+    "playbooks_stints_list",
+    "playbooks_stints_pause",
+    "playbooks_stints_stop",
     "playbooks_run",
     "register_playbooks_methods",
 ]

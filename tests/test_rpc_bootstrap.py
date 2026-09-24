@@ -53,26 +53,32 @@ class _FakeSubagents:
         self.order.append("cancel_all")
 
 
+class _FakeAskUser:
+    """The one tool build_rpc_stack hands its broker to."""
+
+    def __init__(self) -> None:
+        self.broker = None
+
+    def set_broker(self, broker) -> None:
+        self.broker = broker
+
+
 class _FakeLoop:
     """The AgentLoop surface build_rpc_stack touches, each hook recorded."""
 
     def __init__(self, cron: _FakeCron | None = None) -> None:
-        self.tools: dict = {}
+        self.tools: dict = {"ask_user": _FakeAskUser()}
         self.order: list[str] = []
         self.subagents = _FakeSubagents(self.order)
         self.mcp_closed = 0
         self.cron_service = cron
         self.backend = None
-        self.deep_research_broker = None
         self.dag_sink = None
         self.mcp_sink = None
         self.prewarms = 0
         # Whether the MCP event sink was already bound when the prewarm started.
         # The URL an OAuth server parks on rides that sink and nothing else.
         self.sink_at_prewarm: object = "never called"
-
-    def set_deep_research_broker(self, broker) -> None:
-        self.deep_research_broker = broker
 
     def set_dag_progress_sink(self, sink) -> None:
         self.dag_sink = sink
@@ -194,10 +200,9 @@ async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
         assert cron.started is False
         # Page-facing hooks applied, so the host mounting this stack after its
         # own wiring hands the question and progress surfaces to the page.
-        assert loop.deep_research_broker is not None
         # The page's broker is exposed so a host with a question surface of
         # its own can build a RoutingQuestionBroker over both.
-        assert stack.question_broker is loop.deep_research_broker
+        assert stack.question_broker is loop.tools["ask_user"].broker is not None
         assert loop.dag_sink is not None
         assert loop.mcp_sink is not None
         assert loop.subagents.delivery_sink is not None

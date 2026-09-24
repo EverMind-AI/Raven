@@ -42,6 +42,49 @@ cd Raven
 也会安装已发布的 wheel 包。如需在管道安装时指定本地源码目录，请设置
 `RAVEN_LOCAL_SRC=<dir>`。
 
+## 更新 Raven { #update-raven }
+
+按安装时的方式更新 Raven。再次运行安装脚本时，它会先停止正在运行的 WebUI，
+最后在前台启动新的 WebUI：按 Ctrl-C 停止后，运行 `raven web` 即可让 Raven
+在后台持续运行。`~/.raven` 中的设置和会话都会保留。
+
+### 更新一行命令安装的 Raven { #update-a-one-line-install }
+
+再运行一次同一个安装命令即可。它会在当前版本之上安装最新发布版，完成后重新启动
+WebUI。
+
+也可以用命令行更新：
+
+```bash
+raven web --stop
+raven upgrade
+```
+
+在 Linux 和 macOS 上，`raven upgrade` 会在前台完成安装后才返回。在原生 Windows 上，
+它会把安装交给一个独立的辅助进程并立即返回：请等它打印完成信息后再继续。然后再
+启动 Raven：
+
+```bash
+raven web
+```
+
+`raven upgrade` 会安装最新发布版，但不会重启正在运行的 Raven，所以要先停止
+WebUI，升级完成后再启动。如只想检查是否有新版本而不安装，请运行
+`raven upgrade --check`。
+
+### 更新源码安装的 Raven { #update-a-source-checkout }
+
+拉取最新代码后，再运行一次本地安装脚本（PowerShell 中为 `.\install.ps1`）：
+
+```bash
+git pull
+./install.sh
+```
+
+安装脚本会以可编辑模式重新安装该检出目录，仅在源码有变动时重新构建 TUI 和
+WebUI，并重新启动 WebUI。`raven upgrade` 不会更新源码安装，
+因为要更新的代码就是检出目录本身。
+
 ## 配置第一个模型服务商 { #configure-the-first-provider }
 
 安装后运行配置向导：

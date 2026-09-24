@@ -17,12 +17,13 @@ import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 
 import type { ResultOf } from '../../rpc/generated'
-import type { ExtAgentRow, ExtAgentsSource } from './types'
+import type { ExtAgentRow, ExtAgentsSource, Remedy } from './types'
 
 /** One agent as `subagents.list` sends it. */
 export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]
 
 export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
+  const remedy = remedyOf(r.last_test_remedy)
   return {
     name: r.name,
     preset: r.preset,
@@ -48,11 +49,13 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
     probe_status: r.probe_status || 'unknown',
     upgrade_to: r.upgrade_to || null,
     probe_detail: r.probe_detail || '',
+    ...(r.probe_missing ? { probe_missing: r.probe_missing } : {}),
     has_api_key: !!r.has_api_key,
     needs_auth: !!r.needs_auth,
     description: r.description || '',
     last_test_ok: r.last_test_ok ?? null,
     last_test_detail: r.last_test_detail || '',
+    ...(remedy ? { last_test_remedy: remedy } : {}),
     last_test_at_ms: r.last_test_at_ms || null,
     test_running: !!r.test_running,
     own: !!r.own,
@@ -157,18 +160,20 @@ export function isFound(row: ExtAgentRow): boolean {
    instead of reaching into the array the page is rendering. */
 let extAgentsSeen = new Map<string, ExtAgentRow>()
 
-export async function extAgentsFetch(probe: boolean): Promise<ExtAgentRow[]> {
-  const res = await gateway().call('subagents.list', { probe: !!probe })
+export async function extAgentsFetch(probe: boolean, rescan = false): Promise<ExtAgentRow[]> {
+  const res = await gateway().call('subagents.list', { probe: !!probe, ...(rescan ? { refresh_login_env: true } : {}) })
   /* A probe-less list reports every row as "unknown", which would blank the
      health line of a row that was ready a second ago -- connecting an agent
      would look like it broke it. The verdict cannot have changed by writing
-     config, so the last known one is carried over. */
+     config, so the last known one is carried over -- with what it found
+     absent, or a missing row's install falls back to the agent's own. */
   const rows = (res.rows || []).map((r) => {
     const row = extAgentRowOf(r)
     const prev = extAgentsSeen.get(row.name)
     if (row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
       row.probe_status = prev.probe_status
       row.probe_detail = prev.probe_detail
+      if (prev.probe_missing) row.probe_missing = prev.probe_missing
     }
     return row
   })
@@ -182,7 +187,7 @@ export function resetExtAgentsSeen(): void {
 }
 
 export const extAgentsSource: ExtAgentsSource = {
-  load: (probe) => extAgentsFetch(!!probe),
+  load: (probe, rescan) => extAgentsFetch(!!probe, !!rescan),
   act: async (op, row, args) => {
     const a = args || {}
     if (op === 'connect') {
@@ -264,4 +269,12 @@ export const extAgentsSource: ExtAgentsSource = {
 /* Test seam only: the rows carried across a refetch are the module's. */
 export function _resetForTests(): void {
   extAgentsSeen = new Map()
+}
+
+/* A remedy off the wire, or null for anything that is not one. Read from a row
+   and from a refused call's `data` alike, so both land in the one shape. */
+export function remedyOf(raw: unknown): Remedy | null {
+  const r = raw as { kind?: unknown; command?: unknown } | null | undefined
+  if (!r || (r.kind !== 'sign_in' && r.kind !== 'setup' && r.kind !== 'api_key' && r.kind !== 'download')) return null
+  return { kind: r.kind, command: typeof r.command === 'string' ? r.command : '' }
 }

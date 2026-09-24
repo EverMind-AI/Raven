@@ -194,6 +194,7 @@ def _drivers_dir() -> pathlib.Path | None:
         return None
 
 
+@lru_cache(maxsize=4096)
 def may_prompt(model: str) -> bool:
     """Would handing this model to LiteLLM start an interactive login?
 
@@ -208,7 +209,8 @@ def may_prompt(model: str) -> bool:
     that ships ``authenticator.py``. A frozen list would have to be regenerated on
     every LiteLLM bump, and a stale one brings the hang back for the vendor it
     missed; this cannot go stale. The check is a stat, and the callers have already
-    paid for the import.
+    paid for the import. Cached per id all the same: the drivers directory is
+    fixed for the life of the process, and a catalogue asks this once per model.
     """
     drivers = _drivers_dir()
     if drivers is None:

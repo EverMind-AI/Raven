@@ -1173,21 +1173,6 @@ class MediaGenConfig(Base):
     output_subdir: str = "generated"  # where generated files are written under workspace
 
 
-class DeepResearchToolConfig(Base):
-    """MiroThinker deep-research tool configuration.
-
-    A blocking HTTP tool that delegates a research question to the MiroThinker
-    API and returns a structured result. Registered only when ``api_key`` (or
-    ``MIROTHINKER_API_KEY``) is set — it is a paid, minute-scale engine, not a
-    default tool. Empty ``api_base`` / ``model`` fall back at call time to the
-    MiroMind endpoint and the mini engine.
-    """
-
-    api_key: str = ""
-    api_base: str = ""  # defaults to https://api.miromind.ai/v1
-    model: str = ""  # defaults to mirothinker-1-7-deepresearch-mini
-
-
 class MCPOAuthConfig(Base):
     """What an ``auth="oauth"`` server's authorization server already told us.
 
@@ -1324,7 +1309,6 @@ class ToolsConfig(Base):
     browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
     ask_user: AskUserToolConfig = Field(default_factory=AskUserToolConfig)
     media: MediaGenConfig = Field(default_factory=MediaGenConfig)
-    deep_research: DeepResearchToolConfig = Field(default_factory=DeepResearchToolConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
@@ -1337,9 +1321,7 @@ class ToolsConfig(Base):
     work there (raven-code, raven-oncall) turn it on in their own config."""
     disabled_tools: list[str] = Field(default_factory=list)
     """Tool names to withhold from the assembled tool array and refuse at dispatch.
-    The general off switch for a tool this deploy does not want, and the only one
-    that covers a tool with an unconfigured stand-in variant (``deep_research``),
-    where clearing the tool's own config only swaps which variant registers. Also
+    The general off switch for a tool this deploy does not want. Also
     used by eval harnesses (e.g. BrowseComp-Plus) to constrain the agent to a
     specific tool subset. Names match those in ``ToolRegistry`` (e.g.
     ``read_file``, ``web_search``, or ``mcp_bcp-search_search``).

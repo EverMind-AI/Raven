@@ -161,6 +161,39 @@ def _wire_channel_intake(channels, dispatch) -> None:
     channels.on_started = on_started
 
 
+def _wire_cron_partition(channels, cron) -> None:
+    """Let the cron partition follow the channels this gateway is actually running.
+
+    ``allowed_channels`` is the launch-time snapshot :func:`_build_gateway_channels`
+    computed, and ``_may_claim`` refuses every job whose payload channel falls outside
+    it. A channel enabled from the page therefore received and replied while a reminder
+    addressed to it was logged once as foreign and never fired until the next restart
+    (2026-09-23, weixin). Composed over the hooks the caller already set, like
+    :func:`_wire_channel_intake`, so the outlet and the partition cannot drift apart.
+
+    Through the service's own ``admit_channel`` / ``retire_channel``, which also wake
+    its loop: a reminder already due when the channel comes up must not wait out the
+    loop's 30 s poll cap. ``tui`` is not touched here: it is not a manager channel, and
+    its claim follows the page mount rather than a channel start (see
+    :func:`_build_gateway_channels`).
+    """
+    started_hook = channels.on_started
+    stopped_hook = channels.on_stopped
+
+    def on_started(ch) -> None:
+        if started_hook is not None:
+            started_hook(ch)
+        cron.admit_channel(ch.name)
+
+    async def on_stopped(name: str) -> None:
+        if stopped_hook is not None:
+            await stopped_hook(name)
+        cron.retire_channel(name)
+
+    channels.on_started = on_started
+    channels.on_stopped = on_stopped
+
+
 def _format_question_body(params: dict) -> str:
     """Render one ``clarify.request`` as chat text.
 
@@ -634,10 +667,14 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # And retired when it stops, so a channel disabled and enabled
                 # again is not left replying through the adapter it dropped.
                 channels.on_stopped = gw_hub.retire
+                # And its cron jobs are claimed while it runs, so a reminder
+                # addressed to a channel enabled from the page is not left to
+                # the next restart.
+                _wire_cron_partition(channels, cron)
 
-                # Proactive target (cron / sentinel / heartbeat / subagent /
-                # deep_research): the gateway spine. Its hub delivers to the IM
-                # channels and, while a page is mounted, to the page.
+                # Proactive target (cron / sentinel / heartbeat / subagent):
+                # the gateway spine. Its hub delivers to the IM channels and,
+                # while a page is mounted, to the page.
                 pro_submit = gw_scheduler.submit
                 pro_hub = gw_hub
                 pro_readback = gw_readback_texts
@@ -706,12 +743,6 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     decision_consumer.executor.set_submit(pro_submit)
                 # Subagent result re-injection submits a SUBAGENT-origin turn.
                 agent.subagents.set_submit(pro_submit)
-                # Deep research (channel/async) delivers its finished answer back
-                # via a deliver_text turn; wiring submit here (gateway only) is
-                # what flips the tool from its synchronous path to the async one.
-                # Goes through the loop so a manager built later by promotion (a
-                # mid-session enable) inherits the handle too, not just this one.
-                agent.set_deep_research_submit(pro_submit)
 
                 # ask_user round-trip on the channel side: the QuestionBroker
                 # renders the agent's clarify.request as an outbound Text to the
@@ -729,12 +760,9 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     send_frame=_question_to_channel,
                     timeout_s=config.tools.ask_user.timeout,
                 )
-                # Wire the broker into the mid-turn askers. deep_research goes
-                # through the loop so a tool built later by promotion (a mid-session
-                # enable) inherits the broker too, not just the startup one.
+                # Wire the broker into the mid-turn askers.
                 if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                     ask_tool.set_broker(question_broker)
-                agent.set_deep_research_broker(question_broker)
 
                 # The served page, on this same engine. Mounted after the broker
                 # wiring above on purpose: build_rpc_stack rebinds the streaming
@@ -771,29 +799,25 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     # browser and its answer starting a fresh turn. Re-bind a
                     # shim that routes by conversation: page/tui sessions
                     # (`tui:<id>`) to the page broker, everything else back to
-                    # the channel broker. deep_research clarify rides the same
-                    # shim, through the loop for the same promotion reason as
-                    # above.
+                    # the channel broker.
                     from raven.rpc.question_broker import RoutingQuestionBroker
 
                     routed_broker = RoutingQuestionBroker(page=page_mount.question_broker, channel=question_broker)
                     if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                         ask_tool.set_broker(routed_broker)
-                    agent.set_deep_research_broker(routed_broker)
                     # Route channel="tui" outbounds from the gateway's own
                     # spines (a tui cron job's reply, a subagent announce whose
                     # conversation lives on the page) to the page.
                     gw_hub.register(page_mount.outlet)
                     # A runtime turn into a page session -- a sub-agent's result
-                    # relay, a deep-research delivery -- runs on the page spine,
-                    # on the lane the page's own turns to that session use, so
-                    # the two never run at once. Everything else stays on the
-                    # gateway spine, whose hub reaches the IM channels.
+                    # relay -- runs on the page spine, on the lane the page's own
+                    # turns to that session use, so the two never run at once.
+                    # Everything else stays on the gateway spine, whose hub
+                    # reaches the IM channels.
                     from raven.gateway.submit_router import route_submit
 
                     routed_submit = route_submit(page=page_mount.submit, channel=pro_submit)
                     agent.subagents.set_submit(routed_submit)
-                    agent.set_deep_research_submit(routed_submit)
                     # Only now is this process a tui surface, so only now may it
                     # claim tui cron jobs. Deciding the partition here rather
                     # than from gateway.page.enabled is what keeps a gateway

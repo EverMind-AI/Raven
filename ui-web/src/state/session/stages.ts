@@ -3,10 +3,10 @@
  * One stage per contract event, declared in the order the page has always
  * handled them, and one exhaustive `switch` that picks the stage -- so a member
  * added to `TurnEvent` is a compile error here rather than a frame the page
- * drops in silence. The three the contract declares and the page does not draw
- * (`tool.progress`, `dag.node_stalled`, `media`) get a stage that says so; the
- * two the page used to handle and nothing ever sent (`cron.started`,
- * `cron.finished`) are gone.
+ * drops in silence. The four the contract declares and the page does not draw
+ * (`permission.review`, `tool.progress`, `dag.node_stalled`, `media`) get a
+ * stage that says so; the two the page used to handle and nothing ever sent
+ * (`cron.started`, `cron.finished`) are gone.
  *
  * Every stage takes the runtime the frame is about, which is what replaced the
  * page-level `live` object AND the page-level name for whose turn was running:
@@ -158,18 +158,19 @@ export const STAGES: readonly Stage[] = [
   arm('session.naming_ended', (_rt, p) => { void namingEnded(p.session_id, p.reason) }),
 
   arm('notice', (rt, p) => {
+    /* A transient one reports on a turn still running -- the runtime waiting out
+       a failed model call -- so it goes on the status line, which the next
+       thinking/token/tool frame kills. Sealing
+       the step and writing a row would end the turn's prose on a wait it is
+       about to come back from. `episode.start` does not kill the status, so the
+       line survives the whole silence and dies on the first real output. */
+    if (p.transient) { transcript.status(t('gui.notice.' + (p.kind || ''), null, p.kind || '')); return }
     transcript.killStatus()
     /* Seals the open step first: this ends the turn, so the streamed prose
        above stays where it was said. */
     if (rt.st) { rt.st.seal(); rt.st = null }
     flushSay(rt)
     noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true })
-  }),
-
-  /* The smart-mode reviewer runs inside the tool dispatch; name the pause. */
-  arm('permission.review', (_rt, p) => {
-    if (p.phase === 'started') transcript.status(t('gui.perm.reviewing'))
-    else transcript.killStatus()
   }),
 
   arm('thinking.delta', (rt, p) => {
@@ -212,9 +213,10 @@ export const STAGES: readonly Stage[] = [
     o.h.done(ok, preview, took, null, p.truncated)
     /* p.diff is the real change on disk -- the only place a whole-file write's
        previous content survives; p.file_change says whether there was a file
-       there at all, and p.file_removed which files this call made vanish. */
+       there at all, p.file_removed which files this call made vanish, and
+       p.file_written the ones a command left behind that no result names. */
     if (typeof wsOnToolDone === 'function') {
-      wsOnToolDone(o.name, o.args, ok, preview, took, p.diff, p.file_change, p.file_removed)
+      wsOnToolDone(o.name, o.args, ok, preview, took, p.diff, p.file_change, p.file_removed, p.file_written)
     }
   }),
 
@@ -329,7 +331,7 @@ export const STAGES: readonly Stage[] = [
   /* Declared by the contract and drawn by nothing. Named rather than left to
      fall off the end, so that "the page does not render this" is a decision
      with a place to be revisited. */
-  unhandled(['tool.progress', 'dag.node_stalled', 'media']),
+  unhandled(['permission.review', 'tool.progress', 'dag.node_stalled', 'media']),
 ]
 
 const BY_TYPE = new Map<EventType, Stage>()

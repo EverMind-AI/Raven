@@ -5,10 +5,6 @@ spine never imports the agent.
 ``stream`` is the reply-assembly switch: a streaming outlet (TUI) wires it True
 so the reply goes out as StreamDelta and dissolves with no trailing Text; a
 non-streaming outlet (REPL) wires it False so the reply is one Text.
-
-``inline_tool_stream`` lets a long tool (deep_research) stream its output inline
-and return a compact receipt; on for local interactive surfaces (CLI/TUI), off
-for channels/gateway (they wait for async delivery).
 """
 
 from __future__ import annotations
@@ -22,12 +18,9 @@ if TYPE_CHECKING:
 
 
 class AgentTurnRunner:
-    def __init__(self, agent_loop: AgentLoop, *, stream: bool, inline_tool_stream: bool = False) -> None:
+    def __init__(self, agent_loop: AgentLoop, *, stream: bool) -> None:
         self._loop = agent_loop
         self._stream = stream
-        self._inline_tool_stream = inline_tool_stream
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
-        return await self._loop.run_turn(
-            req, emit, drain, stream=self._stream, inline_tool_stream=self._inline_tool_stream
-        )
+        return await self._loop.run_turn(req, emit, drain, stream=self._stream)

@@ -88,8 +88,9 @@ requests and client disconnects.
 
 The packaged schema fixtures and tests in `tests/test_acp_schema.py` help check
 frame shapes. The current outbound client auto-approves offered permission
-options; integrations must disclose that trust model, not promise interactive
-human review.
+options, except that a request whose `toolCall.rawInput.command` the host's
+deny rules refuse is answered with a reject option; integrations must disclose
+that trust model, not promise interactive human review.
 
 ## Integrate A2A safely
 

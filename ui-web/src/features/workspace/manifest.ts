@@ -13,5 +13,5 @@ import type { DomainManifest } from '../manifests'
    its own at a standing layer. */
 export const manifest: DomainManifest = {
   domain: 'workspace',
-  sources: ['workspace', 'prose', 'artifacts'],
+  sources: ['workspace', 'prose'],
 }

@@ -17,11 +17,12 @@ import type { ConnChannel, ConnQr, ConnectionsSource } from './types'
 /* Slack's way in is a token, and the fixture has to say so: an entry with no
    required field is a scan-login entry by derivation, so a fieldless default
    would quietly make the standard row a different kind of channel than the
-   tests that use it mean. */
+   tests that use it mean. The stand-in translator hands a key back as its own
+   text, so a row keyed `Slack` reads as Slack. */
 function chan(over: Partial<ConnChannel> = {}): ConnChannel {
   return {
     id: 'slack',
-    name: 'Slack',
+    key: 'Slack',
     on: false,
     fields: [{ key: 'bot_token', required: true, set: true }],
     missing: [],
@@ -47,6 +48,7 @@ function install(rows: ConnChannel[], over: Partial<ConnectionsSource> = {}) {
     apply: async (c, patch, enable) => {
       calls.push(['apply', { id: c.id, patch, enable }])
       c.on = enable
+      return true
     },
     qr: async () => null,
     ...over,
@@ -144,7 +146,7 @@ describe('connections island', () => {
   it('lists every catalogue row, grouped by whether it is in service', async () => {
     install([
       chan({ on: true, running: true }),
-      chan({ id: 'telegram', name: 'Telegram' }),
+      chan({ id: 'telegram', key: 'Telegram' }),
       chan({ id: 'email', key: 'gui.chan.email' }),
     ])
     await mount()
@@ -164,7 +166,7 @@ describe('connections island', () => {
         { key: 'imap_host', required: true }, { key: 'imap_user', required: true },
         { key: 'smtp_host', required: true }, { key: 'smtp_user', required: true },
       ] }),
-      chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true }] }),
+      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }] }),
       chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true }),
     ])
     await mount()
@@ -183,7 +185,7 @@ describe('connections island', () => {
   it('reads a scan-login entry off its schema, not off the live flag', async () => {
     install([
       chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: false, fields: [{ key: 'route_tag' }] }),
-      chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true }] }),
+      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }] }),
     ])
     await mount()
     expect(await screen.findByText('gui.chan.weixin')).toBeTruthy()
@@ -200,11 +202,11 @@ describe('connections island', () => {
   describe('what the row says about its own state', () => {
     it('tells the five states apart, in words and in colour', async () => {
       install([
-        chan({ id: 'a', name: 'A', on: true, running: true, connected: true, who: 'me' }),
-        chan({ id: 'b', name: 'B', on: true, running: false }),
-        chan({ id: 'c', name: 'C', on: true, running: true, connected: false, qrLogin: true }),
-        chan({ id: 'd', name: 'D', on: true }),
-        chan({ id: 'e', name: 'E', on: false }),
+        chan({ id: 'a', key: 'A', on: true, running: true, connected: true, who: 'me' }),
+        chan({ id: 'b', key: 'B', on: true, running: false }),
+        chan({ id: 'c', key: 'C', on: true, running: true, connected: false, qrLogin: true }),
+        chan({ id: 'd', key: 'D', on: true }),
+        chan({ id: 'e', key: 'E', on: false }),
       ])
       await mount()
       expect(subOf('A')).toBe('gui.conn.as_you {"who":"me"}')
@@ -302,6 +304,7 @@ describe('connections island', () => {
           c.on = true
           c.running = true
           c.connected = true
+          return true
         },
       })
       await mount()
@@ -314,6 +317,91 @@ describe('connections island', () => {
       })
       expect(screen.getByText('gui.conn.pick')).toBeTruthy()
       expect(groupOf('Slack')).toBe('gui.conn.g_on')
+    })
+
+    /* The card a reader opens to correct a rotated token is open on an entrance
+       that is already receiving, and "receiving" was the whole guard: the press
+       closed the card on a state that had been true before it, reporting an
+       answer nothing had given. The answer is the write's completion. */
+    it('does not close the form on the press, before the write has been answered', async () => {
+      const slack = chan({ on: true, running: true, connected: true })
+      let written!: () => void
+      const writing = new Promise<void>((resolve) => { written = resolve })
+      install([slack], { apply: async () => { await writing; return true } })
+      await mount()
+      await act(async () => { openRow('Slack') })
+      await act(async () => {
+        typeInto(main().querySelector<HTMLInputElement>('#connDlgBody input')!, 'rotated-token')
+      })
+      await act(async () => {
+        ;(paneFoot().querySelector('button.key') as HTMLElement).click()
+      })
+      expect(main().querySelector('#connDlgBody')).toBeTruthy()
+
+      await act(async () => {
+        written()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+    })
+
+    /* A rebuild that finishes before the status is re-read shows no down state
+       in between: live before, live after. The form still has to close, so the
+       write's completion, not a transition, is what it keys on. */
+    it('closes the form once the correction is applied and the entrance reads live', async () => {
+      const slack = chan({ on: true, running: true, connected: true })
+      install([slack], { apply: async () => true })
+      await mount()
+      await act(async () => { openRow('Slack') })
+      await act(async () => {
+        typeInto(main().querySelector<HTMLInputElement>('#connDlgBody input')!, 'rotated-token')
+      })
+      await act(async () => {
+        ;(paneFoot().querySelector('button.key') as HTMLElement).click()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+    })
+
+    /* And the reason the card exists: a correction the adapter could not start
+       on leaves the reader with the state line, not with a closed card. */
+    it('keeps the form up when the applied correction leaves the entrance down', async () => {
+      const slack = chan({ on: true, running: true, connected: true })
+      install([slack], {
+        apply: async (c) => {
+          c.running = false
+          c.connected = false
+          return true
+        },
+      })
+      await mount()
+      await act(async () => { openRow('Slack') })
+      await act(async () => {
+        typeInto(main().querySelector<HTMLInputElement>('#connDlgBody input')!, 'rotated-token')
+      })
+      await act(async () => {
+        ;(paneFoot().querySelector('button.key') as HTMLElement).click()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(main().querySelector('#connDlgBody')).toBeTruthy()
+    })
+
+    /* A write the gateway refused (validation, an unreachable rpc) leaves the row
+       exactly as it was, live included. Closing on that would report the old
+       state as the answer to a save that never landed. */
+    it('keeps the form up when the write itself was refused on a live entrance', async () => {
+      const slack = chan({ on: true, running: true, connected: true })
+      install([slack], { apply: async () => false })
+      await mount()
+      await act(async () => { openRow('Slack') })
+      await act(async () => {
+        typeInto(main().querySelector<HTMLInputElement>('#connDlgBody input')!, 'rotated-token')
+      })
+      await act(async () => {
+        ;(paneFoot().querySelector('button.key') as HTMLElement).click()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(main().querySelector('#connDlgBody')).toBeTruthy()
     })
   })
 
@@ -403,10 +491,84 @@ describe('connections island', () => {
     expect(rowSwitch('Slack').getAttribute('aria-checked')).toBe('false')
   })
 
+  /* The press is not the end of the errand: the source reads the status back,
+     and what it reads is what the row has to show. The row used to keep
+     whatever the section entry had loaded, so the same backend state drew
+     "not started" or "receiving" depending on when the reader arrived. */
+  it('redraws the row from what the write read back, not from the press', async () => {
+    install([chan({ on: false, running: false })], {
+      toggle: async (c, on) => {
+        c.on = on
+        /* After the await, the way a status read is: a paint that only happens
+           on the press cannot have this. */
+        await Promise.resolve()
+        c.running = on
+      },
+    })
+    await mount()
+    expect(groupOf('Slack')).toBe('gui.conn.g_off')
+    await act(async () => {
+      rowSwitch('Slack').click()
+    })
+    expect(groupOf('Slack')).toBe('gui.conn.g_on')
+  })
+
+  /* Where the code appears is the pane, and the list says nothing about that:
+     the owner had to be told to click the row. */
+  it('opens the card when a scan entrance is switched on from the list', async () => {
+    install([
+      chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] }),
+      chan({ on: true, running: true }),
+    ])
+    await mount()
+    await act(async () => {
+      rowSwitch('gui.chan.weixin').click()
+    })
+    expect(paneHead().querySelector('.nm')!.textContent).toBe('gui.chan.weixin')
+  })
+
+  it('opens nothing for an entrance whose way in is the form, or for a switch off', async () => {
+    install([
+      chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: true }),
+      chan({ on: false }),
+    ])
+    await mount()
+    await act(async () => {
+      rowSwitch('Slack').click()
+    })
+    expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+    await act(async () => {
+      rowSwitch('gui.chan.weixin').click()
+    })
+    expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+  })
+
+  /* The page-level fact the write can change too: `host` was written only on
+     section entry, so a gateway that came up since then left the pane telling
+     the reader nothing was running it. */
+  it('re-reads whether anything hosts an adapter after a write', async () => {
+    let up = false
+    install([chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: false })], {
+      hostRunning: () => up,
+      toggle: async () => {
+        up = true
+      },
+    })
+    await mount()
+    await act(async () => { openRow('gui.chan.weixin') })
+    expect(main().querySelectorAll('.suwiz .step')[1]!.querySelector('.sd')!.textContent)
+      .toBe('gui.conn.w2_blocked')
+    await act(async () => {
+      rowSwitch('gui.chan.weixin').click()
+    })
+    expect(main().querySelectorAll('.suwiz .step')[1]!.querySelector('.sd')!.textContent)
+      .toBe('gui.conn.w2_down')
+  })
+
   it('leaves the switch unavailable while a credential is still missing', async () => {
     install([
       chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] }),
-      chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true, set: true }], missing: [] }),
+      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true, set: true }], missing: [] }),
     ])
     await mount()
     expect(rowSwitch('Slack').hasAttribute('disabled')).toBe(true)
@@ -455,7 +617,7 @@ describe('connections island', () => {
   })
 
   it('narrows the list by what is typed in the search', async () => {
-    install([chan(), chan({ id: 'telegram', name: 'Telegram' })])
+    install([chan(), chan({ id: 'telegram', key: 'Telegram' })])
     await mount()
     await screen.findByText('Slack')
     const box = side().querySelector('input') as HTMLInputElement
@@ -594,7 +756,7 @@ describe('connections island', () => {
   /* Where the credentials come from, for the channels that have one place to
      get them. A mail host has no open platform to link to, so it has none. */
   it('links to the console that issues the credentials, where there is one', async () => {
-    install([chan({ id: 'telegram', name: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] })])
+    install([chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] })])
     await mount()
     await act(async () => { openRow('Telegram') })
     const jump = main().querySelector<HTMLAnchorElement>('#connDlgBody a.jump')!
@@ -661,6 +823,55 @@ describe('connections island', () => {
     vi.useRealTimers()
   })
 
+  /* A login the adapter gave up on leaves its last code pending, and the row
+     behind this panel goes on saying the entrance is up until the list is
+     re-read -- so the panel is the last place that can catch a dead code, and
+     the only one still on screen to offer the retry. */
+  it('drops a code the adapter is no longer behind and carries the retry itself', async () => {
+    vi.useFakeTimers()
+    const answers: ConnQr[] = [
+      { connected: false, running: true, qr: 'data:image/png;base64,QQ==' },
+      { connected: false, running: false, qr: 'data:image/png;base64,QQ==' },
+    ]
+    let polls = 0
+    const { calls, source } = install(
+      [
+        chan({
+          id: 'weixin',
+          key: 'gui.chan.weixin',
+          fields: [],
+          on: true,
+          qrLogin: true,
+          running: true,
+          connected: false,
+        }),
+      ],
+      { hostRunning: () => true, qr: async () => answers[Math.min(polls++, answers.length - 1)]! },
+    )
+    await mount()
+    await act(async () => { openRow('gui.chan.weixin') })
+    expect(document.querySelector('.qrshot img')).toBeTruthy()
+
+    const rowsSpy = vi.spyOn(source, 'rows')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000)
+    })
+    expect(document.querySelector('.qrshot img')).toBeNull()
+    expect(screen.getByText('gui.conn.w2_down')).toBeTruthy()
+    /* And the row the reader closes this on is asked for again, so what the
+       list says about the entrance stops contradicting the panel. */
+    expect(rowsSpy.mock.calls.length).toBeGreaterThan(0)
+
+    const retry = [...document.querySelectorAll<HTMLButtonElement>('.qrbox button')].find(
+      (b) => b.textContent === 'gui.conn.w_retry',
+    )!
+    expect(retry, 'the panel offers a retry').toBeTruthy()
+    await act(async () => { retry.click() })
+    expect(calls).toContainEqual(['apply', { id: 'weixin', patch: {}, enable: true }])
+    expect(screen.getByText('gui.conn.qr_wait')).toBeTruthy()
+    vi.useRealTimers()
+  })
+
   it('keeps the scan panel off an unpaired channel that is switched off', async () => {
     install([chan({ on: false, qrLogin: true })])
     await mount()
@@ -716,6 +927,14 @@ describe('connections island', () => {
     await act(async () => { openRow('Slack') })
     expect(paneHead().querySelector('.two-pane-meta')!.textContent).toBe('gui.conn.st_live')
     expect(main().querySelector('#connDlgBody .sustate')).toBeNull()
+  })
+
+  it('wears the entrance s own app icon, in its row and in its header', async () => {
+    install([chan()])
+    await mount()
+    expect(rowNamed('Slack').querySelector('.channel-mark img')!.getAttribute('src')).toBe('assets/channels/slack.png')
+    await act(async () => { openRow('Slack') })
+    expect(paneHead().querySelector('.channel-mark img')!.getAttribute('src')).toBe('assets/channels/slack.png')
   })
 
   /* The note beside the save button used to be an empty span. */
@@ -871,7 +1090,7 @@ describe('connections island', () => {
   it('keeps its rendered shape, list', async () => {
     install([
       chan({ on: true, running: true }),
-      chan({ id: 'telegram', name: 'Telegram' }),
+      chan({ id: 'telegram', key: 'Telegram' }),
       chan({ id: 'email', key: 'gui.chan.email' }),
     ])
     await mount()

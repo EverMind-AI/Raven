@@ -831,7 +831,7 @@ class TestAvailableCommands:
         menus = [u for u in rig.updates() if u.get("sessionUpdate") == "available_commands_update"]
         assert len(menus) == 1
         names = [c["name"] for c in menus[0]["availableCommands"]]
-        assert "deep-research" in names and "playbook" in names
+        assert "playbook" in names
         for frame in rig.written:
             if frame.get("method") == "session/update":
                 validate_outbound(frame)

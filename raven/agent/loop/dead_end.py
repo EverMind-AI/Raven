@@ -48,7 +48,7 @@ from raven.agent.loop._shared import _HOOK_INJECTED_KEY
 from raven.i18n.zh_lexicon import REFUSAL_OPENERS
 
 NO_RESPONSE_FALLBACK = "I've completed processing but have no response to give."
-"""What a turn says when it produced no answer at all.
+"""What a turn says when the model produced no answer but a tool had already delivered one.
 
 Lives here rather than beside its emitter because it is a predicate constant with two
 readers a thousand lines apart: the loop writes it, and the dead-end test below reads
@@ -162,8 +162,8 @@ def dead_reasons(
         out.append("empty_answer")
     elif NO_RESPONSE_FALLBACK in text:
         # The emptiness test alone is not enough once an appendix is on: the loop fills
-        # an answerless turn with this sentence so the turn is never silent, and the
-        # research appendix then appends a full trail to it. The result is several
+        # a turn whose model said nothing after a tool answered with this sentence, and
+        # the research appendix then appends a full trail to it. The result is several
         # hundred characters of real content wrapped around "no answer" - which passes
         # every length test while being exactly the case this lever exists for.
         out.append("no_response")

@@ -3,7 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import react from '@vitejs/plugin-react'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, type Plugin } from 'vitest/config'
 
 // Two shapes from one source tree.
 //
@@ -87,10 +87,27 @@ const devPage = (): Plugin => ({
   },
 })
 
+/* The bundle is inlined into a <script> block, where `<!--` flips the HTML
+   parser into escaped script data and the real closer stops closing
+   (scripts/check-page.mjs refuses it). The bundle writes it only inside
+   literals -- the highlighter's HTML and XML grammars, the markup serialiser --
+   and in a string, a template or a regex `\x3C` is the same `<` to the script
+   while being no comment opener to the page. */
+const inlineSafe = (): Plugin => ({
+  name: 'raven-inline-safe',
+  apply: 'build',
+  /* After minification, which would fold the escape straight back into `<`. */
+  generateBundle(_options, bundle) {
+    for (const out of Object.values(bundle)) {
+      if (out.type === 'chunk') out.code = out.code.replaceAll('<!--', '\\x3C!--')
+    }
+  },
+})
+
 export default defineConfig(({ command, mode }) => {
   const dev = command === 'serve' && mode !== 'test'
   return {
-    plugins: dev ? [react(), devPage()] : [react()],
+    plugins: dev ? [react(), devPage()] : [react(), inlineSafe()],
     // Lib mode does not substitute NODE_ENV on its own; without this the
     // bundle carries React's development build, three times the size. Scoped
     // to build: vitest shares this config, and tests need the development
@@ -118,6 +135,15 @@ export default defineConfig(({ command, mode }) => {
       emptyOutDir: true,
       sourcemap: false,
       target: 'es2020',
+    },
+    /* The icon set ships as one module per icon behind a barrel -- twelve
+       thousand files -- and a test that loads the composer or the rail would
+       otherwise transform every one of them, which is enough to push the
+       slowest session tests past their timeout. Pre-bundled, it is one file. */
+    test: {
+      // Let happy-dom provide storage instead of Node's native Web Storage.
+      execArgv: ['--no-experimental-webstorage'],
+      deps: { optimizer: { client: { enabled: true, include: ['@hugeicons/core-free-icons'] } } },
     },
   }
 })

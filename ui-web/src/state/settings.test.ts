@@ -54,6 +54,14 @@ afterEach(() => {
 })
 
 describe('the settings dialog', () => {
+  it('opens on General the first time, not on Usage', async () => {
+    /* The page's own starting value, so a fresh copy of the module rather than
+       whatever an earlier case left in the slot. */
+    vi.resetModules()
+    const fresh = await import('./settings')
+    expect(fresh.settingsTab.id).toBe('general')
+  })
+
   it('is shut on a page nobody has opened', () => {
     render()
     expect(settings.isOpen()).toBe(false)

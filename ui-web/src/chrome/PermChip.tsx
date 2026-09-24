@@ -50,7 +50,7 @@ export function PermChip(): JSX.Element {
         aria-hidden="true"
         dangerouslySetInnerHTML={{ __html: p ? p.ico : SERVED }}
       />
-      <span id="permName">{p ? p.label : '自动执行'}</span>
+      <span id="permName">{p ? p.label : 'Smart mode'}</span>
     </button>
   )
 }

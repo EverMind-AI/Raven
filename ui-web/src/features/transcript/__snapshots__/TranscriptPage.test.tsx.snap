@@ -29,7 +29,9 @@ exports[`transcript island, history > keeps its rendered shape 1`] = `
             div.say.prose
             div.wk
               div.wrow.tog.sum.open
-                svg.ic
+                svg.transcript-ic
+                  path
+                  path
                   path
                 span.ar
                 span.chip.bad
@@ -37,13 +39,17 @@ exports[`transcript island, history > keeps its rendered shape 1`] = `
                   path
               div.wkin
                 div.wrow.tog
-                  svg.ic
+                  svg.transcript-ic
+                    path
+                    path
                     path
                   span.vb
                   svg.cv
                     path
                 div.wrow.bad.tog
-                  svg.ic
+                  svg.transcript-ic
+                    circle
+                    path
                     path
                   span.vb
                   span.err

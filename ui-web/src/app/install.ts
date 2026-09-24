@@ -28,8 +28,8 @@ import { onboardSource } from '../features/onboard/source'
 import { isOpen as onboardOpen, setBodies as setOnboardBodies, subscribe as onOnboard } from '../features/onboard/store'
 import { markNew } from '../features/rail/store'
 import { installSessionActions } from '../features/rail/wire'
-import { ModelStepBody, WebStepBody } from '../features/settings/SetupBodies'
-import { bannerSource, modelStepDone, settingsSource, webStepDone } from '../features/settings/source'
+import { MemoryStepBody, ModelStepBody, WebStepBody } from '../features/settings/SetupBodies'
+import { bannerSource, memoryStepDone, modelStepDone, settingsSource, webStepDone } from '../features/settings/source'
 import * as settingsStore from '../features/settings/store'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
 import { tasksSource } from '../features/tasks/source'
@@ -38,12 +38,11 @@ import {
   refresh as refreshTasks, reset as resetTasks,
 } from '../features/tasks/store'
 import {
-  actLabel, branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList, spawnRecord,
+  actLabel, branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList,
 } from '../features/transcript/source'
 import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
 } from '../features/workspace/source'
-import { shared as workspaceShared } from '../features/workspace/store'
 import { slashHelp, slashName } from '../i18n/t'
 import { t } from '../i18n/t'
 import { $ } from '../lib/dom'
@@ -126,7 +125,6 @@ export function installSources(): void {
   transcript.openDagRun = openDagRun
   transcript.branch = branch
   transcript.dagRun = dagRun
-  transcript.spawnRecord = spawnRecord
   transcript.spawnList = spawnList
   transcript.openSpawn = openSpawn
   /* Read by the tasks domain's own tool rows (features/tasks/NodeRecord.tsx)
@@ -186,6 +184,13 @@ export function installSources(): void {
       done: extAgentsStore.stepDone,
       found: () => extAgentsStore.found().map((row) => ({ id: row.preset ?? row.name, name: row.name })),
     },
+    memory: {
+      Body: MemoryStepBody,
+      load: () => settingsStore.refresh(),
+      subscribe: settingsStore.subscribe,
+      loaded: () => settingsStore.get().loaded,
+      done: memoryStepDone,
+    },
   })
   sources.importSync = importSyncSource
   /* The rail's import row reads the run the wizard's last step starts. Wired
@@ -232,19 +237,6 @@ export function installSources(): void {
   setShortener((p) => ds('workspace').shortPath(p))
   sources.prose = proseSource
   sources.workspace = workspaceSource
-
-  /* ── the turn's products ───────────────────────────────────────────────
-     The workspace record's own rows for one turn, unfiltered. Which of them
-     counts as a product, and what a tile can draw of it, are the transcript
-     island's to decide -- see artifactsOf in features/transcript/store.ts.
-
-     The turn number is the one the record files rows under: bumped per turn by
-     the pipeline, and per user message with text by the replay
-     (features/workspace/record.ts). The transcript counts it the same way over
-     the same payload. */
-  sources.artifacts = {
-    changes: (turn) => workspaceShared().changes.filter((c) => c.turn === turn),
-  }
 
   /* Files are uploaded into <workspace>/uploads and handed to the agent as
      paths: every file tool is already workspace-scoped, so a path is all it
@@ -395,7 +387,7 @@ export function installDevHooks(): void {
   const hooks = window as unknown as Record<string, unknown>
   // Previews the clarify sheet without spending a model turn
   // (window.__clarify({question, choices})).
-  hooks.__clarify = (p: unknown) => clarifyRequest(p || { request_id: 'dev', question: '预览', choices: ['A', 'B'] })
+  hooks.__clarify = (p: unknown) => clarifyRequest(p || { request_id: 'dev', question: 'Preview', choices: ['A', 'B'] })
 
   // The update row's version state only appears when a release is actually
   // newer, which never happens on a dev checkout (window.__upnote('ver', '0.1.11')),

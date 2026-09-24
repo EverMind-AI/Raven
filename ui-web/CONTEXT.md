@@ -351,8 +351,8 @@ vocabulary a card is the drawer's content.
 
 **Escape order**:
 The ordered table in `src/state/escapeOrder.ts` (`ESCAPE_ORDER`, of
-`EscapeLayer`): fourteen layers that can be on
-screen at once, and which one an Escape takes back. A table rather than a
+`EscapeLayer`): ten layers that can be on screen at once, and which one an
+Escape takes back. A table rather than a
 stack, because each entry answers "am I open" when the key arrives -- the
 channel dialog opens over the entries page and closes first, while the shared
 drawer opens over the dialog and closes second. Three capture-phase handlers

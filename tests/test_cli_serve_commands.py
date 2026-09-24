@@ -13,12 +13,30 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
 import typer
 
 from raven.cli import serve_commands
+
+
+@pytest.fixture(autouse=True)
+def _sigterm_restored():
+    """Put this process's SIGTERM disposition back after every test.
+
+    ``_supervise`` run in-process ignores SIGTERM on its way out, as it must in
+    the real supervisor. Left in place, the test process would ignore SIGTERM
+    for the rest of the run, and so would every child it starts afterwards:
+    an ignored disposition survives exec.
+    """
+    import signal
+
+    before = signal.getsignal(signal.SIGTERM)
+    yield
+    signal.signal(signal.SIGTERM, before)
 
 
 @pytest.fixture
@@ -384,6 +402,25 @@ class TestTheCommand:
         assert exit_info.value.exit_code == 1
         assert opened == []
 
+    def test_a_live_gateway_that_will_not_answer_is_not_joined_by_a_second_supervisor(
+        self, home: Path, a_built_page, opened: list[str], supervised: list[int], monkeypatch, capsys
+    ) -> None:
+        """09-20: the supervisor had exited and removed web.json while its gateway,
+        tearing down, still held the lock. The next `web` saw no supervisor and
+        started one, whose gateway could only come up on `serve` -- no channels."""
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: 4321)
+        # So a regression that does spawn fails here, not after the attach ceiling.
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: None)
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._web(port=18999)
+
+        assert exit_info.value.exit_code == 1
+        assert supervised == [] and opened == []
+        said = capsys.readouterr().out
+        assert "pid 4321" in said and "raven web --stop" in said
+
     def test_a_token_mismatch_stops_rather_than_doubling_up(
         self, home: Path, a_built_page, opened: list[str], started: list[int], supervised: list[int], monkeypatch
     ) -> None:
@@ -444,6 +481,12 @@ def instant(monkeypatch):
 
 class TestTheSupervisor:
     """What brings the gateway back, and what it refuses to bring back."""
+
+    @pytest.fixture(autouse=True)
+    def _no_real_group(self, monkeypatch):
+        """The fakes here carry made-up pids; a group read off one could name a
+        real process on this machine, and the stop would signal it."""
+        monkeypatch.setattr(serve_commands, "_owned_group", lambda _proc: None)
 
     def _run(self, monkeypatch, codes: list[int], **kw) -> list[list[str]]:
         """Supervise a gateway whose successive runs exit with ``codes``."""
@@ -528,6 +571,84 @@ class TestTheSupervisor:
 
         assert seen == [True], "it did not record itself before running the gateway"
         assert not (home / "web.json").exists(), "it left a pid behind that nothing is listening on"
+
+    def test_a_stopped_supervisor_ends_its_gateway_before_it_stops_claiming_to_run(
+        self, home: Path, instant, monkeypatch
+    ) -> None:
+        """Removing web.json while the gateway still held the lock is what let a
+        second supervisor start beside it. The gateway ignores a repeated SIGTERM
+        once its teardown begins, so one that outlives its grace is killed."""
+        import subprocess
+
+        calls: list[tuple[str, bool]] = []
+
+        class _Stubborn:
+            pid = 4242
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout=None):
+                if timeout is None:
+                    raise KeyboardInterrupt  # the SIGTERM `--stop` sent the supervisor
+                calls.append(("wait", (home / "web.json").exists()))
+                if len(calls) == 2:
+                    raise subprocess.TimeoutExpired("gateway", timeout)
+                return -9
+
+            def terminate(self):
+                calls.append(("terminate", (home / "web.json").exists()))
+
+            def kill(self):
+                calls.append(("kill", (home / "web.json").exists()))
+
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: _Stubborn())
+        monkeypatch.setattr(serve_commands, "_bound_port_of", lambda _proc: None)
+
+        serve_commands._supervise(18999)
+
+        assert [name for name, _ in calls] == ["terminate", "wait", "kill", "wait"], calls
+        assert all(recorded for _, recorded in calls), "web.json went before the gateway did"
+        assert not (home / "web.json").exists()
+
+    def test_a_stop_while_it_learns_the_bound_port_still_exits_cleanly(self, home: Path, instant, monkeypatch) -> None:
+        """That poll runs for up to fifteen seconds after every launch, and a
+        SIGTERM there used to escape as a traceback with the gateway left up."""
+        import subprocess
+
+        stopped: list[str] = []
+
+        class _Running:
+            pid = 4242
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                stopped.append("terminate")
+
+            def wait(self, timeout=None):
+                return 0
+
+        def _interrupted(_proc):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: _Running())
+        monkeypatch.setattr(serve_commands, "_bound_port_of", _interrupted)
+
+        serve_commands._supervise(18999)
+
+        assert stopped == ["terminate"]
+        assert not (home / "web.json").exists()
+
+    def test_a_gateway_that_already_exited_is_not_signalled(self, home: Path, instant, monkeypatch) -> None:
+        import subprocess
+
+        proc = _FakeProc(4242, 0)
+        proc.terminate = lambda: pytest.fail("signalled a gateway that had already exited")  # type: ignore[attr-defined]
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: proc)
+
+        serve_commands._supervise(18999)
 
     def test_the_gateway_is_run_through_the_interpreter_not_a_shim(self, monkeypatch) -> None:
         """The supervisor outlives the working directory it was started from, and
@@ -680,6 +801,19 @@ class TestTheSupervisor:
 
 
 class TestStopping:
+    @pytest.fixture(autouse=True)
+    def _no_real_groups(self, monkeypatch) -> None:
+        """The pids here are made up, and a real process may hold one. Left to
+        the real calls, the escalation would read that process's group and
+        SIGKILL it, or fail on it and skip the wait being measured."""
+        import os
+
+        def _no_such_process(pid: int) -> int:
+            raise ProcessLookupError(pid)
+
+        monkeypatch.setattr(os, "getpgid", _no_such_process)
+        monkeypatch.setattr(os, "killpg", lambda *_a: pytest.fail("signalled a real process group"))
+
     @staticmethod
     def _resident(home: Path) -> None:
         home.mkdir(parents=True, exist_ok=True)
@@ -821,11 +955,95 @@ class TestStopping:
         reported = capsys.readouterr().out
         assert "supervisor (pid 111)" in reported
         assert "gateway (pid 222)" in reported
-        assert f"{serve_commands._STOP_WAIT_S:.0f}s" in reported
-        # At least the budget each, since the poll that gives up is the first one
-        # at or past the deadline, and at most one poll of overshoot on top.
-        assert clock.now >= 2 * serve_commands._STOP_WAIT_S
-        assert clock.now < 2 * (serve_commands._STOP_WAIT_S + serve_commands._STOP_POLL_S)
+        assert f"still running after {serve_commands._STOP_WAIT_S:.0f}s" in reported
+        assert "error: still running after SIGKILL" in reported
+        # Each process: the grace, then the wait after SIGKILL, each at most one
+        # poll over, since the poll that gives up is the first at or past it.
+        per_process = serve_commands._STOP_WAIT_S + serve_commands._KILL_WAIT_S
+        assert clock.now >= 2 * per_process
+        assert clock.now < 2 * (per_process + 2 * serve_commands._STOP_POLL_S)
+
+    @staticmethod
+    def _signals(monkeypatch, groups: dict[int, int], *, own_group: int = 1) -> tuple[list, set[int]]:
+        """Record every signal, and let a pid die only once it is SIGKILLed.
+
+        ``groups`` maps a pid to the group ``os.getpgid`` reports for it; a pid
+        stays alive through SIGTERM, which is the process this is about.
+        """
+        import os
+        import signal
+
+        sent: list[tuple[str, int, int]] = []
+        dead: set[int] = set()
+
+        def _kill(pid: int, sig: int) -> None:
+            sent.append(("kill", pid, sig))
+            if sig == signal.SIGKILL:
+                dead.add(pid)
+
+        def _killpg(group: int, sig: int) -> None:
+            sent.append(("killpg", group, sig))
+            dead.update(pid for pid, g in groups.items() if g == group)
+
+        monkeypatch.setattr(os, "kill", _kill)
+        monkeypatch.setattr(os, "killpg", _killpg)
+        monkeypatch.setattr(os, "getpgid", lambda pid: groups[pid])
+        monkeypatch.setattr(os, "getpgrp", lambda: own_group)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: pid not in dead)
+        return sent, dead
+
+    def test_a_supervisor_that_ignores_sigterm_is_killed_with_its_whole_group(self, home: Path, monkeypatch) -> None:
+        """Its gateway is in its group; killing the supervisor's pid alone would
+        leave that gateway holding the lock with nothing supervising it."""
+        import signal
+
+        self._resident(home)
+        self._Clock(monkeypatch)
+        sent, _dead = self._signals(monkeypatch, {111: 111, 222: 111})
+
+        assert serve_commands._stop_resident() is True
+
+        assert sent == [("kill", 111, signal.SIGTERM), ("killpg", 111, signal.SIGKILL)], sent
+        assert not (home / "web.json").exists(), "a killed supervisor's web.json names a pid nothing answers on"
+
+    def test_a_gateway_that_leads_no_group_is_killed_alone(self, home: Path, monkeypatch) -> None:
+        """A gateway run from a terminal is in the shell's job group: signalling
+        that group would signal whatever else the shell put there."""
+        import signal
+
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+        self._Clock(monkeypatch)
+        sent, _dead = self._signals(monkeypatch, {222: 900})
+
+        assert serve_commands._stop_resident() is True
+        assert sent == [("kill", 222, signal.SIGTERM), ("kill", 222, signal.SIGKILL)], sent
+
+    def test_its_own_process_group_is_never_the_one_killed(self, home: Path, monkeypatch) -> None:
+        import signal
+
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+        self._Clock(monkeypatch)
+        sent, _dead = self._signals(monkeypatch, {222: 222}, own_group=222)
+
+        assert serve_commands._stop_resident() is True
+        assert ("killpg", 222, signal.SIGKILL) not in sent
+        assert sent[-1] == ("kill", 222, signal.SIGKILL)
+
+    def test_a_process_that_exits_within_the_grace_is_never_killed(self, home: Path, monkeypatch) -> None:
+        import signal
+
+        self._resident(home)
+        sent: list[tuple[int, int]] = []
+        import os
+
+        monkeypatch.setattr(os, "kill", lambda pid, sig: sent.append((pid, sig)))
+        monkeypatch.setattr(os, "killpg", lambda *_a: pytest.fail("killed a process that stopped on its own"))
+        monkeypatch.setattr(serve_commands, "_pid_alive", self._liveness({}))
+
+        assert serve_commands._stop_resident() is True
+        assert all(sig == signal.SIGTERM for _pid, sig in sent)
 
     def test_nothing_running_is_not_an_error(self, home: Path) -> None:
         assert serve_commands._stop_resident() is False
@@ -1703,3 +1921,424 @@ class TestPageBehindSources:
             logger.remove(token)
 
         assert [m for m in said if "make build-ui" in m], said
+
+
+_STUBBORN = """
+import json, os, signal, sys, time
+home = sys.argv[1]
+signal.signal(signal.SIGTERM, lambda *_: open(os.path.join(home, "gw-sigterm"), "w").write(
+    str(os.path.exists(os.path.join(home, "web.json")))))
+with open(os.path.join(home, "serve.json"), "w") as f:
+    json.dump({"port": 18999, "token": "t", "pid": os.getpid()}, f)
+while True:
+    time.sleep(0.05)
+"""
+
+
+_STUBBORN_WITH_CHILD = """
+import json, os, signal, subprocess, sys, time
+home = sys.argv[1]
+grandchild = subprocess.Popen([sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(300)"])
+with open(os.path.join(home, "gc-pid"), "w") as f:
+    f.write(str(grandchild.pid))
+if sys.argv[2] == "ignores":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+with open(os.path.join(home, "serve.json"), "w") as f:
+    json.dump({"port": 18999, "token": "t", "pid": os.getpid()}, f)
+while True:
+    time.sleep(0.05)
+"""
+
+
+def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while not path.exists():
+        assert time.monotonic() < deadline, f"{path.name} never appeared"
+        time.sleep(0.02)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
+class TestStoppingARealTree:
+    """The fakes above say what is signalled; these say it actually ends."""
+
+    def test_stop_ends_a_supervisor_and_gateway_that_both_ignore_sigterm(self, home: Path, monkeypatch) -> None:
+        """Detached the way `_spawn_supervisor` detaches it -- its own session,
+        with the launcher gone -- so nothing here is left a zombie of the test."""
+        import os
+        import signal
+        import subprocess
+
+        from raven.utils.pid import pid_alive
+
+        home.mkdir(parents=True, exist_ok=True)
+        supervisor = (
+            "import json, os, signal, subprocess, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            f"subprocess.Popen([sys.executable, '-c', {_STUBBORN!r}, sys.argv[1]])\n"
+            "json.dump({'pid': os.getpid(), 'port': 18999}, open(os.path.join(sys.argv[1], 'web.json'), 'w'))\n"
+            "while True:\n    time.sleep(0.05)\n"
+        )
+        launcher = (
+            "import subprocess, sys\n"
+            f"subprocess.Popen([sys.executable, '-c', {supervisor!r}, sys.argv[1]], start_new_session=True)\n"
+        )
+        subprocess.run([sys.executable, "-c", launcher, str(home)], check=True, timeout=30)
+        _wait_for(home / "web.json")
+        _wait_for(home / "serve.json")
+        sup = json.loads((home / "web.json").read_text())["pid"]
+        gw = json.loads((home / "serve.json").read_text())["pid"]
+        monkeypatch.setattr(serve_commands, "_STOP_WAIT_S", 0.5)
+        try:
+            assert serve_commands._stop_resident() is True
+            assert not pid_alive(sup) and not pid_alive(gw)
+            assert not (home / "web.json").exists()
+        finally:
+            with suppress(OSError):
+                os.killpg(sup, signal.SIGKILL)
+            with suppress(OSError):
+                os.kill(gw, signal.SIGKILL)
+
+    def test_a_second_sigterm_does_not_cut_the_supervisor_s_cleanup_short(self, home: Path) -> None:
+        """`--stop` signals the supervisor and then the gateway, and a person may
+        send another; one landing while the supervisor waits on its gateway used
+        to raise out of that wait, leaving the gateway up and web.json behind."""
+        import os
+        import signal
+        import subprocess
+        import time
+
+        from raven.utils.pid import pid_alive
+
+        home.mkdir(parents=True, exist_ok=True)
+        script = (
+            "import sys\n"
+            "from raven.cli import serve_commands as sc\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
+            "sc._CHILD_STOP_S = 2.0\n"
+            "sc._supervise(18999)\n"
+        )
+        proc = subprocess.Popen([sys.executable, "-c", script], env={**os.environ, "RAVEN_HOME": str(home)})
+        try:
+            _wait_for(home / "serve.json")
+            gw = json.loads((home / "serve.json").read_text())["pid"]
+            _wait_for(home / "web.json")
+            proc.send_signal(signal.SIGTERM)
+            _wait_for(home / "gw-sigterm")  # the supervisor is now inside its cleanup
+            time.sleep(0.2)
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=20) == 0
+            assert not pid_alive(gw)
+            assert not (home / "web.json").exists()
+        finally:
+            with suppress(OSError):
+                proc.kill()
+
+    def test_a_real_supervisor_kills_its_stubborn_gateway_before_removing_web_json(self, home: Path) -> None:
+        import os
+        import signal
+        import subprocess
+
+        from raven.utils.pid import pid_alive
+
+        home.mkdir(parents=True, exist_ok=True)
+        script = (
+            "import sys\n"
+            "from raven.cli import serve_commands as sc\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN!r}, {str(home)!r}]\n"
+            "sc._CHILD_STOP_S = 0.5\n"
+            "sc._supervise(18999)\n"
+        )
+        env = {**os.environ, "RAVEN_HOME": str(home)}
+        proc = subprocess.Popen([sys.executable, "-c", script], env=env)
+        try:
+            # Signalled as soon as the gateway is up, so usually while the
+            # supervisor still polls serve.json for the port it bound; the unit
+            # test above pins that window, this one that the tree really ends.
+            _wait_for(home / "serve.json")
+            gw = json.loads((home / "serve.json").read_text())["pid"]
+            _wait_for(home / "web.json")
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=20) == 0
+            assert not pid_alive(gw), "the supervisor exited and left its gateway running"
+            assert not (home / "web.json").exists()
+            assert (home / "gw-sigterm").read_text() == "True", "web.json was gone before the gateway was"
+        finally:
+            with suppress(OSError):
+                proc.kill()
+
+    @pytest.mark.parametrize("gateway", ["ignores", "honours"])
+    def test_the_gateways_own_children_are_killed_before_web_json_goes(self, home: Path, gateway: str) -> None:
+        """The gateway is not the only process the supervisor owns: anything it
+        started without a session of its own is in its group. Killing its pid
+        alone let a grandchild that ignores SIGTERM outlive the stop, with
+        `web.json` already gone and the command reporting success -- and so did
+        a gateway that honoured SIGTERM, since its prompt exit ended the stop
+        before the group was ever signalled (reviewer 2026-09-23)."""
+        import os
+        import signal
+        import subprocess
+
+        from raven.utils.pid import pid_alive
+
+        home.mkdir(parents=True, exist_ok=True)
+        script = (
+            "import sys\n"
+            "from raven.cli import serve_commands as sc\n"
+            f"sc._gateway_argv = lambda port: [sys.executable, '-c', {_STUBBORN_WITH_CHILD!r}, {str(home)!r}, {gateway!r}]\n"
+            "sc._CHILD_STOP_S = 0.5\n"
+            "sc._supervise(18999)\n"
+        )
+        env = {**os.environ, "RAVEN_HOME": str(home)}
+        proc = subprocess.Popen([sys.executable, "-c", script], env=env)
+        try:
+            _wait_for(home / "gc-pid")
+            gc = int((home / "gc-pid").read_text())
+            _wait_for(home / "web.json")
+            proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=20) == 0
+            assert not (home / "web.json").exists()
+            assert not pid_alive(gc), "the gateway's own child outlived the stop"
+        finally:
+            with suppress(OSError):
+                proc.kill()
+            with suppress(OSError, ValueError):
+                os.kill(int((home / "gc-pid").read_text()), signal.SIGKILL)
+
+
+_IGNORES_SIGTERM = (
+    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); time.sleep(300)"
+)
+_HONOURS_SIGTERM = "import time; print('ready', flush=True); time.sleep(300)"
+
+
+def _child(code: str, *, own_group: bool = True):
+    """A child that has finished starting: its handlers are in place before any
+    signal a test sends, which a bare ``Popen`` cannot promise."""
+    import subprocess
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", code], start_new_session=own_group, stdout=subprocess.PIPE, text=True
+    )
+    assert proc.stdout.readline().strip() == "ready"
+    return proc
+
+
+def _gone_soon(pid: int, timeout_s: float = 5.0) -> bool:
+    """Whether ``pid`` is gone shortly: a killed orphan is reaped by init, not at once."""
+    import time
+
+    from raven.utils.pid import pid_alive
+
+    deadline = time.monotonic() + timeout_s
+    while pid_alive(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+    return True
+
+
+def _settled(proc) -> None:
+    """Leave nothing behind whatever a test did to ``proc`` and its group."""
+    import os
+    import signal
+
+    with suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    with suppress(OSError):
+        proc.kill()
+    with suppress(Exception):
+        proc.wait(timeout=5)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
+class TestTheSupervisorsStopOfItsGateway:
+    """The supervisor's half of a stop, run in this process: the real-tree tests
+    above drive the same code from a child interpreter, where it is exercised
+    but never measured."""
+
+    @pytest.fixture(autouse=True)
+    def quick(self, monkeypatch):
+        monkeypatch.setattr(serve_commands, "_CHILD_STOP_S", 0.5)
+        monkeypatch.setattr(serve_commands, "_KILL_WAIT_S", 2.0)
+
+    def test_a_group_is_read_only_from_a_child_that_leads_its_own(self) -> None:
+        leader = _child(_HONOURS_SIGTERM)
+        member = _child(_HONOURS_SIGTERM, own_group=False)
+        try:
+            assert serve_commands._owned_group(leader) == leader.pid
+            assert serve_commands._owned_group(member) is None, "this process's own group is never named"
+            assert serve_commands._owned_group(object()) is None
+        finally:
+            _settled(leader)
+            _settled(member)
+
+    def test_a_child_already_reaped_names_no_group(self) -> None:
+        proc = _child("print('ready', flush=True)")
+        proc.wait(timeout=10)
+        assert serve_commands._owned_group(proc) is None
+
+    def test_a_group_that_cannot_be_probed_is_not_reported_gone(self, monkeypatch) -> None:
+        def refuse(group, sig):
+            raise PermissionError(1, "not permitted")
+
+        monkeypatch.setattr("os.killpg", refuse)
+        assert serve_commands._group_gone(12345, 0.0) is False
+
+    def test_nothing_to_stop_is_a_no_op(self) -> None:
+        serve_commands._stop_child(None)
+
+    def test_a_gateway_that_honours_sigterm_goes_with_its_group(self) -> None:
+        proc = _child(_HONOURS_SIGTERM)
+        group = serve_commands._owned_group(proc)
+        try:
+            serve_commands._stop_child(proc, group)
+            assert proc.poll() is not None
+            assert serve_commands._group_gone(proc.pid, 0.0)
+        finally:
+            _settled(proc)
+
+    def test_a_gateway_that_ignores_sigterm_is_killed_with_its_group(self, capsys) -> None:
+        proc = _child(_IGNORES_SIGTERM)
+        group = serve_commands._owned_group(proc)
+        try:
+            serve_commands._stop_child(proc, group)
+            assert proc.returncode == -9
+            assert "ignored SIGTERM" in capsys.readouterr().out
+        finally:
+            _settled(proc)
+
+    def test_a_stubborn_gateway_with_no_group_is_killed_alone(self, capsys) -> None:
+        proc = _child(_IGNORES_SIGTERM)
+        try:
+            serve_commands._stop_child(proc, None)
+            assert proc.returncode == -9
+            assert "killing it" in capsys.readouterr().out
+        finally:
+            _settled(proc)
+
+    def test_a_group_member_that_ignores_sigterm_is_killed_after_its_gateway(self, tmp_path, capsys) -> None:
+        """The gateway exits on SIGTERM; the child it left in its group does not."""
+        import os
+        import signal
+
+        pid_file = tmp_path / "gc-pid"
+        gateway = (
+            "import subprocess, sys, time\n"
+            f"gc = subprocess.Popen([sys.executable, '-c', {_IGNORES_SIGTERM!r}], stdout=subprocess.PIPE, text=True)\n"
+            "gc.stdout.readline()\n"
+            f"open({str(pid_file)!r}, 'w').write(str(gc.pid))\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(300)\n"
+        )
+        proc = _child(gateway)
+        try:
+            grandchild = int(pid_file.read_text())
+            serve_commands._stop_child(proc, serve_commands._owned_group(proc))
+            assert _gone_soon(grandchild), "the gateway's own child outlived the stop"
+            assert "own processes ignored SIGTERM" in capsys.readouterr().out
+        finally:
+            _settled(proc)
+            with suppress(OSError, ValueError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+    def test_a_stubborn_gateway_is_killed_with_its_group_in_one_step(self, tmp_path, capsys) -> None:
+        """Past the grace the kill goes to the whole group at once, so nothing is
+        left for the group's own SIGTERM round to report."""
+        import os
+        import signal
+
+        pid_file = tmp_path / "gc-pid"
+        gateway = (
+            "import signal, subprocess, sys, time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            f"gc = subprocess.Popen([sys.executable, '-c', {_IGNORES_SIGTERM!r}], stdout=subprocess.PIPE, text=True)\n"
+            "gc.stdout.readline()\n"
+            f"open({str(pid_file)!r}, 'w').write(str(gc.pid))\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(300)\n"
+        )
+        proc = _child(gateway)
+        try:
+            grandchild = int(pid_file.read_text())
+            serve_commands._stop_child(proc, serve_commands._owned_group(proc))
+            assert _gone_soon(grandchild)
+            out = capsys.readouterr().out
+            assert "ignored SIGTERM" in out
+            assert "own processes" not in out, "the gateway's child was left for a second round"
+        finally:
+            _settled(proc)
+            with suppress(OSError, ValueError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+    def test_a_killed_group_still_being_reaped_is_waited_out_not_reported(self, monkeypatch, capsys) -> None:
+        """A member the killed gateway orphaned stays in the group until init
+        reaps it, which on a CI runner outlasted the spent budget. The first
+        probe after the kill reports it present, the way that zombie does."""
+        import os
+        import signal
+
+        real_killpg = os.killpg
+        killed: list[int] = []
+
+        def _killpg(group: int, sig: int) -> None:
+            if sig == signal.SIGKILL:
+                killed.append(group)
+            elif sig == 0 and len(killed) == 1:
+                killed.append(group)
+                return
+            real_killpg(group, sig)
+
+        monkeypatch.setattr(os, "killpg", _killpg)
+        proc = _child(_IGNORES_SIGTERM)
+        try:
+            serve_commands._stop_child(proc, serve_commands._owned_group(proc))
+            assert proc.returncode == -9
+            assert len(killed) == 2, "the probe that stands in for the zombie never ran"
+            assert "own processes" not in capsys.readouterr().out
+        finally:
+            _settled(proc)
+
+    def test_a_gateway_already_gone_still_has_its_group_settled(self) -> None:
+        proc = _child(_HONOURS_SIGTERM)
+        group = serve_commands._owned_group(proc)
+        proc.kill()
+        proc.wait(timeout=10)
+        serve_commands._stop_child(proc, group)
+
+
+class TestAStopThatLosesItsTarget:
+    def test_a_process_that_vanishes_before_the_kill_is_not_reported(self, monkeypatch) -> None:
+        monkeypatch.setattr("os.kill", lambda pid, sig: None)
+        monkeypatch.setattr(serve_commands, "_await_exit", lambda pid, timeout: False)
+
+        def gone(pid):
+            raise ProcessLookupError(pid)
+
+        monkeypatch.setattr(serve_commands, "_force_kill", gone)
+        unresponsive: list[str] = []
+        serve_commands._stop_one("gateway", 4242, unresponsive)
+        assert unresponsive == []
+
+    def test_a_supervisor_that_cannot_be_signalled_is_warned_about(self, home: Path, monkeypatch, capsys) -> None:
+        def refuse(label, pid, unresponsive):
+            raise PermissionError(1, "not permitted")
+
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242)
+        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
+        monkeypatch.setattr(serve_commands, "_stop_one", refuse)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: True)
+        serve_commands._stop_resident()
+        assert "could not stop the supervisor (pid 4242)" in capsys.readouterr().out
+
+    def test_a_supervisor_gone_before_its_signal_is_a_quiet_stop(self, home: Path, monkeypatch, capsys) -> None:
+        def gone(label, pid, unresponsive):
+            raise ProcessLookupError(pid)
+
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242)
+        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
+        monkeypatch.setattr(serve_commands, "_stop_one", gone)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: False)
+        assert serve_commands._stop_resident() is True
+        assert "could not stop" not in capsys.readouterr().out

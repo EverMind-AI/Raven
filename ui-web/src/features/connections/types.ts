@@ -11,10 +11,8 @@ export interface ConnField {
 
 export interface ConnChannel {
   id: string
-  /* The catalogue's two spellings: `key` names a message-catalogue entry for
-     the generic channels, `name` is a brand name used verbatim. */
-  key?: string
-  name?: string
+  /* The message-catalogue entry that names the row, in both languages. */
+  key: string
   on: boolean
   who?: string
   fields?: ConnField[]
@@ -28,11 +26,14 @@ export interface ConnChannel {
   qrLogin?: boolean
 }
 
-/* One channels.qr answer. `connected: true` ends the island's polling. */
+/* One channels.qr answer. `connected: true` ends the island's polling, and
+   `running: false` says the adapter behind the code is gone -- a code it left
+   pending is expired, and the row the panel sits in does not know yet. */
 export interface ConnQr {
   qr?: string
   qr_text?: string
   connected: boolean
+  running?: boolean
 }
 
 /* The DS.connections contract both the offline fixture library and the rpc
@@ -50,6 +51,8 @@ export interface ConnectionsSource {
      source cannot say, and the page then claims nothing. */
   hostRunning?(): boolean | undefined
   toggle(c: ConnChannel, on: boolean): Promise<unknown>
-  apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<unknown>
+  /* Resolves true once the write was applied, false when it was refused or never
+     reached the gateway (the source has already said why). */
+  apply(c: ConnChannel, patch: Record<string, string>, enable: boolean): Promise<boolean>
   qr(c: ConnChannel): Promise<ConnQr | null>
 }

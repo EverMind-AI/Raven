@@ -1652,21 +1652,15 @@ def test_an_undecided_order_is_refused_only_when_it_would_matter() -> None:
 # --- capability gaps are reported, not refused ---------------------------
 
 
-def test_skills_for_an_agent_that_cannot_take_them_is_a_notice() -> None:
-    """A capability gap downgrades; a safety breach refuses.
-
-    A playbook written on a better-equipped machine should still run here with the
-    parts that work -- but the caller has to be told, or a wrong result is
-    unattributable.
-    """
+def test_skills_for_an_agent_with_no_menu_are_not_a_capability_gap() -> None:
+    """They used to be noticed as ignored. Now they are quoted into the node's
+    prompt by `dag_skills.fold_skills`, so the capability check has nothing to
+    say about them; only a name the catalog lacks is worth a line, and that
+    module says it."""
     spec = _spec({"id": "a", "subagent": "x", "prompt_template": "go", "skills": ["research"]})
     caps = {"x": AgentCapabilities(injectable_skills=False)}
 
-    notices = validate_capabilities(spec, caps)
-
-    assert len(notices) == 1
-    assert "cannot take injected skills" in notices[0]
-    assert "'a'" in notices[0]
+    assert validate_capabilities(spec, caps) == []
 
 
 def test_mcp_injection_is_checked_per_agent_capability() -> None:
@@ -2613,3 +2607,40 @@ def test_the_oversized_graph_hint_names_the_ref_escape_hatch() -> None:
     assert "Do not shorten prompts by dropping task rules" in hint
     prompt_doc = _NODE_SCHEMA["properties"]["prompt_template"]["description"]
     assert "A long prompt belongs in a file" in prompt_doc
+
+
+async def test_an_addressed_run_is_validated_against_the_conversation_it_names(tmp_path) -> None:
+    """A stint resumed from a terminal or an RPC call has no turn, and validating
+    its graph against the turn's registry found none of the roles the record
+    said had finished: `depends on unknown r03-planner` on the very node the
+    driver had just named as done. The run is written under the addressed
+    conversation, so that is the registry a dependency on an earlier run is
+    checked against."""
+    from raven.agent.subagent.dag_store import SessionNodes
+    from raven.agent.subagent.dag_tool import SubAgentDagTool, _DagOrigin
+
+    tool = SubAgentDagTool(workspace=tmp_path, agents=[ThirdPartyCliSubagentConfig(name="x", command="true")])
+    tool.set_context("cli", "direct", None)
+    asked: list[str | None] = []
+
+    async def session_nodes(session_key: str | None = None) -> SessionNodes:
+        asked.append(session_key)
+        return SessionNodes()
+
+    tool.session_nodes = session_nodes  # type: ignore[method-assign]
+
+    await tool._execute(
+        [{"id": "a", "subagent": "x", "prompt_template": "hi", "depends_on": []}],
+        background=True,
+        task_summary="probe",
+        origin=_DagOrigin(channel="web", chat_id="default", conversation="web:the-stint"),
+    )
+    assert asked[:1] == ["web:the-stint"]
+
+    asked.clear()
+    await tool._execute(
+        [{"id": "b", "subagent": "x", "prompt_template": "hi", "depends_on": []}],
+        background=True,
+        task_summary="probe",
+    )
+    assert asked[:1] == [None], "an unaddressed run still reads the turn's own registry"

@@ -16,13 +16,13 @@ repos:
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
-        # The bundled brand marks are byte-identical copies of what
-        # @lobehub/icons-static-svg ships, and that is the attribution LICENSES
-        # keeps: checkable with `cmp` rather than by trust. Upstream writes them
-        # with no trailing newline, so appending one would quietly end that --
-        # for whichever files a PR happened to touch, which is worse than a
-        # convention nobody follows. Both asset trees make the same claim.
-        exclude: ^ui-web/src/assets/(providers|agents)/.*\.svg$
+        # The bundled brand marks are byte-identical copies of what their
+        # sources ship, and that is the attribution LICENSES keeps: checkable
+        # with `cmp` rather than by trust. Upstream writes some of them with no
+        # trailing newline, so appending one would quietly end that -- for
+        # whichever files a PR happened to touch, which is worse than a
+        # convention nobody follows. All three asset trees make the same claim.
+        exclude: ^ui-web/src/assets/(providers|agents|channels)/.*\.svg$
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files

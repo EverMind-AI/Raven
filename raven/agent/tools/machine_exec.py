@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import re
 import shlex
+from pathlib import PurePosixPath
 from typing import Any
 
 # Long enough to tail a large log or hash a directory; far short of any solver
@@ -94,6 +95,222 @@ def machines_registered() -> bool:
         return bool(load())
     except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
         return False
+
+
+# What punctuation_chars hands back as its own token, split by what the token
+# does to the command. A separator ends it, so the words after one belong to the
+# next command and not to this ssh.
+_COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
+
+# A redirection does not end the command: `ssh 2>/dev/null -p 58717 root@host`
+# is a single ssh. Reading one as a terminator -- or, worse, reading `&>` as a
+# word and taking it for the destination -- lost the registered host that came
+# after it (reviewed 2026-09-20). The operator and the file it names are
+# stepped over instead, and this ssh's own words keep being read.
+_REDIRECTIONS = frozenset({"<", ">", ">>", "<<", "<<<", "<&", ">&", "&>", "&>>", ">|", "<>"})
+
+# An -o option's name and its value are separated by an equals sign or by
+# whitespace; OpenSSH honours both spellings.
+_OPTION_SPLIT = re.compile(r"\s*=\s*|\s+")
+
+# ssh(1)'s own getopt string, copied from the OpenSSH_9.9p2 binary rather than
+# listed from memory: a letter followed by ':' takes a value. The hand-kept set
+# this replaces had lost `B` (bind interface), so `ssh -B lo -p 58717 host`
+# read `lo` as the destination (reviewed 2026-09-21). OpenSSH_8.9 differs in
+# one letter -- `P` takes no value there -- and the current release is read.
+_SSH_OPTSTRING = "1246ab:c:e:fgi:kl:m:no:p:qstvxAB:CD:E:F:GI:J:KL:MNO:P:Q:R:S:TVw:W:XYy"
+_SSH_VALUE_FLAGS = frozenset(ch for i, ch in enumerate(_SSH_OPTSTRING) if _SSH_OPTSTRING[i + 1 : i + 2] == ":")
+
+
+def _read_option_group(word: str, tokens: list[str], index: int) -> tuple[int, str | None]:
+    """Read one ``-xyz`` option group the way getopt does. ``(index, port)``.
+
+    Letters are read in turn until one takes a value; the rest of the group is
+    that value, or the next word when nothing is left (``-p58717``, ``-p
+    58717``, ``-vp 58717``, ``-vvvp58717`` all name port 58717). Reading only a
+    two-character ``-p`` skipped ``-vp`` as a group with no argument and took
+    its port for the destination (reviewed 2026-09-21). ``port`` is the value
+    the group gives the port -- from ``-p`` or from an ``-o`` port option -- or
+    None; ``index`` is past whatever the group consumed.
+    """
+    letters = word[1:]
+    for offset, letter in enumerate(letters):
+        if letter not in _SSH_VALUE_FLAGS:
+            continue
+        value = letters[offset + 1 :]
+        if not value and index < len(tokens):
+            value = tokens[index]
+            index += 1
+        if letter == "p":
+            return index, value
+        if letter == "o":
+            # `ssh -G` prints `port 58717` for -o Port=58717 and for
+            # -o "Port 58717" alike. Splitting only on the equals sign dropped
+            # the spaced spelling's value and left the port at 22, so a machine
+            # registered on another port went unrecognised (reviewed 2026-09-20).
+            pair = _OPTION_SPLIT.split(value.strip(), maxsplit=1)
+            return index, (pair[1].strip() if len(pair) == 2 and pair[0].lower() == "port" else None)
+        return index, None
+    return index, None
+
+
+def _ssh_destinations(command: str) -> list[tuple[str, int]]:
+    """Every host and port an ``ssh`` word in a shell command would connect to.
+
+    Empty when no token runs the ssh client, or when the line cannot be
+    tokenised at all. Every ssh in the line is collected, not the first: a
+    compound line reaches each of its commands, so stopping at one destination
+    lets ``ssh <unregistered>; ssh <registered>`` through on the strength of
+    the half that was allowed.
+
+    Tokenised with ``punctuation_chars`` so that unspaced operators separate
+    words the way a shell reads them -- ``true&&ssh`` is two commands, and
+    plain splitting hands back one token that is neither.
+
+    The executable may be written ``ssh``, ``/usr/bin/ssh`` or ``\\ssh`` (a
+    backslash suppresses alias lookup and still runs the client), and all three
+    reach the far side.
+
+    The port is read from ``-p`` and from an ``-o`` port option in either of the
+    spellings OpenSSH honours -- ``-o Port=58717`` and ``-o "Port 58717"`` --
+    because the registry holds several machines at one address on different
+    ports: the address alone picks whichever row is listed first and names the
+    wrong machine. Repeats keep the first value, as ssh does.
+
+    Options are read the way ssh reads them: a ``-xyz`` group letter by letter
+    (``-vp 58717``), and on past the destination until the first word that is
+    not an option (``ssh root@h -p 58717 true`` is port 58717, ``ssh root@h
+    true -p 58717`` is 22) or a ``--``.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        # An unbalanced quote is not a shell line this can read; the shell will
+        # reject it too, so nothing reaches a machine either way.
+        return []
+
+    found: list[tuple[str, int]] = []
+    index = 0
+    while index < len(tokens):
+        if PurePosixPath(tokens[index].lstrip("\\")).name != "ssh":
+            index += 1
+            continue
+        index += 1
+        port = 22
+        port_set = False
+        destination: str | None = None
+        options_open = True
+        options_ended = False
+        while index < len(tokens):
+            word = tokens[index]
+            if word in _COMMAND_SEPARATORS or PurePosixPath(word.lstrip("\\")).name == "ssh":
+                # The command ended, or the next one began; either way this
+                # ssh's arguments are over and the token is left for the outer
+                # loop to read.
+                break
+            following = tokens[index + 1] if index + 1 < len(tokens) else None
+            if word in _REDIRECTIONS:
+                # The operator and the file it names; the file is skipped only
+                # when there is one, so a redirection left dangling before a
+                # separator does not swallow the separator.
+                index += 1
+                if following is not None and following not in _COMMAND_SEPARATORS and following not in _REDIRECTIONS:
+                    index += 1
+                continue
+            if word.isdigit() and following in _REDIRECTIONS:
+                # `2>&1` arrives as the three tokens 2, >& and 1, so a bare file
+                # descriptor can stand in front of the operator. Without this
+                # the digit was taken for the destination and the real host,
+                # further along the line, was never read. The tokens do not say
+                # whether a space separated the digit from the operator, so a
+                # destination that is itself a bare integer is read as a
+                # descriptor here -- a shape no registry row has, since an
+                # address carries dots or letters.
+                index += 1
+                continue
+            index += 1
+            if not options_open:
+                # The remote command; nothing in it is this ssh's to read.
+                continue
+            if word == "--" and not options_ended:
+                # getopt's end of options. Before the destination it makes the
+                # next word the host whatever it looks like; after it, the rest
+                # is the remote command: `ssh -G root@h -- -p 58717` prints 22.
+                options_ended = True
+                if destination is not None:
+                    options_open = False
+                continue
+            if word.startswith("-") and len(word) > 1 and not options_ended:
+                index, value = _read_option_group(word, tokens, index)
+                # First obtained value wins, which is ssh's own rule for every
+                # option: `ssh -G -p 2222 -o Port=58717 host` prints 2222, and
+                # reversing the two prints 58717. Overwriting instead read
+                # `-p 58717 -p 22` as port 22 and let a command that really
+                # reaches the registered machine past the guard (reviewed
+                # 2026-09-21).
+                if value is not None and value.isdigit() and not port_set:
+                    port = int(value)
+                    port_set = True
+                continue
+            if destination is None:
+                destination = word.rsplit("@", 1)[-1].strip("[]").lower()
+                # OpenSSH re-enters its option loop once it has the host, so
+                # `ssh root@h -p 58717 true` connects on 58717; stopping at the
+                # destination read it as 22 and let the line past the guard
+                # (reviewed 2026-09-21). A `--` already seen means no re-entry.
+                options_open = not options_ended
+                continue
+            # The first non-option word after the host starts the remote
+            # command, and ssh stops reading options there: `ssh -G root@h
+            # true -p 58717` prints 22.
+            options_open = False
+        if destination:
+            found.append((destination, port))
+    return found
+
+
+def raw_ssh_target(command: str) -> dict[str, Any] | None:
+    """The registered machine a plain-shell command reaches over its own ssh.
+
+    ``None`` when the command runs no ssh client, or names a destination the
+    registry does not know, or the registry cannot be read: the plain shell
+    keeps working for everything that is not the bypass this looks for.
+
+    Host and port are both matched, and the host as a whole word rather than a
+    substring -- ``203.0.113.70`` is not ``203.0.113.7``, and a machine the
+    registry does not hold must still be reachable from here.
+
+    The bypass is measured, not hypothetical. Two field runs on 2026-09-14
+    put the machine's address in the task statement, and the coding nodes
+    typed ``ssh -p <port> root@<ip> '... &'`` from the local shell 58 times to
+    start GPU work: the look here is capped at 60 s and on-call's job runner
+    was not theirs to call, so the address was the path of least resistance,
+    and the ledger never saw the runs. Only ssh is matched -- ``scp`` and
+    ``rsync`` move files and start nothing on the far side.
+    """
+    destinations = _ssh_destinations(command)
+    if not destinations:
+        return None
+    try:
+        from raven.ops.connections import load
+
+        rows = load()
+    except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
+        return None
+    for host, port in destinations:
+        for row in rows:
+            row_host = str(row.get("host") or "").strip().lower()
+            if not row_host or row_host != host:
+                continue
+            try:
+                row_port = int(row.get("port") or 22)
+            except (TypeError, ValueError):
+                row_port = 22
+            if row_port == port:
+                return row
+    return None
 
 
 def _runner_for_connection(conn_id: str, *, cap_seconds: float | None = None):

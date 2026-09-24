@@ -43,6 +43,59 @@ async function open(slug: string): Promise<void> {
 }
 
 describe('provider detail', () => {
+  const many = (): ReturnType<typeof snap> => {
+    const data = snap()
+    const row = data.providers.find((r) => r.id === 'openrouter')!
+    row.configured = Array.from({ length: 11 }, (_, i) => `openrouter/vendor/model-${i}`)
+    return data
+  }
+  const chips = (): string[] => [...document.querySelectorAll('.settings-tag2')].map((c) => c.firstChild!.textContent!)
+
+  it('folds a long model list past eight, and a removal does not snap it shut', async () => {
+    /* A gateway takes models by the dozen; the list only ever grew, pushing the
+       rest of the pane out of reach. */
+    install(many())
+    await open('openrouter')
+    expect(chips()).toHaveLength(8)
+    const more = document.querySelector('.settings-tagmore') as HTMLButtonElement
+    expect(more.textContent).toBe('gui.settings.providers.models_more {"n":"3"}')
+    await act(async () => { fireEvent.click(more) })
+    expect(chips()).toHaveLength(11)
+    /* A write redraws the page from a new snapshot; the fold lives in the store
+       so that redraw keeps it open. */
+    await act(async () => { store.set({ epoch: store.get().epoch + 1 }) })
+    expect(chips()).toHaveLength(11)
+    await act(async () => { fireEvent.click(document.querySelector('.settings-tagmore')!) })
+    expect(chips()).toHaveLength(8)
+  })
+
+  it('names each chip without the provider in front, keeping the full id as its title', async () => {
+    install(many())
+    await open('openrouter')
+    expect(chips()[0]).toBe('vendor/model-0')
+    expect(document.querySelector('.settings-tag2')!.getAttribute('title')).toBe('openrouter/vendor/model-0')
+  })
+
+  it('asks a keyless local server for its address once', async () => {
+    const data = snap()
+    data.providers.push({ id: 'vllm', name: 'vLLM', models: [], configured: [], on: false, kind: 'local',
+      acceptsKey: false, needsBase: true })
+    install(data)
+    await open('vllm')
+    expect(screen.getAllByText('gui.settings.providers.base')).toHaveLength(1)
+    expect(document.querySelectorAll('.settings-tp-main input[aria-label="gui.settings.providers.base"]')).toHaveLength(1)
+  })
+
+  it('leaves the page one way out: the key link when there is one, the vendor site when not', async () => {
+    /* The name's arrow used to be `keyUrl || homepage`, the same page as "Get a
+       key" two lines below it. */
+    install()
+    await open('anthropic')
+    expect(document.querySelectorAll('.settings-tp-main a.exlink')).toHaveLength(1)
+    expect(document.querySelector('.settings-tp-name a')).toBeNull()
+    expect(screen.getByText('gui.settings.get_key').closest('a')!.getAttribute('href')).toBe('https://console.anthropic.com/settings/keys')
+  })
+
   it('refuses to disconnect a provider a role runs on, naming the roles, and writes nothing', async () => {
     const { calls } = install()
     await open('anthropic')
@@ -50,6 +103,19 @@ describe('provider detail', () => {
     expect(calls).toEqual([])
     expect(screen.getByRole('alert').textContent)
       .toBe('gui.settings.providers.in_use {"roles":"gui.settings.roles.chat, gui.settings.roles.title, gui.settings.roles.gate"}')
+  })
+
+  /* And it says so where the button is. The panel's own foot sits under a grid
+     `calc(100vh - 220px)` tall, so a refusal drawn there is a screen below the
+     control that refused: the button appeared to do nothing at all. */
+  it('says the refusal inside the pane, not at the foot of the panel', async () => {
+    install()
+    await open('anthropic')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.disconnect_key')) })
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0]!.closest('.settings-tp-main')).not.toBeNull()
+    expect(document.querySelector('.settings-panel > .settings-inline-err')).toBeNull()
   })
 
   /* And it stands at the foot, not among the fields: the box a reader is
@@ -106,7 +172,8 @@ describe('provider detail', () => {
     const box = screen.getByLabelText('gui.settings.providers.api_key') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'sk-new' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
-    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }]])
+    /* The save, then the test it kicks off on the side. */
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }], ['fetchModels:verify', 'openai']])
   })
 
   it('a local provider connects by address alone and refuses an empty one', async () => {
@@ -118,7 +185,7 @@ describe('provider detail', () => {
     expect(calls).toEqual([])
     await act(async () => { fireEvent.change(box, { target: { value: 'http://localhost:11434' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
-    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }]])
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }], ['fetchModels:verify', 'ollama']])
   })
 
   it('a header is added as a one-name patch and removed as a one-name null', async () => {
@@ -171,14 +238,41 @@ describe('provider detail', () => {
     return calls
   }
 
-  it('fetches the vendor list on open and writes one model per click', async () => {
+  const addPicked = (): HTMLButtonElement => document.querySelector('.settings-apfoot .mini.go') as HTMLButtonElement
+  const pickAll = (): HTMLElement => document.querySelector('.settings-apall') as HTMLElement
+
+  it('a click ticks a row and writes nothing; the footer adds the ticked set in one call and closes', async () => {
     const calls = await catalogue([
       { id: 'gpt-5', label: 'gpt-5', kind: 'text', added: false },
-      { id: 'claude-opus-4-5', label: 'x', kind: 'text', added: true },
+      { id: 'gpt-5-mini', label: 'gpt-5-mini', kind: 'text', added: false },
+      { id: 'o4', label: 'o4', kind: 'text', added: false },
     ])
     expect(calls).toEqual([['fetchModels', 'anthropic']])
+    expect(addPicked().disabled).toBe(true)
     await act(async () => { fireEvent.click(popRows()[0]!) })
-    expect(calls[1]).toEqual(['provider', { op: 'add_model', slug: 'anthropic', model: 'gpt-5' }])
+    await act(async () => { fireEvent.click(popRows()[2]!) })
+    expect(popRows().map((r) => r.getAttribute('aria-checked'))).toEqual(['true', 'false', 'true'])
+    expect(calls).toHaveLength(1)
+    expect(addPicked().textContent).toBe('gui.settings.providers.add_picked {"n":"2"}')
+    /* A second click takes the tick off again. */
+    await act(async () => { fireEvent.click(popRows()[2]!) })
+    await act(async () => { fireEvent.click(popRows()[1]!) })
+    await act(async () => { fireEvent.click(addPicked()) })
+    expect(calls[1]).toEqual(['addModels', { slug: 'anthropic', models: ['gpt-5', 'gpt-5-mini'] }])
+    expect(document.querySelector('.settings-apop')).toBeNull()
+  })
+
+  it('keeps a tick through a search that hides its row', async () => {
+    const calls = await catalogue([
+      { id: 'gpt-5', label: 'gpt-5', kind: 'text', added: false },
+      { id: 'o4', label: 'o4', kind: 'text', added: false },
+    ])
+    await act(async () => { fireEvent.click(popRows()[0]!) })
+    await act(async () => { fireEvent.change(popSearch(), { target: { value: 'o4' } }) })
+    await act(async () => { fireEvent.click(popRows()[0]!) })
+    expect(addPicked().textContent).toBe('gui.settings.providers.add_picked {"n":"2"}')
+    await act(async () => { fireEvent.click(addPicked()) })
+    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['gpt-5', 'o4'] }])
   })
 
   it('counts the kinds over the search result and narrows the rows to the tab', async () => {
@@ -188,9 +282,9 @@ describe('provider detail', () => {
       { id: 'other-embed', label: 'other-embed', kind: 'embedding', added: false },
     ])
     const tabs = (): string[] => [...document.querySelectorAll('.settings-mkind')].map((b) => b.textContent!)
-    /* Five, not three: the two models already on this provider are rows too,
-       or a model added by hand could never be taken off from here. */
-    expect(tabs()).toEqual(['gui.model.kind_all5', 'gui.model.type.text3', 'gui.model.type.embedding2'])
+    /* Three, not five: the harness's anthropic already carries two models, and
+       what is already on the provider is not a choice this list offers. */
+    expect(tabs()).toEqual(['gui.model.kind_all3', 'gui.model.type.text1', 'gui.model.type.embedding2'])
     await act(async () => { fireEvent.change(popSearch(), { target: { value: 'gpt' } }) })
     expect(tabs()).toEqual(['gui.model.kind_all2', 'gui.model.type.text1', 'gui.model.type.embedding1'])
     await act(async () => { fireEvent.click([...document.querySelectorAll('.settings-mkind')][2]!) })
@@ -219,52 +313,131 @@ describe('provider detail', () => {
     expect(calls[calls.length - 1]).toEqual(['provider', { op: 'add_model', slug: 'anthropic', model: 'typed-one' }])
   })
 
-  it('treats one model written two ways as one row, already added', async () => {
+  it('one model written two ways is one model, and the added spelling stays out', async () => {
     /* `model.fetch_models` returns provider-qualified ids; a model added by
        hand is stored as it was typed. The backend calls them the same model
-       (`wire.py` merge_key); drawing them as two rows offered to add one that
-       was already there and left "add all" at a number it could never reach. */
+       (`wire.py` merge_key), so the qualified row for a bare configured id is
+       a model this provider already has, and offering to add it again is the
+       bug the merge key exists to stop. */
     const calls = await catalogue([
       { id: 'anthropic/claude-opus-4-5', label: 'Opus', kind: 'text', added: true },
       { id: 'anthropic/claude-sonnet-4-5', label: 'Sonnet', kind: 'text', added: true },
       { id: 'anthropic/claude-haiku', label: 'Haiku', kind: 'text', added: false },
     ])
     /* The harness's anthropic carries the two bare spellings as configured. */
-    expect(popRows().map((r) => r.getAttribute('aria-checked'))).toEqual(['true', 'true', 'false'])
-    expect(popRows()).toHaveLength(3)
-    expect(screen.getByText('gui.model.add_all {"n":"1"}')).toBeTruthy()
-    await act(async () => { fireEvent.click(screen.getByText('gui.model.add_all {"n":"1"}')) })
+    expect(popRows().map((r) => r.querySelector('.settings-apnm')!.textContent)).toEqual(['Haiku'])
+    await act(async () => { fireEvent.click(pickAll()) })
+    await act(async () => { fireEvent.click(addPicked()) })
     expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['anthropic/claude-haiku'] }])
   })
 
-  it('adds everything shown in one call', async () => {
+  it('drops a model from the list the moment it is added, and says so when none is left', async () => {
+    /* The whole point of the list is what is not on the provider yet. A vendor
+       every one of whose models is already added used to open as a page of
+       ticks with nothing to press, and the footer offered "add all (0)". */
+    const calls = await catalogue([
+      { id: 'claude-opus-4-5', label: 'Opus', kind: 'text', added: true },
+      { id: 'claude-sonnet-4-5', label: 'Sonnet', kind: 'text', added: true },
+    ])
+    expect(popRows()).toHaveLength(0)
+    expect(screen.getByText('gui.settings.providers.all_added')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.providers.no_models_yet')).toBeNull()
+    expect(document.querySelector('.settings-apfoot .mini')).toBeNull()
+    expect(document.querySelector('.settings-apall')).toBeNull()
+    expect(calls.some((c) => c[0] === 'provider')).toBe(false)
+  })
+
+  it('"select all" ticks what is shown and writes nothing; the add is still the one write', async () => {
+    /* It replaced an "add all" button: a second way to write, beside a list
+       that is otherwise built by ticking and committed by one button. */
     const calls = await catalogue([
       { id: 'a', label: 'a', kind: 'text', added: false },
       { id: 'b', label: 'b', kind: 'text', added: false },
+      { id: 'zz', label: 'zz', kind: 'text', added: false },
     ])
-    await act(async () => { fireEvent.click(screen.getByText('gui.model.add_all {"n":"2"}')) })
-    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['a', 'b'] }])
+    expect(document.querySelectorAll('.settings-apfoot .mini')).toHaveLength(1)
+    expect(pickAll().getAttribute('aria-checked')).toBe('false')
+    await act(async () => { fireEvent.click(popRows()[0]!) })
+    expect(pickAll().getAttribute('aria-checked')).toBe('mixed')
+    await act(async () => { fireEvent.click(pickAll()) })
+    expect(pickAll().getAttribute('aria-checked')).toBe('true')
+    expect(calls).toHaveLength(1)
+    /* Over what is shown: a search narrows what it takes. */
+    await act(async () => { fireEvent.click(pickAll()) })
+    await act(async () => { fireEvent.change(popSearch(), { target: { value: 'z' } }) })
+    await act(async () => { fireEvent.click(pickAll()) })
+    await act(async () => { fireEvent.click(addPicked()) })
+    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['zz'] }])
   })
 
   it('heads each vendor group and trails the bare rows with none', async () => {
-    const calls = await catalogue([
+    await catalogue([
       { id: 'zeta/one', label: 'Zeta One', kind: 'text', added: false },
       { id: 'alpha/two', label: 'Alpha Two', kind: 'text', added: false },
       { id: 'alpha/three', label: 'Alpha Three', kind: 'text', added: true },
     ])
     const heads = [...document.querySelectorAll('.settings-mgroup')]
     expect(heads.map((g) => g.querySelector('.settings-gn')!.textContent)).toEqual(['alpha', 'zeta'])
-    expect(heads.map((g) => g.querySelector('.settings-gc')!.textContent)).toEqual(['2', '1'])
-    /* The harness's anthropic carries two bare configured ids. They trail the
-       labelled groups and are drawn without a head of their own: a bare row
-       between two vendor heads reads as the previous vendor's tail, and an
-       "add this whole vendor" control over rows with no vendor means nothing. */
+    /* One each: `alpha/three` is on the provider already, and the harness's two
+       bare configured ids are too, so neither the group counts nor the rows
+       carry them. */
+    expect(heads.map((g) => g.querySelector('.settings-gc')!.textContent)).toEqual(['1', '1'])
     expect(popRows().map((r) => r.querySelector('.settings-apnm')!.textContent))
-      .toEqual(['Alpha Two', 'Alpha Three', 'Zeta One', 'claude-opus-4-5', 'claude-sonnet-4-5'])
-    /* The group's control offers the group, not the page: `alpha/three` is
-       already on the provider and stays out of the frame. */
-    await act(async () => { fireEvent.click(heads[0]!.querySelector('.settings-ga')!) })
-    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['alpha/two'] }])
+      .toEqual(['Alpha Two', 'Zeta One'])
+    expect(document.querySelector('.settings-ga')).toBeNull()
+  })
+
+  it('names a row by its display name, or by its id without the group prefix', async () => {
+    /* A hand-typed model has no display name, so it fell back to the raw id --
+       `deepseek/1111` under a head that already says deepseek, beside rows
+       named "DeepSeek V4 Flash": one vendor, spelled twice in two cases. */
+    await catalogue([
+      { id: 'deepseek/deepseek-v4-pro', label: 'DeepSeek V4 Pro', kind: 'text', added: false },
+      { id: 'deepseek/1111', label: 'deepseek/1111', kind: 'text', added: false },
+      { id: 'bare-one', label: 'bare-one', kind: 'text', added: false },
+    ])
+    const names = popRows().map((r) => r.querySelector('.settings-apnm')!.textContent)
+    expect(names).toEqual(['DeepSeek V4 Pro', '1111', 'bare-one'])
+    /* The full id stays on the row for anyone who needs it. */
+    expect(popRows()[1]!.getAttribute('title')).toBe('deepseek/1111')
+  })
+
+  it('groups a gateway\'s qualified ids by vendor, not under the gateway\'s own name', async () => {
+    /* A live gateway list writes every id with its own name in front --
+       `openrouter/anthropic/claude-opus-5.5` -- and grouping on the first
+       segment filed all of them under one head named after the provider the
+       popover already belongs to. The harness provider here is anthropic. */
+    await catalogue([
+      { id: 'anthropic/meta/llama-4', label: 'anthropic/meta/llama-4', kind: 'text', added: false },
+      { id: 'anthropic/qwen/qwen3-max', label: 'qwen/qwen3-max', kind: 'text', added: false },
+    ])
+    const heads = [...document.querySelectorAll('.settings-mgroup .settings-gn')].map((g) => g.textContent)
+    expect(heads).toEqual(['meta', 'qwen'])
+    expect(popRows().map((r) => r.querySelector('.settings-apnm')!.textContent)).toEqual(['llama-4', 'qwen3-max'])
+  })
+
+  it('a vendor head is that vendor\'s select-all: none, some, all', async () => {
+    /* It replaced a bare "+" at the head's far edge that wrote the whole vendor
+       at once -- a second, differently committing way to add, beside rows
+       that tick. */
+    const calls = await catalogue([
+      { id: 'alpha/one', label: 'A1', kind: 'text', added: false },
+      { id: 'alpha/two', label: 'A2', kind: 'text', added: false },
+      { id: 'zeta/one', label: 'Z1', kind: 'text', added: false },
+    ])
+    const head = (): HTMLElement => document.querySelectorAll<HTMLElement>('.settings-mgroup')[0]!
+    expect(head().getAttribute('aria-checked')).toBe('false')
+    await act(async () => { fireEvent.click(popRows()[0]!) })
+    expect(head().getAttribute('aria-checked')).toBe('mixed')
+    await act(async () => { fireEvent.click(head()) })
+    expect(head().getAttribute('aria-checked')).toBe('true')
+    expect(popRows().map((r) => r.getAttribute('aria-checked'))).toEqual(['true', 'true', 'false'])
+    expect(calls).toHaveLength(1)
+    await act(async () => { fireEvent.click(head()) })
+    expect(popRows().map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'false'])
+    await act(async () => { fireEvent.click(head()) })
+    await act(async () => { fireEvent.click(addPicked()) })
+    expect(calls[calls.length - 1]).toEqual(['addModels', { slug: 'anthropic', models: ['alpha/one', 'alpha/two'] }])
   })
 
   it('an OAuth provider authorizes in the browser and shows the code until it lands or expires', async () => {

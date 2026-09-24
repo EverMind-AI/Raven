@@ -156,13 +156,19 @@ def _provider_models(slug: str, *, configured: bool, section: Any = _UNLOADED) -
     # providers have no shortlist at all, which is why the picker used to offer
     # them nothing; the live source is last because asking may cost a request
     # (see ``_runtime_models``).
+    from raven.providers.served_models import recall
     from raven.providers.wire import merge_key
 
     out: list[str] = []
     seen: set[str] = set()
+    # What the vendor itself last named, after the shortlist and before the
+    # bundled catalogue: current where the catalogue lags, and read from disk,
+    # so offering it costs the picker no request.
+    served = tuple(recall(slug)) if configured else ()
     chain = (
         *from_config,
         *common_models_for(slug),
+        *served,
         *litellm_models_for(slug),
         *_runtime_models(slug, configured=configured, section=section),
     )
@@ -244,13 +250,20 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
     from raven.providers.registry_data import kind_of
+    from raven.providers.served_models import recall
 
     overlays = _configured_overlays(slug, section=section)
+    served = recall(slug)
     out: dict[str, dict[str, Any]] = {}
     for model in models:
         row = describe(slug, model, overlay=_overlay_for(overlays, slug, model))
         window = resolve_context_window(model, allow_fetch=False)
         if not (row.described or row.tagged or window):
+            # A model only the vendor's own list names still has the kind that
+            # list proved, which is what keeps an embedding model out of the
+            # chat slot's column.
+            if model in served:
+                out[model] = {"label": row.label, "kind": served[model]}
             continue
         entry: dict[str, Any] = {"label": row.label, "kind": kind_of(row.capabilities, row.output_modalities)}
         if row.description:
@@ -399,6 +412,11 @@ def _build_provider_entry(
         "protocol_overrides": overrides,
         "total_models": len(models),
         "gateway": bool(spec and spec.is_gateway),
+        # Every prefix that names this provider, for a client comparing two
+        # spellings of one model: `route_names` is what `merge_key` strips, and
+        # the spec says to compare against it rather than rebuild it, so it
+        # travels instead of being mirrored on each surface.
+        "route_names": sorted(spec.route_names) if spec else [],
         # "An address must be supplied" -- the gate's answer, not the shape's:
         # an endpoint-credential spec that ships a usable default (custom's
         # localhost gateway) runs on a bare key, and the picker must not
@@ -548,7 +566,19 @@ async def model_set_protocol(params: dict) -> dict:
     return {"provider": provider}
 
 
-async def model_save_key(params: dict) -> dict:
+def _everos_follows(slug: str, agent_loop_factory: "AgentLoopFactory | None") -> None:
+    """Move the memory service onto a credential this handler just changed.
+
+    Lazily imported: ``console`` is where everything that knows about EverOS
+    lives, and importing it at module scope would tie the model handlers to a
+    plugin they otherwise never mention.
+    """
+    from raven.rpc.methods.console import everos_follows_provider
+
+    everos_follows_provider(slug, agent_loop_factory)
+
+
+async def model_save_key(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     parsed = _parse(ModelSaveKeyParams, params)
 
     # No spec of our own is not a reason to refuse: the picker lists such a
@@ -602,18 +632,23 @@ async def model_save_key(params: dict) -> dict:
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
 
+    _everos_follows(parsed.slug, agent_loop_factory)
     _, current_provider = _current_selection()
     return {
         "provider": await _entry_off_loop(parsed.slug, current_provider),
     }
 
 
-async def model_disconnect(params: dict) -> dict:
+async def model_disconnect(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     parsed = _parse(ModelDisconnectParams, params)
     try:
         await asyncio.to_thread(reset_provider, parsed.slug)
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    _everos_follows(parsed.slug, agent_loop_factory)
+    from raven.providers.served_models import forget
+
+    await asyncio.to_thread(forget, parsed.slug)
     return {"disconnected": True}
 
 
@@ -696,7 +731,9 @@ async def model_fetch_models(params: dict) -> dict:
     # Off-thread: this is a network round trip to somebody else's server, and
     # the gateway's loop is carrying a token stream while it happens. Cheap when
     # there is no credential to send -- the probe refuses before any socket.
-    probe = await asyncio.to_thread(test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True)
+    probe = await asyncio.to_thread(
+        test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True, check_credential=parsed.verify
+    )
     asked = bool(probe.get("ok"))
     live = [m for m in (probe.get("model_ids") or []) if isinstance(m, str) and m]
 
@@ -753,6 +790,11 @@ async def model_fetch_models(params: dict) -> dict:
             entry["context_window"] = window
         rows[key] = entry
 
+    if asked:
+        from raven.providers.served_models import remember
+
+        await asyncio.to_thread(remember, slug, {r["id"]: r["kind"] for r in rows.values() if r["source"] == "live"})
+
     # By name, and stably: the order a vendor lists its catalogue in is not an
     # order anybody reads, and it changes between calls for some of them.
     ordered = sorted(rows.values(), key=lambda r: (r["label"] or r["id"]).lower())
@@ -796,7 +838,7 @@ async def model_add_models(params: dict) -> dict:
 _SETTABLE_FIELDS = frozenset({"api_base", "deployment", "api_version", "extra_headers"})
 
 
-async def model_set_fields(params: dict) -> dict:
+async def model_set_fields(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Patch a provider's non-credential fields; the key stays with save_key.
 
     ``extra_headers`` arrives as a patch (``{name: value | null}``) and is merged
@@ -834,6 +876,11 @@ async def model_set_fields(params: dict) -> dict:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     if "extra_headers" in previous:
         previous["extra_headers"] = _redact_headers(previous["extra_headers"])
+    if "api_base" in fields:
+        # The only field here that travels to EverOS: it is handed a model, an
+        # address and a key, so a deployment or an extra header changes nothing
+        # a restart would pick up.
+        _everos_follows(parsed.slug, agent_loop_factory)
     return {"previous": previous}
 
 
@@ -880,7 +927,7 @@ async def model_endpoints(params: dict) -> dict:
     return {"endpoints": await _endpoints_off_loop(parsed.slug)}
 
 
-async def model_add_endpoint(params: dict) -> dict:
+async def model_add_endpoint(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     parsed = _parse(ModelAddEndpointParams, params)
     try:
         # extra_headers is deliberately not a parameter: the picker has no screen
@@ -897,15 +944,17 @@ async def model_add_endpoint(params: dict) -> dict:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     # Re-read rather than redacting what the write returned, so the one place
     # deciding how a key is masked stays ``list_provider_endpoints``.
+    _everos_follows(parsed.slug, agent_loop_factory)
     return {"endpoints": await _endpoints_off_loop(parsed.slug)}
 
 
-async def model_remove_endpoint(params: dict) -> dict:
+async def model_remove_endpoint(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     parsed = _parse(ModelRemoveEndpointParams, params)
     try:
         await asyncio.to_thread(remove_provider_endpoint, parsed.slug, parsed.label)
     except (KeyError, ValidationError) as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    _everos_follows(parsed.slug, agent_loop_factory)
     return {"endpoints": await _endpoints_off_loop(parsed.slug)}
 
 
@@ -931,17 +980,17 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
     """Register the ten ``model.*`` handlers on a dispatcher instance."""
     dispatcher.register("model.options", partial(model_options, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.set_protocol", model_set_protocol)
-    dispatcher.register("model.save_key", model_save_key)
-    dispatcher.register("model.disconnect", model_disconnect)
+    dispatcher.register("model.save_key", partial(model_save_key, agent_loop_factory=agent_loop_factory))
+    dispatcher.register("model.disconnect", partial(model_disconnect, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.fetch_models", model_fetch_models)
     dispatcher.register("model.add_model", model_add_model)
     dispatcher.register("model.add_models", model_add_models)
-    dispatcher.register("model.set_fields", model_set_fields)
+    dispatcher.register("model.set_fields", partial(model_set_fields, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.oauth_login", model_oauth_login)
     dispatcher.register("model.remove_model", model_remove_model)
     dispatcher.register("model.endpoints", model_endpoints)
-    dispatcher.register("model.add_endpoint", model_add_endpoint)
-    dispatcher.register("model.remove_endpoint", model_remove_endpoint)
+    dispatcher.register("model.add_endpoint", partial(model_add_endpoint, agent_loop_factory=agent_loop_factory))
+    dispatcher.register("model.remove_endpoint", partial(model_remove_endpoint, agent_loop_factory=agent_loop_factory))
 
 
 __all__ = [

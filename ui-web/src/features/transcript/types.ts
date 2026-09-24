@@ -12,7 +12,6 @@
 
 import type { SnapshotRow } from '../dag/nodes'
 import type { DagNode } from '../dag/types'
-import type { WsChange } from '../workspace/types'
 
 export interface Hunk {
   add: number
@@ -44,11 +43,6 @@ export interface SpawnListRow {
   kind?: string
   label?: string
   status?: string
-}
-
-export interface SpawnRecordLike {
-  messages?: HistoryMessage[]
-  status?: string | null
 }
 
 /* One `subagent.status` frame, as the live layer forwards it. The fields this
@@ -112,18 +106,10 @@ export interface CallData {
   spawnAsked: boolean
   /* The RUN's own clock, in ms since the epoch, from whichever source named it.
      Not the tool call's: a spawn returns when the work is dispatched, so `ms` is
-     near zero on every spawn card and reading it printed `耗时 0.0s` over a run
-     that had taken eight seconds. Zero means unknown. */
+     near zero on every spawn card and reading it printed an elapsed 0.0s over a
+     run that had taken eight seconds. Zero means unknown. */
   spawnT0: number
   spawnT1: number
-  /* The run's own messages, newest last, as `subagent.context` answers them.
-     Live while it runs: the acp backend republishes its transcript into the
-     activity index on every update, and the method serves that when the record's
-     file does not exist yet. */
-  stream: HistoryMessage[]
-  /* Whether a read is in flight, so a slow answer cannot stack up behind the
-     heartbeat. */
-  reading: boolean
   runId: string | null
   /* What the graph was dispatched for. On the arguments for a model-composed
      graph, and only from `dag.get` for a playbook load, whose arguments name
@@ -202,6 +188,9 @@ export interface AskData {
   body: string
   atts: string[]
   when: string
+  /* When it was said, in epoch ms: what the date line between two questions
+     far apart is measured from. 0 when the entry carried no usable stamp. */
+  at: number
   expanded: boolean
   clipped: boolean
   clipOpen: boolean
@@ -261,22 +250,6 @@ export interface DeliveredData {
   shown: boolean
 }
 
-/* One file this turn produced, as the bar shows it. `head` is the file's own
-   first lines when the page already has them -- a write tool's hunk carries
-   what it wrote, so a text artifact needs no fetch to draw a miniature of
-   itself. Absent means the page has no content for it (a binary, or a replay
-   that kept no diff) and the tile shows its kind instead. */
-export interface ArtifactRow {
-  path: string
-  dir: string
-  name: string
-  ext: string
-  head: string | null
-  lines: number
-  deleted: number
-  change: 'new' | 'edit' | 'deleted'
-}
-
 export interface ArtsData {
   v: number
   id: number
@@ -287,7 +260,6 @@ export interface ArtsData {
      then disagree with it. */
   turn: number
   deliveriesOpen: boolean
-  changesOpen: boolean
 }
 
 export interface FoldData {
@@ -408,16 +380,6 @@ export interface HistoryMessage {
   mid_turn?: boolean
 }
 
-/* What the artifact bar reads, and all it reads: the workspace record's rows
-   for one turn, exactly as that record holds them.
-   Deliberately NOT the finished list. Which of those rows counts as a product,
-   and what a tile can draw of it, are presentation decisions -- they belong to
-   the island that draws them, where they can be tested, rather than to the
-   workspace record that happens to hold the rows. */
-export interface ArtifactsSource {
-  changes(turn: number): WsChange[]
-}
-
 /* The pull half of the seam. Event pushes arrive through this island's own
    verbs, which the session pipeline calls directly (features/transcript/mount). */
 export interface TranscriptSource {
@@ -432,13 +394,9 @@ export interface TranscriptSource {
      which is why the card could name every node and never the graph: a field
      this seam did not return was a field no card could draw. */
   dagRun?: (runId: string) => Promise<DagRunLike>
-  /* One spawned run's messages so far, by the record id `subagent.status`
-     reported. Answers a moving stream while the run is live, not a finished
-     transcript: see MsgLike. */
-  spawnRecord?: (callId: string) => Promise<SpawnRecordLike>
   /* Every delegated call this conversation made, as `subagent.list` answers it.
-     Read to turn a restored card's task id into the record id its stream is
-     read by -- once per conversation, not once per card. */
+     Read to find the record a restored card's run wrote -- once per
+     conversation, not once per card. */
   spawnList?: () => Promise<SpawnListRow[]>
   /* `nodeId` is the tasks store's own id for the spawn (present on the wire's
      `delegated` payload once the run is live). When it names a row there,

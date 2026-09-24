@@ -26,9 +26,10 @@ gets PREFILL. The same thinking-only turn takes NUDGE after a tool, else RETRY,
 so the request handed back never ends on an assistant message.
 
 Spending every budget without a word coming back is FAIL, and the loop ends the
-turn as an error. It is not a fourth mode -- there is nothing left to try -- it
-is the answer to the question the caller asks next, which is whether this turn
-produced anything.
+turn as an error the caller fails the turn on -- unless one of the turn's tools
+has already put an answer in front of the reader. It is not a fourth mode --
+there is nothing left to try -- it is the answer to the question the caller asks
+next, which is whether this turn produced anything.
 
 This is distinct from Sentinel's NudgeInjector / NudgePolicy, which inject
 *proactive suggestions* onto an outbound reply; this module instead recovers an
@@ -149,7 +150,7 @@ class RecoveryAction(Enum):
     PREFILL = auto()  # thinking-only → re-feed reasoning, re-request
     NUDGE = auto()  # post-tool empty → inject (empty) + user nudge, re-request
     RETRY = auto()  # plain empty → re-request as-is
-    FAIL = auto()  # budgets spent with nothing to show → end the turn as an error
+    FAIL = auto()  # budgets spent with nothing to show → the turn fails, it does not reply
 
 
 @dataclass(frozen=True)
@@ -279,7 +280,9 @@ def classify_empty_response(
     finished" from "the model never answered". COMPLETE keeps the two cases that
     really are ends: a response with text in it, and a turn whose recovery is
     switched off -- where no budget was spent and there is nothing to have
-    exhausted.
+    exhausted. The second of those still leaves the turn with no answer, and the
+    loop's caller fails it on that; this function is only asked which repair to
+    try, and for a turn nobody asked to repair the answer is none.
     """
     if visible or not limits.enabled:
         return RecoveryAction.COMPLETE

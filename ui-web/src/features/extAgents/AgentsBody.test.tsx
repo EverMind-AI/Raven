@@ -112,22 +112,24 @@ describe('the onboarding wizard\'s agents step', () => {
     expect(screen.queryByText('gui.agent.setup_scanning')).toBeNull()
   })
 
-  it('draws the hub\'s two sections, available first, with the hub\'s labels and counts', async () => {
+  it('draws available and connected, then Raven\'s shipped specialists as a group of their own', async () => {
     await mounted([
       row({ name: 'preset_a', configured: false, enabled: false }),
       row({ name: 'switched_on', configured: true, enabled: true }),
       row({ name: 'shipped', vendored: true, configured: false, enabled: true }),
     ])
     const labels = [...document.querySelectorAll('.extAgents-sec .extAgents-hd b')].map((b) => b.textContent)
-    expect(labels).toEqual(['gui.agent.g_avail', 'gui.agent.g_on'])
+    expect(labels).toEqual(['gui.agent.g_avail', 'gui.agent.g_on', 'gui.agent.g_shipped {"n":1}'])
     expect(sectionCount('gui.agent.g_avail')).toBe('1')
-    expect(sectionCount('gui.agent.g_on')).toBe('2')
-    expect(sectionOf('preset_a')).toBe('gui.agent.g_avail')
-    expect(sectionOf('shipped')).toBe('gui.agent.g_on')
+    expect(sectionCount('gui.agent.g_on')).toBe('1')
+    /* The heading says how many already. */
+    expect(sectionCount('gui.agent.g_shipped {"n":1}')).toBeNull()
+    expect(sectionOf('shipped')).toBe('gui.agent.g_shipped {"n":1}')
     expect(control('preset_a').textContent).toBe('gui.agent.connect')
     expect(control('switched_on').textContent).toBe('gui.agent.disconnect')
-    /* Raven's own first inside a section, the way the hub orders it. */
-    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['preset_a', 'shipped', 'switched_on'])
+    /* Part of Raven: never offered a disconnect. */
+    expect(rowNamed('shipped').querySelector('.extAgents-ctl button')).toBeNull()
+    expect(rowsOf().map((r) => r.querySelector('.extAgents-t')!.textContent)).toEqual(['preset_a', 'switched_on', 'shipped'])
   })
 
   it('leaves out the built-in loop, an openai endpoint and a command this machine has not got', async () => {
@@ -137,8 +139,25 @@ describe('the onboarding wizard\'s agents step', () => {
       row({ name: 'gone', kind: 'cli', configured: false, enabled: false, probe_status: 'missing' }),
     ])
     expect(rowsOf()).toEqual([])
-    expect(sectionNamed('gui.agent.g_avail')).toBeNull()
     expect(sectionNamed('gui.agent.g_on')).toBeNull()
+  })
+
+  it('opens on what Raven does with the agents it connects, before the roster', async () => {
+    await mounted([row({ name: 'Codex', kind: 'acp', configured: false, enabled: false, probe_status: 'ready' })])
+    const lede = document.querySelector('.extAgents-lede')!
+    expect(lede.textContent).toBe('gui.page.agents_sub')
+    expect(lede.compareDocumentPosition(document.querySelector('.extAgents-sec')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('says so when this machine has no agent of its own to connect', async () => {
+    await mounted([row({ name: 'raven_coder', vendored: true, configured: true, enabled: true })])
+    expect(sectionNamed('gui.agent.g_avail')!.querySelector('.extAgents-empty')!.textContent).toBe('gui.agent.setup_none')
+    expect(sectionOf('raven_coder')).toBe('gui.agent.g_shipped {"n":1}')
+  })
+
+  it('shows no empty note once an agent of the reader\'s own is found', async () => {
+    await mounted([row({ name: 'preset_a' })])
+    expect(document.querySelector('.extAgents-empty')).toBeNull()
   })
 
   it('names a refused row instead of offering to connect it', async () => {
@@ -205,12 +224,13 @@ describe('the onboarding wizard\'s agents step', () => {
 
   it('offers a shipped agent switched off, and switches it back on', async () => {
     await mounted([row({ name: 'raven_coder', vendored: true, configured: false, enabled: false })])
-    expect(sectionOf('raven_coder')).toBe('gui.agent.g_avail')
+    expect(sectionOf('raven_coder')).toBe('gui.agent.g_shipped {"n":1}')
     expect(store.stepDone()).toBe(false)
     await act(async () => {
       fireEvent.click(control('raven_coder'))
     })
-    expect(sectionOf('raven_coder')).toBe('gui.agent.g_on')
+    expect(sectionOf('raven_coder')).toBe('gui.agent.g_shipped {"n":1}')
+    expect(rowNamed('raven_coder').querySelector('.extAgents-ctl button')).toBeNull()
     /* Drawn as connected, still not counted: the step is about an external agent. */
     expect(store.stepDone()).toBe(false)
   })
@@ -250,7 +270,18 @@ describe('the onboarding wizard\'s agents step', () => {
     await act(async () => {
       fireEvent.click(control('preset_a'))
     })
-    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.textContent).toBe('did not answer a test message')
+    /* In the reader's words, with the step the row itself has to carry: the
+       wizard opens no sheet, so there is nowhere else for it to be. The
+       server's English sentence is not the line any more. */
+    const what = `gui.agent.bad_connect ${JSON.stringify({ agent: 'preset_a' })}`
+    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.textContent).toBe(
+      `gui.agent.bad_retry ${JSON.stringify({ what, button: 'gui.retry' })}`,
+    )
+    /* ...and the sentence is kept on hover: with no sheet to fold it into, it
+       is the only reason this row has. */
+    expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')!.getAttribute('title')).toBe(
+      'did not answer a test message',
+    )
     expect(control('preset_a').textContent).toBe('gui.retry')
     expect(toastWriter.items).toEqual([])
 
@@ -264,6 +295,54 @@ describe('the onboarding wizard\'s agents step', () => {
     ])
     expect(rowNamed('preset_a').querySelector('.extAgents-one-bad')).toBeNull()
     expect(control('preset_a').textContent).toBe('gui.agent.disconnect')
+  })
+
+  it('puts the command on the row itself, since the wizard opens no sheet to hold it', async () => {
+    const rows = [row({ name: 'Codex', preset: 'codex' })]
+    install(rows)
+    setSources({
+      extAgents: {
+        load: async () => rows,
+        act: async () => {
+          throw { data: { detail: 'English', remedy: { kind: 'sign_in', command: 'codex login' } } }
+        },
+      },
+    })
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+    await act(async () => {
+      fireEvent.click(control('Codex'))
+    })
+    const what = `gui.agent.bad_sign_in ${JSON.stringify({ agent: 'Codex' })}`
+    expect(rowNamed('Codex').querySelector('.extAgents-one-bad')!.textContent).toBe(
+      `gui.agent.bad_run ${JSON.stringify({ what, command: 'codex login', button: 'gui.retry' })}`,
+    )
+  })
+
+  it('says where to look for a download, rather than the adapter\'s long command', async () => {
+    const rows = [row({ name: 'Claude Code', preset: 'claude_code' })]
+    install(rows)
+    setSources({
+      extAgents: {
+        load: async () => rows,
+        act: async () => {
+          throw { data: { detail: 'English', remedy: { kind: 'download', command: 'npx -y @agentclientprotocol/claude-agent-acp@0.79.0' } } }
+        },
+      },
+    })
+    render(<AgentsStepBody />)
+    await act(async () => {
+      await store.load(true)
+    })
+    await act(async () => {
+      fireEvent.click(control('Claude Code'))
+    })
+    const what = `gui.agent.bad_download ${JSON.stringify({ agent: 'Claude Code' })}`
+    expect(rowNamed('Claude Code').querySelector('.extAgents-one-bad')!.textContent).toBe(
+      `gui.agent.bad_download_retry ${JSON.stringify({ what, button: 'gui.retry' })}`,
+    )
   })
 
   it('disconnects a connected row through act(toggle, {enabled: false})', async () => {

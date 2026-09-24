@@ -54,12 +54,12 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-rail {background:var(--surface); border-right:1px solid var(--line); padding:20px 12px 24px; overflow-y:auto}
 .settings-rail h4 {font-size:16px; font-weight:600; padding:0 10px 14px}
 .settings-rail .settings-grp {font-family:var(--disp); font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:var(--faint); font-weight:600; padding:14px 10px 6px}
-.settings-nitem {display:flex; align-items:center; gap:9px; width:100%; text-align:left; font:inherit; font-size:14px;
-  background:none; border:0; color:var(--muted); padding:6px 10px; border-radius:7px; cursor:pointer; position:relative}
-.settings-nitem:hover {background:var(--raised); color:var(--text)}
-.settings-nitem[aria-current="true"] {background:var(--amber-dp); color:var(--gold); font-weight:600}
-.settings-nitem[aria-current="true"] svg {color:var(--gold)}
-.settings-nitem svg {width:16px; height:16px; flex:0 0 16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; opacity:.85}
+.settings-nitem {display:flex; align-items:center; gap:8px; width:100%; height:32px; text-align:left; font:inherit; font-size:13px;
+  background:none; border:0; color:var(--rail-ink); padding:0 8px; border-radius:8px; cursor:pointer; position:relative}
+.settings-nitem:hover {background:var(--settings-nav-on); color:var(--rail-ink-on)}
+.settings-nitem[aria-current="true"] {background:var(--settings-nav-on); color:var(--rail-ink-on); font-weight:500}
+.settings-nitem svg {width:16px; height:16px; flex:0 0 16px; color:var(--settings-nav-ico)}
+.settings-nitem[aria-current="true"] svg, .settings-nitem:hover svg {color:currentColor}
 .settings-nitem.settings-soon {opacity:.55; cursor:default}
 .settings-nitem.settings-soon:hover {background:none; color:var(--muted)}
 .settings-nitem .settings-p2 {margin-left:auto; font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.06em;
@@ -115,15 +115,6 @@ textarea.settings-tbox {height:auto}
 .settings-setup .mini.ghost { background: none; color: var(--muted); }
 .settings-setup .mini.danger { color: var(--clay); border-color: var(--clay); }
 
-.settings-mini {font:inherit; font-size:13px; border:1px solid var(--line); border-radius:var(--ctl-r);
-  background:var(--paper); color:var(--text); padding:0 13px; cursor:pointer; height:var(--ctl-h); box-sizing:border-box;
-  display:inline-flex; align-items:center; justify-content:center; min-width:64px; white-space:nowrap}
-/* The floor is per language: two Chinese characters do not fill the English
-   frame, and one number leaves Delete and Restore half empty. */
-:root[data-lang="en"] .settings-mini {min-width:88px}
-.settings-mini:hover {border-color:var(--amber)}
-.settings-mini.settings-ghost {background:none; color:var(--muted)}
-.settings-mini.settings-danger {color:var(--clay); border-color:var(--clay)}
 .settings-rov {font-family:var(--mono); font-size:13px; color:var(--muted)}
 .settings-chip {display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 7px; border-radius:99px; border:1px solid transparent}
 .settings-chip .settings-led {width:6px; height:6px; border-radius:99px; background:currentColor}
@@ -186,7 +177,6 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 @media(max-width:640px) {
 .settings-cut .settings-r {grid-template-columns:1fr; gap:4px}
 }
-footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; color:var(--faint); font-size:12.5px}
 .settings-tiles4 {display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:1px; background:var(--line)}
 .settings-tl {background:var(--paper); padding:12px 14px}
 .settings-tl .settings-n {font-family:var(--disp); font-size:21px; font-weight:600; letter-spacing:-.02em; font-variant-numeric:tabular-nums; line-height:1.2}
@@ -242,6 +232,7 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-ff .settings-acts2 {display:flex; gap:8px}
 .settings-mnote {color:var(--faint); font-size:12px}
 .settings-inline-err {color:var(--clay); font-size:12px; padding:0 15px 9px}
+.settings-padderr {color:var(--clay); font-size:12px; line-height:1.4}
 .settings-okmark {color:var(--moss); font-weight:600}
 .settings-fl2 {color:var(--muted); font-size:13px; white-space:nowrap}
 .settings-tkrow input[type="date"] {flex:0 0 auto; min-width:0}
@@ -261,9 +252,6 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
   height:var(--ctl-h); box-sizing:border-box}
 .settings-kvform input:focus,.settings-kvform select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
 .settings-kvform select {font-family:var(--mono)}
-.settings-padd {margin:10px 15px 6px; border-color:var(--line)}
-.settings-padd .settings-row .settings-k:empty {display:none}
-.settings-padd .settings-row:last-child {grid-template-columns:132px minmax(0,1fr)}
 .settings-mlist {border-top:1px solid var(--line-soft); background:var(--paper)}
 .settings-mls {display:flex; align-items:center; gap:9px; padding:9px 15px; border-bottom:1px solid var(--line-soft)}
 .settings-mls svg {width:14px; height:14px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
@@ -279,7 +267,6 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-mli.settings-add .settings-sd {color:var(--gold)}
 .settings-mlempty {padding:26px 14px; color:var(--faint); font-size:13px; text-align:center}
 .settings-mlf {display:flex; align-items:center; gap:8px; padding:9px 15px; border-top:1px solid var(--line-soft)}
-.settings-mini[disabled] {opacity:.45; cursor:not-allowed}
 .settings-ctl {position:relative}
 /* Placed by lib/popover.ts, which sets position, top, left and z-index: the
    row it hangs off lives inside .spanels, whose overflow clips an absolutely
@@ -300,6 +287,12 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
   font-weight:600; padding:12px 15px 5px; background:var(--surface-2)}
 .settings-prow2 {display:flex; align-items:center; gap:9px; padding:10px 15px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap}
 .settings-prow2:last-child {border-bottom:none}
+/* The card's title and the add form under it are one block -- the title names
+   what the form adds -- so the rule moves from under the title to under the
+   form, where the list of connected providers begins. */
+.settings-card:has(> .settings-padd) > .settings-ch {border-bottom:0}
+.settings-card > .settings-cfg.settings-padd {margin-bottom:12px}
+.settings-card > .settings-padd + .settings-prow2 {border-top:1px solid var(--line-soft)}
 .settings-prow2 .settings-pn2 {font-size:14px; font-weight:600}
 .settings-crumb .settings-kd {font-family:var(--sans); font-size:13px; color:var(--faint); border:0; border-radius:4px; padding:0}
 .settings-arow {display:flex; align-items:center; gap:12px; padding:12px 15px; border-bottom:1px solid var(--line-soft)}
@@ -309,7 +302,6 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-arow .settings-ameta {display:flex; gap:10px; align-items:center; color:var(--faint); font-size:12px; margin-top:3px}
 .settings-arow .settings-ameta .settings-kd {font-family:var(--mono); border:1px solid var(--line); border-radius:4px; padding:0 5px}
 .settings-arow .settings-aacts {display:flex; gap:7px; flex:0 0 auto}
-.settings-mini.settings-ghost.settings-danger {color:var(--clay); border-color:transparent}
 .settings-pathv {display:inline-flex; align-items:center; gap:7px; min-width:0}
 .settings-pathv .settings-pp {font-family:var(--mono); font-size:13px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-iconbtn {display:inline-grid; place-items:center; width:24px; height:24px; flex:0 0 24px; padding:0; cursor:pointer;
@@ -317,36 +309,162 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-iconbtn:hover {color:var(--text); border-color:var(--line); background:var(--raised)}
 .settings-iconbtn:focus-visible {outline:2px solid var(--amber); outline-offset:1px}
 .settings-iconbtn svg {width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round}
-.settings-mini.settings-ghost.settings-danger:hover {border-color:var(--clay)}
 .settings-warnmark {color:var(--clay); font-weight:600}
 .settings-req {font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.04em; color:var(--gold); background:var(--amber-dp); border-radius:4px; padding:0 5px}
 .settings-card > .settings-ch.settings-hasact {display:flex; align-items:center; justify-content:space-between; gap:10px; padding-top:9px; padding-bottom:8px}
-.settings-cfg {margin:2px 15px 12px 15px; padding:6px 14px 8px; border:1px solid var(--line-soft); border-radius:8px; background:var(--paper)}
-.settings-cfg .settings-row {display:grid; grid-template-columns:132px minmax(0,1fr); gap:6px 14px; padding:5px 0; border:0; align-items:center}
+/* Settings that belong to the row above: not a card inside a card, but the same
+   table indented one step and tied back to that row by a rail. A boxed panel
+   reads as a second object with its own edges, which is what makes a list of
+   them look like stacked cards; the rail says "these belong to that line" and
+   spends no border doing it. The controls sit a notch under the page's own
+   (28px against 32px) and line up with the parent row's control edge rather
+   than starting a second column, so an open row keeps one alignment, not two.
+   .settings-padd opts back out to a box: it is a standalone form, not a row's
+   dependents. */
+.settings-cfg {position:relative; margin:0; padding:0 15px 12px 31px; background:transparent}
+.settings-cfg::before {content:""; position:absolute; left:15px; top:2px; bottom:14px; width:2px; border-radius:2px;
+  background:var(--faint); opacity:.45}
+.settings-cfg .settings-row {display:grid; grid-template-columns:minmax(0,1fr) auto; gap:0 14px; min-height:34px; padding:1px 0;
+  border:0; align-items:center}
 .settings-cfg .settings-row .settings-k {font-size:13px; color:var(--muted)}
-.settings-cfg .settings-row .settings-ctl {justify-self:start; margin:0}
-.settings-cfg .settings-row.settings-stack {grid-template-columns:132px minmax(0,1fr)}
-.settings-cfg .settings-row.settings-stack .settings-ctl {margin:0}
-.settings-cfg .settings-tbox {min-width:220px; padding:0 9px; font-size:12px}
-.settings-cfg .settings-mini {font-size:12px; padding:4px 10px}
+.settings-cfg .settings-row .settings-ctl {justify-self:end; margin:0}
+/* Three shapes, because a drawer holds three kinds of line.
+
+   A labelled control keeps the two columns above: it joins the column of
+   controls the page already has down its right edge.
+
+   A stacked field puts its label over a control that takes the whole width --
+   which is what `stack` means everywhere else on this page, and what the key
+   fields ask for. The drawer was overriding it back into two columns, so a
+   label two characters long sat a full panel-width away from its own input.
+
+   A sentence has no label at all. Left in the two-column grid it was pushed
+   against the right edge with nothing to pair with; prose reads from the left,
+   so the empty cell collapses and the line spans. */
+.settings-cfg .settings-row.settings-stack {grid-template-columns:minmax(0,1fr)}
+.settings-cfg .settings-row.settings-stack .settings-ctl {justify-self:stretch; margin-top:5px}
+/* The field takes the width the stack just gave the row, which puts its
+   buttons at the right end where the row's own controls are. */
+.settings-cfg .settings-row.settings-stack .settings-taglist {width:100%}
+.settings-cfg .settings-row.settings-stack .settings-tbox {flex:1; min-width:180px}
+.settings-cfg .settings-row .settings-k:empty {display:none}
+.settings-cfg .settings-row:has(> .settings-k:empty) {grid-template-columns:minmax(0,1fr)}
+.settings-cfg .settings-row:has(> .settings-k:empty) .settings-ctl {justify-self:stretch}
+/* A server's own facts.
+
+   Two type styles, and no third: 13px sans for anything written for a reader,
+   12px mono for anything written for a machine -- an address, a command, a
+   tool id, a handshake error. That pair is the drawer's own already (its row
+   labels are 13 sans, its boxes and readouts 12 mono), and mono set one step
+   under the sans it sits beside is what makes the two look the same size; at
+   equal px the mono reads larger. This block had grown four sizes in six
+   words -- 13.5, 12, 12, 11.5 -- which is what a jumble is made of.
+
+   Hierarchy is carried by colour instead: --faint for the label and for names
+   nobody has to read, --muted for the value, --clay for the failure. */
+.settings-pnote {font-size:13px; color:var(--muted)}
+.settings-pbad {font-family:var(--mono); font-size:12px; color:var(--clay); overflow-wrap:anywhere}
+/* The reason on the left, wrapping; the retry on the right at the reason's
+   first line, where the row's own controls stand. */
+.settings-pfail {display:flex; align-items:flex-start; gap:14px; padding:4px 0 8px}
+.settings-pfail .settings-pbad {flex:1; min-width:0; line-height:1.55; padding-top:5px}
+.settings-pfail .mini {flex:none}
+.settings-pfacts {display:grid; grid-template-columns:max-content minmax(0,1fr); gap:3px 14px; margin:3px 0 0;
+  align-items:baseline}
+.settings-pfacts dt {font-size:13px; color:var(--faint)}
+.settings-pfacts dd {margin:0; min-width:0; font-size:13px; color:var(--muted); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+.settings-pmono {font-family:var(--mono); font-size:12px}
+.settings-ptnames {font-family:var(--mono); font-size:12px; color:var(--faint); margin-left:9px}
+.settings-cfg .settings-taglist {gap:10px}
+.settings-cfg .settings-cfnote {font-size:12px; color:var(--clay); text-align:right; padding:0 0 4px}
+/* One size for everything a drawer holds: 28px and 12px, against the dialog's
+   own 32px and 13px (page.css's `.smodal .mini` sets that scale). The sheet
+   already claimed the step down and did not keep it -- only the stepper was
+   28, while the segment, the select, the box and the button all stayed 32, and
+   the button's rule named `.settings-mini`, a class no markup carries. Reached
+   into from here because these are the page's controls embedded in this
+   domain's container; this sheet loads after page.css, which is what lets an
+   equal-specificity rule tune them. */
+.settings-cfg .mini,.settings-cfg .sel,.settings-cfg .settings-tbox,.settings-cfg .settings-seg {height:28px; font-size:12px}
+.settings-cfg .mini {padding:0 11px}
+.settings-cfg .sel {padding:0 24px 0 9px}
+.settings-cfg .settings-tbox {min-width:220px; padding:0 9px}
+.settings-cfg .settings-ctxbox {min-width:0; width:104px; text-align:right}
+.settings-cfg .settings-stepper {height:28px}
 .settings-cfg .settings-stepper button {height:26px; width:24px}
 .settings-cfg .settings-stepper .settings-v {font-size:12px; min-width:52px}
-.settings-cfg .settings-seg button {font-size:12px; padding:4px 10px}
+.settings-cfg .settings-seg button {font-size:12px; padding:0 10px}
 .settings-cfg .settings-rov {font-size:12px}
+.settings-cfg .settings-fl2 {font-size:12px}
 .settings-cfg .settings-swi {width:34px; height:20px}
 .settings-cfg .settings-swi::after {width:14px; height:14px}
 .settings-cfg .settings-swi[aria-checked="true"]::after {transform:translateX(14px)}
-.settings-xrow[aria-expanded="true"] {border-bottom-color:transparent}
+/* An open row gives up its own separator: a line between a row and the panel it
+   just opened reads as a third row, and on the role rows -- which carry no
+   separator at all -- one appeared out of nowhere on expand, because opening
+   the drawer is what stopped the row being its wrapper's :last-child. The tool
+   and plugin rows do carry one, and hand it to the drawer below. */
+.settings-row.settings-open,.settings-xrow.settings-open {border-bottom:0}
+.settings-xrow.settings-open + .settings-cfg {border-bottom:1px solid var(--line-soft)}
+.settings-xrow.settings-open + .settings-cfg:last-child {border-bottom:0}
+/* The add-a-provider block opts back out to a box: it is a standalone form with
+   its own edges, not a row's dependents, so it keeps the border, the ground and
+   the label column, and drops the rail. These outrank the rules above by
+   naming both classes -- they sit later in the sheet as well, because the
+   single-class ones would otherwise win every declaration the two share. */
+.settings-cfg.settings-padd {margin:10px 15px 6px; padding:6px 14px 8px; border:1px solid var(--line); border-radius:8px;
+  background:var(--paper)}
+.settings-cfg.settings-padd::before {display:none}
+.settings-cfg.settings-padd .settings-row {grid-template-columns:132px minmax(0,1fr); gap:6px 14px; padding:5px 0;
+  min-height:0}
+.settings-cfg.settings-padd .settings-row .settings-k:empty {display:none}
+.settings-cfg.settings-padd .settings-row .settings-ctl {justify-self:start}
+/* The vendor dropdown: the field keeps the page's select box, the list is a
+   body-level surface of fixed height that scrolls. It stacks above the wizard
+   and the dialog both, since either may be what opened it. */
+.settings-vpick {display:inline-flex; align-items:center; gap:8px; width:240px; text-align:left; white-space:nowrap; overflow:hidden}
+/* One column in the add form: the vendor, its key and its address stacked as
+   boxes of one width, wide enough for a vendor's default address to show whole. */
+.settings-cfg.settings-padd .settings-vpick,.settings-cfg.settings-padd .keyfield,
+.settings-cfg.settings-padd .settings-ctl > .settings-tbox {width:280px; max-width:100%; box-sizing:border-box}
+.settings-cfg.settings-padd .keyfield > .settings-tbox {width:100%; min-width:0; box-sizing:border-box}
+.settings-vpick > span {overflow:hidden; text-overflow:ellipsis}
+.settings-vpick .provider-icon, .settings-vopt .provider-icon {flex:none}
+.settings-vlist {position:fixed; z-index:calc(var(--z-onboarding) + 1); overflow-y:auto; padding:4px; border-radius:10px;
+  background:var(--paper); border:1px solid var(--line);
+  box-shadow:0 1px 2px rgba(0,0,0,.06), 0 10px 24px -12px rgba(0,0,0,.2), 0 24px 56px -22px rgba(0,0,0,.3)}
+.settings-vgrp {font-size:11.5px; color:var(--faint); padding:8px 9px 4px}
+.settings-vopt {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:13px;
+  background:none; border:0; border-radius:7px; color:var(--text); padding:6px 9px; cursor:pointer}
+.settings-vopt > span {overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-vopt:hover, .settings-vopt:focus-visible {background:var(--surface); outline:none}
+.settings-vopt[aria-selected="true"] {background:var(--raised); font-weight:600}
+/* A credential check's verdict: green when the vendor said yes, clay when it
+   refused or could not be reached, grey when it cannot be asked at all. */
+.settings-pnote {display:inline-flex; align-items:center; gap:8px; font-size:12px; color:var(--clay); min-width:0}
+.settings-pnote[data-tone="ok"] {color:var(--moss)}
+.settings-pnote[data-tone="muted"] {color:var(--faint)}
+.settings-plink {font:inherit; font-size:12px; background:none; border:0; padding:0; color:var(--amber); cursor:pointer}
+.settings-plink:hover:not(:disabled) {text-decoration:underline}
+.settings-plink:disabled {color:var(--faint); cursor:default}
+.settings-pline {margin:-4px 0 10px}
 .settings-xrow {cursor:pointer}
 .settings-xrow:hover {background:var(--surface)}
 .settings-xrow .settings-k {gap:9px}
-.settings-xrow .settings-chev {display:inline-grid; place-items:center; width:18px; height:18px; border:1px solid var(--line); border-radius:5px;
-  background:var(--raised); color:var(--muted); transition:transform .16s, border-color .16s, color .16s}
-.settings-xrow:hover .settings-chev {border-color:var(--amber); color:var(--gold); background:var(--amber-dp)}
-.settings-xrow[aria-expanded="true"] .settings-chev {transform:rotate(90deg); border-color:var(--amber); color:var(--gold); background:var(--amber-dp)}
-.settings-xrow .settings-chev svg {width:11px; height:11px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round}
+/* The same chevron the role rows and the page's own folds show: a mark that
+   turns. In a bordered box it read as a second control beside the name, and
+   gave one list three looks at once -- a grey box, an amber-filled box, and
+   nothing at all on a row with no panel. The element IS the svg, so it carries
+   its own stroke; the `.settings-chev svg` rule matched nothing. The two
+   [aria-expanded] rules matched nothing either: the attribute is on the button
+   inside the row, not on the row. */
+.settings-xrow .settings-chev {flex:none; width:11px; height:11px; color:var(--faint); fill:none; stroke:currentColor;
+  stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; transition:transform .16s, color .16s}
+.settings-xrow:hover .settings-chev {color:var(--muted)}
+@media (prefers-reduced-motion:reduce) {.settings-xrow .settings-chev {transition:none}}
 .settings-row.settings-dim .settings-k {color:var(--faint)}
-.settings-row.settings-dim .settings-chev {opacity:.5}
+.settings-xrow.settings-dim .settings-chev {opacity:.5}
 .settings-srch {display:flex; align-items:center; gap:9px; border:1px solid var(--line); border-radius:var(--ctl-r);
   background:var(--paper); padding:0 11px; height:var(--ctl-h); box-sizing:border-box; margin-bottom:14px}
 .settings-srch:focus-within {border-color:var(--amber); box-shadow:var(--ctl-focus)}
@@ -406,33 +524,54 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-mpill .settings-pm:focus-visible {outline:2px solid var(--amber); outline-offset:-2px}
 .settings-mpill .settings-px {position:absolute; top:0; right:0; bottom:0; width:30px; font:inherit; font-size:14px; line-height:1; border:0; background:var(--paper); color:var(--faint); cursor:pointer; display:none}
 .settings-mpill.settings-clearable:hover .settings-px,.settings-mpill.settings-clearable:focus-within .settings-px {display:block}
-.settings-mpill.settings-clearable:hover .settings-ch,.settings-mpill.settings-clearable:focus-within .settings-ch {visibility:hidden}
+/* The clear control lies over the pill's right edge, so on hover the chevron
+   leaves the row and the button's padding takes its exact place: gap 7 +
+   margin 2 + slot 14 + padding 8 = 31, one past the control's 30. The provider
+   then ellipsizes short of the control instead of running under it, and its
+   right edge does not move. */
+.settings-mpill.settings-clearable:hover .settings-ch,.settings-mpill.settings-clearable:focus-within .settings-ch {display:none}
+.settings-mpill.settings-clearable:hover .settings-pm,.settings-mpill.settings-clearable:focus-within .settings-pm {padding-right:31px}
 .settings-mpill .settings-px:hover {color:var(--clay)}
-.settings-mpill .settings-ch {color:var(--faint); font-size:11px; margin-left:2px}
 .settings-mpill .settings-id {flex:1; min-width:0}
 .settings-mpill .settings-pv {overflow:hidden; text-overflow:ellipsis; max-width:45%}
 .settings-mpill .settings-id {font-family:var(--mono); font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-mpill .settings-pv {font-size:12px; color:var(--faint); white-space:nowrap}
-.settings-mpill .settings-ch {color:var(--faint); font-size:11px; margin-left:2px}
+.settings-mpill .settings-ch {color:var(--faint); font-size:11px; margin-left:2px; width:14px; flex:none; text-align:center}
 .settings-mpill.settings-dim .settings-id {font-family:var(--sans); font-weight:400; color:var(--muted)}
 .settings-mpill.settings-dim {background:none}
 .settings-row .settings-rk {display:block}
 .settings-row .settings-rk .settings-rt {font-size:14px; display:flex; align-items:center; gap:7px}
 .settings-row .settings-rk .settings-rd {font-size:13px; color:var(--faint); margin-top:2px; line-height:1.45}
-.settings-lnk {font:inherit; font-size:13px; color:var(--muted); background:none; border:0; padding:0; margin-top:5px; cursor:pointer; display:inline-flex; align-items:center; gap:4px}
-.settings-lnk:hover {color:var(--text)}
-.settings-lnk .settings-ch {display:inline-block; transition:transform .16s; font-size:11px}
-.settings-lnk[aria-expanded="true"] .settings-ch {transform:rotate(180deg)}
+/* A row's disclosure: the page's own fold (.foldcap -- chevron, word, chevron
+   turns when open), tuned to sit under a role's description and to carry the
+   values it hides while it is closed, so the row answers "what is this set to"
+   without being opened. The word alone was an 11px amber link: it read as
+   navigation, it was the size of one, and it said nothing about the three
+   values behind it. This sheet loads after page.css, which is what lets these
+   tune .foldcap's own declarations. */
+.settings-disc {font-size:12px; line-height:1.3; margin:5px 0 0 -4px; padding:3px 8px 3px 4px; border-radius:6px;
+  flex-wrap:nowrap; gap:6px; max-width:100%; min-width:0; text-align:left}
+.settings-disc:hover {background:var(--line-soft)}
+.settings-disc .settings-sl {white-space:nowrap}
+.settings-disc .settings-sv {color:var(--text); font-variant-numeric:tabular-nums; white-space:nowrap}
+/* A glance, so one line: a column too narrow for all three ends in an
+   ellipsis rather than folding the summary under itself. */
+.settings-disc .settings-sum {min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.settings-disc .settings-sv:not(:last-child)::after {content:"\00b7"; color:var(--faint); margin:0 6px}
+.settings-disc .settings-sn {color:var(--faint); margin-right:3px}
 .settings-opttag {font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.04em; color:var(--muted); background:var(--raised); border-radius:4px; padding:0 5px}
 
 /* The expandable rows (tools, plugins): the name is the button, the switch
    and the chip stay outside it. */
-.settings-xrow {display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line)}
+/* --line-soft, the weight every other row on this page separates with; these
+   were a shade darker, so a list of tools read as ruled and a list of roles
+   did not. */
+.settings-xrow {display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line-soft)}
 .settings-xrow:last-child {border-bottom:0}
 .settings-xrow.settings-dim .settings-xn {color:var(--muted)}
 .settings-xname {display:inline-flex; align-items:center; gap:9px; flex:1; min-width:0; font:inherit; color:inherit; background:none; border:0; padding:0; text-align:left; cursor:pointer}
 .settings-xname .settings-xn {font-size:13.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.settings-xrow.settings-open .settings-chev {transform:rotate(90deg); border-color:var(--amber); color:var(--gold); background:var(--amber-dp)}
+.settings-xrow.settings-open .settings-chev {transform:rotate(90deg); color:var(--amber)}
 .settings-lnkico {margin-left:6px; vertical-align:middle}
 
 /* ---- Model providers: the catalogue in two columns ------------------------
@@ -469,6 +608,26 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-tp-dot {width:7px; height:7px; border-radius:50%; background:var(--moss); flex:none}
 .settings-tp-empty {padding:12px 9px; color:var(--faint); font-size:13px}
 .settings-tp-main {padding:17px 20px 20px; min-width:0; min-height:0; overflow-y:auto}
+/* Every one-line field on a provider's page is one width, and every button
+   beside one stands at the pane's right edge -- the edge "Add model" already
+   stands at. The field is the row less one button slot, whether or not that
+   row has its button: sized by their contents the boxes came out 186 and 208
+   wide, and filling their row instead made the one address box with no button
+   beside it wider than every other. The slot is the dialog's own button floor
+   (`.smodal .mini`, per language), so a two-character label fills it exactly. */
+.settings-tp-main {--tp-act:64px}
+:root[data-lang="en"] .settings-tp-main {--tp-act:88px}
+.settings-tp-main .settings-sec .settings-tbox,.settings-tp-main .settings-sec .keyfield,
+.settings-tp-main .settings-sec .selw {width:calc(100% - var(--tp-act) - 6px); max-width:none; min-width:0; flex:none;
+  box-sizing:border-box}
+.settings-tp-main .keyfield > .settings-tbox,.settings-tp-main .selw > .sel {width:100%}
+.settings-tp-main .settings-taglist:has(> .settings-tbox),.settings-tp-main .settings-taglist:has(> .keyfield),
+.settings-tp-main .settings-taglist:has(> .selw) {flex-wrap:nowrap; width:100%}
+.settings-tp-main .settings-taglist:has(> .settings-tbox) > .mini,.settings-tp-main .settings-taglist:has(> .keyfield) > .mini,
+.settings-tp-main .settings-taglist:has(> .selw) > .mini {min-width:var(--tp-act); margin-left:auto}
+/* The empty model list is a sentence under the heading, at the heading's edge;
+   the list page's empty state carries padding this one does not want. */
+.settings-tp-main .settings-taglist > .settings-tp-empty {padding:2px 0}
 .settings-tp-none {display:grid; place-items:center; padding:60px 20px; color:var(--faint); font-size:13px}
 .settings-tp-head {display:flex; align-items:flex-start; gap:10px}
 .settings-tp-head .provider-icon {width:30px; height:30px; border-radius:8px}
@@ -490,6 +649,10 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 /* The get-a-key link is a named link, not a bare arrow: an icon alone beside
    "API key" does not say that what it opens is where the key comes from. */
 .settings-lab .exlink {margin:0; font-size:13px; font-weight:400}
+/* The label is bold and every button on the page inherits its weight, so a
+   control sitting in the label -- "Add model" beside "Models" -- came out as
+   bold as the heading it is not. Same for the hint after it. */
+.settings-lab .mini,.settings-lab .settings-sub2,.settings-tp-name .exlink {font-weight:400}
 
 /* ---- Add model: a catalogue that hangs off its button ---------------------
    The prototype's `apop` family, prefixed. Positioned in JS against the button
@@ -507,22 +670,45 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
 .settings-mkind i {font-style:normal; font-family:var(--mono); font-size:11px; color:var(--faint)}
 .settings-apbody {flex:1; min-height:0; overflow-y:auto; padding:6px}
 .settings-apwait {display:flex; padding:18px 14px; color:var(--faint); font-size:13px; text-align:center; align-items: center; gap: 9px}
-.settings-mgroup {display:flex; align-items:center; gap:4px; padding:8px 6px 3px}
-.settings-gt {flex:1; min-width:0; display:flex; align-items:center; gap:7px; font:inherit; background:none; border:0; color:var(--muted); padding:2px 4px; border-radius:6px; cursor:pointer; text-align:left}
-.settings-gt:hover {background:var(--surface)}
+/* A vendor's head is its select-all, the same box as its rows. The rows sit
+   one step in, their box under the head's name rather than under the head's
+   box: at one edge a head read as one more row, and the list lost the shape
+   that says which models the head's tick covers. */
+.settings-mgroup {display:flex; align-items:center; gap:9px; width:100%; margin-top:6px; padding:5px 8px; font:inherit;
+  background:none; border:0; border-radius:7px; color:var(--muted); text-align:left; cursor:pointer}
 .settings-gn {font-size:11px; font-weight:600; letter-spacing:.04em}
 .settings-gc {font-family:var(--mono); font-size:10px; color:var(--faint)}
-.settings-ga {flex:none; width:22px; height:22px; border:0; border-radius:6px; background:none; color:var(--faint); cursor:pointer; font-size:14px; line-height:1}
-.settings-ga:hover:not([disabled]) {background:var(--raised); color:var(--text)}
-.settings-ga[disabled] {opacity:.3; cursor:not-allowed}
+.settings-apgrp .settings-apm {padding-left:32px}
+/* The fold at the end of a provider's model chips: a word in the chips' own
+   line, not a button in a box, so it reads as the list's tail. */
+.settings-tagmore {font:inherit; font-size:12px; color:var(--muted); background:none; border:0; padding:3px 6px;
+  border-radius:6px; cursor:pointer}
+.settings-tagmore:hover {color:var(--text); background:var(--surface)}
+/* The footer's select-all: the rows' tick, at the rows' left edge. */
+.settings-apall {display:inline-flex; align-items:center; gap:9px; font:inherit; font-size:12px; color:var(--muted);
+  background:none; border:0; padding:4px 6px 4px 0; border-radius:6px; cursor:pointer}
+.settings-apall:hover {color:var(--text)}
+.settings-apall:hover .settings-aptick {border-color:var(--muted)}
+.settings-apall[aria-checked="true"] .settings-aptick,
+.settings-apall[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
 .settings-apm {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:13px; background:none; border:0; color:var(--text); padding:6px 8px; border-radius:7px; cursor:pointer}
 .settings-apm:hover {background:var(--surface)}
-.settings-aptick {width:15px; height:15px; flex:none; border-radius:4px; border:1.5px solid var(--line); display:grid; place-items:center; font-size:10px; color:var(--ink)}
-.settings-apm[aria-checked="true"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
+/* A tick box: the list is a selection, and the footer commits it. The glyph
+   inside is inked in the ground colour, so it only shows once the box fills. */
+.settings-aptick {width:15px; height:15px; flex:none; border-radius:4px; border:1.5px solid var(--line); display:grid;
+  place-items:center; font-size:10px; line-height:1; color:var(--ink)}
+/* A vendor head does not light up on hover: a filled band there read as a
+   selection of its own, a second state beside the box's. Only the box answers
+   the pointer, the way it does on a row. */
+.settings-apm:hover .settings-aptick,.settings-mgroup:hover .settings-aptick {border-color:var(--muted)}
+.settings-apm[aria-checked="true"] .settings-aptick,
+.settings-mgroup[aria-checked="true"] .settings-aptick,
+.settings-mgroup[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
 .settings-apnm {flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:12px}
-.settings-apm[aria-checked="true"] .settings-apnm {color:var(--muted)}
 .settings-apsd {font-family:var(--sans); font-size:11.5px; color:var(--faint); flex:none}
 .settings-apadd {color:var(--gold)}
+/* The typed-id row's box is dashed and holds a plus: it is the one row that is
+   not a tick -- one press adds an id the list does not carry. */
 .settings-apadd .settings-aptick {border-style:dashed; border-color:var(--gold); color:var(--gold)}
 .settings-apadd .settings-apsd {color:var(--gold)}
 .settings-apkind {display:inline-flex; align-items:center; gap:4px; flex:none; font:inherit; font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:6px; padding:1px 7px; background:var(--paper); cursor:pointer}
@@ -562,3 +748,44 @@ footer {border-top:1px solid var(--line); margin:48px 0 0; padding:18px 0 70px; 
    carrying `role="status"` is the one the section already draws. */
 .settings-wait.settings-tp {display:grid}
 .settings-wait .settings-tp-find .settings-wbar {border-radius:var(--ctl-r)}
+
+/* ── general: title + line on the left, control on the right ───── */
+
+.settings-genlist {display:flex; flex-direction:column; gap:26px; padding-top:4px}
+.settings-gen {display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px 20px}
+.settings-gen-below {grid-template-columns:minmax(0,1fr)}
+.settings-gen-k, .settings-gen-ctl {min-width:0}
+.settings-gen-t {font-size:15px; font-weight:500; color:var(--text)}
+.settings-gen-d {font-size:13px; color:var(--faint); margin-top:3px}
+
+/* The theme as three miniatures of the window. The palette is written as
+   properties because it is data: each card shows its theme's colours whatever
+   theme the page itself is in. */
+.settings-themes {display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:12px}
+.settings-theme {
+  font:inherit; color:inherit; text-align:left; cursor:pointer;
+  display:flex; flex-direction:column; gap:12px; padding:12px;
+  background:var(--paper); border:1px solid var(--line); border-radius:12px;
+  transition:border-color .15s ease, box-shadow .15s ease;
+}
+.settings-theme:hover {border-color:color-mix(in oklab, var(--line) 50%, var(--muted))}
+.settings-theme[aria-checked="true"] {border-color:var(--amber); box-shadow:0 0 0 1px var(--amber)}
+.settings-theme:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+.settings-theme-foot {display:flex; align-items:center; justify-content:space-between; font-size:13.5px; padding:0 2px}
+.settings-theme-dot {width:16px; height:16px; border-radius:50%; border:1.5px solid var(--line); box-sizing:border-box; flex:none}
+.settings-theme[aria-checked="true"] .settings-theme-dot {border:4.5px solid var(--amber)}
+
+.settings-shotbox {position:relative; display:block; height:96px; border-radius:7px; overflow:hidden; border:1px solid var(--line-soft)}
+.settings-shot {
+  --shot-bg:#ffffff; --shot-side:#efefef; --shot-bar:#e6e6e6; --shot-block:#e9e9e9;
+  position:absolute; inset:0; display:grid; grid-template-columns:24% 1fr; background:var(--shot-bg);
+}
+.settings-shot-dark {--shot-bg:#1d1d1d; --shot-side:#2a2a2a; --shot-bar:#555555; --shot-block:#4a4a4a}
+.settings-shot-side {background:var(--shot-side); padding:12px 10px}
+.settings-shot-side i {display:block; height:5px; width:60%; border-radius:3px; background:var(--shot-bar)}
+.settings-shot-main {padding:18px 14px; display:flex; flex-direction:column; gap:10px}
+.settings-shot-main i {display:block; height:6px; width:48%; border-radius:3px; background:var(--shot-bar)}
+.settings-shot-main b {display:block; height:22px; width:78%; border-radius:4px; background:var(--shot-block)}
+/* System: the dark window over the right-hand part of the light one. */
+.settings-shot-half {position:absolute; inset:0; clip-path:inset(0 0 0 62%)}
+@media (max-width: 640px) { .settings-themes {grid-template-columns:1fr} }

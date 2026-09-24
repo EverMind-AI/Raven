@@ -50,6 +50,7 @@ Boot sequence (called by ``make_backend`` / ``make_understand_media_tool``):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -809,11 +810,20 @@ ROLES: tuple[str, ...] = ("llm", "embedding", "rerank", "multimodal")
 callers reason about four roles, even though its pin lives somewhere else."""
 
 REQUIRED_ROLES: tuple[str, ...] = ("llm", "embedding")
-"""Roles that cannot be cleared from the page.
+"""Roles nothing may erase as a side effect.
 
 Clearing ``llm`` turns long-term memory off outright, and ``embedding`` is what
-every stored vector was written under. Neither should be one stray click away;
-both are still editable, just not erasable.
+every stored vector -- and every knowledge base -- was written under. Neither
+should go because a wizard lane was skipped.
+"""
+
+UNCLEARABLE_ROLES: tuple[str, ...] = ("llm",)
+"""The required roles a person cannot clear on purpose either.
+
+``embedding`` is not among them: it is optional (without it recall falls back
+to keyword search), and the page's clear button is a deliberate act, not the
+stray skip ``REQUIRED_ROLES`` guards against. ``llm`` stays: EverOS refuses to
+start without it.
 """
 
 
@@ -945,16 +955,19 @@ def set_role(section: str, *, model: str, provider: str, protocol: str = "") -> 
     return ""
 
 
-def clear_role(section: str) -> None:
+def clear_role(section: str, *, deliberate: bool = False) -> None:
     """Forget what serves ``section``; the next spawn emits it empty.
 
     Emitting it empty is what makes this mean anything: raven no longer writes
     ``everos.toml``, so a section left in that file would otherwise come back
     into force the moment raven stopped naming a model.
+
+    ``deliberate`` is a person asking for exactly this -- the page's clear
+    button -- and lets a required role outside ``UNCLEARABLE_ROLES`` go.
     """
     if section not in ROLES:
         raise KeyError(f"unknown everos role {section!r}; roles: {ROLES}")
-    if section in REQUIRED_ROLES:
+    if section in REQUIRED_ROLES and (not deliberate or section in UNCLEARABLE_ROLES):
         # The rule lives here, with the operation, rather than only at the RPC
         # door that used to be its only reader. The wizard reaches this function
         # too, and its own table answers a different question -- `optional`
@@ -1037,6 +1050,26 @@ def everos_env() -> dict[str, str]:
             if protocol:
                 env[f"{prefix}PROVIDER"] = protocol
     return env
+
+
+def role_env_digest() -> str:
+    """A digest of everything :func:`everos_env` would hand a spawn.
+
+    EverOS builds its model clients once, in the API lifespan, so a running
+    server keeps the credentials it booted with. A key rotated in raven's
+    provider settings afterwards reaches the file and never reaches that
+    process -- and a health probe cannot tell the difference, because it never
+    touches a model. Recording this at the spawn is what lets the next start
+    ask whether the server it is about to adopt is running on what raven still
+    holds.
+
+    Over the emitted environment rather than over the provider sections: an
+    env-managed role is skipped by ``everos_env`` and must be skipped here too,
+    or raven would restart a server over a value it does not own.
+    """
+    env = everos_env()
+    blob = "\n".join(f"{name}={env[name]}" for name in sorted(env))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def everos_toml_role_notes() -> list[str]:
@@ -1145,8 +1178,8 @@ def describe_roles() -> dict[str, Any]:
         "config_path": str(get_everos_config_path()),
         "sections": sections,
         "supports": supports,
-        # Sent rather than mirrored, because the page was mirroring it and had
-        # drifted: it drew a clear button on embedding, which the write refuses.
+        # The roles the page may not clear. Sent rather than mirrored, because
+        # the page was mirroring it and had drifted from what the write refuses.
         # A contract the caller has to remember is a contract that goes stale.
-        "required": list(REQUIRED_ROLES),
+        "required": list(UNCLEARABLE_ROLES),
     }

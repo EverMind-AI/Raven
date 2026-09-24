@@ -341,7 +341,7 @@ describe('createChatStream — cancel preserves streamed content', () => {
       payload: { code: -32000, message: 'cancelled', reason: 'cancelled_by_client' },
       type: 'error'
     })
-    expect(getUiState().status).toBe('interrupted')
+    expect(getUiState().status).toBe(STOPPED_BARE)
 
     // A second prompt inside the 800ms cooldown: the window must not outlive
     // the idle it was describing.

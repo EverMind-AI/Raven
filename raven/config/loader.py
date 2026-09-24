@@ -19,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 9
+CURRENT_CONFIG_VERSION = 11
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -42,6 +42,8 @@ _VENDORED_TREE_MIGRATION = 6
 _RESEARCH_RENAME_MIGRATION = 7
 _EMBEDDING_HOME_MIGRATION = 8
 _EMBEDDING_SHAPE_MIGRATION = 9
+_RETIRED_DEEP_RESEARCH_MIGRATION = 10
+_SHIM_PIN_MIGRATION = 11
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -381,6 +383,10 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_embedding_home(raw, config_path=path) or changed
             if from_version < _EMBEDDING_SHAPE_MIGRATION:
                 changed = _migrate_embedding_shape(raw, config_path=path) or changed
+            if from_version < _RETIRED_DEEP_RESEARCH_MIGRATION:
+                changed = _migrate_retired_deep_research(raw) or changed
+            if from_version < _SHIM_PIN_MIGRATION:
+                changed = _migrate_retired_shim_pins(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -1014,13 +1020,120 @@ def _migrate_embedding_home(data: dict, *, notify: bool = False, config_path: Pa
     return changed
 
 
-def _migrate_config(  # noqa: C901 (cc 42: pre-existing, above the ceiling)
+def _migrate_retired_deep_research(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Drop the retired ``deep_research`` tool's own config section.
+
+    The tool is gone: research runs on the Raven-Research agent and the
+    MiroThinker sub-agent, which carry their own settings. What it leaves
+    behind is a section nothing reads -- and it held an API key, the more
+    reason to clear it. A ``deep_research`` entry in ``tools.disabledTools``
+    is left alone on purpose: that list is the general name denylist and a
+    plugin tool may carry the name (plugin tools register last so one can
+    shadow a built-in), so dropping the entry would put such a tool back on
+    offer.
+
+    Silent, and False, when it changes nothing. This one has to be: the
+    research rename parks the stamp below its own floor, so for those configs
+    every later migration re-runs on each load, and ``raven.config.raven``
+    calls it a third time without ever writing the stamp.
+    """
+    tools = data.get("tools")
+    if not isinstance(tools, dict):
+        return False
+
+    changed = False
+    for spelling in ("deepResearch", "deep_research"):
+        if spelling in tools:
+            tools.pop(spelling)
+            changed = True
+            notice = (
+                f"Removed `tools.{spelling}` from your config: the deep_research tool is retired. "
+                "Research now runs through the Raven-Research agent and the MiroThinker sub-agent, "
+                "each configured in its own right."
+            )
+            if notify and notice not in _migration_notices:
+                _migration_notices.append(notice)
+
+    return changed
+
+
+# The stock commands a shim preset shipped before its current pin, with the one
+# it ships now, by preset key -- for a pin whose new build was measured reopening
+# the old one's sessions, the property the migration below rests on, so not
+# every pin that ever moved. Spelled out rather than read off the preset table
+# because config does not import the agent package (``raven.config.agent_names``
+# says why); tests/test_config_loader.py pins the current command to the
+# preset's own, so a pin bumped without extending this fails there instead of
+# stranding every row configured on the pin before it.
+_RETIRED_SHIM_COMMANDS: dict[str, tuple[frozenset[str], str]] = {
+    "claude_code": (
+        frozenset(
+            {
+                "npx -y @agentclientprotocol/claude-agent-acp@0.66.0",
+                "npx -y @agentclientprotocol/claude-agent-acp@0.79.0",
+            }
+        ),
+        "npx -y @agentclientprotocol/claude-agent-acp@0.81.1",
+    ),
+    "codex": (
+        frozenset({"npx -y @agentclientprotocol/codex-acp@1.1.14"}),
+        "npx -y @agentclientprotocol/codex-acp@1.13.1",
+    ),
+}
+
+
+def _migrate_retired_shim_pins(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Carry a preset row still on a retired shim pin to the one its preset ships.
+
+    A shim is the adapter ``npx`` fetches in front of an agent, pinned in
+    ``raven.agent.subagent.presets``, and both shims carry their agent with them,
+    so the pin decides which models a row can reach: ``codex-acp`` 1.1.14 lists
+    models up to GPT-5.6 after the GPT-6 family shipped, and ``claude-agent-acp``
+    0.66.0 offers no Fable 5.1. ``subagents.add`` copies the preset's command into
+    the row, so a bumped pin reached the rows added after it and no others.
+
+    Carried here rather than surfaced for a remove-and-add the way a transport
+    change is (``_upgrade_transport``): that one is manual because the row's
+    session handles would stop meaning anything, while a pin bump keeps them --
+    measured, codex-acp 1.13.1 reopens a thread 1.1.14 created, and
+    claude-agent-acp 0.81.1 reopens sessions 0.66.0 and 0.79.0 created. The new
+    command is also a new snapshot fingerprint, so the boot backfill re-measures
+    the menu instead of serving the old build's.
+
+    Only a row that names the preset and still carries the exact stock command:
+    an edited command is its owner's pin, and a hand-written row running the
+    same string without the provenance field is its owner's too. Silent, and
+    False, when it changes nothing, for the reason
+    ``_migrate_retired_deep_research`` gives.
+    """
+    changed = False
+    for alias, rows in _subagent_alias_rows(data):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            pin = _RETIRED_SHIM_COMMANDS.get(str(row.get("preset") or ""))
+            command = row.get("command")
+            if pin is None or not isinstance(command, str) or command not in pin[0]:
+                continue
+            row["command"] = pin[1]
+            changed = True
+            notice = (
+                f"Migrated: subagents.{alias}[{row.get('name') or '?'}] now launches `{pin[1]}`, the adapter "
+                f"build its preset ships now, in place of `{command}`. Put the old command back if you pinned "
+                "it on purpose."
+            )
+            if notify and notice not in _migration_notices:
+                _migration_notices.append(notice)
+    return changed
+
+
+def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
     data: dict,
     *,
     pop_extension_keys: bool = True,
     from_version: int = CURRENT_CONFIG_VERSION,
     config_path: Path | None = None,
-) -> dict:  # noqa: C901 (cc 46: pre-existing, above the ceiling)
+) -> dict:
     """Migrate old config formats to current.
 
     ``pop_extension_keys``: when True (default, used by ``load_config``),
@@ -1108,6 +1221,10 @@ def _migrate_config(  # noqa: C901 (cc 42: pre-existing, above the ceiling)
         _migrate_embedding_home(data, notify=True, config_path=config_path)
     if from_version < _EMBEDDING_SHAPE_MIGRATION:
         _migrate_embedding_shape(data, notify=True, config_path=config_path)
+    if from_version < _RETIRED_DEEP_RESEARCH_MIGRATION:
+        _migrate_retired_deep_research(data, notify=True)
+    if from_version < _SHIM_PIN_MIGRATION:
+        _migrate_retired_shim_pins(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

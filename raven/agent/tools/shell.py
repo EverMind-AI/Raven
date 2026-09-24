@@ -6,6 +6,7 @@ dispatched. What stays here is the tool's own integrity boundary -- the
 operator's allowlist and the workspace fence -- and the execution itself.
 """
 
+import asyncio
 import fnmatch
 import os
 import re
@@ -77,6 +78,13 @@ class ExecTool(Tool):
         self.follow_binding = follow_binding
         self.path_append = path_append
         self._executor: SandboxExecutor = executor if executor is not None else DirectExecutor()
+        if not self._executor.is_sandboxed:
+            # The model checks a deck by running `soffice --convert-to` itself,
+            # with LibreOffice's default profile; on a Mac that profile is the
+            # only place its Chinese faces can come from (raven/utils/office.py).
+            from raven.utils import office
+
+            office.link_han_faces_into_default_profile()
 
     @property
     def timeout(self) -> int:
@@ -223,6 +231,24 @@ class ExecTool(Tool):
             from raven.agent.tools.machine_exec import run_on_machine
 
             return await run_on_machine(command, connection=machine, cwd=working_dir)
+        # Same import discipline as above: the registry is read only to
+        # recognise a registered address, and a registry that cannot be read
+        # recognises nothing.
+        from raven.agent.tools.machine_exec import raw_ssh_target
+
+        if (row := raw_ssh_target(command)) is not None:
+            # Typed ssh to a registered machine is the registry bypassed: the
+            # cap, the process-group sweep and the ledger all live on the
+            # other two paths. Refused by name so the model learns the path,
+            # not just that this one closed.
+            conn_id = str(row.get("id") or "").strip()
+            return (
+                f"Error: this command reaches {row.get('display_name') or conn_id} over raw ssh from "
+                f"this computer, and that machine is registered as {conn_id!r}. Look at it with "
+                f"exec(machine={conn_id!r}) (capped at 60s, nothing left running), and hand anything "
+                "longer, or anything that must keep running, to the on-call agent's ops_submit "
+                "(budget, dedup, ledger). scp and rsync to it are still fine here. Nothing was run."
+            )
 
         cwd = self._cwd_for(working_dir)
 
@@ -251,20 +277,22 @@ class ExecTool(Tool):
                     "split the work. Nothing was run."
                 )
             from raven.agent.tools import background_exec
-            from raven.sandbox.direct_executor import _baseline_env
+            from raven.sandbox.direct_executor import baseline_env
 
             # The same environment hygiene as the synchronous path: the child
             # gets the executor's baseline allowlist, never the full host
             # environment, so a detached download cannot read credentials the
             # capped path already withholds.
-            bg_env = _baseline_env()
+            bg_env = baseline_env()
             if self.path_append:
                 bg_env["PATH"] = bg_env.get("PATH", "") + os.pathsep + self.path_append
             try:
                 task = background_exec.start(command, cwd=cwd, env=bg_env)
             except OSError as exc:
                 return f"Error starting background command: {exc}"
-            return background_exec.start_note(task)
+            # The note waits up to a second to see whether the command died at once;
+            # on the loop's thread that wait would stall every other turn with it.
+            return await asyncio.to_thread(background_exec.start_note, task)
 
         # Use `is None` check — `timeout or default` would treat timeout=0 as falsy.
         effective_timeout = min(self.timeout if timeout is None else timeout, self._MAX_TIMEOUT)
@@ -375,6 +403,18 @@ class ExecTool(Tool):
     def _cwd_for(self, working_dir: str | None) -> str:
         bound = str(workdir.current() or "") if self.follow_binding else ""
         return working_dir or bound or self.working_dir or os.getcwd()
+
+    def listing_root(self, params: dict[str, Any]) -> Path | None:
+        """Where this call's files land, as far as this host can see.
+
+        The directory the command runs in, resolved the way ``execute`` will --
+        a per-call ``working_dir`` moves it off the bound one -- or ``None`` for
+        a command run on a registered machine, whose files are not on this disk
+        and would be described by nothing a listing here could find.
+        """
+        if str(params.get("machine") or "").strip():
+            return None
+        return Path(self._cwd_for(str(params.get("working_dir") or "") or None))
 
     def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
         """The command and where it would run, resolved the way ``execute`` will."""
@@ -550,9 +590,9 @@ class ExecTool(Tool):
         started in: this command's ``$PWD`` is the workspace, whatever this
         process inherited.
         """
-        from raven.sandbox.direct_executor import _baseline_env
+        from raven.sandbox.direct_executor import baseline_env
 
-        env = _baseline_env()
+        env = baseline_env()
         env["PWD"] = str(cwd)
         return env
 

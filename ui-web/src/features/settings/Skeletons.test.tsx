@@ -10,7 +10,7 @@ import { SettingsApp } from './SettingsApp'
 import * as store from './store'
 
 import type { SectionId } from './store'
-import type { SettingsSnapshot } from './types'
+import type { McpDetail, SettingsSnapshot } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -61,10 +61,11 @@ describe('the wait a settings section draws', () => {
   it('draws the section rather than a box with a word in it', async () => {
     await waiting('general')
     /* The box this replaces, whose height was a line of text where the page is
-       a card of rows. */
+       two settings, the second a row of theme cards. */
     expect(document.querySelector('.settings-soonbox')).toBeNull()
-    expect(count('.settings-row')).toBe(3)
-    expect(count('.settings-wbar')).toBe(6)
+    expect(count('.settings-gen')).toBe(2)
+    expect(count('.settings-theme')).toBe(3)
+    expect(count('.settings-wbar')).toBe(11)
   })
 
   it('gives every section a shape of its own, so none falls through to the default', async () => {
@@ -102,7 +103,7 @@ describe('the wait a settings section draws', () => {
 
   it('waits on the tool and plugin pages as their switch rows', async () => {
     await waiting('tools')
-    expect(count('.settings-xrow')).toBe(23)
+    expect(count('.settings-xrow')).toBe(22)
     cleanup()
     store._resetForTests()
     await waiting('plugins')
@@ -139,13 +140,13 @@ describe('the waits a settings page owns', () => {
   })
 
   it('draws a plugin\'s credential fields as a key row until the catalogue answers', async () => {
-    let land: ((f: never[]) => void) | null = null
-    install(undefined, { serverAuthFields: () => new Promise((resolve) => { land = resolve }) })
+    let land: ((d: McpDetail) => void) | null = null
+    install(undefined, { serverDetail: () => new Promise((resolve) => { land = resolve }) })
     await mount('plugins')
     await act(async () => { fireEvent.click(screen.getByText('github')) })
     expect(count('.settings-wait .settings-row.settings-stack')).toBe(1)
 
-    await act(async () => { land!([]); await Promise.resolve() })
+    await act(async () => { land!({ known: true, fields: [], tools: [] }); await Promise.resolve() })
     expect(count('.settings-wbar')).toBe(0)
     expect(screen.getByText('gui.settings.plugins.no_credential')).toBeTruthy()
   })

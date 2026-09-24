@@ -159,6 +159,11 @@ what carries the colour across a diagonal when a parent and the children under
 it are on screen together. The lit path is the same path as the skeleton,
 clipped to that range, so the two can never disagree about where the line goes.
 
+Partway through a section longer than the screen, no heading is in the viewport
+at all. The entry of the nearest heading above is then current on its own, since
+that is the section being read, so the column goes dark only above the first
+heading, where no section has begun yet.
+
 The indent follows the heading level, not whether an entry has children: a
 trailing level-one heading with nothing under it belongs in the same column as
 one that does. Material pulls a nested list up into the entry below it, which

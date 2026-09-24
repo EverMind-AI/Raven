@@ -382,6 +382,11 @@ export interface ModelOptionProvider {
      `is_gateway`). The web settings page filters its catalogue on it; here it
      is declared so the drift check stays honest about what the wire sends. */
   gateway?: boolean
+  /* Every model-id prefix that names this provider: its own name plus the ones
+     it used to answer to. A surface comparing two spellings of one model strips
+     any of them, the way `providers/wire.py`'s `merge_key` does. The web picker
+     reads it; here it is declared for the same reason `gateway` is. */
+  route_names?: string[]
   model_labels?: Record<
     string,
     {

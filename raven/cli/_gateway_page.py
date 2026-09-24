@@ -28,7 +28,7 @@ class PageMount:
     url: str
     emitter: Any
     outlet: Any
-    # The page's own ask_user / deep-research broker (build_rpc_stack's). The
+    # The page's own ask_user broker (build_rpc_stack's). The
     # host wires a RoutingQuestionBroker over this and its channel broker so
     # the page answers its own sessions without swallowing the IM round-trip.
     question_broker: Any
@@ -89,7 +89,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     applies the page's streaming sinks (dag progress, mcp events) to the
     shared loop, and last write wins is the intent for those -- the page is
     the surface that renders a progress stream. The question brokers are NOT
-    left last-write-wins: the host re-binds ask_user / deep-research through a
+    left last-write-wins: the host re-binds ask_user through a
     ``RoutingQuestionBroker`` over this mount's ``question_broker`` and its
     channel broker, so IM conversations keep their round-trip while the page
     answers its own.

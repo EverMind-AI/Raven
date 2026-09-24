@@ -24,7 +24,7 @@ class _ThemedConsole(Console):
     ``raven ...`` commands don't detect or probe the terminal. Because every
     onboard render goes through ``print`` on this instance, there is no
     "push the theme before rendering" ordering constraint and no dependence on
-    which entry point (wizard, ``raven deep-research enable``, ...) ran first.
+    which entry point (wizard, ``raven channels``, ...) ran first.
     """
 
     _themed: bool = False

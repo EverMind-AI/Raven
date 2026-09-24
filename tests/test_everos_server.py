@@ -379,20 +379,33 @@ class TestSpawnPreflight:
         assert spawned == []
 
     @pytest.mark.asyncio
-    async def test_a_running_server_needs_no_credential_check(self, everos_toml) -> None:
-        """A /health 200 proves the LLM client was built, so do not second-guess it."""
-        _pin_llm_role(everos_toml, api_key="")
+    async def test_a_running_server_on_current_credentials_is_adopted(self, everos_toml) -> None:
+        """No wait, no restart, no credential probe -- it is already what raven holds.
+
+        This used to assert something stronger and wrong: that a /health 200
+        proved the LLM client was good, so raven need not look further. It does
+        not. EverOS builds its clients at boot and /health never touches one, so
+        a key rotated after the boot leaves this probe green and the server
+        unusable. What raven may skip is the *probe*; what it may not skip is
+        comparing the credentials, which is the record this now writes first.
+        """
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
         waits: list[int] = []
+        stop = MagicMock()
         # _speaks_our_api is stubbed too: a healthy address is also probed for the
         # API prefix, and leaving that unstubbed makes the outcome depend on
         # whether the developer's machine happens to have EverOS on this port.
         with (
             patch("raven_everos.server._probe_health", return_value=True),
             patch("raven_everos.server._speaks_our_api", return_value=True),
+            patch("raven_everos.server.stop_for_reload", stop),
         ):
             await ensure_everos_server("http://localhost:18791", on_wait=lambda: waits.append(1))
 
         assert waits == [], "narrated a wait that never happened"
+        stop.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_configured_llm_reaches_the_spawn(self, everos_toml, tmp_path, monkeypatch) -> None:
@@ -1465,6 +1478,17 @@ class TestThePiecesTheChainIsMadeOf:
 
         assert everos_server.precheck_spawn() is None
 
+    def test_the_precheck_refuses_windows_before_asking_anything_else(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The settings-page restart chain reads this first; on Windows it must
+        report the platform, not stop a server and then fail to spawn one."""
+        monkeypatch.setattr("raven_everos.config.everos_role_configured", lambda _s: True)
+        monkeypatch.setattr(everos_server, "_inotify_gate", lambda: None)
+        monkeypatch.setattr(sys, "platform", "win32")
+
+        answer = everos_server.precheck_spawn()
+
+        assert answer and "Windows" in answer
+
     def test_stopping_a_root_nothing_is_serving_is_not_a_failure(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1571,3 +1595,213 @@ class TestARootTheUserManagesIsNeverStopped:
 
         assert touched == ["precheck", "stop", "ensure"]
         assert seen == [(True, None)]
+
+
+class TestRoleDigest:
+    """Whether the server already running was handed what raven holds now.
+
+    The gap this closes: EverOS builds its model clients once, in the API
+    lifespan, and raven hands it credentials only as environment variables at
+    the spawn. Everything that edits a provider afterwards -- the models page,
+    ``raven provider set``, a hand-edited config.json -- changes the file and
+    not the process, and /health cannot see the difference because it never
+    touches a model. So memory goes on failing against a revoked key with every
+    surface green.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_ambient_role_env(self, monkeypatch) -> None:
+        """An exported role outranks raven and is skipped by ``everos_env``.
+
+        A developer who has one in their shell would otherwise be running
+        different cases than CI, silently.
+        """
+        for section in ("LLM", "EMBEDDING", "RERANK", "MULTIMODAL"):
+            for field in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS", "PROVIDER"):
+                monkeypatch.delenv(f"EVEROS_{section}__{field}", raising=False)
+        from raven_everos import config as ue
+
+        ue._BOUND_HERE.clear()
+
+    def test_a_rotated_key_changes_the_digest(self, everos_toml) -> None:
+        """The whole premise: the digest has to move when the credential does."""
+        from raven_everos.config import role_env_digest
+
+        cfg = _pin_llm_role(everos_toml, api_key="old-key")
+        before = role_env_digest()
+        _pin_llm_role(everos_toml, api_key="new-key")
+        assert cfg.exists()
+        assert role_env_digest() != before
+
+    def test_the_same_config_digests_the_same(self, everos_toml) -> None:
+        """Or every session would restart the server it just started."""
+        from raven_everos.config import role_env_digest
+
+        _pin_llm_role(everos_toml)
+        assert role_env_digest() == role_env_digest()
+
+    def test_a_recorded_digest_reads_as_unchanged(self, everos_toml) -> None:
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        assert everos_server.roles_changed_since_spawn(everos_toml.parent) is False
+
+    def test_a_rotated_key_reads_as_changed(self, everos_toml) -> None:
+        """The reported bug, at the layer that can see it."""
+        _pin_llm_role(everos_toml, api_key="old-key")
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+
+        _pin_llm_role(everos_toml, api_key="new-key")
+        assert everos_server.roles_changed_since_spawn(everos_toml.parent) is True
+
+    def test_no_record_reads_as_changed(self, everos_toml) -> None:
+        """An install that predates the record is exactly the one nobody compared."""
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        assert everos_server.roles_changed_since_spawn(everos_toml.parent) is True
+
+    def test_a_root_raven_does_not_own_is_left_alone(self, everos_toml, monkeypatch) -> None:
+        """raven records that server's address and never starts or stops it."""
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: False)
+        assert everos_server.roles_changed_since_spawn(everos_toml.parent) is False
+
+    def test_an_unwritable_root_does_not_fail_the_spawn(self, everos_toml, tmp_path) -> None:
+        """Bookkeeping must not cost a server that otherwise started fine."""
+        _pin_llm_role(everos_toml)
+        everos_server.record_role_digest(tmp_path / "no" / "such" / "root")
+
+
+class TestStaleCredentialRestart:
+    """``ensure_everos_server`` is the door every session passes through."""
+
+    @pytest.fixture(autouse=True)
+    def _no_ambient_role_env(self, monkeypatch) -> None:
+        for section in ("LLM", "EMBEDDING", "RERANK", "MULTIMODAL"):
+            for field in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS", "PROVIDER"):
+                monkeypatch.delenv(f"EVEROS_{section}__{field}", raising=False)
+        from raven_everos import config as ue
+
+        ue._BOUND_HERE.clear()
+
+    @pytest.mark.asyncio
+    async def test_a_stale_credential_stops_and_respawns(self, everos_toml, tmp_path, monkeypatch) -> None:
+        _pin_llm_role(everos_toml, api_key="old-key")
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        _pin_llm_role(everos_toml, api_key="new-key")
+
+        order: list[str] = []
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: order.append("precheck") or "")
+        monkeypatch.setattr(
+            everos_server,
+            "stop_for_reload",
+            lambda _root: order.append("stop") or everos_server.StopOutcome.STOPPED,
+        )
+        monkeypatch.setattr(
+            "raven_everos.server._start_server_if_unlocked",
+            lambda *a, **kw: order.append("spawn"),
+        )
+        monkeypatch.setattr("raven_everos.server.get_logs_dir", lambda: tmp_path)
+
+        # Healthy on the first probe (the adopt check), healthy again once the
+        # replacement has booted.
+        with (
+            patch("raven_everos.server._probe_health", side_effect=[True, True]),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+        assert order == ["precheck", "stop", "spawn"], "precheck must run before the stop"
+
+    @pytest.mark.asyncio
+    async def test_a_replacement_that_cannot_boot_keeps_the_old_server(self, everos_toml, monkeypatch) -> None:
+        """Stopped-and-not-started is the one genuinely bad state.
+
+        A stale key still serves most of what memory asks; no server serves
+        none of it.
+        """
+        _pin_llm_role(everos_toml, api_key="old-key")
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        _pin_llm_role(everos_toml, api_key="new-key")
+
+        stop = MagicMock()
+        spawn = MagicMock()
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: "no inotify room")
+        monkeypatch.setattr(everos_server, "stop_for_reload", stop)
+        monkeypatch.setattr("raven_everos.server._start_server_if_unlocked", spawn)
+
+        with (
+            patch("raven_everos.server._probe_health", return_value=True),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+
+        stop.assert_not_called()
+        spawn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_stop_that_does_not_finish_keeps_the_old_server(self, everos_toml, monkeypatch) -> None:
+        _pin_llm_role(everos_toml, api_key="old-key")
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        _pin_llm_role(everos_toml, api_key="new-key")
+
+        spawn = MagicMock()
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: "")
+        monkeypatch.setattr(everos_server, "stop_for_reload", lambda _root: everos_server.StopOutcome.STILL_DRAINING)
+        monkeypatch.setattr("raven_everos.server._start_server_if_unlocked", spawn)
+
+        with (
+            patch("raven_everos.server._probe_health", return_value=True),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+
+        spawn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_stop_that_cannot_name_the_process_keeps_the_old_server(self, everos_toml, monkeypatch) -> None:
+        """``None`` is a failure here, and is not one in ``restart_for_config_change``.
+
+        That one may run with nothing serving. This one has just probed a
+        healthy server two lines up, so ``None`` means the lock could not name
+        it -- and spawning anyway leaves the old process holding the port while
+        the poll below finds its ``/health`` and calls the restart a success.
+        Found by driving a real spawn: reading ``None`` as "nothing to stop"
+        left the old server running and reported success.
+        """
+        _pin_llm_role(everos_toml, api_key="old-key")
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        _pin_llm_role(everos_toml, api_key="new-key")
+
+        spawn = MagicMock()
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: "")
+        monkeypatch.setattr(everos_server, "stop_for_reload", lambda _root: None)
+        monkeypatch.setattr("raven_everos.server._start_server_if_unlocked", spawn)
+
+        with (
+            patch("raven_everos.server._probe_health", return_value=True),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+
+        spawn.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_the_respawn_records_the_new_digest(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Or the next session restarts a server that is already correct."""
+        from raven_everos.config import role_env_digest
+
+        _pin_llm_role(everos_toml, api_key="new-key")
+        root = everos_toml.parent
+        root.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr("raven_everos.server._write_pidfile", lambda *a, **kw: None)
+        monkeypatch.setattr("raven_everos.server.set_everos_api", lambda **kw: None, raising=False)
+        everos_server.record_role_digest(root)
+
+        assert (root / everos_server._ROLE_DIGEST_FILE).read_text(encoding="utf-8") == role_env_digest()

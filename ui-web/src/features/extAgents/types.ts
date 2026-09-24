@@ -50,6 +50,11 @@ export interface ExtAgentRow {
   enabled: boolean
   probe_status: ExtAgentProbe | string
   probe_detail: string
+  /* The executable the probe looked for and did not find, on a `missing` row:
+     what to install. `npx` for a preset launched through it, which Node.js
+     brings and the agent's own installer does not. Absent everywhere else,
+     and from a server that predates it. */
+  probe_missing?: string
   has_api_key: boolean
   /* The agent answered the handshake and refused to open a session without a
      credential it names. Only an acp row carries it; absent from a server
@@ -60,6 +65,9 @@ export interface ExtAgentRow {
   last_test_ok: boolean | null
   last_test_at_ms: number | null
   last_test_detail: string
+  /* The fix the server named for the last failed test; absent when it knows
+     none. `last_test_detail` stays the English record. */
+  last_test_remedy?: Remedy | null
   upgrade_to?: string | null
   /* One of Raven's own, whichever way this install registered it: the
      built-in row, a discovered product, or a config row whose acp handshake
@@ -97,6 +105,19 @@ export interface ExtAgentActArgs {
 }
 
 export interface ExtAgentsSource {
-  load(probe?: boolean): Promise<ExtAgentRow[]>
+  /* `rescan` also has the server take the login shell's environment again before
+     it probes: the one answer to an agent installed since the gateway started,
+     whose installer added a PATH line only a new capture reads. Only an explicit
+     re-check sends it -- the capture runs the user's login shell. */
+  load(probe?: boolean, rescan?: boolean): Promise<ExtAgentRow[]>
   act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
+}
+
+/* What fixes a refusal about a credential, as the server classified it: which
+   kind of fix, and the command that makes it on this machine when one is known.
+   The same verdict the server's English sentence spells out, as data, so the
+   sheet can say it in the reader's language. */
+export interface Remedy {
+  kind: 'sign_in' | 'setup' | 'api_key' | 'download'
+  command: string
 }

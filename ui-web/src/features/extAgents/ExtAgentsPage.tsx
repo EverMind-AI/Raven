@@ -7,9 +7,9 @@ import { ModelPicker } from '../../components/ModelPicker'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
-import { offered } from '../model/types'
+import { offered, withCurrent } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
-import { SectionBlock, Spin, Tile, connect, ordered, pendingLabel, shownOf } from './Rows'
+import { CardGrid, Spin, Tile, connect, ordered, pendingLabel, refusedWrite, shownOf } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
@@ -17,18 +17,19 @@ import type { PickerProvider } from '../../components/ModelPicker'
 import type { Shown } from './Rows'
 import type { Section } from './source'
 import type { ExtAgentsState } from './store'
-import type { ExtAgentRow } from './types'
+import type { ExtAgentRow, Remedy } from './types'
 import type { JSX } from 'react'
 import './styles.css'
 
 /* The agents this machine can hand work to, drawn to the Agent Hub prototype.
  *
- * Three sections answer the reader's three questions -- which agents work for
- * me now, which could I connect, which are not on this machine -- and a row
- * answers three more: who it is (mark, name, a line about what it is good at),
- * how it is doing (a dot that is only there when there is something to say),
- * and the one thing to do about it now. Everything else is in the sheet the
- * row opens: what the agent is good at, as the reader words it; a key, where
+ * One grid of cards, filtered by tabs that answer the reader's three questions
+ * -- which agents work for me now, which could I connect, which are not on
+ * this machine -- and a card answers three more: who it is (mark, name, a line
+ * about what it is good at), how it is doing (a dot that is only there when
+ * there is something to say), and the one thing to do about it now. Everything
+ * else is in the sheet the card opens: what the agent is good at, as the
+ * reader words it; a key, where
  * one is needed; how to install one that is absent; and the actions its state
  * calls for, in one bar.
  *
@@ -59,7 +60,8 @@ const canTest = (row: ExtAgentRow): boolean => !row.builtin
    is left: Enter is a newline in a textarea, and a click away from a field one
    has just typed into means the typing. Left blank it goes back to what was
    there -- this is the text the dispatching model reads, and it cannot be
-   nothing. */
+   nothing. The built-in loop's line is not the reader's to word, so it is
+   drawn as text rather than as a field that will not take typing. */
 function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; readOnly: boolean }): JSX.Element {
   const [draft, setDraft] = useState(saved)
   useEffect(() => setDraft(saved), [saved])
@@ -71,6 +73,14 @@ function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; rea
     }
     if (next !== saved) store.describe(row, next)
   }
+  if (readOnly) {
+    return (
+      <div className="extAgents-fld">
+        <span className="extAgents-k">{t('gui.agent.good_at')}</span>
+        <p className="extAgents-ro">{saved}</p>
+      </div>
+    )
+  }
   return (
     <label className="extAgents-fld">
       <span className="extAgents-k">{t('gui.agent.good_at')}</span>
@@ -78,42 +88,53 @@ function GoodAt({ row, saved, readOnly }: { row: ExtAgentRow; saved: string; rea
         aria-label={t('gui.agent.good_at')}
         onBlur={commit}
         onChange={(e) => setDraft(e.target.value)}
-        readOnly={readOnly}
         value={draft}
       />
     </label>
   )
 }
 
-/* The install block for an absent agent: the vendor's command with a copy
-   button, and the vendor's site. Copy confirms itself on the button rather
-   than in a toast, since the reader is looking at the button. */
-function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
-  const { site, cmd } = installOf(row)
+/* A command the reader runs in a terminal, with a copy button. Copy confirms
+   itself on the button rather than in a toast, since the reader is looking at
+   the button. Shared by the install block and a refusal's fix, which is the
+   same act: a command to run somewhere this page cannot reach. */
+function CmdCopy({ cmd }: { cmd: string }): JSX.Element {
   const [copied, setCopied] = useState(false)
   useEffect(() => {
     if (!copied) return
     const timer = setTimeout(() => setCopied(false), 1400)
     return () => clearTimeout(timer)
   }, [copied])
+  return (
+    <div className="extAgents-cmd">
+      <code>{cmd}</code>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard?.writeText(cmd)
+          setCopied(true)
+        }}
+      >
+        {t(copied ? 'gui.agent.copied' : 'gui.agent.copy')}
+      </button>
+    </div>
+  )
+}
+
+/* The install block for an absent agent: the vendor's command with a copy
+   button, and the vendor's site. */
+function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
+  const { site, cmd, node } = installOf(row)
   if (!site && !cmd) return null
   return (
     <div className="extAgents-inst">
-      <span className="extAgents-k">{t('gui.plug.install')}</span>
-      {cmd ? (
-        <div className="extAgents-cmd">
-          <code>{cmd}</code>
-          <button
-            type="button"
-            onClick={() => {
-              void navigator.clipboard?.writeText(cmd)
-              setCopied(true)
-            }}
-          >
-            {t(copied ? 'gui.agent.copied' : 'gui.agent.copy')}
-          </button>
+      {node ? (
+        <div className="extAgents-about">
+          {t('gui.agent.needs_node', { agent: row.name, button: t('gui.agent.recheck') })}
         </div>
       ) : null}
+      <span className="extAgents-k">{t('gui.plug.install')}</span>
+      {cmd ? <CmdCopy cmd={cmd} /> : null}
       {site ? (
         <a className="extAgents-site" href={`https://${site}`} rel="noreferrer" target="_blank">
           {site}
@@ -130,9 +151,22 @@ function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
    bucketed them. Empty is "no menu", whatever the rule. */
 function pickerProvidersFor(row: ExtAgentRow): PickerProvider[] {
   if (row.model_source === 'raven') {
+    /* The text models this host offers, by the same rule the composer's column
+       reads: a provider with nothing added yet offers the registry's shortlist
+       here too. Reading the added list alone drew a connected vendor with zero
+       models beside a composer listing four. No pin -- the tick is the row's. */
+    /* Plus whatever this row already holds, where its own provider's column
+       does not carry it: a model added by hand, or one the provider has since
+       stopped listing, would otherwise open a picker with nothing marked. */
+    const held = shownModel(row)
     return hostProviders()
       .filter((p) => p.on)
-      .map((p) => ({ id: p.id, name: p.name, models: offered(p), labels: p.labels }))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        models: withCurrent(p, offered(p, 'text'), held && held.provider === p.id ? held.id : null),
+        labels: p.labels,
+      }))
   }
   if (row.model_source !== 'agent') return []
   const groups = new Map<string, PickerProvider>()
@@ -209,10 +243,13 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   /* The built-in row's list may simply not have landed yet; its click loads it. */
   const menuless = fixed || (row.model_source === 'agent' && !provs.length)
   const shown = fixed ? null : shownModel(row)
-  const unset = own ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
+  /* `fixed` outranks ownership: one of raven's own whose folder carries its own
+     chat credential runs on that key and the model beside it, so "follows the
+     main Raven" was the one thing it does not do. */
+  const unset = own && !fixed ? 'gui.agent.model_follow' : menuless ? 'gui.agent.model_managed' : 'gui.agent.model_own_default'
   const cls = [
     'extAgents-pill',
-    menuless ? 'extAgents-pill-fixed' : '',
+    menuless ? 'extAgents-pill-fixed' : busy ? 'extAgents-pill-busy' : '',
     shown ? '' : 'extAgents-pill-dim',
     shown ? 'extAgents-pill-clearable' : '',
   ]
@@ -278,6 +315,48 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   )
 }
 
+/* A refusal, and the fix when the server named one. The server's sentence is
+   English and written for a log; a remedy is the same verdict as data, so here
+   it is said in the reader's language -- what is missing, the command that
+   supplies it on a line of its own, and the button to press after -- with the
+   agent's own words folded under it instead of put first. Without a remedy the
+   reader is still told in their own language that it failed and what to press
+   (`unknown`), and the server's sentence is folded the same way: shown first it
+   was a red English paragraph, and all a reader could do with it was copy it. */
+function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }: {
+  agent: string
+  detail: string
+  remedy: Remedy | null
+  button: string
+  unknown: string
+  lead?: (say: string) => string
+}): JSX.Element {
+  const command = remedy && remedy.kind !== 'api_key' ? remedy.command : ''
+  const say = !remedy
+    ? unknown
+    : remedy.kind === 'api_key'
+      ? t('gui.agent.fix_api_key', { agent, button })
+      : remedy.kind === 'download'
+        ? t(command ? 'gui.agent.fix_download' : 'gui.agent.fix_download_bare', { agent, button })
+        : !command
+          ? t('gui.agent.fix_sign_in_bare', { agent, button })
+          : remedy.kind === 'setup'
+            ? t('gui.agent.fix_setup', { agent, button })
+            : t('gui.agent.fix_sign_in', { agent, button })
+  return (
+    <div className="extAgents-fix">
+      <div>{lead(say)}</div>
+      {command ? <CmdCopy cmd={command} /> : null}
+      {detail ? (
+        <details className="extAgents-raw">
+          <summary>{t('gui.agent.fix_raw')}</summary>
+          {detail}
+        </details>
+      ) : null}
+    </div>
+  )
+}
+
 /* One line under the name in the sheet: what is happening to this agent right
    now, or who makes it when nothing is. */
 function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtAgentsState }): JSX.Element {
@@ -292,10 +371,26 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
     )
   }
   if (shown === 'failed') {
+    const failed = s.failed[row.name]
+    const write = failed ? refusedWrite(failed) : 'connect'
+    const button = t('gui.retry')
     return (
-      <div className="extAgents-by extAgents-by-bad">
+      <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
         <span className="extAgents-led extAgents-led-bad" />
-        {s.failed[row.name]?.detail}
+        <Refusal
+          agent={row.name}
+          detail={failed?.detail || ''}
+          remedy={failed?.remedy || null}
+          button={button}
+          unknown={t(
+            write === 'save'
+              ? 'gui.agent.fix_unknown_save'
+              : write === 'disconnect'
+                ? 'gui.agent.fix_unknown_disconnect'
+                : 'gui.agent.fix_unknown_connect',
+            { agent: row.name, button },
+          )}
+        />
       </div>
     )
   }
@@ -306,9 +401,16 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
      verdict measured before the executable went away. */
   if (row.last_test_ok === false && shown !== 'missing') {
     return (
-      <div className="extAgents-by extAgents-by-bad">
+      <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
         <span className="extAgents-led extAgents-led-bad" />
-        {t('gui.agent.hd_test_bad', { detail: row.last_test_detail || '' })}
+        <Refusal
+          agent={row.name}
+          detail={row.last_test_detail || ''}
+          remedy={row.last_test_remedy || null}
+          button={t('gui.agent.test_label')}
+          unknown={t('gui.agent.fix_unknown_test', { button: t('gui.agent.test_label') })}
+          lead={(say) => t('gui.agent.hd_test_bad', { detail: say })}
+        />
       </div>
     )
   }
@@ -359,9 +461,13 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   } else if (shown === 'on') {
     actions = row.builtin ? null : (
       <>
-        <button className="mini danger" onClick={() => store.disconnectRow(row)}>
-          {t('gui.agent.disconnect')}
-        </button>
+        {/* Raven's shipped specialists are part of Raven, not something the
+            reader connected, so there is nothing to disconnect. */}
+        {row.vendored ? null : (
+          <button className="mini danger" onClick={() => store.disconnectRow(row)}>
+            {t('gui.agent.disconnect')}
+          </button>
+        )}
         {canTest(row) && testing ? (
           <button className="mini danger" onClick={() => store.stopTest(row)}>
             <Spin />
@@ -453,27 +559,53 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   )
 }
 
+type Tab = 'all' | Section
+
+const TABS: Array<{ tab: Tab; label: string; empty: string }> = [
+  { tab: 'all', label: 'gui.filter.all', empty: 'gui.agent.none' },
+  { tab: 'on', label: 'gui.agent.g_on', empty: 'gui.agent.none' },
+  { tab: 'avail', label: 'gui.agent.g_avail', empty: 'gui.agent.none_avail' },
+  { tab: 'missing', label: 'gui.agent.g_missing', empty: 'gui.agent.none_missing' },
+]
+
 export function ExtAgentsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
   useSyncExternalStore(lang.subscribe, lang.get)
+  const [tab, setTab] = useState<Tab>('all')
   const by = (section: Section): ExtAgentRow[] => ordered(s.rows.filter((row) => sectionOf(row) === section))
-  const on = by('on')
-  const avail = by('avail')
-  const missing = by('missing')
+  const rows: Record<Tab, ExtAgentRow[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
+  rows.all = [...rows.on, ...rows.avail, ...rows.missing]
+  const current = TABS.find((x) => x.tab === tab)!
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   return (
     <>
       <div className="pmhero">
-        <h3>{t('gui.page.agents')}</h3>
+        <div>
+          <h3>{t('gui.page.agents')}</h3>
+          <p>{t('gui.page.agents_sub')}</p>
+        </div>
       </div>
-      {/* The connected section is always there, even empty: it is the answer to
-          the page's first question. The other two are only drawn with rows in
-          them -- a heading over nothing is a heading about nothing. */}
-      <SectionBlock label={t('gui.agent.g_on')} onOpen={store.sheetOpen} rows={on} s={s} />
-      {avail.length ? <SectionBlock label={t('gui.agent.g_avail')} onOpen={store.sheetOpen} rows={avail} s={s} /> : null}
-      {missing.length ? <SectionBlock label={t('gui.agent.g_missing')} onOpen={store.sheetOpen} rows={missing} s={s} /> : null}
+      {/* All and Connected are always offered; the other two only with agents in
+          them, or while they are the tab being read -- so connecting the last
+          one leaves the reader on an emptied tab rather than moving them. */}
+      <div className="extAgents-tabs" role="tablist">
+        {TABS.filter((x) => x.tab === 'all' || x.tab === 'on' || x.tab === tab || rows[x.tab].length).map((x) => (
+          <button
+            aria-selected={tab === x.tab}
+            className="extAgents-tab"
+            key={x.tab}
+            onClick={() => setTab(x.tab)}
+            role="tab"
+            type="button"
+          >
+            {t(x.label)}
+            <span className="extAgents-tn">{String(rows[x.tab].length)}</span>
+          </button>
+        ))}
+      </div>
+      <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />
       {sheetRow ? <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} /> : null}
     </>
   )

@@ -1,9 +1,9 @@
-/* The Agent Hub's rows, shared by the agents page and the onboarding wizard's
- * agents step. A row answers three questions -- who it is (mark, name, a line
- * about what it is good at), how it is doing (a dot only where there is
- * something to say), and the one thing to do about it now -- and a section is
- * a heading, a count and its rows. What differs between the two callers is
- * only whether a row opens the sheet, which is the caller's `onOpen`.
+/* The Agent Hub's rows and cards. The agents page lays its agents out as cards
+ * in a grid; the onboarding wizard's agents step keeps the rows, a list under
+ * section headings. Both answer the same three questions -- who it is (mark,
+ * name, a line about what it is good at), how it is doing (a dot only where
+ * there is something to say), and the one thing to do about it now. A row
+ * opens the sheet only when its caller passes `onOpen`; a card always does.
  *
  * Connecting is the server's readiness ping -- one real prompt through the
  * agent, up to a minute -- so the row says "testing" for
@@ -13,13 +13,14 @@
  */
 
 import { AgentMark } from '../../components/AgentMark'
+import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
 import { isOwnRow, shortOf } from './catalogue'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
-import type { ExtAgentsState } from './store'
+import type { ExtAgentsState, Failure } from './store'
 import type { ExtAgentRow } from './types'
 import type { JSX } from 'react'
 
@@ -96,6 +97,49 @@ function oneLine(row: ExtAgentRow): string {
   return stale ? `${base} · ${stale}` : base
 }
 
+/* What a refused write comes to, in the reader's language: the fix the server
+   named, by its kind, or what failed when it named none. The server's own
+   sentence is English, and cut to the two lines a card has it said neither
+   what went wrong nor what to do -- so it is shown only in the sheet, folded
+   under the fix. */
+function whatFailed(row: ExtAgentRow, failed: Failure): string {
+  const agent = row.name
+  const kind = failed.remedy?.kind
+  if (kind === 'sign_in') return t('gui.agent.bad_sign_in', { agent })
+  if (kind === 'setup') return t('gui.agent.bad_setup', { agent })
+  if (kind === 'api_key') return t('gui.agent.bad_api_key', { agent })
+  if (kind === 'download') return t('gui.agent.bad_download', { agent })
+  const write = refusedWrite(failed)
+  return t(write === 'save' ? 'gui.agent.bad_save' : write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', {
+    agent,
+  })
+}
+
+/* Which write a refusal refused, which decides its words when no fix is named:
+   a switch-off is not a connect (`disconnects` says so for the pending ring
+   too), and an edit is neither. The sheet asks the same question, so a card and
+   its sheet cannot say two things about one refusal. */
+export function refusedWrite(failed: Failure): 'connect' | 'disconnect' | 'save' {
+  if (store.disconnects(failed)) return 'disconnect'
+  return failed.op === 'model' || failed.op === 'update' ? 'save' : 'connect'
+}
+
+/* The red line itself. A card or row that opens a sheet points there, where
+   the steps and the original error are. The wizard's rows open nothing, so
+   theirs has to carry the step: the command, when it is one to run in a
+   terminal, and the retry to press after. */
+function failureLine(row: ExtAgentRow, failed: Failure, opens: boolean): string {
+  const what = whatFailed(row, failed)
+  if (opens) return t('gui.agent.bad_open', { what })
+  const button = t('gui.retry')
+  const kind = failed.remedy?.kind
+  /* The adapter's own command is too long for a row, and what fixes a
+     download is the network anyway, so the row names where to look. */
+  if (kind === 'download') return t('gui.agent.bad_download_retry', { what, button })
+  const command = kind === 'sign_in' || kind === 'setup' ? failed.remedy?.command : ''
+  return command ? t('gui.agent.bad_run', { what, command, button }) : t('gui.agent.bad_retry', { what, button })
+}
+
 /* Connect, by what the row's stage calls for. The one case with a question in
    it is a preset that moved transport: connecting it removes the entry and adds
    it back from the preset, which drops the handles of runs already in flight. */
@@ -135,7 +179,8 @@ function RowControl({ row, s, shown }: { row: ExtAgentRow; s: ExtAgentsState; sh
     )
   }
   if (shown === 'on') {
-    if (row.builtin) return null
+    /* Raven's shipped specialists are part of Raven: never disconnected. */
+    if (row.builtin || row.vendored) return null
     return (
       <button className="mini" onClick={() => store.disconnectRow(row)}>
         {t('gui.agent.disconnect')}
@@ -195,7 +240,11 @@ function AgentRow({
             {t(pendingLabel(row, s))}
           </div>
         ) : shown === 'failed' && failed ? (
-          <div className="extAgents-one extAgents-one-bad">{failed.detail}</div>
+          /* With no sheet to fold it into, the server's sentence -- all a row
+             with no named fix has to say why -- is kept on hover, not shown. */
+          <div className="extAgents-one extAgents-one-bad" title={open ? undefined : failed.detail}>
+            {failureLine(row, failed, !!open)}
+          </div>
         ) : (
           <div className="extAgents-one">{oneLine(row)}</div>
         )}
@@ -209,19 +258,105 @@ function AgentRow({
   )
 }
 
+const PLUS = 'M12 5v14M5 12h14'
+const DOWNLOAD = 'M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14'
+const RETRY = 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4'
+
+/* The card's corner control: Connect, Install, Retry, or the sign-in the
+   agent wants. A connected card carries none -- Disconnect is in the sheet,
+   one click away and out of reach of a stray click -- and a write in flight is
+   said by the line itself. */
+function CardControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
+  const iconButton = (label: string, d: string, onClick: () => void, cls = ''): JSX.Element => (
+    <button
+      aria-label={label}
+      className={'extAgents-cbtn' + (cls ? ' ' + cls : '')}
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      <Glyph d={d} />
+    </button>
+  )
+  if (shown === 'failed') return iconButton(t('gui.retry'), RETRY, () => store.retry(row), 'extAgents-cbtn-bad')
+  if (shown === 'missing') return iconButton(t('gui.agent.go_install'), DOWNLOAD, () => store.sheetOpen(row))
+  if (shown !== 'off') return null
+  if (stageOf(row) === 'unauthorized') return <span className="extAgents-ctag">{t('gui.agent.unauthorized')}</span>
+  return iconButton(t('gui.agent.connect'), PLUS, () => connect(row))
+}
+
+function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
+  const shown = shownOf(row, s)
+  const failed = s.failed[row.name]
+  const open = (): void => store.sheetOpen(row)
+  return (
+    <div
+      className="extAgents-card"
+      role="button"
+      tabIndex={0}
+      aria-current={s.sheet === row.name ? 'true' : undefined}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+    >
+      <div className="extAgents-ctop">
+        <Tile row={row} />
+        <div className="extAgents-nm">
+          <span className="extAgents-t">{row.name}</span>
+          <Led row={row} shown={shown} />
+        </div>
+        <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
+          <CardControl row={row} shown={shown} />
+        </div>
+      </div>
+      {shown === 'pending' ? (
+        <div className="extAgents-one extAgents-one-work">
+          <Spin />
+          {t(pendingLabel(row, s))}
+        </div>
+      ) : shown === 'failed' && failed ? (
+        <div className="extAgents-one extAgents-one-bad">{failureLine(row, failed, true)}</div>
+      ) : (
+        <div className="extAgents-one">{oneLine(row)}</div>
+      )}
+    </div>
+  )
+}
+
+export function CardGrid({ rows, s, empty }: { rows: ExtAgentRow[]; s: ExtAgentsState; empty: string }): JSX.Element {
+  if (!rows.length) return <div className="extAgents-empty">{empty}</div>
+  return (
+    <div className="extAgents-grid">
+      {rows.map((row) => (
+        <AgentCard key={row.name} row={row} s={s} />
+      ))}
+    </div>
+  )
+}
+
 /* Raven's own first, then the server's order. */
 export const ordered = (rows: ExtAgentRow[]): ExtAgentRow[] =>
   [...rows].sort((a, b) => Number(isOwnRow(b)) - Number(isOwnRow(a)))
 
 export function SectionBlock({
-  label, rows, s, onOpen,
-}: { label: string; rows: ExtAgentRow[]; s: ExtAgentsState; onOpen?: (row: ExtAgentRow) => void }): JSX.Element {
+  label, rows, s, onOpen, note, counted = true,
+}: {
+  label: string; rows: ExtAgentRow[]; s: ExtAgentsState; onOpen?: (row: ExtAgentRow) => void; note?: string
+  /* Off for a heading that already says how many. */
+  counted?: boolean
+}): JSX.Element {
   return (
     <section className="extAgents-sec">
-      <div className="extAgents-hd">
+      <div className={counted ? 'extAgents-hd' : 'extAgents-hd extAgents-hd-say'}>
         <b>{label}</b>
-        <span className="extAgents-n">{String(rows.length)}</span>
+        {counted ? <span className="extAgents-n">{String(rows.length)}</span> : null}
       </div>
+      {note ? <div className="extAgents-empty">{note}</div> : null}
       {rows.length ? (
         <div className="extAgents-set">
           {rows.map((row) => (

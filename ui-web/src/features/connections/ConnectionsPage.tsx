@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
-import { Tile } from '../../components/SetupRow'
+import { ChannelMark } from '../../components/ChannelMark'
 import { Field } from '../../components/SetupSheet'
 import {
   TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneSwitch,
@@ -8,6 +8,7 @@ import {
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
+import { chanName } from './catalogue'
 import * as store from './store'
 
 import type { ConnChannel, ConnField } from './types'
@@ -18,10 +19,6 @@ import type { JSX } from 'react'
    pane draws come from the channel's own Pydantic schema, shipped on
    channels.status, so the form cannot drift from the model.
  */
-
-/* One accessor so a renderer never has to know which of the catalogue's two
-   spellings an entry uses (i18n key vs verbatim brand name). */
-const chanName = (c: ConnChannel): string => (c.key ? t(c.key) : (c.name ?? c.id))
 
 /* Configured means the schema's required fields are all set. Entries whose
    schema declares no required fields count as configured out of the box. */
@@ -175,7 +172,7 @@ function ConnSide({ rows, loaded, q, onQ, pickedId }: {
         key={c.id}
         current={c.id === pickedId}
         off={!c.on}
-        icon={<Tile name={cn} />}
+        icon={<ChannelMark id={c.id} />}
         name={cn}
         sub={sub.text}
         {...(sub.tone ? { tone: sub.tone } : {})}
@@ -189,7 +186,15 @@ function ConnSide({ rows, loaded, q, onQ, pickedId }: {
             on={c.on}
             disabled={!isConfigured(c)}
             label={cn}
-            onChange={() => store.toggle(c)}
+            onChange={() => {
+              /* A scan entrance switched on from the list has its code in the
+                 pane, and the list says nothing about that: opening the card
+                 with the switch is the cue, and the reader is where the code
+                 appears instead of watching a row that will never turn green
+                 on its own. */
+              if (!c.on && scanLogin(c)) store.openChannel(c)
+              store.toggle(c)
+            }}
           />
         }
       />
@@ -227,7 +232,7 @@ function ConnDetail({ c }: { c: ConnChannel }): JSX.Element {
   return (
     <>
       <TwoPaneHead
-        icon={<Tile name={chanName(c)} />}
+        icon={<ChannelMark id={c.id} />}
         name={chanName(c)}
         meta={signing ? t('gui.conn.cost_scan_line') : <span className={'st ' + st.cls}>{st.text}</span>}
       />
@@ -265,9 +270,6 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
      -- an adapter that would not start, a gateway that could not be asked -- is
      a reason the reader is owed, so the card stays with the state line up. */
   const live = connState(c) === 'live'
-  useEffect(() => {
-    if (sent && live) store.closeChannel()
-  }, [sent, live])
   const fieldRow = (f: ConnField): JSX.Element => {
     /* The human sentence is the label; the config key rides on its tooltip.
        The catalogue speaks first so the label follows the reader's language,
@@ -319,8 +321,19 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
     setDirty(false)
     /* Always "on". `enable` used to be `!c.on`, which read as a toggle: saving
        a correction to a connected channel turned it off. Disconnecting is its
-       own control in the dialog, so this one only ever connects. */
-    void store.apply(c, patch, true)
+       own control in the dialog, so this one only ever connects.
+     *
+     * The card closes when the write has been applied and the entrance reads
+     * live after it, not before. A card opened on an entrance that was already
+     * receiving used to close on the press itself, reporting an answer nothing
+     * had given yet; and a rebuild that finishes before the status is re-read
+     * shows no intermediate state at all, so the answer has to be read off the
+     * write's own completion rather than waited for as a transition. A write
+     * the gateway refused leaves the row as it was, live included, and that is
+     * not an answer either: the card stays with the failure the source toasted. */
+    void store.apply(c, patch, true).then((applied) => {
+      if (applied && connState(c) === 'live') store.closeChannel()
+    })
   }
   return (
     <>
@@ -523,7 +536,7 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
    polled while the dialog is open and stopped the moment it is not: the code
    rotates, and a poll left running after the dialog closed would keep a
    socket busy for a picture nobody is looking at. Unmounting is the stop. */
-type QrView = { phase: 'wait' | 'scan' | 'done' | 'noenc'; img: string | null }
+type QrView = { phase: 'wait' | 'scan' | 'done' | 'noenc' | 'down'; img: string | null }
 
 function QrPanel({ c }: { c: ConnChannel }): JSX.Element {
   const [view, setView] = useState<QrView>({ phase: 'wait', img: null })
@@ -550,6 +563,16 @@ function QrPanel({ c }: { c: ConnChannel }): JSX.Element {
         void store.refresh()
         return
       }
+      /* The adapter is gone -- it gave up on the login, or nothing is running
+         it any more -- and any code it left pending expired with it. The row
+         behind this panel still reads as up until the list is re-read, which
+         is what puts the wizard's own retry out of reach, so ask for that read
+         and carry the verb here until it lands. */
+      if (r.running === false) {
+        setView({ phase: 'down', img: null })
+        void store.refresh()
+        return
+      }
       if (r.qr) {
         setView({ phase: 'scan', img: r.qr })
         return
@@ -567,6 +590,8 @@ function QrPanel({ c }: { c: ConnChannel }): JSX.Element {
       stop()
     }
   }, [c.id])
+  /* Down reads the host the same way the wizard does: only a known host shifts
+     the blame to the adapter, and not knowing keeps the advice to open the app. */
   const say =
     view.phase === 'done'
       ? t('gui.conn.qr_done')
@@ -574,11 +599,29 @@ function QrPanel({ c }: { c: ConnChannel }): JSX.Element {
         ? t('gui.conn.qr_scan')
         : view.phase === 'noenc'
           ? t('gui.conn.qr_noenc')
-          : t('gui.conn.qr_wait')
+          : view.phase === 'down'
+            ? t(store.get().host === true ? 'gui.conn.w2_down' : 'gui.conn.w2_blocked')
+            : t('gui.conn.qr_wait')
   return (
     <div className="qrbox">
-      <div className="qrshot">{view.img ? <img src={view.img} alt={t('gui.conn.qr_alt')} /> : null}</div>
+      {view.phase === 'down' ? null : (
+        <div className="qrshot">{view.img ? <img src={view.img} alt={t('gui.conn.qr_alt')} /> : null}</div>
+      )}
       <div className={view.phase === 'done' ? 'qrsay ok' : 'qrsay'}>{say}</div>
+      {view.phase === 'down' ? (
+        <button
+          className="mini key"
+          onClick={() => {
+            /* The press is answered in the panel it was made in, not three
+               seconds later by the poll: a start that did not take reads as down
+               again on the next tick anyway. */
+            setView({ phase: 'wait', img: null })
+            void store.apply(c, {}, true)
+          }}
+        >
+          {t('gui.conn.w_retry')}
+        </button>
+      ) : null}
     </div>
   )
 }

@@ -65,7 +65,7 @@ function actIco(name: string): string {
     case 'list_dir': return ACT_ICO.folder as string
     case 'grep': case 'find': case 'tool_search': return ACT_ICO.find as string
     case 'exec': return ACT_ICO.term as string
-    case 'web_search': case 'web_fetch': case 'deep_research': return ACT_ICO.globe as string
+    case 'web_search': case 'web_fetch': return ACT_ICO.globe as string
     case 'image_generate': return ACT_ICO.image as string
     case 'video_generate': return ACT_ICO.video as string
     case 'text_to_speech': return ACT_ICO.sound as string
@@ -162,10 +162,10 @@ function Prose({ text, cls, caret = false }: { text: string; cls: string; caret?
 }
 
 /* `running`: this node has no token stream of its own, but `useNodeRecord`
-   re-reads the record on every live `node_updated` event, so a trailing
-   answer that arrives while the node is still `running` is not necessarily
-   the final one -- the caret says so the way the main chat's does, rather
-   than a second "in progress" sentence. */
+   re-reads the record on a beat while the node runs, so a trailing answer
+   that arrives while the node is still `running` is not necessarily the
+   final one -- the caret says so the way the main chat's does, rather than
+   a second "in progress" sentence. */
 export function Answer({ text, at, running = false }: { text: string; at: number | null; running?: boolean }): JSX.Element {
   return (
     <div className="tkanswer">

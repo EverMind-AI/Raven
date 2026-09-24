@@ -56,7 +56,6 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "tools.media.image.model",
         "tools.media.image.quality",
         "tools.media.image",
-        "tools.deepResearch.apiKey",
         "channels.sendProgress",
         "channels.sendToolHints",
         "memory.memoryTopK",
@@ -974,6 +973,100 @@ async def test_fs_reveal_refuses_what_the_viewer_refuses(tmp_path: Path, monkeyp
     assert spawned == []
 
 
+async def test_fs_reveal_shows_the_config_file_and_opens_agent_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The About page's two rows are addresses. Both sit under the state
+    directory the path fence refuses, so the page names them and the gateway
+    resolves them: the config file selected in its folder, agent home opened."""
+    from raven.config.loader import get_config_path, load_config
+
+    home = tmp_path / "raven-home"
+    home.mkdir()
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    get_config_path().write_text("{}")
+    Path(load_config().workspace_path).mkdir(parents=True, exist_ok=True)
+
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", "darwin")
+
+    loop = _WorkdirLoop({}, tmp_path)
+    assert await console_module.fs_reveal({"place": "config"}, agent_loop_factory=_loop_factory(loop)) == {"ok": True}
+    assert await console_module.fs_reveal({"place": "workspace"}, agent_loop_factory=_loop_factory(loop)) == {
+        "ok": True
+    }
+    assert spawned == [
+        ["open", "-R", str(get_config_path().resolve())],
+        ["open", str(Path(load_config().workspace_path).expanduser().resolve())],
+    ]
+
+
+async def test_fs_reveal_refuses_a_place_that_is_not_there(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fresh install has no config file yet; that is an error to show, not a Finder window on nothing."""
+    from raven.rpc.errors import ConfigValidationError
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+
+    loop = _WorkdirLoop({}, tmp_path)
+    with pytest.raises(ConfigValidationError, match="does not exist"):
+        await console_module.fs_reveal({"place": "config"}, agent_loop_factory=_loop_factory(loop))
+    assert spawned == []
+
+
+@pytest.mark.parametrize(
+    ("platform", "select", "expected"),
+    [
+        ("win32", True, lambda t: ["explorer", f"/select,{t}"]),
+        ("win32", False, lambda t: ["explorer", str(t)]),
+        ("linux", True, lambda t: ["xdg-open", str(t.parent)]),
+        ("linux", False, lambda t: ["xdg-open", str(t)]),
+    ],
+)
+def test_show_in_file_manager_speaks_each_host_file_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, select: bool, expected
+) -> None:
+    """Selecting is only for a file; a folder is opened. Linux has no select verb, so a file opens its folder."""
+    target = tmp_path / "config.json"
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+    monkeypatch.setattr("sys.platform", platform)
+
+    console_module._show_in_file_manager(target, select=select)
+
+    assert spawned == [expected(target)]
+
+
+def test_show_in_file_manager_reports_a_launcher_that_will_not_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    def refuse(argv, **kw):
+        raise FileNotFoundError("xdg-open")
+
+    monkeypatch.setattr("subprocess.Popen", refuse)
+    monkeypatch.setattr("sys.platform", "linux")
+    with pytest.raises(ConfigValidationError, match="reveal failed"):
+        console_module._show_in_file_manager(tmp_path, select=False)
+
+
+async def test_fs_reveal_names_only_its_own_places(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A place is a name from a list of two, not a path in disguise."""
+    from raven.rpc.errors import ConfigValidationError
+
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "raven-home"))
+    spawned: list[list[str]] = []
+    monkeypatch.setattr("subprocess.Popen", lambda argv, **kw: spawned.append(argv))
+
+    loop = _WorkdirLoop({}, tmp_path)
+    with pytest.raises(ConfigValidationError):
+        await console_module.fs_reveal({"place": "serve.json"}, agent_loop_factory=_loop_factory(loop))
+    assert spawned == []
+
+
 # ---------------------------------------------------------------------------
 # fs.open -- the same fence, then the host's application
 # ---------------------------------------------------------------------------
@@ -1228,12 +1321,12 @@ async def test_channels_configure_connects_and_disconnects(isolated_config: None
         return next(c for c in status["channels"] if c["name"] == "telegram")["enabled"]
 
     r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "123:abc"}, "enabled": True})
-    assert r == {"applied": True}
+    assert r == {"applied": True, "outcome": "unreachable"}
     assert stored_enabled() is True
     assert await reported_on() is True
 
     r = await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
-    assert r == {"applied": True}
+    assert r == {"applied": True, "outcome": "unreachable"}
     assert stored_enabled() is False
     assert await reported_on() is False
 
@@ -1247,10 +1340,10 @@ async def test_channels_configure_asks_the_gateway_to_start_the_adapter(isolated
     here did nothing until the next launch -- for a scan-login entrance that
     meant no QR could ever be fetched and nobody could sign in from the UI.
     """
-    asked: list[tuple[str, bool]] = []
+    asked: list[tuple[str, bool, bool]] = []
 
-    async def fake_start(name: str, *, enabled: bool = True) -> str:
-        asked.append((name, enabled))
+    async def fake_start(name: str, *, enabled: bool = True, restart: bool = False) -> str:
+        asked.append((name, enabled, restart))
         return "started" if enabled else "stopped"
 
     import raven.gateway.live_probe as probe
@@ -1258,13 +1351,27 @@ async def test_channels_configure_asks_the_gateway_to_start_the_adapter(isolated
     probe_start = probe.channel_start
     probe.channel_start = fake_start
     try:
-        await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
-        assert asked == [("telegram", True)]
-        await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
-        assert asked == [("telegram", True), ("telegram", False)]
+        # Credentials came with the switch, so an adapter that is already up has
+        # to be rebuilt: it holds the slice it was built with, and the corrected
+        # token would sit in config while the live one kept the rejected one.
+        r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
+        assert asked == [("telegram", True, True)]
+        assert r == {"applied": True, "outcome": "started"}
+        r = await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": False})
+        assert asked[-1] == ("telegram", False, False)
+        assert r == {"applied": True, "outcome": "stopped"}
+        # The bare switch is not a rebuild: flipping on what is already on must
+        # leave a working adapter where it is.
+        await console_module.channels_configure({"name": "telegram", "fields": {}, "enabled": True})
+        assert asked[-1] == ("telegram", True, False)
+        # Nor is a form whose boxes were all left blank -- nothing was written,
+        # so there is nothing the adapter is out of date with.
+        await console_module.channels_configure({"name": "telegram", "fields": {"token": "   "}, "enabled": True})
+        assert asked[-1] == ("telegram", True, False)
         # A credential correction with no switch in it does not restart anything.
-        await console_module.channels_configure({"name": "telegram", "fields": {"token": "2:b"}})
-        assert asked == [("telegram", True), ("telegram", False)]
+        r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "2:b"}})
+        assert len(asked) == 4
+        assert r == {"applied": True}, "no switch, nothing started: no outcome to report"
     finally:
         probe.channel_start = probe_start
 
@@ -1278,7 +1385,7 @@ async def test_channels_configure_still_applies_when_no_gateway_answers(isolated
     import raven.gateway.live_probe as probe
     from raven.config.loader import get_config_path
 
-    async def boom(name: str, *, enabled: bool = True) -> str:
+    async def boom(name: str, *, enabled: bool = True, restart: bool = False) -> str:
         raise OSError("no gateway here")
 
     probe_start = probe.channel_start
@@ -1287,8 +1394,31 @@ async def test_channels_configure_still_applies_when_no_gateway_answers(isolated
         r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
     finally:
         probe.channel_start = probe_start
-    assert r == {"applied": True}
+    assert r == {"applied": True, "outcome": "unreachable"}, "the one case where the next launch is the remedy"
     assert _json.loads(get_config_path().read_text())["channels"]["telegram"]["enabled"] is True
+
+
+async def test_channels_configure_carries_the_gateway_refusal_and_what_to_do(isolated_config: None) -> None:
+    """A channel the gateway would not start has a reason, and the reader needs
+    it: the word was dropped here, so a missing SDK reached the page as a bare
+    red "not started" while the sentence that fixes it sat in the gateway log.
+    """
+    from raven.gateway.manager import missing_dep_hint
+
+    async def refusing(name: str, *, enabled: bool = True, restart: bool = False) -> str:
+        return "missing_dep"
+
+    import raven.gateway.live_probe as probe
+
+    probe_start = probe.channel_start
+    probe.channel_start = refusing
+    try:
+        r = await console_module.channels_configure({"name": "telegram", "fields": {"token": "1:a"}, "enabled": True})
+    finally:
+        probe.channel_start = probe_start
+    assert r["applied"] is True, "the config write stands whatever the adapter did"
+    assert r["outcome"] == "missing_dep"
+    assert r["detail"] == missing_dep_hint()
 
 
 async def test_channels_configure_refuses_an_empty_request(isolated_config: None) -> None:
@@ -2317,7 +2447,7 @@ async def test_deck_templates_list_answers_at_once_and_draws_the_covers_behind_i
 
     async def draw(template, *_):
         drawn.append(template.name)
-        target = deck_templates.cover_cache_dir() / f"{deck_templates._cover_key(template.path)}.jpg"
+        target = deck_templates.cover_cache_dir() / f"{deck_templates._drawn_key(template.path)}.jpg"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"\xff\xd8jpeg")
         return target

@@ -975,7 +975,6 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.media.image.model": _chk_str("tools.media.image.model"),
     "tools.media.image.quality": _chk_enum("tools.media.image.quality", "", "low", "medium", "high"),
     "tools.media.image": _chk_image_selection,
-    "tools.deepResearch.apiKey": _chk_str("tools.deepResearch.apiKey", 200),
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
     "memory.memoryTopK": _chk_int("memory.memoryTopK", 1, 50),
@@ -1360,6 +1359,43 @@ def _everos_applied(agent_loop_factory: Any, cost: str = "") -> dict:
     return {"applied": True, **({"warning": cost} if cost else {})}
 
 
+def everos_follows_provider(slug: str, agent_loop_factory: Any) -> None:
+    """Restart EverOS when ``slug`` is what one of its four roles runs on.
+
+    A role stores a pin -- a model and a provider -- and resolves the address
+    and key from that provider at spawn time. So a credential edited on the
+    models page changes what the *next* spawn would hand the server while the
+    one already running keeps what it booted with, and nothing on any screen
+    says so: EverOS's health endpoint never touches a model, so a revoked key
+    reads as healthy right up until memory fails in EverOS's own log.
+
+    ``roles_changed_since_spawn`` catches this at the next session whatever
+    wrote the credential, ``raven provider set`` and a hand-edited config.json
+    included. This is the half that makes it the moment the person made the
+    change instead.
+
+    Silent when the install has no EverOS, when no role names this provider, or
+    when no session is connected to hear the outcome. None of those is a reason
+    to fail a save that already succeeded.
+    """
+    try:
+        from raven.providers.registry import names_same_provider
+        from raven_everos.config import ROLES, role_pin
+    except ImportError:
+        return
+    try:
+        for section in ROLES:
+            pin = role_pin(section)
+            if pin is not None and names_same_provider(pin[1], slug):
+                break
+        else:
+            return
+    except Exception:  # noqa: BLE001 - a save must not fail over this question
+        logger.debug("settings/everos: could not tell whether {} serves a memory role", slug)
+        return
+    _everos_applied(agent_loop_factory)
+
+
 async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     """Record which model and provider serve one EverOS role, or clear the role.
 
@@ -1400,7 +1436,7 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
         # restates it -- a second copy here is what let the wizard's own copy
         # drift from this one.
         try:
-            clear_role(section)
+            clear_role(section, deliberate=True)
         except RoleRequiredError as e:
             raise ConfigValidationError(str(e)) from e
         return _everos_applied(agent_loop_factory)
@@ -1640,20 +1676,32 @@ async def channels_configure(params: dict, *, agent_loop_factory=None) -> dict:
     # all until the next launch -- for a scan-login entrance that meant no QR
     # could ever appear, and the page said "reopen Raven App" instead of
     # signing anyone in. Ask the gateway to start (or stop) it now.
+    answer: dict[str, Any] = {"applied": True}
     if enabled is not None:
         from raven.gateway.live_probe import channel_start, reset_cache
 
         try:
-            await channel_start(name, enabled=enabled)
+            # A credential written onto a channel that is already running
+            # reaches config and nothing else: the adapter holds the slice it
+            # was built with and re-reads none of it, so the corrected value
+            # only takes effect once the gateway rebuilds it.
+            outcome = await channel_start(name, enabled=enabled, restart=bool(payload) and enabled)
         except Exception:
-            # Nobody answered, or the gateway refused: the config write stands
-            # and the next launch honours it, which is what the page already
-            # says while an adapter is not up.
-            pass
+            outcome = None
+        # Nobody answered, or the gateway refused to say: the config write
+        # stands and the next launch honours it, which is the one case the
+        # page's "reopen the app" sentence is true of. Every other outcome was
+        # swallowed here too, so a channel whose SDK is missing and a channel
+        # nothing was running reached the reader as the same silence.
+        answer["outcome"] = outcome or "unreachable"
+        if outcome == "missing_dep":
+            from raven.gateway.manager import missing_dep_hint
+
+            answer["detail"] = missing_dep_hint()
         # The liveness cache is three seconds old at most, but the poll right
         # after this write is exactly the one that should see the new adapter.
         reset_cache()
-    return {"applied": True}
+    return answer
 
 
 async def channels_qr(params: dict) -> dict:
@@ -2124,9 +2172,16 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
     for the localhost page that is the reader's own desktop, which is the whole
     use. Fenced exactly like the viewer (``resolve_readable``): a path the page
     may not render is not one it may pop a Finder window on either.
+
+    ``place`` is the one way past that fence, and it takes no path: it names one
+    of two locations the gateway resolves from its own config (see
+    :func:`_reveal_place`).
     """
     from raven.rpc.files import resolve_readable
 
+    place = params.get("place")
+    if place:
+        return _reveal_place(str(place))
     raw = str(params.get("path") or "").strip()
     if not raw:
         raise ConfigValidationError("path is required")
@@ -2144,19 +2199,48 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
         target = resolve_readable(str(p))
     except (ValueError, PermissionError, FileNotFoundError, IsADirectoryError, OSError) as e:
         raise ConfigValidationError(str(e)) from None
+    _show_in_file_manager(target, select=True)
+    return {"ok": True}
+
+
+def _reveal_place(place: str) -> dict:
+    """Show one of raven's own locations: the config file, or agent home.
+
+    The settings page's About rows are addresses, and pressing one should go
+    there. Both live under the state directory the viewer's fence refuses, and
+    agent home is a folder, which the fence refuses too -- so they are named
+    here rather than sent as paths. The page picks one of two places this
+    gateway resolves from its own config, which reaches nothing else and reads
+    nothing back: the reveal opens a window on the host and answers ``ok``.
+    """
+    from raven.config.loader import get_config_path, load_config
+
+    if place == "config":
+        target, select = get_config_path(), True
+    elif place == "workspace":
+        target, select = Path(load_config().workspace_path).expanduser(), False
+    else:
+        raise ConfigValidationError(f"unknown place: {place}")
+    if not target.exists():
+        raise ConfigValidationError(f"{target} does not exist")
+    _show_in_file_manager(target.resolve(), select=select)
+    return {"ok": True}
+
+
+def _show_in_file_manager(target: Path, *, select: bool) -> None:
+    """Open the host's file manager on ``target``: selected in its folder, or opened."""
     if sys.platform == "darwin":
-        argv = ["open", "-R", str(target)]
+        argv = ["open", "-R", str(target)] if select else ["open", str(target)]
     elif sys.platform.startswith("win"):
-        argv = ["explorer", f"/select,{target}"]
+        argv = ["explorer", f"/select,{target}"] if select else ["explorer", str(target)]
     else:
         # No cross-desktop "select this file" verb exists, so the containing
         # folder is the best any Linux file manager can be asked for.
-        argv = ["xdg-open", str(target.parent)]
+        argv = ["xdg-open", str(target.parent if select else target)]
     try:
         subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         raise ConfigValidationError(f"reveal failed: {e}") from None
-    return {"ok": True}
 
 
 # An application NAME, and nothing that could be anything else. The check is a

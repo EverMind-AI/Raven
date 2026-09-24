@@ -47,6 +47,7 @@
  * with them because a portal can only append: rendered from here it would land
  * after #noJs instead of between the two.
  */
+import { LayoutAlignLeftIcon } from '@hugeicons/core-free-icons'
 import { useEffect, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
@@ -59,6 +60,7 @@ import { SheetRack } from './chrome/SheetRack'
 import { Tooltip } from './chrome/Tooltip'
 import { UpgradeShade } from './chrome/UpgradeShade'
 import { WsPane } from './chrome/WsPane'
+import { Icon } from './components/Icon'
 import { t } from './i18n/t'
 import * as confirm from './state/confirm'
 import * as detail from './state/detail'
@@ -94,6 +96,10 @@ function useScrim(id: string, close: () => void): void {
    it by clicking #cfNo -- which reaches this through the button's onClick. */
 const cancel = (): void => confirm.answer(false)
 
+/* The yes button's look per tone: a notice's one button is the plain one, so
+   nothing on the sheet reads as a consequence. */
+const YES_CLASS: Record<confirm.ConfirmTone, string> = { danger: 'btn bad', primary: 'btn key', notice: 'btn' }
+
 /* The confirm dialog. The question is state/confirm.ts's: the asker hands it a
    title, a body and a label for the yes button, and until something asks, the
    three literals the page was served with stand. */
@@ -104,11 +110,11 @@ function ConfirmSheet(): JSX.Element {
   return (
     <div className="veil" id="veil" data-open="false">
       <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="cfTitle">
-        <header id="cfTitle">{s.title ?? '确认'}</header>
+        <header id="cfTitle">{s.title ?? 'Confirm'}</header>
         <div className="body" id="cfBody">{s.body}</div>
         <footer>
-          <button className="btn" id="cfNo" onClick={cancel}>{t('gui.cancel')}</button>
-          <button className="btn bad" id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? '确认'}</button>
+          <button className="btn" id="cfNo" hidden={s.tone === 'notice'} onClick={cancel}>{t('gui.cancel')}</button>
+          <button className={YES_CLASS[s.tone]} id="cfYes" onClick={() => confirm.answer(true)}>{s.label ?? 'Confirm'}</button>
         </footer>
       </div>
     </div>
@@ -182,7 +188,7 @@ function SettingsModal(): JSX.Element {
         <div className="sbody">
           <header className="shd">
             <div className="ttl">
-              <h3 id="setTitle">设置</h3>
+              <h3 id="setTitle">Settings</h3>
               <p className="sub" id="setSub" />
             </div>
             <button
@@ -260,8 +266,8 @@ function Toasts(): JSX.Element {
    chat header because that header opens a stacking context of its own (.top is
    positioned with a z-index), which capped this button below the full-page
    modules no matter how high its own z-index went -- collapsing the rail inside
-   技能 / 插件 / 记忆 then covered the only control that brings it back, with no
-   way left to reach another module.
+   Skills / Plugins / Memory then covered the only control that brings it back,
+   with no way left to reach another module page.
 
    Collapsing the rail is the reader's call, never the window's: it holds the
    session list, and having it vanish on resize loses your place. This is the
@@ -278,9 +284,7 @@ function RailShow(): JSX.Element {
       aria-label={lang.attr('gui.expand_rail')}
       onClick={() => rail.set(true)}
     >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M9.5 4.5v15" />
-      </svg>
+      <Icon icon={LayoutAlignLeftIcon} stroke={1.8} />
     </button>
   )
 }

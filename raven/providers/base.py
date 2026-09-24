@@ -30,7 +30,7 @@ from raven.contracts.llm_provider import (  # noqa: F401
 )
 from raven.contracts.llm_provider import LLMProvider as _LLMProviderPaper
 from raven.observability import semconv
-from raven.providers import call_record
+from raven.providers import call_record, usage_record
 from raven.providers.first_byte import FirstByteTimeoutError, StreamIdleTimeoutError
 from raven.tracing import trace
 
@@ -76,6 +76,42 @@ _LLM_ERROR_CONTENT_RE = re.compile(
 )
 
 
+#: How much of a provider's own account of a failure travels with the failure.
+#: A vendor body runs to kilobytes -- a whole rejected prompt, an HTML error
+#: page -- and the same sentence is read in a chat reply, a session marker, a
+#: cron job record and a log line. The untouched body stays on the call record.
+LLM_ERROR_DETAIL_MAX = 200
+
+_ELLIPSIS = "..."
+
+#: One clause per category ``LLMProvider._classify`` can return (which is where
+#: ``tool_image_unsupported`` comes from too), plus ``upstream_transport_failure``,
+#: which litellm_provider attaches directly. A category with no clause falls to
+#: the default rather than going unsaid -- the trajectory replay's
+#: ``replay_divergence`` is the one in-tree case -- and
+#: ``test_error_classification`` holds the table to the classifier.
+_LLM_ERROR_SUMMARIES = {
+    "auth": "The provider rejected the credentials",
+    "billing": "The provider reported a billing or quota problem",
+    "context_overflow": "The request was longer than the model's context window",
+    "first_byte_timeout": "The model sent nothing before the first-byte timeout expired",
+    "image_too_large": "The provider refused an image for its size",
+    "images_unsupported": "The model does not accept images",
+    "invalid_request": "The provider rejected the request as malformed",
+    "model_unavailable": "The model is not being served",
+    "network": "The connection to the provider failed",
+    "rate_limit": "The provider is rate limiting this account",
+    "server": "The provider returned a server error",
+    "stream_idle_timeout": "The model's stream stalled until the idle timeout expired",
+    "tool_image_unsupported": "The provider refused an image carried in a tool result",
+    "unparsable_response": "The provider's answer could not be read",
+    "unknown": "The model call failed for a reason the runtime could not name",
+    "upstream_transport_failure": "The upstream reported a failed call instead of an answer",
+}
+
+_LLM_ERROR_SUMMARY_DEFAULT = "The model call failed"
+
+
 def _strip_json_error_body(text: str) -> str:
     """Replace a raw JSON error body with its human-readable message.
 
@@ -112,17 +148,61 @@ def _strip_json_error_body(text: str) -> str:
     return " ".join(part for part in (head, message, tail) if part)
 
 
+def bound_llm_detail(detail: str) -> str:
+    """``detail`` cut to ``LLM_ERROR_DETAIL_MAX``, marked when it was cut.
+
+    One cutter for one number: the detail travels into a chat reply, a session
+    marker, a cron job record and a log line, and a bound applied at each of
+    those would be four numbers that drift apart. The vendor's whole body is
+    kept on the call record either way.
+    """
+    detail = detail.strip()
+    if len(detail) <= LLM_ERROR_DETAIL_MAX:
+        return detail
+    return detail[: LLM_ERROR_DETAIL_MAX - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
+
+
+def canonical_llm_error(category: str, provider: str | None, detail: str) -> str:
+    """The canonical content for a failed LLM call.
+
+    Shape: ``Error calling LLM (<category>[@<provider>]): <detail>``. The head
+    is machine-parseable (see ``parse_llm_error``) so rendering surfaces can
+    show a diagnosis + fix hint instead of the raw exception.
+
+    The only place that shape is built. A second hand-assembled copy is how a
+    bound comes to hold on some failures and not others, and the readers of
+    this format cannot tell the two apart.
+
+    Callers pass a detail they have already classified: the bound here is
+    applied after the verdict is taken, so a needle deep in a 5000-character
+    body still decides the category it is reported under.
+    """
+    head = f"{category}@{provider}" if provider else category
+    return f"Error calling LLM ({head}): {bound_llm_detail(detail)}"
+
+
+def llm_error_summary(category: str, provider: str | None = None) -> str:
+    """One sentence per failure category, carrying no vendor text at all.
+
+    What a reader who is not the operator is told: a chat member gets the
+    category and the endpoint, and the provider's own account -- which can hold
+    a masked key, an account URL or a whole prompt -- stays in the log and on
+    the call record.
+    """
+    phrase = _LLM_ERROR_SUMMARIES.get(category, _LLM_ERROR_SUMMARY_DEFAULT)
+    where = f" ({provider})" if provider else ""
+    return f"{phrase}{where}. The runtime log has the provider's own account."
+
+
 def format_llm_error(
     exc: BaseException,
     classification: ErrorClassification,
     provider: str | None = None,
 ) -> str:
-    """Build the canonical content for a failed LLM call.
+    """Build the canonical content for a failed LLM call from the exception.
 
-    Shape: ``Error calling LLM (<category>[@<provider>]): <detail>``. The head
-    is machine-parseable (see ``parse_llm_error``) so rendering surfaces can
-    show a diagnosis + fix hint instead of the raw exception; the detail drops
-    duplicated exception-name prefixes and raw JSON error bodies.
+    ``canonical_llm_error`` with the detail read off ``exc``: duplicated
+    exception-name prefixes and raw JSON error bodies come out of it first.
     """
     detail = str(exc).strip()
     names: list[str] = []
@@ -137,8 +217,7 @@ def format_llm_error(
     detail = _strip_json_error_body(detail).strip()
     prefix = "".join(f"{n}: " for n in names)
     detail = f"{prefix}{detail}".strip().rstrip(":-").strip() or type(exc).__name__
-    head = f"{classification.category}@{provider}" if provider else classification.category
-    return f"Error calling LLM ({head}): {detail}"
+    return canonical_llm_error(classification.category, provider, detail)
 
 
 def parse_llm_error(content: str | None) -> tuple[str, str | None, str] | None:
@@ -220,6 +299,12 @@ class LLMProvider(_LLMProviderPaper):
     _SENTINEL = _LLMProviderPaper._SENTINEL
 
     _CHAT_RETRY_DELAYS = (1, 2, 4)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        # Every adapter and wrapper is billed where it is called, however it is
+        # reached; see raven.providers.usage_record.
+        super().__init_subclass__(**kwargs)
+        usage_record.instrument(cls)
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -318,15 +403,18 @@ class LLMProvider(_LLMProviderPaper):
             temperature = gen.temperature
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = gen.reasoning_effort
-        response = await self.chat(
-            messages=messages,
-            tools=tools,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            reasoning_effort=reasoning_effort,
-            tool_choice=tool_choice,
-        )
+        # The stream records this call from the delta built below; owned here so
+        # the ``chat`` it rides on is not recorded as a second one.
+        with usage_record.recorded_by_caller():
+            response = await self.chat(
+                messages=messages,
+                tools=tools,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                tool_choice=tool_choice,
+            )
         tool_call_delta: dict[str, Any] | None = None
         if response.tool_calls:
             tool_call_delta = {
@@ -925,6 +1013,10 @@ class LLMProvider(_LLMProviderPaper):
         return response
 
 
+# The base defines two of the three entry points itself; __init_subclass__ only
+# sees subclasses, so it is instrumented here.
+usage_record.instrument(LLMProvider)
+
 __all__ = [
     "ErrorClassification",
     "GenerationSettings",
@@ -935,7 +1027,11 @@ __all__ = [
     "ChatDelta",
     "ToolCallRequest",
     "TruncationInfo",
+    "LLM_ERROR_DETAIL_MAX",
+    "bound_llm_detail",
+    "canonical_llm_error",
     "format_llm_error",
+    "llm_error_summary",
     "parse_llm_error",
     "send_max_tokens",
 ]

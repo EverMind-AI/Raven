@@ -819,9 +819,9 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
 
         if (answer) {
           // Legacy transcript: record the clarify as a tool-trail panel plus the
-          // answer as a message. In episodes mode the ask_user / deep_research
-          // tool already renders this Q&A as a step, so committing them here would
-          // double it — and the answer would masquerade as a typed user message.
+          // answer as a message. In episodes mode the ask_user tool already
+          // renders this Q&A as a step, so committing them here would double it —
+          // and the answer would masquerade as a typed user message.
           if (getUiState().transcript !== 'episodes') {
             turnController.persistedToolLabels.add(label)
             appendMessage({

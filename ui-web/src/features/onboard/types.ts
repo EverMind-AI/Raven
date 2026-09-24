@@ -73,4 +73,7 @@ export interface StepBodies {
   model: StepBody
   search: StepBody
   agents: AgentsBody
+  /* Not a step of its own: the memory models, drawn inside the data-sync step,
+     and `done` once an import has somewhere to land. */
+  memory: StepBody
 }

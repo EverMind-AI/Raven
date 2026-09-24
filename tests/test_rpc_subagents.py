@@ -218,6 +218,80 @@ async def test_list_groups_an_installed_but_untested_acp_preset_as_installed(
     assert by_name["OpenClaw"]["group"] == "uninstalled"
 
 
+async def test_a_missing_row_names_the_executable_to_install(config_path: Path, tmp_path: Path, monkeypatch) -> None:
+    """The page reads what to install off the row, and for a shim preset that is npx.
+
+    Codex launches through `npx`, so on a machine with neither npx nor any agent
+    the row is missing for want of Node.js -- which the agent's own installer
+    does not bring. A row that is not `missing` names nothing, and neither does
+    a listing that measured nothing.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / "hermes"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: str(bindir))
+    by_name = {row["name"]: row for row in (await subagents_list({}))["rows"]}
+    assert by_name["Codex"]["probe_status"] == "missing"
+    assert by_name["Codex"]["probe_missing"] == "npx"
+    assert by_name["OpenClaw"]["probe_missing"] == "openclaw"
+    assert by_name["Hermes Agent"]["probe_missing"] is None
+
+    unmeasured = (await subagents_list({"probe": False}))["rows"]
+    assert all(row["probe_missing"] is None for row in unmeasured)
+
+
+async def test_a_recheck_finds_an_agent_installed_after_the_gateway_started(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page's "Check again" reads the shell's PATH as it is now, not as it was at start.
+
+    Measured 2026-09-24 with Kimi Code: installed from a terminal after the
+    gateway had started, its installer adding a PATH line to ~/.zshrc, and the
+    card kept saying "still not found" until a restart -- every probe read the
+    login-shell PATH the gateway captured once. A plain listing still reads that
+    capture, since every page open lists and must not run a login shell to do
+    it; only the flag the re-check sends takes the shell's environment again.
+    """
+    import raven.agent.subagent.backends.env as env_mod
+
+    # The shell itself is the stand-in, and everything above it is real: the
+    # memo, the refresh, and the probe reading the memo (which `_skip_live_probes`
+    # cut off, so it is wired back here, as that fixture says to).
+    shell = {"PATH": "/usr/bin:/bin"}
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", None)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
+    monkeypatch.setattr(env_mod, "_capture", lambda *, consequence: dict(shell))
+    monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: env_mod.login_shell_env().get("PATH", ""))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+
+    def kimi(result: dict) -> dict:
+        return next(row for row in result["rows"] if row["name"] == "Kimi Code")
+
+    assert kimi(await subagents_list({}))["probe_status"] == "missing"
+
+    # The install: the executable lands, and the shell rc now puts its directory on PATH.
+    bindir = tmp_path / "kimi-code" / "bin"
+    bindir.mkdir(parents=True)
+    exe = bindir / "kimi"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    shell["PATH"] = f"{bindir}:/usr/bin:/bin"
+
+    assert kimi(await subagents_list({}))["probe_status"] == "missing", "a plain listing reads the capture from start"
+
+    found = kimi(await subagents_list({"refresh_login_env": True}))
+    assert found["probe_status"] != "missing"
+    assert found["probe_missing"] is None
+
+    # It is now the capture every later listing and spawn reads, and only a real
+    # boolean asks for another: "true" is truthy in Python but is not a request.
+    shell["PATH"] = "/usr/bin:/bin"
+    assert kimi(await subagents_list({"refresh_login_env": "true"}))["probe_status"] != "missing"
+
+
 async def test_list_surfaces_a_malformed_config_section_instead_of_an_empty_list(
     config_path: Path,
 ) -> None:
@@ -577,6 +651,52 @@ async def test_a_refused_add_stores_nothing_at_all(config_path: Path, monkeypatc
     assert "sign in" in caught.value.data["detail"], "the UI reads data.detail, not just the message"
     assert [e for e in _stored(config_path) if e["name"] == "OpenCode"] == [], "a refused add must store no row"
     assert _stored(config_path) == before, "and must leave the rest of the list alone"
+
+
+async def test_a_refused_add_carries_the_fix_it_names(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The page draws the fix from `data.remedy`; `data.detail` stays the sentence.
+
+    Only when the ping named one: a refusal it could not classify must not grow
+    a fix the page would then draw in place of the agent's own words.
+    """
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    async def _named(cfg):
+        return PingResult(False, "it is installed but has no usable credential", Remedy("sign_in", "claude auth login"))
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _named)
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "opencode"})
+    assert caught.value.data["remedy"] == {"kind": "sign_in", "command": "claude auth login"}
+    assert "no usable credential" in caught.value.data["detail"]
+
+    async def _unnamed(cfg):
+        return PingResult(False, "connection ended (exit 127)")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _unnamed)
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "opencode"})
+    assert "remedy" not in caught.value.data
+
+
+async def test_a_refused_add_that_npx_could_not_fetch_carries_the_download_fix(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    command = "npx -y @agentclientprotocol/codex-acp@1.1.14"
+
+    async def _unfetched(cfg):
+        return PingResult(False, "npx could not download it (ENOTFOUND)", Remedy("download", command))
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _unfetched)
+    with pytest.raises(subagents_mod.SubagentNotReadyError) as caught:
+        await subagents_add({"preset": "codex"})
+    assert caught.value.data["remedy"] == {"kind": "download", "command": command}
 
 
 async def test_a_refused_add_of_a_cli_preset_stores_nothing_either(
@@ -1961,6 +2081,34 @@ async def test_test_records_a_verdict_for_a_configured_agent(config_path: Path, 
     assert coder["last_test_ok"] is True
 
 
+async def test_a_failed_test_s_fix_reaches_the_row(config_path: Path, monkeypatch) -> None:
+    """The row carries the fix the last failed test named, and nothing when it named none."""
+    from raven.agent.subagent.probe import TestResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    verdicts = iter(
+        [
+            TestResult(
+                "Coder", "config", "acp", False, "no usable credential", None, 5, Remedy("setup", "hermes model")
+            ),
+            TestResult("Coder", "config", "acp", False, "exited 1", None, 5),
+        ]
+    )
+
+    async def fake_run_test(cfg, *, source):
+        return next(verdicts)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.run_test", fake_run_test)
+
+    await subagents_test({"name": "Coder", "source": "config"})
+    coder = next(r for r in (await subagents_list({}))["rows"] if r["name"] == "Coder")
+    assert coder["last_test_remedy"] == {"kind": "setup", "command": "hermes model"}
+
+    await subagents_test({"name": "Coder", "source": "config"})
+    coder = next(r for r in (await subagents_list({}))["rows"] if r["name"] == "Coder")
+    assert coder.get("last_test_remedy") is None, "a failure with no fix leaves none behind"
+
+
 async def test_test_rejects_an_unknown_name(config_path: Path) -> None:
     with pytest.raises(SubagentNotFoundError):
         await subagents_test({"name": "nope", "source": "config"})
@@ -2304,7 +2452,7 @@ async def test_a_builtin_name_cannot_be_added_as_another_transport(config_path: 
 # --------------------------------------------------------------- product readiness on the page
 
 
-def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None = None) -> Path:
+def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None = None, kind: str = "cli") -> Path:
     """An `agents/` tree with one product folder.
 
     The manifest command names the interpreter and the folder's `run.py`, the
@@ -2316,9 +2464,11 @@ def _product_tree(tmp_path: Path, *, launcher: bool = True, engine: dict | None 
     folder.mkdir(parents=True)
     manifest = {
         "name": "Raven-Probe",
-        "kind": "cli",
+        "kind": kind,
         "description": "d",
-        "command": "{PYTHON} {SUBAGENT_DIR}/run.py {prompt}",
+        # An acp folder is served, not spawned per task, so it takes no prompt
+        # placeholder -- the shape the five shipped products ship with.
+        "command": "{PYTHON} {SUBAGENT_DIR}/run.py" + (" {prompt}" if kind == "cli" else ""),
     }
     if engine is not None:
         manifest["engine"] = engine
@@ -2547,6 +2697,65 @@ async def test_list_marks_the_built_in_row_and_a_discovered_product_as_ravens_ow
     assert rows["Researcher"]["own"] is False and rows["Researcher"]["model_source"] == "fixed"
 
 
+async def test_list_takes_a_product_on_its_own_key_off_the_hosts_catalogue(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder carrying its own `<PREFIX>_API_KEY` is what each launcher
+    branches on: it takes that credential with the provider and model beside it
+    and never calls `inherit_llm`. So the row does not follow the main Raven,
+    its model is not one this host can name, and the page must not offer raven's
+    ids for it -- which is what the `fixed` rule says, the same answer an openai
+    row gets for the same reason.
+
+    The same folder either way, so the key is the only thing that moved: without
+    it the row reads its menu off raven's own catalogue, the way every shipped
+    product does today.
+    """
+    from raven.acp_client.capabilities import CapabilitySnapshot, SnapshotStore, snapshot_fingerprint
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path, kind="acp")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.delenv("PROBE_API_KEY", raising=False)
+    cfg = next(c for c in va.discover_product_rows(root) if c.name == "Raven-Probe")
+    SnapshotStore(path=tmp_path / "caps.json").record(
+        CapabilitySnapshot(
+            agent="Raven-Probe",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=1,
+            agent_name="raven",
+        )
+    )
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "raven"
+
+    (root / "raven-probe" / ".env").write_text("PROBE_API_KEY=sk-its-own\n", encoding="utf-8")
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Probe"]["own"] is True and rows["Raven-Probe"]["model_source"] == "fixed"
+
+
+async def test_update_refuses_a_model_on_a_product_that_runs_on_its_own_key(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The refusal is the point: the pick would be pushed at a session whose own
+    config was rendered from the folder's credential and has never heard of this
+    host's ids."""
+    from raven.agent.subagent import vendored_agents as va
+
+    root = _product_tree(tmp_path, kind="acp")
+    (root / "raven-probe" / ".env").write_text("PROBE_API_KEY=sk-its-own\n", encoding="utf-8")
+    monkeypatch.setattr(va, "agents_root", lambda: root)
+    monkeypatch.delenv("PROBE_API_KEY", raising=False)
+
+    with pytest.raises(ConfigFieldReadonlyError, match="no menu this call can pick from"):
+        await subagents_update({"name": "Raven-Probe", "model": "gpt-5"})
+
+
 async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own(
     config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2587,13 +2796,16 @@ async def test_list_marks_a_config_row_whose_handshake_named_raven_as_ravens_own
 
     rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
 
-    # Raven's own, and still an acp row: its menu is what its handshake
-    # advertised, which under the products' inherited catalogue is raven's own.
-    assert rows["Raven-Code"]["own"] is True and rows["Raven-Code"]["model_source"] == "agent"
+    # Raven's own, and still an acp row: it picks from raven's live catalogue,
+    # not from the launch-time capture its handshake advertised -- the menu the
+    # composer draws, so the two never disagree. The capture still travels, for
+    # a reader that wants to know what the probe saw.
+    assert rows["Raven-Code"]["own"] is True and rows["Raven-Code"]["model_source"] == "raven"
+    assert rows["Raven-Code"]["model_choices"] == [{"value": "v/m", "name": "M", "group": "V"}]
     assert rows["Other"]["own"] is False and rows["Other"]["model_source"] == "agent"
     assert rows["Other"]["model_choices"] == [{"value": "v/m", "name": "M", "group": "V"}]
-    # The same agent with nothing to advertise: raven's own falls back to
-    # raven's own catalogue, a third party is taken at its word.
+    # The same agent with nothing to advertise: raven's own is on the same
+    # catalogue either way, a third party is taken at its word.
     assert rows["Raven-PPT"]["own"] is True and rows["Raven-PPT"]["model_source"] == "raven"
     assert rows["Raven-PPT"]["model_choices"] == []
     assert rows["Other-Quiet"]["own"] is False and rows["Other-Quiet"]["model_source"] == "agent"

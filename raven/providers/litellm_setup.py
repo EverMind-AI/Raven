@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 import threading
+from types import ModuleType
 
 # litellm attaches its stderr handler to all three (litellm/_logging.py).
 _LITELLM_LOGGERS = ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy")
@@ -117,10 +118,23 @@ def _register_raven_model_rows(litellm) -> None:
 #: serves, so both callers pass through here.
 _INITIALISING = threading.Lock()
 
+#: The module, once one caller has finished the pass below. Everything the pass
+#: does outlives it -- the environment is set, the banner flag and the extra
+#: rows sit on the module, and litellm attaches its terminal handler at import
+#: only -- so a later pass has nothing left to do. It is not free, though: the
+#: window resolver reaches here once per model, and the twelve ``setLevel``
+#: calls alone put a third of a 1095-model catalogue's time into this function.
+_READY: ModuleType | None = None
+
 
 def import_litellm():
     """Import litellm with its banner disabled and its terminal handler detached."""
+    global _READY
+    if _READY is not None:
+        return _READY
     with _INITIALISING:
+        if _READY is not None:
+            return _READY
         _point_oauth_tokens_at_raven()
         _use_local_model_cost_map()
         loggers = [logging.getLogger(name) for name in _LITELLM_LOGGERS]
@@ -138,6 +152,7 @@ def import_litellm():
 
         _detach_tty_handlers(loggers)
 
+        _READY = litellm
         return litellm
 
 

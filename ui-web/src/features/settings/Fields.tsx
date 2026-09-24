@@ -74,17 +74,21 @@ export function Fold({ open, label, onToggle, children }: {
   )
 }
 
-export function Row({ label, sub, stack, k, children }: {
+export function Row({ label, sub, stack, k, open, children }: {
   label?: ReactNode
   sub?: string
   /* Label above the control rather than beside it: key fields, lists. */
   stack?: boolean
   /* A whole label cell of the caller's own (the role rows). */
   k?: ReactNode
+  /* This row has a drawer open under it, so it gives up its own separator --
+     a line between a row and its own panel reads as a third row. */
+  open?: boolean
   children?: ReactNode
 }): JSX.Element {
+  const cls = ['settings-row', stack ? 'settings-stack' : '', open ? 'settings-open' : ''].filter(Boolean).join(' ')
   return (
-    <div className={stack ? 'settings-row settings-stack' : 'settings-row'}>
+    <div className={cls}>
       {k ?? (
         <div className="settings-k">
           {label}
@@ -278,12 +282,13 @@ export function Search({ id, value, placeholder, onChange }: {
   )
 }
 
-/* A path with a copy action, for the About page. */
-export function PathVal({ path, onCopy }: { path: string; onCopy(): void }): JSX.Element {
+/* A path with one action beside it, for the About page: show it in the file
+   manager, or copy it where the host is not this desktop. */
+export function PathVal({ path, label, onAct }: { path: string; label: string; onAct(): void }): JSX.Element {
   return (
     <span className="settings-pathv">
       <span className="settings-pp">{path}</span>
-      <IconBtn label={t('gui.settings.copy_path')} onClick={onCopy} />
+      <IconBtn label={label} onClick={onAct} />
     </span>
   )
 }

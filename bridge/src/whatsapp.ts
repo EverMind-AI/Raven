@@ -15,7 +15,7 @@ import makeWASocket, {
   extractMessageContent as baileysExtractMessageContent
 } from '@whiskeysockets/baileys'
 import { randomBytes } from 'crypto'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile, writeFile, mkdir, readdir, rm } from 'fs/promises'
 import { join, basename, resolve, sep } from 'path'
 import pino from 'pino'
 import qrcode from 'qrcode-terminal'
@@ -78,6 +78,27 @@ export class WhatsAppClient {
     return mentioned.some((jid: string) => selfIds.has(this.normalizeJid(jid)))
   }
 
+  /**
+   * Forget the session Baileys resumed from. Only the `<name>.json` files are
+   * removed: WhatsApp credentials are all Baileys writes here, while the same
+   * directory also holds the bridge token raven minted, and dropping that would
+   * lock the Python side out of its own bridge until the gateway restarts.
+   */
+  private async clearCredentials(): Promise<void> {
+    await mkdir(this.options.authDir, { recursive: true })
+    const entries = await readdir(this.options.authDir)
+    await Promise.all(
+      entries.filter(name => name.endsWith('.json')).map(name => rm(join(this.options.authDir, name), { force: true }))
+    )
+  }
+
+  private reconnectLater(): void {
+    setTimeout(() => {
+      this.reconnecting = false
+      this.connect()
+    }, 5000)
+  }
+
   async connect(): Promise<void> {
     const logger = pino({ level: 'silent' })
     const { state, saveCreds } = await useMultiFileAuthState(this.options.authDir)
@@ -116,18 +137,30 @@ export class WhatsAppClient {
 
       if (connection === 'close') {
         const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut
+        const loggedOut = statusCode === DisconnectReason.loggedOut
 
-        console.log(`Connection closed. Status: ${statusCode}, Will reconnect: ${shouldReconnect}`)
+        console.log(`Connection closed. Status: ${statusCode}, Logged out: ${loggedOut}`)
         this.options.onStatus('disconnected')
 
-        if (shouldReconnect && !this.reconnecting) {
-          this.reconnecting = true
-          console.log('Reconnecting in 5 seconds...')
-          setTimeout(() => {
+        if (this.reconnecting) {
+          return
+        }
+        this.reconnecting = true
+
+        if (loggedOut) {
+          console.log('This device is no longer linked; discarding the stored credentials and pairing again')
+          this.sock = null
+          try {
+            await this.clearCredentials()
+            await this.connect()
             this.reconnecting = false
-            this.connect()
-          }, 5000)
+          } catch (error) {
+            console.error('Could not start a new pairing, retrying in 5 seconds:', error)
+            this.reconnectLater()
+          }
+        } else {
+          console.log('Reconnecting in 5 seconds...')
+          this.reconnectLater()
         }
       } else if (connection === 'open') {
         console.log('✅ Connected to WhatsApp')

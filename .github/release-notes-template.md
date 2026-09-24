@@ -25,36 +25,58 @@ Windows PowerShell 5.1 (the version built into Windows) rejects that URL with
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex
 ```
 
-Open a new terminal, then run:
+The installer puts uv, Node.js 22, Raven and its plugins in place, downloads the
+browser runtime, installs or offers LibreOffice, and then finishes by opening
+Raven in your browser. First-run setup happens on that page. The installer holds
+the terminal while the page is up; press Ctrl-C to stop it, then start Raven
+again with:
 
 ```bash
-raven
+raven web
 ```
 
-That sets you up on first run and then opens the TUI. `raven onboard` stays
-the explicit way to reconfigure later.
+That keeps Raven running in the background and opens the page; `raven web --stop`
+stops it. Prefer the terminal? `raven` runs the same first-run setup and opens
+the TUI, and `raven onboard` stays the explicit way to reconfigure later. Set
+`RAVEN_MINIMAL=1` to skip the browser and LibreOffice downloads, or
+`RAVEN_NO_LAUNCH=1` to have the installer return without opening the page.
 
 ## Upgrade
 
 Already running Raven? Upgrade in place -- configuration, sessions, and memory
-are preserved:
+are preserved. Stop the page first, then upgrade:
 
 ```bash
+raven web --stop
 raven upgrade
 ```
 
-`raven upgrade` installs the latest stable release, so it does not pick up a
-pre-release; rerun the installer above for that. Editable source checkouts are
-never overwritten -- pull the checkout and rerun its development setup. On
-native Windows the upgrade finishes in an external helper; wait for its
-completion message before running Raven again.
+On Linux and macOS `raven upgrade` runs the install in the foreground and
+returns when it is done. On native Windows it hands the install to a separate
+helper and returns at once; wait for the helper's completion message. Then
+start Raven again:
+
+```bash
+raven web
+```
+
+`raven upgrade` installs the latest stable release together with the plugin
+wheels it ships. It never picks up a pre-release unless this install has joined
+the beta channel (a `~/.raven/beta.json` that only the beta installer writes).
+`raven upgrade --check` reports whether a newer release exists without
+installing it. Editable source checkouts are never overwritten: `raven upgrade`
+reports the checkout path and how far it is ahead of or behind `origin/main`,
+and the remedy is `git pull && ./install.sh` in the checkout. Rerunning the
+one-line installer also upgrades, and ends on the running page.
 
 ## Release Status
 
 - Version: `__VERSION__`
 - Tag: `__TAG__`
 - Stability: <!-- TODO: e.g. public preview patch / public preview minor -->
-- Assets: wheel and source distribution attached to this release
+- Assets: the `raven` wheel and source distribution, the three plugin wheels
+  (`everos_memory`, `design_engine`, `ppt_engine`), the locked constraints file
+  `raven-constraints.txt`, and the plugin list `raven-plugins.txt`
 
 ## Notes
 

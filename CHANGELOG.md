@@ -63,6 +63,18 @@ All notable changes to Raven are documented here.
   file name is unchanged so the new picture arrives without the page being
   edited.
 
+### Removed
+
+- The built-in `deep_research` tool is gone, along with the stand-in that
+  took its name when no key was configured and the `raven deep-research`
+  command that configured it. The settings page no longer carries its row,
+  and `tools.deepResearch` is no longer read: a load-time migration drops
+  that section. A `deep_research` entry in `tools.disabledTools` is left as
+  written, since that denylist also governs a plugin tool of the same name.
+  Reports written under `<workspace>/deep_research/` stay on disk; nothing
+  writes there any more. The capability moved to the agent surface -- the
+  first-party Raven-Research agent, and MiroThinker as a sub-agent preset.
+
 ### Changed
 
 - A Raven-PPT turn that changes nothing about an already published deck no
@@ -125,6 +137,29 @@ All notable changes to Raven are documented here.
   from the session's mode overlay.
 
 ### Fixed
+
+- A heartbeat on an untouched `HEARTBEAT.md` no longer costs a model call every
+  interval. The shipped template promises that a file of only headers and
+  comments is skipped, and the service skipped only a file with no bytes at all,
+  so a workspace that never edited the template paid a decision call every 30
+  minutes -- 14 to 35 a day on one machine. What counts as a task is now read
+  from the template itself: its headings, prose and comments are scaffolding,
+  anything else is a task, and one is still decided (including a task written as
+  a heading, or a section the template does not have).
+
+- Every model call is accounted for, not only the turn loop's. About forty
+  callers reached a provider directly -- the heartbeat's decision, the sentinel
+  planner and its predictors, memory consolidation, session titles, the
+  permission judge, the playbook planner, the curator, the in-process
+  sub-agent's own loop -- and none of them reached `UsageTracker`, so
+  `~/.raven/telemetry/usage-*.jsonl` recorded none of it: 20-odd heartbeats in
+  one day left no row. The recording now happens at the provider seam
+  (`raven/providers/usage_record.py`, installed by the runtime assembly), which
+  bills each call once: nested providers and the retry ladder record at the
+  outermost entry, a stream is one row from its terminal usage, the turn loop
+  keeps its own richer row and tells the seam so, and a call that never reached
+  a model is not a row. The heartbeat's own call is billed to a `heartbeat`
+  session rather than to whichever conversation ran last.
 
 - `web_fetch`, `web_search` and `image_search` stop asking a vendor that has
   refused the key. A 401 or 402 from a reader, or a 401, 402 or 403 from a
@@ -239,6 +274,17 @@ All notable changes to Raven are documented here.
   Measured with four sessions in one process: 18 of 183 approvals lost, each
   inside another session's `ssh`. The command's stdin now reads EOF at once, as the
   background executor's already did.
+
+- `exec` on this computer refuses a typed `ssh` to a machine the connection
+  registry knows, and names the two paths that exist for it: `machine=<id>`
+  for a look (capped at 60 s, nothing left running) and the on-call agent's
+  `ops_submit` for anything longer. Two field runs on 2026-09-14 had put the
+  machine's address in the task statement, and the coding nodes started GPU
+  work over raw ssh from the local shell 58 times, past the cap, the sweep
+  and the ledger. `scp` and `rsync` to the machine are untouched; a registry
+  that cannot be read refuses nothing. Options are read the way ssh reads
+  them -- a bundled group like `-vp 58717`, and options written after the
+  host -- so a spelling ssh honours does not read as port 22.
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused
@@ -385,6 +431,43 @@ All notable changes to Raven are documented here.
   image model (Nano Banana and its kind) is asked for the requested frame through
   OpenRouter's `image_config.aspect_ratio`; before, it answered in its own default
   frame whatever ratio the caller asked for.
+- `mode: stint`: a playbook that takes many rounds instead of one. It declares
+  roles rather than nodes, and one round is one sub-agent graph, so a thirty-round
+  run is thirty graphs on the shared dispatch path -- each validated and charged
+  to the same hourly dispatch budget an ordinary graph is, approved once at the
+  start, and resumable by any process because the stint is a file. Roles hand over
+  through files in the project, not through a conversation: each opens a fresh one
+  every round.
+
+  What a role may write is declared in the playbook (`owns`, `appends`), rendered
+  into its prompt, and undone afterwards, with the file it
+  wrote kept under `violations/`. The undo reads the stage's own commits as well
+  as the worktree, so a role that commits a stray write is caught too.
+
+  `verify[]` runs real commands -- a build, a test run -- and a failure goes back
+  to the role that caused it with the failure text, up to `maxHandbacks`. Once
+  that budget is spent the round moves on with the failure on the record -- a
+  failed node would skip every role downstream, and a reviewer has to see a
+  failed build -- and the next round's prompt carries it.
+
+  A stint runs in a checkout of its own, cut from the project's head, so hours of
+  its commits do not collide with the conversation that started it.
+  `stop.maxRounds` defaults to 10 and is capped at 99; `stop.until` lets a role
+  end a stint early by reporting a marker on a line of its own. A round the
+  dispatch budget turns down pauses the stint rather than ending it, and says so.
+  A person can watch, extend, pause, stop, resume and answer questions from
+  `raven playbook stints ...`, the RPC surface and the page.
+
+- `raven playbook stint`: lay a project out for a stint (`init` writes `.stint/`:
+  a guard file per role, the shared prose, a link to the project's own
+  specification), and work the backlog its roles share (`task`, `ask`, `confirm`).
+
+- `raven agent --message-file` reads the turn's message from a file instead of
+  argv, and `raven agent --permission-mode ask|smart|full` binds the turn's
+  reading of the ask tier. Both are what an unattended driver needs: a prompt on
+  the command line is readable by every process on the box, and a one-shot has
+  nobody to ask when a tool call routes to approval.
+
 - The research agent's three modes are three stop rules rather than three sizes
   of one budget. `medium` may answer a settled general-knowledge question
   without searching: the first model call has the web tools withheld and a
@@ -854,8 +937,7 @@ All notable changes to Raven are documented here.
   OpenRouter, so a raven that already has an OpenRouter key is not asked for a second
   copy of it - and that reuse reads `providers.openrouter` alone, never a key parked in
   `custom`, which belongs to whichever private gateway that section names. It replaces the
-  deep_research step, which is unchanged and still reachable through
-  `raven deep-research enable`. Previously `subagents/install.sh` did the registering,
+  deep_research step. Previously `subagents/install.sh` did the registering,
   which could not work on a first install: it runs before `~/.raven/config.json` exists,
   read that file to decide whether an agent had an LLM to fall back on, and so declined
   to register every folder on exactly the machines that had just been set up. It now

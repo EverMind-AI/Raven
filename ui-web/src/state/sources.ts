@@ -27,7 +27,7 @@ import type { RailSource } from '../features/rail/types'
 import type { SettingsSource } from '../features/settings/types'
 import type { SubagentsSource } from '../features/subagents/types'
 import type { TasksSource } from '../features/tasks/types'
-import type { ArtifactsSource, TranscriptSource } from '../features/transcript/types'
+import type { TranscriptSource } from '../features/transcript/types'
 import type { WorkspaceSource } from '../features/workspace/types'
 import type { ProseSource } from '../lib/prose'
 import type { BannerSource } from './banner'
@@ -43,7 +43,6 @@ export interface CapabilitiesSource {
 }
 
 export interface Sources {
-  artifacts: ArtifactsSource
   banner: BannerSource
   browser: BrowserSource
   capabilities: CapabilitiesSource

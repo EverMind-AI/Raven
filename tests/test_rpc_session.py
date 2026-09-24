@@ -1916,6 +1916,33 @@ async def test_session_resume_carries_the_files_a_stored_call_removed(
     assert msgs[1]["file_removed"] == [{"path": "/w/gone.txt", "del": 2}]
 
 
+async def test_session_resume_carries_the_files_a_stored_command_wrote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A command's own result says only that it ran, so a reloaded page has no
+    other record that it wrote anything. The stored shape is the live one here:
+    a size and a line count are already what the page draws."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_778899"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "build it")
+    session.add_message(
+        "tool",
+        "ran",
+        tool_call_id="c1",
+        name="exec",
+        file_written=[{"path": "/w/made.txt", "created": True, "size": 8, "lines": 2}],
+    )
+    mgr.save(session)
+
+    msgs = (await session_resume({"session_id": session_key}))["messages"]
+    assert msgs[1]["file_written"] == [{"path": "/w/made.txt", "created": True, "size": 8, "lines": 2}]
+
+
 async def test_session_resume_carries_the_broken_turn_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``turn_ended`` says why a transcript stops where it does; without it a
     reloaded page renders the marker's model-facing text as an answer."""
