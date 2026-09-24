@@ -23,9 +23,9 @@
 
 <p align="center"><em>一个入口，连接所有 Agent：Raven 为复杂任务生成 DAG，并编排多个专业 Agent。</em></p>
 
-Raven 是 **The Harness of Harnesses**——一个自我演进的多 Agent 编排生态。作为 **Host Agent（宿主 Agent）**，它通过统一入口汇聚各类专业 Agent，负责委派任务、协调执行并整合结果。长远来看，Raven 希望把这种编排能力延伸到不同的设备、环境与领域。
+Raven 是 **The Harness of Harnesses**——一个自我演进的多 Agent 协作生态。作为 **Host Agent（宿主 Agent）**，它通过统一入口汇聚各类专业 Agent，负责委派任务、协调执行并整合结果。长远来看，Raven 希望把这种编排能力延伸到不同的设备、环境与领域。
 
-Raven 构建于 EverMind 的自进化 harness 引擎之上，由 [EverOS](https://github.com/EverMind-AI/EverOS) 驱动，能够跨会话保留上下文，并持续改进 Agent harness 与协作工作流。
+Raven 构建于 EverMind 的自进化 harness 引擎之上，由 [EverOS](https://github.com/EverMind-AI/EverOS) 驱动，跨会话保留记忆，并持续改进 Agent harness 与协作工作流。
 
 **内置 Agent：** **Raven-Research**、**Raven-Code**、**Raven-Design** 与 **Raven-Oncall**，分别覆盖研究、编程、视觉设计与无人值守的流程自动化。
 
