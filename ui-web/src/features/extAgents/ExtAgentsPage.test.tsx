@@ -794,6 +794,29 @@ describe('the sheet', () => {
     const note = sheet()!.querySelector('.extAgents-note')!
     expect(note.querySelector('.extAgents-note-t')!.textContent).toBe('gui.agent.st_test_bad')
     expect(note.querySelector('.extAgents-note-said')!.textContent).toBe('it connected and then answered nothing')
+    /* The test cleared the handshake, so the bar is back to Connect, and the
+       note names Connect rather than a Test the bar no longer offers. */
+    expect(sheetActs()).toEqual(['gui.agent.connect'])
+    expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
+      `gui.agent.said_test ${JSON.stringify({ button: 'gui.agent.connect' })}`,
+    )
+  })
+
+  /* The note and the bar are drawn from one state, so whatever the note tells
+     the reader to press has to be on the bar, in every state a failed test can
+     leave a row in. */
+  it.each([
+    ['connected', { configured: true, enabled: true }],
+    ['unauthorized', { configured: false, enabled: false, needs_auth: true, probe_status: 'attention' }],
+    ['available', { configured: false, enabled: false }],
+    ['waiting on a key', { preset: 'mirothinker', kind: 'openai', configured: false, enabled: false }],
+  ] as const)('names a press the bar offers, after a failed test on a %s row', async (_state, over) => {
+    install([row({ name: 'x', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it answered nothing', ...over })])
+    await mount()
+    await openSheet('x')
+    const said = sheet()!.querySelector('.extAgents-note .extAgents-note-p')!.textContent!
+    const named = (JSON.parse(said.slice(said.indexOf('{'))) as { button: string }).button
+    expect(sheetActs()).toContain(named)
   })
 })
 
@@ -831,6 +854,7 @@ describe('a refusal that names its fix', () => {
     await openSheet('Hermes Agent')
     expect(title()).toBe(say('gui.agent.bad_setup', { agent: 'Hermes Agent' }))
     expect(lead()).toBe(say('gui.agent.fix_setup', { agent: 'Hermes Agent', button: 'gui.agent.test_label' }))
+    expect(sheetActs()).toContain('gui.agent.test_label')
     expect(note()!.querySelector('.extAgents-cmd code')!.textContent).toBe('hermes model')
     expect(raw()!.querySelector('summary')!.textContent).toBe('gui.agent.fix_raw')
     expect(raw()!.textContent).toContain(hermesSaid)
@@ -877,8 +901,10 @@ describe('a refusal that names its fix', () => {
     await mount()
     await openSheet('MiroThinker')
     expect(title()).toBe(say('gui.agent.bad_api_key', { agent: 'MiroThinker' }))
-    /* An endpoint with no key is not connected, so its press is plain Test. */
-    expect(lead()).toBe(say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.test_label' }))
+    /* An endpoint with no key is not connected, and its bar offers Connect
+       beside the key field, not Test: the note names the press that is there. */
+    expect(lead()).toBe(say('gui.agent.fix_api_key', { agent: 'MiroThinker', button: 'gui.agent.connect' }))
+    expect(sheetActs()).toEqual(['gui.agent.connect'])
     expect(note()!.querySelector('.extAgents-cmd')).toBeNull()
   })
 

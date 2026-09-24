@@ -387,6 +387,19 @@ function remedied(agent: string, remedy: Remedy | null, button: string, raw: str
    language what failed and what to press, and the server's sentence is shown
    as it came: it is the only reason there is, and folding it away made the
    block say nothing. */
+/* The press the sheet's action bar offers after a failed test, which is the
+   one its note has to name: read off the same branches as the bar in
+   `AgentSheet`. A connected row retests; an unauthorized one tests, since that
+   is how it earns its Connect back; any other row that is not connected offers
+   Connect alone -- a key to fill in, or a handshake a test has since cleared --
+   and connecting runs the same test. Empty where the bar offers nothing to
+   press, which is Raven itself, whose rows are never tested. */
+function testPress(row: ExtAgentRow, shown: Shown): string {
+  if (shown === 'on') return canTest(row) ? t('gui.agent.test_again') : ''
+  if (shown !== 'off') return ''
+  return t(stageOf(row) === 'unauthorized' ? 'gui.agent.test_label' : 'gui.agent.connect')
+}
+
 function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown): NoteSpec | null {
   const agent = row.name
   const failed = s.failed[row.name]
@@ -402,10 +415,9 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown): NoteSpec | n
       folded: false,
     }
   }
-  if (shown === 'pending' || shown === 'missing' || row.last_test_ok !== false) return null
-  /* The press named is the one the action bar offers: a connected row's says
-     "again", since its last test is the reason this block is here. */
-  const button = t(shown === 'on' ? 'gui.agent.test_again' : 'gui.agent.test_label')
+  if (row.last_test_ok !== false) return null
+  const button = testPress(row, shown)
+  if (!button) return null
   const when = ago(row.last_test_at_ms)
   const spec = remedied(agent, row.last_test_remedy || null, button, row.last_test_detail || '')
   if (spec) return { ...spec, when }
