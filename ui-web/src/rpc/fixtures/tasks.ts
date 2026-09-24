@@ -306,6 +306,44 @@ function scenarioInterrupted(env: FixtureEnv): TaskRow[] {
   })]
 }
 
+/* Scenario 6, session 'c': the last step waits on the step before it and on
+   every step that one already waits on, the shape a real research-to-deck run
+   came back in. Laid out by centring each layer, the middle research step's
+   edge to the build ran straight down behind the outline's box and could not
+   be seen; this is the graph that keeps that visible. */
+function scenarioSkippedLayer(env: FixtureEnv): TaskRow[] {
+  const now = env.now()
+  const started = now - 16 * MIN
+  const research = (id: string, summary: string, took: number): TaskNode => node({
+    node_id: id, agent: 'Raven-Research', status: 'completed', instance: id.replace('research_', 'research-'),
+    node_summary: summary, started_at: started, ended_at: started + took, tokens_in: 5200, tokens_out: 2100,
+    tool_call_count: 14, tool_failure_count: 0, has_output: true,
+  })
+  const nodes = [
+    research('research_rl_llm', 'Survey recent progress in RL for LLMs', 15 * MIN + 9 * SEC),
+    research('research_rl_algo', 'Survey recent RL algorithms and theory', 9 * MIN + 53 * SEC),
+    research('research_rl_apps', 'Survey recent RL applications', 10 * MIN + 39 * SEC),
+    node({
+      node_id: 'ppt_outline', agent: 'Raven', status: 'running', instance: 'ppt-outline-a7e3d3',
+      depends_on: ['research_rl_llm', 'research_rl_algo', 'research_rl_apps'],
+      node_summary: 'Merge the research into a ten-slide outline',
+      started_at: now - 57 * SEC, tool_call_count: 3,
+      prompt_template: 'Merge {{ research_rl_llm.output_path }}, {{ research_rl_algo.output_path }} and '
+        + '{{ research_rl_apps.output_path }} into a ten-slide outline.',
+    }),
+    node({
+      node_id: 'ppt_build', agent: 'Raven-Design', status: 'pending', instance: 'ppt-build-5c1f09',
+      depends_on: ['ppt_outline', 'research_rl_llm', 'research_rl_algo', 'research_rl_apps'],
+      node_summary: 'Build the slide deck and its previews',
+      prompt_template: 'Build the deck from {{ ppt_outline.output_path }}, reading the three surveys for detail.',
+    }),
+  ]
+  return [row({
+    id: '20260923T101500000000Z-rlsurvey', kind: 'dag', status: 'running', nodes,
+    task_summary: 'Survey recent RL progress and build a slide deck', started_at: started,
+  })]
+}
+
 export interface TasksFixture {
   fixtures: Fixtures
 }
@@ -320,6 +358,7 @@ export function createTasks(env: FixtureEnv): TasksFixture {
     ['g', [...scenarioCompletedWithFiles(env), scenarioManyFiles(env)]],
     ['h', scenarioTwoSpawns(env)],
     ['d', scenarioInterrupted(env)],
+    ['c', scenarioSkippedLayer(env)],
   ])
 
   const findRow = (id: string, kind?: string): { rows: TaskRow[]; at: number; row: TaskRow } | null => {

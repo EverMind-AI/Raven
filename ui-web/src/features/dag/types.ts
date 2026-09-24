@@ -83,8 +83,20 @@ export interface NodeAt {
   y: number
 }
 
+/* One dependency as it is drawn: out of the upstream box's downstream face,
+   through a bend beside every layer it skips, and into the downstream box's
+   upstream face. Consecutive points differ along the flow only across the gap
+   between two layers, never inside one, which is what keeps a line that skips
+   a layer from being drawn under a box of the layer it skips. */
+export interface EdgeRoute {
+  from: string
+  to: string
+  points: NodeAt[]
+}
+
 export interface DagLayout {
   at: Map<string, NodeAt>
+  edges: EdgeRoute[]
   width: number
   height: number
 }

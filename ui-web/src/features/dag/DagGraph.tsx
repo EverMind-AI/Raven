@@ -6,7 +6,7 @@
 import { layout } from './graph'
 
 import type { Dims, Flow } from './graph'
-import type { DagNode } from './types'
+import type { DagNode, EdgeRoute, NodeAt } from './types'
 import type { JSX } from 'react'
 
 /* A caller's own box for a node. Given the node and the clock a running
@@ -28,54 +28,49 @@ interface DagGraphProps {
   renderNode: CardRenderer
 }
 
-/* One edge, drawn along whichever way the graph runs: out of the downstream
-   face of the upstream box and into the upstream face of the next one, with the
-   curve's control points on the same axis so a fan-out leaves as a fan rather
-   than as a sheaf of diagonals. */
-function edgePath(from: { x: number; y: number }, to: { x: number; y: number }, dims: Dims, down: boolean): {
-  d: string
-  tip: string
-} {
-  if (down) {
-    const x1 = from.x + dims.W / 2
-    const y1 = from.y + dims.H
-    const x2 = to.x + dims.W / 2
-    const y2 = to.y - 5
-    const mid = (y1 + y2) / 2
-    return {
-      d: `M${x1} ${y1} C${x1} ${mid} ${x2} ${mid} ${x2} ${y2}`,
-      tip: `M${x2 - 3} ${y2 - 3.5}L${x2} ${y2 + 1}l3 -4.5`,
+/* One edge, drawn through its route along whichever way the graph runs. Each
+   hop is a curve whose control points sit on the flow axis, so the line leaves
+   and enters every face square to it and a fan-out leaves as a fan rather than
+   as a sheaf of diagonals; a hop that keeps its place across the flow is the
+   straight run beside a skipped layer. The last point is pulled back off the
+   face to leave room for the arrowhead. */
+function edgePath(points: NodeAt[], down: boolean): { d: string; tip: string } {
+  const pts = points.map((p) => ({ ...p }))
+  const end = pts[pts.length - 1]!
+  if (down) end.y -= 5
+  else end.x -= 5
+  let d = `M${pts[0]!.x} ${pts[0]!.y}`
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!
+    const b = pts[i]!
+    if (down ? a.x === b.x : a.y === b.y) {
+      d += `L${b.x} ${b.y}`
+    } else if (down) {
+      const mid = (a.y + b.y) / 2
+      d += `C${a.x} ${mid} ${b.x} ${mid} ${b.x} ${b.y}`
+    } else {
+      const mid = (a.x + b.x) / 2
+      d += `C${mid} ${a.y} ${mid} ${b.y} ${b.x} ${b.y}`
     }
   }
-  const x1 = from.x + dims.W
-  const y1 = from.y + dims.H / 2
-  const x2 = to.x - 5
-  const y2 = to.y + dims.H / 2
-  const mid = (x1 + x2) / 2
-  return {
-    d: `M${x1} ${y1} C${mid} ${y1} ${mid} ${y2} ${x2} ${y2}`,
-    tip: `M${x2 - 3.5} ${y2 - 3}L${x2 + 1} ${y2}l-4.5 3`,
-  }
+  const tip = down
+    ? `M${end.x - 3} ${end.y - 3.5}L${end.x} ${end.y + 1}l3 -4.5`
+    : `M${end.x - 3.5} ${end.y - 3}L${end.x + 1} ${end.y}l-4.5 3`
+  return { d, tip }
 }
 
-function Edges({ dims, nodes, at, down }: {
-  dims: Dims
+function Edges({ nodes, edges, down }: {
   nodes: DagNode[]
-  at: Map<string, { x: number; y: number }>
+  edges: EdgeRoute[]
   down: boolean
 }): JSX.Element {
   const done = new Set(nodes.filter((n) => n.status === 'completed').map((n) => n.id))
   const out: JSX.Element[] = []
-  nodes.forEach((n) => {
-    n.depends_on.forEach((pid) => {
-      const a = at.get(pid)
-      const b = at.get(n.id)
-      if (!a || !b) return
-      const { d, tip } = edgePath(a, b, dims, down)
-      const flowed = done.has(pid) ? ' flowed' : ''
-      out.push(<path key={`e${pid}-${n.id}`} d={d} data-from={pid} className={'edge' + flowed} />)
-      out.push(<path key={`t${pid}-${n.id}`} d={tip} data-from={pid} className={'tip' + flowed} />)
-    })
+  edges.forEach(({ from, to, points }) => {
+    const { d, tip } = edgePath(points, down)
+    const flowed = done.has(from) ? ' flowed' : ''
+    out.push(<path key={`e${from}-${to}`} d={d} data-from={from} className={'edge' + flowed} />)
+    out.push(<path key={`t${from}-${to}`} d={tip} data-from={from} className={'tip' + flowed} />)
   })
   return <>{out}</>
 }
@@ -89,12 +84,12 @@ export function DagGraph({
   flow = 'across',
   renderNode,
 }: DagGraphProps): JSX.Element {
-  const { at, width, height } = layout(nodes, dims, flow)
+  const { at, edges, width, height } = layout(nodes, dims, flow)
 
   return (
     <div className="daggraph">
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-        <Edges dims={dims} nodes={nodes} at={at} down={flow === 'down'} />
+        <Edges nodes={nodes} edges={edges} down={flow === 'down'} />
         {nodes.map((n) => {
           const p = at.get(n.id)
           if (!p) return null
