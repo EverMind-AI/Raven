@@ -231,6 +231,24 @@ class ExecTool(Tool):
             from raven.agent.tools.machine_exec import run_on_machine
 
             return await run_on_machine(command, connection=machine, cwd=working_dir)
+        # Same import discipline as above: the registry is read only to
+        # recognise a registered address, and a registry that cannot be read
+        # recognises nothing.
+        from raven.agent.tools.machine_exec import raw_ssh_target
+
+        if (row := raw_ssh_target(command)) is not None:
+            # Typed ssh to a registered machine is the registry bypassed: the
+            # cap, the process-group sweep and the ledger all live on the
+            # other two paths. Refused by name so the model learns the path,
+            # not just that this one closed.
+            conn_id = str(row.get("id") or "").strip()
+            return (
+                f"Error: this command reaches {row.get('display_name') or conn_id} over raw ssh from "
+                f"this computer, and that machine is registered as {conn_id!r}. Look at it with "
+                f"exec(machine={conn_id!r}) (capped at 60s, nothing left running), and hand anything "
+                "longer, or anything that must keep running, to the on-call agent's ops_submit "
+                "(budget, dedup, ledger). scp and rsync to it are still fine here. Nothing was run."
+            )
 
         cwd = self._cwd_for(working_dir)
 

@@ -355,3 +355,415 @@ def test_without_killpg_the_cap_falls_back_to_a_tree_kill_by_pid(monkeypatch):
 
     assert calls == [["C:/Windows/System32/taskkill.exe", "/T", "/F", "/PID", "4242"]]
     assert killed == ["kill"], "and the shell itself is still killed when the tree kill left it"
+
+
+# ---- the plain shell refuses typed ssh to a machine the registry knows ----
+
+
+@pytest.mark.asyncio
+async def test_typed_ssh_to_a_registered_machine_is_refused(registry, tmp_path):
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"ssh -p 58717 root@203.0.113.7 'nohup python train.py &'; touch {marker}")
+
+    assert "Error:" in out
+    assert "conn_gpu" in out and "ops_submit" in out
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_ssh_to_an_unregistered_host_still_runs(registry, tmp_path):
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="echo ssh 198.51.100.9 would be typed here")
+
+    assert "would be typed here" in out
+
+
+@pytest.mark.asyncio
+async def test_naming_the_host_without_ssh_is_not_a_bypass(registry, tmp_path):
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="echo the box is 203.0.113.7")
+
+    assert "203.0.113.7" in out and "Error:" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_broken_registry_refuses_nothing_in_the_plain_shell(monkeypatch, tmp_path):
+    def boom():
+        raise ValueError("mangled json")
+
+    monkeypatch.setattr("raven.ops.connections.load", boom)
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="echo ssh 203.0.113.7 with a broken registry")
+
+    assert "with a broken registry" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "written",
+    ["ssh", "/usr/bin/ssh", "\\ssh"],
+    ids=["bare", "path-qualified", "backslash-escaped"],
+)
+async def test_the_ssh_client_is_recognised_however_it_is_written(registry, tmp_path, written):
+    """All three spellings run the client, so all three reach the far side.
+
+    A leading backslash suppresses alias lookup and an absolute path skips
+    PATH; neither changes what executes. Matching only the bare word left both
+    on the plain path, past the cap, the process-group sweep and the ledger.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / f"ran-{written.strip('\\/').replace('usr', '')}"
+
+    out = await tool.execute(command=f"{written} -o ConnectTimeout=1 -p 58717 root@203.0.113.7 true; touch {marker}")
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_a_different_port_at_the_same_address_is_a_different_machine(monkeypatch, tmp_path):
+    """The registry holds several machines at one address on different ports.
+
+    Matching the address alone returns whichever row is listed first, so the
+    refusal names a machine the command was not reaching and the recovery it
+    proposes would run the work somewhere else.
+    """
+    other = dict(ROW) | {"id": "conn_gpu_b", "display_name": "GPU box B", "port": 64101}
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(ROW), other])
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="ssh -o ConnectTimeout=1 -p 64101 root@203.0.113.7 true")
+
+    assert "conn_gpu_b" in out, "the refusal names the machine on the port that was typed"
+    assert "conn_gpu'" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_longer_address_that_starts_with_a_registered_one_still_runs(registry, tmp_path):
+    """203.0.113.70 is not 203.0.113.7.
+
+    A substring test made every address with a registered one as its prefix
+    unreachable from here, which breaks the guarantee that ssh to a machine
+    the registry does not hold keeps working.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="echo ssh root@203.0.113.70 would be typed here")
+
+    assert "would be typed here" in out and "Error:" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_line_that_cannot_be_tokenised_is_not_judged(registry, tmp_path):
+    """An unbalanced quote is not a shell line this can read.
+
+    The shell rejects it too, so nothing reaches a machine either way, and
+    guessing at a half-parsed line would refuse commands that never ran.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="ssh root@203.0.113.7 'unterminated")
+
+    assert "conn_gpu" not in out, "no refusal is issued for a line nobody can parse"
+
+
+@pytest.mark.asyncio
+async def test_a_flag_that_takes_no_value_does_not_hide_the_destination(registry, tmp_path):
+    """-v takes no argument, so the destination is the next word, not the one after it."""
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"ssh -v -o ConnectTimeout=1 -p 58717 root@203.0.113.7 true; touch {marker}")
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_ssh_with_no_destination_at_all_is_left_alone(registry, tmp_path):
+    """Flags and nothing else reaches no machine; ssh prints its usage and stops."""
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="ssh -V")
+
+    assert "conn_gpu" not in out
+
+
+@pytest.mark.asyncio
+async def test_a_row_whose_port_is_not_a_number_is_read_as_the_default(monkeypatch, tmp_path):
+    """A hand-edited registry must not make the guard give up on the row.
+
+    22 is what ssh itself would use, so a row with no usable port is compared
+    against the port a command that names none would reach.
+    """
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(ROW) | {"port": "not-a-number"}])
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="ssh -o ConnectTimeout=1 root@203.0.113.7 true")
+
+    assert "Error:" in out and "conn_gpu" in out
+
+
+@pytest.mark.asyncio
+async def test_an_unspaced_operator_still_separates_the_commands(registry, tmp_path):
+    """A shell reads "true&&ssh" as two commands; splitting on whitespace reads one word.
+
+    That word is neither "true" nor "ssh", so the guard saw no ssh at all and
+    the registered machine was reached from the plain shell.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"true&&ssh -o ConnectTimeout=1 -p 58717 root@203.0.113.7 true; touch {marker}")
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_every_ssh_in_the_line_is_read_not_just_the_first(registry, tmp_path):
+    """A compound line reaches each of its commands, so each destination counts.
+
+    Stopping at the first let a line through on the strength of the half that
+    was allowed, and the registered machine in the second half still ran.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(
+        command=(
+            "ssh -o ConnectTimeout=1 root@198.51.100.9 true; "
+            f"ssh -o ConnectTimeout=1 -p 58717 root@203.0.113.7 true; touch {marker}"
+        )
+    )
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_the_port_given_as_an_option_counts_like_the_flag(registry, tmp_path):
+    """OpenSSH honours "-o Port=N" exactly as it honours "-p N" (checked with ssh -G).
+
+    Consuming -o as a value-taking flag and dropping its value left the guard
+    on port 22, so a machine registered elsewhere read as unregistered.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"ssh -o ConnectTimeout=1 -o Port=58717 root@203.0.113.7 true; touch {marker}")
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "option",
+    ["-o 'Port 58717'", '-o "Port 58717"', "-o 'Port = 58717'"],
+    ids=["single-quoted", "double-quoted", "spaced-equals"],
+)
+async def test_the_port_option_is_read_when_a_space_separates_it(registry, tmp_path, option):
+    """OpenSSH takes the option written either way, so the guard has to read both.
+
+    `ssh -G -o "Port 58717" root@203.0.113.7` prints `port 58717`, the same as
+    the equals spelling. Splitting the value on the equals sign alone discarded
+    the spaced one, left the guard on port 22, and the line ran on the plain
+    shell path -- past the cap, the process-group sweep and the ledger.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"ssh -o ConnectTimeout=1 {option} root@203.0.113.7 true; touch {marker}")
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "redirection",
+    ["2>&1", "&>/dev/null", "2>/dev/null"],
+    ids=["descriptor-dup", "both-streams", "descriptor-to-file"],
+)
+async def test_a_redirection_before_the_destination_does_not_hide_it(registry, tmp_path, redirection):
+    """A redirection is plumbing; the ssh's own words continue after it.
+
+    `2>&1` arrives as the three tokens 2, >& and 1, so the bare descriptor was
+    taken for the destination, and `&>` -- matching no operator the reader knew
+    -- became one itself. Either way the registered host further along the line
+    was never read and the command ran on the plain shell path.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(
+        command=f"ssh {redirection} -o ConnectTimeout=1 -p 58717 root@203.0.113.7 true; touch {marker}"
+    )
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("ssh -p 58717 root@h true 2>&1 | tee log", [("h", 58717)]),
+        ("ssh -p 58717 root@h >", [("h", 58717)]),
+        ("ssh root@h >; ssh -p 9 root@k", [("h", 22), ("k", 9)]),
+        ("ssh root@h <<EOF\nfoo\nEOF", [("h", 22)]),
+        ("ssh -o Port=58717 -o 'Port 22' root@h", [("h", 58717)]),
+        ("ssh 2>&1", []),
+    ],
+    ids=["after-host", "dangling", "dangling-then-separator", "heredoc", "first-port-wins", "no-host"],
+)
+def test_redirections_are_stepped_over_wherever_they_fall(command, expected):
+    """A redirection is neither a destination nor the end of the command.
+
+    Before the destination it is skipped so the host after it is read; after
+    the destination it changes nothing; dangling before a separator it does not
+    swallow the separator, so the next ssh in the line is still found.
+    """
+    assert machine_exec._ssh_destinations(command) == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("ssh -o Port=58717 -o 'Port 22' root@h", 58717),
+        ("ssh -o 'Port 22' -o Port=58717 root@h", 22),
+        ("ssh -p 2222 -o Port=58717 root@h", 2222),
+        ("ssh -o Port=58717 -p 2222 root@h", 58717),
+        ("ssh -p 58717 -p 22 root@h", 58717),
+        ("ssh -p 22 -p 58717 root@h", 22),
+    ],
+    ids=["option-then-option", "reversed", "flag-then-option", "option-then-flag", "flag-twice", "flag-twice-reversed"],
+)
+def test_a_repeated_port_keeps_the_first_value_as_ssh_does(command, expected):
+    """ssh takes the first obtained value for every option, `-p` and `-o Port`
+    queueing together: `ssh -G -p 2222 -o Port=58717 host` prints 2222 and the
+    two reversed prints 58717 (measured with OpenSSH 9.9p2).
+
+    Overwriting instead read `-p 58717 -p 22` as port 22, so a command that
+    really reaches the registered machine on 58717 read as unregistered and
+    ran on the plain shell path -- the bypass this guard exists to close.
+    """
+    assert machine_exec._ssh_destinations(command) == [("h", expected)]
+
+
+@pytest.mark.asyncio
+async def test_an_option_that_is_not_the_port_leaves_the_port_alone(registry, tmp_path):
+    """-o carries many settings; only Port changes where the command lands."""
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="echo ssh -o StrictHostKeyChecking=no root@203.0.113.7 true")
+
+    assert "conn_gpu" not in out, "port 22 is not the registered 58717"
+
+
+@pytest.mark.asyncio
+async def test_a_value_taking_flag_does_not_stand_in_for_the_destination(registry, tmp_path):
+    """-l takes the login name, so the bare host after it is still the destination.
+
+    Also the form with no "user@": the destination is the whole word, not
+    whatever follows an at sign that is not there.
+    """
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"ssh -l root -o ConnectTimeout=1 -p 58717 203.0.113.7 true; touch {marker}")
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+# Each spelling beside what OpenSSH itself resolves it to. The expectations were
+# measured with `ssh -G` (OpenSSH_9.9p2 here, and OpenSSH_8.9p1 in review for
+# the ones that apply to both), and the test below re-measures them wherever an
+# ssh client is installed, so a wrong expectation cannot hide in this table.
+GETOPT_SPELLINGS = [
+    ("ssh -vp 58717 root@h true", ("h", 58717)),
+    ("ssh -4p 58717 h", ("h", 58717)),
+    ("ssh -vvvp58717 h", ("h", 58717)),
+    ("ssh -vo Port=58717 h", ("h", 58717)),
+    ("ssh -o Port=58717 -vp 22 h", ("h", 58717)),
+    ("ssh root@h -p 58717 true", ("h", 58717)),
+    ("ssh root@h -o Port=58717 true", ("h", 58717)),
+    ("ssh root@h -vp 58717 ls -la", ("h", 58717)),
+    ("ssh -p 58717 root@h -p 22", ("h", 58717)),
+    ("ssh root@h true -p 58717", ("h", 22)),
+    ("ssh root@h -- -p 58717", ("h", 22)),
+    ("ssh -- root@h -p 58717", ("h", 22)),
+    ("ssh -B lo -p 58717 root@h", ("h", 58717)),
+    ("ssh -P tag -p 58717 root@h", ("h", 58717)),
+]
+GETOPT_IDS = [
+    "bundled",
+    "bundled-after-a-number-flag",
+    "bundled-attached",
+    "bundled-option",
+    "bundled-after-a-port",
+    "port-after-host",
+    "option-after-host",
+    "bundled-after-host",
+    "first-port-wins-across-host",
+    "after-the-remote-command",
+    "after-double-dash",
+    "double-dash-before-host",
+    "bind-interface-value",
+    "tag-value",
+]
+
+
+@pytest.mark.parametrize(("command", "expected"), GETOPT_SPELLINGS, ids=GETOPT_IDS)
+def test_options_are_read_the_way_getopt_and_ssh_read_them(command, expected):
+    """Two readings the reviewer showed let a real connection past the guard
+    (2026-09-21): a bundled group (`-vp 58717`) was skipped as if it took no
+    argument, so the port became the destination; and the scan stopped at the
+    host, while OpenSSH goes back to reading options after it until the first
+    word that is not one. `-B` takes a value too; the set that said which flags
+    do was kept by hand and had lost it, so it is read from ssh's own getopt
+    string now."""
+    assert machine_exec._ssh_destinations(command) == [expected]
+
+
+@pytest.mark.parametrize(("command", "expected"), GETOPT_SPELLINGS, ids=GETOPT_IDS)
+def test_the_table_agrees_with_the_ssh_on_this_computer(command, expected):
+    import shutil
+    import subprocess
+
+    if not shutil.which("ssh"):
+        pytest.skip("no ssh on this computer")
+    words = command.split()[1:]
+    out = subprocess.run(["ssh", "-G", *words], capture_output=True, text=True, check=False, timeout=10).stdout
+    seen = dict(line.split(" ", 1) for line in out.splitlines() if line.startswith(("hostname ", "port ")))
+    if "-P" in words and "tag" not in out:
+        pytest.skip("this ssh predates `-P tag` (OpenSSH < 9.2), where P takes no value")
+    assert (seen.get("hostname"), int(seen.get("port", 0))) == expected
+
+
+def test_the_value_taking_flags_are_ssh_s_own():
+    """The set is derived from the getopt string, not listed beside it: the
+    hand-kept list this replaces had lost `B`."""
+    assert machine_exec._SSH_VALUE_FLAGS == frozenset("bceilmopBDEFIJLOPQRSWw")
+
+
+@pytest.mark.asyncio
+async def test_a_port_written_after_the_host_is_still_refused(registry, tmp_path):
+    """Through ExecTool, the shape the reviewer ran: the whole line used to run
+    on the plain shell path and reached 203.0.113.7:58717."""
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    for command in (
+        f"ssh -o ConnectTimeout=1 root@203.0.113.7 -p 58717 true; touch {marker}",
+        f"ssh -o ConnectTimeout=1 -vp 58717 root@203.0.113.7 true; touch {marker}",
+    ):
+        out = await tool.execute(command=command)
+        assert "Error:" in out and "conn_gpu" in out, command
+        assert not marker.exists()

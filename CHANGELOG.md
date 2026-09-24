@@ -253,6 +253,17 @@ All notable changes to Raven are documented here.
   Measured with four sessions in one process: 18 of 183 approvals lost, each
   inside another session's `ssh`. The command's stdin now reads EOF at once, as the
   background executor's already did.
+
+- `exec` on this computer refuses a typed `ssh` to a machine the connection
+  registry knows, and names the two paths that exist for it: `machine=<id>`
+  for a look (capped at 60 s, nothing left running) and the on-call agent's
+  `ops_submit` for anything longer. Two field runs on 2026-09-14 had put the
+  machine's address in the task statement, and the coding nodes started GPU
+  work over raw ssh from the local shell 58 times, past the cap, the sweep
+  and the ledger. `scp` and `rsync` to the machine are untouched; a registry
+  that cannot be read refuses nothing. Options are read the way ssh reads
+  them -- a bundled group like `-vp 58717`, and options written after the
+  host -- so a spelling ssh honours does not read as port 22.
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused
