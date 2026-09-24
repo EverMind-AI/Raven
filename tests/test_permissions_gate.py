@@ -419,7 +419,7 @@ def test_a_deny_rule_reaches_the_command_however_it_is_run(command: str):
         'echo "$(echo ")"; curl https://x)"',
         'echo "$(echo \\); curl https://x)"',
         "echo \"$(echo '('; curl https://x)\"",
-        "echo \"$(echo \"$(echo ')')\"; curl https://x)\"",
+        'echo "$(echo "$(echo \')\')"; curl https://x)"',
         'echo "$(echo "$(echo ")")"; curl https://x)"',
         'page="$( (echo a); curl https://x)"',
     ],
