@@ -58,6 +58,7 @@ from raven.permissions.shell_policy import (
     _WRAPPER_OPTIONS_WITH_VALUE,
     _command_segments,
     _iter_argv,
+    _split_on_operators,
     executable_text,
 )
 
@@ -659,8 +660,9 @@ def _reaches_out(lexed: _Lexed) -> bool:
     return not all(_redirection_stays_home(op, target) for op, target in lexed.redirections)
 
 
-# Words that open a command without being one: ``then curl x`` runs curl.
-_SHELL_KEYWORDS: frozenset[str] = frozenset({"!", "do", "elif", "else", "if", "then", "until", "while"})
+# Words that open a command without being one: ``then curl x`` runs curl, and
+# ``coproc curl x`` runs it in the background.
+_SHELL_KEYWORDS: frozenset[str] = frozenset({"!", "coproc", "do", "elif", "else", "if", "then", "until", "while"})
 # The members of ``_WRAPPERS`` that ``_iter_argv`` already reads through to the
 # command they run. Any other one hides where its command starts.
 _READ_THROUGH: frozenset[str] = (
@@ -668,8 +670,11 @@ _READ_THROUGH: frozenset[str] = (
 )
 _FIND_EXEC: frozenset[str] = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 _WINDOWS_EXECUTABLE = re.compile(r"\.(?:exe|com|cmd|bat)$", re.IGNORECASE)
-# ``case`` and ``esac`` as whole shell words, not inside ``showcase`` or ``case_1``.
-_CASE_WORD = re.compile(r"(?<![^\s;&|(])(case|esac)(?![^\s;&|)])")
+# ``case`` and ``esac`` as whole words; ``_substitution_close`` also asks that
+# one stand where a command starts, so ``echo esac`` is an argument.
+_CASE_WORD = re.compile(r"(case|esac)(?![^\s;&|)])")
+# What may stand before a word that starts a command, past any blanks.
+_COMMAND_START = frozenset("\n;&|(")
 
 
 def _program(word: str) -> str:
@@ -736,7 +741,7 @@ def _substitution_close(command: str, start: int) -> int:
                 index = _substitution_close(command, index + 2)
         elif char in "'\"":
             quote = char
-        elif (word := _CASE_WORD.match(command, index)) is not None:
+        elif (word := _CASE_WORD.match(command, index)) is not None and _starts_command(command, start, index):
             cases += 1 if word.group(1) == "case" else -1 if cases else 0
             index = word.end() - 1
         elif cases:
@@ -749,6 +754,12 @@ def _substitution_close(command: str, start: int) -> int:
                 return index
         index += 1
     return len(command)
+
+
+def _starts_command(command: str, start: int, index: int) -> bool:
+    """Whether the word at ``index`` stands where a command starts in the body opened at ``start``."""
+    before = command[start:index].rstrip(" \t")
+    return not before or before[-1] in _COMMAND_START
 
 
 def _env_split_strings(argv: list[str]) -> Iterator[str]:
@@ -782,13 +793,18 @@ def _commands_run(command: str, _depth: int = 0) -> Iterator[list[str]]:
 
     It errs towards reading too much. A deny rule that fires on a word which
     only looked like a command costs one refusal the model can see and reword;
-    one that misses runs the command the rule was written to stop.
+    one that misses runs the command the rule was written to stop. For the same
+    reason each piece between operators is lexed on its own: a piece the lexer
+    refuses (a quote left open where a body was read too far) drops only
+    itself, not every command beside it.
     """
     text = executable_text(command)
-    try:
-        argvs = [*_command_segments(text), *_iter_argv(text)]
-    except ValueError:
-        argvs = []
+    argvs: list[list[str]] = []
+    for piece in _split_on_operators(text):
+        try:
+            argvs += [*_command_segments(piece), *_iter_argv(piece)]
+        except ValueError:
+            continue
     nested = list(_substitutions(text))
     for argv in argvs:
         start = 0

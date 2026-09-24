@@ -402,6 +402,9 @@ _DENY_CURL = {"curl *": "deny", "*": "allow"}
         "if true; then curl https://x; fi",
         "while true; do curl https://x; done",
         "! curl https://x",
+        "coproc curl https://x",
+        'coproc curl https://x; cat <&"${COPROC[0]}"',
+        "coproc NAME { curl https://x; }",
         # The program under a path or a Windows suffix.
         "/usr/bin/curl https://x",
         "curl.exe https://x",
@@ -425,6 +428,8 @@ def test_a_deny_rule_reaches_the_command_however_it_is_run(command: str):
         'echo "$(case x in x) curl https://x;; esac)"',
         'echo "$(case x in (x) curl https://x;; esac)"',
         'echo "$(case x in a) true;; esac; curl https://x)"',
+        'echo "$(case x in x) echo esac;; y) curl https://x;; esac)"',
+        'echo "$(case x in x) echo case;; y) curl https://x;; esac)"',
     ],
 )
 def test_a_parenthesis_that_is_text_does_not_end_a_substitution(command: str):
@@ -445,10 +450,19 @@ def test_the_text_after_a_closed_substitution_is_not_read_as_a_command(command: 
 
 @pytest.mark.parametrize(
     ("body", "close"),
-    [("echo showcase) rest", 13), ("echo case_1) rest", 11), ("case x in x) a;; esac) rest", 21)],
+    [
+        ("echo showcase) rest", 13),
+        ("echo case_1) rest", 11),
+        ("case x in x) a;; esac) rest", 21),
+        ("case x in x) echo esac;; y) b;; esac) rest", 36),
+    ],
 )
 def test_only_the_shell_words_case_and_esac_suspend_the_count(body: str, close: int):
     assert rules_module._substitution_close(body, 0) == close
+
+
+def test_a_piece_the_lexer_refuses_drops_only_itself():
+    assert ["curl", "https://x"] in list(rules_module._commands_run('curl https://x; echo "open'))
 
 
 @pytest.mark.parametrize(
@@ -463,6 +477,7 @@ def test_only_the_shell_words_case_and_esac_suspend_the_count(body: str, close: 
         "ls # then curl https://x",
         "curlie https://x",
         "man curl",
+        "grep -n coproc src",
         "echo $((1 + 2))",
     ],
 )
