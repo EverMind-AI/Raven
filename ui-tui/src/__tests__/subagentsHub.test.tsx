@@ -759,6 +759,127 @@ describe('SubagentsHub', () => {
     h.unmount()
   })
 
+  // Switching a row on is answered by running the agent, which leaves a verdict
+  // the last probe never saw; a probe-less follow-up would carry the old one
+  // back over it, and the `!` stayed until the overlay was reopened.
+  it("'space' on a row that is off switches it on, then re-lists with the probe and takes the answer whole", async () => {
+    const off: SubagentRow = {
+      ...CODER_ROW,
+      enabled: false,
+      probe_detail: 'capabilities not recorded yet',
+      probe_status: 'attention'
+    }
+    let listCalls = 0
+    const h = mount({
+      listImpl: () => {
+        listCalls += 1
+
+        return listCalls === 1
+          ? undefined
+          : { rows: [{ ...off, enabled: true, probe_detail: 'connected over ACP v1', probe_status: 'ready' }] }
+      },
+      rows: [off]
+    })
+    await waitForFrame(h, 'capabilities not recorded yet')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    await waitForRpcCall(h.gw.request, 'subagents.toggle')
+    await waitForRpcCall(h.gw.request, 'subagents.list')
+    // The frame is the accumulated output, so the prior `!` and its sentence
+    // stay in it; the ready glyph is what only the fresh answer can put there.
+    await waitForFrame(h, '●')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.toggle', { enabled: true, name: 'Coder' })
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.list', { probe: true })
+    expect(h.frame()).toContain('ACP v1')
+
+    h.unmount()
+  })
+
+  // The probing follow-up can wait on the login shell and an endpoint. Until
+  // it lands the old row is still under the cursor, so the switch stays
+  // guarded for the whole wait, or a second press would connect twice.
+  it("keeps the switch guarded until the probed row is on screen, so a second 'space' cannot connect twice", async () => {
+    const off: SubagentRow = { ...CODER_ROW, enabled: false }
+    let listCalls = 0
+    let release: (r: SubagentsListResult) => void = () => {}
+    const h = mount({
+      listImpl: () => {
+        listCalls += 1
+
+        return listCalls === 1
+          ? undefined
+          : (new Promise<SubagentsListResult>(resolve => {
+              release = resolve
+            }) as unknown as SubagentsListResult)
+      },
+      rows: [off]
+    })
+    await waitForFrame(h, 'Coder')
+
+    h.gw.request.mockClear()
+    await h.type(' ')
+    await waitForRpcCall(h.gw.request, 'subagents.list')
+    await h.type(' ')
+    await delay(90)
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.toggle')).toHaveLength(1)
+
+    release({ rows: [{ ...off, enabled: true }] })
+    await delay(90)
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.toggle')).toHaveLength(1)
+
+    h.unmount()
+  })
+
+  it("keeps a test guarded until its probed follow-up lands, so a second 't' cannot test twice", async () => {
+    let listCalls = 0
+    let release: (r: SubagentsListResult) => void = () => {}
+    const h = mount({
+      listImpl: () => {
+        listCalls += 1
+
+        return listCalls === 1
+          ? undefined
+          : (new Promise<SubagentsListResult>(resolve => {
+              release = resolve
+            }) as unknown as SubagentsListResult)
+      }
+    })
+    await waitForFrame(h, 'Coder')
+
+    h.gw.request.mockClear()
+    await h.type('t')
+    await waitForRpcCall(h.gw.request, 'subagents.list')
+    await h.type('t')
+    await delay(90)
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.test')).toHaveLength(1)
+
+    release({ rows: ROWS })
+    await delay(90)
+
+    expect(h.gw.request.mock.calls.filter(c => c[0] === 'subagents.test')).toHaveLength(1)
+
+    h.unmount()
+  })
+
+  it("'t' on Coder tests it, then re-lists with the probe so the test's own verdict is what shows", async () => {
+    const h = mount()
+    await waitForFrame(h, 'Coder')
+
+    h.gw.request.mockClear()
+    await h.type('t')
+    await waitForRpcCall(h.gw.request, 'subagents.test')
+    await waitForRpcCall(h.gw.request, 'subagents.list')
+
+    expect(h.gw.request).toHaveBeenCalledWith('subagents.list', { probe: true })
+
+    h.unmount()
+  })
+
   it("'space' on Coder toggles it off, then re-lists without probing", async () => {
     const h = mount()
     await waitForFrame(h, 'Coder')
@@ -1536,6 +1657,21 @@ describe('SubagentsHub built-in row', () => {
 })
 
 describe('mergeProbeColumns', () => {
+  // A verdict the fresh list measured is the newer evidence: carrying the prior
+  // one over it is how a row that had just connected kept its `!`.
+  it('takes a measured verdict fresh, and carries the prior one only over unknown', () => {
+    const prior: SubagentRow = {
+      ...CODER_ROW,
+      probe_detail: 'capabilities not recorded yet',
+      probe_status: 'attention'
+    }
+    const fresh: SubagentRow = { ...CODER_ROW, probe_detail: 'connected over ACP v1', probe_status: 'ready' }
+
+    const [merged] = mergeProbeColumns([prior], [fresh])
+
+    expect(merged).toEqual(fresh)
+  })
+
   it('keeps a prior row probe_status/probe_detail and takes everything else fresh', () => {
     const prior: SubagentRow = { ...CODER_ROW, enabled: true }
     const fresh: SubagentRow = { ...CODER_ROW, enabled: false, probe_detail: '', probe_status: 'unknown' }
