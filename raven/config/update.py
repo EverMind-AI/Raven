@@ -596,10 +596,13 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
     of passes -- a local deployment or a release newer than the snapshot is not
     a mistake, and refusing it would make this a gate on the snapshot's age.
 
-    Then one request, for the one fact only the model can answer: how wide its
-    vectors are. Narrower than the index is refused; a probe that could not
-    reach the provider is not a verdict, so the pin is written and the width
-    left to the first real call.
+    Then, only where EverOS is the memory backend this config names, one
+    request for the one fact only the model can answer: how wide its vectors
+    are. Narrower than the memory index is refused. A knowledge base sizes
+    itself to whatever width the model returns, so an install whose memory is
+    off or runs elsewhere keeps any width. A probe that could not reach the
+    provider is not a verdict, so the pin is written and the width left to the
+    first real call.
     """
     provider = str(clean.get("provider") or "")
     model = str(clean.get("model") or "")
@@ -635,6 +638,9 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
             f"{', '.join(caps)}); pick one that returns vectors"
         )
 
+    if not _everos_consumes_the_pin(path):
+        return
+
     from raven.providers.wire import wire_model
 
     base_url, api_key = resolved
@@ -655,6 +661,24 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
             provider,
             width,
         )
+
+
+def _everos_consumes_the_pin(path: "Path") -> bool:
+    """Whether the memory backend this config names is EverOS.
+
+    Read raw rather than through the loader: the writer already holds the file,
+    and the loader's migrations have no business running inside a settings
+    write. An absent ``memory.backend`` is the schema default, EverOS; an
+    explicit ``null`` is memory off.
+    """
+    from raven.core.plugin_stack import SHIPPED_DEFAULT_BACKEND
+
+    try:
+        memory = read_raw_or_raise(path).get("memory") or {}
+    except Exception:  # noqa: BLE001 - an unreadable config fails the write itself, not this check
+        return False
+    backend = memory["backend"] if "backend" in memory else SHIPPED_DEFAULT_BACKEND
+    return backend == SHIPPED_DEFAULT_BACKEND
 
 
 _EMBEDDING_MODEL_CHANGED = (

@@ -590,3 +590,97 @@ def test_skill_unblock_removes_from_an_existing_snake_blocklist(cfg_path: Path) 
     )
     assert set_skill_blocked("alpha", False, config_path=cfg_path) == ["beta"]
     assert _read(cfg_path)["skill_forge"]["blocklist"] == ["beta"]
+
+
+class TestProbeEmbeddingDimensions:
+    """The one request the pin writer makes, against a fake provider."""
+
+    @staticmethod
+    def _client_factory(monkeypatch, handler):
+        import httpx
+
+        real = httpx.Client
+
+        def factory(**kwargs):
+            kwargs.pop("transport", None)
+            return real(transport=httpx.MockTransport(handler), **kwargs)
+
+        monkeypatch.setattr(httpx, "Client", factory)
+
+    def test_a_model_that_honours_dimensions_answers_the_index_width(
+        self, monkeypatch, real_probe_embedding_dimensions
+    ) -> None:
+        import httpx
+
+        from raven.config.update import REQUIRED_EMBEDDING_DIMENSIONS
+
+        probe_embedding_dimensions = real_probe_embedding_dimensions
+
+        bodies: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            body = _json.loads(request.content)
+            bodies.append(body)
+            width = body.get("dimensions") or 2560
+            return httpx.Response(200, json={"data": [{"embedding": [0.0] * width}]})
+
+        self._client_factory(monkeypatch, handler)
+
+        assert probe_embedding_dimensions("https://d/v1/embeddings", {}, "m") == REQUIRED_EMBEDDING_DIMENSIONS
+        assert [b.get("dimensions") for b in bodies] == [REQUIRED_EMBEDDING_DIMENSIONS]
+
+    def test_a_model_that_ignores_dimensions_answers_its_native_width(
+        self, monkeypatch, real_probe_embedding_dimensions
+    ) -> None:
+        import httpx
+
+        probe_embedding_dimensions = real_probe_embedding_dimensions
+
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(200, json={"data": [{"embedding": [0.0] * 768}]})
+
+        self._client_factory(monkeypatch, handler)
+
+        assert probe_embedding_dimensions("https://d/v1/embeddings", {}, "bge-base") == 768
+        # Asked with the index width first, then without it.
+        assert len(calls) == 2
+
+    @pytest.mark.parametrize(
+        ("response", "verdict"),
+        [
+            (lambda: httpx_response(503, text="down"), "HTTP 503"),
+            (lambda: httpx_response(200, json={"data": []}), "empty response"),
+            (lambda: httpx_response(200, json={"data": ["not-a-dict"]}), "unexpected response format"),
+        ],
+    )
+    def test_a_failure_is_described_not_measured(
+        self, monkeypatch, response, verdict, real_probe_embedding_dimensions
+    ) -> None:
+        probe_embedding_dimensions = real_probe_embedding_dimensions
+
+        self._client_factory(monkeypatch, lambda request: response())
+
+        assert probe_embedding_dimensions("https://d/v1/embeddings", {}, "m") == verdict
+
+    def test_a_transport_error_is_described_not_raised(self, monkeypatch, real_probe_embedding_dimensions) -> None:
+        import httpx
+
+        probe_embedding_dimensions = real_probe_embedding_dimensions
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=request)
+
+        self._client_factory(monkeypatch, handler)
+
+        assert "refused" in str(probe_embedding_dimensions("https://d/v1/embeddings", {}, "m"))
+
+
+def httpx_response(status: int, **kwargs):
+    import httpx
+
+    return httpx.Response(status, **kwargs)

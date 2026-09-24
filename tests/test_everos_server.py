@@ -1759,6 +1759,46 @@ class TestStaleServerRestart:
 
         stop.assert_not_called()
 
+    def test_the_running_version_is_read_from_health(self, monkeypatch, real_running_everos_version) -> None:
+        import httpx
+
+        seen: list[str] = []
+
+        def fake_get(url, timeout):
+            seen.append(url)
+            return httpx.Response(200, json={"status": "ok", "version": "1.2.3"})
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+
+        assert real_running_everos_version("http://localhost:18791") == "1.2.3"
+        assert seen == ["http://localhost:18791/health"]
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            lambda url, timeout: (_ for _ in ()).throw(ConnectionError("gone")),
+            lambda url, timeout: __import__("httpx").Response(200, json={"status": "ok"}),
+            lambda url, timeout: __import__("httpx").Response(200, json=["not", "a", "dict"]),
+        ],
+    )
+    def test_a_version_that_cannot_be_read_is_none(self, monkeypatch, answer, real_running_everos_version) -> None:
+        import httpx
+
+        monkeypatch.setattr(httpx, "get", answer)
+
+        assert real_running_everos_version("http://localhost:18791") is None
+
+    def test_the_installed_version_is_the_package_metadata(self, monkeypatch) -> None:
+        import importlib.metadata as md
+
+        assert everos_server.installed_everos_version() == md.version("everos")
+
+        def missing(name):
+            raise md.PackageNotFoundError(name)
+
+        monkeypatch.setattr(md, "version", missing)
+        assert everos_server.installed_everos_version() is None
+
     def test_a_root_the_user_manages_is_never_called_stale(self, everos_toml, monkeypatch) -> None:
         """Their server, their restart: the version gap is reported nowhere here."""
         monkeypatch.setattr("raven_everos.config.everos_owned", lambda: False)

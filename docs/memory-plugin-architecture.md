@@ -465,8 +465,10 @@ path is ported.
 768-dimension embedding model against this 1024-wide index, with every store
 and search answering 500. `set_embedding_endpoint` now measures the model's
 width before writing the pin and refuses anything narrower than
-`REQUIRED_EMBEDDING_DIMENSIONS`; the wizard's own check reads the same
-constant and probe.
+`REQUIRED_EMBEDDING_DIMENSIONS`, but only where the config names EverOS as
+the memory backend: a knowledge base sizes itself to whatever width the
+model returns, so an install with memory off or on another backend keeps
+any width. The wizard's own check reads the same constant and probe.
 
 ---
 

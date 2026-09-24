@@ -532,6 +532,28 @@ async def test_a_model_narrower_than_the_index_is_refused_readably(everos_cfg, m
     assert "embedding" not in json.loads(cfg.read_text())
 
 
+@pytest.mark.parametrize("backend", [None, "mem0"])
+async def test_a_narrow_model_is_fine_where_everos_does_not_consume_the_pin(everos_cfg, monkeypatch, backend):
+    """The width requirement is the memory index's. A knowledge base sizes
+    itself to the model, so an install with memory off, or on another backend,
+    keeps a 768-dimension pin."""
+    cfg = everos_cfg(providers={"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}})
+    raw = json.loads(cfg.read_text())
+    raw["memory"] = {"backend": backend}
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+    asked: list[str] = []
+    monkeypatch.setattr(
+        "raven.config.update.probe_embedding_dimensions", lambda url, headers, model: asked.append(model) or 768
+    )
+
+    await rpc_console.settings_everos_set(
+        {"section": "embedding", "model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}
+    )
+
+    assert json.loads(cfg.read_text())["embedding"]["model"] == "deepinfra/BAAI/bge-base-en-v1.5"
+    assert asked == [], "no request leaves for a width nobody here requires"
+
+
 async def test_a_width_that_could_not_be_measured_does_not_block_the_pin(everos_cfg, monkeypatch):
     """A refused connection is a fact about the network, not about the model."""
     cfg = everos_cfg(providers={"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}})
