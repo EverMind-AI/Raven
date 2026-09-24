@@ -662,11 +662,21 @@ function Start-Web([string]$UvPath) {
     Write-Host ""
     Write-Ok "Starting Raven -- your browser will open in a moment. Ctrl-C here stops it."
     Write-Host ""
-    & $bin web --stop *> $null
-    if ($LASTEXITCODE -ne 0) { Write-Warn "could not stop a previous gateway; continuing" }
-    & $bin web --foreground
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "the page ended with exit code $LASTEXITCODE; start it again with 'raven web'"
+    # `raven web` starts its engine as `python -m raven`, which puts the working
+    # directory first on sys.path: run from inside a source checkout, a release
+    # without the `-P` guard comes up on that checkout's raven, and the published
+    # release this script installs may predate that guard. Under `irm | iex` this
+    # is the caller's own shell, so the directory is put back once the page ends.
+    Push-Location $HOME
+    try {
+        & $bin web --stop *> $null
+        if ($LASTEXITCODE -ne 0) { Write-Warn "could not stop a previous gateway; continuing" }
+        & $bin web --foreground
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "the page ended with exit code $LASTEXITCODE; start it again with 'raven web'"
+        }
+    } finally {
+        Pop-Location
     }
 }
 
