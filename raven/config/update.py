@@ -669,16 +669,19 @@ def _everos_consumes_the_pin(path: "Path") -> bool:
     Read raw rather than through the loader: the writer already holds the file,
     and the loader's migrations have no business running inside a settings
     write. An absent ``memory.backend`` is the schema default, EverOS; an
-    explicit ``null`` is memory off.
+    explicit ``null`` is memory off. The default is read off the schema field
+    rather than imported from ``raven.core``, which imports this package and
+    would close a cycle.
     """
-    from raven.core.plugin_stack import SHIPPED_DEFAULT_BACKEND
+    from raven.config.raven import MemoryConfig
 
+    shipped = MemoryConfig.model_fields["backend"].default
     try:
         memory = read_raw_or_raise(path).get("memory") or {}
     except Exception:  # noqa: BLE001 - an unreadable config fails the write itself, not this check
         return False
-    backend = memory["backend"] if "backend" in memory else SHIPPED_DEFAULT_BACKEND
-    return backend == SHIPPED_DEFAULT_BACKEND
+    backend = memory["backend"] if "backend" in memory else shipped
+    return backend == shipped
 
 
 _EMBEDDING_MODEL_CHANGED = (
