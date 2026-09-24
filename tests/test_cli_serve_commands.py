@@ -650,14 +650,62 @@ class TestTheSupervisor:
 
         serve_commands._supervise(18999)
 
-    def test_the_gateway_is_run_through_the_interpreter_not_a_shim(self, monkeypatch) -> None:
+    def test_the_gateway_is_run_through_the_interpreter_with_a_safe_path(self, monkeypatch) -> None:
         """The supervisor outlives the working directory it was started from, and
-        `raven` on PATH may be a relative path or a shim that only resolved there."""
+        `raven` on PATH may be a relative path or a shim that only resolved there.
+        `-m` then puts that working directory first on sys.path, and `-P` is what
+        keeps a source checkout there from shadowing the installed raven."""
         import sys
 
         argv = serve_commands._gateway_argv(18999)
 
-        assert argv[:3] == [sys.executable, "-m", "raven"]
+        assert argv[:4] == [sys.executable, "-P", "-m", "raven"]
+
+    def test_a_checkout_under_the_working_directory_cannot_shadow_the_installed_raven(self, tmp_path: Path) -> None:
+        """The flags the child is given have to keep the working directory off
+        sys.path: a page started from inside a source checkout would otherwise
+        run that checkout's raven on the installed environment, and the
+        supervisor would do it again on every restart. A decoy package stands in
+        for the checkout, and the bare interpreter first shows that it does
+        shadow -- without that, a test that only ever passes proves nothing."""
+        import os
+        import subprocess
+        import sys
+
+        (tmp_path / "raven").mkdir()
+        (tmp_path / "raven" / "__init__.py").write_text("", encoding="utf-8")
+        probe = "import raven; print(raven.__file__)"
+        env = {**os.environ, "PYTHONSAFEPATH": ""}
+        argv = serve_commands._gateway_argv(18999)
+        flags = argv[1 : argv.index("-m")]
+
+        def imported_with(*options: str) -> Path:
+            run = subprocess.run(
+                [sys.executable, *options, "-c", probe],
+                cwd=tmp_path,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return Path(run.stdout.strip())
+
+        assert imported_with().is_relative_to(tmp_path), "the decoy has to shadow for the second half to mean anything"
+        assert not imported_with(*flags).is_relative_to(tmp_path)
+
+    def test_the_supervisor_itself_is_started_with_the_same_safe_path(self, home: Path, monkeypatch) -> None:
+        """The supervisor is the process that keeps the working directory for as
+        long as the page is up, so the guard has to be on its own launch too."""
+        import subprocess
+        import sys
+
+        launched: list[list[str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda argv, **_k: launched.append(list(argv)))
+
+        serve_commands._spawn_supervisor(18999)
+
+        assert launched and launched[0][:4] == [sys.executable, "-P", "-m", "raven"]
+        assert "--supervise" in launched[0]
 
     def test_it_supervises_the_engine_that_has_the_channel_adapters(self) -> None:
         """`serve` builds no ChannelManager, so a page behind it can never start an
@@ -671,7 +719,7 @@ class TestTheSupervisor:
         """
         argv = self.argv_with_lock(None, 18999)
 
-        assert argv[3] == "gateway"
+        assert argv[argv.index("raven") + 1] == "gateway"
         assert "--page-port" in argv
         assert argv[argv.index("--page-port") + 1] == "18999"
         assert "serve" not in argv
@@ -780,7 +828,7 @@ class TestTheSupervisor:
         """
         argv = self.argv_with_lock(object(), 18999)
 
-        assert argv[3] == "serve"
+        assert argv[argv.index("raven") + 1] == "serve"
         assert argv[argv.index("--port") + 1] == "18999"
         assert "gateway" not in argv
 
