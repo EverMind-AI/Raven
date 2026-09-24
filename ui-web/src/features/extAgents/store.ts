@@ -148,6 +148,17 @@ export function close(): void {
   page.show(null)
 }
 
+/* Writes run side by side, and each ends in a whole-roster read that takes
+   as long as a probe. A read that began before a later write landed does not
+   have that write, and painted as read it would offer the later agent as
+   connectable again though its write succeeded. So writes are counted as
+   they start and as they land, and one whose read came back after a later
+   write landed reads the roster again -- with the probe, since the verdicts
+   it carries must be the newer ones too -- until nothing newer has landed
+   under it. */
+let started = 0
+let landed = 0
+
 /* Every write goes through here: one place that repaints from whatever the
    source answered, so no caller has to remember to. A failure is toasted
    unless the caller says it will show it itself; either way it is returned,
@@ -167,6 +178,7 @@ export async function run(
      length of the write. Set on success only, or a rejected rename would point
      the sheet at a name no row will ever have and close the drawer. */
   let renamed = ''
+  let gen = ++started
   try {
     rows = await source().act(op, row as ExtAgentRow, args || {})
     if (row && args?.new_name && args.new_name !== row.name) renamed = args.new_name
@@ -182,9 +194,14 @@ export async function run(
     rows = await source().load(false).catch(() => get().rows)
     if (!opts.quiet) toast(t('gui.agent.failed', { detail: failedWith.detail }))
   }
-  const landed: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
-  if (renamed && get().sheet === row?.name) landed.sheet = renamed
-  set(landed)
+  while (landed > gen) {
+    gen = ++started
+    rows = await source().load(true).catch(() => get().rows)
+  }
+  landed = gen
+  const next: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
+  if (renamed && get().sheet === row?.name) next.sheet = renamed
+  set(next)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
   return failedWith
