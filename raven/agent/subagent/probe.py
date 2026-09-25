@@ -25,7 +25,7 @@ from typing import Any, Literal
 import aiohttp
 from loguru import logger
 
-from raven.agent.subagent import kimi_code
+from raven.agent.subagent import github_copilot, kimi_code
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
@@ -270,6 +270,12 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     from raven.acp_client.capabilities import looks_like_auth
 
     judged = said if answer is None else answer
+    # Copilot writes a provider refusal into the message and ends the turn, and
+    # the same words on a failed call still say "Authentication", which the
+    # credential reading would send to `copilot login`. Read its own sentence
+    # first so a bad API key is not told to sign in.
+    if github_copilot.applies(cfg) and (named := github_copilot.read(judged)) is not None:
+        return named[0][:_DETAIL_CAP], named[1]
     if not looks_like_auth(judged):
         # Read off the agent's answer only: a launch that died says nothing
         # about a provider, and its stderr can name an unreachable host that is
@@ -891,6 +897,10 @@ async def ping_agent(cfg: Any) -> PingResult:
         await pool.close_all()
 
     if failure is None and (reply or "").strip():
+        # Copilot reports a refused model call as the assistant message of a
+        # finished turn. A non-empty reply is not, on its own, a success.
+        if github_copilot.applies(cfg) and (named := github_copilot.read(reply)) is not None:
+            return PingResult(False, named[0][:_DETAIL_CAP], named[1])
         return PingResult(True, "it ran and replied")
     # An agent whose ACP answer leaves the reason out is asked for it its own way,
     # once the pool is closed, so the process asked is not racing the one pinged.

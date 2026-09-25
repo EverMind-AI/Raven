@@ -4743,8 +4743,12 @@ def test_copilot_login_is_the_one_spelling(monkeypatch: pytest.MonkeyPatch) -> N
     assert "`copilot login`" in off_path
     assert "None" not in off_path
 
+    expired = "Your Copilot subscription has expired. Please renew to continue."
+    text, remedy = probe_mod._refusal(cfg, expired)
+    assert remedy == Remedy("billing")
+    assert "renew it" in text and expired in text
+
     for other in (
-        "Your Copilot subscription has expired. Please renew to continue.",
         "The model not-a-model does not exist",
         "Rate limit reached. Please slow down.",
         "Offline mode requires a local model provider. Set COPILOT_PROVIDER_BASE_URL to configure one.",
