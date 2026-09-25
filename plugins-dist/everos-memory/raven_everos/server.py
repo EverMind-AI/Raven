@@ -226,6 +226,16 @@ class EverosBinaryMissingError(RuntimeError):
     """
 
 
+class EverosStillStartingError(RuntimeError):
+    """The server is up and booting, but did not answer within the start budget.
+
+    A wait, not a failure: an upgraded server rebuilding its index over a
+    large store outruns the budget every time, and the next probe finds it.
+    Callers that treat ``RuntimeError`` as "unavailable" still can; this only
+    lets one say "still starting" instead.
+    """
+
+
 class EverosNotConfiguredError(RuntimeError):
     """The memory LLM is missing, so no server could survive startup.
 
@@ -1031,14 +1041,13 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
 
 
 def _spawn_kwargs() -> dict[str, Any]:
-    """Keep the gateway's console signals away from the child.
+    """A session (POSIX) or process group (Windows) of the server's own.
 
-    POSIX: a session of its own, so a Ctrl-C at the gateway's terminal is not
-    delivered to the server too. Windows: a process group of its own, which
-    keeps Ctrl-C off it and, the group id being the pid, is what lets
-    ``stop_pid`` address Ctrl-Break to it. Closing the console window still
-    reaches every process on it, group or not; uvicorn shuts down on that
-    event and the next gateway starts a server again.
+    POSIX: a Ctrl-C at the gateway's terminal is not delivered to the server
+    too. Windows: the group is an address, not a shield -- its id is the pid,
+    which is what lets ``stop_pid`` send Ctrl-Break to this server alone. A
+    Ctrl-C at the gateway's console still reaches it (measured: both stop, the
+    server logging a clean shutdown), and the next gateway starts one again.
     """
     if sys.platform == "win32":
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -1188,10 +1197,9 @@ async def ensure_everos_server(
             )
 
     # Not phrased as a failure: the process is up and still booting, which is
-    # what the caller should tell the user and what the next session will find.
-    raise RuntimeError(
+    # what the caller should tell the user and what the next probe will find.
+    raise EverosStillStartingError(
         f"EverOS server is still starting at {base_url} after {timeout}s. "
-        f"This session runs without long-term memory; the next one should find it. "
         f"If it never comes up, check that port {_extract_port(base_url)} is free "
         f"and see {server_log_path()}"
     )

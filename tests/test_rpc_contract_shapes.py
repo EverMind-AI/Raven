@@ -267,6 +267,15 @@ def _everos(monkeypatch: pytest.MonkeyPatch, payload: dict) -> None:
 
     monkeypatch.setattr("raven.rpc.methods.memory._post", _post)
     monkeypatch.setattr("raven.rpc.methods.memory._cfg", lambda: ("http://x", "u", "a"))
+    # A search asks the server what it can do first; ``http://x`` is a hostname,
+    # and resolving it cost the one search test five seconds.
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", lambda base_url: _FullServer())
+
+
+class _FullServer:
+    @staticmethod
+    def available(section: str) -> bool:
+        return True
 
 
 async def test_memory_stats(monkeypatch: pytest.MonkeyPatch) -> None:

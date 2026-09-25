@@ -15,6 +15,7 @@ import pytest
 import raven_everos.server as everos_server
 from raven_everos.server import (
     EverosNotConfiguredError,
+    EverosStillStartingError,
     _everos_executable,
     ensure_everos_server,
 )
@@ -500,6 +501,36 @@ class TestTheRootDescribesItsOwnAddress:
         assert record["pid"] == 4242
         assert record["root"] == str(everos_toml.parent)
 
+    def test_a_pidfile_naming_a_live_server_survives_a_second_start(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Two starts inside one boot window: the lock covers the spawn, not
+        the boot, so the second child dies on the OME lock. On Windows the
+        pidfile is the only way back to the first server, and the loser must
+        not put its own pid there."""
+        import json
+
+        from raven_everos import server as _server
+
+        _pin_llm_role(everos_toml)
+        _server._write_pidfile(77, base_url="http://localhost:18791", root=everos_toml.parent)
+        monkeypatch.setattr(_server, "_is_everos_server", lambda pid: pid == 77)
+
+        _server._start_server_if_unlocked("http://localhost:18791")
+
+        assert json.loads((tmp_path / "everos-server.pid").read_text())["pid"] == 77
+
+    def test_a_pidfile_naming_a_dead_server_is_replaced(self, everos_toml, tmp_path, monkeypatch) -> None:
+        import json
+
+        from raven_everos import server as _server
+
+        _pin_llm_role(everos_toml)
+        _server._write_pidfile(77, base_url="http://localhost:18791", root=everos_toml.parent)
+        monkeypatch.setattr(_server, "_is_everos_server", lambda pid: False)
+
+        _server._start_server_if_unlocked("http://localhost:18791")
+
+        assert json.loads((tmp_path / "everos-server.pid").read_text())["pid"] == 4242
+
 
 class TestThePrimitivesAgainstTheRealOS:
     """The four OS-touching helpers, unmocked.
@@ -773,7 +804,7 @@ class TestDeadChildDetection:
             return False
 
         with patch("raven_everos.server._probe_health", side_effect=_probe):
-            with pytest.raises(RuntimeError, match="is still starting"):
+            with pytest.raises(EverosStillStartingError, match="is still starting"):
                 await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
         # One pre-loop probe plus one per 0.5s poll interval across a 1s budget.
@@ -884,7 +915,7 @@ class TestEnsureEverosServer:
                 "raven_everos.server.get_logs_dir",
                 return_value=tmp_path,
             ),
-            pytest.raises(RuntimeError, match="is still starting"),
+            pytest.raises(EverosStillStartingError, match="is still starting"),
         ):
             await ensure_everos_server("http://localhost:18791", timeout=0.05)
 

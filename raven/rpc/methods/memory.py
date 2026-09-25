@@ -82,10 +82,12 @@ async def _search_tuning(base_url: str, kind: str) -> dict[str, Any]:
     """What ``/search`` needs on this server, asked the way the chat adapter
     asks (``_search_tuning`` in ``raven_everos.backend``).
 
-    Keyword when nothing can embed; the LLM rerank when the agent track has no
-    cross-encoder, which is every install without a rerank role; the profile
-    opted in on its own tab. Without these the server refuses the search with
-    422 and the page reported "everos unreachable" over a retry button.
+    Keyword when nothing can embed; vector when the agent track has no
+    cross-encoder, which is every install without a rerank role -- the LLM
+    rerank lane the server offers instead measured 10-12 s a search, past this
+    page's own timeout; the profile opted in on its own tab. Without these the
+    server refuses the search with 422 and the page reported "everos
+    unreachable" over a retry button.
     """
     from raven_everos.health import probe_capabilities
 
@@ -93,8 +95,8 @@ async def _search_tuning(base_url: str, kind: str) -> dict[str, Any]:
     body: dict[str, Any] = {}
     if report.available("embedding") is False:
         body["method"] = "keyword"
-    if kind in _AGENT_KINDS and report.available("rerank") is False:
-        body["enable_llm_rerank"] = True
+    elif kind in _AGENT_KINDS and report.available("rerank") is False:
+        body["method"] = "vector"
     if kind == "profile":
         body["include_profile"] = True
     return body
@@ -104,7 +106,8 @@ def _everos_error(exc: Exception) -> str:
     """The server's own sentence when it refused, the transport error otherwise.
 
     A 4xx from EverOS carries ``error.message`` saying what to change; folding
-    it into "unreachable" sent people to check a server that was answering.
+    it into "unreachable" sent people to check a server that was answering. A
+    timeout carries no message at all, so it says what it waited for.
     """
     import httpx
 
@@ -115,7 +118,9 @@ def _everos_error(exc: Exception) -> str:
             message = None
         if message:
             return f"everos refused the request: {message}"
-    return f"everos unreachable: {exc}"
+    if isinstance(exc, httpx.TimeoutException):
+        return f"everos did not answer within {_HTTP_TIMEOUT_S:g}s"
+    return f"everos unreachable: {str(exc) or type(exc).__name__}"
 
 
 def _owner_body(kind: str, user_id: str, agent_id: str) -> dict[str, Any]:

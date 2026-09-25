@@ -450,6 +450,26 @@ class TestColdStartSpeaksUp:
         assert "exited with code 1" in err
         assert "without long-term memory" in err
 
+    async def test_a_server_still_booting_is_a_wait_not_an_outage(self, tmp_path: Path) -> None:
+        """An upgraded server rebuilding its index over a large store outruns
+        the start budget every time; "unavailable" sent people looking for a
+        fault, and "this session starts without memory" read as the gateway's
+        whole life. The probe attaches to it on the first call after it answers."""
+        from raven_everos.server import EverosStillStartingError
+
+        async def _still_booting(*_a: object, **_kw: object) -> None:
+            raise EverosStillStartingError("EverOS server is still starting at http://x after 10.0s.")
+
+        NOTICES.clear()
+        with patch("raven_everos.server.ensure_everos_server", new=_still_booting):
+            b = EverosBackend(_ctx(tmp_path))
+            await b.start()
+
+        assert b._state is ServiceState.STARTING
+        err = " ".join(" ".join(NOTICES).split())
+        assert "still starting" in err and "attaches to it as soon as it answers" in err
+        assert "unavailable" not in err
+
 
 class TestAUserManagedRootIsReadOnly:
     """Reusing an EverOS the user manages means recording its address, nothing more.
@@ -2910,7 +2930,7 @@ class TestRequestBodiesMatchEverosModels:
         [
             {"query": "q", "top_k": 5, "user_id": "default", "include_profile": True},
             {"query": "q", "top_k": 5, "agent_id": "raven"},
-            {"query": "q", "top_k": 5, "agent_id": "raven", "enable_llm_rerank": True},
+            {"query": "q", "top_k": 5, "agent_id": "raven", "method": "vector"},
             {"query": "q", "top_k": 5, "user_id": "default", "include_profile": True, "method": "keyword"},
             {"user_id": "default", "query": "q", "top_k": 100},
         ],
@@ -3031,9 +3051,35 @@ class TestAGatewayStartsTheServerAgain:
     def _ready(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EverosBackend:
         b = EverosBackend(_ctx(tmp_path), adapter=_HttpEverosAdapter("http://127.0.0.1:1"))
         b._state = ServiceState.READY
+        b._started = True
         monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
         monkeypatch.setattr("raven_everos.config.everos_root", lambda: tmp_path / "root")
         return b
+
+    async def test_a_turn_arriving_during_start_does_not_spawn_beside_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Gateway boot: ``start()`` is still measuring roles when the first
+        turn comes in, finds nothing listening, and would start a server of
+        its own -- leaving the one ``start()`` then starts to die on the OME
+        lock, reported as "exited with code 1" for a service that was up."""
+        import time as _time
+
+        b = EverosBackend(_ctx(tmp_path), adapter=_HttpEverosAdapter("http://127.0.0.1:1"))
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
+        monkeypatch.setattr("raven_everos.config.everos_root", lambda: tmp_path / "root")
+        monkeypatch.setattr("raven_everos.server.probe_health", lambda _u: ProbeVerdict.REFUSED)
+        monkeypatch.setattr("raven_everos.server.lock_holder", lambda _r, **_kw: None)
+        ensure = AsyncMock(return_value=None)
+        monkeypatch.setattr("raven_everos.server.ensure_everos_server", ensure)
+        # The width measurement is the window the turn lands in.
+        monkeypatch.setattr(b, "_withhold_an_embedding_that_cannot_serve", lambda: _time.sleep(0.05))
+        monkeypatch.setattr(b, "_warn_if_recall_cannot_work", lambda _u: None)
+
+        await asyncio.gather(b.start(), b._probe_once())
+
+        assert ensure.await_count == 1
+        assert b._state is ServiceState.READY
 
     async def test_nothing_listening_and_nothing_holding_the_lock_starts_one(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3124,6 +3170,34 @@ class TestAPinThatCannotServeIsWithheld:
 
             b._withhold_an_embedding_that_cannot_serve()
             assert len(said) == 1, "measured and said once per pin"
+        finally:
+            cfg.release_role("embedding")
+
+    def test_picking_another_model_ends_the_withholding_on_its_own(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """What the notice asks for. The settings page restarts the server
+        without measuring anything, so the spawn it triggers must already read
+        the new pin as not withheld."""
+        from raven_everos import backend as backend_mod
+        from raven_everos import config as cfg
+
+        monkeypatch.setattr("raven.config.update.configured_embedding_width", lambda: 768)
+        monkeypatch.setattr(
+            cfg, "role_pin", lambda section: ("bge-base", "deepinfra") if section == "embedding" else None
+        )
+        monkeypatch.setattr(backend_mod, "_EMBEDDING_WIDTHS", {})
+        b = _backend(tmp_path)
+        b.notify = lambda _text: None
+        try:
+            b._withhold_an_embedding_that_cannot_serve()
+            assert "embedding" in cfg.withheld_roles()
+
+            monkeypatch.setattr(
+                cfg, "role_pin", lambda section: ("qwen3", "deepinfra") if section == "embedding" else None
+            )
+
+            assert "embedding" not in cfg.withheld_roles()
         finally:
             cfg.release_role("embedding")
 

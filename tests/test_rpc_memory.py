@@ -18,6 +18,9 @@ from tests._everos_presence import everos_plugin_absent
 @pytest.fixture(autouse=True)
 def fake_cfg(monkeypatch):
     monkeypatch.setattr(memory, "_cfg", lambda: ("http://x", "u1", "a1"))
+    # A full server, so no test pays a real capability probe: ``http://x`` is
+    # a hostname, and resolving it cost the one search test five seconds.
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=True))
 
 
 def _post_returning(payloads):
@@ -251,9 +254,8 @@ def _server_that(embedding: bool | None, rerank: bool | None):
 
 @pytest.mark.asyncio
 async def test_search_asks_for_what_the_server_can_do(monkeypatch):
-    """No embedding: keyword. Agent track without a cross-encoder: the LLM
-    rerank. Without these the server answered 422 and the page called it
-    unreachable."""
+    """No embedding: keyword, whatever the track. Without it the server
+    answered 422 and the page called it unreachable."""
     post, calls = _post_returning([{"data": {"agent_cases": []}}])
     monkeypatch.setattr(memory, "_post", post)
     monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=False, rerank=False))
@@ -261,7 +263,31 @@ async def test_search_asks_for_what_the_server_can_do(monkeypatch):
     await memory.memory_list({"kind": "agent_case", "q": "x"})
 
     assert calls[0][1]["method"] == "keyword"
-    assert calls[0][1]["enable_llm_rerank"] is True
+    assert "enable_llm_rerank" not in calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_the_agent_tabs_search_by_vector_without_a_cross_encoder(monkeypatch):
+    """The default install has no rerank role. The LLM rerank lane the server
+    offers instead measured 10-12 s a search -- past this page's timeout once
+    the reranker has anything to read -- so the page asks for the dense half
+    on its own: under two seconds, no LLM call."""
+    post, calls = _post_returning([{"data": {"agent_skills": []}}])
+    monkeypatch.setattr(memory, "_post", post)
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=False))
+
+    await memory.memory_list({"kind": "agent_skill", "q": "x"})
+
+    assert calls[0][1]["method"] == "vector"
+    assert "enable_llm_rerank" not in calls[0][1]
+
+
+def test_a_timeout_says_what_it_waited_for():
+    """``str()`` of an httpx timeout is empty, which left the page reading
+    ``everos unreachable:`` and nothing after the colon."""
+    import httpx
+
+    assert memory._everos_error(httpx.ReadTimeout("")) == "everos did not answer within 15s"
 
 
 @pytest.mark.asyncio

@@ -326,16 +326,19 @@ class _HttpEverosAdapter:
           recall. This is what makes the embedding role genuinely optional.
         - **No rerank, agent track, HYBRID.** Agent-track HYBRID fuses
           ``agent_case`` / ``agent_skill`` through a cross-encoder; without one
-          the server refuses the request. ``enable_llm_rerank`` is the documented
-          fallback, and it costs one LLM call per recall, so it is only taken
-          when the cross-encoder is genuinely absent. Moot under KEYWORD, whose
-          agent path does not go through rerank at all.
+          the server refuses the request. VECTOR is the dense half of that
+          fusion on its own -- no rerank, no LLM call. The server's other way
+          out, ``enable_llm_rerank``, reranks through the LLM and measured
+          10-12 s a call with or without candidates, against a 4 s recall
+          budget: a fallback that never returns in time is no fallback, and it
+          billed one call per turn for nothing. Moot under KEYWORD, which needs
+          neither.
         """
         caps = await self._capabilities()
         if caps.get("embed") is False:
             return {"method": "keyword"}
         if agent_id is not None and caps.get("rerank") is False:
-            return {"enable_llm_rerank": True}
+            return {"method": "vector"}
         return {}
 
     async def search(
@@ -566,6 +569,8 @@ class EverosBackend:
         self._probe_task: asyncio.Task | None = None
         self._last_probe_at: float = 0.0
         self._last_respawn_at = 0.0
+        # Whether ``start()`` has returned. Until then the spawn is its to make.
+        self._started = False
         self._store_inflight: set[asyncio.Task] = set()
         # Set once `stop` has closed the adapter. A write still on the wire then
         # fails because we shut its transport, which says nothing about the
@@ -687,11 +692,12 @@ class EverosBackend:
         raven never sees -- an upgrade's sweep on Windows, a crash, a stop
         another process sent that finished after it gave up waiting -- and the
         only other path that starts one is ``start()``, which a running gateway
-        never passes through again.
+        never passes through again -- and which, until it has returned, is the
+        one entitled to spawn.
         """
         from raven_everos.config import everos_owned
 
-        if self._stopping or not isinstance(self._adapter, _HttpEverosAdapter):
+        if not self._started or self._stopping or not isinstance(self._adapter, _HttpEverosAdapter):
             return False
         if self._proc is not None and self._proc.poll() is None:
             return False
@@ -792,6 +798,17 @@ class EverosBackend:
         return self._state
 
     async def start(self) -> None:
+        # The self-heal in ``_probe_once`` waits for this to return. A turn
+        # arriving while the roles are still being measured finds nothing
+        # listening; a server it started would leave the one this method then
+        # starts to die on the OME lock -- "exited with code 1" for a service
+        # that was up and serving.
+        try:
+            await self._start()
+        finally:
+            self._started = True
+
+    async def _start(self) -> None:
         try:
             self._validate_identity()
         except ValueError as e:
@@ -858,6 +875,7 @@ class EverosBackend:
             from raven_everos.server import (
                 EverosBinaryMissingError,
                 EverosNotConfiguredError,
+                EverosStillStartingError,
                 ensure_everos_server,
             )
 
@@ -917,6 +935,18 @@ class EverosBackend:
                 self._state = ServiceState.NO_BINARY
                 self.notify(f"Long-term memory is off: {e}\nInstall the everos CLI, then start a new session.")
                 return
+            except EverosStillStartingError as e:
+                # Up and still booting: a server rebuilding its index over a
+                # large store after an upgrade outruns the start budget every
+                # time. A wait, not an outage -- the probe attaches to it on the
+                # first memory call after it answers.
+                self._state = self._state_from_child()
+                self._logger.warning("EverosBackend: %s", e)
+                self.notify(
+                    f"{e}\nRaven attaches to it as soon as it answers; until then this session runs "
+                    "without long-term memory."
+                )
+                return
             except Exception as e:
                 # Not raised on: the session continues without memory, and the
                 # state machine keeps probing in case the server comes up. The
@@ -959,7 +989,7 @@ class EverosBackend:
             _EMBEDDING_WIDTHS[pin] = configured_embedding_width()
         width = _EMBEDDING_WIDTHS[pin]
         if isinstance(width, int) and width < REQUIRED_EMBEDDING_DIMENSIONS:
-            withhold_role("embedding")
+            withhold_role("embedding", pin)
             if first:
                 self.notify(
                     f"The embedding model in your settings ({pin[0]}) returns {width}-dimension vectors and the "
