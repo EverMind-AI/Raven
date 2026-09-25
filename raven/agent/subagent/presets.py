@@ -419,6 +419,13 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # declares no `engines.node` and a launch that quits on an old Node.js
     # was not measured, so it is not in `NODE_RUNTIME_PRESETS`.
     "github_copilot": SignIn(exe="copilot", local="copilot login"),
+    # `grok login` is what `grok login --help` titles "Sign in to Grok"
+    # (measured 2026-09-24, Grok Build 1.0.41). `--oauth` names the default
+    # path; the bare command is the one a reader runs. A local install: the
+    # row's command is `grok agent stdio`, so a reader with no `grok` stops at
+    # the absent executable. The binary is native, so a launch that quits is
+    # not a Node.js problem.
+    "grok": SignIn(exe="grok", local="grok login"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -461,6 +468,13 @@ MODEL_SWITCH_HINTS: dict[str, InAgent] = {
     # (`persistModelSelection`, "Saved ... as default"), and only a separate
     # "this session only" select does not (read from Kimi Code 2.1.0).
     "kimi_code": InAgent("kimi", "/model"),
+    # `grok models` ("List available models and exit") is the command
+    # `grok models --help` prints (Grok Build 1.0.41). It does not switch the
+    # model; it is the list a reader picks from.
+    "grok": InAgent("grok models"),
+    # `--model` is the flag `copilot --help` names, and its help says `auto`
+    # lets Copilot pick (1.0.88). One command, no second spelling.
+    "github_copilot": InAgent("copilot --model auto"),
 }
 """How to change the model the agent a row defers to is set to use, by preset key.
 
@@ -485,6 +499,14 @@ DIAGNOSE_HINTS: dict[str, str] = {
     # the reason once it gives up, and within a second for everything it does not
     # retry (measured 2026-09-24, Kimi Code 2.1.0).
     "kimi_code": "kimi -p hi",
+    # `-p` / `--single` ("Single-turn prompt. Prints the response to stdout and
+    # exits") is the flag `grok --help` names (1.0.41).
+    "grok": "grok -p hi",
+    # `-p` / `--prompt` ("Execute a prompt in non-interactive mode") is the flag
+    # `copilot --help` names (1.0.88). A 429 against a stand-in provider was
+    # still retrying when the connect's wait ran out, so the reply carried no
+    # reason.
+    "github_copilot": "copilot -p hi",
 }
 """A command that makes the agent a row defers to say why it is not answering.
 

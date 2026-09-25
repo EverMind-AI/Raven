@@ -4757,9 +4757,8 @@ def test_copilot_login_is_the_one_spelling(monkeypatch: pytest.MonkeyPatch) -> N
 
     answer = "Internal error: 404 The model not-a-model does not exist"
     text, remedy = probe_mod._refusal(cfg, f"request failed: [-32603] {answer}", answer)
-    assert remedy == Remedy("model")
-    assert remedy.command is None
-    assert "switch the model it uses" in text
+    assert remedy == Remedy("model", "copilot --model auto")
+    assert "`copilot --model auto`" in text
 
 
 def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: pytest.MonkeyPatch) -> None:

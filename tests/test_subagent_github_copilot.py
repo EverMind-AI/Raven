@@ -9,6 +9,7 @@ reply.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -143,6 +144,74 @@ async def test_grok_is_not_read_with_copilots_sentences(monkeypatch: pytest.Monk
         SimpleNamespace(name="Grok Build", preset="grok", kind="acp", command="grok agent stdio")
     )
     assert result.ok is True
+
+
+def test_an_install_the_login_path_misses_is_not_reported_as_absent(tmp_path: Path) -> None:
+    from raven.agent.subagent.probe import _installed_outside_login_path
+
+    binary = tmp_path / "copilot"
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
+    binary.chmod(0o755)
+    found = _installed_outside_login_path("copilot", str(tmp_path / "empty"), roots=(tmp_path,))
+    assert found == str(binary)
+    assert _installed_outside_login_path("qwen", "", roots=(tmp_path,)) is None
+    assert _installed_outside_login_path("copilot", str(tmp_path), roots=(tmp_path,)) is None
+
+
+def test_these_two_agents_name_a_start_that_quit_or_never_spoke() -> None:
+    from raven.agent.subagent.probe import _process_refusal
+    from raven.agent.subagent.probe_state import Remedy
+
+    def shown(tail: str) -> str:
+        return f"acp agent 'x': connection ended (exit 1); stderr tail: {tail}"
+
+    grok = SimpleNamespace(preset="grok", kind="acp", command="grok agent stdio")
+    copilot = SimpleNamespace(preset="github_copilot", kind="acp", command="copilot --acp")
+
+    text, remedy = _process_refusal(grok, shown("error: unrecognized subcommand 'agent'"))
+    assert remedy == Remedy("upgrade", "npm i -g @xai-official/grok@latest")
+    assert "too old to be connected" in text
+
+    text, remedy = _process_refusal(copilot, shown("error: unexpected argument '--acp' found"))
+    assert remedy == Remedy("upgrade", "npm i -g @github/copilot@latest")
+    assert "too old to be connected" in text
+
+    text, remedy = _process_refusal(
+        copilot, shown("GitHub Copilot CLI: no platform package found. Reinstall with `npm install -g @github/copilot`.")
+    )
+    assert remedy is not None and remedy.kind == "upgrade"
+    assert "platform package" in text
+
+    text, remedy = _process_refusal(
+        copilot, shown("Offline mode requires a local model provider. Set COPILOT_PROVIDER_BASE_URL to configure one.")
+    )
+    assert remedy == Remedy("setup", "copilot login")
+    assert "no model provider" in text
+
+    text, remedy = _process_refusal(grok, "acp agent 'Grok': initialize timed out after 30.0s")
+    assert remedy is None
+    assert "ACP server did not start" in text
+
+    text, remedy = _process_refusal(copilot, "acp agent 'GitHub Copilot': session/prompt timed out after 30s")
+    assert remedy == Remedy("silent", "copilot -p hi")
+
+
+def test_an_expired_sign_in_is_not_described_as_a_missing_key() -> None:
+    from raven.agent.subagent.probe import _refusal
+
+    text, remedy = _refusal(
+        SimpleNamespace(preset="grok", kind="acp"),
+        "Failed to authenticate: OAuth session expired and could not be refreshed.",
+    )
+    assert remedy is not None and remedy.command == "grok login"
+    assert text.startswith("its sign-in has expired")
+
+    text, remedy = _refusal(
+        SimpleNamespace(preset="grok", kind="acp"),
+        "Incorrect API key provided",
+    )
+    assert remedy is not None and remedy.command == "grok login"
+    assert text.startswith("its API key was refused")
 
 
 async def test_an_ordinary_reply_is_still_a_success(monkeypatch: pytest.MonkeyPatch) -> None:
