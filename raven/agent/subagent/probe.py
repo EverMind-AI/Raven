@@ -470,11 +470,14 @@ def _named_launch_failure(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
             f"It said: {shown}"
         )[:_DETAIL_CAP], Remedy("upgrade", upgrade_hint_for(cfg))
     if preset == "github_copilot" and "offline mode requires a local model provider" in low:
+        # No command: offline mode does not authenticate, so `copilot login`
+        # leaves the same missing COPILOT_PROVIDER_BASE_URL. `setup` without a
+        # command renders as a sign-in, which is the same miss.
         return (
-            "it has no model provider configured; set COPILOT_PROVIDER_BASE_URL, "
-            "or sign in with `copilot login`, and connect again. "
+            "it has no model provider configured; set COPILOT_PROVIDER_BASE_URL "
+            "to one and connect again. "
             f"It said: {shown}"
-        )[:_DETAIL_CAP], Remedy("setup", "copilot login")
+        )[:_DETAIL_CAP], None
     return None
 
 

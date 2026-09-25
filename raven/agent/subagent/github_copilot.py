@@ -43,16 +43,22 @@ def read(said: str) -> tuple[str, Remedy | None] | None:
     it here would hide that command.
     """
     if _KEY.search(said):
+        # Not `api_key`: that kind is the sheet's key field, and an ACP row has
+        # none. The variable Copilot names is the action, so it stays in the
+        # record instead of being folded under a control that is not there.
         return (
             "its model provider refused the API key it is set up with; "
-            "change COPILOT_PROVIDER_API_KEY and connect again. "
+            "change COPILOT_PROVIDER_API_KEY (or COPILOT_PROVIDER_API_KEY_COMMAND, "
+            "or COPILOT_PROVIDER_BEARER_TOKEN) and connect again. "
             f"It said: {said}",
-            Remedy("api_key"),
+            None,
         )
     if _SUBSCRIPTION.search(said):
+        # `plan`, not `billing`: billing tells the reader to add provider credit
+        # or switch models, and neither renews the Copilot subscription.
         return (
-            f"its subscription has expired; renew it and connect again. It said: {said}",
-            Remedy("billing"),
+            f"its subscription has expired; renew the plan and connect again. It said: {said}",
+            Remedy("plan"),
         )
     if _CREDIT.search(said):
         return (

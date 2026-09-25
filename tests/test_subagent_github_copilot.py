@@ -46,10 +46,8 @@ def _cfg(preset: str = "github_copilot") -> SimpleNamespace:
 @pytest.mark.parametrize(
     ("said", "kind"),
     [
-        (_KEY_401, "api_key"),
-        (_KEY_403, "api_key"),
         (_CREDIT, "billing"),
-        (_EXPIRED, "billing"),
+        (_EXPIRED, "plan"),
         (_MODEL, "model"),
         (_LOCAL, "network"),
         (_TUNNEL, "network"),
@@ -97,8 +95,9 @@ def test_a_bad_provider_key_is_not_told_to_sign_in() -> None:
     from raven.agent.subagent.probe import _refusal
 
     text, remedy = _refusal(_cfg(), _KEY_401, _KEY_401)
-    assert remedy == Remedy("api_key")
+    assert remedy is None
     assert "copilot login" not in text
+    assert text.startswith("its model provider refused the API key")
     assert "COPILOT_PROVIDER_API_KEY" in text
 
 
@@ -185,8 +184,9 @@ def test_these_two_agents_name_a_start_that_quit_or_never_spoke() -> None:
     text, remedy = _process_refusal(
         copilot, shown("Offline mode requires a local model provider. Set COPILOT_PROVIDER_BASE_URL to configure one.")
     )
-    assert remedy == Remedy("setup", "copilot login")
-    assert "no model provider" in text
+    assert remedy is None
+    assert "COPILOT_PROVIDER_BASE_URL" in text
+    assert "copilot login" not in text
 
     text, remedy = _process_refusal(grok, "acp agent 'Grok': initialize timed out after 30.0s")
     assert remedy is None

@@ -468,13 +468,6 @@ MODEL_SWITCH_HINTS: dict[str, InAgent] = {
     # (`persistModelSelection`, "Saved ... as default"), and only a separate
     # "this session only" select does not (read from Kimi Code 2.1.0).
     "kimi_code": InAgent("kimi", "/model"),
-    # `grok models` ("List available models and exit") is the command
-    # `grok models --help` prints (Grok Build 1.0.41). It does not switch the
-    # model; it is the list a reader picks from.
-    "grok": InAgent("grok models"),
-    # `--model` is the flag `copilot --help` names, and its help says `auto`
-    # lets Copilot pick (1.0.88). One command, no second spelling.
-    "github_copilot": InAgent("copilot --model auto"),
 }
 """How to change the model the agent a row defers to is set to use, by preset key.
 
