@@ -8317,3 +8317,18 @@ def test_a_self_hosted_rerank_source_asks_the_operator_for_the_shape(
     assert role_pin("rerank") is not None
     # Recorded on the role, because the table is silent exactly here.
     assert rerank_protocol_for_role() == "vllm"
+
+
+def test_a_wider_embedding_model_passes_the_wizard_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The verdict the settings page reaches: EverOS keeps the first 1024 of a
+    wider vector, so the model serves; the wizard used to refuse it."""
+    monkeypatch.setattr(onboard_everos, "_probe_embedding_dim", lambda url, headers, model: 1536)
+
+    assert onboard_everos._verify_embedding_dim(model="m", api_key="k", base_url="http://p", non_interactive=True)
+
+
+def test_a_narrower_embedding_model_still_fails_the_wizard_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(onboard_everos, "_probe_embedding_dim", lambda url, headers, model: 768)
+
+    assert not onboard_everos._verify_embedding_dim(model="m", api_key="k", base_url="http://p", non_interactive=True)
+

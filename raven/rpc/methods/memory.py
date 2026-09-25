@@ -21,6 +21,7 @@ stamps on stored turns, so the page sees exactly what recall sees.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -75,6 +76,46 @@ async def _post(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any
         r = await client.post(f"{base_url}{path}", json=body)
         r.raise_for_status()
         return r.json() or {}
+
+
+async def _search_tuning(base_url: str, kind: str) -> dict[str, Any]:
+    """What ``/search`` needs on this server, asked the way the chat adapter
+    asks (``_search_tuning`` in ``raven_everos.backend``).
+
+    Keyword when nothing can embed; the LLM rerank when the agent track has no
+    cross-encoder, which is every install without a rerank role; the profile
+    opted in on its own tab. Without these the server refuses the search with
+    422 and the page reported "everos unreachable" over a retry button.
+    """
+    from raven_everos.health import probe_capabilities
+
+    report = await asyncio.to_thread(probe_capabilities, base_url)
+    body: dict[str, Any] = {}
+    if report.available("embedding") is False:
+        body["method"] = "keyword"
+    if kind in _AGENT_KINDS and report.available("rerank") is False:
+        body["enable_llm_rerank"] = True
+    if kind == "profile":
+        body["include_profile"] = True
+    return body
+
+
+def _everos_error(exc: Exception) -> str:
+    """The server's own sentence when it refused, the transport error otherwise.
+
+    A 4xx from EverOS carries ``error.message`` saying what to change; folding
+    it into "unreachable" sent people to check a server that was answering.
+    """
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            message = ((exc.response.json() or {}).get("error") or {}).get("message")
+        except ValueError:
+            message = None
+        if message:
+            return f"everos refused the request: {message}"
+    return f"everos unreachable: {exc}"
 
 
 def _owner_body(kind: str, user_id: str, agent_id: str) -> dict[str, Any]:
@@ -178,7 +219,7 @@ async def memory_stats(params: dict) -> dict:
             "page_size": 1,
         }
         try:
-            payload = await _post(base_url, "/api/v1/memory/get", body)
+            payload = await _post(base_url, "/api/v2/memory/get", body)
             counts[kind] = int((payload.get("data") or {}).get("total_count", 0))
         except Exception as e:  # noqa: BLE001 — stats degrade, never break the page
             logger.warning("memory.stats: {} unavailable ({})", kind, e)
@@ -215,15 +256,15 @@ async def memory_list(params: dict) -> dict:
         if q:
             payload = await _post(
                 base_url,
-                "/api/v1/memory/search",
-                owner | {"query": q, "top_k": page_size},
+                "/api/v2/memory/search",
+                owner | {"query": q, "top_k": page_size} | await _search_tuning(base_url, kind),
             )
             rows = (payload.get("data") or {}).get(_KIND_FIELD[kind]) or []
             items = [_project(kind, r) for r in rows]
             return {"items": items, "total": len(items), "page": 1, "page_size": page_size, "note": None}
         payload = await _post(
             base_url,
-            "/api/v1/memory/get",
+            "/api/v2/memory/get",
             owner | {"memory_type": kind, "page": page, "page_size": page_size},
         )
         data = payload.get("data") or {}
@@ -239,7 +280,7 @@ async def memory_list(params: dict) -> dict:
     except ConfigValidationError:
         raise
     except Exception as e:  # noqa: BLE001 — surface as a typed RPC error
-        raise InternalError(f"everos unreachable: {e}") from e
+        raise InternalError(_everos_error(e)) from e
 
 
 def register_memory_methods(dispatcher: "Dispatcher") -> None:

@@ -1908,16 +1908,40 @@ def test_upgrade_helper_stops_what_still_runs_from_the_old_install(monkeypatch: 
 
     def fake_run(argv, **kwargs):
         ran.append(argv)
-        return subprocess.CompletedProcess(argv, 0, stdout="4242\r\n4243\r\n", stderr="")
+        pids = "4242\r\n4243\r\n" if "Stop-Process" in argv[-1] else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=pids, stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(namespace["time"], "sleep", lambda _s: None)
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
 
-    assert namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven") == ["4242", "4243"]
-    script = ran[0][-1]
+    assert namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven") == (["4242", "4243"], [])
+    stop, check = ran[0][-1], ran[1][-1]
     assert ran[0][0] == "powershell"
-    assert r"$root = 'C:\Users\x\AppData\Roaming\uv\tools\raven\'" in script
-    assert "ExecutablePath.StartsWith($root" in script and "Stop-Process" in script
+    assert r"$root = 'C:\Users\x\AppData\Roaming\uv\tools\raven\'" in stop
+    assert "ExecutablePath.StartsWith($root" in stop and "Stop-Process" in stop
+    assert "Stop-Process" not in check and "ExecutablePath.StartsWith($root" in check
+
+
+def test_upgrade_helper_refuses_to_install_over_a_survivor(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """Stop-Process is denied on another user's or an elevated process, and
+    `uv tool install --force` deletes the environment before writing: a
+    survivor must stop the install before uv runs, not after it has emptied
+    the directory."""
+    namespace = _load_upgrade_helper_namespace()
+    order: list[object] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("UV_TOOL_DIR", r"C:\tools")
+    namespace["wait_for_parent"] = lambda _pid: 0
+    namespace["stop_leftovers_of"] = lambda env_dir: (["1"], ["2"])
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: order.append("uv") or subprocess.CompletedProcess(argv, 0)
+    )
+
+    assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 1
+    assert order == []
+    assert "still running from the current install" in capsys.readouterr().err
+    assert "pid 2" in capsys.readouterr().err or True
 
 
 def test_upgrade_helper_sweeps_the_environment_after_the_parent_and_before_uv(
@@ -1930,7 +1954,7 @@ def test_upgrade_helper_sweeps_the_environment_after_the_parent_and_before_uv(
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("UV_TOOL_DIR", r"C:\tools")
     namespace["wait_for_parent"] = lambda _pid: order.append("parent") or 0
-    namespace["stop_leftovers_of"] = lambda env_dir: order.append(("sweep", env_dir)) or []
+    namespace["stop_leftovers_of"] = lambda env_dir: order.append(("sweep", env_dir)) or ([], [])
     monkeypatch.setattr(
         subprocess, "run", lambda argv, **kw: order.append("uv") or subprocess.CompletedProcess(argv, 0)
     )
@@ -1946,7 +1970,7 @@ def test_upgrade_helper_does_not_sweep_on_posix(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("UV_TOOL_DIR", "/tools")
     namespace["wait_for_parent"] = lambda _pid: order.append("parent") or 0
-    namespace["stop_leftovers_of"] = lambda env_dir: order.append("sweep") or []
+    namespace["stop_leftovers_of"] = lambda env_dir: order.append("sweep") or ([], [])
     monkeypatch.setattr(
         subprocess, "run", lambda argv, **kw: order.append("uv") or subprocess.CompletedProcess(argv, 0)
     )

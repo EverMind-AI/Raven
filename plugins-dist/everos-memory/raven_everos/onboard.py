@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 import typer
 
 from raven.config.update import REQUIRED_EMBEDDING_DIMENSIONS as _REQUIRED_EMBEDDING_DIM
+from raven.config.update import EmbeddingPinError
 from raven.config.update import probe_embedding_dimensions as _probe_embedding_dim
 from raven.plugins import OnboardUI, PluginContext, StepOutcome
 from raven_everos.config import REQUIRED_ROLES, RERANK_PROTOCOLS, VENDORS, recorded_slice, vendors
@@ -292,14 +293,16 @@ def _verify_embedding_dim(
             return False
 
         if isinstance(result, int) and result > _REQUIRED_EMBEDDING_DIM:
+            # The same verdict the settings page reaches: EverOS keeps the first
+            # 1024 of a wider vector, so this model serves, only less precisely.
             _UI.console.print(
                 _UI.t(
-                    "  [red]✗ Model outputs {result}-dim and does not support the dimensions parameter to truncate to {_REQUIRED_EMBEDDING_DIM}. Please pick another model.[/red]",
+                    "  [green]✓ Outputs {result}-dim; EverOS keeps the first {_REQUIRED_EMBEDDING_DIM}.[/green]",
                     result=result,
                     _REQUIRED_EMBEDDING_DIM=_REQUIRED_EMBEDDING_DIM,
                 )
             )
-            return False
+            return True
 
         _UI.console.print(_UI.t("  [yellow]✗ Couldn't verify dimension: {result}[/yellow]", result=result))
         if non_interactive:
@@ -1037,7 +1040,13 @@ def _config_everos_role(
         if section == "embedding":
             # Raven's own block, which a knowledge base reads too. `set_role`
             # routes it there; the cost line is what only this writer can report.
-            cost = _UI.set_embedding_endpoint({"model": result["model"], "provider": provider})
+            try:
+                cost = _UI.set_embedding_endpoint({"model": result["model"], "provider": provider})
+            except EmbeddingPinError as exc:
+                # The host's own check, which runs even when the wizard's was
+                # skipped: a refusal is a reason to pick again, not a traceback.
+                _UI.console.print(_UI.t("  [red]✗ {reason}[/red]", reason=str(exc)))
+                continue
         else:
             set_role(
                 section,

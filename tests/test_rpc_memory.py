@@ -91,7 +91,7 @@ async def test_list_projects_episode_rows(monkeypatch):
     post, calls = _post_returning(payloads)
     monkeypatch.setattr(memory, "_post", post)
     out = await memory.memory_list({"kind": "episode", "page": 2, "page_size": 10})
-    assert calls[0][0] == "/api/v1/memory/get"
+    assert calls[0][0] == "/api/v2/memory/get"
     assert calls[0][1]["page"] == 2
     assert out["total"] == 41 and out["page"] == 2
     item = out["items"][0]
@@ -123,7 +123,7 @@ async def test_list_with_query_uses_search(monkeypatch):
     post, calls = _post_returning(payloads)
     monkeypatch.setattr(memory, "_post", post)
     out = await memory.memory_list({"kind": "agent_skill", "q": "fallback"})
-    assert calls[0][0] == "/api/v1/memory/search"
+    assert calls[0][0] == "/api/v2/memory/search"
     assert calls[0][1]["agent_id"] == "a1"
     assert out["page"] == 1
     assert out["items"][0]["score"] == 0.9
@@ -243,3 +243,51 @@ async def test_the_configured_backend_gets_no_note(monkeypatch):
     stats = await memory.memory_stats({})
 
     assert stats["note"] is None
+
+
+def _server_that(embedding: bool | None, rerank: bool | None):
+    return lambda base_url: SimpleNamespace(available=lambda s: {"embedding": embedding, "rerank": rerank}.get(s))
+
+
+@pytest.mark.asyncio
+async def test_search_asks_for_what_the_server_can_do(monkeypatch):
+    """No embedding: keyword. Agent track without a cross-encoder: the LLM
+    rerank. Without these the server answered 422 and the page called it
+    unreachable."""
+    post, calls = _post_returning([{"data": {"agent_cases": []}}])
+    monkeypatch.setattr(memory, "_post", post)
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=False, rerank=False))
+
+    await memory.memory_list({"kind": "agent_case", "q": "x"})
+
+    assert calls[0][1]["method"] == "keyword"
+    assert calls[0][1]["enable_llm_rerank"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_full_server_gets_the_plain_request_and_the_profile_tab_opts_in(monkeypatch):
+    post, calls = _post_returning([{"data": {"profiles": []}}])
+    monkeypatch.setattr(memory, "_post", post)
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=True))
+
+    await memory.memory_list({"kind": "profile", "q": "x"})
+
+    assert calls[0][1] == {"user_id": "u1", "query": "x", "top_k": 20, "include_profile": True}
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_carries_the_servers_own_sentence(monkeypatch):
+    import httpx
+
+    async def _post(base_url, path, body):
+        request = httpx.Request("POST", "http://x" + path)
+        response = httpx.Response(
+            422, json={"error": {"code": "x", "message": "set enable_llm_rerank=true"}}, request=request
+        )
+        raise httpx.HTTPStatusError("422", request=request, response=response)
+
+    monkeypatch.setattr(memory, "_post", _post)
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=None, rerank=None))
+
+    with pytest.raises(InternalError, match="set enable_llm_rerank=true"):
+        await memory.memory_list({"kind": "agent_case", "q": "x"})

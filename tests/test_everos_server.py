@@ -1168,6 +1168,36 @@ class TestWindowsProcessIdentification:
 
         assert _listening_port(4242) is None
 
+    def test_a_lookup_that_failed_is_not_a_process_that_is_gone(self, monkeypatch) -> None:
+        """PowerShell missing or blocked, WMI wedged, the timeout hit: the
+        answer is unknown, and a stop keeps waiting rather than declaring the
+        server gone, deleting the pidfile and starting a second one against
+        the lock the first still holds."""
+        import subprocess
+
+        from raven_everos.server import _cmdline_of, _is_everos_server
+
+        def refuse(argv, **kwargs):
+            raise OSError("powershell is not available")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(subprocess, "run", refuse)
+
+        assert _cmdline_of(4242) is None
+        assert _is_everos_server(4242) is None
+
+    def test_a_powershell_that_exits_with_an_error_is_also_unknown(self, monkeypatch) -> None:
+        import subprocess
+
+        from raven_everos.server import _cmdline_of
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, stdout="", stderr="blocked")
+        )
+
+        assert _cmdline_of(4242) is None
+
 
 class TestStoppingOnWindows:
     """Windows has no SIGTERM. The request is Ctrl-Break to the process group
@@ -1215,6 +1245,14 @@ class TestStoppingOnWindows:
 
         assert everos_server.stop_pid(4242) is everos_server.StopOutcome.STOPPED
         assert signalled == [21, everos_server.signal.SIGTERM]
+
+    def test_an_unknown_answer_keeps_the_stop_waiting(self, monkeypatch) -> None:
+        signalled: list[int] = []
+        monkeypatch.setattr(everos_server.os, "kill", lambda _pid, sig: signalled.append(sig))
+        monkeypatch.setattr(everos_server, "_is_everos_server", lambda _p: None)
+
+        assert everos_server.stop_pid(4242, timeout=0.05) is everos_server.StopOutcome.STILL_DRAINING
+        assert everos_server.signal.SIGTERM in signalled, "the bounded fallback still fires"
 
     def test_the_child_gets_a_process_group_of_its_own(self, monkeypatch) -> None:
         import subprocess
@@ -1575,11 +1613,31 @@ class TestRestartingForAConfigChange:
         """No holder is not a failure: the person just configured memory, and
         starting what they configured is what the save meant."""
         seen = self._wire(monkeypatch, stop=None)
+        monkeypatch.setattr(everos_server, "_probe_health", lambda _url: False)
 
         await self._run(seen)
 
         assert seen["ensure"] == ["http://127.0.0.1:18791"]
         assert seen["result"] == [(True, None)]
+
+    async def test_a_server_that_answers_but_cannot_be_named_is_not_reported_applied(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lookup that failed, or a pidfile lost on Windows: something serves
+        the address and the lock cannot say what. Adopting it would report the
+        save as applied over a server still running the old configuration."""
+        seen = self._wire(monkeypatch, stop=None)
+        monkeypatch.setattr(everos_server, "_probe_health", lambda _url: True)
+
+        await self._run(seen)
+
+        assert seen["ensure"] == []
+        assert seen["result"] == [
+            (
+                False,
+                "the process serving it could not be identified, so it was not restarted; restart the memory service yourself to pick this up.",
+            )
+        ]
 
     async def test_a_startup_failure_reaches_the_caller_verbatim(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen = self._wire(
@@ -1631,7 +1689,7 @@ class TestThePiecesTheChainIsMadeOf:
     ) -> None:
         """None, not an outcome: there was nothing to stop, which is what lets
         the chain go on and start one."""
-        monkeypatch.setattr(everos_server, "lock_holder", lambda _root: None)
+        monkeypatch.setattr(everos_server, "lock_holder", lambda _root, **_kw: None)
 
         assert everos_server.stop_for_reload(tmp_path) is None
 
@@ -1640,7 +1698,7 @@ class TestThePiecesTheChainIsMadeOf:
         process the lock just identified, which is the state the lock lookup
         exists to get out of."""
         asked: list[int] = []
-        monkeypatch.setattr(everos_server, "lock_holder", lambda _root: SimpleNamespace(pid=4321))
+        monkeypatch.setattr(everos_server, "lock_holder", lambda _root, **_kw: SimpleNamespace(pid=4321))
         monkeypatch.setattr(
             everos_server, "stop_pid", lambda pid: asked.append(pid) or everos_server.StopOutcome.STOPPED
         )
@@ -2003,7 +2061,11 @@ class TestStaleServerRestart:
         spawn.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_a_stop_that_does_not_finish_keeps_the_old_server(self, everos_toml, monkeypatch) -> None:
+    async def test_a_stop_that_does_not_finish_is_not_adopted(self, everos_toml, monkeypatch) -> None:
+        """The request is out and cannot be taken back: the server has closed its
+        port and is finishing what it had. Reported as ready, a gateway would
+        sit on it without memory until it was restarted by hand; refused, the
+        probes start a new one once the old one is gone."""
         _pin_llm_role(everos_toml, api_key="old-key")
         everos_toml.parent.mkdir(parents=True, exist_ok=True)
         everos_server.record_role_digest(everos_toml.parent)
@@ -2017,8 +2079,9 @@ class TestStaleServerRestart:
         with (
             patch("raven_everos.server._probe_health", return_value=True),
             patch("raven_everos.server._speaks_our_api", return_value=True),
+            pytest.raises(RuntimeError, match="still shutting down"),
         ):
-            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+            await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
         spawn.assert_not_called()
 

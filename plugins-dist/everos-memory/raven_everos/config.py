@@ -1006,6 +1006,28 @@ def role_is_env_managed(section: str) -> bool:
     return not all(k in _BOUND_HERE for k in keys)
 
 
+_WITHHELD_ROLES: set[str] = set()
+
+
+def withhold_role(section: str) -> None:
+    """Emit ``section`` empty on every spawn from now on, as if raven held no pin.
+
+    For a pin that cannot serve -- an embedding model narrower than the index
+    -- EverOS would fail every store and search; without the role it runs the
+    lesser search and keeps storing. Process-wide, because the digest and the
+    spawn read the same environment and must agree.
+    """
+    _WITHHELD_ROLES.add(section)
+
+
+def release_role(section: str) -> None:
+    _WITHHELD_ROLES.discard(section)
+
+
+def withheld_roles() -> frozenset[str]:
+    return frozenset(_WITHHELD_ROLES)
+
+
 def everos_env() -> dict[str, str]:
     """The binding all four roles earn, from raven's own config.
 
@@ -1039,7 +1061,7 @@ def everos_env() -> dict[str, str]:
             # complete endpoint in the environment on purpose.
             continue
         prefix = f"EVEROS_{section.upper()}__"
-        endpoint = resolve_role(section)
+        endpoint = None if section in _WITHHELD_ROLES else resolve_role(section)
         env[f"{prefix}MODEL"] = endpoint.model if endpoint else ""
         env[f"{prefix}BASE_URL"] = endpoint.base_url if endpoint else ""
         env[f"{prefix}API_KEY"] = endpoint.api_key if endpoint else ""

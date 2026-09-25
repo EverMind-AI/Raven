@@ -485,6 +485,62 @@ environment -- that directory and nothing wider -- and only then installs.
 Verified on the box: the same reinstall that failed with the server up
 succeeds after the sweep, and the relaunched gateway spawns a fresh server.
 
+**What a six-angle review of the branch then changed.** Each item is a
+scenario a real install can reach; the rule behind them is that memory
+degrades with a notice and never blocks a turn, a start or an upgrade.
+
+- A gateway starts the server again when it finds nothing listening
+  (`EverosBackend._may_respawn` / `_respawn`): only for a root raven owns, only
+  when no child of its own still runs, only when nothing holds the OME lock,
+  at most once per thirty seconds. Before, the only spawn was in `start()`,
+  which a running gateway never passes through again, so a server that went
+  away -- an upgrade's sweep, a crash, a stop another process sent -- left the
+  gateway without memory until it was restarted by hand.
+- A stop that was sent and did not finish (`STILL_DRAINING`: uvicorn closes
+  the port at once and finishes the requests it had, an extraction included)
+  is no longer adopted by `ensure_everos_server`; it raises, the backend keeps
+  probing, and the probe above starts a replacement once the lock is free.
+  Adopting it reported memory over a process that no longer answered.
+- A command-line lookup that failed (`_cmdline_of` -> `None`: no `ps`,
+  PowerShell blocked, WMI wedged, the timeout hit) is distinct from a process
+  that is gone. A stop keeps waiting on it; `lock_holder` identifies nothing;
+  `restart_for_config_change` reports "could not be identified" instead of
+  applied when something still answers on the address.
+- A spawn that loses the boot race no longer overwrites the pidfile of the
+  live server (`_start_server_if_unlocked`): on Windows the pidfile is the
+  only way back to it.
+- `stop_pid` counts wall time (each Windows poll launches PowerShell) and takes
+  a `grace`; on Windows a backend drains the server it started itself at
+  `stop()` (Ctrl-Break, sixty seconds), so an upgrade finds nothing to
+  terminate mid-write and a settings change restarts it cleanly.
+- The helper's sweep asks again after `Stop-Process` and refuses to run `uv`
+  while anything from the environment survives (elevated or another user's
+  process): `uv tool install --force` removes the environment before it
+  writes, and would have left every file but the one that could not go.
+- An embedding pin narrower than the index is measured at backend start
+  (`configured_embedding_width`, once per pin per process) and withheld from
+  the spawn (`withhold_role`): EverOS runs keyword recall and keeps storing,
+  and the notice names the model and the width. The write-time check covers a
+  pin written through raven; this covers one written around it. The probe no
+  longer raises on an odd response, times out at ten seconds, and an install
+  with the plugin on `plugins.disabled` is not gated. `migrate_roles` runs off
+  the event loop, which the probe had put a provider round-trip onto.
+- The memory page calls the `/api/v2` routes (v1 is EverOS's legacy alias),
+  asks `/health` before a search the way the chat adapter does (keyword
+  without embedding, the LLM rerank on the agent track without a
+  cross-encoder, the profile opted in), and shows the server's own sentence
+  on a refusal instead of "unreachable".
+- The recalled profile is rendered as lines again: the search response
+  arrives as namespaces, and the renderer, handed one, had put
+  `namespace(explicit_info=[namespace(...)])` -- evidence fields included --
+  into every prompt. A tool-call-only assistant row is stored with empty
+  content, not `"None"`; `top_k` is clamped to the server's 1..100; an empty
+  query asks nothing; a `/health` probe that failed is not cached as "no
+  capabilities" for the life of the adapter.
+- The wizard accepts a model wider than 1024 (EverOS keeps the first 1024,
+  the settings page already accepted it) and turns the host's refusal into a
+  re-prompt rather than a traceback.
+
 **One guard added alongside.** The live install was found pinned to a
 768-dimension embedding model against this 1024-wide index, with every store
 and search answering 500. `set_embedding_endpoint` now measures the model's

@@ -318,15 +318,23 @@ def _read_pidfile() -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def _is_everos_server(pid: int) -> bool:
+def _is_everos_server(pid: int) -> bool | None:
     """Verify ``pid`` is still an everos server before signalling it.
 
     A pidfile is stale information: the process it names may have exited and the
     number been handed to something unrelated. Checking the command line is what
     keeps a port-convergence restart from killing an innocent process; reading
     it is :func:`_cmdline_of`'s business, platform included.
+
+    ``None`` when the question could not be asked -- no ``ps``, PowerShell
+    blocked, WMI wedged, the lookup timed out. Read as "gone", that would end a
+    stop early, delete the pidfile and start a second server against the lock
+    the first one still holds.
     """
-    return _SERVER_CMDLINE_RE.search(_cmdline_of(pid)) is not None
+    cmdline = _cmdline_of(pid)
+    if cmdline is None:
+        return None
+    return _SERVER_CMDLINE_RE.search(cmdline) is not None
 
 
 class StopOutcome(str, Enum):
@@ -345,7 +353,7 @@ class StopOutcome(str, Enum):
     STILL_DRAINING = "still_draining"
 
 
-def stop_pid(pid: int, *, timeout: float = 35.0) -> StopOutcome:
+def stop_pid(pid: int, *, timeout: float = 35.0, grace: float | None = None) -> StopOutcome:
     """Stop a specific everos server and wait for it.
 
     Takes the pid rather than re-deriving it, so a caller that identified the
@@ -359,22 +367,30 @@ def stop_pid(pid: int, *, timeout: float = 35.0) -> StopOutcome:
 
     On native Windows the request is Ctrl-Break to the server's process group,
     which uvicorn takes as a shutdown; a server that has not acted on it within
-    ``_WINDOWS_GRACE_S`` is terminated, the stop Windows had before.
+    ``grace`` seconds (``_WINDOWS_GRACE_S`` by default) is terminated, the stop
+    Windows had before. A caller that spawned the server itself, and so knows
+    the event arrives, passes ``grace=timeout`` and lets it drain.
+
+    Both bounds are wall time: on Windows every poll launches PowerShell, so
+    counting polls stretched them several-fold.
     """
     if not _ask_to_stop(pid):
         return StopOutcome.SIGNAL_FAILED
-    waited = 0.0
+    started = time.monotonic()
+    deadline = started + timeout
+    grace_until = started + (_WINDOWS_GRACE_S if grace is None else grace)
     forced = sys.platform != "win32"
-    while waited < timeout:
-        if not _is_everos_server(pid):
+    while time.monotonic() < deadline:
+        # ``None`` (the question could not be asked) keeps waiting: the caller
+        # would otherwise start a second server against a lock this one holds.
+        if _is_everos_server(pid) is False:
             _pidfile_path().unlink(missing_ok=True)
             return StopOutcome.STOPPED
-        if not forced and waited >= _WINDOWS_GRACE_S:
+        if not forced and time.monotonic() >= grace_until:
             forced = True
             with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGTERM)
         time.sleep(_POLL_INTERVAL)
-        waited += _POLL_INTERVAL
     logger.warning("everos server {} did not exit within {}s", pid, timeout)
     return StopOutcome.STILL_DRAINING
 
@@ -517,33 +533,41 @@ def _cmdline_of(pid: int) -> str:
     set to UTF-8 so a path holding non-ASCII survives the round trip.
     """
     if sys.platform == "win32":
-        argv = _powershell(f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}').CommandLine")
-    else:
-        argv = [shutil.which("ps") or "/bin/ps", "-ww", "-p", str(pid), "-o", "command="]
-    return _capture(argv)
+        out = _capture(_powershell(f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}').CommandLine"))
+        # A pid that is gone prints nothing and exits 0; a lookup that failed
+        # exits non-zero (or never ran), and is not evidence about the pid.
+        if out is None or out.returncode != 0:
+            return None
+        return out.stdout.strip()
+    out = _capture([shutil.which("ps") or "/bin/ps", "-ww", "-p", str(pid), "-o", "command="])
+    # ps exits 1 for a pid it cannot find, with nothing on stdout: that is
+    # "gone", not "unknown"; only a ps that could not run is unknown.
+    return None if out is None else out.stdout.strip()
 
 
 def _powershell(command: str) -> list[str]:
     """argv for one PowerShell command; the console set to UTF-8 so a path
-    holding non-ASCII survives the round trip."""
+    holding non-ASCII survives the round trip. The encoding switch is a .NET
+    property set that a constrained-language policy refuses, so it is tried,
+    not required: a mangled path costs one lookup, a refused first statement
+    costs every lookup."""
     return [
         "powershell",
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + command,
+        "try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}; " + command,
     ]
 
 
-def _capture(argv: list[str]) -> str:
-    """stdout of ``argv``, stripped; empty when it could not run."""
+def _capture(argv: list[str]) -> subprocess.CompletedProcess[str] | None:
+    """``argv`` run to completion, or ``None`` when it could not be run at all."""
     try:
-        out = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        return subprocess.run(  # noqa: S603 - fixed argv, no shell
             argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
         )
     except (OSError, subprocess.SubprocessError):
-        return ""
-    return out.stdout.strip()
+        return None
 
 
 def _windows_listening_port(pid: int) -> int | None:
@@ -564,7 +588,8 @@ def _windows_listening_port(pid: int) -> int | None:
             "Where-Object { $ids -contains $_.OwningProcess } | Select-Object -First 1).LocalPort"
         )
     )
-    return int(out) if out.isdigit() else None
+    text = out.stdout.strip() if out is not None and out.returncode == 0 else ""
+    return int(text) if text.isdigit() else None
 
 
 def _proc_net_rows() -> str:
@@ -700,7 +725,7 @@ def _lock_holder_pid(lock: Path, root: Path) -> int | None:
     return recorded if isinstance(recorded, int) else None
 
 
-def lock_holder(root: Path | str) -> LockHolder | None:
+def lock_holder(root: Path | str, *, with_port: bool = True) -> LockHolder | None:
     """The process serving ``root``'s data, identified from the OS.
 
     Identified from the lock rather than from a pidfile raven wrote: losing the
@@ -717,10 +742,13 @@ def lock_holder(root: Path | str) -> LockHolder | None:
         return None
     cmdline = _cmdline_of(pid)
     # Both halves matter: the command has to be an everos server, and it has to
-    # be serving *this* root. A pid can be recycled onto anything.
-    if _SERVER_CMDLINE_RE.search(cmdline) is None or str(resolved) not in cmdline:
+    # be serving *this* root. A pid can be recycled onto anything. A lookup
+    # that failed identifies nothing, which the caller reports as such.
+    if cmdline is None or _SERVER_CMDLINE_RE.search(cmdline) is None or str(resolved) not in cmdline:
         return None
-    return LockHolder(pid=pid, cmdline=cmdline, port=_listening_port(pid))
+    # The port is one more process-table walk on Windows, and a stop never
+    # reads it.
+    return LockHolder(pid=pid, cmdline=cmdline, port=_listening_port(pid) if with_port else None)
 
 
 def _last_error_line() -> str:
@@ -983,7 +1011,18 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
                     **_spawn_kwargs(),
                 )
             logger.info("started everos server for {} at {} (log: {})", root, base_url, log_path)
-            _write_pidfile(proc.pid, base_url=base_url, root=root)
+            record = _read_pidfile()
+            recorded = record.get("pid") if record and str(record.get("root")) == str(root) else None
+            if isinstance(recorded, int) and _is_everos_server(recorded):
+                # Two starts inside one boot window: the lock above covers the
+                # spawn, not the boot, and this child will die on the OME lock.
+                # On Windows the pidfile is the only way back to the first one,
+                # so the loser must not put its own pid there.
+                logger.info(
+                    "everos pidfile still names a live server ({}); not replacing it with {}", recorded, proc.pid
+                )
+            else:
+                _write_pidfile(proc.pid, base_url=base_url, root=root)
             record_role_digest(root)
             return proc
     except LockTimeoutError:
@@ -995,9 +1034,11 @@ def _spawn_kwargs() -> dict[str, Any]:
     """Keep the gateway's console signals away from the child.
 
     POSIX: a session of its own, so a Ctrl-C at the gateway's terminal is not
-    delivered to the server too. Windows: a process group of its own, which is
-    the same protection and, the group id being the pid, what lets ``stop_pid``
-    address Ctrl-Break to it.
+    delivered to the server too. Windows: a process group of its own, which
+    keeps Ctrl-C off it and, the group id being the pid, is what lets
+    ``stop_pid`` address Ctrl-Break to it. Closing the console window still
+    reaches every process on it, group or not; uvicorn shuts down on that
+    event and the next gateway starts a server again.
     """
     if sys.platform == "win32":
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -1072,6 +1113,15 @@ async def ensure_everos_server(
             return None
         logger.info("everos at {} {}; restarting", base_url, stale)
         outcome = await asyncio.to_thread(stop_for_reload, root)
+        if outcome is StopOutcome.STILL_DRAINING:
+            # The request is out and cannot be taken back: the server has closed
+            # its port and is finishing what it had. Adopting it would report
+            # memory over a process that no longer answers, and nothing would
+            # start another once it is gone. Refusing leaves the caller probing,
+            # and its probe starts one the moment the lock is free.
+            raise RuntimeError(
+                f"everos at {base_url} {stale} and is still shutting down; a new one starts once it has finished"
+            )
         if outcome is not StopOutcome.STOPPED:
             # ``None`` counts as a failure here and does not in
             # ``restart_for_config_change``: that one may run with nothing
@@ -1187,7 +1237,7 @@ def stop_for_reload(root: Path | str) -> StopOutcome | None:
     pidfile would report ``NOT_OURS`` about the process just identified, which is
     the state the lock lookup exists to get out of.
     """
-    holder = lock_holder(root)
+    holder = lock_holder(root, with_port=False)
     if holder is None:
         return None
     return stop_pid(holder.pid)
@@ -1239,6 +1289,18 @@ async def restart_for_config_change(
         if outcome is not None and outcome is not StopOutcome.STOPPED:
             logger.info("everos restart {} end: stop returned {}", run_id, outcome.value)
             on_result(False, _STOP_REASON.get(outcome, "it did not stop"))
+            return
+        if outcome is None and await asyncio.to_thread(_probe_health, base_url):
+            # Something answers on the address and the lock could not name it
+            # (a lookup that failed, a pidfile lost on Windows). ``ensure`` would
+            # adopt it, and this chain would report the save as applied over a
+            # server still running the old configuration.
+            logger.info("everos restart {} end: a server answers but could not be identified", run_id)
+            on_result(
+                False,
+                "the process serving it could not be identified, so it was not restarted; "
+                "restart the memory service yourself to pick this up.",
+            )
             return
         try:
             await ensure_everos_server(base_url)

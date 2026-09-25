@@ -2930,3 +2930,229 @@ class TestRequestBodiesMatchEverosModels:
             GetRequest.model_validate(
                 _owner_body(kind, "default", "raven") | {"memory_type": kind, "page": 1, "page_size": 20}
             )
+
+
+class TestTheProfileReachesThePromptAsText:
+    def test_a_namespace_profile_is_rendered_not_repred(self) -> None:
+        """The search response arrives as namespaces; handed one, the renderer
+        fell through to ``str()`` and put ``namespace(...)`` -- evidence fields
+        included -- into every prompt."""
+        from raven_everos.backend import _jsonify
+
+        data = _jsonify(
+            {
+                "episodes": [],
+                "profiles": [
+                    {
+                        "id": "p",
+                        "user_id": "u",
+                        "profile_data": {
+                            "explicit_info": [{"category": "location", "description": "Seattle", "evidence": "said so"}]
+                        },
+                    }
+                ],
+                "agent_cases": [],
+                "agent_skills": [],
+            }
+        )
+
+        text = EverosBackend._search_data_to_memories(data, "user")[0].text
+
+        assert "namespace(" not in text
+        assert "location" in text and "Seattle" in text
+        assert "said so" not in text
+
+
+class TestAToolCallOnlyTurn:
+    def test_none_content_is_stored_empty(self) -> None:
+        from raven.contracts.llm_provider import ToolCallRequest
+        from raven.providers.tool_calls import openai_tool_call
+
+        call = ToolCallRequest(id="c1", name="read_file", arguments={})
+        out = convert_messages(
+            [{"role": "assistant", "content": None, "tool_calls": [openai_tool_call(call)]}], agent_id="raven"
+        )
+
+        assert out[0]["content"] == "" and out[0]["tool_calls"][0]["id"] == "c1"
+
+
+class TestCapabilitiesAreNotCachedWhenUnanswered:
+    async def test_a_failed_probe_is_asked_again(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        adapter = _HttpEverosAdapter("http://127.0.0.1:1")
+        answers = iter([{}, {"embed": False}])
+
+        async def probe():
+            return next(answers)
+
+        monkeypatch.setattr(adapter, "_probe_capabilities", probe)
+
+        assert await adapter._capabilities() == {}
+        assert await adapter._capabilities() == {"embed": False}
+        assert await adapter._capabilities() == {"embed": False}
+
+
+class TestSearchStaysWithinTheServersBounds:
+    async def test_top_k_is_clamped_to_what_the_server_takes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        adapter = _HttpEverosAdapter("http://127.0.0.1:1")
+        seen: dict[str, Any] = {}
+
+        class _Resp:
+            def raise_for_status(self) -> None:
+                pass
+
+            def json(self) -> dict[str, Any]:
+                return {"data": {}}
+
+        async def post(url, json, headers, **kw):
+            seen.update(json)
+            return _Resp()
+
+        monkeypatch.setattr(adapter._client, "post", post)
+        monkeypatch.setattr(adapter, "_search_tuning", AsyncMock(return_value={}))
+
+        await adapter.search(user_id="u", agent_id=None, query="q", top_k=500)
+
+        assert seen["top_k"] == 100
+
+    async def test_an_empty_query_asks_nothing(self, tmp_path: Path) -> None:
+        adapter = _FakeAdapter()
+        b = _backend(tmp_path, adapter=adapter)
+
+        assert await b.recall("   ", user_id="u", agent_id=None, top_k=5) == []
+        assert adapter.search_calls == []
+
+
+class TestAGatewayStartsTheServerAgain:
+    """A running gateway had no path back to a server that went away: the only
+    spawn was in ``start()``. The probe that finds nothing listening now starts
+    one, when this root is raven's, no child of ours still runs, nothing holds
+    the lock, and not more than once per cooldown."""
+
+    def _ready(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EverosBackend:
+        b = EverosBackend(_ctx(tmp_path), adapter=_HttpEverosAdapter("http://127.0.0.1:1"))
+        b._state = ServiceState.READY
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
+        monkeypatch.setattr("raven_everos.config.everos_root", lambda: tmp_path / "root")
+        return b
+
+    async def test_nothing_listening_and_nothing_holding_the_lock_starts_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        b = self._ready(tmp_path, monkeypatch)
+        monkeypatch.setattr("raven_everos.server.probe_health", lambda _u: ProbeVerdict.REFUSED)
+        monkeypatch.setattr("raven_everos.server.lock_holder", lambda _r, **_kw: None)
+        ensure = AsyncMock(return_value=None)
+        monkeypatch.setattr("raven_everos.server.ensure_everos_server", ensure)
+
+        await b._probe_once()
+        assert ensure.await_count == 1 and b._state is ServiceState.READY
+
+        await b._probe_once()
+        assert ensure.await_count == 1, "not again within the cooldown"
+
+    async def test_a_holder_still_draining_is_left_alone(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        b = self._ready(tmp_path, monkeypatch)
+        monkeypatch.setattr("raven_everos.server.probe_health", lambda _u: ProbeVerdict.REFUSED)
+        monkeypatch.setattr("raven_everos.server.lock_holder", lambda _r, **_kw: SimpleNamespace(pid=1))
+        ensure = AsyncMock(return_value=None)
+        monkeypatch.setattr("raven_everos.server.ensure_everos_server", ensure)
+
+        await b._probe_once()
+
+        assert ensure.await_count == 0 and b._state is ServiceState.STARTING
+
+    async def test_a_child_of_ours_still_running_means_wait(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        b = self._ready(tmp_path, monkeypatch)
+        b._proc = SimpleNamespace(pid=7, poll=lambda: None)
+        monkeypatch.setattr("raven_everos.server.probe_health", lambda _u: ProbeVerdict.REFUSED)
+        ensure = AsyncMock(return_value=None)
+        monkeypatch.setattr("raven_everos.server.ensure_everos_server", ensure)
+
+        await b._probe_once()
+
+        assert ensure.await_count == 0
+
+    async def test_a_start_that_fails_keeps_probing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        b = self._ready(tmp_path, monkeypatch)
+        monkeypatch.setattr("raven_everos.server.probe_health", lambda _u: ProbeVerdict.REFUSED)
+        monkeypatch.setattr("raven_everos.server.lock_holder", lambda _r, **_kw: None)
+        monkeypatch.setattr(
+            "raven_everos.server.ensure_everos_server", AsyncMock(side_effect=RuntimeError("still shutting down"))
+        )
+
+        await b._probe_once()
+
+        assert b._state is ServiceState.STARTING
+
+
+class TestAPinThatCannotServeIsWithheld:
+    def test_a_narrow_pin_is_kept_from_the_spawn_and_said_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven_everos import backend as backend_mod
+        from raven_everos import config as cfg
+
+        monkeypatch.setattr("raven.config.update.configured_embedding_width", lambda: 768)
+        monkeypatch.setattr(
+            cfg, "role_pin", lambda section: ("bge-base", "deepinfra") if section == "embedding" else None
+        )
+        monkeypatch.setattr(backend_mod, "_EMBEDDING_WIDTHS", {})
+        said: list[str] = []
+        b = _backend(tmp_path)
+        b.notify = said.append
+        try:
+            b._withhold_an_embedding_that_cannot_serve()
+            assert "embedding" in cfg.withheld_roles()
+            assert len(said) == 1 and "768" in said[0] and "keyword" in said[0]
+
+            b._withhold_an_embedding_that_cannot_serve()
+            assert len(said) == 1, "measured and said once per pin"
+        finally:
+            cfg.release_role("embedding")
+
+    def test_a_pin_wide_enough_is_handed_over(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven_everos import backend as backend_mod
+        from raven_everos import config as cfg
+
+        monkeypatch.setattr("raven.config.update.configured_embedding_width", lambda: 1024)
+        monkeypatch.setattr(cfg, "role_pin", lambda section: ("qwen3", "deepinfra") if section == "embedding" else None)
+        monkeypatch.setattr(backend_mod, "_EMBEDDING_WIDTHS", {})
+        b = _backend(tmp_path)
+
+        b._withhold_an_embedding_that_cannot_serve()
+
+        assert "embedding" not in cfg.withheld_roles()
+
+
+class TestAWindowsShutdownDrainsItsOwnServer:
+    async def test_the_child_this_process_started_is_stopped_gracefully(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven_everos.server import StopOutcome
+
+        b = _backend(tmp_path)
+        b._proc = SimpleNamespace(pid=77, poll=lambda: None)
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
+        asked: list[tuple[int, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            "raven_everos.server.stop_pid", lambda pid, **kw: asked.append((pid, kw)) or StopOutcome.STOPPED
+        )
+
+        await b.stop()
+
+        assert asked == [(77, {"timeout": 60.0, "grace": 60.0})]
+
+    async def test_a_server_another_process_started_is_left_running(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        b = _backend(tmp_path)
+        monkeypatch.setattr("sys.platform", "win32")
+        asked: list[int] = []
+        monkeypatch.setattr("raven_everos.server.stop_pid", lambda pid, **kw: asked.append(pid))
+
+        await b.stop()
+
+        assert asked == []
