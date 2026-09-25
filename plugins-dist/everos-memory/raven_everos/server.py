@@ -26,6 +26,16 @@ from raven.utils.portable_lock import LockTimeoutError, file_lock
 
 _POLL_INTERVAL = 0.5
 
+# What "please stop" is. Windows has no SIGTERM: ``os.kill`` with anything but a
+# console event is TerminateProcess, so the graceful request there is Ctrl-Break,
+# addressed to the process group the spawn created (``_spawn_kwargs``) and taken
+# by uvicorn as a shutdown. POSIX has no such attribute.
+_GRACEFUL_SIGNAL = getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
+# How long a Windows server gets to act on Ctrl-Break before TerminateProcess,
+# which was every stop there until now. A server another console started never
+# receives the event, so without the fallback it would never stop.
+_WINDOWS_GRACE_S = 10.0
+
 _API_PROBE_PATH = "/api/v2/memory/search"
 """One route off the prefix the backend client uses (see ``backend.py``). Kept
 beside the client's own constant in spirit: if that prefix ever moves, this is
@@ -347,24 +357,48 @@ def stop_pid(pid: int, *, timeout: float = 35.0) -> StopOutcome:
     The caller is responsible for having established that this pid is an everos
     serving the root in question; both routes in do.
 
-    On native Windows ``os.kill`` is ``TerminateProcess``: no shutdown handler
-    runs in the server. EverOS writes its markdown through atomic saves and
-    rebuilds the index from it, so that is the stop Windows has.
+    On native Windows the request is Ctrl-Break to the server's process group,
+    which uvicorn takes as a shutdown; a server that has not acted on it within
+    ``_WINDOWS_GRACE_S`` is terminated, the stop Windows had before.
     """
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError as exc:
-        logger.debug("could not signal everos server {}: {}", pid, exc)
+    if not _ask_to_stop(pid):
         return StopOutcome.SIGNAL_FAILED
     waited = 0.0
+    forced = sys.platform != "win32"
     while waited < timeout:
         if not _is_everos_server(pid):
             _pidfile_path().unlink(missing_ok=True)
             return StopOutcome.STOPPED
+        if not forced and waited >= _WINDOWS_GRACE_S:
+            forced = True
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
         time.sleep(_POLL_INTERVAL)
         waited += _POLL_INTERVAL
     logger.warning("everos server {} did not exit within {}s", pid, timeout)
     return StopOutcome.STILL_DRAINING
+
+
+def _ask_to_stop(pid: int) -> bool:
+    """Deliver the stop request; False when nothing could be sent.
+
+    Ctrl-Break can only be addressed to a process group, so a Windows server
+    raven did not spawn (an older raven's, started without one) refuses it; that
+    one is terminated outright, which is the stop it always had.
+    """
+    try:
+        os.kill(pid, _GRACEFUL_SIGNAL)
+        return True
+    except OSError as exc:
+        if _GRACEFUL_SIGNAL == signal.SIGTERM:
+            logger.debug("could not signal everos server {}: {}", pid, exc)
+            return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except OSError as exc:
+        logger.debug("could not signal everos server {}: {}", pid, exc)
+        return False
 
 
 def ome_lock_held(root: Path | str) -> bool:
@@ -483,16 +517,26 @@ def _cmdline_of(pid: int) -> str:
     set to UTF-8 so a path holding non-ASCII survives the round trip.
     """
     if sys.platform == "win32":
-        argv = [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-            f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}').CommandLine",
-        ]
+        argv = _powershell(f"(Get-CimInstance Win32_Process -Filter 'ProcessId = {int(pid)}').CommandLine")
     else:
         argv = [shutil.which("ps") or "/bin/ps", "-ww", "-p", str(pid), "-o", "command="]
+    return _capture(argv)
+
+
+def _powershell(command: str) -> list[str]:
+    """argv for one PowerShell command; the console set to UTF-8 so a path
+    holding non-ASCII survives the round trip."""
+    return [
+        "powershell",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + command,
+    ]
+
+
+def _capture(argv: list[str]) -> str:
+    """stdout of ``argv``, stripped; empty when it could not run."""
     try:
         out = subprocess.run(  # noqa: S603 - fixed argv, no shell
             argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
@@ -500,6 +544,27 @@ def _cmdline_of(pid: int) -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return out.stdout.strip()
+
+
+def _windows_listening_port(pid: int) -> int | None:
+    """The port ``pid`` or a descendant of it listens on, from the TCP table.
+
+    The descendants matter: the pid raven holds is the ``everos.exe`` launcher,
+    which runs the environment's ``python.exe``, itself a launcher for the base
+    interpreter -- and that grandchild is what holds the socket.
+    """
+    out = _capture(
+        _powershell(
+            "$all = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId; "
+            f"$ids = @({int(pid)}); "
+            "do { $new = @($all | Where-Object { $ids -contains $_.ParentProcessId -and "
+            "$ids -notcontains $_.ProcessId } | ForEach-Object { $_.ProcessId }); $ids += $new } "
+            "while ($new.Count -gt 0); "
+            "(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
+            "Where-Object { $ids -contains $_.OwningProcess } | Select-Object -First 1).LocalPort"
+        )
+    )
+    return int(out) if out.isdigit() else None
 
 
 def _proc_net_rows() -> str:
@@ -566,10 +631,11 @@ def _proc_net_listening_port(pid: int) -> int | None:
 def _listening_port(pid: int) -> int | None:
     """The TCP port ``pid`` listens on, or ``None`` if it serves no HTTP.
 
-    Native Windows has neither ``lsof`` nor ``/proc`` and answers ``None``: the
-    holder is still identified and stopped, only the wizard's "serves on port
-    N" line goes unsaid there.
+    Native Windows has neither ``lsof`` nor ``/proc``; it asks the TCP table
+    through PowerShell instead.
     """
+    if sys.platform == "win32":
+        return _windows_listening_port(pid)
     port = _lsof_listening_port(pid)
     if port is not None:
         return port
@@ -913,8 +979,8 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
                     [everos, "server", "start", "--root", str(root)],
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
-                    start_new_session=True,
                     env=_child_env(),
+                    **_spawn_kwargs(),
                 )
             logger.info("started everos server for {} at {} (log: {})", root, base_url, log_path)
             _write_pidfile(proc.pid, base_url=base_url, root=root)
@@ -923,6 +989,19 @@ def _start_server_if_unlocked(base_url: str) -> subprocess.Popen | None:
     except LockTimeoutError:
         logger.debug("everos server startup lock held by another process; skipping spawn")
         return None
+
+
+def _spawn_kwargs() -> dict[str, Any]:
+    """Keep the gateway's console signals away from the child.
+
+    POSIX: a session of its own, so a Ctrl-C at the gateway's terminal is not
+    delivered to the server too. Windows: a process group of its own, which is
+    the same protection and, the group id being the pid, what lets ``stop_pid``
+    address Ctrl-Break to it.
+    """
+    if sys.platform == "win32":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
 
 
 async def ensure_everos_server(

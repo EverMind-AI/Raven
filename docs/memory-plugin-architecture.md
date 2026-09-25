@@ -463,10 +463,27 @@ comes from WMI through PowerShell on `win32` and the marker accepts both
 shapes; the pidfile raven writes at spawn already named the pid. Verified on
 a Windows 11 box: a changed memory role sent the running server through
 "holds credentials raven has since changed; restarting", the old pid exited
-and the new one answered `/health`. `_listening_port` still answers `None`
-there (no `lsof`, no `/proc`), which only silences the wizard's "serves on
-port N" sentence. `os.kill` is `TerminateProcess` on Windows, so the stop is
-not graceful; EverOS saves markdown atomically and rebuilds its index from it.
+and the new one answered `/health`. `_listening_port` asks the TCP table
+through PowerShell there (no `lsof`, no `/proc`), walking the launcher's
+descendants because the socket belongs to the base interpreter two launchers
+below `everos.exe`. The stop is Ctrl-Break: the child is spawned in a process
+group of its own (`CREATE_NEW_PROCESS_GROUP`, the Windows counterpart of
+`start_new_session`, and what keeps a Ctrl-C at the gateway off the server),
+uvicorn takes the event as a shutdown, and a server that has not acted on it
+in ten seconds -- one another console started, which the event cannot reach
+-- gets `TerminateProcess`, the stop every server there had before. Verified
+on the same box: a stop from the spawning console runs the full uvicorn
+shutdown (`Shutting down` ... `Finished server process`) in three seconds; a
+stop from another console falls back and the process is gone in two.
+
+**The upgrade helper sweeps the environment on Windows.** Windows cannot
+replace an executable that is running, and the server outlives the gateway
+by design, on the environment's own python: with it up, `uv` failed to
+replace `Scripts\everos.exe` (`os error 32`). After waiting for the parent,
+the helper now stops every process whose executable lives under the tool
+environment -- that directory and nothing wider -- and only then installs.
+Verified on the box: the same reinstall that failed with the server up
+succeeds after the sweep, and the relaunched gateway spawns a fresh server.
 
 **One guard added alongside.** The live install was found pinned to a
 768-dimension embedding model against this 1024-wide index, with every store

@@ -1135,6 +1135,99 @@ class TestWindowsProcessIdentification:
         assert _cmdline_of(4242) == ""
         assert _is_everos_server(4242) is False
 
+    def test_the_listening_port_comes_from_the_tcp_table(self, monkeypatch) -> None:
+        """No lsof, no /proc: the TCP table is asked, for the launcher and its
+        descendants -- the socket belongs to the base interpreter two launchers
+        down from ``everos.exe``."""
+        import subprocess
+
+        from raven_everos.server import _listening_port
+
+        seen: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="18791\r\n", stderr="")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        assert _listening_port(4242) == 18791
+        script = seen[0][-1]
+        assert "$ids = @(4242)" in script and "ParentProcessId" in script and "Get-NetTCPConnection" in script
+
+    def test_no_listener_reads_as_no_port(self, monkeypatch) -> None:
+        import subprocess
+
+        from raven_everos.server import _listening_port
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        )
+
+        assert _listening_port(4242) is None
+
+
+class TestStoppingOnWindows:
+    """Windows has no SIGTERM. The request is Ctrl-Break to the process group
+    the spawn created; a server that ignores it, or one no group can be
+    addressed to, gets TerminateProcess -- the stop every server there had."""
+
+    @pytest.fixture(autouse=True)
+    def _windows(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        # CTRL_BREAK_EVENT's value there; the attribute does not exist here.
+        monkeypatch.setattr(everos_server, "_GRACEFUL_SIGNAL", 21)
+        monkeypatch.setattr(everos_server, "_WINDOWS_GRACE_S", 0.0)
+        monkeypatch.setattr(everos_server.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(everos_server, "_pidfile_path", lambda: tmp_path / "everos-server.pid")
+
+    def test_ctrl_break_first_and_terminate_only_when_ignored(self, monkeypatch) -> None:
+        signalled: list[int] = []
+        monkeypatch.setattr(everos_server.os, "kill", lambda _pid, sig: signalled.append(sig))
+        alive = iter([True, True, False])
+        monkeypatch.setattr(everos_server, "_is_everos_server", lambda _p: next(alive, False))
+
+        assert everos_server.stop_pid(4242) is everos_server.StopOutcome.STOPPED
+        assert signalled == [21, everos_server.signal.SIGTERM]
+
+    def test_a_server_that_acts_on_ctrl_break_is_never_terminated(self, monkeypatch) -> None:
+        signalled: list[int] = []
+        monkeypatch.setattr(everos_server.os, "kill", lambda _pid, sig: signalled.append(sig))
+        monkeypatch.setattr(everos_server, "_is_everos_server", lambda _p: False)
+
+        assert everos_server.stop_pid(4242) is everos_server.StopOutcome.STOPPED
+        assert signalled == [21]
+
+    def test_a_server_outside_any_group_is_terminated_at_once(self, monkeypatch) -> None:
+        """An older raven's server, spawned without a group: Ctrl-Break has no
+        address, and the stop must not be reported as undeliverable."""
+        signalled: list[int] = []
+
+        def kill(_pid, sig):
+            signalled.append(sig)
+            if sig == 21:
+                raise OSError("not a process group")
+
+        monkeypatch.setattr(everos_server.os, "kill", kill)
+        monkeypatch.setattr(everos_server, "_is_everos_server", lambda _p: False)
+
+        assert everos_server.stop_pid(4242) is everos_server.StopOutcome.STOPPED
+        assert signalled == [21, everos_server.signal.SIGTERM]
+
+    def test_the_child_gets_a_process_group_of_its_own(self, monkeypatch) -> None:
+        import subprocess
+
+        monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+
+        assert everos_server._spawn_kwargs() == {"creationflags": 0x200}
+
+    def test_a_posix_child_gets_a_session_of_its_own(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+
+        assert everos_server._spawn_kwargs() == {"start_new_session": True}
+
 
 class TestParsingLsofListenOutput:
     """Real ``lsof`` rows, because the shape is what the parser got wrong.

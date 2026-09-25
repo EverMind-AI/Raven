@@ -200,6 +200,37 @@ def main(argv=None):
         clear_marker()
 
 
+def stop_leftovers_of(env_dir):
+    # Windows cannot replace an executable that is running. The parent waited
+    # for above is gone, but what it started from this environment need not be:
+    # the memory plugin's server runs on the environment's python and outlives
+    # the gateway by design, and `uv tool install` then fails on its everos.exe.
+    # Anything still executing from under the environment is raven's, and the
+    # install cannot proceed around it.
+    root = env_dir.rstrip("\\/") + "\\"
+    script = (
+        "$root = '" + root.replace("'", "''") + "'; "
+        "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and "
+        "$_.ExecutablePath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) } | "
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids = out.stdout.split()
+    if pids:
+        print("Stopped what was still running from the old install (pid " + ", ".join(pids) + ").")
+        time.sleep(2)
+    return pids
+
+
 def run(argv=None):
     args = sys.argv[1:] if argv is None else argv
     if len(args) not in (4, 5, 6):
@@ -233,6 +264,8 @@ def run(argv=None):
         parent_status = wait_for_parent(parent_pid)
         if parent_status != 0:
             return parent_status
+    if sys.platform == "win32" and os.environ.get("UV_TOOL_DIR"):
+        stop_leftovers_of(os.path.join(os.environ["UV_TOOL_DIR"], "raven"))
 
     def run_uv(requirement, mode, plugin_list):
         command = [uv_path, "tool", "install"] + mode
@@ -299,7 +332,6 @@ def run(argv=None):
     # is uninstalled. Installing raven alone would be exactly that loss, so no
     # list means no upgrade.
     import base64
-    import os
     import socket
     import tempfile
     import urllib.parse

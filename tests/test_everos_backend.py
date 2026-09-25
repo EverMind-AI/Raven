@@ -2871,3 +2871,62 @@ class TestStoreConventions:
         )
 
         assert (backend._user_id, backend._agent_id) == ("host-user", "host-agent")
+
+
+class TestRequestBodiesMatchEverosModels:
+    """Every body raven sends is checked against EverOS's own request models.
+
+    The wire contract lives in the everos package this plugin pins, so the
+    models are the one source that says whether a call will be accepted or
+    refused with 422 -- ``tool_call_id`` on a tool row, the owner xor, the
+    ``top_k`` bounds, the four kind names. An upgrade that moves any of them
+    fails here rather than in a user's gateway log.
+    """
+
+    def test_a_tool_exchange_is_accepted_by_the_add_route(self) -> None:
+        from everos.entrypoints.api.routes.memorize import MemorizeAddRequest, MemorizeFlushRequest
+
+        from raven.contracts.llm_provider import ToolCallRequest
+        from raven.providers.tool_calls import openai_tool_call
+
+        call = ToolCallRequest(id="call_abc", name="read_file", arguments={"path": "a.txt"})
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "read a.txt", "sender_id": "default"},
+            {"role": "assistant", "content": "", "tool_calls": [openai_tool_call(call)]},
+            {"role": "tool", "tool_call_id": "call_abc", "name": "read_file", "content": "hello"},
+            {"role": "assistant", "content": [{"type": "text", "text": "it says hello"}]},
+        ]
+        converted = convert_messages(messages, agent_id="raven", user_id="default")
+
+        request = MemorizeAddRequest.model_validate({"session_id": "s1", "messages": converted})
+        assert [m.role for m in request.messages] == ["user", "assistant", "tool", "assistant"]
+        assert request.messages[1].tool_calls is not None and request.messages[1].tool_calls[0].id == "call_abc"
+        assert request.messages[2].tool_call_id == "call_abc"
+        MemorizeFlushRequest.model_validate({"session_id": "s1", "app_id": "default", "project_id": "default"})
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"query": "q", "top_k": 5, "user_id": "default", "include_profile": True},
+            {"query": "q", "top_k": 5, "agent_id": "raven"},
+            {"query": "q", "top_k": 5, "agent_id": "raven", "enable_llm_rerank": True},
+            {"query": "q", "top_k": 5, "user_id": "default", "include_profile": True, "method": "keyword"},
+            {"user_id": "default", "query": "q", "top_k": 100},
+        ],
+        ids=["user-hybrid", "agent-hybrid", "agent-without-cross-encoder", "keyword-without-embedding", "memory-page"],
+    )
+    def test_every_search_shape_is_accepted(self, body: dict[str, Any]) -> None:
+        from everos.memory.search.dto import SearchRequest
+
+        SearchRequest.model_validate(body)
+
+    def test_the_memory_page_listing_names_the_kinds_everos_knows(self) -> None:
+        from everos.memory.get.dto import GetRequest
+
+        from raven.rpc.methods.memory import _KINDS, _owner_body
+
+        for kind in _KINDS:
+            GetRequest.model_validate(
+                _owner_body(kind, "default", "raven") | {"memory_type": kind, "page": 1, "page_size": 20}
+            )

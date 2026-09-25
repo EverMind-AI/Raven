@@ -1896,3 +1896,60 @@ def test_upgrade_helper_does_not_rebuild_when_the_cheap_shape_worked(
     helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
 
     assert not any("--force" in call.args[0] for call in run.call_args_list)
+
+
+def test_upgrade_helper_stops_what_still_runs_from_the_old_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows cannot replace an executable that is running, and the memory
+    plugin's server outlives the gateway by design, on the environment's own
+    python. The sweep stops what executes from under the environment -- that
+    directory and nothing wider -- and names what it stopped."""
+    namespace = _load_upgrade_helper_namespace()
+    ran: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="4242\r\n4243\r\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _s: None)
+
+    assert namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven") == ["4242", "4243"]
+    script = ran[0][-1]
+    assert ran[0][0] == "powershell"
+    assert r"$root = 'C:\Users\x\AppData\Roaming\uv\tools\raven\'" in script
+    assert "ExecutablePath.StartsWith($root" in script and "Stop-Process" in script
+
+
+def test_upgrade_helper_sweeps_the_environment_after_the_parent_and_before_uv(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The order is the point: the parent has to be gone first, and uv must not
+    touch the environment while anything still runs from it."""
+    namespace = _load_upgrade_helper_namespace()
+    order: list[object] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("UV_TOOL_DIR", r"C:\tools")
+    namespace["wait_for_parent"] = lambda _pid: order.append("parent") or 0
+    namespace["stop_leftovers_of"] = lambda env_dir: order.append(("sweep", env_dir)) or []
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: order.append("uv") or subprocess.CompletedProcess(argv, 0)
+    )
+
+    assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 0
+    assert order[:3] == ["parent", ("sweep", os.path.join(r"C:\tools", "raven")), "uv"]
+
+
+def test_upgrade_helper_does_not_sweep_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A running binary is replaceable there, and the server is meant to stay up."""
+    namespace = _load_upgrade_helper_namespace()
+    order: list[object] = []
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("UV_TOOL_DIR", "/tools")
+    namespace["wait_for_parent"] = lambda _pid: order.append("parent") or 0
+    namespace["stop_leftovers_of"] = lambda env_dir: order.append("sweep") or []
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: order.append("uv") or subprocess.CompletedProcess(argv, 0)
+    )
+
+    assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 0
+    assert "sweep" not in order
