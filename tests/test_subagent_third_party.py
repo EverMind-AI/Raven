@@ -4703,6 +4703,61 @@ async def test_the_connect_path_reads_the_answer_whole(monkeypatch: pytest.Monke
     assert "not connected to any AI provider" in result.detail
 
 
+def test_copilot_login_is_the_one_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GitHub Copilot signs in with `copilot login`, and has no second spelling.
+
+    Read from `copilot login --help` on 1.0.88, which says "Authenticate with
+    Copilot via OAuth" and opens a browser by default. The row launches
+    `copilot --acp`, a local install, so a machine without `copilot` is told
+    the executable is missing rather than handed an `npx` command. A provider
+    status is not given an in-agent command: none was measured that fixes a
+    missing model, a missing credit and a rate limit together.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import NODE_RUNTIME_PRESETS, SHIM_LAUNCHED_PRESETS, SIGN_IN_HINTS
+    from raven.agent.subagent.probe_state import Remedy
+
+    assert "github_copilot" not in SHIM_LAUNCHED_PRESETS
+    assert "github_copilot" not in NODE_RUNTIME_PRESETS
+    hint = SIGN_IN_HINTS["github_copilot"]
+    assert (hint.exe, hint.local, hint.anywhere, hint.does, hint.then) == (
+        "copilot",
+        "copilot login",
+        None,
+        "sign_in",
+        None,
+    )
+    said = "request failed: [-32000] Authentication required"
+    cfg = SimpleNamespace(preset="github_copilot", kind="acp")
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/opt/homebrew/bin/copilot")
+    signed_in = probe_mod._refusal_detail(cfg, said)
+    assert "sign in with `copilot login`" in signed_in
+    assert "npx" not in signed_in
+    assert said in signed_in
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    off_path = probe_mod._refusal_detail(cfg, said)
+    assert "`copilot login`" in off_path
+    assert "None" not in off_path
+
+    for other in (
+        "Your Copilot subscription has expired. Please renew to continue.",
+        "The model not-a-model does not exist",
+        "Rate limit reached. Please slow down.",
+        "Offline mode requires a local model provider. Set COPILOT_PROVIDER_BASE_URL to configure one.",
+    ):
+        assert probe_mod._refusal(cfg, other) == (other, None), other
+
+    answer = "Internal error: 404 The model not-a-model does not exist"
+    text, remedy = probe_mod._refusal(cfg, f"request failed: [-32603] {answer}", answer)
+    assert remedy == Remedy("model")
+    assert remedy.command is None
+    assert "switch the model it uses" in text
+
+
 def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: pytest.MonkeyPatch) -> None:
     """The page's fix and the terminal's sentence come out of the same call.
 
@@ -4725,6 +4780,7 @@ def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: py
         (SimpleNamespace(preset="claude_code", kind="acp"), Remedy("sign_in", "claude auth login")),
         (SimpleNamespace(preset="codex", kind="acp"), Remedy("sign_in", "npx -y @openai/codex login")),
         (SimpleNamespace(preset="hermes", kind="acp"), Remedy("setup", "hermes model")),
+        (SimpleNamespace(preset="github_copilot", kind="acp"), Remedy("sign_in", "copilot login")),
         (SimpleNamespace(preset="grok", kind="acp"), Remedy("sign_in", "grok login")),
         (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in")),
         (SimpleNamespace(preset="mirothinker", kind="openai"), Remedy("api_key")),
