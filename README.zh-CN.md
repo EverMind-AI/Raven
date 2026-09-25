@@ -111,98 +111,86 @@ Raven 采用模块化架构，专为 harness 自进化与子 Agent 创建而设�
 
 ## ❯❯ 案例展示
 
-以下均为真实运行记录，每条都取自 Raven 的任务图。任务图展示 Raven 为该任务生成的编排，下方是本次运行的产出。
+### ❯ THRESHOLD 阈限：从需求文档到可玩的射击游戏
+
+**需求文档由人编写，其余工作由 Raven 完成。** Raven 自主运行约 4 天，历经 42 轮规划、开发与验收，用 Godot 4 开发出一款可玩的第一人称射击游戏，以竞技场 Boss 战为核心玩法。它还为游戏制作了海报、演示文稿和官网。
 
 <table>
 <tr>
-<td valign="top"><p align="center"><b>用 Godot 4 开发的 FPS Boss 竞技场游戏（自主运行约 4 天）</b></p></td>
+<td colspan="2" valign="top"><p align="center"><b>实机视频</b></p></td>
+<td width="22.8%" valign="top"><p align="center"><b><a href="https://threshold-7bl.pages.dev/">官网 ↗</a></b></p></td>
 </tr>
 <tr>
-<td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
-</tr>
-<tr>
-<td valign="top">
+<td colspan="2" valign="top">
 
 https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 </td>
+<td rowspan="3" width="22.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/eaabfa42-e644-419e-a2a0-252974c97cad"><img src="https://github.com/user-attachments/assets/eaabfa42-e644-419e-a2a0-252974c97cad" alt="The Chinese THRESHOLD website as one long capture: hero, fight, kill cam, attack tells, evolution, making-of and footer" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="45.8%" valign="top"><p align="center"><b>海报</b></p></td>
+<td width="31.4%" valign="top"><p align="center"><b>演示文稿</b></p></td>
+</tr>
+<tr>
+<td width="45.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/edc9e0df-1a76-4302-8c6d-be73e088d65d"><img src="https://github.com/user-attachments/assets/edc9e0df-1a76-4302-8c6d-be73e088d65d" alt="THRESHOLD poster with its Chinese title: the Warden towers over the player on a molten arena floor" width="100%"></a></p></td>
+<td width="31.4%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/3852c187-3412-4501-9b62-809a3dfd0b81"><img src="https://github.com/user-attachments/assets/3852c187-3412-4501-9b62-809a3dfd0b81" alt="Cover, slides and closing slide of the THRESHOLD deck" width="100%"></a></p></td>
 </tr>
 </table>
 
-<table>
-<tr>
-<td width="50%" valign="top"><p align="center"><b>演示文稿：宋代居家美学（成本约 5.5 元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>演示文稿：古希腊是怎样变“白”的（成本约 5.5 元）</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489"><img src="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257"><img src="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/92fafcb0-8e17-4f17-819f-d18d970f2c3c"><img src="https://github.com/user-attachments/assets/92fafcb0-8e17-4f17-819f-d18d970f2c3c" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/82801a70-edb3-4ca7-b7f0-a2c11431d6d3"><img src="https://github.com/user-attachments/assets/82801a70-edb3-4ca7-b7f0-a2c11431d6d3" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a></p></td>
-</tr>
-</table>
+### ❯ Raven RSI：递归自我改进的实践
+
+**让 AI 改进 AI。** 给定任务目标与不可修改的评估标准，Raven RSI 会自主制定每轮计划、编写代码、运行实验并评估结果。在 nanochat 预训练实验中，它完成了 7 轮迭代、172 次训练，全程无崩溃，并在相同的单卡 20 分钟预算内，将 `val_bpb` 降低了 5.8%。同一流程还将溃坝仿真的越界量降低了三个数量级，并经过 8 轮二分迭代，完成了 FEA 极限载荷搜索。
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>演示文稿：流行音乐是如何被制造出来的（成本约 5.5 元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>演示文稿：抽象艺术百年（成本约 5.5 元）</b></p></td>
+<td width="35.9%" valign="top"><p align="center"><b>CFD 溃坝仿真</b></p></td>
+<td colspan="2" width="35.9%" valign="top"><p align="center"><b>FEA 极限载荷搜索</b></p></td>
+<td width="28.2%" valign="top"><p align="center"><b><a href="https://livxue.github.io/raven-rsi/">网站 ↗</a></b></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6"><img src="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="98%"></a></p></td>
+<td width="35.9%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24"><img src="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="100%"></a></p></td>
+<td colspan="2" width="35.9%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7"><img src="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="100%"></a></p></td>
+<td rowspan="3" width="28.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/a33256c2-2051-45a5-b62b-ca67e8cbe4be"><img src="https://github.com/user-attachments/assets/a33256c2-2051-45a5-b62b-ca67e8cbe4be" alt="The Chinese Raven RSI website as one long capture: headline numbers, nanochat, dam-break CFD, FEA limit load and the low-cost-model comparison" width="100%"></a></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/350f902e-838a-4233-af44-d86c3240e757"><img src="https://github.com/user-attachments/assets/350f902e-838a-4233-af44-d86c3240e757" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/4feda7e4-bb2e-4d63-b592-dc75c77f3406"><img src="https://github.com/user-attachments/assets/4feda7e4-bb2e-4d63-b592-dc75c77f3406" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a></p></td>
+<td colspan="2" width="41.2%" valign="top"><p align="center"><b>海报</b></p></td>
+<td width="30.6%" valign="top"><p align="center"><b>演示文稿</b></p></td>
+</tr>
+<tr>
+<td colspan="2" width="41.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092"><img src="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092" alt="Raven RSI poster with its Chinese title: a spiral stone stair climbing into the light, with ravens circling it" width="100%"></a></p></td>
+<td width="30.6%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/f2c368e3-789e-4a8d-890f-384240b36c25"><img src="https://github.com/user-attachments/assets/f2c368e3-789e-4a8d-890f-384240b36c25" alt="Cover, slides and closing slide of the Raven RSI deck" width="100%"></a></p></td>
 </tr>
 </table>
 
-<table>
-<tr>
-<td width="50%" valign="top"><p align="center"><b>海报：六个 Agent 编排框架横向对比</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>数据分析：参数扫描</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4"><img src="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/0048ee55-9102-407c-a58a-366dc0a8a9da"><img src="https://github.com/user-attachments/assets/0048ee55-9102-407c-a58a-366dc0a8a9da" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/15396c71-10ff-4077-9193-44c3a25d2d60"><img src="https://github.com/user-attachments/assets/15396c71-10ff-4077-9193-44c3a25d2d60" alt="Comparison board: six orchestration frameworks against four dimensions, each tagged explicit graph or canvas, declared task flow, or dynamic at runtime" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9e0ee7b0-4265-4b84-bb50-8034406894b3"><img src="https://github.com/user-attachments/assets/9e0ee7b0-4265-4b84-bb50-8034406894b3" alt="Retrieval sweep dashboard: recall@k is set by top_k alone and latency stays broadly flat, with a sixteen-cell grid of measured recall and latency and the best cell ringed at top_k 10, chunk_size 1024" width="99%"></a></p></td>
-</tr>
-</table>
+### ❯ Raven：一套完整的产品发布素材
+
+**一只渡鸦，汇聚各路专家。** Raven 的产品发布素材包括一款可在浏览器中直接游玩的物理小游戏、一份 16 页的产品介绍演示文稿、中英文海报，以及你正在阅读的这份 README。
 
 <table>
 <tr>
-<td width="50%" valign="top"><p align="center"><b>海报：光污染如何偷走野生动物的睡眠</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>网站：GPS 为什么需要第四颗卫星</b></p></td>
+<td colspan="2" valign="top"><p align="center"><b>物理小游戏</b> · <b><a href="https://livxue.github.io/angry-raven/">在线试玩 ↗</a></b></p></td>
+<td width="19.5%" valign="top"><p align="center"><b>README</b></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da"><img src="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da" alt="Task graph: two Raven-Code nodes in parallel into a Raven-Oncall cross-check; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="100%"></a></p></td>
+<td colspan="2" valign="top">
+
+https://github.com/user-attachments/assets/dd186b6d-3752-4c59-89c7-eeea5c6fa962
+
+</td>
+<td rowspan="3" width="19.5%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/97476a17-f779-47ae-9006-2285ef2fe58a"><img src="https://github.com/user-attachments/assets/97476a17-f779-47ae-9006-2285ef2fe58a" alt="The top of the Chinese Raven README as one long capture: banner, introduction, the four built-in agents with their benchmarks, and runtime self-evolution" width="100%"></a></p></td>
 </tr>
 <tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/fd70acb8-ec48-4adc-bf51-1e1c316e939e"><img src="https://github.com/user-attachments/assets/fd70acb8-ec48-4adc-bf51-1e1c316e939e" alt="Key visual plus the derived series: street poster, data panel, social square and wide banner" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/dbf6fa43-5a68-4e6a-95d4-a9902770ee4b"><img src="https://github.com/user-attachments/assets/dbf6fa43-5a68-4e6a-95d4-a9902770ee4b" alt="GPS trilateration explainer: the live page, and the fix at two, three and four satellites" width="97%"></a></p></td>
+<td width="46.2%" valign="top"><p align="center"><b>海报</b></p></td>
+<td width="34.3%" valign="top"><p align="center"><b>演示文稿</b></p></td>
+</tr>
+<tr>
+<td width="46.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9152b06b-74a3-4059-adff-41267a69a207"><img src="https://github.com/user-attachments/assets/9152b06b-74a3-4059-adff-41267a69a207" alt="Raven poster with its Chinese title: a raven on a standing stone above sea cliffs at sunset" width="100%"></a></p></td>
+<td width="34.3%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/2e19674e-83a8-4a77-a114-39f906c240d0"><img src="https://github.com/user-attachments/assets/2e19674e-83a8-4a77-a114-39f906c240d0" alt="Cover, slides and closing slide of the Raven overview deck" width="100%"></a></p></td>
 </tr>
 </table>
 
-<table>
-<tr>
-<td width="50%" valign="top"><p align="center"><b>仿真：用二分法求出梁的极限载荷</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>仿真：溃坝模拟，调优至水相不再越界</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d"><img src="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a dam-break chain, 3 of 3 done in 11m48s, 1m16s and 3m58s" width="100%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7"><img src="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="90%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24"><img src="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="90%"></a></p></td>
-</tr>
-</table>
+**[更多案例](docs/showcase.zh-CN.md)**
 
 ## ❯❯ 连接第三方 Agent
 
