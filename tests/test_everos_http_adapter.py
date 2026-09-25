@@ -204,25 +204,28 @@ class TestHttpAdapterSearch:
         await adapter.search(user_id=None, agent_id="agent:default", query="coffee", top_k=5)
         return json.loads(_first(mock, "/memory/search").content.decode())
 
-    async def test_agent_track_asks_for_the_llm_lane_when_rerank_is_absent(self, mock, http_client) -> None:
+    async def test_agent_track_drops_to_vector_search_when_rerank_is_absent(self, mock, http_client) -> None:
         """Agent-track HYBRID needs a rerank cross-encoder; without one the
         server refuses the request and `recall` turns that into an empty
-        result, so the whole track dies silently. The LLM lane is the
-        documented fallback."""
+        result, so the whole track dies silently. VECTOR needs no rerank. The
+        LLM lane the server offers instead was the fallback before: measured
+        10-12 s a call against the 4 s recall budget, it never returned in
+        time and billed an LLM call per turn for nothing."""
         mock.rerank_available = False
 
         body = await self._agent_search_body(mock, http_client)
 
-        assert body["enable_llm_rerank"] is True
+        assert body["method"] == "vector"
+        assert "enable_llm_rerank" not in body
 
     async def test_agent_track_leaves_the_cross_encoder_alone_when_it_exists(self, mock, http_client) -> None:
-        """The LLM lane costs one call per recall, so a configured rerank
-        provider must not be bypassed."""
+        """A configured rerank provider is the better ranking and must not be
+        bypassed."""
         mock.rerank_available = True
 
         body = await self._agent_search_body(mock, http_client)
 
-        assert "enable_llm_rerank" not in body
+        assert "method" not in body and "enable_llm_rerank" not in body
 
     async def test_a_server_without_capabilities_is_left_alone(self, mock, http_client) -> None:
         """Pre-1.2.1 servers do not report capabilities, and their
@@ -232,14 +235,14 @@ class TestHttpAdapterSearch:
 
         body = await self._agent_search_body(mock, http_client)
 
-        assert "enable_llm_rerank" not in body
+        assert "method" not in body and "enable_llm_rerank" not in body
 
     async def test_an_unreachable_health_endpoint_is_left_alone(self, mock, http_client) -> None:
         mock.status_for_path["/health"] = 503
 
         body = await self._agent_search_body(mock, http_client)
 
-        assert "enable_llm_rerank" not in body
+        assert "method" not in body and "enable_llm_rerank" not in body
 
     async def test_capabilities_are_probed_once_per_adapter(self, mock, http_client) -> None:
         """A tier change needs a server restart, so re-probing per recall

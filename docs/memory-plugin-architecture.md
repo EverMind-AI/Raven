@@ -315,7 +315,7 @@ imported.
 
 ## 7. EverOS version pinning & upgrade SOP
 
-### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.2.3`]**
+### 7.1 Exact pin is mandatory **[DONE: `everos[multimodal]==1.4.1`]**
 
 The adapter is written against EverOS **internal** APIs, not a stable
 public surface:
@@ -333,8 +333,8 @@ is pinned to an exact version (`==X.Y.Z`), not a range: upgrades are
 deliberate, re-validated events, never something `uv lock --upgrade`
 can do silently.
 
-Single pin: with `raven_everos` removed, EverOS is pinned in **one**
-place (raven's `pyproject.toml`). The upgrade surface is one line.
+Single pin: EverOS is pinned in **one** place, the plugin's own
+`plugins-dist/everos-memory/pyproject.toml`. The upgrade surface is one line.
 
 ### 7.2 Upgrade procedure
 
@@ -343,7 +343,7 @@ place (raven's `pyproject.toml`). The upgrade surface is one line.
    (`~/.everos/.index/` sqlite + lancedb) changed.
 1. **Bump the pin (uv only — never hand-edit pyproject/lock)**:
    ```bash
-   uv add 'everos[multimodal]==1.2.3' && uv sync
+   uv add --package everos-memory 'everos[multimodal]==1.4.1' && uv sync
    ```
    Always keep the `[multimodal]` extra. Skip `1.2.0`: it shipped a
    path-traversal regression fixed in `1.2.1`.
@@ -417,6 +417,138 @@ process supervisor; raven spawns it once per session and
 until the session restarts. And `everos cascade rebuild`, now the
 supported index recovery, refuses to run while a server holds the OME
 lock — while raven exposes no way to stop the server it started.
+
+### 7.4 Record: `1.2.3` -> `1.4.1`
+
+Five packages moved: `everos` `1.2.3` -> `1.4.1`, `pyarrow` `24.0.0` ->
+`25.0.1` (EverOS's new floor), `everalgo-boundary` `0.2.0` -> `0.2.1` and
+`everalgo-core` `0.4.0` -> `0.3.0` (EverOS now pins its everalgo transitive
+layer with `==`, so the resolver follows it down), and `msvc-runtime` joins
+on `win32` only. `lancedb` stays at `0.34.0`.
+
+**No adapter change.** Every internal symbol the adapter reaches
+(`MemoryRoot`, `episode_repo` / `agent_skill_repo`, `EpisodeWriter` /
+`AgentSkillWriter`, the `init_cmd` templates, the multimodal parser and
+client, the two error classes) is present in `1.4.1` with the same
+signature.
+
+**No data migration.** A copy of a 46 MB store written by `1.2.x` (568
+episodes, 5528 atomic facts, seven LanceDB tables at table schema version 2)
+started under `1.4.1` with no schema complaint and a healthy cascade. The same
+keyword searches returned the same ids in the same order on both versions;
+BM25 scores drift in the third decimal place. First start builds an IVF_FLAT
+index on any vector column past 2000 rows (`atomic_fact` here) -- seconds, and
+searches keep working meanwhile. A real turn through raven then wrote a new
+episode into that store and a fresh session recalled it, alongside episodes
+written months earlier under `1.2.x`. Rollback was not exercised this time;
+`lancedb` did not move, so the file format is the one `1.2.3` already reads.
+
+**A running server from before the upgrade is replaced.** raven used to
+reuse whatever answered on the configured port, so an EverOS `1.2.3` left
+running kept serving after the pin moved, with every surface green.
+`ensure_everos_server` now reads the running server's `/health` version and,
+for a root raven owns, sends a mismatch through the same precheck / stop /
+spawn chain a rotated credential takes (`stale_reason`). A root the user
+manages is theirs to restart. `everos cascade sync`, `cascade fix --apply` and
+`cascade rebuild` refuse to run beside a running server (exit code 3).
+
+**Windows.** `1.4.0` runs natively on Windows, so the platform gate raven
+carried (`everos_platform_note`, `ServiceState.UNSUPPORTED`, the wizard's
+WSL notice) is gone and `_everos_executable` looks for `everos.exe` there.
+Spawning, probing and reusing the server were already portable. Identifying
+and stopping a stale server was not: `_cmdline_of` asked `ps`, and the marker
+`everos server start` never matched a Windows command line, which prints the
+executable as `...\Scripts\everos.exe server start`. The command line now
+comes from WMI through PowerShell on `win32` and the marker accepts both
+shapes; the pidfile raven writes at spawn already named the pid. Verified on
+a Windows 11 box: a changed memory role sent the running server through
+"holds credentials raven has since changed; restarting", the old pid exited
+and the new one answered `/health`. `_listening_port` asks the TCP table
+through PowerShell there (no `lsof`, no `/proc`), walking the launcher's
+descendants because the socket belongs to the base interpreter two launchers
+below `everos.exe`. The stop is Ctrl-Break: the child is spawned in a process
+group of its own (`CREATE_NEW_PROCESS_GROUP`, the Windows counterpart of
+`start_new_session`, and what keeps a Ctrl-C at the gateway off the server),
+uvicorn takes the event as a shutdown, and a server that has not acted on it
+in ten seconds -- one another console started, which the event cannot reach
+-- gets `TerminateProcess`, the stop every server there had before. Verified
+on the same box: a stop from the spawning console runs the full uvicorn
+shutdown (`Shutting down` ... `Finished server process`) in three seconds; a
+stop from another console falls back and the process is gone in two.
+
+**The upgrade helper sweeps the environment on Windows.** Windows cannot
+replace an executable that is running, and the server outlives the gateway
+by design, on the environment's own python: with it up, `uv` failed to
+replace `Scripts\everos.exe` (`os error 32`). After waiting for the parent,
+the helper now stops every process whose executable lives under the tool
+environment -- that directory and nothing wider -- and only then installs.
+Verified on the box: the same reinstall that failed with the server up
+succeeds after the sweep, and the relaunched gateway spawns a fresh server.
+
+**What a six-angle review of the branch then changed.** Each item is a
+scenario a real install can reach; the rule behind them is that memory
+degrades with a notice and never blocks a turn, a start or an upgrade.
+
+- A gateway starts the server again when it finds nothing listening
+  (`EverosBackend._may_respawn` / `_respawn`): only for a root raven owns, only
+  when no child of its own still runs, only when nothing holds the OME lock,
+  at most once per thirty seconds. Before, the only spawn was in `start()`,
+  which a running gateway never passes through again, so a server that went
+  away -- an upgrade's sweep, a crash, a stop another process sent -- left the
+  gateway without memory until it was restarted by hand.
+- A stop that was sent and did not finish (`STILL_DRAINING`: uvicorn closes
+  the port at once and finishes the requests it had, an extraction included)
+  is no longer adopted by `ensure_everos_server`; it raises, the backend keeps
+  probing, and the probe above starts a replacement once the lock is free.
+  Adopting it reported memory over a process that no longer answered.
+- A command-line lookup that failed (`_cmdline_of` -> `None`: no `ps`,
+  PowerShell blocked, WMI wedged, the timeout hit) is distinct from a process
+  that is gone. A stop keeps waiting on it; `lock_holder` identifies nothing;
+  `restart_for_config_change` reports "could not be identified" instead of
+  applied when something still answers on the address.
+- A spawn that loses the boot race no longer overwrites the pidfile of the
+  live server (`_start_server_if_unlocked`): on Windows the pidfile is the
+  only way back to it.
+- `stop_pid` counts wall time (each Windows poll launches PowerShell) and takes
+  a `grace`; on Windows a backend drains the server it started itself at
+  `stop()` (Ctrl-Break, sixty seconds), so an upgrade finds nothing to
+  terminate mid-write and a settings change restarts it cleanly.
+- The helper's sweep asks again after `Stop-Process` and refuses to run `uv`
+  while anything from the environment survives (elevated or another user's
+  process): `uv tool install --force` removes the environment before it
+  writes, and would have left every file but the one that could not go.
+- An embedding pin narrower than the index is measured at backend start
+  (`configured_embedding_width`, once per pin per process) and withheld from
+  the spawn (`withhold_role`): EverOS runs keyword recall and keeps storing,
+  and the notice names the model and the width. The write-time check covers a
+  pin written through raven; this covers one written around it. The probe no
+  longer raises on an odd response, times out at ten seconds, and an install
+  with the plugin on `plugins.disabled` is not gated. `migrate_roles` runs off
+  the event loop, which the probe had put a provider round-trip onto.
+- The memory page calls the `/api/v2` routes (v1 is EverOS's legacy alias),
+  asks `/health` before a search the way the chat adapter does (keyword
+  without embedding, the LLM rerank on the agent track without a
+  cross-encoder, the profile opted in), and shows the server's own sentence
+  on a refusal instead of "unreachable".
+- The recalled profile is rendered as lines again: the search response
+  arrives as namespaces, and the renderer, handed one, had put
+  `namespace(explicit_info=[namespace(...)])` -- evidence fields included --
+  into every prompt. A tool-call-only assistant row is stored with empty
+  content, not `"None"`; `top_k` is clamped to the server's 1..100; an empty
+  query asks nothing; a `/health` probe that failed is not cached as "no
+  capabilities" for the life of the adapter.
+- The wizard accepts a model wider than 1024 (EverOS keeps the first 1024,
+  the settings page already accepted it) and turns the host's refusal into a
+  re-prompt rather than a traceback.
+
+**One guard added alongside.** The live install was found pinned to a
+768-dimension embedding model against this 1024-wide index, with every store
+and search answering 500. `set_embedding_endpoint` now measures the model's
+width before writing the pin and refuses anything narrower than
+`REQUIRED_EMBEDDING_DIMENSIONS`, but only where the config names EverOS as
+the memory backend: a knowledge base sizes itself to whatever width the
+model returns, so an install with memory off or on another backend keeps
+any width. The wizard's own check reads the same constant and probe.
 
 ---
 

@@ -469,6 +469,52 @@ class EmbeddingPinError(ValueError):
     """
 
 
+REQUIRED_EMBEDDING_DIMENSIONS = 1024
+EVEROS_PLUGIN_NAME = "everos-memory"
+"""The plugin name as ``plugins.disabled`` spells it."""
+"""The width of every vector column in the memory index.
+
+EverOS truncates a wider vector to this on the way in, so a model that returns
+more is fine. One that returns fewer cannot fill the column: every store and
+every search then answers 500 about a mismatched width, and nothing on the
+settings page says why.
+"""
+
+
+def probe_embedding_dimensions(url: str, headers: dict[str, str], model: str) -> int | str:
+    """The width ``model`` answers with at ``url``, or why it could not be asked.
+
+    Asks with ``dimensions=REQUIRED_EMBEDDING_DIMENSIONS`` first -- the API-level
+    truncation MRL-capable models honour -- and falls back to the native width.
+    An int is a measured width; a str is a transport or shape failure, which is
+    not a verdict about the model.
+    """
+    import httpx
+
+    def _try(client: httpx.Client, body: dict[str, Any]) -> int | str:
+        try:
+            resp = client.post(url, json=body, headers=headers)
+            if resp.status_code != 200:
+                return f"HTTP {resp.status_code}"
+            items = resp.json().get("data", [])
+            if not items:
+                return "empty response"
+            first = items[0]
+            if not isinstance(first, dict):
+                return "unexpected response format"
+            return len(first.get("embedding", []))
+        except Exception as exc:  # noqa: BLE001 - whatever failed, it is "could not measure", never a verdict
+            return str(exc)
+
+    with httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)) as client:
+        result = _try(
+            client, {"model": model, "input": ["dimension check"], "dimensions": REQUIRED_EMBEDDING_DIMENSIONS}
+        )
+        if result == REQUIRED_EMBEDDING_DIMENSIONS:
+            return result
+        return _try(client, {"model": model, "input": ["dimension check"]})
+
+
 def set_embedding_endpoint(
     fields: dict[str, Any],
     *,
@@ -483,8 +529,9 @@ def set_embedding_endpoint(
     rotating a key is one edit somewhere else.
 
     Raises :class:`EmbeddingPinError` when the pair cannot embed: an unknown
-    provider, one with no usable credential, or a model that provider's
-    catalogue describes as something other than an embedding model.
+    provider, one with no usable credential, a model that provider's catalogue
+    describes as something other than an embedding model, or one whose vectors
+    are narrower than the memory index.
 
     Returns the previous block, so a caller can say what changed -- including
     that the model moved, which invalidates every vector stored under the old
@@ -545,11 +592,19 @@ def _clear_embedding_pin(path: "Path") -> dict[str, Any]:
 def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> None:
     """Check the pair before it is stored. Raises, or returns quietly.
 
-    Only what can be answered without a network call: whether the provider is
+    First what can be answered without a network call: whether the provider is
     one this install has, whether it has a credential to call with, and whether
     its catalogue says the model embeds. A model the catalogue has never heard
     of passes -- a local deployment or a release newer than the snapshot is not
     a mistake, and refusing it would make this a gate on the snapshot's age.
+
+    Then, only where EverOS is the memory backend this config names, one
+    request for the one fact only the model can answer: how wide its vectors
+    are. Narrower than the memory index is refused. A knowledge base sizes
+    itself to whatever width the model returns, so an install whose memory is
+    off or runs elsewhere keeps any width. A probe that could not reach the
+    provider is not a verdict, so the pin is written and the width left to the
+    first real call.
     """
     provider = str(clean.get("provider") or "")
     model = str(clean.get("model") or "")
@@ -584,6 +639,118 @@ def _refuse_a_pin_that_cannot_embed(clean: dict[str, Any], *, path: "Path") -> N
             f"{model!r} is not an embedding model on {provider} (it is described as "
             f"{', '.join(caps)}); pick one that returns vectors"
         )
+
+    if not _everos_consumes_the_pin(path):
+        return
+
+    from raven.providers.wire import wire_model
+
+    base_url, api_key = resolved
+    width = probe_embedding_dimensions(
+        base_url.rstrip("/") + "/embeddings",
+        {"Authorization": f"Bearer {api_key}"} if api_key else {},
+        wire_model(model, client_provider=provider),
+    )
+    if isinstance(width, int) and width < REQUIRED_EMBEDDING_DIMENSIONS:
+        raise EmbeddingPinError(
+            f"{model!r} on {provider} returns {width}-dimension vectors and the memory index is "
+            f"{REQUIRED_EMBEDDING_DIMENSIONS} wide; pick a model that can return {REQUIRED_EMBEDDING_DIMENSIONS}"
+        )
+    if not isinstance(width, int):
+        logger.warning(
+            "config/update: could not measure the width {!r} returns on {} ({}); pin written unchecked",
+            model,
+            provider,
+            width,
+        )
+
+
+def _everos_consumes_the_pin(path: "Path") -> bool:
+    """Whether an EverOS backend will read the pin this config carries.
+
+    Three things have to hold: the ``everos-memory`` distribution is installed,
+    it is not on ``plugins.disabled``, and the memory backend this config names
+    is EverOS. A knowledge-only
+    install ships without the plugin and still carries the schema default, so
+    the name alone would gate a pin nothing consumes.
+
+    Read raw rather than through the loader: the writer already holds the file,
+    and the loader's migrations have no business running inside a settings
+    write. An absent ``memory.backend`` is the schema default, EverOS; an
+    explicit ``null`` is memory off. The default is read off the schema field
+    rather than imported from ``raven.core``, which imports this package and
+    would close a cycle.
+    """
+    from raven.config.raven import MemoryConfig
+
+    if not _everos_plugin_present():
+        return False
+    shipped = MemoryConfig.model_fields["backend"].default
+    try:
+        raw = read_raw_or_raise(path)
+    except Exception:  # noqa: BLE001 - an unreadable config fails the write itself, not this check
+        return False
+    if EVEROS_PLUGIN_NAME in ((raw.get("plugins") or {}).get("disabled") or []):
+        return False
+    memory = raw.get("memory") or {}
+    backend = memory["backend"] if "backend" in memory else shipped
+    return backend == shipped
+
+
+def configured_embedding_width(config_path: "Path | None" = None) -> int | str | None:
+    """The width the pinned embedding model returns, measured now.
+
+    ``None`` when there is nothing to measure: no pin, no credential for its
+    provider, or no EverOS backend to read it. An int is the width; a str is
+    why it could not be measured. The check at write time covers a pin written
+    through raven; this covers the rest -- a pin written before memory was
+    turned on, one the probe could not reach at write time, a hand-edited file
+    -- at the moment EverOS is about to be started on it.
+    """
+    path = config_path or get_config_path()
+    if not _everos_consumes_the_pin(path):
+        return None
+    try:
+        pin = read_raw_or_raise(path).get("embedding") or {}
+    except Exception:  # noqa: BLE001 - an unreadable config is reported by the loader, not from here
+        return None
+    provider = str(pin.get("provider") or "")
+    model = str(pin.get("model") or "")
+    if not provider or not model:
+        return None
+    from raven.config.update_providers import resolve_provider_credentials
+
+    try:
+        resolved = resolve_provider_credentials(provider, config_path=path)
+    except KeyError:
+        return None
+    if resolved is None:
+        return None
+    from raven.providers.wire import wire_model
+
+    base_url, api_key = resolved
+    return probe_embedding_dimensions(
+        base_url.rstrip("/") + "/embeddings",
+        {"Authorization": f"Bearer {api_key}"} if api_key else {},
+        wire_model(model, client_provider=provider),
+    )
+
+
+def _everos_plugin_present() -> bool:
+    """Whether the ``everos-memory`` distribution is present in this install.
+
+    The same question ``raven.core.plugin_stack.everos_plugin_installed``
+    answers, asked the same way -- an imported module is present by definition,
+    and a spec lookup executes no line of the plugin -- and kept as a copy here
+    because ``raven.core`` imports this package and importing back would close
+    a cycle.
+    """
+    import sys
+    from importlib.util import find_spec
+
+    if sys.modules.get("raven_everos") is not None:
+        return True
+    return find_spec("raven_everos") is not None
 
 
 _EMBEDDING_MODEL_CHANGED = (

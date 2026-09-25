@@ -63,6 +63,7 @@ class ToolInstallTarget:
 
 _UPGRADE_HELPER_SOURCE = r"""import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -200,6 +201,50 @@ def main(argv=None):
         clear_marker()
 
 
+def stop_leftovers_of(env_dir):
+    # Windows cannot replace an executable that is running. The parent waited
+    # for above is gone, but what it started from this environment need not be:
+    # the memory plugin's server runs on the environment's python and outlives
+    # the gateway by design, and `uv tool install` then fails on its everos.exe.
+    # Anything still executing from under the environment is raven's, and the
+    # install cannot proceed around it. Returns (stopped, survivors); survivors
+    # is None when the question could not be asked.
+    root = env_dir.rstrip("\\/") + "\\"
+    select = (
+        "$root = '" + root.replace("'", "''") + "'; "
+        "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and "
+        "$_.ExecutablePath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) }"
+    )
+    powershell = shutil.which("powershell") or os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"
+    )
+
+    def ask(script):
+        try:
+            out = subprocess.run(
+                [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return out.stdout.split()
+
+    stopped = ask(select + " | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }")
+    if stopped is None:
+        return [], None
+    if stopped:
+        print("Stopped what was still running from the old install (pid " + ", ".join(stopped) + ").")
+        time.sleep(2)
+    # Asked again rather than trusted: Stop-Process is denied on a process of
+    # another user or a higher integrity level, and `uv tool install --force`
+    # deletes the environment before it writes, so a survivor would cost the
+    # user every file except the one that could not be removed.
+    return stopped, ask(select + " | ForEach-Object { $_.ProcessId }")
+
+
 def run(argv=None):
     args = sys.argv[1:] if argv is None else argv
     if len(args) not in (4, 5, 6):
@@ -299,7 +344,6 @@ def run(argv=None):
     # is uninstalled. Installing raven alone would be exactly that loss, so no
     # list means no upgrade.
     import base64
-    import os
     import socket
     import tempfile
     import urllib.parse
@@ -393,6 +437,24 @@ def run(argv=None):
 
     try:
         status = 0
+        if sys.platform == "win32" and os.environ.get("UV_TOOL_DIR"):
+            # After the downloads, so a list that cannot be fetched leaves
+            # everything running, and right before uv, so nothing starts again
+            # in between.
+            stopped, survivors = stop_leftovers_of(os.path.join(os.environ["UV_TOOL_DIR"], "raven"))
+            if survivors is None or survivors:
+                what = (
+                    "could not check for Raven processes still running from the current install"
+                    if survivors is None
+                    else "these processes are still running from the current install and Windows cannot "
+                    "replace a running executable: pid " + ", ".join(survivors)
+                )
+                print(
+                    "Unable to upgrade Raven: " + what + ". Stop them and run the upgrade again. Nothing was changed.",
+                    file=sys.stderr,
+                )
+                restart()
+                return 1
         for plugin_list, spec, losses in rungs:
             requirement = wheel_url if spec == "raven" else f"{spec} @ {wheel_url}"
             status = install(requirement, plugin_list)
