@@ -1940,8 +1940,8 @@ def test_upgrade_helper_refuses_to_install_over_a_survivor(monkeypatch: pytest.M
 
     assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 1
     assert order == []
-    assert "still running from the current install" in capsys.readouterr().err
-    assert "pid 2" in capsys.readouterr().err or True
+    err = capsys.readouterr().err
+    assert "still running from the current install" in err and "pid 2" in err
 
 
 def test_upgrade_helper_sweeps_the_environment_after_the_parent_and_before_uv(
