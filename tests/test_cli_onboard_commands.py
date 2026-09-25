@@ -8331,4 +8331,3 @@ def test_a_narrower_embedding_model_still_fails_the_wizard_check(monkeypatch: py
     monkeypatch.setattr(onboard_everos, "_probe_embedding_dim", lambda url, headers, model: 768)
 
     assert not onboard_everos._verify_embedding_dim(model="m", api_key="k", base_url="http://p", non_interactive=True)
-

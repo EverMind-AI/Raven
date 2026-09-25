@@ -3050,6 +3050,21 @@ class TestAGatewayStartsTheServerAgain:
         await b._probe_once()
         assert ensure.await_count == 1, "not again within the cooldown"
 
+    async def test_a_port_that_is_slow_to_refuse_counts_as_gone_when_nothing_holds_the_lock(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Seen on a Windows box: a dead port takes two to four seconds to be
+        refused, longer than the probe waits, so the verdict is TIMEOUT."""
+        b = self._ready(tmp_path, monkeypatch)
+        monkeypatch.setattr("raven_everos.server.probe_health", lambda _u: ProbeVerdict.TIMEOUT)
+        monkeypatch.setattr("raven_everos.server.lock_holder", lambda _r, **_kw: None)
+        ensure = AsyncMock(return_value=None)
+        monkeypatch.setattr("raven_everos.server.ensure_everos_server", ensure)
+
+        await b._probe_once()
+
+        assert ensure.await_count == 1 and b._state is ServiceState.READY
+
     async def test_a_holder_still_draining_is_left_alone(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         b = self._ready(tmp_path, monkeypatch)
         monkeypatch.setattr("raven_everos.server.probe_health", lambda _u: ProbeVerdict.REFUSED)

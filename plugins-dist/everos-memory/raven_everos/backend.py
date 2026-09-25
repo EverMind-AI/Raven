@@ -671,7 +671,11 @@ class EverosBackend:
         base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
         result = await asyncio.to_thread(probe_health, base_url)
         self._apply_probe(result)
-        if result is ProbeVerdict.REFUSED and self._may_respawn():
+        # TIMEOUT as well as REFUSED: on Windows a connection to a port nobody
+        # listens on can take longer to be refused than the probe waits, and
+        # the verdict then reads "slow", not "gone". A server that is merely
+        # slow still holds the lock, which is what ``_respawn`` checks first.
+        if result in (ProbeVerdict.REFUSED, ProbeVerdict.TIMEOUT) and self._may_respawn():
             await self._respawn(base_url)
 
     def _may_respawn(self) -> bool:
