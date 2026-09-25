@@ -6,6 +6,26 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- Memory runs on native Windows. EverOS 1.4.0 runs there without WSL, so
+  the memory plugin's pin moves to `everos[multimodal]==1.4.1` and the
+  platform gate that made memory unavailable on Windows is gone, together
+  with the wizard's WSL notice and the import scan's refusal. Finding a
+  running server reads the command line through WMI and the TCP table
+  through PowerShell rather than `ps`; the server is spawned in a process
+  group of its own and stopped with Ctrl-Break, which uvicorn takes as a
+  shutdown. Because Windows cannot replace a running executable, the
+  upgrade helper stops whatever still runs from under the tool environment
+  before it installs.
+
+- An embedding model narrower than the 1024-wide memory index is refused
+  where it is pinned, and withheld from the server it would otherwise have
+  started with. A 768-dimension model saved from the settings page had left
+  every memory store and search answering 500 about a mismatched width,
+  with nothing on the page saying why; EverOS now runs keyword recall and
+  keeps storing, and the notice names the model and its width. A probe that
+  cannot reach the provider is not a verdict: the pin is written and a
+  warning logged.
+
 - `ops_connection_add` is a trunk tool, served on `tools.connectionAdd`
   (on in raven-code and raven-oncall, off elsewhere). It writes the machine
   an owner described into their connection registry after reaching it, with
@@ -33,6 +53,20 @@ All notable changes to Raven are documented here.
   a technology register.
 
 ### Changed
+
+- A running EverOS whose version no longer matches the installed one is
+  replaced rather than reused, through the same precheck, stop and spawn
+  chain a rotated credential takes. An upgrade used to leave the old server
+  answering until something unrelated restarted it. A root the user manages
+  is never touched. A gateway that finds nothing listening and no lock held
+  starts the server again, at most once every thirty seconds, so a server
+  that goes away no longer leaves that gateway without memory until it is
+  restarted by hand.
+
+- Recall on the `agent_case` and `agent_skill` tracks (the Cases and
+  Know-how tabs) searches by vector when no reranker is configured,
+  instead of asking for an LLM rerank that the four-second recall budget
+  can never wait out.
 
 - A sub-agent reads the connection registry in the owner's home
   (`raven_home()/connections.json`), which the host hands it as `RAVEN_HOME`;
