@@ -520,8 +520,8 @@ def _proc_locks_pid(lock: Path) -> int | None:
     return None
 
 
-def _cmdline_of(pid: int) -> str:
-    """The full command line of ``pid``, or an empty string.
+def _cmdline_of(pid: int) -> str | None:
+    """The full command line of ``pid``: empty when it is gone, ``None`` when unknown.
 
     POSIX asks ``ps``. ``-ww`` is what makes "full" true: ``ps`` otherwise
     truncates to ``$COLUMNS`` (80 when unset), and the marker this is read for
