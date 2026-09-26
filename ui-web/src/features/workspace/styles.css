@@ -19,3 +19,9 @@
 .workspace-stat { margin-left: 8px; font-family: var(--mono); font-size: 11px; }
 .workspace-add { font-weight: 400; color: var(--moss); }
 .workspace-del { font-weight: 400; color: var(--clay); }
+
+/* In a pane's header these two glyphs are taller than the folder beside them
+   (a portrait page, a box with an arrow out of it), so they are drawn smaller
+   to put their strokes on the same 10px as the rest of the row. */
+.fcopy.ghost-ic svg { width: 14px; height: 14px; }
+.workspace-ext.ghost-ic svg { width: 14px; height: 14px; }

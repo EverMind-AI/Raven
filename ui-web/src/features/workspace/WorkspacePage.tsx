@@ -426,7 +426,7 @@ function FileActs({ f }: { f: WsFile }): JSX.Element {
     <>
       {f.kind === 'pdf' || f.kind === 'html' ? (
         <button
-          className="ghost-ic tipdn"
+          className="ghost-ic tipdn workspace-ext"
           data-tip={t('gui.ws.file_newtab')}
           aria-label={t('gui.ws.file_newtab')}
           /* The tab shows the page as the pane does, scripts and all, under the

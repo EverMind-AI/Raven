@@ -5648,7 +5648,11 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   color: var(--text-3); font-size: 17px; cursor: pointer; flex: none;
 }
 .desk-pane > header button svg { width: 16px; height: 16px; stroke-linecap: round; stroke-linejoin: round; }
-.desk-pane > header .pane-fullscreen svg { width: 14px; height: 14px; }
+/* Sized by the ink each glyph draws, not by its box: every control's strokes
+   span about 10px tall, so the row reads level. A diagonal pair of arrows
+   fills less of its square than a folder does, and a cross less again. */
+.desk-pane > header .pane-fullscreen svg { width: 16px; height: 16px; }
+.desk-pane > header .desk-pane-close svg { width: 18px; height: 18px; }
 /* The instance's own effort. A text chip, so it has to undo the fixed 26px
    square the icon buttons above take. Two states worth telling apart at a
    glance: following the conversation is the ordinary one and stays as quiet as

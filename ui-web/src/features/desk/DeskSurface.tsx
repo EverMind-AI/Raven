@@ -109,7 +109,11 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
         >
           <FullscreenIcon active={full} />
         </button>
-        <button onClick={() => desk.closePane(pane.id)} aria-label={t('gui.close')}>×</button>
+        <button className="desk-pane-close" onClick={() => desk.closePane(pane.id)} aria-label={t('gui.close')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <path d="M6 6l12 12M18 6 6 18" />
+          </svg>
+        </button>
       </header>
       <div className="desk-pane-body">
         <PaneHeadSlot.Provider value={target}>
