@@ -276,6 +276,8 @@ _MAX_ITER_STATIC_FALLBACK = (
     "completing the task. You can try breaking the task into smaller steps."
 )
 
+_WALL_CLOCK_STATIC_FALLBACK = "I reached the time limit for this turn before completing the task."
+
 # The same wrap-up, for a turn stopped because one call was repeating to no
 # effect. Its own wording because the max-iter prompt opens by telling the model
 # it used up its budget, which here would be false: the budget is not what ran
@@ -686,6 +688,23 @@ whether or not this key is set, and only the sub-label depends on it.
 Unlike ``observers`` this entry stays in the process -- it is never filed onto a message
 or sent to a client -- so a callable here crosses no serialization boundary.
 """
+
+
+TURN_SYNTHESIS_KEY = "turn_synthesis"
+
+
+@dataclass(frozen=True)
+class TurnSynthesisPolicy:
+    """Product guidance and one bounded repair for an interrupted turn's reply."""
+
+    guidance: str
+    repair_prompt: Callable[[str], str | None] | None = None
+    format_fallback: Callable[[str], str] | None = None
+
+
+def turn_synthesis(metadata: dict[str, Any] | None) -> TurnSynthesisPolicy | None:
+    value = (metadata or {}).get(TURN_SYNTHESIS_KEY)
+    return value if isinstance(value, TurnSynthesisPolicy) else None
 
 
 @dataclass(frozen=True)

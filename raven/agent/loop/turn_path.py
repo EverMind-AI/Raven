@@ -24,6 +24,7 @@ from raven.agent.loop._shared import (
     _TOOL_DURATION_MS_KEY,
     _TOOL_METADATA_KEY,
     _TOOL_PREVIEW_MAX_CHARS,
+    _WALL_CLOCK_STATIC_FALLBACK,
     OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     SKIPPED_AFTER_BLOCKED_CALL,
@@ -42,6 +43,7 @@ from raven.agent.loop._shared import (
     Origin,
     RecoveryAction,
     Session,
+    TurnSynthesisPolicy,
     _appended_by_hook,
     _display_label,
     _file_change_payload,
@@ -76,6 +78,7 @@ from raven.agent.loop._shared import (
     turn_ask_kind,
     turn_budgets,
     turn_question,
+    turn_synthesis,
     uuid4,
     workdir,
 )
@@ -430,14 +433,19 @@ class TurnPathMixin:
         reasoning_effort: str | None = None,
         prompt: str = _MAX_ITER_SYNTHESIS_PROMPT,
         fallback: str | None = None,
+        synthesis_policy: TurnSynthesisPolicy | None = None,
     ) -> str:
-        """One tools-disabled LLM call to wrap up a turn that has to stop early.
+        """Wrap up an interrupted turn with tools withheld from the model.
 
         Instead of returning a canned apology, ask the model to summarize what
         it accomplished and deliver its best partial answer. Tools are withheld
         (``tools=None``) so it cannot start another tool call — or an
         ``ask_user`` — at the cliff edge. Falls back to a static message if the
         call errors or comes back empty, so the turn is never left silent.
+
+        A product may add its own guidance and request one format repair. Those
+        calls are buffered until a final text is chosen so the streamed reply
+        and the persisted reply agree.
 
         When the turn caller wired streaming callbacks, this synthesized reply
         must stream too — otherwise it never reaches a streaming outlet: the
@@ -449,10 +457,51 @@ class TurnPathMixin:
         not used up its budget, and told that it had, it summarizes the wrong
         thing.
         """
+        if synthesis_policy is not None:
+            prompt = f"{prompt}\n\n{synthesis_policy.guidance}"
         synth_messages = messages + [{"role": "user", "content": prompt}]
         # The wrap-up is a model call of the same turn, so it pays the turn's
         # effort; absent, the provider's configured default stands.
         effort_kwargs: dict[str, str] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
+        if synthesis_policy is not None:
+
+            async def _call(rows: list[dict]) -> str:
+                response = await self.provider.chat_with_retry(
+                    messages=rows,
+                    tools=None,
+                    model=model,
+                    fallback_models=fallback_models,
+                    **effort_kwargs,
+                )
+                return (self._strip_think(response.content) or "") if response.finish_reason != "error" else ""
+
+            try:
+                text = await _call(synth_messages)
+            except Exception as exc:
+                logger.warning("Early-exit synthesis call failed: {}", exc)
+                text = ""
+            if text and synthesis_policy.repair_prompt is not None:
+                repair = synthesis_policy.repair_prompt(text)
+                if repair:
+                    try:
+                        revised = await _call(
+                            synth_messages
+                            + [{"role": "assistant", "content": text}, {"role": "user", "content": repair}]
+                        )
+                        if revised:
+                            text = revised
+                    except Exception as exc:
+                        logger.warning("Early-exit synthesis repair failed: {}", exc)
+            if not text:
+                text = fallback or _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
+                if synthesis_policy.format_fallback is not None:
+                    try:
+                        text = synthesis_policy.format_fallback(text)
+                    except Exception as exc:
+                        logger.warning("Early-exit synthesis fallback formatting failed: {}", exc)
+            if on_token_delta is not None:
+                await on_token_delta(text)
+            return text
         try:
             if on_token_delta is not None or on_reasoning_delta is not None:
                 response = await self._llm_call_stream(
@@ -1842,8 +1891,8 @@ class TurnPathMixin:
             #      shadow-git checkpoint commit is labelled and the next turn's
             #      recovery prompt can surface the sha + edited files to resume.
             #   2. The user still deserves a useful reply NOW — so, checkpoint
-            #      or not, synthesize a best-effort wrap-up (one tools-disabled
-            #      call summarising what was done and what's left) instead of a
+            #      or not, synthesize a best-effort wrap-up with tools disabled
+            #      (and one format repair if requested) instead of a
             #      canned apology. Synthesis falls back to a static message
             #      internally if the call fails, so the turn is never silent.
             status = "interrupted"
@@ -1856,10 +1905,13 @@ class TurnPathMixin:
                 reasoning_effort=policy.reasoning_effort,
                 prompt=_MAX_ITER_SYNTHESIS_PROMPT if stalled_tool is None else _STALLED_SYNTHESIS_PROMPT,
                 fallback=(
-                    _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
-                    if stalled_tool is None
-                    else _STALLED_STATIC_FALLBACK.format(tool=stalled_tool)
+                    _STALLED_STATIC_FALLBACK.format(tool=stalled_tool)
+                    if stalled_tool is not None
+                    else _WALL_CLOCK_STATIC_FALLBACK
+                    if stopped_by == "wall_clock"
+                    else _MAX_ITER_STATIC_FALLBACK.format(n=self.max_iterations)
                 ),
+                synthesis_policy=turn_synthesis(turn_meta),
             )
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,

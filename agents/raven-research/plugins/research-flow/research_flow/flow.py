@@ -29,7 +29,7 @@ from loguru import logger
 
 from raven.agent.hook.composite import CompositeHook
 from raven.agent.hook.participant import ParticipantHook
-from raven.agent.loop import TURN_ASK_KIND_KEY, TURN_BUDGETS_KEY
+from raven.agent.loop import TURN_ASK_KIND_KEY, TURN_BUDGETS_KEY, TURN_SYNTHESIS_KEY, TurnSynthesisPolicy
 from raven.contracts.loop_hooks import HookDecision
 from raven.contracts.participant import Accept, AgentParticipant, Answer, End, Intake, Resample, StepView
 from research_flow.config import FlowConfig
@@ -72,7 +72,14 @@ from research_flow.gates.plain_first import (
     PlainTurnGate,
     set_plain_turn,
 )
-from research_flow.gates.report_shape import ReportShape, ReportShapeGate, render_reminder
+from research_flow.gates.report_shape import (
+    ReportShape,
+    ReportShapeGate,
+    interrupted_report_fallback,
+    interrupted_report_guidance,
+    interrupted_report_rewrite_prompt,
+    render_reminder,
+)
 from research_flow.gates.spin_breaker import SpinEntryBreaker
 from research_flow.gates.sufficiency import SufficiencyGate
 from research_flow.gates.verify import DraftReviewerGate
@@ -93,6 +100,25 @@ if TYPE_CHECKING:
 # concurrent turns, and the token in the filename is what joins a row back to
 # its turn (same scheme as the fork's loop).
 _TURN_SEQ = itertools.count()
+
+
+def _turn_cargo(cfg: FlowConfig, text: str) -> dict[str, Any]:
+    cargo: dict[str, Any] = {
+        TURN_BUDGETS_KEY: {
+            "wall_clock_seconds": cfg.wall_clock_seconds,
+            "dead_end_retries": cfg.dead_end_retry.max_retries if cfg.dead_end_retry.enabled else 0,
+            "dead_end_reasons": list(cfg.dead_end_retry.reasons),
+        },
+        TURN_ASK_KIND_KEY: harness_ask_kind,
+    }
+    if cfg.final_shape.report_structure:
+        cargo[TURN_SYNTHESIS_KEY] = TurnSynthesisPolicy(
+            guidance=interrupted_report_guidance(text),
+            repair_prompt=interrupted_report_rewrite_prompt if cfg.final_shape.report_bounce else None,
+            format_fallback=interrupted_report_fallback,
+        )
+    return cargo
+
 
 # ``ctx.metadata`` is ONE dict per turn on this host: the loop seeds it at
 # the inbound fire and hands the same dict to the iteration run (where it
@@ -228,20 +254,15 @@ class TurnFrame(Gate):
         # than config the loop reads: the loop serves every agent and must not know
         # any of them, so an agent that leaves this key alone is bounded exactly as
         # it was before the key existed.
-        ctx.metadata[TURN_BUDGETS_KEY] = {
-            "wall_clock_seconds": self._cfg.wall_clock_seconds,
-            "dead_end_retries": self._cfg.dead_end_retry.max_retries if self._cfg.dead_end_retry.enabled else 0,
-            "dead_end_reasons": list(self._cfg.dead_end_retry.reasons),
-        }
         # This product's asks are this product's wording, so the loop is handed the
         # name for them rather than a copy of the prefixes. Without it a dead end on
         # any of the three reads as ``stranded:harness_ask_unknown``, and a
         # ``dead_end_reasons`` narrowed to one of them would match nothing and switch
         # off the rerun it meant to narrow.
-        ctx.metadata[TURN_ASK_KIND_KEY] = harness_ask_kind
         ctx.metadata.pop(_TURN_MODE_KEY, None)
         text = ctx.inbound_content or ""
         ctx.metadata[_USER_TEXT_KEY] = text
+        ctx.metadata.update(_turn_cargo(self._cfg, text))
         record = self._store.load(ctx.session_key)
         if self._conversation:
             self._consume_pending_clarify(ctx.session_key, record, text)
@@ -1074,6 +1095,12 @@ class ResearchFlowHook(ParticipantHook):
 
     def _resolve(self, ctx: Any) -> _ChainSlot:
         return self.flow._resolve(ctx)
+
+    async def before_user_inbound(self, ctx) -> HookDecision:
+        text = ctx.inbound_content or ""
+        slot = self.flow._reuse(GateCtx(session_key=ctx.session_key))
+        ctx.metadata.update(_turn_cargo(slot.cfg, text))
+        return await super().before_user_inbound(ctx)
 
 
 __all__ = [

@@ -246,6 +246,34 @@ _REWRITE_PROMPT = (
 )
 
 
+def interrupted_report_guidance(task: str) -> str:
+    return (
+        "This research turn was interrupted before completion. Give the best-supported "
+        "partial answer, preserve source URLs and uncertainty, and state what remains "
+        "unfinished. Do not present the partial result as a completed investigation. "
+        "Reply in the same language as the user's request.\n\n"
+        f"{render_reminder(task)}"
+    )
+
+
+def interrupted_report_rewrite_prompt(draft: str) -> str | None:
+    missing = ReportShape(draft).missing
+    if not missing:
+        return None
+    return (
+        _REWRITE_PROMPT.format(missing=", ".join(missing))
+        + " Keep the interruption and unfinished work explicit under Limitations."
+    )
+
+
+def interrupted_report_fallback(reason: str) -> str:
+    return (
+        f"## Answer\n{reason}\n\n"
+        "## Findings\nThe available record could not be summarized into a reliable partial result.\n\n"
+        "## Limitations\nThe research turn ended before the task was complete."
+    )
+
+
 class ReportShapeGate(Gate):
     """Bounce a terminal draft that is missing a template section, once.
 
