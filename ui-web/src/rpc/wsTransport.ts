@@ -99,11 +99,17 @@ const defaultSocket = (url: string): WebSocketLike =>
    cookie the gateway has already forgotten, so an answer means the process is
    back and a socket closing anyway is a real auth refusal. No answer means
    keep waiting. (The old client probed '/' with HEAD; the two are equivalent, and
-   the dev server owns '/'.) */
-const probeHealth = async (): Promise<boolean> => {
+   the dev server owns '/'.)
+
+   A 5xx is not an answer either. During an upgrade the helper holds the page's
+   port and says 503 to everything but its own status: read as "the process is
+   back", that 503 made the transport give up on a gateway that was minutes
+   from returning and tell the reader to start Raven by hand -- the one thing
+   that, mid-upgrade, starts a second supervisor beside the one coming back. */
+export const probeHealth = async (): Promise<boolean> => {
   try {
     const r = await fetch('/health', { cache: 'no-store' })
-    return r.status !== 401 && r.status !== 403
+    return r.status < 500 && r.status !== 401 && r.status !== 403
   } catch {
     return false
   }

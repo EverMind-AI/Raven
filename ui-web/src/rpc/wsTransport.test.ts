@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { RpcError } from './transport'
-import { WsTransport } from './wsTransport'
+import { probeHealth, WsTransport } from './wsTransport'
 
 import type { ConnectionState } from './transport'
 
@@ -473,5 +473,36 @@ describe('rejoin', () => {
 
     expect(h.sockets.length).toBe(1)
     expect(states(h).at(-1)).toBe('closed')
+  })
+})
+
+/* What decides "absent, keep waiting" against "back, and refused this session".
+   Only the second ends the reconnect, with a bar telling the reader to act. */
+describe('the health probe behind a refused socket', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const answering = (status: number): void => {
+    vi.stubGlobal('fetch', async () => ({ status, ok: status < 400 }))
+  }
+
+  it('reads a live gateway as back', async () => {
+    answering(200)
+    expect(await probeHealth()).toBe(true)
+  })
+
+  it('reads an upgrade in progress as not back yet', async () => {
+    /* The helper holds the port and answers 503 while the new Raven installs. */
+    answering(503)
+    expect(await probeHealth()).toBe(false)
+  })
+
+  it('reads nothing listening as not back yet', async () => {
+    vi.stubGlobal('fetch', async () => { throw new TypeError('connection refused') })
+    expect(await probeHealth()).toBe(false)
+  })
+
+  it('does not read its own refusal as the process being back', async () => {
+    answering(401)
+    expect(await probeHealth()).toBe(false)
   })
 })
