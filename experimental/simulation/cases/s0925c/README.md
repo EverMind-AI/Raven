@@ -2,12 +2,12 @@
 
 一家虚构旅行社"海岚旅行"的老板培养他的在线 AI 顾问。老板不碰任何配置，只做三件事：上传店里的资料，扮成客人演练，演练后说出意见。Curator 据此改造顾问和它的三个子代理组成的 harness-of-harnesses。
 
-这个案例要展示的是两种已经能看到的价值，而不是一个满足全部要求的完美结果：
+这个案例展示两种价值：
 
 1. **按资料定制**：入职时还没有任何接待记录，Curator 只凭资料就生成了流程和关口，之后三轮一直守住。
 2. **按意见改进**：老板指出的问题，Curator 在下一轮前改到了执行层面，第 3 轮全部 11 条红线通过。
 
-全过程由模拟自动运行，完整记录见 [transcript.md](transcript.md)。
+全过程由模拟自动运行，过程记录见 [transcript/](transcript/README.md)。
 
 ## 设置
 
@@ -64,7 +64,7 @@ if computable and counts_set == {claimed}:
 
 ## 过程记录
 
-[transcript.md](transcript.md) 是系统从运行记录自动导出的培养记录，包括：入职对话与资料、每轮的演练对话与交付物、老板评审、交给 Curator 的要求、Curator 的理解与每个策略面的代码 diff、机制实际拦截的记录，以及价值判定。[provenance.json](provenance.json) 记录运行设置和原始记录文件的 sha256。
+[transcript/](transcript/README.md) 是系统从运行记录自动导出的培养记录，按阶段分成输入、入职、第 1 至 3 轮和规则台账几个文件，包括：入职对话与资料、每轮的演练对话与交付物、老板评审、交给 Curator 的要求、Curator 的理解与每个策略面的代码 diff、机制实际拦截的记录，以及每条规则在哪一轮、由哪个策略面守住。[provenance.json](provenance.json) 记录运行设置和原始记录文件的 sha256。
 
 ## 复现
 

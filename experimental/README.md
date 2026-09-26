@@ -98,4 +98,4 @@ uv run pytest tests/test_harness_curator_*.py tests/test_analyst_*.py tests/test
 
 ## 展示案例
 
-[`simulation/cases/s0925c/`](simulation/cases/s0925c/) 是一次自动运行的完整培养记录：老板只交资料、扮客人演练、说意见，Curator 在入职时凭资料生成了流程与关口，之后按意见逐轮补齐，第 3 轮全部红线通过。目录里有案例说明、系统自动导出的 transcript，以及第 1 轮和第 3 轮的方案 PPT。
+[`simulation/cases/s0925c/`](simulation/cases/s0925c/) 是一次自动运行的培养记录：老板只交资料、扮客人演练、说意见，Curator 在入职时凭资料生成了流程与关口，之后按意见逐轮补齐，第 3 轮全部红线通过。目录里有案例说明、系统自动导出的 transcript，以及第 1 轮和第 3 轮的方案 PPT。
