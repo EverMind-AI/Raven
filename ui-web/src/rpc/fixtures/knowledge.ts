@@ -15,10 +15,15 @@ export interface KnowledgeFixture {
 export function createKnowledge(_env: FixtureEnv): KnowledgeFixture {
   return {
     fixtures: {
-      'knowledge.status': () => ({ configured: false, model: '' }),
+      /* `provider` rides with the model: a base is embedded through the
+         provider that serves it, and a model id does not name one. */
+      'knowledge.status': () => ({ configured: false, model: '', provider: '' }),
       'knowledge.bases.list': () => ({ bases: [] }),
       'knowledge.documents.list': () => ({ documents: [] }),
-      'knowledge.search': () => ({ hits: [] }),
+      /* `by_keyword` is what a search fell back to when the embedding
+         endpoint could not be reached, so a reader can tell a keyword hit
+         from a semantic one. Empty here, like the hits it accompanies. */
+      'knowledge.search': () => ({ hits: [], by_keyword: [] }),
     },
   }
 }

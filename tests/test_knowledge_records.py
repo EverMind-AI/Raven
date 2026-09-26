@@ -269,6 +269,34 @@ def test_a_setting_nobody_defined_is_a_caller_mistake(store) -> None:
         store.configure_base(base.id, embedding_model="something-else")
 
 
+def test_a_rebuild_moves_the_model_and_requeues_everything_under_it(store) -> None:
+    """The two halves are one write: a document left saying ready would be
+    claiming chunks that the rebuild is about to throw away."""
+    base = _base(store)
+    doc = store.add_document(base_id=base.id, source="a.md", media_type="text/markdown", size=10)
+    store.set_status(doc.id, "ready", chunk_count=4)
+
+    rebuilt = store.rebuild_base(base.id, embedding_model="bge-m3", dimensions=1024, embedding_provider="siliconflow")
+
+    assert (rebuilt.embedding_model, rebuilt.dimensions) == ("bge-m3", 1024)
+    assert rebuilt.embedding_provider == "siliconflow"
+    kept = store.get_document(doc.id)
+    assert (kept.status, kept.chunk_count) == ("pending", 0)
+
+
+def test_a_rebuild_survives_a_reload(store, tmp_path) -> None:
+    base = _base(store)
+    store.rebuild_base(base.id, embedding_model="", dimensions=0)
+
+    reloaded = RecordStore(tmp_path / "knowledge" / "records.json").get_base(base.id)
+
+    assert (reloaded.embedding_model, reloaded.dimensions) == ("", 0)
+
+
+def test_rebuilding_a_base_that_is_gone_returns_none(store) -> None:
+    assert store.rebuild_base("nope", embedding_model="bge-m3", dimensions=8) is None
+
+
 def test_configuring_a_base_that_is_gone_returns_none(store) -> None:
     assert store.configure_base("nope", top_k=3) is None
 

@@ -27,6 +27,10 @@ services:
         # LibreOffice, for previewing office files and rendering decks. Set 0
         # for a much smaller image that cannot show either.
         RAVEN_OFFICE: ${RAVEN_OFFICE:-1}
+        # The tokenizer dictionary and the deepdoc vision models, about 160 MB
+        # baked into the image. Set 0 for a smaller one that cannot segment
+        # Chinese or read a PDF's layout.
+        RAVEN_RESOURCES: ${RAVEN_RESOURCES:-1}
     restart: unless-stopped
 
     # Bind the local auto-login page to loopback. Port 18793 deliberately stays

@@ -8,10 +8,13 @@ pretending to be a model.
 
 from __future__ import annotations
 
+import base64
+from dataclasses import replace
+
 import pytest
 
-from raven.knowledge._embedding import EmbeddingConfig
-from raven.knowledge._manager import DuplicateBaseNameError, KnowledgeError, KnowledgeManager, StaleBaseError
+from raven.knowledge._embedding import EmbeddingConfig, EmbeddingError
+from raven.knowledge._manager import DuplicateBaseNameError, KnowledgeError, KnowledgeManager
 
 DIM = 8
 _VOCAB = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
@@ -56,6 +59,56 @@ class _NoStore:
         return None
 
 
+class _Endpoints:
+    """The endpoints a manager can reach, other than the configured one.
+
+    A base built with a model the current pin no longer names has to be
+    embedded through whatever still serves that model, and the manager finds
+    it by building a client for the base's own model. This stands in for that
+    lookup: ``serve`` makes a model answerable, ``refuse`` makes it fail the
+    way an endpoint that does not host it would.
+    """
+
+    def __init__(self) -> None:
+        self.clients: dict[str, _StubClient] = {}
+        self.refusals: dict[str, Exception] = {}
+        #: Every config the manager asked for a client with, so a test can say
+        #: which endpoint it decided on and not only which model.
+        self.built: list[EmbeddingConfig] = []
+
+    def serve(self, model: str, dimensions: int = DIM) -> "_StubClient":
+        client = _StubClient(model=model, dimensions=dimensions)
+        self.clients[model] = client
+        return client
+
+    def refuse(self, model: str, error: Exception) -> None:
+        self.refusals[model] = error
+
+    def build(self, config: EmbeddingConfig):
+        self.built.append(config)
+        if config.model in self.refusals:
+            raise self.refusals[config.model]
+        return self.clients.get(config.model) or self.serve(config.model)
+
+
+@pytest.fixture
+def endpoints(monkeypatch):
+    """Route the manager's per-base client building at the stubs above."""
+    registry = _Endpoints()
+    monkeypatch.setattr("raven.knowledge._manager.embedding_client", registry.build)
+    monkeypatch.setattr(
+        "raven.knowledge._manager.embedding_config_for",
+        lambda provider, model, dimensions=None: (
+            EmbeddingConfig(
+                model=model, base_url="https://other/v1", api_key="k", provider=provider, dimensions=dimensions
+            )
+            if provider
+            else None
+        ),
+    )
+    return registry
+
+
 @pytest.fixture
 def manager(tmp_path, monkeypatch):
     client = _StubClient()
@@ -66,6 +119,95 @@ def manager(tmp_path, monkeypatch):
     monkeypatch.setattr(mgr, "_client", lambda: client)
     mgr.stub = client  # type: ignore[attr-defined]
     return mgr
+
+
+#: The smallest PNG that decodes: one transparent pixel. What the parser is
+#: routed by is the filename, and what the vision path needs is bytes Pillow
+#: will open.
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+class _StubVision:
+    """A vision model that answers without a network."""
+
+    max_figures = 64
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.calls: list[tuple[str, str]] = []
+
+    async def describe(self, image: bytes, *, mime: str = "", context_above: str = "", context_below: str = "") -> str:
+        self.calls.append((context_above, context_below))
+        return self.text
+
+
+def _deck_of(slides: list[str]) -> bytes:
+    """A minimal slide deck, one text box a slide."""
+    import io
+    import zipfile
+
+    namespaces = (
+        'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as package:
+        entries = "".join(f'<p:sldId id="{256 + n}" r:id="rId{n + 2}"/>' for n in range(len(slides)))
+        package.writestr(
+            "ppt/presentation.xml",
+            f"<p:presentation {namespaces}><p:sldIdLst>{entries}</p:sldIdLst></p:presentation>",
+        )
+        rels = "".join(
+            f'<Relationship Id="rId{n + 2}" Target="slides/slide{n + 1}.xml" '
+            f'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"/>'
+            for n in range(len(slides))
+        )
+        package.writestr(
+            "ppt/_rels/presentation.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f"{rels}</Relationships>",
+        )
+        for n, text in enumerate(slides):
+            package.writestr(
+                f"ppt/slides/slide{n + 1}.xml",
+                f"<p:sld {namespaces}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r>"
+                f"<a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>",
+            )
+    return buffer.getvalue()
+
+
+def _docx_with_picture() -> bytes:
+    """A minimal Word package holding one paragraph and one embedded picture."""
+    import io
+    import zipfile
+
+    namespaces = (
+        'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    )
+    body = (
+        "<w:p><w:r><w:t>alpha alpha discussion of the first topic.</w:t></w:r></w:p>"
+        '<w:p><w:r><w:drawing><wp:inline><wp:docPr id="1" name="Picture 1"/>'
+        '<a:graphic><a:graphicData><a:blip r:embed="rId7"/></a:graphicData></a:graphic>'
+        "</wp:inline></w:drawing></w:r></w:p>"
+    )
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as package:
+        package.writestr("word/document.xml", f"<w:document {namespaces}><w:body>{body}</w:body></w:document>")
+        package.writestr(
+            "word/_rels/document.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId7" Target="media/image1.png" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"/>'
+            "</Relationships>",
+        )
+        package.writestr("word/media/image1.png", _PNG)
+    return buffer.getvalue()
 
 
 MARKDOWN = b"""# Handbook
@@ -82,6 +224,10 @@ beta beta beta notes on the second topic.
 
 async def _ready_base(manager, content: bytes = MARKDOWN, filename: str = "handbook.md"):
     base = await manager.create_base(name="handbook")
+    # Small enough that the fixture document is more than one chunk, which is
+    # what the paging, deleting and disabling tests below are about. The base
+    # default would swallow it whole.
+    manager.configure_base(base.id, chunk_size=12)
     doc = manager.add_document(base.id, filename=filename, content=content)
     indexed = await manager.index_document(doc.id)
     return base, indexed
@@ -145,11 +291,31 @@ async def test_reindexing_replaces_instead_of_duplicating(manager) -> None:
     assert len({h.chunk.text for h in hits}) == len(hits)
 
 
+async def test_a_deck_indexes_one_chunk_a_slide(manager) -> None:
+    """The end-to-end shape the slide parser exists for: a chunk and a page are
+    the same thing, so a hit can take the preview to the slide it came from."""
+    deck = _deck_of(["Opening remarks", "The second slide", "Closing"])
+    base = await manager.create_base(name="decks")
+    # Small enough that any other parser's sections would be cut several times
+    # over, which is what makes this a test of the guarantee rather than of the
+    # size of the fixture.
+    manager.configure_base(base.id, chunk_size=4)
+    document = manager.add_document(base.id, filename="deck.pptx", content=deck)
+
+    indexed = await manager.index_document(document.id)
+
+    assert indexed.status == "ready"
+    assert indexed.chunk_count == 3
+    chunks, _ = await manager.document_chunks(document.id)
+    assert [piece.chunk.metadata["page_number"] for piece in chunks] == [1, 2, 3]
+    assert [piece.chunk.text for piece in chunks] == ["Opening remarks", "The second slide", "Closing"]
+
+
 async def test_an_unparseable_upload_fails_that_document_only(manager) -> None:
     """One bad upload must not stop the queue behind it, and the reason
     belongs on the row the person who uploaded it is looking at."""
     base = await manager.create_base(name="handbook")
-    bad = manager.add_document(base.id, filename="picture.png", content=b"\x89PNG")
+    bad = manager.add_document(base.id, filename="firmware.bin", content=b"\x00\x01\x02")
     good = manager.add_document(base.id, filename="ok.md", content=MARKDOWN)
 
     await manager.index_pending()
@@ -157,6 +323,75 @@ async def test_an_unparseable_upload_fails_that_document_only(manager) -> None:
     assert manager.get_document(bad.id).status == "failed"
     assert "no parser" in manager.get_document(bad.id).error
     assert manager.get_document(good.id).status == "ready"
+
+
+async def test_an_image_with_no_vision_model_fails_with_the_reason(manager, monkeypatch) -> None:
+    """A picture has no text of its own, so a build that cannot look at one has
+    nothing to index -- and the row has to say that rather than reporting a
+    document with no chunks as ready."""
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
+    base = await manager.create_base(name="handbook")
+    picture = manager.add_document(base.id, filename="chart.png", content=_PNG)
+    good = manager.add_document(base.id, filename="ok.md", content=MARKDOWN)
+
+    await manager.index_pending()
+
+    assert manager.get_document(picture.id).status == "failed"
+    assert "no vision model is configured" in manager.get_document(picture.id).error
+    assert manager.get_document(good.id).status == "ready"
+
+
+async def test_an_image_is_indexed_as_one_chunk(manager, monkeypatch) -> None:
+    """One picture, one chunk, however much the model had to say about it: the
+    section is marked as a figure, and the chunker never splits one."""
+    described = ("A bar chart. " * 400).strip()
+    monkeypatch.setattr(
+        "raven.knowledge._vision.load_vision_model",
+        lambda: _StubVision(described),
+    )
+    base = await manager.create_base(name="handbook")
+    picture = manager.add_document(base.id, filename="chart.png", content=_PNG)
+
+    indexed = await manager.index_document(picture.id)
+
+    assert indexed.status == "ready"
+    assert indexed.chunk_count == 1
+    chunks, _ = await manager.document_chunks(picture.id)
+    assert chunks[0].chunk.text == described
+
+
+async def test_a_picture_nobody_could_read_warns_on_a_searchable_row(manager, monkeypatch) -> None:
+    """The case this warning exists for: the document indexed, the row says
+    ready, and half of what the file shows is not in the index. Nothing else
+    would ever tell a reader -- a search about the missing part just answers
+    worse."""
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="report.docx", content=_docx_with_picture())
+
+    indexed = await manager.index_document(doc.id)
+
+    assert indexed.status == "ready", "still indexed, still searchable"
+    assert indexed.chunk_count >= 1
+    assert "no vision model is configured" in indexed.warning
+    assert indexed.error == "", "a warning is not a failure"
+
+
+async def test_the_warning_goes_when_the_reindex_reads_the_picture(manager, monkeypatch) -> None:
+    """Otherwise a row keeps reporting a gap that has since been filled."""
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="report.docx", content=_docx_with_picture())
+    assert (await manager.index_document(doc.id)).warning
+
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: _StubVision("A bar chart."))
+    assert (await manager.index_document(doc.id)).warning == ""
+
+
+async def test_a_document_that_parsed_whole_carries_no_warning(manager) -> None:
+    base, doc = await _ready_base(manager)
+
+    assert doc.warning == ""
 
 
 async def test_indexing_a_document_whose_base_is_gone_fails_it(manager) -> None:
@@ -170,27 +405,53 @@ async def test_indexing_a_document_whose_base_is_gone_fails_it(manager) -> None:
 # ── the staleness rule ────────────────────────────────────────────
 
 
-async def test_a_base_indexed_with_another_model_refuses_to_be_searched(manager) -> None:
-    """The vectors answer to the old model; a query embedded with the new one
-    lands somewhere unrelated in the same space. Searching anyway returns
-    confident nonsense, so it has to say rebuild."""
+async def test_a_base_is_searched_with_the_model_it_was_built_with(manager, endpoints) -> None:
+    """The vectors answer to the model the base was built with, so that is the
+    model the query is embedded with -- moving the configured pin does not move
+    the space an existing collection lives in."""
     base, _ = await _ready_base(manager)
     manager.stub.model = "a-different-model"
+    old_model = endpoints.serve("stub-embed")
 
-    with pytest.raises(StaleBaseError, match="rebuild"):
-        await manager.search([base.id], "alpha")
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
+
+    assert len(hits) == 1
+    assert old_model.calls == [["alpha"]], "the query went to the base's own model"
+    assert manager.stub.calls[-1] != ["alpha"], "and not to the one configured now"
+
+
+async def test_a_base_whose_model_cannot_be_reached_answers_by_keyword(manager, endpoints) -> None:
+    """The words still work. A base whose model has gone answers worse rather
+    than not at all, and says which of its answers came from words."""
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    endpoints.refuse("stub-embed", EmbeddingError("model not served here"))
+
+    outcome = await manager.search([base.id], "alpha")
+
+    assert outcome.hits, "the text is still there to match against"
+    assert "alpha" in outcome.hits[0].chunk.text.lower()
+    assert base.id in outcome.by_keyword
+    assert "Point the base at a provider that serves it" in outcome.by_keyword[base.id]
 
 
 async def test_a_width_change_is_also_stale(manager) -> None:
     """The base records both the model and the width, and the width leg has to
     stand on its own: a model can be redeployed at a different width under the
-    same name. Clearing the memo is what a fresh process does."""
+    same name. Clearing the memo is what a fresh process does.
+
+    Stale means the vectors cannot be queried, not that the base is gone: it
+    answers by keyword and says why, and the refusal that matters stays on the
+    indexing side, where writing into a mismatched collection would corrupt
+    it."""
     base, _ = await _ready_base(manager)
     manager.stub.dimensions = DIM + 1
     manager._widths.clear()
 
-    with pytest.raises(StaleBaseError):
-        await manager.search([base.id], "alpha")
+    outcome = await manager.search([base.id], "alpha")
+
+    assert base.id in outcome.by_keyword
+    assert "rebuild the base" in outcome.by_keyword[base.id]
 
 
 async def test_a_pin_that_contradicts_the_model_is_refused(manager) -> None:
@@ -231,11 +492,781 @@ async def test_moving_the_endpoint_does_not_make_a_base_stale(manager) -> None:
 
 async def test_indexing_into_a_stale_base_fails_the_document_not_the_queue(manager) -> None:
     base, _ = await _ready_base(manager)
-    manager.stub.model = "a-different-model"
+    manager.stub.dimensions = DIM + 1
+    manager._widths.clear()
     doc = manager.add_document(base.id, filename="b.md", content=b"beta")
 
     assert (await manager.index_document(doc.id)).status == "failed"
     assert "rebuild" in manager.get_document(doc.id).error
+
+
+async def test_a_new_document_is_embedded_with_the_base_own_model(manager, endpoints) -> None:
+    """A document added to an older base has to land in the space that base's
+    collection already holds, or nothing it says is findable."""
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    old_model = endpoints.serve("stub-embed")
+    doc = manager.add_document(base.id, filename="b.md", content=b"# beta\n\nbeta beta beta\n")
+
+    assert (await manager.index_document(doc.id)).status == "ready"
+    assert old_model.calls, "the chunks went to the base's own model"
+    assert (await manager.search([base.id], "beta", top_k=1)).hits
+
+
+# -- one embedding per model, not one per search -------------------
+
+
+async def test_each_base_is_embedded_with_its_own_model(manager, endpoints) -> None:
+    """The point of the whole arrangement: two bases built with two models are
+    two different vector spaces, and one query vector cannot address both."""
+    first, _ = await _ready_base(manager)
+    # The pin moves, a second base is built on it, and it moves back -- so the
+    # two bases hold vectors from two models and neither is the odd one out.
+    manager.stub.model = "second-model"
+    second = await manager.create_base(name="second")
+    doc = manager.add_document(second.id, filename="s.md", content=b"# gamma\n\ngamma gamma\n")
+    assert (await manager.index_document(doc.id)).status == "ready"
+    manager.stub.model = "stub-embed"
+    other = endpoints.serve("second-model")
+
+    outcome = await manager.search([first.id, second.id], "alpha gamma")
+
+    assert manager.stub.calls[-1] == ["alpha gamma"], "the base on the current model used it"
+    assert other.calls == [["alpha gamma"]], "the base on the older model used that one"
+    assert outcome.by_keyword == {}
+    assert {hit.chunk.source for hit in outcome.hits} == {"handbook.md", "s.md"}
+
+
+async def test_bases_sharing_a_model_share_one_embedding_call(manager) -> None:
+    """The common case still costs one round trip: what is grouped is the
+    model, not the base."""
+    first, _ = await _ready_base(manager)
+    second = await manager.create_base(name="second")
+    doc = manager.add_document(second.id, filename="s.md", content=b"# gamma\n\ngamma\n")
+    await manager.index_document(doc.id)
+    before = len(manager.stub.calls)
+
+    await manager.search([first.id, second.id], "alpha")
+
+    assert len(manager.stub.calls) - before == 1
+
+
+async def test_one_unreachable_base_does_not_take_the_others_down(manager, endpoints) -> None:
+    """Asking a mixed set is ordinary. The base that fell back to words is
+    named, so a caller is not left thinking every hit was scored the same
+    way."""
+    good, _ = await _ready_base(manager)
+    manager.stub.model = "gone-model"
+    stranded = await manager.create_base(name="stranded")
+    doc = manager.add_document(stranded.id, filename="s.md", content=b"# gamma\n\ngamma\n")
+    await manager.index_document(doc.id)
+    manager.stub.model = "stub-embed"
+    endpoints.refuse("gone-model", EmbeddingError("no endpoint serves it"))
+
+    outcome = await manager.search([good.id, stranded.id], "alpha")
+
+    assert "handbook.md" in {hit.chunk.source for hit in outcome.hits}
+    assert list(outcome.by_keyword) == [stranded.id]
+    assert "no endpoint serves it" in outcome.by_keyword[stranded.id]
+
+
+async def test_a_base_with_no_provider_falls_back_to_the_configured_endpoint(manager, endpoints) -> None:
+    """The last thing left to try for a base written before providers were
+    recorded. Raven no longer reads the memory backend's own config for an
+    older endpoint: a knowledge base that needs the memory plugin installed to
+    answer is one that stops working when it is not.
+    """
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    served = endpoints.serve("stub-embed")
+
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
+
+    assert hits and served.calls == [["alpha"]], "asked for the base's own model"
+    assert endpoints.built[-1].model == "stub-embed"
+
+
+async def test_a_base_can_be_pointed_at_the_provider_that_still_serves_it(manager, endpoints) -> None:
+    """The way back for a base stranded by a change of pin, short of a rebuild:
+    the model and the width are what the collection was built to and cannot
+    move, but where that model is reached can."""
+    base, _ = await _ready_base(manager)
+    manager.stub.model = "a-different-model"
+    endpoints.refuse("stub-embed", EmbeddingError("this endpoint does not serve it"))
+    served_elsewhere = _StubClient(model="stub-embed")
+    endpoints.clients["stub-embed"] = served_elsewhere
+    endpoints.refusals.clear()
+
+    assert manager.configure_base(base.id, embedding_provider="siliconflow").embedding_provider == "siliconflow"
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
+
+    assert hits and served_elsewhere.calls == [["alpha"]]
+
+
+async def test_a_base_can_be_built_on_a_picked_model(manager, endpoints) -> None:
+    """The page offers every embedding model the install can reach, so the pair
+    it picked is what the base is built on -- not the configured pin, which is
+    only the default the picker starts on."""
+    picked = endpoints.serve("picked-model")
+
+    base = await manager.create_base(name="handbook", embedding_model="picked-model", embedding_provider="openai")
+
+    assert (base.embedding_model, base.embedding_provider) == ("picked-model", "openai")
+    assert picked.probes == 1, "the width was measured against the model that was picked"
+    assert manager.stub.probes == 0, "and the configured one was never asked"
+
+
+async def test_switching_the_model_rebuilds_what_the_base_holds(manager, endpoints) -> None:
+    """The vectors in the collection were made by the old model, and no query
+    embedded by the new one lands anywhere near them. So the documents go back
+    to the queue rather than staying ready against an index that is gone."""
+    base, doc = await _ready_base(manager)
+    endpoints.serve("second-model")
+
+    switched = await manager.switch_embedding(base.id, model="second-model", provider="openai")
+
+    assert (switched.embedding_model, switched.embedding_provider) == ("second-model", "openai")
+    assert [d.status for d in manager.list_documents(base.id)] == ["pending"]
+    assert manager.get_document(doc.id).chunk_count == 0
+
+
+async def test_the_requeued_documents_index_on_the_new_model(manager, endpoints) -> None:
+    """Which is the point of requeueing them: the blob is still on disk, so a
+    reindex is all it takes to have the base searchable again."""
+    base, _ = await _ready_base(manager)
+    second = endpoints.serve("second-model")
+    await manager.switch_embedding(base.id, model="second-model", provider="openai")
+
+    assert await manager.index_pending() == 1
+
+    hits = (await manager.search([base.id], "alpha", top_k=1)).hits
+    assert hits and "first topic" in hits[0].chunk.text
+    assert ["alpha"] in second.calls, "the query went to the model the base now holds"
+
+
+async def test_the_same_model_through_another_account_is_not_a_rebuild(manager, endpoints) -> None:
+    """Nothing about the vectors changed -- only the address the next call goes
+    out on -- so requeueing every document would be work for nothing."""
+    base, doc = await _ready_base(manager)
+    endpoints.serve("stub-embed")
+
+    switched = await manager.switch_embedding(base.id, model="stub-embed", provider="siliconflow")
+
+    assert switched.embedding_provider == "siliconflow"
+    assert manager.get_document(doc.id).status == "ready"
+
+
+async def test_a_model_that_cannot_be_reached_leaves_the_base_alone(manager, endpoints) -> None:
+    """The width is measured before anything is dropped, so a picked model that
+    refuses costs the reader a message rather than their index."""
+    base, doc = await _ready_base(manager)
+    endpoints.refuse("second-model", EmbeddingError("this endpoint does not serve it"))
+
+    with pytest.raises(EmbeddingError):
+        await manager.switch_embedding(base.id, model="second-model", provider="openai")
+
+    assert manager.get_base(base.id).embedding_model == "stub-embed"
+    assert manager.get_document(doc.id).status == "ready"
+    assert (await manager.search([base.id], "alpha", top_k=1)).hits
+
+
+async def test_embedding_can_be_turned_off_and_on_again(manager, endpoints) -> None:
+    """The one choice that used to be fixed at creation: a base made without a
+    model was rebuilt or nothing, and now it is the same call as any other
+    switch."""
+    base, doc = await _ready_base(manager)
+
+    off = await manager.switch_embedding(base.id, model="")
+    assert (off.embedding_model, off.dimensions, off.embedding_provider) == ("", 0, "")
+    assert not manager.embeds(off)
+
+    endpoints.serve("stub-embed")
+    on = await manager.switch_embedding(base.id, model="stub-embed", provider="openai")
+    assert manager.embeds(on)
+    assert await manager.index_pending() >= 1
+    assert manager.get_document(doc.id).status == "ready"
+
+
+async def test_switching_to_what_the_base_already_has_changes_nothing(manager) -> None:
+    base, doc = await _ready_base(manager)
+    before = manager.get_base(base.id)
+
+    same = await manager.switch_embedding(base.id, model=before.embedding_model, provider=before.embedding_provider)
+
+    assert same == before
+    assert manager.get_document(doc.id).status == "ready"
+
+
+async def test_a_base_keeps_its_own_provider_when_the_model_ids_collide(manager, endpoints) -> None:
+    """Two providers reselling one model id is ordinary, and the id alone does
+    not name a credential -- which is the whole reason a base records the
+    provider beside it. Matching on the id, the base's queries went out on the
+    pinned account's key against vectors the other account had made, and fell
+    back to keywords whenever the pinned one was the one that was down."""
+    base, _ = await _ready_base(manager)
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+    # The pin serves the same model id, through somebody else.
+    manager.stub.provider = "dashscope"
+
+    client = manager._client_for(manager.get_base(base.id))
+
+    assert endpoints.built[-1].provider == "siliconflow", "the account the base records"
+    assert client is not manager.stub, "and not the pinned one that happens to share the id"
+
+
+async def test_reach_asks_about_the_provider_the_base_records(manager, monkeypatch) -> None:
+    """The other half of the same predicate. Answering from the model id alone
+    called a base reachable because the *pin* was usable, while the account it
+    actually queries through had no credential left."""
+    base, _ = await _ready_base(manager)
+    manager.configure_base(base.id, embedding_provider="gone")
+    manager.stub.provider = "dashscope"
+    monkeypatch.setattr("raven.knowledge._manager.embedding_config_for", lambda *a, **k: None)
+
+    assert manager.embedding_reach(manager.get_base(base.id)) == "no_credential"
+
+
+async def test_a_base_on_the_pin_itself_still_takes_it(manager) -> None:
+    """The common case, and the one the check above must not cost: same model,
+    same provider, today's client unchanged."""
+    base, _ = await _ready_base(manager)
+    manager.stub.provider = "siliconflow"
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+
+    assert manager._client_for(manager.get_base(base.id)) is manager.stub
+
+
+async def test_a_base_with_no_provider_recorded_still_follows_the_pin(manager) -> None:
+    """An empty provider means "wherever this is configured", which is every
+    base written before the field existed -- the one case where the model id
+    alone decides."""
+    base, _ = await _ready_base(manager)
+    manager.stub.provider = "dashscope"
+
+    assert manager.get_base(base.id).embedding_provider == ""
+    assert manager._client_for(manager.get_base(base.id)) is manager.stub
+
+
+def _clear_the_pin(manager, monkeypatch) -> None:
+    """Leave the deployment with no configured embedding endpoint at all.
+
+    The fixture hands the manager a stub through both `_embedding` and a
+    patched `_client`, so a test about the pin being absent has to undo both --
+    including the seam, or `_configured_client` answers with the stub it was
+    handed and the path under test is never reached.
+    """
+    monkeypatch.setattr(manager, "_embedding", None)
+    monkeypatch.setattr("raven.knowledge._manager.load_embedding_config", lambda: None)
+    monkeypatch.setattr(manager, "_client", KnowledgeManager._client.__get__(manager))
+
+
+async def test_a_base_keeps_its_own_provider_when_the_pin_is_cleared(manager, endpoints, monkeypatch) -> None:
+    """The pin is the default for a *new* base, not a precondition for an old
+    one. Asking for it first and failing when there is none made every base
+    that records its own provider unsearchable the moment somebody cleared the
+    pin -- while `embedding_reach` went on calling those bases reachable."""
+    base, _ = await _ready_base(manager)
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+    served = endpoints.serve("stub-embed")
+
+    _clear_the_pin(manager, monkeypatch)
+
+    outcome = await manager.search([base.id], "alpha", top_k=1)
+
+    assert outcome.hits, "the base still answers by meaning"
+    assert served.calls == [["alpha"]], "through the provider it recorded"
+    assert outcome.by_keyword == {}, "and not by falling back to words"
+
+
+async def test_reach_and_the_client_agree_about_a_base_with_no_pin(manager, endpoints, monkeypatch) -> None:
+    """The two used to disagree, which is the part that made this hard to see:
+    the page said reachable and the indexer said no endpoint is configured."""
+    base, _ = await _ready_base(manager)
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+    endpoints.serve("stub-embed")
+    _clear_the_pin(manager, monkeypatch)
+
+    record = manager.get_base(base.id)
+    assert manager.embedding_reach(record) == "", "the page calls it reachable"
+    assert manager._client_for(record) is not None, "and so does the indexer"
+
+
+async def test_a_base_with_no_provider_and_no_pin_still_says_so(manager, monkeypatch) -> None:
+    """The one case that genuinely needs the configured endpoint keeps needing
+    it, and says which."""
+    base, _ = await _ready_base(manager)
+    _clear_the_pin(manager, monkeypatch)
+
+    with pytest.raises(KnowledgeError, match="no embedding endpoint is configured"):
+        manager._client_for(manager.get_base(base.id))
+
+
+# ── chunk edits stay inside their document ────────────────────────
+
+
+async def _two_documents(manager):
+    """Two documents in one base holding the same sentence."""
+    base = await manager.create_base(name="handbook")
+    manager.configure_base(base.id, chunk_size=12)
+    one = manager.add_document(base.id, filename="one.md", content=b"alpha alpha shared sentence")
+    two = manager.add_document(base.id, filename="two.md", content=b"alpha alpha shared sentence")
+    await manager.index_pending()
+    return base, one, two
+
+
+async def test_disabling_a_chunk_cannot_reach_another_document(manager) -> None:
+    """A chunk id names its text, and two documents in one base can hold the
+    same sentence -- so an id from one of them must not switch the identical
+    row in the other."""
+    base, one, two = await _two_documents(manager)
+    held, _ = await manager.document_chunks(two.id)
+    borrowed = [piece.chunk_id for piece in held]
+
+    changed = await manager.set_chunks_enabled(one.id, borrowed, False)
+
+    assert changed == 0, "nothing in this document matched those ids"
+    after, _ = await manager.document_chunks(two.id)
+    assert all(piece.enabled for piece in after), "and the other document is untouched"
+
+
+async def test_deleting_a_chunk_cannot_reach_another_document(manager) -> None:
+    """The same rule, and here the count depends on it: an unscoped delete
+    removed the other document's rows and then rewrote this document's
+    count, leaving both wrong."""
+    base, one, two = await _two_documents(manager)
+    held, before = await manager.document_chunks(two.id)
+    borrowed = [piece.chunk_id for piece in held]
+
+    remaining = await manager.delete_chunks(one.id, borrowed)
+
+    _, still = await manager.document_chunks(two.id)
+    assert still == before, "the other document kept every piece"
+    assert remaining == manager.get_document(one.id).chunk_count
+    assert remaining > 0, "and this one kept its own"
+
+
+# ── a hand edit leaves the numbering intact ───────────────────────
+
+
+async def test_deleting_the_middle_piece_renumbers_the_rest(manager) -> None:
+    """`chunk_index` runs 0..N-1 and every piece agrees on N -- the chunker's
+    own contract, which a hand edit has to leave standing. Deleting the middle
+    of three left 0 and 2 of 3, so a hit reported a position its document
+    disagreed with."""
+    base, doc = await _ready_base(manager)
+    held, total = await manager.document_chunks(doc.id)
+    assert total >= 2, "the fixture has to be more than one chunk for this to mean anything"
+
+    await manager.delete_chunks(doc.id, [held[0].chunk_id])
+
+    after, count = await manager.document_chunks(doc.id)
+    assert [piece.chunk.chunk_index for piece in after] == list(range(count))
+    assert {piece.chunk.total_chunks for piece in after} == {count}
+
+
+async def test_an_appended_piece_renumbers_the_document(manager) -> None:
+    """The mirror: the rows already there said "of N" while the new one said
+    "of N+1"."""
+    base, doc = await _ready_base(manager)
+
+    written = await manager.add_chunk(doc.id, "A note somebody typed.")
+
+    after, count = await manager.document_chunks(doc.id)
+    assert [piece.chunk.chunk_index for piece in after] == list(range(count))
+    assert {piece.chunk.total_chunks for piece in after} == {count}
+    assert written.chunk.total_chunks == count, "including the piece that was just written"
+
+
+async def test_a_new_base_records_who_served_its_model(manager) -> None:
+    """Recorded at creation because a model id does not name a credential: the
+    query has to go back out on that provider's address later."""
+    manager.stub.provider = "siliconflow"
+
+    base = await manager.create_base(name="recorded")
+
+    assert base.embedding_provider == "siliconflow"
+
+
+async def test_editing_a_chunk_re_embeds_it(manager) -> None:
+    """A piece whose text changed and whose vector did not would be found by
+    the old words and read as the new ones."""
+    base, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = held[0]
+
+    written = await manager.update_chunk(doc.id, target.chunk_id, "epsilon epsilon epsilon")
+
+    assert written.chunk.text == "epsilon epsilon epsilon"
+    assert written.chunk_id != target.chunk_id, "the id follows the content"
+    assert written.chunk.chunk_index == target.chunk.chunk_index, "and its place is kept"
+    assert written.manual is True
+    hits = (await manager.search([base.id], "epsilon")).hits
+    assert any("epsilon" in hit.chunk.text for hit in hits)
+    after, total = await manager.document_chunks(doc.id)
+    assert total == len(held), "an edit replaces, it does not add"
+
+
+async def test_an_edited_chunk_keeps_the_state_it_was_in(manager) -> None:
+    _, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = held[0]
+    await manager.set_chunks_enabled(doc.id, [target.chunk_id], False)
+
+    written = await manager.update_chunk(doc.id, target.chunk_id, "rewritten while off")
+
+    assert written.enabled is False
+    after, _ = await manager.document_chunks(doc.id)
+    assert next(p for p in after if p.chunk_id == written.chunk_id).enabled is False
+
+
+async def test_editing_a_chunk_to_the_same_text_is_not_a_write(manager) -> None:
+    """No new vector, no new id: there is nothing for either to follow."""
+    _, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = held[0]
+
+    written = await manager.update_chunk(doc.id, target.chunk_id, target.chunk.text)
+
+    assert written.chunk_id == target.chunk_id
+
+
+async def test_editing_a_chunk_that_is_not_there_is_refused(manager) -> None:
+    _, doc = await _ready_base(manager)
+
+    with pytest.raises(KnowledgeError):
+        await manager.update_chunk(doc.id, "no-such-chunk", "text")
+
+
+async def test_a_legacy_word_document_has_a_parser(manager) -> None:
+    """It had none, so every reindex of a base holding one failed on it -- a
+    file the panel can preview and the engine refused to read."""
+    from raven.knowledge._manager import _default_parsers
+
+    claimed = {media for parser in _default_parsers() for media in parser.supported_media_types}
+
+    assert "application/msword" in claimed
+    assert ".doc" in manager.supported_extensions()
+
+
+async def test_a_table_carries_its_surroundings_without_being_asked(manager) -> None:
+    """On by default, and it reaches the bases that predate the setting: none
+    of them stored a value, so they take what the record defaults to. A table
+    on its own embeds as a grid of values with nothing saying what they are
+    about."""
+    base = await manager.create_base(name="tables")
+
+    assert base.table_context_size == 64
+    assert base.image_context_size == 64
+    chunker = manager._chunker_for(base)
+    assert chunker.table_context_size == 64
+
+
+# -- whether a base can embed at all -------------------------------
+
+
+async def test_a_base_on_the_configured_model_can_embed(manager) -> None:
+    base = await manager.create_base(name="current")
+
+    assert manager.embedding_reach(base) == ""
+
+
+async def test_a_base_with_no_provider_and_another_model_says_so(manager) -> None:
+    """The case that actually happens: a base built before providers were
+    recorded, on a model the configured endpoint does not serve. Nothing it
+    holds can be indexed until that is fixed, and the reason belongs where the
+    reader is looking rather than in a line of the gateway log."""
+    base = await manager.create_base(name="stranded")
+    # The pin moves under it, which is what leaves a base naming a model the
+    # configured endpoint does not serve.
+    manager._embedding = replace(manager._embedding, model="a-different-model")
+
+    assert manager.embedding_reach(manager.get_base(base.id)) == "no_provider"
+
+
+async def test_a_base_whose_provider_has_no_credential_says_which(manager, endpoints, monkeypatch) -> None:
+    """A different repair from the one above, so a different answer."""
+    base = await manager.create_base(name="keyless")
+    manager._embedding = replace(manager._embedding, model="a-different-model")
+    manager.configure_base(base.id, embedding_provider="siliconflow")
+    monkeypatch.setattr("raven.knowledge._manager.embedding_config_for", lambda *a, **k: None)
+
+    assert manager.embedding_reach(manager.get_base(base.id)) == "no_credential"
+
+
+async def test_a_base_with_no_model_is_not_unreachable(manager) -> None:
+    """A base created without embedding is not broken; it is what it asked to
+    be, and warning about it would be warning about a choice."""
+    base = await manager.create_base(name="files only", embedding=False)
+
+    assert manager.embedding_reach(base) == ""
+
+
+# -- the settings a base is chunked by -----------------------------
+
+
+async def test_a_base_is_chunked_the_way_it_is_configured(manager) -> None:
+    """The four chunking settings were saved, shown, and read by nothing: one
+    chunker was built at startup and used for every base."""
+    base = await manager.create_base(name="naive")
+    manager.configure_base(base.id, smart_chunking=False, separator="!", chunk_size=1)
+    doc = manager.add_document(base.id, filename="a.md", content=b"alpha!beta!gamma")
+    await manager.index_document(doc.id)
+
+    held, total = await manager.document_chunks(doc.id)
+
+    assert total == 3, "cut on the separator this base asked for"
+    assert [p.chunk.text for p in held] == ["alpha", "beta", "gamma"]
+
+
+async def test_every_base_is_cut_the_naive_way_for_now(manager) -> None:
+    """The structural chunker is being reworked, so the strategy setting is
+    kept and not consulted: a base asking for smart chunking is cut on its
+    delimiters like every other one."""
+    base = await manager.create_base(name="smart")
+    manager.configure_base(base.id, smart_chunking=True, separator="!", chunk_size=1)
+    doc = manager.add_document(base.id, filename="a.md", content=b"alpha!beta")
+    await manager.index_document(doc.id)
+
+    held, total = await manager.document_chunks(doc.id)
+
+    assert total == 2 and [p.chunk.text for p in held] == ["alpha", "beta"]
+
+
+async def test_an_overlap_nobody_chose_is_not_applied(manager) -> None:
+    """Every base carried 215 while nothing read the setting, so no document
+    was ever chunked with it and nobody picked it."""
+    base = await manager.create_base(name="legacy")
+    manager._records._bases[base.id] = replace(base, chunk_overlap=215)
+    manager._records._save()
+    manager._records._bases.clear()
+    manager._records._load()
+
+    assert manager.get_base(base.id).chunk_overlap == 0
+
+
+# -- keywords, when the vectors cannot be reached ------------------
+
+
+async def test_keyword_search_finds_chinese_text(manager, endpoints) -> None:
+    """The reason the keyword index is tokenized by n-grams rather than by
+    words: a language that writes without spaces matches nothing under the
+    default tokenizer, and this deployment's documents are in one."""
+    base = await manager.create_base(name="zh")
+    body = "# \u6807\u9898\n\n\u5ef6\u8fdf\u5728\u7b2c\u4e8c\u5b63\u5ea6\u4e0a\u5347\uff0c\u541e\u5410\u91cf\u4e0b\u964d\u3002\n"
+    doc = manager.add_document(base.id, filename="zh.md", content=body.encode())
+    assert (await manager.index_document(doc.id)).status == "ready"
+    manager.stub.model = "gone"
+    endpoints.refuse("stub-embed", EmbeddingError("no endpoint"))
+
+    outcome = await manager.search([base.id], "\u5ef6\u8fdf")
+
+    assert outcome.hits, "a chinese query matched chinese text"
+    assert base.id in outcome.by_keyword
+
+
+async def test_a_disabled_chunk_is_not_matched_by_keyword_either(manager, endpoints) -> None:
+    """Off means out of retrieval, whichever way the retrieval is done."""
+    base, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = next(p for p in held if "first topic" in p.chunk.text)
+    await manager.set_chunks_enabled(doc.id, [target.chunk_id], False)
+    manager.stub.model = "gone"
+    endpoints.refuse("stub-embed", EmbeddingError("no endpoint"))
+
+    outcome = await manager.search([base.id], "alpha")
+
+    assert all("first topic" not in hit.chunk.text for hit in outcome.hits)
+
+
+async def test_mixed_scoring_is_merged_by_rank_not_by_value(manager, endpoints) -> None:
+    """A cosine similarity and a BM25 score are not comparable numbers. Sorting
+    the concatenation would let whichever scale runs hotter decide the order,
+    so the merge asks each list only for the part every scorer agrees on."""
+    first, _ = await _ready_base(manager)
+    # The pin moves, so the second base is built on a model that is still
+    # reachable while the first one's is not: one list of cosine scores, one of
+    # BM25 scores, in the same answer.
+    manager.stub.model = "second-model"
+    second = await manager.create_base(name="second")
+    doc = manager.add_document(second.id, filename="s.md", content=b"# alpha\n\nalpha alpha alpha\n")
+    await manager.index_document(doc.id)
+    endpoints.refuse("stub-embed", EmbeddingError("no endpoint"))
+
+    outcome = await manager.search([first.id, second.id], "alpha", top_k=5)
+
+    assert outcome.hits, "both kinds of answer are in the result"
+    assert first.id in outcome.by_keyword and second.id not in outcome.by_keyword
+
+
+# -- reading a document's chunks back, and acting on them ----------
+
+
+async def test_a_document_chunks_come_back_in_reading_order(manager) -> None:
+    """Reading order is the chunker's numbering, and a scan of the store has no
+    order of its own to promise -- so the store sorts rather than the caller
+    hoping."""
+    _, doc = await _ready_base(manager)
+
+    held, total = await manager.document_chunks(doc.id)
+
+    assert [piece.chunk.chunk_index for piece in held] == list(range(total))
+    assert total == doc.chunk_count
+    assert "first topic" in held[0].chunk.text
+    assert all(piece.chunk_id for piece in held), "every piece is addressable"
+    assert all(piece.enabled and not piece.manual for piece in held)
+
+
+async def test_chunks_of_a_document_that_indexed_nothing_are_empty(manager) -> None:
+    """A base with no model, a document that failed, one still queued: all the
+    same answer, and none of them an error."""
+    base = await manager.create_base(name="files only", embedding=False)
+    doc = manager.add_document(base.id, filename="a.md", content=b"# alpha\n")
+    await manager.index_document(doc.id)
+
+    assert await manager.document_chunks(doc.id) == ([], 0)
+    assert await manager.document_chunks("no-such-document") == ([], 0)
+
+
+async def test_chunks_of_one_document_do_not_include_another(manager) -> None:
+    base, _ = await _ready_base(manager)
+    second = manager.add_document(base.id, filename="other.md", content=b"# gamma\n\ngamma\n")
+    await manager.index_document(second.id)
+
+    held, _ = await manager.document_chunks(second.id)
+
+    assert held and all("gamma" in piece.chunk.text for piece in held)
+
+
+async def test_a_page_is_a_window_on_the_document(manager) -> None:
+    """Paged after the ordering, so page two follows page one through the
+    document rather than through whatever the scan returned."""
+    _, doc = await _ready_base(manager)
+
+    first, total = await manager.document_chunks(doc.id, offset=0, limit=1)
+    second, again = await manager.document_chunks(doc.id, offset=1, limit=1)
+
+    assert total == again == doc.chunk_count
+    assert [p.chunk.chunk_index for p in first] == [0]
+    assert [p.chunk.chunk_index for p in second] == [1]
+
+
+async def test_an_id_is_the_same_piece_after_a_rebuild(manager) -> None:
+    """Content-derived on purpose: a reader who turned a paragraph off last
+    week is still looking at the same paragraph after a reindex."""
+    _, doc = await _ready_base(manager)
+    before, _ = await manager.document_chunks(doc.id)
+
+    await manager.index_document(doc.id)
+    after, _ = await manager.document_chunks(doc.id)
+
+    assert [p.chunk_id for p in before] == [p.chunk_id for p in after]
+
+
+async def test_a_repeated_passage_still_gets_two_ids(manager) -> None:
+    """Hashing content alone would give both copies one name, and acting on one
+    would act on the other."""
+    base = await manager.create_base(name="repeats")
+    twice = b"# alpha\n\nsame words here\n\n# beta\n\nsame words here\n"
+    doc = manager.add_document(base.id, filename="twice.md", content=twice)
+    await manager.index_document(doc.id)
+
+    held, _ = await manager.document_chunks(doc.id)
+    texts = [p.chunk.text for p in held]
+
+    assert len(texts) != len(set(texts)) or len(held) == len({p.chunk_id for p in held})
+    assert len({p.chunk_id for p in held}) == len(held), "no two pieces share a name"
+
+
+async def test_a_disabled_chunk_is_not_retrieved(manager) -> None:
+    """Off is not a ranking penalty. The filter is in the store's own search,
+    where every caller passes through it."""
+    base, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = next(p for p in held if "first topic" in p.chunk.text)
+
+    changed = await manager.set_chunks_enabled(doc.id, [target.chunk_id], False)
+
+    assert changed == 1
+    hits = (await manager.search([base.id], "alpha")).hits
+    assert all("first topic" not in hit.chunk.text for hit in hits)
+    back, _ = await manager.document_chunks(doc.id)
+    assert next(p for p in back if p.chunk_id == target.chunk_id).enabled is False
+
+
+async def test_turning_a_chunk_back_on_restores_it(manager) -> None:
+    base, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    target = held[0]
+    await manager.set_chunks_enabled(doc.id, [target.chunk_id], False)
+
+    await manager.set_chunks_enabled(doc.id, [target.chunk_id], True)
+
+    hits = (await manager.search([base.id], "alpha")).hits
+    assert any(hit.chunk.text == target.chunk.text for hit in hits)
+
+
+async def test_listing_can_ask_for_one_state(manager) -> None:
+    _, doc = await _ready_base(manager)
+    held, _ = await manager.document_chunks(doc.id)
+    await manager.set_chunks_enabled(doc.id, [held[0].chunk_id], False)
+
+    off, off_total = await manager.document_chunks(doc.id, enabled=False)
+    on, on_total = await manager.document_chunks(doc.id, enabled=True)
+
+    assert off_total == 1 and [p.chunk_id for p in off] == [held[0].chunk_id]
+    assert on_total == len(held) - 1
+
+
+async def test_deleting_a_chunk_leaves_the_count_agreeing_with_the_index(manager) -> None:
+    """The row on the page reads that number to tell an indexed document from
+    an empty one."""
+    _, doc = await _ready_base(manager)
+    held, total = await manager.document_chunks(doc.id)
+
+    left = await manager.delete_chunks(doc.id, [held[0].chunk_id])
+
+    assert left == total - 1
+    assert manager.get_document(doc.id).chunk_count == total - 1
+    remaining, _ = await manager.document_chunks(doc.id)
+    assert held[0].chunk_id not in {p.chunk_id for p in remaining}
+
+
+async def test_a_written_chunk_is_appended_and_findable(manager) -> None:
+    """Appended rather than inserted: it was not cut from anywhere in the
+    document, and putting it between two pieces that were would claim a place
+    in the text it does not have."""
+    base, doc = await _ready_base(manager)
+    _, before = await manager.document_chunks(doc.id)
+
+    written = await manager.add_chunk(doc.id, "  epsilon epsilon epsilon  ")
+
+    assert written.manual is True and written.enabled is True
+    assert written.chunk.text == "epsilon epsilon epsilon"
+    held, total = await manager.document_chunks(doc.id)
+    assert total == before + 1
+    assert held[-1].chunk_id == written.chunk_id, "at the end of the reading order"
+    assert manager.get_document(doc.id).chunk_count == total
+    hits = (await manager.search([base.id], "epsilon")).hits
+    assert any("epsilon" in hit.chunk.text for hit in hits)
+
+
+async def test_a_written_chunk_does_not_survive_a_reindex(manager) -> None:
+    """A reindex is the document being cut again, and a piece nobody cut has
+    nothing to be attached to."""
+    _, doc = await _ready_base(manager)
+    written = await manager.add_chunk(doc.id, "written by hand")
+
+    await manager.index_document(doc.id)
+
+    held, _ = await manager.document_chunks(doc.id)
+    assert written.chunk_id not in {p.chunk_id for p in held}
+
+
+async def test_an_empty_written_chunk_is_refused(manager) -> None:
+    _, doc = await _ready_base(manager)
+
+    with pytest.raises(KnowledgeError):
+        await manager.add_chunk(doc.id, "   \n  ")
 
 
 # ── deletion ──────────────────────────────────────────────────────

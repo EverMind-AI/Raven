@@ -1338,6 +1338,26 @@ dropped directory itself, so each of its files arrives as `file`.
 One parsed region of a source document, before chunking — a heading and the text
 under it, a page, a slide. A parser produces Sections and never splits them.
 
+**Reading Order**:
+A Section's 0-based place in the file it was parsed from, recorded by every
+parser in `Section.metadata`. The only record of a document's order that
+survives indexing: search returns hits by score, and a Section's text does not
+say where it came from.
+
+**Layout Type**:
+What a parsed region is, as the source file marks it -- `title`, `heading`,
+`text`, `list_item`, `table`, `figure`, `caption`, `quote`, `code`, `toc`,
+`header`, `footer`, `footnote`. Read off the format's own markup (a Word style,
+a PDF layout model), never guessed from the text.
+_Avoid_: inferring one from shape -- a short line is not therefore a heading.
+
+**Element Span**:
+One paragraph, table or figure inside a Section, recorded with the character
+range it occupies in the Section text plus its page and box. What lets a hit in
+the middle of a long Section resolve to the place in the file it came from,
+without making every paragraph its own Section (which would make every
+paragraph its own Chunk).
+
 **Chunk**:
 One embeddable piece of a Section, carrying its place in its own document
 (`chunk_index` / `total_chunks`) and the Section it came from. A Chunk never spans

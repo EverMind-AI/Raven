@@ -21,6 +21,8 @@ from raven.knowledge import (
     DEFAULT_SEPARATOR,
     DEFAULT_TOP_K,
     DuplicateBaseNameError,
+    EmbeddingError,
+    KnowledgeError,
 )
 from raven.rpc.errors import ConfigValidationError, InternalError
 
@@ -68,6 +70,10 @@ async def knowledge_status(_params: dict[str, Any]) -> dict[str, Any]:
     return {
         "configured": config is not None,
         "model": config.model if config is not None else "",
+        # Who serves it. The page pairs the two to preselect the default in the
+        # picker a new base is made from: a model id names no credential, so
+        # half the pin is not enough to select with.
+        "provider": config.provider if config is not None else "",
         # Read off the parsers rather than listed here: which formats can be
         # indexed moves with the optional extras installed, and a surface that
         # walks a folder has to filter by today's answer. Not through the
@@ -94,6 +100,10 @@ def _base_row(manager: KnowledgeManager, base: Any) -> dict[str, Any]:
         "name": base.name,
         "description": base.description,
         "embedding_model": base.embedding_model,
+        # The other half of the pair: which account that model is reached
+        # through. Without it the settings picker cannot show a base its own
+        # endpoint, and every base reads as being on the configured one.
+        "embedding_provider": str(getattr(base, "embedding_provider", "") or ""),
         "dimensions": base.dimensions,
         "created_at": base.created_at,
         "updated_at": base.updated_at,
@@ -104,9 +114,15 @@ def _base_row(manager: KnowledgeManager, base: Any) -> dict[str, Any]:
         "top_k": int(getattr(base, "top_k", DEFAULT_TOP_K) or DEFAULT_TOP_K),
         "smart_chunking": bool(getattr(base, "smart_chunking", True)),
         "separator": str(getattr(base, "separator", DEFAULT_SEPARATOR)),
+        "table_context_size": int(getattr(base, "table_context_size", 0) or 0),
+        "image_context_size": int(getattr(base, "image_context_size", 0) or 0),
         "chunk_size": int(getattr(base, "chunk_size", DEFAULT_CHUNK_SIZE) or DEFAULT_CHUNK_SIZE),
         "chunk_overlap": int(getattr(base, "chunk_overlap", DEFAULT_CHUNK_OVERLAP) or 0),
         "file_processing": str(getattr(base, "file_processing", "") or ""),
+        # Why this base cannot embed, when it cannot. The page needs it on the
+        # row rather than on a failure: a base that cannot index says so where
+        # a reader is looking, instead of in a line of the gateway log.
+        "embedding_reach": manager.embedding_reach(base),
     }
 
 
@@ -118,11 +134,14 @@ async def knowledge_bases_create(params: dict[str, Any]) -> dict[str, Any]:
     sizes the collection to something no vector fits, and that surfaces at the
     first insert with nothing pointing back here.
 
+    ``embedding_model`` and ``embedding_provider`` are the pair the page picked,
+    and the configured pin is what a caller that sends neither gets -- which is
+    what every base was built on before the choice existed.
+
     ``embedding=false`` makes a base with no model at all, which is the one
-    case that reaches no endpoint and cannot fail that way. It is also the one
-    choice here that cannot be revised later: a collection's width is fixed
-    when it is created, so a base made without one is rebuilt rather than
-    switched.
+    case that reaches no endpoint and cannot fail that way. Revising it later
+    is ``knowledge.bases.settings``, which rebuilds the collection rather than
+    editing a field.
     """
     name = str(params.get("name") or "").strip()
     if not name:
@@ -133,6 +152,8 @@ async def knowledge_bases_create(params: dict[str, Any]) -> dict[str, Any]:
             name=name,
             description=str(params.get("description") or ""),
             embedding=params.get("embedding", True) is not False,
+            embedding_model=str(params.get("embedding_model") or "").strip(),
+            embedding_provider=str(params.get("embedding_provider") or "").strip(),
         )
     except DuplicateBaseNameError as exc:
         # The caller's mistake, not the gateway's: reported as a validation
@@ -174,6 +195,15 @@ TOP_K_MIN, TOP_K_MAX = 1, 50
 #: every chunk contains the one before it.
 CHUNK_MIN, CHUNK_MAX = 64, 8192
 
+#: A page of chunks. Twenty is what a reader scans without the page becoming a
+#: scroll of its own, and the ceiling is what stops a caller asking for a
+#: document's worth of text in one frame.
+CHUNK_PAGE_SIZE, MAX_CHUNK_PAGE = 20, 100
+
+#: The most prose a table or a figure may drag in with it. Past this the
+#: context is the chunk and the table is a footnote to it.
+CONTEXT_MAX = 2048
+
 
 def _bounded(params: dict[str, Any], key: str, low: int, high: int) -> int | None:
     """One integer setting, refused rather than clamped when it is out of range.
@@ -198,6 +228,12 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
     that saves one slider should not have to send the rest back unchanged, and
     a field this build does not know about yet cannot be blanked by one that
     does.
+
+    ``embedding_model`` is the exception to "a field is a setting": sent, it
+    rebuilds the base rather than writing a value, because the collection is
+    sized to the model's width and the vectors in it were made by that model.
+    Sending it empty turns embedding off. Sent alone, ``embedding_provider``
+    still only moves where the same model is reached.
     """
     base_id = str(params.get("base_id") or "")
     manager = _base_or_refuse(base_id)
@@ -216,6 +252,16 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
         settings["smart_chunking"] = bool(params["smart_chunking"])
     if params.get("separator") is not None:
         settings["separator"] = str(params["separator"])
+    # Only when the model is not being moved: the rebuild below records the
+    # provider that actually served the width it measured, and a settings write
+    # of the same key would be a second, unchecked opinion about it.
+    switching = params.get("embedding_model") is not None
+    if params.get("embedding_provider") is not None and not switching:
+        settings["embedding_provider"] = str(params["embedding_provider"]).strip()
+    for name in ("table_context_size", "image_context_size"):
+        size = _bounded(params, name, 0, CONTEXT_MAX)
+        if size is not None:
+            settings[name] = size
     if params.get("file_processing") is not None:
         settings["file_processing"] = str(params["file_processing"])
 
@@ -228,9 +274,32 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
     if lap >= size:
         raise ConfigValidationError("chunk_overlap must be smaller than chunk_size")
 
-    base = manager.configure_base(base_id, **settings)
+    # Skipped when nothing was sent but the model: a settings write with no
+    # settings in it is a file rewritten to say what it already said.
+    base = manager.configure_base(base_id, **settings) if settings else existing
     if base is None:
         raise ConfigValidationError(f"no such base: {base_id}")
+
+    if switching:
+        # After the settings, not before: the documents this requeues are
+        # re-cut on the way back in, and they should be cut by the numbers
+        # this same call just wrote rather than by the ones it replaced.
+        try:
+            base = await manager.switch_embedding(
+                base_id,
+                model=str(params.get("embedding_model") or "").strip(),
+                provider=str(params.get("embedding_provider") or "").strip(),
+            )
+        except (KnowledgeError, EmbeddingError) as exc:
+            # The picked pair cannot be embedded with, which is the caller's
+            # choice to correct: reported as a refusal so the panel shows the
+            # sentence rather than "internal error". Nothing was dropped -- the
+            # width is measured before the collection is touched.
+            raise ConfigValidationError(str(exc)) from None
+        except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+            raise InternalError(f"could not switch the embedding model: {exc}") from exc
+        if base is None:
+            raise ConfigValidationError(f"no such base: {base_id}")
     return {"base": _base_row(manager, base)}
 
 
@@ -279,6 +348,11 @@ def _doc_row(doc: Any) -> dict[str, Any]:
         "status": doc.status,
         "chunk_count": doc.chunk_count,
         "error": doc.error or "",
+        # What the parse could not do, on a document that was indexed anyway.
+        # Empty on every row that had nothing to report, and never a second
+        # spelling of `error`: a row carries one or the other, because a
+        # document that failed has no parse to warn about.
+        "warning": str(getattr(doc, "warning", "") or ""),
         "created_at": doc.created_at,
         "updated_at": doc.updated_at,
         "origin": getattr(doc, "origin", "file"),
@@ -467,6 +541,241 @@ async def knowledge_documents_index(params: dict[str, Any]) -> dict[str, Any]:
     return {"document": _doc_row(doc)}
 
 
+async def knowledge_documents_chunks(params: dict[str, Any]) -> dict[str, Any]:
+    """One document's indexed pieces, in reading order.
+
+    What the search matches against, not what a fresh parse would produce: a
+    reader checking why a document answers the way it does needs the pieces
+    that are in the index, and those two stop agreeing the moment a chunking
+    setting has moved.
+    """
+    document_id = _document_id(params)
+    page = max(1, int(params.get("page") or 1))
+    size = min(MAX_CHUNK_PAGE, max(1, int(params.get("page_size") or CHUNK_PAGE_SIZE)))
+    available = params.get("available")
+    query = str(params.get("query") or "").strip()
+    manager = knowledge_manager()
+    try:
+        if query:
+            # Searching answers with what matched, best first. Paging it would
+            # promise a second page of relevance that the engine was never
+            # asked for -- the limit is the page size, and a reader who wants
+            # more narrows the query.
+            found = await manager.search_document(document_id, query, limit=size)
+            cropped = _cropped(manager, document_id, found)
+            return {"chunks": [_chunk_row(piece, cropped) for piece in found], "total": len(found)}
+        held, total = await manager.document_chunks(
+            document_id,
+            offset=(page - 1) * size,
+            limit=size,
+            enabled=available if isinstance(available, bool) else None,
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"reading chunks failed: {exc}") from exc
+    cropped = _cropped(manager, document_id, held)
+    return {"chunks": [_chunk_row(piece, cropped) for piece in held], "total": total}
+
+
+async def knowledge_chunks_switch(params: dict[str, Any]) -> dict[str, Any]:
+    """Turn pieces of one document on or off."""
+    document_id = _document_id(params)
+    chunk_ids = _chunk_ids(params)
+    enabled = bool(params.get("enabled"))
+    try:
+        changed = await knowledge_manager().set_chunks_enabled(document_id, chunk_ids, enabled)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"switching chunks failed: {exc}") from exc
+    return {"changed": changed}
+
+
+async def knowledge_chunks_delete(params: dict[str, Any]) -> dict[str, Any]:
+    """Remove pieces of one document, and say how many it has left."""
+    document_id = _document_id(params)
+    chunk_ids = _chunk_ids(params)
+    try:
+        remaining = await knowledge_manager().delete_chunks(document_id, chunk_ids)
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"deleting chunks failed: {exc}") from exc
+    return {"remaining": remaining}
+
+
+async def knowledge_chunks_create(params: dict[str, Any]) -> dict[str, Any]:
+    """Append a piece a person wrote, embedded like every other piece."""
+    document_id = _document_id(params)
+    text = str(params.get("text") or "").strip()
+    if not text:
+        raise ConfigValidationError("text is required")
+    try:
+        written = await knowledge_manager().add_chunk(document_id, text)
+    except KnowledgeError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"adding a chunk failed: {exc}") from exc
+    return {"chunk": _chunk_row(written)}
+
+
+async def knowledge_chunks_update(params: dict[str, Any]) -> dict[str, Any]:
+    """Rewrite one piece, re-embedding it so the vector says what it says."""
+    document_id = _document_id(params)
+    chunk_id = str(params.get("chunk_id") or "").strip()
+    if not chunk_id:
+        raise ConfigValidationError("chunk_id is required")
+    text = str(params.get("text") or "").strip()
+    if not text:
+        raise ConfigValidationError("text is required")
+    try:
+        written = await knowledge_manager().update_chunk(document_id, chunk_id, text)
+    except KnowledgeError as exc:
+        raise ConfigValidationError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"editing a chunk failed: {exc}") from exc
+    return {"chunk": _chunk_row(written)}
+
+
+def _document_id(params: dict[str, Any]) -> str:
+    """The document a chunk call is about.
+
+    Stripped, the way `query` is: a blank id is never a document, and answering
+    it with an empty list would read as "this file indexed to nothing" rather
+    than "you asked for nothing".
+    """
+    document_id = str(params.get("document_id") or "").strip()
+    if not document_id:
+        raise ConfigValidationError("document_id is required")
+    return document_id
+
+
+def _chunk_ids(params: dict[str, Any]) -> list[str]:
+    raw = params.get("chunk_ids")
+    ids = [str(value).strip() for value in raw if str(value).strip()] if isinstance(raw, list) else []
+    if not ids:
+        raise ConfigValidationError("chunk_ids is required")
+    return ids
+
+
+def _page(value: Any) -> int | None:
+    """A page number, or ``None`` for anything that is not one."""
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _path(value: Any) -> list[str]:
+    return [str(part) for part in value] if isinstance(value, list) else []
+
+
+def _chunk_parts(metadata: dict[str, Any]) -> list[dict[str, Any]]:
+    """Where each piece of a merged chunk came from, in order.
+
+    Empty for a chunk that merged nothing, which is most of them: its own
+    fields already say where it is, and repeating that as a list of one would
+    make "this chunk was merged" unreadable from the answer.
+
+    Present, it is the only place the truth is. The naive strategy merges
+    across section boundaries, so a chunk can hold two pages, two headings and
+    two sections -- and the flattened fields beside this one can only carry the
+    first of each. A reader given those alone is told the chunk is on page 4
+    under one heading when half of what they are reading came from page 9 under
+    another, and nothing about the row says so.
+    """
+    spans = metadata.get("elements")
+    if not isinstance(spans, list) or len(spans) < 2:
+        return []
+    parts: list[dict[str, Any]] = []
+    for span in spans:
+        if not isinstance(span, dict):
+            continue
+        ordinal = span.get("section_ordinal")
+        parts.append(
+            {
+                "char_start": int(span.get("char_start") or 0),
+                "char_end": int(span.get("char_end") or 0),
+                "layout_type": str(span.get("layout_type") or ""),
+                "page_number": _page(span.get("page_number")),
+                "heading_path": _path(span.get("heading_path")),
+                # The section identity, when the parser recorded one. A heading
+                # path is not a substitute: two same-named children of one
+                # parent share it.
+                "section_ordinal": int(ordinal) if isinstance(ordinal, int) and not isinstance(ordinal, bool) else None,
+            }
+        )
+    return parts
+
+
+def _regions(chunk: Any) -> "list[dict[str, Any]]":
+    """Where on its pages a piece was cut from, for a viewer that draws it.
+
+    Through the same reader the crops use rather than a second walk over the
+    metadata. The rule it applies is not obvious -- a merged chunk keeps each
+    piece's page and box in its element spans and drops its own box when the
+    pieces disagree on the page, while an unmerged one has no spans at all and
+    carries one page and one box at the top level -- and two implementations of
+    it would mean the picture and the highlight could disagree about where a
+    piece came from.
+    """
+    from raven.knowledge._crops import regions_of
+
+    try:
+        found = regions_of(chunk)
+    except Exception as exc:  # noqa: BLE001 - a row without boxes is still a row
+        logger.debug("knowledge: cannot read the regions of a chunk ({})", exc)
+        return []
+    return [
+        {"page_number": page, "x0": x0, "top": top, "x1": x1, "bottom": bottom} for page, (x0, top, x1, bottom) in found
+    ]
+
+
+def _cropped(manager: Any, document_id: str, held: "list[Any]") -> "set[str]":
+    """Which of these pieces have a picture of their region stored.
+
+    One pass over the rows rather than a lookup inside each: this is a stat per
+    piece either way, and doing it here keeps the row builder a pure function
+    of what it is handed.
+    """
+    found = set()
+    for piece in held:
+        chunk_id = str(getattr(piece, "chunk_id", "") or "")
+        if chunk_id and manager.crop_path(document_id, chunk_id):
+            found.add(chunk_id)
+    return found
+
+
+def _chunk_row(held: Any, cropped: "frozenset[str] | set[str]" = frozenset()) -> dict[str, Any]:
+    """One stored piece as the page reads it, positional metadata flattened.
+
+    The flattened fields describe where the chunk *starts*, which is all they
+    can do for a chunk that merged several sections -- so ``parts`` carries the
+    rest, and is empty for a chunk that merged nothing. Without it a merged
+    chunk reads as a chunk of its first section, and the reader has no route to
+    the other one: the box and the character ranges stay in the metadata, but
+    which page, which heading and which section each piece came from is exactly
+    what a person scanning this list is using.
+
+    ``cropped`` is which of the pieces being rendered have a picture stored
+    for them, worked out once by :func:`_cropped` rather than per row. What the
+    row needs is only whether there is one to ask for; the picture itself is
+    fetched from the crop route when the page decides to show it.
+    """
+    chunk = getattr(held, "chunk", held)
+    metadata = getattr(chunk, "metadata", None) or {}
+    chunk_id = str(getattr(held, "chunk_id", "") or "")
+    return {
+        "chunk_index": int(getattr(chunk, "chunk_index", 0) or 0),
+        "total_chunks": int(getattr(chunk, "total_chunks", 0) or 0),
+        "text": getattr(chunk, "text", "") or "",
+        "layout_type": str(metadata.get("layout_type") or ""),
+        "page_number": _page(metadata.get("page_number")),
+        # The last page this piece touches. Equal to the first unless the chunk
+        # runs over a page boundary, which it can whenever it merged.
+        "page_end": _page(metadata.get("page_end")),
+        "heading_path": _path(metadata.get("heading_path")),
+        "parts": _chunk_parts(metadata),
+        "chunk_id": chunk_id,
+        "enabled": bool(getattr(held, "enabled", True)),
+        "manual": bool(getattr(held, "manual", False)),
+        "has_crop": chunk_id in cropped,
+        "regions": _regions(chunk),
+    }
+
+
 def _forget_preview(document_id: str) -> None:
     """Drop the source copy a preview retained for this document.
 
@@ -517,8 +826,14 @@ async def knowledge_documents_delete(params: dict[str, Any]) -> dict[str, Any]:
 async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
     """Nearest chunks across the named bases.
 
-    ``score`` is a similarity, so higher is nearer -- the direction every caller
-    already reads.
+    ``score`` runs one direction whatever found the hit -- higher is nearer --
+    but what it *is* differs, so every hit says. A base whose embedding model
+    cannot be reached is searched by keyword instead of not at all, and its
+    hits are BM25 scores on the index's own scale: unbounded, and not
+    comparable by value with the cosine similarities beside them. Without
+    ``retrieval`` on the hit and ``by_keyword`` on the answer, an endpoint
+    going down turned into a normal-looking result set, differently scaled,
+    with nothing anywhere saying retrieval had changed mode.
     """
     raw_ids = params.get("base_ids")
     base_ids = [str(b) for b in raw_ids if str(b).strip()] if isinstance(raw_ids, list) else []
@@ -540,6 +855,9 @@ async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
         "hits": [
             {
                 "score": float(hit.score),
+                # What that number is: a cosine similarity, or a BM25 score
+                # from the keyword fallback.
+                "retrieval": str(getattr(hit, "retrieval", "vector") or "vector"),
                 "document_id": hit.document_id,
                 "text": getattr(hit.chunk, "text", "") or "",
                 # Which piece of its document this was, and of how many. A
@@ -556,6 +874,12 @@ async def knowledge_search(params: dict[str, Any]) -> dict[str, Any]:
             }
             for hit in found.hits
         ],
+        # Which bases answered by words, and why their vectors could not be
+        # reached. Not an error -- those bases are in the results above -- but
+        # a reader comparing two sets of hits has to be told that some of them
+        # came from a different kind of match, and the reason is the sentence
+        # that says what to fix.
+        "by_keyword": [{"base_id": base_id, "reason": reason} for base_id, reason in found.by_keyword.items()],
         # Rounded here rather than in the surface: this is a measurement, and
         # microseconds of it are noise either way.
         "search_ms": round(found.search_ms, 1),
@@ -571,6 +895,11 @@ def register_knowledge_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("knowledge.bases.settings", knowledge_bases_settings)
     dispatcher.register("knowledge.bases.delete", knowledge_bases_delete)
     dispatcher.register("knowledge.documents.list", knowledge_documents_list)
+    dispatcher.register("knowledge.documents.chunks", knowledge_documents_chunks)
+    dispatcher.register("knowledge.chunks.switch", knowledge_chunks_switch)
+    dispatcher.register("knowledge.chunks.delete", knowledge_chunks_delete)
+    dispatcher.register("knowledge.chunks.create", knowledge_chunks_create)
+    dispatcher.register("knowledge.chunks.update", knowledge_chunks_update)
     dispatcher.register("knowledge.documents.add", knowledge_documents_add)
     dispatcher.register("knowledge.documents.add_note", knowledge_documents_add_note)
     dispatcher.register("knowledge.documents.update_note", knowledge_documents_update_note)
