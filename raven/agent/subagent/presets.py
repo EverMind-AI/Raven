@@ -389,6 +389,12 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # holds a key. Shim-launched it is not: the command is a bare `hermes`, so the
     # local spelling is the only one it can reach.
     "hermes": SignIn(exe="hermes", local="hermes model", does="setup"),
+    # `grok login` is what `grok login --help` titles "Sign in to Grok"
+    # (measured 2026-09-24, Grok Build 1.0.41). `--oauth` names the default
+    # path; the bare command is the one a reader runs. A local install, like
+    # hermes: the row's command is `grok agent stdio`, so a reader with no
+    # `grok` stops at the absent executable and never reaches this sentence.
+    "grok": SignIn(exe="grok", local="grok login"),
     # `qwen auth` is gone from 0.24 -- run, it says so and names the replacement:
     # "Interactive -> run qwen and use /auth to configure providers" (measured
     # 2026-09-24, qwen 0.24.4). `/auth` ("Connect an LLM provider") is among the

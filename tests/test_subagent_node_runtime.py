@@ -181,6 +181,7 @@ def test_a_launch_that_quit_on_an_old_node_is_named_with_both_versions(tmp_path:
     assert text.endswith(f"It said: {_DIED}"), "the agent's own words stay in the record"
 
     assert probe_mod._ping_refusal(_qwen(path, preset="hermes"), AcpConnectionError(_DIED))[1] == Remedy("exited")
+    assert probe_mod._ping_refusal(_qwen(path, preset="grok"), AcpConnectionError(_DIED))[1] == Remedy("exited")
 
 
 def test_a_launch_that_quit_on_a_new_enough_node_is_only_an_exit(tmp_path: Path) -> None:
