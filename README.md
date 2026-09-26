@@ -111,14 +111,16 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 ## ❯❯ Showcase
 
-### ❯ THRESHOLD: from a spec to a playable FPS
+These are three complete projects delivered by Raven. In each case, Raven drove a team of specialized agents from the initial brief or objective through execution to a complete set of final deliverables.
 
-**Humans wrote the spec. Raven handled the rest.** Working autonomously for about 4 days, Raven completed 42 rounds of planning, development, and verification to build a playable first-person shooter in Godot 4, centered on an arena boss fight. It also created the game's poster, presentation, and website.
+### ❯ THRESHOLD: a complete game development project
+
+**The brief came from a person; Raven completed the entire project.** Working autonomously for about 4 days, Raven completed 42 rounds of planning, development, and verification to build a playable first-person shooter in Godot 4, centered on an arena boss fight. The full deliverable includes the game, its poster, presentation, and website, all produced by Raven.
 
 <table>
 <tr>
 <td colspan="2" valign="top"><p align="center"><b>Gameplay video</b></p></td>
-<td width="22.5%" valign="top"><p align="center"><b><a href="https://threshold-7bl.pages.dev/en/">Website ↗</a></b></p></td>
+<td width="22.2%" valign="top"><p align="center"><b><a href="https://livxue.github.io/threshold/en/">Website ↗</a></b></p></td>
 </tr>
 <tr>
 <td colspan="2" valign="top">
@@ -126,21 +128,21 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 </td>
-<td rowspan="3" width="22.5%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/17f1de3b-abce-48df-8d04-78b9bfcea157"><img src="https://github.com/user-attachments/assets/17f1de3b-abce-48df-8d04-78b9bfcea157" alt="The THRESHOLD website as one long capture: hero, fight, kill cam, attack tells, evolution, making-of and footer" width="100%"></a></p></td>
+<td rowspan="3" width="22.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/8cfd513f-fba9-432d-b020-51dba0a7faeb"><img src="https://github.com/user-attachments/assets/8cfd513f-fba9-432d-b020-51dba0a7faeb" alt="The THRESHOLD website as one long capture: hero, fight, kill cam, attack tells, evolution, making-of and footer" width="100%"></a></p></td>
 </tr>
 <tr>
-<td width="46%" valign="top"><p align="center"><b>Poster</b></p></td>
-<td width="31.5%" valign="top"><p align="center"><b>Presentation</b></p></td>
+<td width="46.2%" valign="top"><p align="center"><b>Poster</b></p></td>
+<td width="31.6%" valign="top"><p align="center"><b>Presentation</b></p></td>
 </tr>
 <tr>
-<td width="46%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/a12e76d1-e7b1-4a7e-a3ba-1f3b5492fb50"><img src="https://github.com/user-attachments/assets/a12e76d1-e7b1-4a7e-a3ba-1f3b5492fb50" alt="THRESHOLD poster: the Warden towers over the player on a molten arena floor" width="100%"></a></p></td>
-<td width="31.5%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/3852c187-3412-4501-9b62-809a3dfd0b81"><img src="https://github.com/user-attachments/assets/3852c187-3412-4501-9b62-809a3dfd0b81" alt="Cover, slides and closing slide of the THRESHOLD deck" width="100%"></a></p></td>
+<td width="46.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/a12e76d1-e7b1-4a7e-a3ba-1f3b5492fb50"><img src="https://github.com/user-attachments/assets/a12e76d1-e7b1-4a7e-a3ba-1f3b5492fb50" alt="THRESHOLD poster: the Warden towers over the player on a molten arena floor" width="100%"></a></p></td>
+<td width="31.6%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/3852c187-3412-4501-9b62-809a3dfd0b81"><img src="https://github.com/user-attachments/assets/3852c187-3412-4501-9b62-809a3dfd0b81" alt="Cover, slides and closing slide of the THRESHOLD deck" width="100%"></a></p></td>
 </tr>
 </table>
 
-### ❯ Raven RSI: recursive self-improvement in action
+### ❯ Raven RSI: a complete recursive self-improvement project
 
-**AI that improves AI.** Given a task and evaluation criteria it cannot modify, Raven RSI independently plans each round, writes code, runs experiments, and evaluates the results. In nanochat pre-training experiments, it completed 172 training runs across 7 rounds without a single crash, reducing `val_bpb` by 5.8% within the same 20-minute, single-GPU budget. The same process reduced overshoot in a dam-break simulation by three orders of magnitude and completed an FEA limit-load search in 8 rounds of bisection.
+**AI that improves AI, with the entire project completed by Raven.** Given a task and evaluation criteria it cannot modify, Raven RSI independently plans each round, writes code, runs experiments, and evaluates the results. In nanochat pre-training experiments, it completed 172 training runs across 7 rounds without a single crash, reducing `val_bpb` by 5.8% within the same 20-minute, single-GPU budget. The same process reduced overshoot in a dam-break simulation by three orders of magnitude and completed an FEA limit-load search in 8 rounds of bisection. The complete deliverable includes the experimental results, visualizations, poster, presentation, and project website, all produced by Raven.
 
 <table>
 <tr>
@@ -151,7 +153,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 <tr>
 <td width="35.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24"><img src="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="100%"></a></p></td>
 <td colspan="2" width="35.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7"><img src="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="100%"></a></p></td>
-<td rowspan="3" width="28.4%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/cddb15fa-2968-47b8-906a-c335c928e0eb"><img src="https://github.com/user-attachments/assets/cddb15fa-2968-47b8-906a-c335c928e0eb" alt="The Raven RSI website as one long capture: headline numbers, nanochat, dam-break CFD, FEA limit load and the low-cost-model comparison" width="100%"></a></p></td>
+<td rowspan="3" width="28.4%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/791310d8-497e-4608-9fcc-ddddc83cba04"><img src="https://github.com/user-attachments/assets/791310d8-497e-4608-9fcc-ddddc83cba04" alt="The Raven RSI website as one long capture: research overview, nanochat, dam-break CFD, FEA solver convergence and model cost comparison" width="100%"></a></p></td>
 </tr>
 <tr>
 <td colspan="2" width="41.1%" valign="top"><p align="center"><b>Poster</b></p></td>
@@ -163,9 +165,9 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 </tr>
 </table>
 
-### ❯ Raven: a complete product launch kit
+### ❯ Raven: a complete product launch project
 
-**One raven, a whole flock of specialists.** Raven's launch kit brings together a browser-based physics mini-game, a 16-slide product overview, a poster, and the README you are reading now.
+**One raven, a whole flock of specialists. Raven completed the entire project.** Its launch kit brings together a browser-based physics mini-game, a 16-slide product overview, posters in English and Chinese, and the README you are reading now, all produced by Raven.
 
 <table>
 <tr>

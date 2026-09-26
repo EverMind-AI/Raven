@@ -111,14 +111,16 @@ Raven 采用模块化架构，专为 harness 自进化与子 Agent 创建而设�
 
 ## ❯❯ 案例展示
 
-### ❯ THRESHOLD 阈限：从需求文档到可玩的射击游戏
+以下是三个由 Raven 驱动多智能体团队完成的完整项目案例。每个项目都从需求或目标出发，经由团队协作完成全过程，并交付下方展示的整套成果。
 
-**需求文档由人编写，其余工作由 Raven 完成。** Raven 自主运行约 4 天，历经 42 轮规划、开发与验收，用 Godot 4 开发出一款可玩的第一人称射击游戏，以竞技场 Boss 战为核心玩法。它还为游戏制作了海报、演示文稿和官网。
+### ❯ THRESHOLD 阈限：一个完整的游戏开发项目
+
+**需求文档由人编写，整个项目由 Raven 完成。** Raven 自主运行约 4 天，历经 42 轮规划、开发与验收，用 Godot 4 开发出一款以竞技场 Boss 战为核心玩法的第一人称射击游戏。项目最终交付可玩的游戏、游戏海报、演示文稿和官网，全部由 Raven 制作。
 
 <table>
 <tr>
 <td colspan="2" valign="top"><p align="center"><b>实机视频</b></p></td>
-<td width="22.8%" valign="top"><p align="center"><b><a href="https://threshold-7bl.pages.dev/">官网 ↗</a></b></p></td>
+<td width="22.8%" valign="top"><p align="center"><b><a href="https://livxue.github.io/threshold/">官网 ↗</a></b></p></td>
 </tr>
 <tr>
 <td colspan="2" valign="top">
@@ -126,7 +128,7 @@ Raven 采用模块化架构，专为 harness 自进化与子 Agent 创建而设�
 https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 
 </td>
-<td rowspan="3" width="22.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/eaabfa42-e644-419e-a2a0-252974c97cad"><img src="https://github.com/user-attachments/assets/eaabfa42-e644-419e-a2a0-252974c97cad" alt="The Chinese THRESHOLD website as one long capture: hero, fight, kill cam, attack tells, evolution, making-of and footer" width="100%"></a></p></td>
+<td rowspan="3" width="22.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/bf8f62c3-a78d-46ae-b964-94e6fea91435"><img src="https://github.com/user-attachments/assets/bf8f62c3-a78d-46ae-b964-94e6fea91435" alt="The Chinese THRESHOLD website as one long capture: hero, fight, kill cam, attack tells, evolution, making-of and footer" width="100%"></a></p></td>
 </tr>
 <tr>
 <td width="45.8%" valign="top"><p align="center"><b>海报</b></p></td>
@@ -138,34 +140,34 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 </tr>
 </table>
 
-### ❯ Raven RSI：递归自我改进的实践
+### ❯ Raven RSI：一个完整的递归自我改进项目
 
-**让 AI 改进 AI。** 给定任务目标与不可修改的评估标准，Raven RSI 会自主制定每轮计划、编写代码、运行实验并评估结果。在 nanochat 预训练实验中，它完成了 7 轮迭代、172 次训练，全程无崩溃，并在相同的单卡 20 分钟预算内，将 `val_bpb` 降低了 5.8%。同一流程还将溃坝仿真的越界量降低了三个数量级，并经过 8 轮二分迭代，完成了 FEA 极限载荷搜索。
+**让 AI 改进 AI，整个项目由 Raven 完成。** 给定任务目标与不可修改的评估标准，Raven RSI 会自主制定每轮计划、编写代码、运行实验并评估结果。在 nanochat 预训练实验中，它完成了 7 轮迭代、172 次训练，全程无崩溃，并在相同的单卡 20 分钟预算内，将 `val_bpb` 降低了 5.8%。同一流程还将溃坝仿真的越界量降低了三个数量级，并经过 8 轮二分迭代，完成了 FEA 极限载荷搜索。项目完整交付包括实验结果、可视化图表、海报、演示文稿和项目网站，全部由 Raven 制作。
 
 <table>
 <tr>
-<td width="35.9%" valign="top"><p align="center"><b>CFD 溃坝仿真</b></p></td>
-<td colspan="2" width="35.9%" valign="top"><p align="center"><b>FEA 极限载荷搜索</b></p></td>
-<td width="28.2%" valign="top"><p align="center"><b><a href="https://livxue.github.io/raven-rsi/">网站 ↗</a></b></p></td>
+<td width="35.7%" valign="top"><p align="center"><b>CFD 溃坝仿真</b></p></td>
+<td colspan="2" width="35.7%" valign="top"><p align="center"><b>FEA 极限载荷搜索</b></p></td>
+<td width="28.6%" valign="top"><p align="center"><b><a href="https://livxue.github.io/raven-rsi/">网站 ↗</a></b></p></td>
 </tr>
 <tr>
-<td width="35.9%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24"><img src="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="100%"></a></p></td>
-<td colspan="2" width="35.9%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7"><img src="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="100%"></a></p></td>
-<td rowspan="3" width="28.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/a33256c2-2051-45a5-b62b-ca67e8cbe4be"><img src="https://github.com/user-attachments/assets/a33256c2-2051-45a5-b62b-ca67e8cbe4be" alt="The Chinese Raven RSI website as one long capture: headline numbers, nanochat, dam-break CFD, FEA limit load and the low-cost-model comparison" width="100%"></a></p></td>
+<td width="35.7%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24"><img src="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="100%"></a></p></td>
+<td colspan="2" width="35.7%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7"><img src="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="100%"></a></p></td>
+<td rowspan="3" width="28.6%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/5e001c7d-f861-470b-8f11-5b5e4cc6c020"><img src="https://github.com/user-attachments/assets/5e001c7d-f861-470b-8f11-5b5e4cc6c020" alt="The Chinese Raven RSI website as one long capture: research overview, nanochat, dam-break CFD, FEA solver convergence and model cost comparison" width="100%"></a></p></td>
 </tr>
 <tr>
-<td colspan="2" width="41.2%" valign="top"><p align="center"><b>海报</b></p></td>
-<td width="30.6%" valign="top"><p align="center"><b>演示文稿</b></p></td>
+<td colspan="2" width="41%" valign="top"><p align="center"><b>海报</b></p></td>
+<td width="30.4%" valign="top"><p align="center"><b>演示文稿</b></p></td>
 </tr>
 <tr>
-<td colspan="2" width="41.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092"><img src="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092" alt="Raven RSI poster with its Chinese title: a spiral stone stair climbing into the light, with ravens circling it" width="100%"></a></p></td>
-<td width="30.6%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/f2c368e3-789e-4a8d-890f-384240b36c25"><img src="https://github.com/user-attachments/assets/f2c368e3-789e-4a8d-890f-384240b36c25" alt="Cover, slides and closing slide of the Raven RSI deck" width="100%"></a></p></td>
+<td colspan="2" width="41%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092"><img src="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092" alt="Raven RSI poster with its Chinese title: a spiral stone stair climbing into the light, with ravens circling it" width="100%"></a></p></td>
+<td width="30.4%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/f2c368e3-789e-4a8d-890f-384240b36c25"><img src="https://github.com/user-attachments/assets/f2c368e3-789e-4a8d-890f-384240b36c25" alt="Cover, slides and closing slide of the Raven RSI deck" width="100%"></a></p></td>
 </tr>
 </table>
 
-### ❯ Raven：一套完整的产品发布素材
+### ❯ Raven：一个完整的产品发布项目
 
-**一只渡鸦，汇聚各路专家。** Raven 的产品发布素材包括一款可在浏览器中直接游玩的物理小游戏、一份 16 页的产品介绍演示文稿、中英文海报，以及你正在阅读的这份 README。
+**一只渡鸦，汇聚各路专家；整个项目由 Raven 完成。** Raven 的产品发布项目包括一款可在浏览器中直接游玩的物理小游戏、一份 16 页的产品介绍演示文稿、中英文海报，以及你正在阅读的这份 README，整套内容均由 Raven 制作。
 
 <table>
 <tr>
