@@ -38,6 +38,7 @@ import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
 import { set as setCtx } from '../ctxChip'
+import { clearStaged as clearStagedHarness, staged as stagedHarness } from '../harness'
 import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
@@ -447,7 +448,14 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
      before the list is read back. Spent once the session exists, and left
      staged when the create fails, since the draft is still on screen. */
   const workdir = stagedWorkdir()
-  const r = await gateway().call('session.create', workdir ? { workdir } : {})
+  /* Beside the folder and for its reason: the create is the only moment the
+     engine freezes a Harness onto a conversation, so a Persona the reader
+     picked off the wall rides along here or not at all. */
+  const harness = stagedHarness()
+  const r = await gateway().call('session.create', {
+    ...(workdir ? { workdir } : {}),
+    ...(harness ? { harness } : {}),
+  })
   setWsRoot(draftRt, r.info && r.info.cwd)
   const s: SessRow = {
     id: r.session_id, title: t('gui.new_task'), last: preview || t('gui.sess.not_started'),
@@ -456,6 +464,7 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   }
   sessionRows().unshift(s); sessionSet(s.id)
   clearStagedWorkdir()
+  clearStagedHarness()
   /* The draft IS the conversation now: everything it was holding -- the staged
      model, tier and permission mode, the lane it drew into -- belongs to the
      session that was just minted. */

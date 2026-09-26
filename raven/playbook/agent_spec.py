@@ -8,6 +8,8 @@ run the searches by the time it matters.
 
 Shape, and why it is this small:
 
+- ``coordinator`` is the main Raven's durable operating charter. It owns the
+  user conversation and decides when to answer directly or delegate.
 - ``delegate`` is the only field with behaviour. Each entry is a label, the
   roster agent behind it, and a sub-playbook that becomes that label's charter.
 - ``version`` / ``mode`` / ``name`` / ``description`` carry nothing this
@@ -132,10 +134,9 @@ class SubAction(CamelBase):
     functions: dict[str, str] = Field(default_factory=dict)
 
 
-class SubPlaybook(CamelBase):
-    """One worker's charter. The four module roles, one level deep."""
+class _SeatPlaybook(CamelBase):
+    """The four Harness roles shared by coordinator and delegate seats."""
 
-    role: Literal["subagent"] = "subagent"
     memory: SubMemory = Field(default_factory=SubMemory)
     planning: SubPlanning = Field(default_factory=SubPlanning)
     capability: SubCapability = Field(default_factory=SubCapability)
@@ -153,7 +154,7 @@ class SubPlaybook(CamelBase):
     """One line naming what, once obtained, means this worker is done."""
 
     @model_validator(mode="after")
-    def _enabled_fields_only(self) -> "SubPlaybook":
+    def _enabled_fields_only(self) -> "_SeatPlaybook":
         disabled: list[str] = []
         if "system_prompt" in self.memory.model_fields_set and not parameter_enabled("memory", "systemPrompt"):
             disabled.append("memory.systemPrompt")
@@ -185,6 +186,18 @@ class SubPlaybook(CamelBase):
             raise ValueError(f"disabled harness field(s): {', '.join(disabled)}")
         return self
 
+
+class CoordinatorPlaybook(_SeatPlaybook):
+    """The main Raven's turn-scoped charter for one Persona."""
+
+    role: Literal["coordinator"] = "coordinator"
+
+
+class SubPlaybook(_SeatPlaybook):
+    """One delegate's charter, one level below the coordinator."""
+
+    role: Literal["subagent"] = "subagent"
+
     @model_validator(mode="after")
     def _no_third_level(self) -> "SubPlaybook":
         """A worker may not bring workers of its own.
@@ -210,11 +223,21 @@ class DelegateEntry(CamelBase):
     """The roster agent behind the label. Validated against the live roster by
     the generator's caller, not here: the schema cannot know the install."""
 
+    brief: str = ""
+    """The reusable dispatch brief (v1 kept this only in a transient sidecar)."""
+
     playbook: SubPlaybook | None = None
 
     @property
     def label(self) -> str:
         return self.as_ or self.name
+
+
+class CoordinatorEntry(CamelBase):
+    """The main Raven identity and operating rules for a Persona."""
+
+    brief: str = ""
+    playbook: CoordinatorPlaybook | None = None
 
 
 class AgentPlaybookSpec(CamelBase):
@@ -224,6 +247,7 @@ class AgentPlaybookSpec(CamelBase):
     mode: Literal["agent"] = "agent"
     name: str = Field(default="turn-plan", pattern=NAME_RE)
     description: str = Field(default="", max_length=200)
+    coordinator: CoordinatorEntry | None = None
     delegate: list[DelegateEntry] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -241,6 +265,8 @@ __all__ = [
     "AgentPlaybookSpec",
     "CheckRule",
     "Checks",
+    "CoordinatorEntry",
+    "CoordinatorPlaybook",
     "DelegateEntry",
     "SubAction",
     "SubCapability",

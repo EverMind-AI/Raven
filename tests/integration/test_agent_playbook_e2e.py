@@ -24,24 +24,25 @@ from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.config.schema import PlaybookConfig
+from raven.playbook.agent_generator import TASK_TOOL
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import Origin, TurnRequest
 
 QUERY = "List what is in the workspace, then tell me how many entries you saw."
-EMIT = "emit_worker_table"
+EMIT = TASK_TOOL
 
 WORKERS = {
+    "artifactName": "competitor-research",
     "description": "two researchers, one per competitor",
     "workers": [
         {
             "as": "research-a",
-            "name": "Raven",
-            "brief": "only A's pricing",
-            "systemPrompt": "Only look at A. Leave B alone.",
-            "tools": ["web_fetch"],
+            "agent": "Raven",
+            "prompt": "Only research A's pricing and leave B alone",
+            "tools": ["list_dir"],
         },
-        {"as": "research-b", "name": "Raven", "brief": "only B's pricing", "systemPrompt": "Only look at B."},
+        {"as": "research-b", "agent": "Raven", "prompt": "Only research B's pricing and leave A alone"},
     ],
 }
 
@@ -146,7 +147,10 @@ async def _run(workspace, harness: str, *, emit_table: bool = True) -> tuple[_Sc
         tools=ToolWiring(restrict_to_workspace=True),
         engine=EngineWiring(
             runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
-            playbook_config=PlaybookConfig(agentHarness=harness),
+            playbook_config=PlaybookConfig(
+                dir=str(workspace / "playbooks"),
+                agentHarness=harness,
+            ),
         ),
     )
     emitted: list[str] = []
@@ -190,9 +194,9 @@ async def test_the_default_turn_is_deterministic(tmp_path_factory) -> None:
 async def test_a_configured_turn_differs_only_in_what_spawn_offers(tmp_path_factory) -> None:
     """The switch's promise, measured rather than asserted.
 
-    Everything the loop hands the provider -- the model, the tool array, every
-    message -- is identical with the feature on. The single exception is the
-    target ``spawn`` offers, which is the whole of what a worker table is for.
+    The setup does not add or remove any main-turn model call and does not
+    change the answer. Its generated Harness is allowed to change dispatch
+    targets and the live Playbook listing because it is saved immediately.
     """
     off, off_emitted = await _run(tmp_path_factory.mktemp("off"), "default")
     on, on_emitted = await _run(tmp_path_factory.mktemp("on"), "generate")
@@ -203,8 +207,7 @@ async def test_a_configured_turn_differs_only_in_what_spawn_offers(tmp_path_fact
 
     for index, (a, b) in enumerate(zip(off_turns, on_turns, strict=True), 1):
         assert a["model"] == b["model"], f"call {index}: model moved"
-        assert a["tool_names"] == b["tool_names"], f"call {index}: the tool array moved"
-        assert a["messages"] == b["messages"], f"call {index}: the prompt moved"
+        assert set(a["tool_names"]) == set(b["tool_names"]), f"call {index}: the tool surface moved"
 
 
 @pytest.mark.asyncio
@@ -220,8 +223,8 @@ async def test_spawn_offers_the_workers_and_their_briefs(tmp_path_factory) -> No
     on, _ = await _run(tmp_path_factory.mktemp("on"), "generate")
     target = _turn_calls(on)[0]["spawn_target"]
     assert target["enum"] == ["research-a", "research-b"]
-    assert "only A's pricing" in target["description"]
-    assert "only B's pricing" in target["description"]
+    assert "Only research A's pricing" in target["description"]
+    assert "Only research B's pricing" in target["description"]
     assert "Raven" in target["description"], "the label says which agent is behind it"
 
 
@@ -260,7 +263,7 @@ async def test_the_setup_call_runs_on_the_session_s_own_model(tmp_path_factory) 
         tools=ToolWiring(restrict_to_workspace=True),
         engine=EngineWiring(
             runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="never")),
-            playbook_config=PlaybookConfig(agentHarness="generate"),
+            playbook_config=PlaybookConfig(dir=str(workspace / "playbooks"), agentHarness="generate"),
         ),
     )
     switched = replace(loop.binding_for_session("test:c1"), model="switched-model")

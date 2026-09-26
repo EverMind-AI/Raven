@@ -14,7 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /** The module pages, as NAV_OF keys them. */
-const PAGES = ['extAgentsPage'] as const
+const PAGES = ['extAgentsPage', 'personaPage'] as const
 
 interface Fresh {
   page: typeof import('./page')

@@ -21,6 +21,7 @@ import { draw as sessionDraw } from '../../features/rail/store'
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
+import { claimantFor } from '../clarifyClaim'
 import { show as toast } from '../toast'
 import { bySubscriptionRuntime, dispatchTo, refreshList, viewRuntime } from './registry'
 import { sess } from './rows'
@@ -211,10 +212,13 @@ export function approvalClosed(frame: unknown): void {
  defect, kept because this refactor changes no behaviour. See the design's
  issue list. */
 export function clarifyRequest(frame: unknown): void {
-  const p = frame as { request_id: string; conversation_id?: string; index?: number }
+  const p = frame as {
+    request_id: string; conversation_id?: string
+    question?: string; choices?: string[]; index?: number
+  }
   const owner = p.conversation_id || sessionCurrent()!
   notify(owner, { type: 'wait' })
-  clarifySheet(p, (answers: string[]) => {
+  const respond = (answers: string[]): void => {
     notify(owner, { type: 'resume' })
     /* Both: `answer` is this question's own, which is all a broker that never
        heard of a batch reads, and `answers` is the whole form, which the broker
@@ -225,7 +229,25 @@ export function clarifyRequest(frame: unknown): void {
     }).catch(() => {})
     const open = viewRuntime().st
     if (open) open.hasQA = true
-  })
+  }
+  /* A page running a conversation of its own answers its own questions
+     (state/clarifyClaim.ts); everything else is the sheet's. */
+  const claimant = claimantFor(owner)
+  if (claimant) {
+    claimant.ask(
+      { requestId: p.request_id, question: p.question || '', choices: p.choices || [] },
+      /* A claimant answers the one question the frame describes, which sits at
+         the batch's `index`. The report is one string per position it covers,
+         so the positions before that one are the empty strings the sheet would
+         have sent for questions already answered. */
+      (text: string): void => {
+        const at = p.index ?? 0
+        respond(Array.from({ length: at + 1 }, (_, i) => (i === at ? text : '')))
+      },
+    )
+    return
+  }
+  clarifySheet(p, respond)
 }
 
 /* The question is over and nobody answered it: it timed out, its turn was
@@ -235,7 +257,13 @@ export function clarifyRequest(frame: unknown): void {
  same reason it resumes on an answer: it is no longer blocked on the reader. */
 export function clarifyClosed(frame: unknown): void {
   const p = frame as { request_id: string; conversation_id?: string }
-  notify(p.conversation_id || sessionCurrent()!, { type: 'resume' })
+  const owner = p.conversation_id || sessionCurrent()!
+  notify(owner, { type: 'resume' })
+  const claimant = claimantFor(owner)
+  if (claimant) {
+    claimant.close(p.request_id)
+    return
+  }
   clarifyClose(p.request_id)
 }
 

@@ -1234,6 +1234,13 @@ read; whether a playbook is offered on this machine is config (the
 the model is shown, and `raven playbook run` still resolves it), because the file
 is the distribution unit and local state must not travel with it.
 
+Schema v2 separates three concepts. A reusable artifact contains a **Harness**, a
+**Workflow**, or both: the Harness is the durable worker table bound into a turn;
+the Workflow is the validated DAG compiled from one accepted successful run.
+A **Run Record** is the per-execution evidence and metadata kept separately from
+the reusable artifact; it is neither discoverable nor loaded as a Playbook.
+Schema v1 remains supported through the `dag` and `prompt` modes below.
+
 The two modes differ in where the graph comes from, and therefore in who acts on
 a load: `dag` ships it as `nodes`, which the engine fills and dispatches through
 `SubAgentDagTool.execute` — the same entry a model-composed graph takes, so one
@@ -1244,16 +1251,19 @@ model in the room, composes with one call of its own. `mode` is the author's
 statement of how completely they specified the procedure, and is deliberately not
 in the tool signature.
 
-**Discovery is the model's, not a matcher's.** A playbook is reached through
-`load_playbook`, one of the tools a turn can use, alongside `spawn` and
-`run_subagent_dag` — there is no pre-turn interception and no LLM gate.
-`triggers.keywords` decides which playbooks get *described* in that tool when the
-library is larger than `playbooks.router.topK`; the `name` enum stays the whole
-library, so a retrieval miss leaves a playbook undescribed rather than
-unreachable. What the caller may supply is bounded to `params` and `fills`, and a
-`fills` entry aimed at a field the playbook already wrote is refused — so a
-playbook can be completed but never edited, and the file in git stays an accurate
-account of what ran.
+**Discovery has two paths.** Normally the main model chooses `load_playbook`
+alongside `spawn` and `run_subagent_dag`. When
+`playbooks.agentHarness=generate`, one pre-turn setup-model call receives the
+ranked saved candidates and may select a direct match. That selection may bind
+the saved durable Harness before the main turn and annotates `load_playbook`;
+it never executes the stored Workflow. The main model must call
+`load_playbook` to execute a Workflow. This resolver is an LLM decision, not a
+passive keyword matcher and not an auto-run path.
+`match.keywords` on v2 and `triggers.keywords` on v1 rank what is described
+when the library exceeds `playbooks.router.topK`; the `name` enum still covers
+the whole library. What the caller may supply is bounded to declared parameters
+and fills, and a fill aimed at a field the Playbook already wrote is refused, so
+a Playbook can be completed but never edited.
 _Avoid_: calling `triggers.keywords` a trigger — a keyword makes a playbook
 visible, never run. And avoid describing `confirm` as a playbook-level gate: it is
 `SubAgentDagSpec.confirm`, a graph-level parameter the playbook's value is

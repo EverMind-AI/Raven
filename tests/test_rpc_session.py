@@ -42,6 +42,7 @@ from raven.rpc.methods.session import (
     session_most_recent,
     session_pin,
     session_resume,
+    session_set_harness,
     session_set_mode,
     session_title,
     session_usage,
@@ -3515,3 +3516,85 @@ async def test_session_usage_is_no_longer_a_stub(tmp_path: Path, monkeypatch: py
     assert "error" not in response, response
     METHOD_MODELS["session.usage"][1].model_validate(response["result"])
     assert response["result"]["input"] == 42
+
+
+class _HarnessLoop:
+    """The two verbs `session.set_harness` reaches for, and a library of one."""
+
+    def __init__(self, known=("travel-concierge",)) -> None:
+        self.known = set(known)
+        self.bound: dict[str, str | None] = {}
+
+    def bind_session_harness(self, session_key: str, name: str | None) -> str | None:
+        if name is None:
+            self.bound.pop(session_key, None)
+            return None
+        if name not in self.known:
+            raise ValueError(f"no stored Harness named {name!r}")
+        self.bound[session_key] = name
+        return name
+
+    def session_harness_name(self, session_key: str) -> str | None:
+        return self.bound.get(session_key)
+
+
+@pytest.mark.asyncio
+async def test_set_harness_reports_binds_and_unbinds_by_which_fields_are_present() -> None:
+    """Three calls told apart by the `harness` key, the way session.set_mode does it."""
+    loop = _HarnessLoop()
+
+    reported = await session_set_harness({"session_key": "s1"}, agent_loop_factory=lambda: loop)
+    assert reported == {"session_key": "s1", "harness": None}
+
+    bound = await session_set_harness(
+        {"session_key": "s1", "harness": "travel-concierge"}, agent_loop_factory=lambda: loop
+    )
+    assert bound == {"session_key": "s1", "harness": "travel-concierge"}
+    assert loop.bound == {"s1": "travel-concierge"}
+
+    again = await session_set_harness({"session_key": "s1"}, agent_loop_factory=lambda: loop)
+    assert again["harness"] == "travel-concierge"
+
+    cleared = await session_set_harness({"session_key": "s1", "harness": None}, agent_loop_factory=lambda: loop)
+    assert cleared == {"session_key": "s1", "harness": None}
+    assert loop.bound == {}
+
+
+@pytest.mark.asyncio
+async def test_set_harness_refuses_a_missing_key_and_an_unknown_harness() -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    loop = _HarnessLoop()
+    with pytest.raises(ConfigValidationError) as missing:
+        await session_set_harness({}, agent_loop_factory=lambda: loop)
+    assert missing.value.data["field"] == "session_key"
+
+    with pytest.raises(ConfigValidationError) as unknown:
+        await session_set_harness({"session_key": "s1", "harness": "nope"}, agent_loop_factory=lambda: loop)
+    assert unknown.value.data["field"] == "harness"
+    assert "nope" in str(unknown.value)
+
+
+@pytest.mark.asyncio
+async def test_set_harness_says_so_when_this_build_cannot_bind_one() -> None:
+    """A loop without the verb refuses the write rather than reporting success."""
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError):
+        await session_set_harness(
+            {"session_key": "s1", "harness": "travel-concierge"}, agent_loop_factory=lambda: object()
+        )
+
+    reported = await session_set_harness({"session_key": "s1"}, agent_loop_factory=lambda: object())
+    assert reported == {"session_key": "s1", "harness": None}
+
+
+@pytest.mark.asyncio
+async def test_session_create_refuses_a_harness_a_build_cannot_bind() -> None:
+    """The zero-factory path has no binder, so asking to open on one is an error
+    rather than a session that silently comes up as an ordinary one."""
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_create({"harness": "travel-concierge"})
+    assert exc.value.data["field"] == "harness"

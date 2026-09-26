@@ -81,6 +81,7 @@ const PINNED = [
   'lib/prose.ts -> state/sources.ts',
   'rpc/fixtures/channels.ts -> features/connections/catalogue.ts',
   'state/escapeOrder.ts -> features/composer/turn.ts',
+  'state/escapeOrder.ts -> features/persona/store.ts',
   'state/escapeOrder.ts -> features/extAgents/store.ts',
   'state/find.ts -> features/composer/store.ts',
   'state/globalListeners.ts -> app/boot.ts',

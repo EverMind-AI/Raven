@@ -168,6 +168,10 @@ export interface SessionInitInfo {
   version: string;
   cwd: string;
   mcp_servers: JsonValue[];
+  /**
+   * The Harness this session is bound to, if any.
+   */
+  harness?: string | null;
   update_available?: boolean;
   /**
    * The command that would install the newer release.
@@ -2200,6 +2204,27 @@ export interface PlaybookNodeShape {
   depends_on: string[];
 }
 /**
+ * One durable Harness alias and the registered agent behind it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookWorkerShape".
+ */
+export interface PlaybookWorkerShape {
+  label: string;
+  agent: string;
+}
+/**
+ * The full worker detail; its brief is the durable per-job instruction.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybookWorker".
+ */
+export interface PlaybookWorker {
+  label: string;
+  agent: string;
+  brief: string;
+}
+/**
  * One playbook as the library list needs it. ``error`` is empty unless the
  * file would not parse, in which case it carries the reason and ``nodes`` is
  * empty -- one unreadable file in a directory of user-edited text must not
@@ -2214,12 +2239,23 @@ export interface PlaybookRow {
   name: string;
   description: string;
   task_summary: string;
+  schema_version: number;
+  artifact_kind: 'legacy' | 'workflow' | 'harness' | 'composite';
+  /**
+   * True when the Harness carries a coordinator seat, which is what makes it a Persona.
+   */
+  coordinator?: boolean;
+  workers: PlaybookWorkerShape[];
   mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
   nodes: PlaybookNodeShape[];
   error: string;
+  /**
+   * What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat.
+   */
+  coordinator_brief?: string;
 }
 /**
  * One runtime input. ``description`` is the sentence the caller is asked when
@@ -2272,6 +2308,13 @@ export interface PlaybookDetail {
   description: string;
   task_summary: string;
   version: number;
+  schema_version: number;
+  artifact_kind: 'legacy' | 'workflow' | 'harness' | 'composite';
+  /**
+   * True when the Harness carries a coordinator seat, which is what makes it a Persona.
+   */
+  coordinator?: boolean;
+  workers: PlaybookWorker[];
   mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
@@ -2286,6 +2329,10 @@ export interface PlaybookDetail {
   mcp_servers?: {
     [k: string]: PlaybookMcpServer;
   };
+  /**
+   * What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat.
+   */
+  coordinator_brief?: string;
   stint?: PlaybookStint;
 }
 /**
@@ -2722,6 +2769,10 @@ export interface SessionCreateParams {
    * Absolute directory this session's turns run in, persisted as the session's workdir override. How a client attached to a shared gateway keeps its launch directory.
    */
   workdir?: string;
+  /**
+   * Name of a stored Harness to open this session on. A snapshot of it is frozen onto the session, so the window keeps the Harness it was opened on after the library entry changes.
+   */
+  harness?: string;
 }
 /**
  * The key is minted lazily -- no file is written until the first save.
@@ -2986,6 +3037,7 @@ export interface SessionHistoryResult {
 export interface TurnSendParams {
   session_key: string;
   content: string;
+  playbook_mode?: 'off' | 'task' | 'persona';
   channel?: string;
   chat_id?: string;
   sender_id?: string;
@@ -3813,6 +3865,28 @@ export interface SubagentsInstanceSetModelResult {
      */
     group?: string;
   }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetHarnessParams".
+ */
+export interface SessionSetHarnessParams {
+  session_key: string;
+  /**
+   * A stored Harness name to bind. Null unbinds.
+   */
+  harness?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetHarnessResult".
+ */
+export interface SessionSetHarnessResult {
+  session_key: string;
+  /**
+   * The Harness now bound to this session.
+   */
+  harness?: string | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5399,6 +5473,94 @@ export interface PlaybooksCreateResult {
    * Whether the live library loaded the new file, so it is usable in this process without a restart.
    */
   adopted: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDraftParams".
+ */
+export interface PlaybooksDraftParams {
+  /**
+   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   */
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDraftResult".
+ */
+export interface PlaybooksDraftResult {
+  draft?: PlaybookRow1;
+}
+/**
+ * One playbook as the library list needs it. ``error`` is empty unless the
+ * file would not parse, in which case it carries the reason and ``nodes`` is
+ * empty -- one unreadable file in a directory of user-edited text must not
+ * take the page down with it. ``disabled`` lives in config rather than in the
+ * file, because the file is the distribution unit and the switch is local to
+ * this machine.
+ */
+export interface PlaybookRow1 {
+  name: string;
+  description: string;
+  task_summary: string;
+  schema_version: number;
+  artifact_kind: 'legacy' | 'workflow' | 'harness' | 'composite';
+  /**
+   * True when the Harness carries a coordinator seat, which is what makes it a Persona.
+   */
+  coordinator?: boolean;
+  workers: PlaybookWorkerShape[];
+  mode: 'dag' | 'prompt' | 'stint';
+  confirm: boolean;
+  origin: string;
+  disabled: boolean;
+  nodes: PlaybookNodeShape[];
+  error: string;
+  /**
+   * What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat.
+   */
+  coordinator_brief?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDraftSaveParams".
+ */
+export interface PlaybooksDraftSaveParams {
+  /**
+   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   */
+  session_key: string;
+  /**
+   * The name to keep it under. Kebab-case, because the name resolves a directory under the library root. Omitted keeps the generated one.
+   */
+  name?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDraftSaveResult".
+ */
+export interface PlaybooksDraftSaveResult {
+  /**
+   * The name it was saved under, which a collision may have suffixed.
+   */
+  name: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDraftDiscardParams".
+ */
+export interface PlaybooksDraftDiscardParams {
+  /**
+   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   */
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PlaybooksDraftDiscardResult".
+ */
+export interface PlaybooksDraftDiscardResult {
+  discarded: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

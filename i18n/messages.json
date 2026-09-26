@@ -10210,6 +10210,246 @@
     "gui.pb.stint_status_finished": {
       "en": "finished",
       "zh": "已完成"
+    },
+    "gui.act.ing.deep_research": {
+      "en": "researching",
+      "zh": "正在深度调研"
+    },
+    "gui.act.v.deep_research": {
+      "en": "researched",
+      "zh": "深度调研"
+    },
+    "gui.agent.hd_test_bad": {
+      "en": "Test failed: {detail}",
+      "zh": "测试没通过：{detail}"
+    },
+    "gui.arts.deleted": {
+      "en": "Deleted",
+      "zh": "删除"
+    },
+    "gui.arts.edit": {
+      "en": "Edited",
+      "zh": "编辑"
+    },
+    "gui.arts.new": {
+      "en": "New",
+      "zh": "新建"
+    },
+    "gui.deleg.stream_empty": {
+      "en": "This run has not said anything yet.",
+      "zh": "这次运行还没有产生消息。"
+    },
+    "gui.deleg.tail_hint": {
+      "en": "Open what this run is doing",
+      "zh": "展开这次运行正在做的事"
+    },
+    "gui.deleg.tail_wait": {
+      "en": "starting up",
+      "zh": "正在启动"
+    },
+    "gui.nav.persona": {
+      "en": "Personas",
+      "zh": "数字人"
+    },
+    "gui.pb.f_artifact": {
+      "en": "artifact",
+      "zh": "产物"
+    },
+    "gui.pb.harness_only": {
+      "en": "This artifact provides reusable workers and has no stored Workflow.",
+      "zh": "这个产物提供可复用的 workers，不包含已保存的 Workflow。"
+    },
+    "gui.pb.sec_harness": {
+      "en": "Harness",
+      "zh": "Harness"
+    },
+    "gui.pb.shape_harness": {
+      "en": "Harness · {n}",
+      "zh": "Harness · {n}"
+    },
+    "gui.pb.tab_harness": {
+      "en": "Harness",
+      "zh": "Harness"
+    },
+    "gui.persona.answer": {
+      "en": "Answer",
+      "zh": "回答"
+    },
+    "gui.persona.ask": {
+      "en": "Describe the digital person you want -- what it handles, and who it can hand work to.",
+      "zh": "描述你想要的数字人 —— 它负责什么，能把活派给谁。"
+    },
+    "gui.persona.asked": {
+      "en": "Raven is asking",
+      "zh": "Raven 在问你"
+    },
+    "gui.persona.delete": {
+      "en": "Delete",
+      "zh": "删除"
+    },
+    "gui.persona.delete_failed": {
+      "en": "Could not delete it: {err}",
+      "zh": "没能删除：{err}"
+    },
+    "gui.persona.delete_no": {
+      "en": "Keep",
+      "zh": "取消"
+    },
+    "gui.persona.delete_sure": {
+      "en": "Delete {name}?",
+      "zh": "删除 {name}？"
+    },
+    "gui.persona.delete_yes": {
+      "en": "Delete",
+      "zh": "确认删除"
+    },
+    "gui.persona.deleted": {
+      "en": "Deleted {name}",
+      "zh": "已删除 {name}"
+    },
+    "gui.persona.disabled": {
+      "en": "Disabled",
+      "zh": "已禁用"
+    },
+    "gui.persona.discard": {
+      "en": "Discard",
+      "zh": "丢弃"
+    },
+    "gui.persona.draft_head": {
+      "en": "Generated, not saved yet",
+      "zh": "已生成，尚未保存"
+    },
+    "gui.persona.draft_name": {
+      "en": "Name",
+      "zh": "名字"
+    },
+    "gui.persona.empty": {
+      "en": "No personas yet. Ask Raven to build you one.",
+      "zh": "还没有数字人。让 Raven 给你捏一个。"
+    },
+    "gui.persona.host": {
+      "en": "Main Raven",
+      "zh": "主 Raven"
+    },
+    "gui.persona.loading": {
+      "en": "Reading the library...",
+      "zh": "正在读取..."
+    },
+    "gui.persona.make_failed": {
+      "en": "Could not make one: {err}",
+      "zh": "没能捏出来：{err}"
+    },
+    "gui.persona.no_description": {
+      "en": "No description.",
+      "zh": "没有描述。"
+    },
+    "gui.persona.no_match": {
+      "en": "No persona matches that.",
+      "zh": "没有匹配的数字人。"
+    },
+    "gui.persona.no_workers": {
+      "en": "Works alone.",
+      "zh": "独自工作。"
+    },
+    "gui.persona.ran": {
+      "en": "Ran",
+      "zh": "已执行"
+    },
+    "gui.persona.raven": {
+      "en": "Raven",
+      "zh": "Raven"
+    },
+    "gui.persona.recheck": {
+      "en": "Check again",
+      "zh": "再查一次"
+    },
+    "gui.persona.reply": {
+      "en": "Say the next thing -- refine it, or answer the question above.",
+      "zh": "接着说 —— 改一改，或者回答上面的问题。"
+    },
+    "gui.persona.restart": {
+      "en": "Start over",
+      "zh": "重新开始"
+    },
+    "gui.persona.save": {
+      "en": "Save",
+      "zh": "保存"
+    },
+    "gui.persona.saved_one": {
+      "en": "Saved {name}",
+      "zh": "已保存 {name}"
+    },
+    "gui.persona.search": {
+      "en": "Search personas",
+      "zh": "搜索数字人"
+    },
+    "gui.persona.seat_main": {
+      "en": "Coordinator",
+      "zh": "协调席"
+    },
+    "gui.persona.send": {
+      "en": "Make it",
+      "zh": "捏出来"
+    },
+    "gui.persona.slow": {
+      "en": "This outlasted what the page waits for. It may still arrive -- check again.",
+      "zh": "超过了页面的等待上限。它可能还在路上 —— 点「再查一次」。"
+    },
+    "gui.persona.start": {
+      "en": "Start a chat",
+      "zh": "开始对话"
+    },
+    "gui.persona.start_failed": {
+      "en": "Cannot start {name} here",
+      "zh": "这里无法启动 {name}"
+    },
+    "gui.persona.step_done": {
+      "en": "Done",
+      "zh": "完成"
+    },
+    "gui.persona.step_error": {
+      "en": "The turn failed",
+      "zh": "这一轮失败了"
+    },
+    "gui.persona.step_saying": {
+      "en": "Writing the answer",
+      "zh": "正在作答"
+    },
+    "gui.persona.step_thinking": {
+      "en": "Thinking",
+      "zh": "正在思考"
+    },
+    "gui.persona.step_tool": {
+      "en": "Running {name}",
+      "zh": "正在执行 {name}"
+    },
+    "gui.persona.tab_make": {
+      "en": "Make one",
+      "zh": "捏一个"
+    },
+    "gui.persona.tab_saved": {
+      "en": "Saved",
+      "zh": "已保存"
+    },
+    "gui.persona.working": {
+      "en": "Making one...",
+      "zh": "正在捏…"
+    },
+    "gui.persona.working_for": {
+      "en": "{secs}s",
+      "zh": "{secs} 秒"
+    },
+    "gui.persona.you": {
+      "en": "You",
+      "zh": "你"
+    },
+    "gui.settings.saved": {
+      "en": "Saved",
+      "zh": "已保存"
+    },
+    "tool.deep_research": {
+      "en": "Deep research",
+      "zh": "深度调研"
     }
   }
 }

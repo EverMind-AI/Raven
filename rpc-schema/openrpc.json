@@ -125,6 +125,14 @@
             "type": "string",
             "description": "Absolute directory this session's turns run in, persisted as the session's workdir override. How a client attached to a shared gateway keeps its launch directory."
           }
+        },
+        {
+          "name": "harness",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Name of a stored Harness to open this session on. A snapshot of it is frozen onto the session, so the window keeps the Harness it was opened on after the library entry changes."
+          }
         }
       ],
       "result": {
@@ -605,6 +613,18 @@
           "required": true,
           "schema": {
             "type": "string"
+          }
+        },
+        {
+          "name": "playbook_mode",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "enum": [
+              "off",
+              "task",
+              "persona"
+            ]
           }
         },
         {
@@ -2892,6 +2912,50 @@
           "$ref": "#/components/errors/ConfigValidationError"
         }
       ]
+    },
+    {
+      "name": "session.set_harness",
+      "summary": "Report, bind or unbind the Harness this session runs as. Omitting the harness key reports; a name binds a frozen snapshot of that stored Harness; null unbinds. A window keeps the Harness it was bound to even after the library entry is edited or removed.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "harness",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "A stored Harness name to bind. Null unbinds."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionSetHarnessResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_key"
+          ],
+          "properties": {
+            "session_key": {
+              "type": "string"
+            },
+            "harness": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The Harness now bound to this session."
+            }
+          }
+        }
+      },
+      "errors": []
     },
     {
       "name": "session.set_mode",
@@ -6404,6 +6468,107 @@
       ]
     },
     {
+      "name": "playbooks.draft",
+      "summary": "The Persona this session generated and has not saved, or null. A generated Harness is held as a draft rather than written to the library, so a turn that generates one leaves nothing behind until a reader saves it.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksDraftResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "draft": {
+              "$ref": "#/components/schemas/PlaybookRow",
+              "description": "The unsaved Persona, in the row shape the library answers, with origin 'draft'. Absent when this session has generated none."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "playbooks.draft_save",
+      "summary": "Write this session's generated Persona to the library and adopt it. An optional name renames it on the way in; a collision takes the first free numeric suffix.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
+          }
+        },
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "description": "The name to keep it under. Kebab-case, because the name resolves a directory under the library root. Omitted keeps the generated one."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksDraftSaveResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "The name it was saved under, which a collision may have suffixed."
+            }
+          }
+        }
+      },
+      "errors": [
+        {
+          "$ref": "#/components/errors/ConfigValidationError"
+        }
+      ]
+    },
+    {
+      "name": "playbooks.draft_discard",
+      "summary": "Let this session's unsaved Persona go. Answers whether there was one.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
+          }
+        }
+      ],
+      "result": {
+        "name": "PlaybooksDraftDiscardResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "discarded"
+          ],
+          "properties": {
+            "discarded": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
       "name": "approval.respond",
       "summary": "Answer a pending approval request.",
       "params": [
@@ -6494,7 +6659,9 @@
               "type": "boolean"
             }
           },
-          "required": ["ok"],
+          "required": [
+            "ok"
+          ],
           "type": "object"
         }
       }
@@ -6536,7 +6703,9 @@
               "type": "array"
             }
           },
-          "required": ["requests"],
+          "required": [
+            "requests"
+          ],
           "type": "object"
         }
       }
@@ -9585,6 +9754,13 @@
               "$ref": "#/components/schemas/JsonValue"
             },
             "type": "array"
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Harness this session is bound to, if any."
           },
           "update_available": {
             "type": "boolean"
@@ -13624,6 +13800,44 @@
         "type": "object",
         "description": "Just enough of one step to draw the graph: which step it is, and what it\nwaits for. The library page draws a concept diagram per card, and shipping\nthe prompts and per-node config the detail view needs would be the whole\nlibrary on page open."
       },
+      "PlaybookWorkerShape": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "agent"
+        ],
+        "type": "object",
+        "description": "One durable Harness alias and the registered agent behind it."
+      },
+      "PlaybookWorker": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "brief": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "agent",
+          "brief"
+        ],
+        "type": "object",
+        "description": "The full worker detail; its brief is the durable per-job instruction."
+      },
       "PlaybookRow": {
         "additionalProperties": false,
         "properties": {
@@ -13635,6 +13849,28 @@
           },
           "task_summary": {
             "type": "string"
+          },
+          "schema_version": {
+            "type": "integer"
+          },
+          "artifact_kind": {
+            "enum": [
+              "legacy",
+              "workflow",
+              "harness",
+              "composite"
+            ],
+            "type": "string"
+          },
+          "coordinator": {
+            "type": "boolean",
+            "description": "True when the Harness carries a coordinator seat, which is what makes it a Persona."
+          },
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookWorkerShape"
+            },
+            "type": "array"
           },
           "mode": {
             "enum": [
@@ -13661,12 +13897,19 @@
           },
           "error": {
             "type": "string"
+          },
+          "coordinator_brief": {
+            "type": "string",
+            "description": "What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat."
           }
         },
         "required": [
           "name",
           "description",
           "task_summary",
+          "schema_version",
+          "artifact_kind",
+          "workers",
           "mode",
           "confirm",
           "origin",
@@ -13777,6 +14020,28 @@
           "version": {
             "type": "integer"
           },
+          "schema_version": {
+            "type": "integer"
+          },
+          "artifact_kind": {
+            "enum": [
+              "legacy",
+              "workflow",
+              "harness",
+              "composite"
+            ],
+            "type": "string"
+          },
+          "coordinator": {
+            "type": "boolean",
+            "description": "True when the Harness carries a coordinator seat, which is what makes it a Persona."
+          },
+          "workers": {
+            "items": {
+              "$ref": "#/components/schemas/PlaybookWorker"
+            },
+            "type": "array"
+          },
           "mode": {
             "enum": [
               "dag",
@@ -13824,6 +14089,10 @@
             },
             "type": "object"
           },
+          "coordinator_brief": {
+            "type": "string",
+            "description": "What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat."
+          },
           "stint": {
             "$ref": "#/components/schemas/PlaybookStint"
           }
@@ -13834,6 +14103,9 @@
           "task_summary",
           "version",
           "mode",
+          "schema_version",
+          "artifact_kind",
+          "workers",
           "confirm",
           "origin",
           "disabled",

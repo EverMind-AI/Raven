@@ -118,7 +118,7 @@ describe('the portal table', () => {
        page installs and .upshade only when an upgrade starts. The table copies
        what is measured, not what the comment intends. */
     expect(BOOT_BODY_ORDER.indexOf('div.tipp')).toBeGreaterThan(-1)
-    expect(PORTALS.find((p) => p.id === '.tipp')!.at).toBe(13)
+    expect(PORTALS.find((p) => p.id === '.tipp')!.at).toBe(14)
     expect(PORTALS.find((p) => p.id === '.upshade')!.at).toBe('last')
   })
 
@@ -164,7 +164,7 @@ describe('the portal table', () => {
 
   it('gives the model picker its place among the standing layers, and reparents nothing', () => {
     const picker = PORTALS.find((p) => p.id === 'pickHost')!
-    expect(picker.at).toBe(11)
+    expect(picker.at).toBe(12)
     /* The composer's popovers hang off their chips with the stylesheet now, so
        no portal leaves the card it was born in. */
     expect(PORTALS.filter((p) => p.kind === 'reparent')).toEqual([])

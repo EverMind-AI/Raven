@@ -1,17 +1,17 @@
-"""Playbook — reusable task templates: generation, matching, execution.
+"""Playbook — reusable Harnesses and Workflows.
 
-Generation, discovery by the model, execution. A playbook is one directory
-under the playbooks scan root holding a
-``playbook.md`` (two-field frontmatter, human body, one fenced
-``yaml playbook-spec`` block) — one file, no sidecar. The two modes differ
-only in where the graph comes from: ``dag`` ships it, ``prompt`` ships
-assembly guidance a model turns into a graph at run time — same validation,
-same execution chain. Whether a playbook is offered on this machine is config
+A playbook is one directory under the scan root holding one ``playbook.md``:
+two-field frontmatter, a human-readable body, and one fenced
+``yaml playbook-spec`` block. Schema v2 stores an optional durable Harness,
+an optional concrete DAG Workflow, or both. New artifacts never use prompt
+mode. Schema-v1 DAG/prompt files remain readable and executable for backwards
+compatibility. Whether an artifact is offered on this machine is config
 (``playbooks.disabled``), never file content.
 
 Package layout:
 
-- ``types``      — the pydantic contract (:class:`PlaybookSpec` et al.)
+- ``unified``    — schema-v2 Harness + Workflow contract
+- ``types``      — legacy schema-v1 contract
 - ``agent_profiles`` — what each sub-agent on the table can be asked to do
 - ``llm_result`` — the shapes a generation call comes back in
 - ``params``     — parameter values and ``${params.x}`` / ``{{ params.x }}`` refs
@@ -50,12 +50,21 @@ from raven.playbook.types import (
     PlaybookSpec,
     Triggers,
 )
+from raven.playbook.unified import (
+    InputSchema,
+    PlaybookMatch,
+    PlaybookMetadata,
+    StoredPlaybook,
+    UnifiedPlaybookSpec,
+    WorkflowSpec,
+)
 
 __all__ = [
     "BUILTIN_ROOT",
     "CapabilityInventory",
     "ExecutionPlan",
     "GeneratedPlaybook",
+    "InputSchema",
     "NodeSpec",
     "ParamSpec",
     "PlaybookExecutor",
@@ -65,6 +74,9 @@ __all__ = [
     "PlaybookProviderError",
     "PlaybookProtocolError",
     "PlaybookOrigin",
+    "PlaybookMatch",
+    "PlaybookMetadata",
+    "StoredPlaybook",
     "MAX_GAP_ROUNDS",
     "PlaybookRuntime",
     "RouterSizes",
@@ -74,6 +86,8 @@ __all__ = [
     "StaticInventory",
     "TriggerIndex",
     "Triggers",
+    "UnifiedPlaybookSpec",
+    "WorkflowSpec",
     "agent_profiles_from_registry",
     "find_collisions",
     "live_inventory",
