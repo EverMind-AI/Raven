@@ -411,7 +411,7 @@ def _silent_detail(said: str, run: str) -> str:
     )[:_DETAIL_CAP]
 
 
-def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
+def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
     """A launch or a wait that failed without the agent answering, when there is evidence of which.
 
     An exit carries the agent's own last words on stderr; a flag it does not know
@@ -452,7 +452,7 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
     return None
 
 
-def _named_launch_failure(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
+def _named_launch_failure(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
     """A quit whose stderr names a cause these two agents print themselves.
 
     Read only for their presets. Anything else keeps the generic "it quit".
