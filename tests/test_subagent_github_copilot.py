@@ -176,7 +176,8 @@ def test_these_two_agents_name_a_start_that_quit_or_never_spoke() -> None:
     assert "too old to be connected" in text
 
     text, remedy = _process_refusal(
-        copilot, shown("GitHub Copilot CLI: no platform package found. Reinstall with `npm install -g @github/copilot`.")
+        copilot,
+        shown("GitHub Copilot CLI: no platform package found. Reinstall with `npm install -g @github/copilot`."),
     )
     assert remedy is not None and remedy.kind == "upgrade"
     assert "platform package" in text

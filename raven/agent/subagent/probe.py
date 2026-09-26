@@ -425,9 +425,7 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
     off the event loop.
     """
     if _EXITED.search(shown):
-        if _NO_ACP_FLAG.search(shown) or (
-            getattr(cfg, "preset", None) == "grok" and _GROK_NO_AGENT.search(shown)
-        ):
+        if _NO_ACP_FLAG.search(shown) or (getattr(cfg, "preset", None) == "grok" and _GROK_NO_AGENT.search(shown)):
             up = upgrade_hint_for(cfg)
             how = f" with `{up}`" if up else ""
             return (
@@ -450,9 +448,7 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy] | None:
         if run:
             return _silent_detail(shown, run), Remedy("silent", run)
     if getattr(cfg, "preset", None) in {"grok", "github_copilot"} and "initialize timed out" in shown:
-        return (
-            f"its ACP server did not start; connect again. It said: {shown}"
-        )[:_DETAIL_CAP], None
+        return (f"its ACP server did not start; connect again. It said: {shown}")[:_DETAIL_CAP], None
     return None
 
 
