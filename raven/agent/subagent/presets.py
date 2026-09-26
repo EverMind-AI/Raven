@@ -419,13 +419,6 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # declares no `engines.node` and a launch that quits on an old Node.js
     # was not measured, so it is not in `NODE_RUNTIME_PRESETS`.
     "github_copilot": SignIn(exe="copilot", local="copilot login"),
-    # `grok login` is what `grok login --help` titles "Sign in to Grok"
-    # (measured 2026-09-24, Grok Build 1.0.41). `--oauth` names the default
-    # path; the bare command is the one a reader runs. A local install: the
-    # row's command is `grok agent stdio`, so a reader with no `grok` stops at
-    # the absent executable. The binary is native, so a launch that quits is
-    # not a Node.js problem.
-    "grok": SignIn(exe="grok", local="grok login"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
