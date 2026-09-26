@@ -8384,8 +8384,8 @@
       "zh": "继续对话…"
     },
     "gui.composer.ph_busy": {
-      "en": "Continue the conversation; it is sent once this turn ends",
-      "zh": "继续对话，输入会排队到本轮结束再发"
+      "en": "Continue the conversation; Raven will receive your new instruction directly",
+      "zh": "继续对话，Raven 将直接收到你的新指令"
     },
     "gui.plus.add": {
       "en": "Add",
