@@ -765,10 +765,15 @@ async def test_stopping_the_server_closes_an_open_page_instead_of_waiting_on_it(
     await client.start_server()
     gateway.port = server.port
     ws = await client.ws_connect("/rpc", headers={"X-Raven-Token": gateway.session_token})
+    # Reading already when the server stops, as a page always is: the close
+    # handshake needs the client to answer, and a client that only starts
+    # reading afterwards sees the transport drop (1006) instead of the close.
+    reading = asyncio.ensure_future(ws.receive())
     try:
         await asyncio.wait_for(server.close(), timeout=5)
-        message = await asyncio.wait_for(ws.receive(), timeout=5)
+        message = await asyncio.wait_for(reading, timeout=5)
     finally:
+        reading.cancel()
         await client.close()
 
     assert message.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED)
