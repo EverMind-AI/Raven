@@ -1,8 +1,9 @@
 /** Pane chrome and responsive layout for the floating workspace surface. */
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 
+import { PaneHeadParts, PaneHeadSlot } from '../../components/PaneHead'
 import { t } from '../../i18n/t'
 import { storedWidth } from '../../state/paneWidth'
 import { InstanceMode } from '../subagents/InstanceMode'
@@ -23,9 +24,10 @@ import {
 } from './geometry'
 import * as desk from './store'
 
+import type { InstanceRow } from '../subagents/types'
 import type { DeskArrangement, SlotRect } from './drag'
 import type { DeskPane } from './types'
-import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
+import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent, ReactNode } from 'react'
 
 function FullscreenIcon({ active }: { active: boolean }): JSX.Element {
   return active ? (
@@ -43,10 +45,19 @@ interface PaneProps {
   pane: DeskPane
   /* The header is the handle: the body scrolls and selects, the chrome moves
      the window. Wired from the surface, which owns the pointer for the whole
-     gesture -- a drag crosses pane boundaries by definition. */
-  onGrab: (id: string, event: ReactPointerEvent<HTMLElement>) => void
+     gesture -- a drag crosses pane boundaries by definition. A native listener
+     rather than a React prop, because most of what the header shows is portaled
+     in by the content (PaneHead), and a portal's React events bubble through
+     the content's tree, not the header's: a grab bound as a prop never heard a
+     press on the title. */
+  onGrab: (id: string, event: PointerEvent) => void
   refPane: (id: string, el: HTMLElement | null) => void
 }
+
+/* The kinds whose content draws its own head (PaneHead): what they name and
+   what their controls do depends on state the content holds -- a picked node,
+   a tab, a granted run. */
+const OWN_HEAD = new Set<DeskPane['kind']>(['diff', 'file', 'task'])
 
 function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
   const state = useSyncExternalStore(desk.subscribe, desk.get)
@@ -63,16 +74,22 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
     ? live.instances.find((it) => it.agent === pane.row.agent && it.handle === pane.row.handle) || pane.row
     : null
   const full = state.solo === pane.id
-  const title = pane.kind === 'agent'
-    ? row!.title || row!.nodeId || row!.handle
-    : pane.kind === 'agent-record'
-      /* What it did before what it is called. `label` is the node's own summary
-         for a graph node and the run's label for a spawn; `node` is the plan's
-         slug, a name for the machine. Read the other way round, a graph node's
-         pane was headed by its id whatever the run knew about it. */
-      ? pane.row.label || pane.row.node || pane.row.id || t('gui.ws.agents')
-      : pane.kind === 'file' ? pane.file.path.split('/').pop() || pane.file.path
-        : pane.kind === 'task' ? pane.row.task_summary || pane.row.id : pane.change.name
+  const [slot, setSlot] = useState<HTMLElement | null>(null)
+  const header = useRef<HTMLElement | null>(null)
+  const grab = useRef(onGrab)
+  grab.current = onGrab
+  useEffect(() => {
+    const el = header.current
+    if (!el) return
+    const down = (event: PointerEvent): void => grab.current(pane.id, event)
+    el.addEventListener('pointerdown', down)
+    return () => el.removeEventListener('pointerdown', down)
+  }, [pane.id])
+  /* The robot glyph says "an agent ran this", which a task pane is as much as
+     a live conversation is -- the two-box graph mark stays on the palette's own
+     tab, where it names the tab rather than a run. */
+  const glyphKind = pane.kind === 'agent' || pane.kind === 'agent-record' || pane.kind === 'task' ? 'agents' : pane.kind
+  const target = useMemo(() => ({ el: slot, icon: <DeskIcon kind={glyphKind} /> }), [slot, glyphKind])
   return (
     <section
       ref={(el) => refPane(pane.id, el)}
@@ -80,31 +97,10 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
       data-active={state.active === pane.id}
       onPointerDown={() => desk.setActive(pane.id)}
     >
-      <header onPointerDown={(event) => onGrab(pane.id, event)}>
-        {/* The robot glyph says "an agent ran this", which a task pane is as
-            much as a live conversation is -- the two-box graph mark stays on
-            the palette's own tab, where it names the tab rather than a run. */}
-        <DeskIcon kind={
-          pane.kind === 'agent' || pane.kind === 'agent-record' || pane.kind === 'task' ? 'agents' : pane.kind
-        } />
-        <b title={title}>{title}</b>
-        {pane.kind === 'agent' || pane.kind === 'agent-record'
-          ? (
-            <span className="pane-meta">
-              {[pane.kind === 'agent' ? pane.row.runTitle : null, pane.row.agent].filter(Boolean).join(' \u00b7 ')}
-            </span>
-          )
-          : pane.kind === 'diff'
-            ? <span className="pane-meta">{`+${pane.change.add} \u2212${pane.change.del}`}</span>
-            : null}
-        <span className="pane-spacer" />
-        {/* Live instances only. A record is a run that already happened, and the
-            model and mode it ran under are not things a reader can still
-            change -- nor is it still running, so neither is there a clock to
-            draw. */}
-        {pane.kind === 'agent' ? <TurnClock row={row!} /> : null}
-        {pane.kind === 'agent' ? <InstanceModel row={row!} /> : null}
-        {pane.kind === 'agent' ? <InstanceMode row={row!} /> : null}
+      <header ref={header}>
+        <div className="pane-head" ref={setSlot}>
+          {OWN_HEAD.has(pane.kind) ? null : <AgentHead pane={pane} row={row} icon={target.icon} />}
+        </div>
         <button
           className="pane-fullscreen"
           onClick={() => desk.toggleSolo(pane.id)}
@@ -116,13 +112,38 @@ function Pane({ pane, onGrab, refPane }: PaneProps): JSX.Element {
         <button onClick={() => desk.closePane(pane.id)} aria-label={t('gui.close')}>×</button>
       </header>
       <div className="desk-pane-body">
-        {pane.kind === 'diff' ? <ChgDiff c={pane.change} patch /> : null}
-        {pane.kind === 'file' ? <FileView ws={workspace.shared()} file={pane.file} /> : null}
-        {pane.kind === 'agent' ? <InstanceConversation row={pane.row} /> : null}
-        {pane.kind === 'agent-record' ? <AgentRecordConversation row={pane.row} /> : null}
-        {pane.kind === 'task' ? <TaskPane task={pane.row} full={full} /> : null}
+        <PaneHeadSlot.Provider value={target}>
+          {pane.kind === 'diff' ? <ChgDiff c={pane.change} patch /> : null}
+          {pane.kind === 'file' ? <FileView ws={workspace.shared()} file={pane.file} /> : null}
+          {pane.kind === 'agent' ? <InstanceConversation row={pane.row} /> : null}
+          {pane.kind === 'agent-record' ? <AgentRecordConversation row={pane.row} /> : null}
+          {pane.kind === 'task' ? <TaskPane task={pane.row} full={full} /> : null}
+        </PaneHeadSlot.Provider>
       </div>
     </section>
+  )
+}
+
+function AgentHead({ pane, row, icon }: { pane: DeskPane; row: InstanceRow | null; icon: ReactNode }): JSX.Element | null {
+  if (pane.kind !== 'agent' && pane.kind !== 'agent-record') return null
+  const title = pane.kind === 'agent'
+    ? row!.title || row!.nodeId || row!.handle
+    /* What it did before what it is called. `label` is the node's own summary
+       for a graph node and the run's label for a spawn; `node` is the plan's
+       slug, a name for the machine. Read the other way round, a graph node's
+       pane was headed by its id whatever the run knew about it. */
+    : pane.row.label || pane.row.node || pane.row.id || t('gui.ws.agents')
+  const meta = [pane.kind === 'agent' ? pane.row.runTitle : null, pane.row.agent].filter(Boolean).join(' \u00b7 ')
+  return (
+    <PaneHeadParts icon={icon} title={title} meta={meta || null}>
+      {/* Live instances only. A record is a run that already happened, and the
+          model and mode it ran under are not things a reader can still
+          change -- nor is it still running, so neither is there a clock to
+          draw. */}
+      {pane.kind === 'agent' ? <TurnClock row={row!} /> : null}
+      {pane.kind === 'agent' ? <InstanceModel row={row!} /> : null}
+      {pane.kind === 'agent' ? <InstanceMode row={row!} /> : null}
+    </PaneHeadParts>
   )
 }
 
@@ -256,7 +277,7 @@ export function DeskSurface(): JSX.Element | null {
     })
   }
 
-  const grab = (id: string, event: ReactPointerEvent<HTMLElement>): void => {
+  const grab = (id: string, event: PointerEvent): void => {
     if (event.button !== 0 || dragRef.current) return
     if ((event.target as HTMLElement).closest('button')) return
     const held = desk.get()
@@ -266,7 +287,7 @@ export function DeskSurface(): JSX.Element | null {
     const el = paneEls.current.get(id)
     if (!grid || !el) return
     event.preventDefault()
-    const header = event.currentTarget
+    const header = event.currentTarget as HTMLElement
     const controller = new AbortController()
     const run: DragRun = {
       id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,

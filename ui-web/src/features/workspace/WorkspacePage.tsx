@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 
+import { PaneHead, PaneHeadSeg, usePaneHead } from '../../components/PaneHead'
 import { t } from '../../i18n/t'
 import { toUnified } from '../../lib/hunks'
 import * as lang from '../../state/lang'
@@ -8,7 +9,7 @@ import { show as toast } from '../../state/toast'
 import * as deliveries from './deliveries'
 import {
   RENDERED, TWO_VIEWS, appFor, canOpenInApp, copyToClip, extOf, fileURL, pageURL,
-  hostPlatform, mdHtml, openInApp, renderURL, runURL, setAppFor,
+  hostPlatform, mdHtml, openInApp, runURL, setAppFor,
 } from './store'
 import * as store from './store'
 import './styles.css'
@@ -29,7 +30,6 @@ const ICO = {
   reveal: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z'
     + 'M9.5 16l5-4.5M14.5 15V11.5H11',
   chev: 'M9.5 6.5 15 12l-5.5 5.5',
-  save: 'M12 4v10.5M7.5 10.5 12 15l4.5-4.5M5 19.5h14',
 }
 
 const FT_ICO = {
@@ -229,23 +229,44 @@ export function ChgDiff({ c, patch }: { c: WsChange; patch?: boolean }): JSX.Ele
    a second one for a patch. */
 function PatchDiff({ c }: { c: WsChange }): JSX.Element {
   const path = c.dir + c.name
+  const inPane = !!usePaneHead()
+  const copy = (
+    <button
+      className="ghost-ic fcopy tipdn"
+      data-tip={t('gui.ws.copy_path_do')}
+      aria-label={t('gui.ws.copy_path_do')}
+      onClick={() => copyToClip(path, t('gui.ws.copy_path'))}
+    >
+      <Ico d={ICO.doc} />
+    </button>
+  )
   return (
     <div className="fwrap">
-      <div className="fbar">
-        <span className="nm" title={path}>
-          {c.dir ? <i>{c.dir}</i> : null}
-          <b>{c.name}</b>
-        </span>
-        <button
-          className="ghost-ic fcopy tipdn"
-          data-tip={t('gui.ws.copy_path_do')}
-          aria-label={t('gui.ws.copy_path_do')}
-          onClick={() => copyToClip(path, t('gui.ws.copy_path'))}
+      {inPane ? (
+        <PaneHead
+          title={c.name}
+          tip={path}
+          meta={(
+            <>
+              {c.dir ? <span className="workspace-dir">{c.dir}</span> : null}
+              <span className="workspace-stat">
+                <b className="workspace-add">{`+${c.add}`}</b> <b className="workspace-del">{`\u2212${c.del}`}</b>
+              </span>
+            </>
+          )}
         >
-          <Ico d={ICO.doc} />
-        </button>
-        <span className="fsp" />
-      </div>
+          {copy}
+        </PaneHead>
+      ) : (
+        <div className="fbar">
+          <span className="nm" title={path}>
+            {c.dir ? <i>{c.dir}</i> : null}
+            <b>{c.name}</b>
+          </span>
+          {copy}
+          <span className="fsp" />
+        </div>
+      )}
       <div className="fpane">
         <div className="fbody">
           <div className="fview">
@@ -279,15 +300,6 @@ const OPEN_WITH: Record<string, string[]> = {
 function BinNote({ f }: { f: WsFile }): JSX.Element {
   const chosen = appFor(f.path)
   const canApp = canOpenInApp()
-  /* Subscribed, not read once. `loadDeliveries()` is fire-and-forget on a
-     session reopen while `resume()` can restore this pane first, so the row
-     this note needs can arrive AFTER it mounts -- and `seed()` notifies only
-     this store's listeners. Reading `byPath` once leaves the save link absent
-     for good in that order, which strands exactly the reader it exists for:
-     a remote gateway, where the open-with offer is withheld and the path is
-     on somebody else's machine. */
-  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
-  const saveAt = deliveries.byPath(f.path)?.downloadPath || ''
   const hand = (app: string | null): void => {
     void openInApp(f.path, app).then(
       () => {},
@@ -324,16 +336,6 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
           <button className="mini ghost" onPointerUp={pick}>{t('gui.ws.open_with_pick')}</button>
         </div>
       ) : null}
-      {/* The bar's download again, in words, where this note's reader looks:
-          the viewer cannot render the file, and on a gateway that is not this
-          desktop the offer above is withheld. Only a delivered file's, read
-          from the registry by path rather than carried on the pane: the same
-          file is one pane whichever door opened it. */}
-      {saveAt ? (
-        <a className="mini ghost" href={saveAt} download={f.path.split('/').pop() || ''}>
-          {t('gui.ws.save_copy')}
-        </a>
-      ) : null}
       <button
         className="mini ghost"
         onClick={() => {
@@ -350,21 +352,13 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
    the diff list or the deliverables shelf -- nothing navigates from inside it,
    which is why there is nothing left here to navigate with. */
 export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile | null }): JSX.Element {
-  /* Held here because both the bar and the body act on it, and held as the view
-     it was granted for rather than a flag: anything that replaces the view --
-     another file, or this path opened again over rewritten bytes -- revokes it
-     with no effect to remember to write, which is the shape that cannot leak a
-     grant onto a page the reader never saw. */
-  const [ranFor, setRanFor] = useState<string | null>(null)
+  const inPane = !!usePaneHead()
   if (!store.source().canBrowse) return <div className="wsnote">{t('gui.ws.file_unreadable')}</div>
   const f = file
-  /* The same identity the body is keyed by, so a remount and a revoke are one
-     event and cannot disagree about which bytes were consented to. */
   const view = f ? String(f.seq ?? f.path) : null
-  const running = !!view && ranFor === view
   return (
     <div className="fwrap">
-      <Fbar f={f} running={running} />
+      {inPane ? <FileHead f={f} /> : <Fbar f={f} />}
       <div className="fpane">
         {!f ? (
           <div className="fempty">
@@ -373,7 +367,7 @@ export function FileView({ ws, file = ws.file }: { ws: WsShared; file?: WsFile |
           </div>
         ) : (
           <div className="fbody">
-            <FileBody key={view ?? undefined} f={f} running={running} onRun={() => setRanFor(view)} />
+            <FileBody key={view ?? undefined} f={f} />
           </div>
         )}
       </div>
@@ -392,114 +386,117 @@ const whySaid = (e: unknown): string => {
 
 /* A deck adds nothing to the bar: no application picker and no viewer toolbar
    in the frame below. The deck is read here and changed by talking to the
-   agent; what a reader still needs from the bar is the file, or the file among
-   the others in the file manager, and the download and folder buttons every
-   kind gets cover both. So a deck's bar reads as the same bar an image or a
-   PDF gets. */
-function Fbar({ f, running }: { f: WsFile | null; running: boolean }): JSX.Element {
+   agent, so its bar reads as the same bar an image or a PDF gets. */
+function CopyPath({ path }: { path: string }): JSX.Element {
+  return (
+    <button
+      className="ghost-ic fcopy tipdn"
+      data-tip={t('gui.ws.copy_path_do')}
+      aria-label={t('gui.ws.copy_path_do')}
+      onClick={() => {
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(path).then(() => toast(t('gui.ws.copy_path')), () => {})
+        }
+      }}
+    >
+      <Ico d={ICO.doc} />
+    </button>
+  )
+}
+
+function ViewSeg({ f }: { f: WsFile }): JSX.Element | null {
+  if (!TWO_VIEWS[f.kind]) return null
+  return (
+    <PaneHeadSeg
+      options={[{ key: 'rendered', label: t('gui.ws.file_rendered') }, { key: 'source', label: t('gui.ws.file_source') }]}
+      value={f.raw ? 'source' : 'rendered'}
+      onPick={(k) => {
+        f.raw = k === 'source'
+        store.redraw()
+      }}
+    />
+  )
+}
+
+function FileActs({ f }: { f: WsFile }): JSX.Element {
   const platform = hostPlatform()
-  /* Subscribed for the same reason BinNote is: the delivery row the download
-     prefers can arrive after the pane mounts. */
-  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const revealTip = t(platform === 'mac' ? 'gui.ws.reveal_finder'
     : platform === 'windows' ? 'gui.ws.reveal_explorer' : 'gui.ws.reveal_folder')
-  const rel = f ? store.source().shortPath(f.path) : ''
+  return (
+    <>
+      {f.kind === 'pdf' || f.kind === 'html' ? (
+        <button
+          className="ghost-ic tipdn"
+          data-tip={t('gui.ws.file_newtab')}
+          aria-label={t('gui.ws.file_newtab')}
+          /* The tab shows the page as the pane does, scripts and all, under the
+             same opaque-origin sandbox the route puts on it. */
+          onClick={() => window.open(f.kind === 'html' ? runURL(f.path) : fileURL(f.path), '_blank', 'noopener')}
+        >
+          <Ico d={ICO.ext} />
+        </button>
+      ) : null}
+      {/* Reveal runs where the GATEWAY runs, like every fs call, so on a
+          remote serve it shows the file on that host. */}
+      <button
+        className="ghost-ic tipdn"
+        data-tip={revealTip}
+        aria-label={revealTip}
+        onClick={() => {
+          store.source().reveal?.(f.path).then(() => {}, (e: unknown) => toast(whySaid(e)))
+        }}
+      >
+        <Ico d={ICO.reveal} />
+      </button>
+    </>
+  )
+}
+
+const splitRel = (f: WsFile): [string, string] => {
+  const rel = store.source().shortPath(f.path)
   const cut = rel.lastIndexOf('/')
+  return cut > 0 ? [rel.slice(0, cut + 1), rel.slice(cut + 1)] : ['', rel]
+}
+
+const copyMenu = (f: WsFile) => ctxRef(() => [
+  { label: t('gui.ws.copy_path_do'), fn: () => copyToClip(f.path, t('gui.ws.copy_path')) },
+])
+
+/* In a desk pane the file is named once, in the pane's header: the base name
+   as the title, the folder it sits in as the muted line after it, and the
+   controls that act on it at the header's end. */
+function FileHead({ f }: { f: WsFile | null }): JSX.Element {
+  if (!f) return <PaneHead title={t('gui.ws.file_none')} />
+  const [dir, name] = splitRel(f)
+  return (
+    <PaneHead title={name} tip={f.path} titleRef={copyMenu(f)}
+      meta={dir ? <span className="workspace-dir">{dir}</span> : null}>
+      <ViewSeg f={f} />
+      <CopyPath path={f.path} />
+      <FileActs f={f} />
+    </PaneHead>
+  )
+}
+
+/* The same file, drawn outside a pane: a bar of its own above the body. */
+function Fbar({ f }: { f: WsFile | null }): JSX.Element {
+  const [dir, name] = f ? splitRel(f) : ['', '']
   return (
     <div className="fbar">
       {f ? (
         <>
-          <span
-            className="nm"
-            title={f.path}
-            ref={ctxRef(() => [
-              { label: t('gui.ws.copy_path_do'), fn: () => copyToClip(f.path, t('gui.ws.copy_path')) },
-            ])}
-          >
-            {cut > 0 ? <i>{rel.slice(0, cut + 1)}</i> : null}
-            <b>{cut > 0 ? rel.slice(cut + 1) : rel}</b>
+          <span className="nm" title={f.path} ref={copyMenu(f)}>
+            {dir ? <i>{dir}</i> : null}
+            <b>{name}</b>
           </span>
-          <button
-            className="ghost-ic fcopy tipdn"
-            data-tip={t('gui.ws.copy_path_do')}
-            aria-label={t('gui.ws.copy_path_do')}
-            onClick={() => {
-              if (navigator.clipboard) {
-                navigator.clipboard.writeText(f.path).then(() => toast(t('gui.ws.copy_path')), () => {})
-              }
-            }}
-          >
-            <Ico d={ICO.doc} />
-          </button>
+          <CopyPath path={f.path} />
         </>
       ) : (
         <span className="nm">{t('gui.ws.file_none')}</span>
       )}
       <span className="fsp" />
-      {f && TWO_VIEWS[f.kind] ? (
-        <div className="kseg">
-          {([[false, 'gui.ws.file_rendered'], [true, 'gui.ws.file_source']] as Array<[boolean, string]>).map(([raw, key]) => (
-            <button
-              key={key}
-              aria-pressed={Boolean(f.raw) === raw}
-              onClick={() => {
-                f.raw = raw
-                store.redraw()
-              }}
-            >
-              {t(key)}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {f ? (
-        <span className="workspace-file-acts">
-          {f.kind === 'pdf' || f.kind === 'html' ? (
-            <button
-              className="ghost-ic tipdn"
-              data-tip={t('gui.ws.file_newtab')}
-              aria-label={t('gui.ws.file_newtab')}
-              /* A tab granted the same run the pane was: the reader asked once, for
-                 this file, and a tab that still refused would send them to save the
-                 file and open it by hand -- which is the longer way round to the
-                 same execution, with none of the isolation this one keeps. */
-              onClick={() => window.open(
-                f.kind === 'pptx' ? renderURL(f.path) : running ? runURL(f.path) : fileURL(f.path),
-                '_blank', 'noopener')}
-            >
-              <Ico d={ICO.ext} />
-            </button>
-          ) : null}
-          {/* Saved by the browser, so on a remote serve the bytes reach the
-              reader's machine rather than the gateway's. The folder button and
-              a delivery card do not stand in for it: the folder opens where the
-              gateway runs, and a card saves only the binary kinds. A delivered
-              file comes from its delivery, which has no size cap; any other
-              from the route the viewer reads it through, whose inline answer
-              `download` turns into a save under the file's own name. */}
-          <a
-            className="ghost-ic tipdn"
-            href={deliveries.byPath(f.path)?.downloadPath || fileURL(f.path)}
-            download={f.path.split(/[\\/]/).pop() || ''}
-            data-tip={t('gui.ws.download')}
-            aria-label={t('gui.ws.download')}
-          >
-            <Ico d={ICO.save} />
-          </a>
-          {/* Reveal runs where the GATEWAY runs, like every fs call, so on a
-              remote serve it shows the file on that host. */}
-          <button
-            className="ghost-ic tipdn"
-            data-tip={revealTip}
-            aria-label={revealTip}
-            onClick={() => {
-              store.source().reveal?.(f.path).then(() => {}, (e: unknown) => toast(whySaid(e)))
-            }}
-          >
-            <Ico d={ICO.reveal} />
-          </button>
-        </span>
-      ) : null}
+      {f ? <ViewSeg f={f} /> : null}
+      {f ? <span className="workspace-file-acts"><FileActs f={f} /></span> : null}
     </div>
   )
 }
@@ -517,7 +514,7 @@ function diffLineCls(line: string): string {
   return ''
 }
 
-function FileBody({ f, running, onRun }: { f: WsFile; running: boolean; onRun: () => void }): JSX.Element {
+function FileBody({ f }: { f: WsFile }): JSX.Element {
   const [broken, setBroken] = useState(false)
   const asSource = TWO_VIEWS[f.kind] ? f.raw : !RENDERED[f.kind]
   const asImage = f.kind === 'img' || (f.kind === 'svg' && !asSource)
@@ -548,30 +545,17 @@ function FileBody({ f, running, onRun }: { f: WsFile; running: boolean; onRun: (
        blocked by the client, so the pane stayed a grey box with a sad face,
        whatever tokens the attribute granted (allow-scripts included). The
        viewer runs in its own extension origin, so the frame being same-origin
-       hands the document nothing of the page's. HTML keeps the empty sandbox:
-       a report the agent wrote is readable without running its scripts. */
+       hands the document nothing of the page's.
+
+       An HTML file is rendered as the page it is, scripts included: a page
+       drawn on a canvas or laid out by its own code is otherwise a blank or a
+       broken-looking rectangle. Both halves grant the scripts -- the frame's
+       sandbox attribute and the header the route sends for `run=1` -- and
+       neither grants `allow-same-origin`, so the page keeps an opaque origin
+       and reaches no cookie or socket of this one. */
     body = f.kind === 'pdf'
       ? <iframe referrerPolicy="no-referrer" src={fileURL(f.path)} />
-      /* The note rides above the frame rather than inside it: the frame's
-         document is what was denied scripts, so it cannot be the thing that
-         explains the denial. Without it a page drawn on a canvas arrives as a
-         rectangle of its own background colour, which reads as a broken file
-         rather than a withheld capability -- and the reader goes looking for
-         the bug in what the agent wrote. */
-      /* Both halves have to grant it: the frame's sandbox attribute and the
-         response's own header. The attribute is here and the header comes from
-         asking the route for the running view, so neither alone is enough --
-         which is what keeps a page from running because one of the two was
-         edited without the other. */
-      : running
-        ? <iframe sandbox="allow-scripts" referrerPolicy="no-referrer" src={runURL(f.path)} />
-        : <>
-          <div className="vnote">
-            {t('gui.ws.html_no_scripts')}
-            <button className="mini ghost vnote-run" onClick={onRun}>{t('gui.ws.html_run')}</button>
-          </div>
-          <iframe sandbox="" referrerPolicy="no-referrer" src={fileURL(f.path)} />
-        </>
+      : <iframe sandbox="allow-scripts" referrerPolicy="no-referrer" src={runURL(f.path)} />
   } else if (asDeck) {
     body = <DeckBody f={f} />
   } else if (f.kind === 'bin') {

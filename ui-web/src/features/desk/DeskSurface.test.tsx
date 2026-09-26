@@ -15,8 +15,8 @@ import { DeskFollowToggle, DeskSurface } from './DeskSurface'
 import * as desk from './store';
 
 import type { InstanceRow } from '../subagents/types'
-import type { TaskRow, TasksSource } from '../tasks/types'
-import type { WorkspaceSource } from '../workspace/types'
+import type { TaskNode, TaskRow, TasksSource } from '../tasks/types'
+import type { WorkspaceSource, WsChange } from '../workspace/types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -632,5 +632,130 @@ describe("a task pane's header icon", () => {
     const icon = document.querySelector('.desk-pane header svg')
     expect(icon?.innerHTML).toContain('M9 12h.01M15 12h.01M12 7V4M9 18v2M15 18v2')
     expect(icon?.innerHTML).not.toContain('M7 11.5v4a2 2 0 0 0 2 2h4.5')
+  })
+})
+
+/* The pane's header is the one place a pane is named: the content portals
+   what it knows into it, and draws no bar of its own under it. */
+describe('a pane named once, in its header', () => {
+  const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
+    agent: 'raven', node_summary: null, instance: null, depends_on: [], started_at: null, ended_at: null,
+    error: null, tokens_in: null, tokens_out: null, tool_call_count: null, tool_failure_count: null,
+    has_output: null, prompt_template: null, files: [],
+    ...over,
+  })
+
+  beforeEach(() => {
+    taskRows = []
+    tasksStore.reset()
+    setCurrent('s1')
+    setSources({ tasks: stubTasks() })
+  })
+
+  afterEach(() => { setCurrent(null) })
+
+  const titles = (): string[] => [...document.querySelectorAll('.desk-pane .pane-head-title')].map((b) => b.textContent || '')
+
+  it('heads a file with its base name and folder, with no path bar in the body', async () => {
+    render(<DeskSurface />)
+    await act(async () => { desk.openDeskFile('/w/docs/a.md') })
+    const pane = document.querySelector('.desk-pane') as HTMLElement
+    expect(titles()).toEqual(['a.md'])
+    expect(pane.querySelector('header .pane-head-meta')?.textContent).toBe('/w/docs/')
+    expect(pane.querySelector('header [aria-label="gui.ws.reveal_finder"]')).toBeTruthy()
+    expect(pane.querySelector('.desk-pane-body .fbar')).toBeNull()
+  })
+
+  it('heads a change with its name, folder and counts, with no path bar in the body', async () => {
+    render(<DeskSurface />)
+    await act(async () => {
+      desk.openDeskDiff({ key: 'k', dir: 'src/', name: 'x.ts', kind: 'edit', add: 3, del: 1, turn: 2, open: false,
+        hunks: [{ rows: [['add', 'y', null, 1]] }] as WsChange['hunks'] })
+    })
+    const pane = document.querySelector('.desk-pane') as HTMLElement
+    expect(titles()).toEqual(['x.ts'])
+    expect(pane.querySelector('header .pane-head-meta')?.textContent).toBe('src/+3 −1')
+    expect(pane.querySelector('.desk-pane-body .fbar')).toBeNull()
+  })
+
+  it('reads a picked node as a step of its task, and backs out by the crumb', async () => {
+    const row = { ...taskRow('t1'), kind: 'dag' as const, task_summary: 'Ship the release',
+      nodes: [
+        node({ node_id: 'survey', status: 'completed' }),
+        node({ node_id: 'draft', node_summary: 'Draft the notes', status: 'completed' }),
+      ] }
+    taskRows = [row]
+    render(<DeskSurface />)
+    await act(async () => { desk.openDeskTask(row) })
+    expect(titles()).toEqual(['Ship the release'])
+    await act(async () => { tasksStore.pickNode('task:dag:t1', 'draft') })
+
+    const head = document.querySelector('.desk-pane > header') as HTMLElement
+    expect(titles()).toEqual(['Draft the notes'])
+    expect(head.querySelector('.pane-head-crumb')?.textContent).toBe('Ship the release')
+    expect(head.querySelector('.pane-head-back')).toBeTruthy()
+    expect(head.querySelector('.pane-head-glyph')).toBeNull()
+    expect(head.querySelectorAll('.pane-head-seg [role="tab"]')).toHaveLength(2)
+    expect(document.querySelector('.desk-pane-body .tkcard')?.textContent).not.toContain('Draft the notes')
+
+    await act(async () => { (head.querySelector('.pane-head-crumb') as HTMLElement).click() })
+    expect(titles()).toEqual(['Ship the release'])
+    expect(head.querySelector('.pane-head-crumb')).toBeNull()
+  })
+
+  it('names a single spawn once, not as its task and again as its one node', async () => {
+    const row = { ...taskRow('t2'), task_summary: 'Rewrite the report',
+      nodes: [node({ node_id: 't2', node_summary: 'Rewrite the report', status: 'running' })] }
+    taskRows = [row]
+    render(<DeskSurface />)
+    await act(async () => {
+      desk.openDeskTask(row)
+      tasksStore.pickNode('task:spawn:t2', 't2')
+    })
+    const head = document.querySelector('.desk-pane > header') as HTMLElement
+    expect(head.textContent?.split('Rewrite the report')).toHaveLength(2)
+    expect(head.querySelector('.pane-head-crumb')).toBeNull()
+    expect(head.querySelector('.pane-head-back')).toBeTruthy()
+  })
+
+  it('offers stop on a running node, for the whole run on a graph, and not on a finished one', async () => {
+    const row = { ...taskRow('t3'), kind: 'dag' as const, nodes: [
+      node({ node_id: 'a', status: 'completed' }),
+      node({ node_id: 'b', status: 'running' }),
+    ] }
+    taskRows = [row]
+    render(<DeskSurface />)
+    await act(async () => { desk.openDeskTask(row) })
+    const head = document.querySelector('.desk-pane > header') as HTMLElement
+    expect(head.querySelector('.tkhalt')?.getAttribute('aria-label')).toBe('gui.tasks.stop_title')
+
+    await act(async () => { tasksStore.pickNode('task:dag:t3', 'b') })
+    expect(head.querySelector('.tkhalt')?.getAttribute('aria-label')).toBe('gui.tasks.stop_title')
+    await act(async () => { tasksStore.pickNode('task:dag:t3', 'a') })
+    expect(head.querySelector('.tkhalt')).toBeNull()
+  })
+
+  it('moves the pane when the press lands on the title the content drew', async () => {
+    render(<DeskSurface />)
+    await act(async () => {
+      desk.openDeskFile('/workspace/a.ts')
+      desk.openDeskFile('/workspace/b.ts')
+    })
+    const rect = { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect)
+    const pointer = (type: string, target: EventTarget, x: number, y: number): void => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 })
+      Object.defineProperty(event, 'pointerId', { value: 7 })
+      target.dispatchEvent(event)
+    }
+    const title = document.querySelectorAll('.desk-pane .pane-head-title')[0] as HTMLElement
+    await act(async () => {
+      pointer('pointerdown', title, 400, 150)
+      pointer('pointermove', window, 400, 450)
+    })
+    expect(document.querySelector('.desk-grid')!.getAttribute('data-dragging')).toBe('true')
+    await act(async () => { pointer('pointerup', window, 400, 450) })
+    expect(desk.get().panes.map((pane) => pane.id)).toEqual(['file:/workspace/b.ts', 'file:/workspace/a.ts'])
+    vi.restoreAllMocks()
   })
 })

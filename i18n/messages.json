@@ -4647,10 +4647,6 @@
       "en": "This view cannot read files here",
       "zh": "这里没法读取文件"
     },
-    "gui.ws.save_copy": {
-      "en": "Save a copy",
-      "zh": "保存副本"
-    },
     "gui.ws.expand_lines": {
       "en": "show {n} more",
       "zh": "展开 {n} 行"
@@ -4674,14 +4670,6 @@
     "gui.ws.file_denied": {
       "en": "Raven is confined to the workspace, so this file cannot be opened here.",
       "zh": "Raven 被限制在工作目录内，这个文件没法在这里打开。"
-    },
-    "gui.ws.html_run": {
-      "en": "Run it here",
-      "zh": "在这里运行"
-    },
-    "gui.ws.html_no_scripts": {
-      "en": "Scripts do not run in this preview. A page that needs them may look blank, or may look finished while its layout is wrong and nothing responds. Open the file outside Raven to see it as written.",
-      "zh": "预览不运行脚本。需要脚本的页面可能一片空白，也可能看着像画好了、实际上排版是歪的且点什么都没反应。要看它本来的样子，请在 Raven 之外打开这个文件。"
     },
     "gui.ws.file_gone": {
       "en": "That file is no longer there.",
@@ -4738,10 +4726,6 @@
     "gui.ws.dlv_turn": {
       "en": "turn {n}",
       "zh": "第 {n} 轮"
-    },
-    "gui.ws.download": {
-      "en": "Download",
-      "zh": "下载"
     },
     "gui.ws.dlv_here": {
       "en": "delivered this turn",

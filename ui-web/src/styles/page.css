@@ -3098,9 +3098,7 @@ textarea:focus, textarea:focus-visible,
    as itself: prose for markdown, the picture for an image, the page for HTML.
    Numbered source lines are the fallback, not the default -- and stay one
    click away for the text kinds that also render. */
-.fbar .kseg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; flex: none; }
-.fbar .kseg button { padding: 3px 9px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
-.fbar .kseg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+.fbar .pane-head-seg { margin-right: 0; }
 .fview { min-height: 0; }
 .fview .prose { padding: 14px 14px 26px; font-size: 13.5px; line-height: 1.75; }
 .fview .shot { display: block; padding: 14px; }
@@ -3150,21 +3148,6 @@ textarea:focus, textarea:focus-visible,
 .fview .binote .binacts { display: flex; flex-wrap: wrap; gap: 7px; }
 .fview .vspin { padding: 22px 16px; font-size: 12px; color: var(--faint); }
 .fview .verr { padding: 18px 16px; font-size: 12.5px; color: var(--clay); line-height: 1.6; }
-/* Not .verr: nothing failed here. A withheld capability is worth saying plainly
-   and worth not dressing as an error, or the reader starts debugging the file. */
-.fview .vnote {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 10px 14px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--muted);
-  background: var(--raised);
-  border-bottom: 1px solid var(--line);
-}
-.fview .vnote-run { flex: none; }
 
 /* ── switch ────────────────────────────────────────────────────────── */
 .swi, .two-pane-swi {
@@ -5651,10 +5634,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   border: 1px solid var(--line); border-radius: 14px;
   background: var(--ink);
   box-shadow: 0 8px 28px var(--sh-soft), 0 1px 3px var(--ring); }
-.desk-pane > header { height: 48px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 10px;
+.desk-pane > header { height: 48px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 10px 0 12px;
   border-bottom: 1px solid var(--line-soft); }
-.desk-pane > header > svg { width: 15px; height: 15px; flex: none; stroke-linecap: round; stroke-linejoin: round; }
-.desk-pane > header b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
 /* Centred rather than left to each child's own rules: one of these buttons
    holds an inline <svg>, which sits on the text baseline with the descender
    space still under it, and the other holds the "x" character, which sits
@@ -5680,6 +5661,44 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-pane > header .pane-imode:not(.auto) { color: var(--text); background: var(--raised);
   box-shadow: inset 0 0 0 1px var(--line-soft); }
 .desk-pane > header button:hover { color: var(--text); background: var(--hover); }
+
+/* The pane's one header (components/PaneHead.tsx): glyph or the way back, the
+   name -- led by its parent's when a part of something is up -- with a muted
+   line of facts under it, and the controls that act on what is shown. A
+   hairline sets those off from the window's own two. Each line gives way on
+   its own, so the facts stay on screen however narrow the pane. */
+.pane-head { flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px; }
+.pane-head-glyph, .pane-head .pane-head-back { width: 28px; height: 28px; margin-left: -6px; flex: none;
+  display: grid; place-items: center; color: var(--text-3); }
+.pane-head-glyph svg { width: 15px; height: 15px; stroke-linecap: round; stroke-linejoin: round; }
+.pane-head-id { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+.pane-head-line { min-width: 0; display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.pane-head-title { flex: 0 1 auto; min-width: 3em; overflow: hidden; text-overflow: ellipsis;
+  font-size: 13px; line-height: 18px; font-weight: 500; color: var(--text); }
+.pane-head .pane-head-crumb { width: auto; height: auto; flex: 0 3 auto; min-width: 2em; max-width: 45%; display: block;
+  padding: 0; border-radius: 0; font-size: 13px; line-height: 18px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-head .pane-head-crumb:hover { color: var(--text); background: none; }
+.pane-head-sep { flex: none; color: var(--faint); }
+.pane-head-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--faint); font: 11px/15px var(--sans); }
+.pane-head-acts { flex: none; display: flex; align-items: center; gap: 2px; }
+.pane-head-acts > a { color: var(--text-3); }
+.pane-head-acts > a svg { width: 16px; height: 16px; }
+.pane-head-acts:not(:empty)::after { content: ""; width: 1px; height: 16px; margin: 0 4px 0 6px; background: var(--line); }
+.pane-head-seg { flex: none; display: inline-flex; gap: 2px; padding: 2px; margin-right: 4px; border-radius: 8px;
+  background: var(--surface); }
+.pane-head-seg > button[role="tab"] { width: auto; height: 24px; padding: 0 9px; border-radius: 6px; display: block;
+  font-size: 12px; line-height: 24px; color: var(--muted); }
+.pane-head-seg > button[role="tab"]:hover { color: var(--text); background: none; }
+.pane-head-seg > button[role="tab"][aria-selected="true"] { color: var(--text); background: var(--raised);
+  box-shadow: 0 1px 2px var(--ring); }
+/* A docked pane is often a third of the window. There the way back is the
+   chevron alone: a parent squeezed to its first letter says nothing. */
+@container desk-pane (max-width: 560px) {
+  .pane-head .pane-head-crumb, .pane-head-sep { display: none; }
+  .pane-head-seg > button[role="tab"] { padding: 0 7px; }
+}
 /* The header is the handle once there is more than one pane to arrange. */
 .desk-grid[data-can-drag="true"] .desk-pane > header { cursor: grab; touch-action: none; user-select: none;
   -webkit-user-select: none; }
@@ -5701,9 +5720,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .desk-drop, .desk-pane-settle { transition: none; }
 }
-.pane-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint);
-  font: 11px var(--sans); }
-.pane-spacer { flex: 1; }
 .desk-pane-body { position: relative; flex: 1; min-height: 0; overflow: auto; }
 .desk-pane:has(.instance-conversation) .desk-pane-body { overflow: hidden; }
 .desk-pane-body > .diff { min-height: 100%; }
@@ -6588,7 +6604,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    this is a display rule rather than an unmount -- the reader's pan and zoom
    are still there once they back out. Full screen keeps all of it, since
    there the node sits beside the board rather than over it. */
-.tkview:not(.full)[data-detail="true"] > .tkbar,
 .tkview:not(.full)[data-detail="true"] > .tkwhy,
 .tkview:not(.full)[data-detail="true"] > .tkchips,
 .tkview:not(.full)[data-detail="true"] > .gboard {
@@ -6627,20 +6642,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* ── one node, described ───────────────────────────────────────────────
    Fills the node area rather than sitting beside it: the docked pane is not
    wide enough for both, and closing the card brings the column back. The
-   card is itself a column with one scrolling child (`.tkbody`): the header
-   stays put above it rather than riding off the top of a long record. */
+   card is itself a column with one scrolling child (`.tkbody`); what the
+   node is and its two tabs are the pane header's (TaskHead). */
 .tkcard { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; height: 100%; min-height: 0; }
-.tkch { flex: none; display: flex; align-items: flex-start; gap: 8px; padding-bottom: 8px;
-  border-bottom: 1px solid var(--line-soft); }
 .tkbody { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-/* The back control makes no sense in full screen -- the graph it would
-   return to is already beside the panel, not covered by it. */
-.tkview.full .tkback { display: none; }
-/* The id is the title. It is the name every other field keys off -- a
-   dependency names it, a placeholder names it -- so it is set in the face
-   those references are written in. */
-.tkch h4 { flex: 1; min-width: 0; margin: 0; font-size: 14px; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; }
 .tkx { flex: none; background: none; border: 0; font-size: 16px; line-height: 1;
   color: var(--faint); cursor: pointer; padding: 0 2px; }
 .tkx:hover { color: var(--text); }
@@ -6772,14 +6777,6 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   background: var(--surface); border-radius: 8px; padding: 9px 11px; }
 .tklive { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--faint); }
 
-/* The two tabs of a node card: one small segmented control, the same shape
-   the workspace switcher's `.wseg` already wears, rather than an underline --
-   440px of card is not the width an underline tab strip reads well at. */
-.tktabs { display: flex; gap: 2px; flex: none; width: fit-content; margin-left: auto;
-  padding: 2px; border-radius: 8px; background: var(--surface); align-self: flex-start; }
-.tktabs button { font-size: 12px; color: var(--muted); background: none; border: 0;
-  border-radius: 6px; padding: 5px 10px; cursor: pointer; }
-.tktabs button[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 600; }
 /* The same token the runtime uses for the same condition, carried by colour.
    Beside the name, never instead of it. */
 .tkerr { flex: none; font-family: var(--mono); font-size: 10px; color: var(--clay);

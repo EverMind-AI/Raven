@@ -247,7 +247,7 @@ const LEGACY_LOCAL = {
      `.ln`, `.dagcap` and `.workv` were that box's own classes, and every
      caller now hands DagGraph a `renderNode` of its own. */
   dag: 7,
-  desk: 5,
+  desk: 4,
   /* Was none with the agent hub: every class the page writes carries its
      prefix, and its rules live in features/extAgents/styles.css. Up to three
      with the playbooks page gone -- `.kd`, `.pmhero` and `.sulist` were shared
@@ -303,7 +303,7 @@ const LEGACY_LOCAL = {
      domain's alone now. */
   transcript: 60,
   /* Up from 37 with the playbooks page gone: `.t` was shared with it. */
-  workspace: 38,
+  workspace: 35,
 }
 
 // The same count for the classes a domain names from inside a `className={...}`

@@ -170,28 +170,12 @@ describe('the tasks list', () => {
     expect(panes[0]!.id).toBe('task:dag:a')
   })
 
-  it.each(['spawn', 'dag'] as const)('stops only the selected %s from the list without opening it', async (kind) => {
-    const running = task({ id: 'a', kind, status: 'running', agent: 'raven', handle: 'worker-a' })
-    const other = task({ id: 'b', kind: 'spawn', status: 'running' })
-    rows = [running, other]
+  it('offers no stop on a running row: stopping is rare, and lives in the task pane', async () => {
+    rows = [task({ id: 'a', kind: 'spawn', status: 'running' }), task({ id: 'b', kind: 'dag', status: 'running' })]
     await draw()
-    const stop = document.querySelector<HTMLButtonElement>('.tklistrow button[aria-label="gui.stop"]')
-    expect(stop).not.toBeNull()
-    expect(stop!.parentElement?.closest('button')).toBeNull()
-    rows = [{ ...running, status: 'cancelled' }, other]
-    await act(async () => { stop!.click() })
-    expect(stopped).toEqual([running])
-    expect(desk.get().panes).toHaveLength(0)
-    expect(store.byKey(kind, 'a')?.status).toBe('cancelled')
-    expect(store.byKey('spawn', 'b')?.status).toBe('running')
-    expect(document.querySelectorAll('.tklistrow button[aria-label="gui.stop"]')).toHaveLength(1)
-  })
-
-  it('offers no stop action for settled tasks', async () => {
-    rows = (['completed', 'cancelled', 'failed', 'interrupted'] as const)
-      .map((status) => task({ id: status, kind: 'spawn', status }))
-    await draw()
-    expect(document.querySelectorAll('.tklistrow button[aria-label="gui.stop"]')).toHaveLength(0)
+    expect(document.querySelectorAll('.sarow.task')).toHaveLength(2)
+    expect(document.querySelectorAll('.tklistrow button[aria-label]')).toHaveLength(0)
+    expect(document.querySelector('.tkhalt')).toBeNull()
   })
 
   it('disables stop while pending, reports failure and allows a retry', async () => {
@@ -203,8 +187,9 @@ describe('the tasks list', () => {
     const toasts = document.createElement('div')
     toasts.id = 'toasts'
     document.body.append(toasts)
-    await draw()
-    const stop = document.querySelector<HTMLButtonElement>('.tklistrow button[aria-label="gui.stop"]')
+    await act(async () => { await store.refresh() })
+    render(<TaskPane task={running} />)
+    const stop = document.querySelector<HTMLButtonElement>('.pane-head .tkhalt[aria-label="gui.stop"]')
     expect(stop).not.toBeNull()
     act(() => { stop!.click() })
     expect(stop!.disabled).toBe(true)
@@ -219,6 +204,7 @@ describe('the tasks list', () => {
     await act(async () => { stop!.click() })
     expect(stopRequest).toHaveBeenCalledTimes(2)
     expect(store.byKey('spawn', 'a')?.status).toBe('cancelled')
+    expect(document.querySelector('.tkhalt')).toBeNull()
     toasts.remove()
   })
 })
@@ -284,21 +270,21 @@ describe('the running strip', () => {
 describe('a task pane', () => {
   it('shows the status word, the ticking duration and a stop action while running', () => {
     render(<TaskPane task={task({ id: 'a', kind: 'dag', status: 'running', started_at: Date.now() - 5000 })} />)
-    expect(document.querySelector('.tkbar .st')?.textContent).toBe('gui.tasks.running')
-    expect(document.querySelector('.tkbaract')).not.toBeNull()
+    expect(document.querySelector('.tkmeta')?.textContent?.split(' \u00b7 ')[0]).toBe('gui.tasks.running')
+    expect(document.querySelector('.tkhalt')).not.toBeNull()
   })
 
   it('has no stop action once the task has settled', () => {
     render(<TaskPane task={task({ id: 'a', kind: 'dag', status: 'completed' })} />)
-    expect(document.querySelector('.tkbaract')).toBeNull()
-    expect(document.querySelector('.tkbar .st')?.textContent).toBe('gui.tasks.st_completed')
+    expect(document.querySelector('.tkhalt')).toBeNull()
+    expect(document.querySelector('.tkmeta')?.textContent?.split(' \u00b7 ')[0]).toBe('gui.tasks.st_completed')
   })
 
   it('stop dispatches by kind: a dag calls subagent.interrupt through the source', async () => {
     const running = task({ id: 'r1', kind: 'dag', status: 'running' })
     rows = [{ ...running, status: 'cancelled' }]
     render(<TaskPane task={running} />)
-    await act(async () => { (document.querySelector('.tkbaract') as HTMLElement).click() })
+    await act(async () => { (document.querySelector('.tkhalt') as HTMLElement).click() })
     expect(stopped).toEqual([running])
   })
 
@@ -319,7 +305,7 @@ describe('a task pane', () => {
     })
     document.body.insertAdjacentHTML('afterbegin', '<div id="toasts"></div>')
     render(<TaskPane task={running} />)
-    act(() => { (document.querySelector('.tkbaract') as HTMLElement).click() })
+    act(() => { (document.querySelector('.tkhalt') as HTMLElement).click() })
     expect(toastGet().some((n) => n.text === 'gui.tasks.stop_requested')).toBe(true)
     await act(async () => { release(); await Promise.resolve() })
   })
@@ -337,10 +323,10 @@ describe('a task pane', () => {
     expect(document.querySelector('.tkwhy')?.getAttribute('role')).toBe('button')
 
     await act(async () => { (document.querySelector('.tkwhyat') as HTMLElement).click() })
-    expect(document.querySelector('.tktt b')?.textContent).toBe('Fetch the futures quote')
+    expect(document.querySelector('.pane-head-title')?.textContent).toBe('Fetch the futures quote')
     /* The id is a hover away once the summary has the text: a dependency and
        the run dir key on it, and nothing else on the pane spells it out. */
-    expect(document.querySelector('.tktt b')?.getAttribute('title')).toBe('fetch_comex')
+    expect(document.querySelector('.pane-head-title')?.getAttribute('title')).toBe('fetch_comex')
   })
 
   it('gives the fixed sentence for an interrupted run, not a node error', () => {
@@ -358,21 +344,21 @@ describe('a task pane', () => {
     const running = task({ id: 'a', kind: 'dag', status: 'running' })
     store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
     render(<TaskPane task={running} />)
-    expect(document.querySelector('.tkbaract')).not.toBeNull()
-    expect(document.querySelector('.tkbar .st')?.textContent).toBe('gui.tasks.running')
+    expect(document.querySelector('.tkhalt')).not.toBeNull()
+    expect(document.querySelector('.tkmeta')?.textContent?.split(' \u00b7 ')[0]).toBe('gui.tasks.running')
 
     await act(async () => {
       store.set((prev) => ({ ...prev, rows: [{ ...running, status: 'completed' }] }))
     })
 
-    expect(document.querySelector('.tkbaract')).toBeNull()
-    expect(document.querySelector('.tkbar .st')?.textContent).toBe('gui.tasks.st_completed')
+    expect(document.querySelector('.tkhalt')).toBeNull()
+    expect(document.querySelector('.tkmeta')?.textContent?.split(' \u00b7 ')[0]).toBe('gui.tasks.st_completed')
   })
 
   it('falls back to the opening snapshot while the store holds no row for it yet', () => {
     const running = task({ id: 'a', kind: 'dag', status: 'running' })
     render(<TaskPane task={running} />)
-    expect(document.querySelector('.tkbaract')).not.toBeNull()
+    expect(document.querySelector('.tkhalt')).not.toBeNull()
   })
 
   describe('a replan banner', () => {
@@ -644,10 +630,10 @@ describe('the node panel', () => {
       ],
     })
     pick(withNodes, 1)
-    expect(document.querySelector('.tktabs button[aria-selected="true"]')?.textContent).toBe('gui.tasks.tab_order')
+    expect(document.querySelector('.pane-head-seg button[aria-selected="true"]')?.textContent).toBe('gui.tasks.tab_order')
     cleanup()
     pick(withNodes, 0)
-    expect(document.querySelector('.tktabs button[aria-selected="true"]')?.textContent).toBe('gui.tasks.tab_context')
+    expect(document.querySelector('.pane-head-seg button[aria-selected="true"]')?.textContent).toBe('gui.tasks.tab_context')
   })
 
   it('warns when the assigned agent is not on this roster, and links to add it', () => {
@@ -657,7 +643,7 @@ describe('the node panel', () => {
       nodes: [node({ node_id: 'n1', status: 'pending', agent: 'Raven-Ghost' })],
     })
     pick(withMissing)
-    act(() => { (document.querySelectorAll('.tktabs button')[1] as HTMLElement).click() })
+    act(() => { (document.querySelectorAll('.pane-head-seg button')[1] as HTMLElement).click() })
     expect(document.querySelector('.tkagent.tkmiss')?.textContent).toBe('Raven-Ghost')
     expect(document.querySelector('.tkfix')?.textContent).toBe('gui.tasks.agent_missing')
   })
@@ -668,7 +654,7 @@ describe('the node panel', () => {
       nodes: [node({ node_id: 'a', status: 'completed', agent: 'raven' })],
     })
     pick(spawnRow)
-    act(() => { (document.querySelectorAll('.tktabs button')[1] as HTMLElement).click() })
+    act(() => { (document.querySelectorAll('.pane-head-seg button')[1] as HTMLElement).click() })
     expect(document.querySelectorAll('.tkfield .tkfv')[1]?.textContent).toBe('gui.tasks.skills_none')
     expect(document.querySelectorAll('.tkfield .tkfv')[2]?.textContent).toBe('gui.tasks.mcps_none')
   })
@@ -679,7 +665,7 @@ describe('the node panel', () => {
       nodes: [node({ node_id: 'n1', status: 'pending', prompt_template: 'Use {{ inputs.week }} and {{ n0.output }}.' })],
     })
     pick(pending)
-    act(() => { (document.querySelectorAll('.tktabs button')[1] as HTMLElement).click() })
+    act(() => { (document.querySelectorAll('.pane-head-seg button')[1] as HTMLElement).click() })
     expect([...document.querySelectorAll('.tkph')].map((m) => m.textContent)).toEqual(['{{ inputs.week }}', '{{ n0.output }}'])
   })
 
@@ -714,7 +700,7 @@ describe('the node panel', () => {
     pick(pending)
     /* A step that has not run opens on the order tab by default; asking for
        the context tab explicitly is what this assertion is about. */
-    act(() => { (document.querySelectorAll('.tktabs button')[0] as HTMLElement).click() })
+    act(() => { (document.querySelectorAll('.pane-head-seg button')[0] as HTMLElement).click() })
     expect(document.querySelector('.tkempty')?.textContent).toBe('gui.tasks.ctx_none')
   })
 
@@ -754,7 +740,7 @@ describe('the node panel', () => {
   it('footer names the run id for a dag and the call id for a spawn, each with a copy button', () => {
     const dagRow = task({ id: 'run-123', kind: 'dag', status: 'completed', nodes: [node({ node_id: 'n1', status: 'completed' })] })
     pick(dagRow)
-    act(() => { (document.querySelectorAll('.tktabs button')[1] as HTMLElement).click() })
+    act(() => { (document.querySelectorAll('.pane-head-seg button')[1] as HTMLElement).click() })
     expect(document.querySelector('.tkspecid span')?.textContent).toBe('gui.tasks.run_label')
     expect(document.querySelector('.tkspecid b')?.textContent).toBe('run-123')
   })
@@ -768,7 +754,7 @@ describe('the node panel', () => {
       })],
     })
     pick(done)
-    expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
+    expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
   })
 
   /* A settled node: every lane writes its usage into the record when the run
@@ -779,7 +765,7 @@ describe('the node panel', () => {
       nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 111_000, tokens_in: 4000, tokens_out: 910 })],
     })
     pick(done)
-    expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1m50s · gui.tasks.tokens_n {"n":"4,910"}')
+    expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1m50s · gui.tasks.tokens_n {"n":"4,910"}')
   })
 
   it('subtitle counts usage a lane reported on one side only', () => {
@@ -788,16 +774,18 @@ describe('the node panel', () => {
       nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000, tokens_in: 500, tokens_out: null })],
     })
     pick(done)
-    expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"500"}')
+    expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"500"}')
   })
 
-  it('sets the agent apart in its own <b>, without the handle', () => {
+  it('leads with the agent, without the handle', () => {
     const done = task({
       id: 'a', kind: 'dag', status: 'completed',
       nodes: [node({ node_id: 'n1', status: 'completed', agent: 'coder', instance: 'x1' })],
     })
     pick(done)
-    expect(document.querySelector('.tksub b')?.textContent).toBe('coder')
+    const meta = document.querySelector('.pane-head-meta')?.textContent ?? ''
+    expect(meta.split(' \u00b7 ')[0]).toBe('coder')
+    expect(meta).not.toContain('x1')
   })
 
   describe('a cross-run dependency', () => {
@@ -1036,7 +1024,7 @@ describe('the node panel', () => {
         })
         expect(calls).toEqual(['fetch', 'fetch'])
         expect(document.querySelector('.tkanswer .tkans')?.textContent).toBe('the answer')
-        expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
+        expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
 
         /* Settled: the beat has nothing left to follow. */
         await act(async () => { vi.advanceTimersByTime(3000) })
@@ -1082,11 +1070,11 @@ describe('the node panel', () => {
         store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
         pick(running)
         await act(async () => {})
-        expect(document.querySelector('.tksub')?.textContent).not.toContain('gui.tasks.tokens_n')
+        expect(document.querySelector('.pane-head-meta')?.textContent).not.toContain('gui.tasks.tokens_n')
 
         rows = [{ ...running, nodes: [node({ node_id: 's1', status: 'running', started_at: 1000, tokens_in: 1200, tokens_out: 34 })] }]
         await act(async () => { vi.advanceTimersByTime(1000) })
-        expect(document.querySelector('.tksub')?.textContent).toContain('gui.tasks.tokens_n {"n":"1,234"}')
+        expect(document.querySelector('.pane-head-meta')?.textContent).toContain('gui.tasks.tokens_n {"n":"1,234"}')
       } finally {
         vi.useRealTimers()
       }
@@ -1100,11 +1088,11 @@ describe('the node panel', () => {
       store.set((prev) => ({ ...prev, rows: [running], loaded: true }))
       pick(running)
       await act(async () => {})
-      expect(document.querySelector('.tksub')?.textContent).not.toContain('gui.tasks.tokens_n')
+      expect(document.querySelector('.pane-head-meta')?.textContent).not.toContain('gui.tasks.tokens_n')
 
       rows = [{ ...running, nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000, tokens_in: 4000, tokens_out: 910 })] }]
       await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c1' }) })
-      expect(document.querySelector('.tksub')?.textContent).toContain('gui.tasks.tokens_n {"n":"4,910"}')
+      expect(document.querySelector('.pane-head-meta')?.textContent).toContain('gui.tasks.tokens_n {"n":"4,910"}')
     })
 
     it('keeps one row read out at a time across node_updated frames', async () => {
@@ -1167,11 +1155,11 @@ describe('the node panel', () => {
 
       await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'completed', ended_at: 2000 }) })
       expect(reads).toBe(2)
-      expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"4,910"}')
+      expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"4,910"}')
 
       /* The stale read lands now, still saying n1 runs with no usage. */
       await act(async () => { release?.(before) })
-      expect(document.querySelector('.tksub')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"4,910"}')
+      expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s · gui.tasks.tokens_n {"n":"4,910"}')
       expect(store.byKey('dag', 'r1')?.status).toBe('running')
     })
   })
@@ -1244,7 +1232,7 @@ describe('the node panel', () => {
         nodes: [node({ node_id: 'n1', status: 'running', prompt_template: 'Use {{ inputs.week }}.' })],
       })
       pick(running)
-      act(() => { (document.querySelectorAll('.tktabs button')[1] as HTMLElement).click() })
+      act(() => { (document.querySelectorAll('.pane-head-seg button')[1] as HTMLElement).click() })
       const instructionField = [...document.querySelectorAll('.tkfield')]
         .find((f) => f.querySelector('.tkfk')?.textContent === 'gui.tasks.instruction')
       expect(instructionField?.querySelector('.tkfv')?.textContent).toBe('gui.tasks.instruction_loading')
@@ -1601,7 +1589,7 @@ describe('a node record still being written', () => {
     sized(body(), 5090, 687)
     act(() => { reader(4403) })
 
-    fireEvent.click(document.querySelectorAll('.tktabs button')[1] as Element)
+    fireEvent.click(document.querySelectorAll('.pane-head-seg button')[1] as Element)
     await readAgain('second')
     expect(body().scrollTop).toBe(4403)
   })
