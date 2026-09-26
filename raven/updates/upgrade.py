@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -733,8 +734,15 @@ if __name__ == "__main__":
 
 
 def _upgrade_helper_bootstrap() -> str:
-    encoded = base64.b64encode(_UPGRADE_HELPER_SOURCE.encode("utf-8")).decode("ascii")
-    return f'exec(compile(__import__("base64").b64decode("{encoded}"),"<raven-upgrade>","exec"))'
+    # Compressed because the whole helper travels on the command line, and
+    # Windows caps a command line at 32,767 characters: base64 of the plain
+    # source grew past that and the helper could not even be started there
+    # (WinError 206). zlib ships with every Python, `-I` included.
+    encoded = base64.b64encode(zlib.compress(_UPGRADE_HELPER_SOURCE.encode("utf-8"), 9)).decode("ascii")
+    return (
+        'exec(compile(__import__("zlib").decompress(__import__("base64").b64decode('
+        f'"{encoded}")),"<raven-upgrade>","exec"))'
+    )
 
 
 def _version_key(value: str) -> tuple[int, int, int]:

@@ -757,6 +757,25 @@ def _load_upgrade_helper() -> object:
 _PARENT_EXIT_TIMEOUT_S = _load_upgrade_helper_namespace()["PARENT_EXIT_TIMEOUT_S"]
 
 
+def test_upgrade_helper_bootstrap_fits_a_windows_command_line() -> None:
+    """The whole helper travels as `python -I -c <bootstrap>`, and Windows caps a
+    command line at 32,767 characters -- interpreter path, uv path, wheel URL
+    and relaunch argv included. Past it the helper cannot start at all, and only
+    a Windows machine notices, so the budget is held here, on every OS, with
+    room left for the helper to grow."""
+    assert len(upgrade_commands._upgrade_helper_bootstrap()) < 20_000
+
+
+def test_upgrade_helper_bootstrap_carries_the_helper_unchanged() -> None:
+    import re
+    import zlib
+
+    bootstrap = upgrade_commands._upgrade_helper_bootstrap()
+    encoded = re.search(r'b64decode\("([^"]+)"\)', bootstrap).group(1)
+
+    assert zlib.decompress(base64.b64decode(encoded)).decode("utf-8") == upgrade_commands._UPGRADE_HELPER_SOURCE
+
+
 def test_upgrade_helper_bootstrap_runs_in_isolated_python() -> None:
     bootstrap = upgrade_commands._upgrade_helper_bootstrap()
 
