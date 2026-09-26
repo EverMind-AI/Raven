@@ -201,12 +201,16 @@ async def system_version(params: dict, *, send_frame: Any = None) -> dict:
 
 
 async def system_upgrade(params: dict) -> dict:
-    """`system.upgrade` — install the latest release and restart the gateway.
+    """`system.upgrade` — install the latest release and restart what serves the page.
 
-    Only meaningful inside `raven serve`: the helper waits for *this* process to
-    exit, so the caller must be the process being replaced. Returns as soon as
-    the helper owns the install; the shutdown is scheduled a beat later so this
-    reply reaches the client first.
+    Two hosts, two restarts. Under standalone `raven serve` the helper waits for
+    this process and brings back another `raven serve`. Under `raven gateway` --
+    what `raven web` runs -- this process exits cleanly, its supervisor reads the
+    zero exit as "stand down" and exits too, and the helper waits for *that*
+    before it installs and brings back a fresh `raven web --supervise`: the same
+    gateway, IM channels included, on the same port. Returns as soon as the
+    helper owns the install; the shutdown is scheduled a beat later so this reply
+    reaches the client first.
     """
     import asyncio
 
@@ -220,14 +224,24 @@ async def system_upgrade(params: dict) -> dict:
         return ConfigValidationError(detail, data={"reason": reason, "detail": detail})
 
     if SERVE.hosted_by_gateway:
-        # The page is mounted inside `raven gateway`, and the relaunch below
-        # would replace that whole process with a bare `raven serve` -- the IM
-        # channels would silently vanish. Restarting the gateway in place is a
-        # later phase; until then this refusal is the honest answer.
-        raise _refuse(
-            "gateway_hosted",
-            "This page is hosted by `raven gateway`. Run `raven upgrade`, then restart the gateway.",
-        )
+        if SERVE.supervisor_pid is None:
+            # Nothing would bring this gateway back: started by hand, or under
+            # `raven web --foreground`. Starting a resident supervisor on the
+            # reader's behalf would change how their Raven runs, so say so.
+            raise _refuse(
+                "unsupervised",
+                "This Raven was started by hand, so nothing would bring it back after an upgrade. "
+                "Run `raven upgrade` in a terminal, then start Raven again.",
+            )
+        busy = SERVE.busy()
+        if busy is not None:
+            # The restart cancels every turn, sub-agent and pending question on
+            # this engine -- IM channels included, which the page cannot see.
+            raise _refuse(
+                "busy",
+                "Raven is still working on a turn, a sub-agent or a pending question. "
+                "Upgrading restarts it and would cut that off; let it finish first.",
+            )
     if not SERVE.running:
         raise _refuse("not_serving", "system.upgrade is only available while `raven serve` is running")
 
@@ -248,9 +262,23 @@ async def system_upgrade(params: dict) -> dict:
 
     relaunch: list[str] | None = None
     extra_env: dict[str, str] = {}
+    parent_pid = os.getpid()
     raven_bin = plan.target.bin_dir / ("raven.exe" if os.name == "nt" else "raven")
+    if SERVE.hosted_by_gateway and (SERVE.port is None or not raven_bin.parent.is_dir()):
+        # Under the gateway there is no degraded path: without a relaunch the
+        # helper would install and leave nothing running at all.
+        raise _refuse("not_upgradable", "Could not find the raven executable to restart the gateway from.")
     if SERVE.port is not None and raven_bin.parent.is_dir():
-        relaunch = [str(raven_bin), "serve", "--port", str(SERVE.port)]
+        if SERVE.hosted_by_gateway:
+            # Waited for as the parent, not this process: the supervisor's own
+            # cleanup runs after the gateway exits and removes web.json, and a
+            # new supervisor started before that would have its file removed
+            # out from under it -- inviting the next `raven web` to start a
+            # second one beside it.
+            relaunch = [str(raven_bin), "web", "--supervise", "--port", str(SERVE.port)]
+            parent_pid = SERVE.supervisor_pid or parent_pid
+        else:
+            relaunch = [str(raven_bin), "serve", "--port", str(SERVE.port)]
         # Same port, same credentials: the browser reconnects to the origin it
         # already has and presents the cookie it already holds, so it stays
         # signed in across the restart instead of hitting an auth wall. Both
@@ -265,9 +293,10 @@ async def system_upgrade(params: dict) -> dict:
     try:
         spawn_detached_upgrade(
             plan,
-            parent_pid=os.getpid(),
+            parent_pid=parent_pid,
             relaunch=relaunch,
             extra_env=extra_env or None,
+            status_port=SERVE.port if relaunch is not None else None,
         )
     except UpgradeError as exc:
         raise _refuse("handoff_failed", str(exc)) from exc

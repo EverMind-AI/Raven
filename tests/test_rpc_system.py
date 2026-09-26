@@ -213,22 +213,149 @@ async def test_upgrade_refuses_outside_serve():
     assert excinfo.value.data["reason"] == "not_serving"
 
 
-async def test_upgrade_refuses_on_a_gateway_hosted_page():
-    """The relaunch flow replaces this process with a bare `raven serve`. On a
-    page the gateway hosts that would silently drop the IM channels, so until
-    the gateway can restart in place the page gets a structured refusal the
-    front end already renders (reason + human sentence)."""
-    from raven.cli.serve_commands import SERVE
-    from raven.rpc.methods.system import system_upgrade
+def _plan(tmp_path, monkeypatch):
+    from raven.updates import upgrade as upgrade_commands
 
-    SERVE.arm_hosted(18792, "tok", "cookie")
-    try:
-        with pytest.raises(ConfigValidationError) as excinfo:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    plan = upgrade_commands.UpgradePlan(
+        current_version="0.1.3",
+        release=upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url="https://example.invalid/x.whl"),
+        target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=bin_dir),
+    )
+    monkeypatch.setattr(upgrade_commands, "plan_upgrade", lambda: plan)
+    spawned: dict[str, object] = {}
+    monkeypatch.setattr(
+        upgrade_commands,
+        "spawn_detached_upgrade",
+        lambda p, **kw: spawned.update({"plan": p, **kw}),
+    )
+    return bin_dir, spawned
+
+
+class TestUpgradingFromAGatewayHostedPage:
+    """`raven web` runs `raven gateway`, so this is the page nearly every reader
+    has. The old relaunch brought back a bare `raven serve`, which builds no
+    ChannelManager: the IM channels would have vanished without a word. The
+    restart now goes through the supervisor instead."""
+
+    async def test_it_brings_back_the_supervised_gateway_not_a_bare_serve(self, monkeypatch, tmp_path):
+        import asyncio
+
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+
+        bin_dir, spawned = _plan(tmp_path, monkeypatch)
+        stopped: list[bool] = []
+        SERVE.arm_hosted(18792, "tok", "cookie")
+        SERVE.hand_over(lambda: stopped.append(True), lambda: None, 4242)
+        try:
+            result = await system_upgrade({})
+            assert result["status"] == "started"
+            # The reply must land before the gateway goes down.
+            assert stopped == []
+            await asyncio.sleep(0.9)
+            assert stopped == [True]
+        finally:
+            SERVE.disarm()
+
+        assert spawned["relaunch"] == [str(bin_dir / "raven"), "web", "--supervise", "--port", "18792"]
+        assert spawned["extra_env"] == {
+            "RAVEN_SERVE_PORT_STRICT": "1",
+            "RAVEN_SERVE_TOKEN": "tok",
+            "RAVEN_SERVE_COOKIE": "cookie",
+        }
+
+    async def test_the_helper_waits_for_the_supervisor_not_the_gateway(self, monkeypatch, tmp_path):
+        """The supervisor's own cleanup runs after the gateway exits and removes
+        web.json. A new supervisor started before that finishes has its file
+        removed from under it, and the next `raven web` starts a second one."""
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+
+        _bin_dir, spawned = _plan(tmp_path, monkeypatch)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+        SERVE.hand_over(lambda: None, lambda: None, 4242)
+        try:
             await system_upgrade({})
-    finally:
-        SERVE.disarm()
-    assert excinfo.value.data["reason"] == "gateway_hosted"
-    assert "raven gateway" in excinfo.value.data["detail"]
+        finally:
+            SERVE.disarm()
+
+        assert spawned["parent_pid"] == 4242
+
+    async def test_it_refuses_a_gateway_nothing_would_bring_back(self, monkeypatch, tmp_path):
+        """Started by hand, or under `raven web --foreground`: no supervisor.
+        Installing would end with nothing running at all."""
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+
+        _bin_dir, spawned = _plan(tmp_path, monkeypatch)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+        SERVE.hand_over(lambda: pytest.fail("stopped an unsupervised gateway"), lambda: None, None)
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        assert excinfo.value.data["reason"] == "unsupervised"
+        assert spawned == {}
+
+    async def test_it_refuses_while_work_the_page_cannot_see_is_running(self, monkeypatch, tmp_path):
+        """The page checks its own turn. An IM turn or a sub-agent on the same
+        engine is invisible to it, and the restart would cut it off."""
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+
+        _bin_dir, spawned = _plan(tmp_path, monkeypatch)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+        SERVE.hand_over(
+            lambda: pytest.fail("stopped a busy gateway"),
+            lambda: {"subagents": 1, "questions": 0},
+            4242,
+        )
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        assert excinfo.value.data["reason"] == "busy"
+        assert spawned == {}
+
+    async def test_it_refuses_when_there_is_nothing_to_relaunch_from(self, monkeypatch, tmp_path):
+        """Under the gateway there is no degraded path: without a relaunch the
+        helper would install and leave nothing running."""
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+
+        bin_dir, spawned = _plan(tmp_path, monkeypatch)
+        bin_dir.rmdir()
+        SERVE.arm_hosted(18792, "tok", "cookie")
+        SERVE.hand_over(lambda: pytest.fail("stopped with nothing to relaunch"), lambda: None, 4242)
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        assert excinfo.value.data["reason"] == "not_upgradable"
+        assert spawned == {}
+
+    async def test_a_page_mounted_before_the_hand_over_does_not_upgrade(self):
+        """The mount happens before the gateway has built its stop. A request in
+        that gap must not be treated as upgradable."""
+        from raven.cli.serve_commands import SERVE
+        from raven.rpc.methods.system import system_upgrade
+
+        SERVE.arm_hosted(18792, "tok", "cookie")
+        try:
+            with pytest.raises(ConfigValidationError) as excinfo:
+                await system_upgrade({})
+        finally:
+            SERVE.disarm()
+
+        assert excinfo.value.data["reason"] in {"unsupervised", "not_serving"}
 
 
 async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch: pytest.MonkeyPatch):

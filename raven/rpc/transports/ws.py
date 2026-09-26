@@ -23,7 +23,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from aiohttp import WSMsgType, web
+from aiohttp import WSCloseCode, WSMsgType, web
 from loguru import logger
 
 DEFAULT_PORT = 18792
@@ -149,6 +149,21 @@ class WsGateway:
         for ws in list(self._sockets):
             try:
                 await ws.send_str(data)
+            except Exception:
+                self._sockets.discard(ws)
+
+    async def close_all(self, _app: object = None) -> None:
+        """Close every open page socket; registered as the app's ``on_shutdown``.
+
+        aiohttp's cleanup waits for live handlers rather than closing websockets
+        itself, so an open tab held the whole process up for most of a minute
+        after it was told to stop -- and a page-started upgrade cannot begin
+        installing until this process has exited. Closed here, the page sees
+        the drop at once and goes into its reconnect.
+        """
+        for ws in list(self._sockets):
+            try:
+                await ws.close(code=WSCloseCode.GOING_AWAY, message=b"server shutdown")
             except Exception:
                 self._sockets.discard(ws)
 
@@ -580,6 +595,7 @@ def build_app(
     app.router.add_get("/file", gateway.handle_file)
     app.router.add_get("/knowledge/file", gateway.handle_knowledge_file)
     app.router.add_get("/rpc", gateway.handle_ws)
+    app.on_shutdown.append(gateway.close_all)
     app.router.add_get("/oauth/callback", handle_oauth_callback)
 
     from raven.a2a.gate import mount_gateway_face

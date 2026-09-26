@@ -73,6 +73,23 @@ def _saved_language() -> str:
         return "en"
 
 
+def _can_open_a_browser() -> bool:
+    """Whether this machine has a browser to hand the page to.
+
+    ``webbrowser.get()`` raises when nothing is registered, which is exactly the
+    question worth asking before anything is started: on a headless box the page
+    would come up on a URL the reader has no way to open, while the TUI is the
+    surface that still works there.
+    """
+    import webbrowser
+
+    try:
+        webbrowser.get()
+    except webbrowser.Error:
+        return False
+    return True
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -80,14 +97,26 @@ def main(
 ):
     """Raven - Agent Framework.
 
-    Bare ``raven`` (no subcommand) is equivalent to ``raven tui``: it runs the
-    same startup gate (onboard when provider+model are missing, else launch the
-    session) and then enters the native TUI. Both paths share the identical
-    pre-launch check by routing through the ``tui`` callback.
+    Bare ``raven`` (no subcommand) opens the page, the same as ``raven web``:
+    that is where the installer ends, so the command a reader types the next day
+    should not land them somewhere else.
+
+    Where no browser can be opened the page would be a URL nobody can reach, so
+    the bare command runs the native TUI instead -- through the ``tui`` callback,
+    so the startup gate (onboard when provider+model are missing, else launch the
+    session) is identical either way. ``raven web`` and ``raven tui`` still name
+    a surface outright and are unaffected.
     """
     i18n.set_language(_saved_language())
     if ctx.invoked_subcommand is not None:
         return
+    if _can_open_a_browser():
+        from raven.cli.serve_commands import _web
+        from raven.rpc.transports.ws import DEFAULT_PORT
+
+        _web(DEFAULT_PORT)
+        return
+    console.print("No browser to open the page with; starting the terminal UI. `raven web` prints the URL instead.")
     from raven.cli.tui_commands import tui as _tui_entry
 
     # Delegate to the exact `raven tui` callback so the onboarding gate and

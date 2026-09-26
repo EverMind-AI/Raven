@@ -114,6 +114,135 @@ def test_run_starts_the_litellm_warm_up_before_the_first_request() -> None:
     assert "warm_up_in_background()" in run_body
 
 
+def test_every_page_mount_hands_the_gateway_stop_to_the_page() -> None:
+    """The page's upgrade restarts this whole process, so it needs the same
+    graceful stop and busy check the control plane uses. Handed over on every
+    mount, because a swap tears the page down (which disarms it) and mounts it
+    again; a hand-over done once at boot would be gone after the first reload.
+    ``run()`` blocks forever, so its source is pinned rather than executed."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    bind = src.split("async def _bind_generation():", 1)[1].split("def _request_stop() -> None:", 1)[0]
+    mount_at = bind.index("page_mount = await mount_page(")
+    hand_at = bind.index("_hand_page_the_gateway(_request_stop, _busy)")
+    assert mount_at < hand_at
+
+
+class TestHandingThePageTheGateway:
+    """What the page's upgrade needs from the gateway it runs in."""
+
+    @pytest.fixture(autouse=True)
+    def _disarm(self):
+        from raven.rpc.serve_control import SERVE
+
+        yield
+        SERVE.disarm()
+
+    def test_its_own_supervisor_is_handed_over(self, monkeypatch) -> None:
+        import os
+
+        from raven.cli import gateway_commands, serve_commands
+        from raven.rpc.serve_control import SERVE
+
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: os.getppid())
+        SERVE.arm_hosted(18792, "tok", "cookie")
+
+        gateway_commands._hand_page_the_gateway(lambda: None, lambda: None)
+
+        assert SERVE.supervisor_pid == os.getppid()
+        assert SERVE.running
+
+    def test_a_supervisor_that_is_not_its_parent_is_not_trusted(self, monkeypatch) -> None:
+        """web.json outlives the run that wrote it. A supervisor that is not
+        this process's parent would never bring the gateway back, so treating
+        it as one would install an upgrade and leave nothing running."""
+        import os
+
+        from raven.cli import gateway_commands, serve_commands
+        from raven.rpc.serve_control import SERVE
+
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: os.getppid() + 1)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+
+        gateway_commands._hand_page_the_gateway(lambda: None, lambda: None)
+
+        assert SERVE.supervisor_pid is None
+
+    def test_no_supervisor_at_all_is_handed_over_as_none(self, monkeypatch) -> None:
+        from raven.cli import gateway_commands, serve_commands
+        from raven.rpc.serve_control import SERVE
+
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+
+        gateway_commands._hand_page_the_gateway(lambda: None, lambda: None)
+
+        assert SERVE.supervisor_pid is None
+
+
+class TestWorkInFlight:
+    """The one answer a config swap and an upgrade restart both refuse on."""
+
+    def _agent(self, *, processing=False, subagents=0):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            is_processing=processing,
+            subagents=SimpleNamespace(get_running_count=lambda: subagents),
+        )
+
+    def _broker(self, pending):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(pending_count=lambda: pending)
+
+    def test_an_idle_gateway_reports_nothing(self) -> None:
+        from raven.cli.gateway_commands import _work_in_flight
+
+        assert _work_in_flight(self._agent(), [self._broker(0), None], None) is None
+
+    def test_a_question_waiting_on_either_surface_counts(self) -> None:
+        """The IM round-trip and the page each hold their own broker, and a
+        restart drops what is pending on both."""
+        from raven.cli.gateway_commands import _work_in_flight
+
+        assert _work_in_flight(self._agent(), [self._broker(1), self._broker(2)], None) == {
+            "subagents": 0,
+            "questions": 3,
+        }
+
+    def test_a_running_sub_agent_counts(self) -> None:
+        from raven.cli.gateway_commands import _work_in_flight
+
+        assert _work_in_flight(self._agent(subagents=2), [], None) == {"subagents": 2, "questions": 0}
+
+    def test_a_turn_in_flight_counts_whether_the_agent_or_the_scheduler_holds_it(self) -> None:
+        from types import SimpleNamespace
+
+        from raven.cli.gateway_commands import _work_in_flight
+
+        assert _work_in_flight(self._agent(processing=True), [], None) is not None
+        scheduler = SimpleNamespace(has_running=lambda: True)
+        assert _work_in_flight(self._agent(), [], scheduler) is not None
+
+
+def test_the_swap_and_the_upgrade_refuse_on_one_busy_answer() -> None:
+    """Both cut off in-flight turns, sub-agents and pending questions. Two
+    copies of that check would drift, and the one that drifted would restart
+    over work the other would have protected."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    reload_body = src.split("async def _reload(force: bool) -> dict:", 1)[1].split("control_dispatcher", 1)[0]
+    assert "_busy()" in reload_body
+    assert "pending_count()" not in reload_body
+
+
 def test_run_warms_the_deck_template_covers_once_the_page_is_mounted() -> None:
     """`raven web` is `raven gateway --page-port` underneath, so the gallery's
     covers are drawn from here, after the page mount, not from `raven serve`
@@ -162,6 +291,88 @@ def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
     assert r.exit_code == 1
     assert "already running for this instance" in r.stdout
     assert "4242" in r.stdout
+
+
+class TestTheGatewayWillNotServeAHalfWrittenInstall:
+    """`raven web` supervises the gateway, and the supervisor restarts it the
+    moment it exits -- including during an upgrade, when uv has removed the old
+    environment and not yet written the new one. `build_app` picks the page
+    route once, so a gateway that came up in that window answers `/` with the
+    placeholder for the rest of its life, on an installation that was sound
+    seconds later."""
+
+    def test_it_refuses_instead_of_serving(self, monkeypatch) -> None:
+        from raven.cli import serve_commands
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(
+            _install_guard,
+            "inspect_install",
+            lambda: _install_guard.InstallFault("incomplete", "this installation is missing the packaged page"),
+        )
+
+        r = runner.invoke(app, ["gateway"])
+
+        assert r.exit_code == serve_commands.INCOMPLETE_INSTALL_EXIT
+
+    def test_it_refuses_before_it_takes_the_instance_lock(self, monkeypatch) -> None:
+        """The wait inside the guard can last the whole install. Holding the
+        lock through it would block the gateway the finished install is meant
+        to bring back."""
+        from raven.gateway import lock as _gateway_lock
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(
+            _install_guard,
+            "inspect_install",
+            lambda: _install_guard.InstallFault("incomplete", "this installation is missing the packaged page"),
+        )
+
+        def unreachable(**_kwargs):
+            raise AssertionError("the gateway took the lock on a half-written installation")
+
+        monkeypatch.setattr(_gateway_lock, "acquire", unreachable)
+
+        r = runner.invoke(app, ["gateway"])
+
+        assert r.exit_code != 0
+
+    def test_the_refusal_names_the_gateway_not_serve(self, monkeypatch) -> None:
+        """Both surfaces reach the same guard, and a reader told to restart
+        `raven serve` when the gateway refused would restart the wrong one."""
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(
+            _install_guard,
+            "inspect_install",
+            lambda: _install_guard.InstallFault("incomplete", "this installation is missing the packaged page"),
+        )
+
+        r = runner.invoke(app, ["gateway"])
+
+        # The module runner mixes the streams, so the refusal is read off output.
+        assert "raven gateway:" in r.output
+        assert "raven serve:" not in r.output
+
+    def test_a_sound_install_is_not_stopped_here(self, monkeypatch) -> None:
+        """The guard must be invisible on every normal start."""
+        from raven.gateway import lock as _gateway_lock
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(_install_guard, "inspect_install", lambda: None)
+        reached: list[bool] = []
+
+        def _raise(now: float):
+            reached.append(True)
+            raise _gateway_lock.GatewayAlreadyRunningError(
+                _gateway_lock.LockInfo(pid=4242, started_at=0.0, config_path="/tmp/whatever.json")
+            )
+
+        monkeypatch.setattr(_gateway_lock, "acquire", _raise)
+
+        runner.invoke(app, ["gateway"])
+
+        assert reached == [True]
 
 
 def test_gateway_log_config_defaults() -> None:

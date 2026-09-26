@@ -1344,8 +1344,8 @@
       "zh": "Hi，我是 Raven Agent"
     },
     "gui.composer_ph": {
-      "en": "Describe your task, or have Raven build an agent for it",
-      "zh": "描述你的任务，或让 Raven 搭一个智能体来做"
+      "en": "Describe your task",
+      "zh": "描述你的任务"
     },
     "gui.compress.done": {
       "en": "Archived {n} messages - {before} to {after} tokens",
@@ -4375,6 +4375,18 @@
       "en": "new version available",
       "zh": "有新版本"
     },
+    "gui.upg.phase.download": {
+      "en": "Downloading the new version: {progress}",
+      "zh": "正在下载新版本：{progress}"
+    },
+    "gui.upg.phase.install": {
+      "en": "Installing the new version...",
+      "zh": "正在安装新版本…"
+    },
+    "gui.upg.phase.restart": {
+      "en": "Restarting Raven...",
+      "zh": "正在重启 Raven…"
+    },
     "gui.upg.reauth": {
       "en": "Raven restarted but this page is no longer signed in. Reopen Raven.",
       "zh": "Raven 已重启，但这个页面的登录失效了，请重新打开 Raven。"
@@ -4382,6 +4394,18 @@
     "gui.upg.title": {
       "en": "Upgrade Raven?",
       "zh": "升级 Raven？"
+    },
+    "gui.upg.why.busy": {
+      "en": "Raven is still working on a turn, a sub-agent or a question waiting for an answer, possibly in an IM channel. Upgrading restarts Raven and would cut that off, so let it finish first.",
+      "zh": "Raven 还在处理回合、子智能体或待回答的问题（可能在 IM 渠道里）。升级会重启 Raven 并打断它们，请等它们结束再升级。"
+    },
+    "gui.upg.why.not_serving": {
+      "en": "This page is not being served by a running Raven, so it has nothing here to upgrade.",
+      "zh": "这个页面当前没有正在运行的 Raven 在托管，这里没有可以升级的对象。"
+    },
+    "gui.upg.why.unsupervised": {
+      "en": "This Raven was started by hand in a terminal, so nothing would bring it back after an upgrade. Run raven upgrade there, then start Raven again.",
+      "zh": "这个 Raven 是在终端里手动启动的，升级后没有守护进程能把它重新拉起来。请在那个终端里运行 raven upgrade，然后重新启动 Raven。"
     },
     "gui.upg.working": {
       "en": "Upgrading Raven...",
@@ -8360,8 +8384,8 @@
       "zh": "继续对话…"
     },
     "gui.composer.ph_busy": {
-      "en": "Continue the conversation; it is sent once this turn ends",
-      "zh": "继续对话，输入会排队到本轮结束再发"
+      "en": "Continue the conversation; Raven will receive your new instruction directly",
+      "zh": "继续对话，Raven 将直接收到你的新指令"
     },
     "gui.plus.add": {
       "en": "Add",
