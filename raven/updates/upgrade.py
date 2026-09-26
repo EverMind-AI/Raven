@@ -551,7 +551,9 @@ def run(argv=None):
     def progress_line():
         state = progress.snapshot()
         of = f" / {state['total'] / 1048576:.1f}" if state["total"] else ""
-        return f"  {state['done'] / 1048576:.1f}{of} MiB  {state['rate'] / 1024:.0f} KB/s   "
+        # No rate until there is one: "0 KB/s" on the first frame reads as a stall.
+        rate = f"  {state['rate'] / 1024:.0f} KB/s" if state["rate"] else ""
+        return f"  {state['done'] / 1048576:.1f}{of} MiB{rate}   "
 
     def fetch(url, path):
         url, headers = unwrap_credentials(url)
