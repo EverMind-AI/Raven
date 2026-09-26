@@ -1,0 +1,34 @@
+{
+  "run": "s0925c-documents-0925-2001",
+  "generated_by": "python -m experimental.simulation.record <run dir> --out <dir>",
+  "settings": {
+    "scenario": "travel_agency",
+    "chain": "documents",
+    "rounds": 3,
+    "turns": 14,
+    "repeats": 1,
+    "cards": [
+      "family"
+    ],
+    "seed": 11,
+    "analysis": "owner (single-layer, the default when this run was made)",
+    "models": {
+      "curator": "openrouter/anthropic/claude-opus-5.5",
+      "owner": "openrouter/anthropic/claude-opus-5.5",
+      "employee": "deepseek/deepseek-flash",
+      "subagents": "deepseek/deepseek-flash",
+      "traveller": "deepseek/deepseek-flash"
+    }
+  },
+  "original_record_sha256": {
+    "transcript.md": "fd49e5217406d28dc107f06fb8ae8b5cdacee4722e602b065483d2479f5a2fc2",
+    "record.json": "82b1c82d25f9345d57c5a7973f2a51907beac3b834e080fd9efa8b692db5cd0d",
+    "ledger.json": "db8933595c9045c091a5679bb8c6b187731c0e22dafab654fc7445dc088b1189",
+    "manifest.json": "ffd028381d04d7d13f1210c2cb3130c51af9652aaa5cf65fc8502ff5f89c7bf3"
+  },
+  "files_sha256": {
+    "transcript.md": "28f134a05322b064904555a77c57e8eff128144c72338d8e63938fb3b1faf47b",
+    "round1-HL-Q-1020-4P.pptx": "4caac24cb657303a131c867d1380d4ffc6dc3b3b84a551d5b8d54c6c8cd9df10",
+    "round3-HL-Q-1028-4P.pptx": "5cd1799ea2328ba303926a1efd1179e733ff8e0a64d37637c3eab06ccd170128"
+  }
+}
