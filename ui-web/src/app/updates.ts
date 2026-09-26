@@ -152,7 +152,7 @@ export function resumeUpgrade(): void {
    detail carries run-specific facts (the uv error, the failed lookup) keep it,
    because translating the frame would throw the facts away. */
 const REFUSALS: Record<string, string> = {
-  gateway_hosted: 'gui.upg.why.gateway_hosted',
+  unsupervised: 'gui.upg.why.unsupervised',
   not_serving: 'gui.upg.why.not_serving',
 }
 
@@ -179,6 +179,15 @@ export async function runUpgrade(): Promise<void> {
     if (err.data && err.data.reason === 'in_progress') {
       upMark(upLatest)
       watchUpgrade(shade)
+      return
+    }
+    /* Work is running that the page cannot see -- an IM turn, a sub-agent.
+       Same answer as the page's own busy turn: a notice to wait. The failure
+       card would offer the terminal command, which is not the fix. */
+    if (err.data && err.data.reason === 'busy') {
+      upMarkClear()
+      shade.close()
+      confirmAsk(t('gui.upg.title'), t('gui.upg.why.busy'), t('gui.upg.close'), () => {}, 'notice')
       return
     }
     upMarkClear()

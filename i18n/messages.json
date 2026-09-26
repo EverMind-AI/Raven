@@ -4383,13 +4383,17 @@
       "en": "Upgrade Raven?",
       "zh": "升级 Raven？"
     },
-    "gui.upg.why.gateway_hosted": {
-      "en": "This page runs inside the Raven gateway, which cannot restart itself from here yet. After upgrading in a terminal, run raven web --stop and then raven web to load the new version.",
-      "zh": "这个页面跑在 Raven gateway 里，暂时还不能从页面上自己重启。在终端里升级完之后，再依次运行 raven web --stop 和 raven web，才会用上新版本。"
+    "gui.upg.why.busy": {
+      "en": "Raven is still working on a turn, a sub-agent or a question waiting for an answer, possibly in an IM channel. Upgrading restarts Raven and would cut that off, so let it finish first.",
+      "zh": "Raven 还在处理回合、子智能体或待回答的问题（可能在 IM 渠道里）。升级会重启 Raven 并打断它们，请等它们结束再升级。"
     },
     "gui.upg.why.not_serving": {
       "en": "This page is not being served by a running Raven, so it has nothing here to upgrade.",
       "zh": "这个页面当前没有正在运行的 Raven 在托管，这里没有可以升级的对象。"
+    },
+    "gui.upg.why.unsupervised": {
+      "en": "This Raven was started by hand in a terminal, so nothing would bring it back after an upgrade. Run raven upgrade there, then start Raven again.",
+      "zh": "这个 Raven 是在终端里手动启动的，升级后没有守护进程能把它重新拉起来。请在那个终端里运行 raven upgrade，然后重新启动 Raven。"
     },
     "gui.upg.working": {
       "en": "Upgrading Raven...",

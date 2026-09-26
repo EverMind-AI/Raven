@@ -125,23 +125,15 @@ describe('an upgrade the server refused', () => {
     const mod = (await loadPart(() => import('./updates'), {})) as Updates
     const err = {
       data: {
-        reason: 'gateway_hosted',
-        detail: 'This page is hosted by `raven gateway`. Run `raven upgrade`, then restart the gateway.',
+        reason: 'unsupervised',
+        detail: 'This Raven was started by hand, so nothing would bring it back after an upgrade.',
       },
     }
 
     const text = mod.refusalText(err)
 
-    expect(text).toBe(t('gui.upg.why.gateway_hosted'))
-    expect(text).not.toContain('This page is hosted by')
-  })
-
-  it('tells a hand-started gateway how to load the new version, not only how to install it', async () => {
-    const mod = (await loadPart(() => import('./updates'), {})) as Updates
-
-    const text = mod.refusalText({ data: { reason: 'gateway_hosted', detail: 'x' } })
-
-    expect(text).toContain('raven web --stop')
+    expect(text).toBe(t('gui.upg.why.unsupervised'))
+    expect(text).not.toContain('This Raven was started by hand, so nothing')
   })
 
   it('keeps the detail when it carries facts from this run', async () => {
@@ -155,5 +147,32 @@ describe('an upgrade the server refused', () => {
     const mod = (await loadPart(() => import('./updates'), {})) as Updates
 
     expect(mod.refusalText({ message: 'socket closed' })).toBe('socket closed')
+  })
+
+  it('answers busy work it cannot see with a notice to wait, not the terminal command', async () => {
+    const asked: string[][] = []
+    const failed: string[] = []
+    const shade = { say: () => {}, fail: (text: string) => failed.push(text), close: vi.fn() }
+    const mod = (await loadPart(() => import('./updates'), {
+      fakes: {
+        'src/state/upgradeShade': { open: () => shade },
+        'src/state/confirm': {
+          ask: (title: string, body: string) => {
+            asked.push([title, body])
+          },
+        },
+        'src/rpc/gateway': {
+          gateway: () => ({
+            call: () => Promise.reject({ data: { reason: 'busy', detail: 'Raven is still working' } }),
+          }),
+        },
+      },
+    })) as Updates
+
+    await mod.runUpgrade()
+
+    expect(failed).toEqual([])
+    expect(shade.close).toHaveBeenCalled()
+    expect(asked).toEqual([[t('gui.upg.title'), t('gui.upg.why.busy')]])
   })
 })

@@ -794,6 +794,23 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     except OSError as exc:
                         logger.warning("page mount failed ({}); gateway continues without the page", exc)
                 if page_mount is not None:
+                    # The page's upgrade restarts this whole process, so it needs
+                    # the stop and the busy check the control plane already uses.
+                    # Handed over on every mount, not once: a swap's teardown
+                    # disarms the page and the next generation mounts it afresh.
+                    # Both names are bound later in `run`, before any bind runs.
+                    import os as _os
+
+                    from raven.cli.serve_commands import _read_web_state
+                    from raven.rpc.serve_control import SERVE
+
+                    # Trusted only as this process's own parent: web.json can
+                    # outlive the run that wrote it, and a supervisor that is
+                    # not ours would never bring this gateway back.
+                    supervisor = _read_web_state()
+                    if supervisor is not None and supervisor != _os.getppid():
+                        supervisor = None
+                    SERVE.hand_over(_request_stop, _busy, supervisor)
                     # The page is what shows the deck template gallery, so its
                     # covers are drawn now, in the background, rather than on
                     # the click that opens it; a no-op without the engine or
@@ -1075,25 +1092,36 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     "page": {"mounted": page_mount is not None, "url": getattr(page_mount, "url", None)},
                 }
 
-            async def _shutdown() -> None:
+            def _request_stop() -> None:
                 nonlocal shutdown_requested
                 shutdown_requested = True
                 if main_task is not None:
-                    # One tick later, so the {ok: true} reply leaves before
-                    # the teardown closes the control socket.
+                    # One tick later, so a reply already queued -- the control
+                    # plane's {ok: true}, the page's system.upgrade result --
+                    # leaves before the teardown closes its socket.
                     asyncio.get_running_loop().call_soon(main_task.cancel)
 
-            async def _reload(force: bool) -> dict:
+            async def _shutdown() -> None:
+                _request_stop()
+
+            def _busy() -> dict | None:
                 # A swap cancels every in-flight turn, sub-agent and pending
-                # question; refuse while there is work unless told to force.
+                # question, and so does the restart an upgrade needs; both
+                # refuse on this answer rather than each keeping its own.
+                questions = question_broker.pending_count() if question_broker is not None else 0
+                if page_mount is not None:
+                    questions += page_mount.question_broker.pending_count()
+                subagents = agent.subagents.get_running_count()
+                in_flight = agent.is_processing or (gw_scheduler is not None and gw_scheduler.has_running())
+                if in_flight or questions or subagents:
+                    return {"subagents": subagents, "questions": questions}
+                return None
+
+            async def _reload(force: bool) -> dict:
                 if not force:
-                    questions = question_broker.pending_count() if question_broker is not None else 0
-                    if page_mount is not None:
-                        questions += page_mount.question_broker.pending_count()
-                    subagents = agent.subagents.get_running_count()
-                    in_flight = agent.is_processing or (gw_scheduler is not None and gw_scheduler.has_running())
-                    if in_flight or questions or subagents:
-                        return {"ok": False, "reason": "busy", "subagents": subagents, "questions": questions}
+                    busy = _busy()
+                    if busy is not None:
+                        return {"ok": False, "reason": "busy", **busy}
                 return await _request_swap()
 
             control_dispatcher = Dispatcher()

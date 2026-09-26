@@ -114,6 +114,49 @@ def test_run_starts_the_litellm_warm_up_before_the_first_request() -> None:
     assert "warm_up_in_background()" in run_body
 
 
+def test_every_page_mount_hands_the_gateway_stop_to_the_page() -> None:
+    """The page's upgrade restarts this whole process, so it needs the same
+    graceful stop and busy check the control plane uses. Handed over on every
+    mount, because a swap tears the page down (which disarms it) and mounts it
+    again; a hand-over done once at boot would be gone after the first reload.
+    ``run()`` blocks forever, so its source is pinned rather than executed."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    bind = src.split("async def _bind_generation():", 1)[1].split("def _request_stop() -> None:", 1)[0]
+    mount_at = bind.index("page_mount = await mount_page(")
+    hand_at = bind.index("SERVE.hand_over(_request_stop, _busy, supervisor)")
+    assert mount_at < hand_at
+
+
+def test_only_its_own_parent_counts_as_the_gateway_supervisor() -> None:
+    """web.json outlives the run that wrote it. A supervisor that is not this
+    process's parent would never bring the gateway back, and treating it as
+    one would install an upgrade and leave nothing running."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    assert "supervisor != _os.getppid()" in src
+
+
+def test_the_swap_and_the_upgrade_refuse_on_one_busy_answer() -> None:
+    """Both cut off in-flight turns, sub-agents and pending questions. Two
+    copies of that check would drift, and the one that drifted would restart
+    over work the other would have protected."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    reload_body = src.split("async def _reload(force: bool) -> dict:", 1)[1].split("control_dispatcher", 1)[0]
+    assert "_busy()" in reload_body
+    assert "pending_count()" not in reload_body
+
+
 def test_run_warms_the_deck_template_covers_once_the_page_is_mounted() -> None:
     """`raven web` is `raven gateway --page-port` underneath, so the gallery's
     covers are drawn from here, after the page mount, not from `raven serve`
