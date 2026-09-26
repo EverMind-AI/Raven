@@ -1247,7 +1247,7 @@ def _command(settings: dict) -> str | None:
             flag for key in ("deliver", "disclose") if settings.get(key) for flag in (f"--{key}", str(settings[key]))
         ]
     argv += ["--analysis", str(settings.get("analysis") or "owner")]
-    for key in ("rounds", "turns", "repeats", "curator", "targets"):
+    for key in ("rounds", "turns", "repeats"):
         if settings.get(key) is not None:
             argv += [f"--{key}", str(settings[key])]
     budget = settings.get("curator_budget") if isinstance(settings.get("curator_budget"), dict) else {}

@@ -115,8 +115,6 @@ def settings(args, employee_model: str, employee_effort=None, employee_tier=None
         "scenario": Path(args.scenario).name,
         "deliver": args.deliver,
         "disclose": [list(step) for step in args.disclose] if isinstance(args.disclose, tuple) else args.disclose,
-        "curator": args.curator,
-        "targets": args.targets,
         "analysis": args.analysis,
         "rounds": args.rounds,
         "turns": args.turns,
@@ -314,19 +312,6 @@ def cli():
         default="staged",
         help="Hand every material over at onboarding, or the scenario's initial set first and the rest as the owner "
         "chooses after each round",
-    )
-    parser.add_argument(
-        "--curator",
-        choices=("improve",),
-        default="improve",
-        help="Curate the Harness after every round; the only arm, accepted so recorded command lines still run",
-    )
-    parser.add_argument(
-        "--targets",
-        choices=("all",),
-        default="all",
-        help="Let the Curator author every declared target; the only choice, accepted so recorded command lines "
-        "still run",
     )
     parser.add_argument("--curator-model", help="Override the model used for curation")
     parser.add_argument(
