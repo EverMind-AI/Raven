@@ -410,6 +410,15 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # Code 2.1.0). Its own installer puts `kimi` on PATH, so the local spelling
     # is the only one.
     "kimi_code": SignIn(exe="kimi", local="kimi login"),
+    # `copilot login` ("Authenticate with Copilot via OAuth") is what
+    # `copilot login --help` prints (measured 2026-09-24, GitHub Copilot CLI
+    # 1.0.88). The default on a desktop is the browser flow, so the bare
+    # command is the one a reader runs. A local install: the row's command is
+    # `copilot --acp`, so a reader with no `copilot` stops at the absent
+    # executable. Its npm loader is `#!/usr/bin/env node`, but the package
+    # declares no `engines.node` and a launch that quits on an old Node.js
+    # was not measured, so it is not in `NODE_RUNTIME_PRESETS`.
+    "github_copilot": SignIn(exe="copilot", local="copilot login"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -476,6 +485,14 @@ DIAGNOSE_HINTS: dict[str, str] = {
     # the reason once it gives up, and within a second for everything it does not
     # retry (measured 2026-09-24, Kimi Code 2.1.0).
     "kimi_code": "kimi -p hi",
+    # `-p` / `--single` ("Single-turn prompt. Prints the response to stdout and
+    # exits") is the flag `grok --help` names (1.0.41).
+    "grok": "grok -p hi",
+    # `-p` / `--prompt` ("Execute a prompt in non-interactive mode") is the flag
+    # `copilot --help` names (1.0.88). A 429 against a stand-in provider was
+    # still retrying when the connect's wait ran out, so the reply carried no
+    # reason.
+    "github_copilot": "copilot -p hi",
 }
 """A command that makes the agent a row defers to say why it is not answering.
 
