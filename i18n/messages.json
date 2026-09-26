@@ -1344,8 +1344,8 @@
       "zh": "Hi，我是 Raven Agent"
     },
     "gui.composer_ph": {
-      "en": "Describe your task, or have Raven build an agent for it",
-      "zh": "描述你的任务，或让 Raven 搭一个智能体来做"
+      "en": "Describe your task",
+      "zh": "描述你的任务"
     },
     "gui.compress.done": {
       "en": "Archived {n} messages - {before} to {after} tokens",
