@@ -66,6 +66,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 # How long to wait for the process being replaced to exit. Sized for a real
@@ -82,6 +83,119 @@ PARENT_EXIT_TIMEOUT_S = 300
 # default: the sizes are a courtesy, and four unanswered probes must not add
 # minutes of silence to the very wait they exist to explain.
 SIZE_TIMEOUT_S = 5
+
+# How long a failure stays readable on the page's port before the Raven it
+# replaced is brought back. The page polls about once a second, so this is
+# several chances to see it; the ceiling is what a reader waits for the old
+# Raven when nobody is looking.
+STATUS_HOLD_S = 5
+
+WAITING_PAGE = (
+    b'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="3">'
+    b"<title>Raven</title><p>Raven is upgrading...</p>"
+)
+
+
+class Progress:
+    # What the page shows while this helper is the only thing on its port.
+    # Written by the download loop, read by the status server's threads.
+
+    def __init__(self, to_version):
+        self._lock = threading.Lock()
+        self._state = {
+            "upgrading": True,
+            "to": to_version,
+            "phase": "starting",
+            "done": 0,
+            "total": 0,
+            "rate": 0,
+            "message": None,
+        }
+        self._samples = []
+        self.failure_seen = threading.Event()
+
+    def set(self, **fields):
+        with self._lock:
+            self._state.update(fields)
+
+    def advance(self, count):
+        now = time.monotonic()
+        with self._lock:
+            self._state["done"] += count
+            self._samples.append((now, self._state["done"]))
+            self._samples = [sample for sample in self._samples if sample[0] >= now - 3.0]
+            (first_at, first_done), (last_at, last_done) = self._samples[0], self._samples[-1]
+            if last_at > first_at:
+                self._state["rate"] = int((last_done - first_done) / (last_at - first_at))
+
+    def snapshot(self):
+        with self._lock:
+            state = dict(self._state)
+        if state["phase"] == "failed":
+            self.failure_seen.set()
+        return state
+
+
+def recorded_port():
+    # The port the page is on, written into the marker by the side that spawned
+    # this helper. Absent for the terminal, which has no page to answer.
+    if not MARKER_PATH:
+        return None
+    try:
+        with open(MARKER_PATH, encoding="utf-8") as handle:
+            port = json.load(handle).get("port")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return port if isinstance(port, int) and 0 < port < 65536 else None
+
+
+def serve_status(port, progress):
+    # Once the Raven being replaced has exited, nothing answers on the port its
+    # page is pointed at, and the page can only spin. This answers in its place
+    # until the new Raven is started: `/upgrade/status` with the progress, and
+    # 503 for everything else, so the page's "is it back?" probe keeps waiting
+    # instead of reloading onto this helper.
+    import http.server
+
+    allowed = {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def reply(self, status, body, content_type):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            if status == 503:
+                self.send_header("Retry-After", "2")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+
+        def do_GET(self):
+            # Only the page's own origin: a site the reader has open could
+            # otherwise rebind a host name of its own to this port.
+            if self.headers.get("Host") not in allowed:
+                self.reply(421, b"", "text/plain")
+                return
+            if self.path.split("?", 1)[0] == "/upgrade/status":
+                self.reply(200, json.dumps(progress.snapshot()).encode("utf-8"), "application/json")
+                return
+            # A reload during the upgrade lands here, not on the page. It asks
+            # again every few seconds, so it becomes the page once Raven is back.
+            self.reply(503, WAITING_PAGE, "text/html; charset=utf-8")
+
+        do_HEAD = do_GET
+
+        def log_message(self, *args):
+            pass
+
+    try:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    except OSError:
+        return None
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 # Where the spawning side recorded that this environment is being replaced. The
 # helper runs under `python -I` outside the environment it is rewriting, so it
@@ -284,6 +398,12 @@ def run(argv=None):
         if parent_status != 0:
             return parent_status
 
+    # Only once the parent is gone, which is what frees the port, and only for a
+    # page: the terminal has no port and sees the progress on its own screen.
+    progress = Progress(latest_version)
+    port = recorded_port() if relaunch is not None else None
+    status_server = serve_status(port, progress) if port is not None else None
+
     def run_uv(requirement, mode, plugin_list):
         command = [uv_path, "tool", "install"] + mode
         if constraints_path:
@@ -318,7 +438,7 @@ def run(argv=None):
             return 0
         return run_uv(requirement, ["--force"], plugin_list)
 
-    def restart():
+    def restart(failure=None):
         # Called on every path out of the install, not just the successful one.
         # Once the parent has exited, this helper holds the only handle to the
         # surface the user was sitting in -- so a failed install must still put
@@ -326,6 +446,16 @@ def run(argv=None):
         # the page the upgrade was clicked from cannot even reconnect to say
         # what went wrong, and the user is left with a dead window.
         #
+        # A failure is held on the page's port until the page has read it, or
+        # for STATUS_HOLD_S: one nobody saw reads, once the old Raven is back, as
+        # an upgrade that quietly did nothing. Then the port is let go, because
+        # the Raven started below binds it strictly.
+        if status_server is not None:
+            if failure is not None:
+                progress.set(phase="failed", message=failure)
+                progress.failure_seen.wait(STATUS_HOLD_S)
+            status_server.shutdown()
+            status_server.server_close()
         # The marker goes first, before anything is launched: the process being
         # started here reads it, and would wait out an upgrade that is over.
         clear_marker()
@@ -349,6 +479,7 @@ def run(argv=None):
     # is uninstalled. Installing raven alone would be exactly that loss, so no
     # list means no upgrade.
     import base64
+    import pathlib
     import socket
     import tempfile
     import urllib.parse
@@ -410,11 +541,73 @@ def run(argv=None):
             except Exception:
                 sizes.append((name, 0))
         if not any(size for _, size in sizes):
-            return
+            return [0 for _ in sizes]
         width = max(len(name) for name, _ in sizes)
         for name, size in sizes:
             print(f"  {name.ljust(width)}  " + (f"{size / 1048576:6.1f} MiB" if size else "     unknown"))
         print(f"  {'total'.ljust(width)}  {sum(size for _, size in sizes) / 1048576:6.1f} MiB", flush=True)
+        return [size for _, size in sizes]
+
+    def progress_line():
+        state = progress.snapshot()
+        of = f" / {state['total'] / 1048576:.1f}" if state["total"] else ""
+        return f"  {state['done'] / 1048576:.1f}{of} MiB  {state['rate'] / 1024:.0f} KB/s   "
+
+    def fetch(url, path):
+        url, headers = unwrap_credentials(url)
+        request = urllib.request.Request(url, headers=headers)
+        partial = path + ".part"
+        live = sys.stdout.isatty()
+        shown = 0.0
+        with urllib.request.urlopen(request) as response, open(partial, "wb") as handle:
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                handle.write(chunk)
+                progress.advance(len(chunk))
+                if live and time.monotonic() - shown > 0.25:
+                    shown = time.monotonic()
+                    print("\r" + progress_line(), end="", flush=True)
+        os.replace(partial, path)
+
+    def download_assets(assets, sizes):
+        # Fetched here rather than by uv, because here the bytes can be counted.
+        # uv draws no progress when it is not writing to a terminal -- the page's
+        # case, where its output is a log file -- and tens of megabytes with
+        # nothing moving on screen reads as a hang. uv is handed the local files
+        # and only resolves dependencies. All or nothing: if any asset cannot be
+        # fetched, uv gets the original URLs and downloads them itself, exactly
+        # as it did before this existed.
+        home = os.path.dirname(MARKER_PATH) if MARKER_PATH else None
+        root = os.path.join(home, "cache", "upgrade") if home else tempfile.mkdtemp(prefix="raven-upgrade-")
+        target = os.path.join(root, latest_version)
+        progress.set(phase="downloading", done=0, total=sum(sizes))
+        local = {}
+        try:
+            os.makedirs(target, exist_ok=True)
+            for _name, url in assets:
+                path = os.path.join(target, urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1])
+                fetch(url, path)
+                local[url] = pathlib.Path(path).as_uri()
+        except Exception as exc:
+            if sys.stdout.isatty():
+                print()
+            print(f"Warning: could not download the release directly ({exc}); uv will fetch it.", file=sys.stderr)
+            shutil.rmtree(target if home else root, ignore_errors=True)
+            progress.set(phase="installing")
+            return None
+        if sys.stdout.isatty():
+            print()
+        print(f"Downloaded {progress.snapshot()['done'] / 1048576:.1f} MiB.", flush=True)
+        # Earlier versions' files go. This version's stay: the tool's receipt
+        # names them as where it was installed from.
+        if home:
+            for entry in os.listdir(root):
+                if entry != latest_version:
+                    shutil.rmtree(os.path.join(root, entry), ignore_errors=True)
+        progress.set(phase="installing")
+        return local
 
     def write_list(lines, prefix):
         fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
@@ -435,12 +628,9 @@ def run(argv=None):
         with open(download(authorize(release_dir + "/raven-plugins.txt"), "raven-plugins-"), encoding="utf-8") as handle:
             plugin_lines = [line.strip() for line in handle if line.strip() and not line.lstrip().startswith("#")]
     except Exception as exc:
-        print(
-            f"Unable to upgrade Raven: could not download the plugin list for {latest_version} ({exc}). "
-            "Nothing was changed; retry later.",
-            file=sys.stderr,
-        )
-        restart()
+        why = f"could not download the plugin list for {latest_version} ({exc}). Nothing was changed; retry later."
+        print(f"Unable to upgrade Raven: {why}", file=sys.stderr)
+        restart(why)
         return 1
 
     def authorize_line(line):
@@ -448,6 +638,22 @@ def run(argv=None):
         return name + sep + authorize(url) if sep else line
 
     plugin_lines = [authorize_line(line) for line in plugin_lines]
+
+    assets = [("raven", wheel_url)]
+    for line in plugin_lines:
+        name, sep, url = line.partition(" @ ")
+        if sep:
+            assets.append((name.strip(), url.strip()))
+    local = download_assets(assets, announce_download(assets))
+    wheel_source = wheel_url
+    if local is not None:
+        wheel_source = local[wheel_url]
+
+        def relocate(line):
+            name, sep, url = line.partition(" @ ")
+            return f"{name.strip()} @ {local[url.strip()]}" if sep and url.strip() in local else line
+
+        plugin_lines = [relocate(line) for line in plugin_lines]
     memory_lines = [line for line in plugin_lines if line.partition(" @ ")[0].strip() == "everos-memory"]
 
     # Two independent things can fail: the channel extras, and the plugins
@@ -473,13 +679,6 @@ def run(argv=None):
         rungs.append((None, "raven[channels]", [lost_plugins]))
         rungs.append((None, "raven", [lost_plugins, lost_channels]))
 
-    assets = [("raven", wheel_url)]
-    for line in plugin_lines:
-        name, sep, url = line.partition(" @ ")
-        if sep:
-            assets.append((name.strip(), url.strip()))
-    announce_download(assets)
-
     try:
         status = 0
         if sys.platform == "win32" and os.environ.get("UV_TOOL_DIR"):
@@ -494,26 +693,26 @@ def run(argv=None):
                     else "these processes are still running from the current install and Windows cannot "
                     "replace a running executable: pid " + ", ".join(survivors)
                 )
-                print(
-                    "Unable to upgrade Raven: " + what + ". Stop them and run the upgrade again. Nothing was changed.",
-                    file=sys.stderr,
-                )
-                restart()
+                why = what + ". Stop them and run the upgrade again. Nothing was changed."
+                print("Unable to upgrade Raven: " + why, file=sys.stderr)
+                restart(why)
                 return 1
         for plugin_list, spec, losses in rungs:
-            requirement = wheel_url if spec == "raven" else f"{spec} @ {wheel_url}"
+            requirement = wheel_source if spec == "raven" else f"{spec} @ {wheel_source}"
             status = install(requirement, plugin_list)
             if status == 0:
                 for loss in losses:
                     print(f"Warning: {loss}", file=sys.stderr)
                 break
         else:
-            print(f"Unable to upgrade Raven: uv exited with status {status}.", file=sys.stderr)
-            restart()
+            why = f"uv exited with status {status}."
+            print(f"Unable to upgrade Raven: {why}", file=sys.stderr)
+            restart(why)
             return status
     except OSError as exc:
-        print(f"Unable to upgrade Raven: could not run uv: {exc}.", file=sys.stderr)
-        restart()
+        why = f"could not run uv: {exc}."
+        print(f"Unable to upgrade Raven: {why}", file=sys.stderr)
+        restart(why)
         return 1
 
     if current_version == latest_version:
@@ -1029,6 +1228,7 @@ def spawn_detached_upgrade(
     parent_pid: int,
     relaunch: list[str] | None = None,
     extra_env: dict[str, str] | None = None,
+    status_port: int | None = None,
 ) -> None:
     """Start the upgrade helper as a process that outlives this one.
 
@@ -1049,7 +1249,7 @@ def spawn_detached_upgrade(
     # Written here rather than by the helper: the window this marker exists for
     # opens the moment the caller lets go of the port, which is before the
     # helper has run its first instruction.
-    env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=plan.release.version))
+    env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=plan.release.version, port=status_port))
     if extra_env:
         env.update(extra_env)
 

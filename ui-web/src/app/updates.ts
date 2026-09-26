@@ -204,15 +204,77 @@ export async function runUpgrade(): Promise<void> {
    byte-compiles every dependency: one measured cold run took nine. The old
    three-minute ceiling declared failure over a install that was still running,
    which is what taught the reader to click upgrade a second time. */
+/* What the upgrade helper reports while it is the only thing on this page's
+   port: from the moment the old Raven exits until the new one is started.
+   Anything without `upgrading` is not the helper -- the real server may well
+   answer this path with the page itself. */
+export interface UpStatus {
+  upgrading: true
+  phase: string
+  done: number
+  total: number
+  rate: number
+  message: string | null
+}
+
+async function readStatus(): Promise<UpStatus | null> {
+  try {
+    const r = await fetch('/upgrade/status', { cache: 'no-store' })
+    if (!r.ok) return null
+    const body = (await r.json()) as Partial<UpStatus> | null
+    return body && body.upgrading === true ? (body as UpStatus) : null
+  } catch { return null }
+}
+
+const mib = (n: number): string => (n / 1048576).toFixed(1)
+const speed = (n: number): string => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB/s` : `${Math.round(n / 1024)} KB/s`)
+
+/* The line and the bar for one report. Numbers and units are the same in every
+   language, so only the frame around them comes from the catalogue. */
+export function describeStatus(s: UpStatus): { text: string; fraction: number | null } {
+  if (s.phase === 'downloading') {
+    const amount = s.total > 0 ? `${mib(s.done)} / ${mib(s.total)} MiB` : `${mib(s.done)} MiB`
+    const rate = s.rate > 0 ? ` · ${speed(s.rate)}` : ''
+    return { text: t('gui.upg.phase.download', { progress: amount + rate }), fraction: s.total > 0 ? s.done / s.total : null }
+  }
+  if (s.phase === 'installing') return { text: t('gui.upg.phase.install'), fraction: null }
+  return { text: t('gui.upg.working'), fraction: null }
+}
+
 export function watchUpgrade(shade: UpgradeShade, since?: number): void {
   const t0 = since || Date.now()
+  /* The ceiling counts silence, not the whole upgrade. A slow link can take
+     longer than the ceiling to download a release, and giving up on one that
+     is visibly still moving would be the one wrong answer left. */
+  let heard: number | null = null
+  let helperSeen = false
   shade.say(t('gui.upg.working'))
   const tick = async (): Promise<void> => {
-    if (Date.now() - t0 > UPG_CEILING_MS) {
+    if (Date.now() - (heard ?? t0) > UPG_CEILING_MS) {
       upMarkClear()
       shade.fail(t('gui.upg.failed'), t('gui.upg.gave_up'))
       return
     }
+    const status = await readStatus()
+    if (status) {
+      heard = Date.now()
+      helperSeen = true
+      if (status.phase === 'failed') {
+        /* The helper holds this until it has been read, then brings the old
+           Raven back; without the card the page would reload onto it and the
+           failed upgrade would read as one that did nothing. */
+        upMarkClear()
+        shade.fail(t('gui.upg.failed'), status.message || '')
+        return
+      }
+      const seen = describeStatus(status)
+      shade.measure(seen.text, seen.fraction)
+      setTimeout(tick, 1000)
+      return
+    }
+    /* The helper answered and now does not: it has let the port go to the new
+       Raven, which is starting. */
+    if (helperSeen) shade.measure(t('gui.upg.phase.restart'), null)
     let r: Response
     try {
       r = await fetch('/', { method: 'HEAD', cache: 'no-store' })

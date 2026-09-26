@@ -1673,14 +1673,17 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
   box-shadow: var(--shadow);
 }
-/* Same indeterminate bar the browser pane uses, for the same reason: the helper
-   reports nothing back until it relaunches serve, so there is no progress to
-   show and a bar that pretended to measure one would be lying. */
+/* Same indeterminate bar the browser pane uses while nothing can be measured:
+   until the old Raven has exited the helper cannot answer on this port, and
+   while uv resolves there are no bytes to count. `[data-measured]` is the
+   stretch in between, when the helper is downloading and reports how far it has
+   got. An attribute, not a class, so the bar's class stays a plain literal. */
 .upshade .upbar { height: 2px; overflow: hidden; border-radius: 2px; background: var(--surface); }
 .upshade .upbar i {
   display: block; height: 100%; width: 34%; background: var(--amber); border-radius: 2px;
   animation: bslide 1.1s ease-in-out infinite;
 }
+.upshade .upbar[data-measured] i { animation: none; transform: none; transition: width .4s ease-out; }
 @media (prefers-reduced-motion: reduce) {
   .upshade { backdrop-filter: none; }
   .upshade .upbar i { animation: none; width: 100%; opacity: .45; }

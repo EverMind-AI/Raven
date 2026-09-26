@@ -4375,6 +4375,18 @@
       "en": "new version available",
       "zh": "有新版本"
     },
+    "gui.upg.phase.download": {
+      "en": "Downloading the new version: {progress}",
+      "zh": "正在下载新版本：{progress}"
+    },
+    "gui.upg.phase.install": {
+      "en": "Installing the new version...",
+      "zh": "正在安装新版本…"
+    },
+    "gui.upg.phase.restart": {
+      "en": "Restarting Raven...",
+      "zh": "正在重启 Raven…"
+    },
     "gui.upg.reauth": {
       "en": "Raven restarted but this page is no longer signed in. Reopen Raven.",
       "zh": "Raven 已重启，但这个页面的登录失效了，请重新打开 Raven。"

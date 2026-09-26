@@ -51,6 +51,16 @@ the running WebUI and finishes by starting a new one in the foreground: press
 Ctrl-C to stop it, then run `raven web` to keep Raven running in the
 background. Your settings and conversations in `~/.raven` are kept.
 
+### Update from the page
+
+When the bottom of the sidebar says a new version is available, click it and
+confirm. Raven shows the download's progress, installs the new version,
+restarts, and the page reloads by itself. Your settings and conversations are
+kept. While a turn, a sub-agent or a question waiting for an answer is still
+running, including in an IM channel, the page asks you to let it finish first.
+A Raven started by hand with `raven gateway` or `raven web --foreground` has
+nothing to restart it, so update that one from the command line below.
+
 ### Update a one-line install
 
 Run the same installer again. It installs the newest release over the current

@@ -16,6 +16,9 @@ import { makeStore } from './store'
 
 export interface UpgradeShade {
   say(text: string): void
+  /** A line with how far the install has got: 0..1, or null while it cannot
+      be measured (the bar goes back to sliding). */
+  measure(text: string, fraction: number | null): void
   fail(text: string, detail?: string): void
   close(): void
 }
@@ -32,6 +35,10 @@ export interface Failure {
 export interface Card {
   readonly id: number
   readonly text: string
+  /** How far the download has got, 0..1. Absent while nothing reports it --
+      the helper answers only once the old Raven has exited -- and the bar
+      then slides rather than pretend to measure. */
+  readonly progress?: number
   readonly failure?: Failure
 }
 
@@ -66,6 +73,11 @@ export function open(): UpgradeShade {
   return {
     say(text: string): void {
       if (mine()) set({ ...get()!, text })
+    },
+    measure(text: string, fraction: number | null): void {
+      if (!mine()) return
+      const { progress: _drop, ...rest } = get()!
+      set(fraction === null ? { ...rest, text } : { ...rest, text, progress: Math.max(0, Math.min(1, fraction)) })
     },
     fail(text: string, detail?: string): void {
       if (!mine()) return

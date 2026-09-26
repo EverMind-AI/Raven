@@ -1287,6 +1287,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.upg.manual': 'Run this in a terminal instead:',
     'gui.upg.note': 'new version {v}',
     'gui.upg.note_bare': 'new version available',
+    'gui.upg.phase.download': 'Downloading the new version: {progress}',
+    'gui.upg.phase.install': 'Installing the new version...',
+    'gui.upg.phase.restart': 'Restarting Raven...',
     'gui.upg.reauth': 'Raven restarted but this page is no longer signed in. Reopen Raven.',
     'gui.upg.title': 'Upgrade Raven?',
     'gui.upg.why.busy':
@@ -3810,6 +3813,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.upg.manual': '改在终端里跑这条命令：',
     'gui.upg.note': '有新版 {v}',
     'gui.upg.note_bare': '有新版本',
+    'gui.upg.phase.download': '正在下载新版本：{progress}',
+    'gui.upg.phase.install': '正在安装新版本…',
+    'gui.upg.phase.restart': '正在重启 Raven…',
     'gui.upg.reauth': 'Raven 已重启，但这个页面的登录失效了，请重新打开 Raven。',
     'gui.upg.title': '升级 Raven？',
     'gui.upg.why.busy':

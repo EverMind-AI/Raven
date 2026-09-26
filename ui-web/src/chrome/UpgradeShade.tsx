@@ -4,9 +4,10 @@
  * `.upshade` is the full-window shade itself, so a wrapper around it would take
  * the inset and the `--z` step the class carries.
  *
- * While the install is running the card is a bar and a line of text. A failure
- * hides the bar and adds the three things only the reader can act on: what
- * went wrong, the command to run by hand, and a way to put the card down.
+ * While the install is running the card is a bar and a line of text. The bar
+ * slides until the helper reports bytes, then measures them. A failure hides
+ * the bar and adds the three things only the reader can act on: what went
+ * wrong, the command to run by hand, and a way to put the card down.
  */
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
@@ -22,7 +23,9 @@ export function UpgradeShade(): JSX.Element | null {
   return createPortal(
     <div className="upshade">
       <div className="upcard">
-        <div className="upbar" hidden={!!failure}><i /></div>
+        <div className="upbar" data-measured={card.progress === undefined ? undefined : ''} hidden={!!failure}>
+          <i style={card.progress === undefined ? undefined : { width: `${(card.progress * 100).toFixed(1)}%` }} />
+        </div>
         <div className="t">{card.text}</div>
         {failure ? (
           <>

@@ -895,6 +895,239 @@ def test_upgrade_helper_says_package_for_one(
     assert "Downloading 1 package for Raven 0.1.4." in capsys.readouterr().out
 
 
+RELEASE_WHEELS = {
+    "raven-0.1.4-py3-none-any.whl": b"R" * 1000,
+    "everos_memory-1.2.0-py3-none-any.whl": b"E" * 10,
+    "design_engine-0.2.0-py3-none-any.whl": b"D" * 20,
+    "ppt_engine-0.2.0-py3-none-any.whl": b"P" * 30,
+}
+
+
+def _free_port() -> int:
+    import socket as _socket
+
+    with _socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _port_is_free(port: int) -> bool:
+    """Probed the way the relaunched Raven probes it (`pick_port`): with
+    SO_REUSEADDR, so connections the helper closed, still in TIME_WAIT, do not
+    read as the port being held. What matters is that nothing listens on it."""
+    import socket as _socket
+
+    with _socket.socket() as probe:
+        probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def _get(port: int, path: str, host: str | None = None) -> tuple[int, bytes]:
+    """Through http.client, not urllib: the release-directory fixture stands in
+    for urllib's urlopen for the whole file."""
+    import http.client
+
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        connection.request("GET", path, headers={"Host": host} if host else {})
+        response = connection.getresponse()
+        return response.status, response.read()
+    finally:
+        connection.close()
+
+
+class TestTheHelperOwnsTheDownload:
+    """uv draws no progress when it is not writing to a terminal -- the page's
+    case -- so the helper fetches the release itself, where the bytes can be
+    counted, and hands uv the local files."""
+
+    @pytest.fixture
+    def home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        marker = tmp_path / "upgrade.json"
+        marker.write_text(json.dumps({"started_at": 1.0}), encoding="utf-8")
+        monkeypatch.setenv("RAVEN_UPGRADE_MARKER", str(marker))
+        return tmp_path
+
+    def test_uv_is_handed_the_files_the_helper_downloaded(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        release_directory.files.update(RELEASE_WHEELS)
+        run = Mock(return_value=Mock(returncode=0))
+        monkeypatch.setattr(subprocess, "run", run)
+
+        assert _load_upgrade_helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+
+        folder = home / "cache" / "upgrade" / "0.1.4"
+        (call,) = _uv_calls(run)
+        assert call["requirement"] == f"raven[channels] @ {(folder / 'raven-0.1.4-py3-none-any.whl').as_uri()}"
+        assert call["plugins"] == "".join(
+            f"{name} @ {(folder / wheel).as_uri()}\n"
+            for name, wheel in (
+                ("everos-memory", "everos_memory-1.2.0-py3-none-any.whl"),
+                ("design-engine", "design_engine-0.2.0-py3-none-any.whl"),
+                ("ppt-engine", "ppt_engine-0.2.0-py3-none-any.whl"),
+            )
+        )
+        for wheel, payload in RELEASE_WHEELS.items():
+            assert (folder / wheel).read_bytes() == payload
+
+    def test_one_asset_it_cannot_fetch_sends_every_asset_back_to_uv(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        """All or nothing, with the missing asset last so the ones before it
+        were really downloaded and then discarded: uv gets the URLs and fetches
+        them itself, exactly as it did before the helper downloaded anything."""
+        release_directory.files.update(RELEASE_WHEELS)
+        del release_directory.files["ppt_engine-0.2.0-py3-none-any.whl"]
+        run = Mock(return_value=Mock(returncode=0))
+        monkeypatch.setattr(subprocess, "run", run)
+
+        assert _load_upgrade_helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+
+        (call,) = _uv_calls(run)
+        assert call["requirement"] == f"raven[channels] @ {WHEEL_URL}"
+        assert call["plugins"] == PLUGIN_LIST
+        assert not (home / "cache" / "upgrade" / "0.1.4").exists()
+
+    def test_an_earlier_version_s_files_are_cleared_and_this_one_s_kept(
+        self, home: Path, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        """This version's stay because the tool's receipt names them as where
+        it was installed from; nothing names the earlier ones any more."""
+        old = home / "cache" / "upgrade" / "0.1.3"
+        old.mkdir(parents=True)
+        (old / "raven-0.1.3-py3-none-any.whl").write_bytes(b"old")
+        release_directory.files.update(RELEASE_WHEELS)
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+
+        _load_upgrade_helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+        assert not old.exists()
+        assert (home / "cache" / "upgrade" / "0.1.4" / "raven-0.1.4-py3-none-any.whl").exists()
+
+
+class TestTheHelperAnswersOnThePagePort:
+    """Once the Raven being replaced exits, nothing answers where its page is
+    pointed, and the page can only spin. The helper answers in its place."""
+
+    RELAUNCH = json.dumps(["raven", "web", "--supervise", "--port", "0"])
+
+    @pytest.fixture
+    def port(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory) -> int:
+        port = _free_port()
+        marker = tmp_path / "upgrade.json"
+        marker.write_text(json.dumps({"started_at": 1.0, "port": port}), encoding="utf-8")
+        monkeypatch.setenv("RAVEN_UPGRADE_MARKER", str(marker))
+        release_directory.files.update(RELEASE_WHEELS)
+        release_directory.sizes = {name: len(payload) for name, payload in RELEASE_WHEELS.items()}
+        return port
+
+    def _helper(self) -> object:
+        helper = _load_upgrade_helper()
+        helper.__globals__["wait_for_parent"] = Mock(return_value=0)
+        return helper
+
+    def test_it_reports_progress_and_holds_everything_else_at_503(
+        self, port: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """503, not 200 and not 401: the page reloads on an OK answer to `/`
+        and asks the reader to sign in again on 401 or 403."""
+        seen: dict[str, tuple[int, bytes]] = {}
+
+        def run(_argv, check):
+            seen["status"] = _get(port, "/upgrade/status")
+            seen["root"] = _get(port, "/")
+            return Mock(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", run)
+        free_at_relaunch: list[bool] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: free_at_relaunch.append(_port_is_free(port)))
+
+        assert self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4242", self.RELAUNCH]) == 0
+
+        code, body = seen["status"]
+        state = json.loads(body)
+        assert code == 200
+        assert state["upgrading"] is True
+        assert state["to"] == "0.1.4"
+        assert state["phase"] == "installing"
+        assert state["done"] == state["total"] == sum(len(payload) for payload in RELEASE_WHEELS.values())
+        assert seen["root"][0] == 503
+        # Let go before the relaunch, which binds the same port strictly.
+        assert free_at_relaunch == [True]
+
+    def test_it_answers_only_the_page_s_own_origin(self, port: int, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A site the reader has open could otherwise rebind a host name of its
+        own to this port and read the answer."""
+        seen: list[int] = []
+
+        def run(_argv, check):
+            seen.append(_get(port, "/upgrade/status", host=f"attacker.example:{port}")[0])
+            return Mock(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", run)
+        monkeypatch.setattr(subprocess, "Popen", Mock())
+
+        self._helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4242", self.RELAUNCH])
+
+        assert seen == [421]
+
+    def test_a_failure_is_held_until_the_page_has_read_it(self, port: int, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Otherwise the old Raven comes straight back and the page reloads onto
+        it: an upgrade that failed reads as one that quietly did nothing."""
+        import threading
+        import time as _time
+
+        monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=1)))
+        monkeypatch.setattr(subprocess, "Popen", Mock())
+        helper = self._helper()
+        helper.__globals__["STATUS_HOLD_S"] = 20
+        read: dict[str, object] = {}
+
+        def page() -> None:
+            deadline = _time.monotonic() + 15
+            while _time.monotonic() < deadline and "state" not in read:
+                try:
+                    code, body = _get(port, "/upgrade/status")
+                except OSError:
+                    _time.sleep(0.02)
+                    continue
+                state = json.loads(body)
+                if state["phase"] == "failed":
+                    read["state"] = state
+                _time.sleep(0.02)
+
+        reader = threading.Thread(target=page)
+        reader.start()
+        started = _time.monotonic()
+        status = helper(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4242", self.RELAUNCH])
+        took = _time.monotonic() - started
+        reader.join()
+
+        assert status == 1
+        assert "uv exited with status 1" in read["state"]["message"]
+        # Released by the read, not by sitting out the whole hold.
+        assert took < 20
+
+    def test_the_terminal_gets_no_server(self, port: int, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The terminal has no page to answer and sees the progress itself."""
+        free_during_install: list[bool] = []
+
+        def run(_argv, check):
+            free_during_install.append(_port_is_free(port))
+            return Mock(returncode=0)
+
+        monkeypatch.setattr(subprocess, "run", run)
+
+        _load_upgrade_helper()(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+        assert free_during_install == [True]
+
+
 def test_upgrade_helper_refuses_to_upgrade_without_the_plugin_list(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1056,6 +1289,9 @@ def test_upgrade_helper_pins_constraints_when_download_succeeds(
         f"{RELEASE_DIR}/everos_memory-1.2.0-py3-none-any.whl",
         f"{RELEASE_DIR}/design_engine-0.2.0-py3-none-any.whl",
         f"{RELEASE_DIR}/ppt_engine-0.2.0-py3-none-any.whl",
+        # The helper's own download of the wheel, which this directory does not
+        # serve, so uv is handed the URLs instead.
+        WHEEL_URL,
     ]
     assert _uv_calls(run) == [
         {
@@ -1128,9 +1364,10 @@ def test_upgrade_helper_carries_the_beta_credentials_to_the_release_directory(
         f"{BETA_DIR}/raven-plugins.txt",
         f"{BETA_DIR}/raven-0.1.4b1-py3-none-any.whl",
         f"{BETA_DIR}/everos_memory-1.2.0-py3-none-any.whl",
+        f"{BETA_DIR}/raven-0.1.4b1-py3-none-any.whl",
     ]
-    # The size probes are on the same protected host, so they need the header
-    # for the same reason the downloads do.
+    # The size probes and the helper's own download are on the same protected
+    # host, so they need the header for the same reason the lists do.
     assert all(request.get_header("Authorization") == expected_header for request in release_directory.requests)
     (call,) = _uv_calls(run)
     assert call["plugins"] == (
@@ -1969,6 +2206,22 @@ class TestSpawningLeavesTheMarker:
 
         assert at_spawn == [True]
         assert handed == [str(isolated_raven_home / "upgrade.json")]
+
+    def test_the_marker_names_the_page_port_for_the_helper_to_answer_on(
+        self, plan: object, isolated_raven_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Once the process holding the port exits, the helper answers there with
+        progress; the marker is how it learns which port that is."""
+        recorded: list[dict[str, object]] = []
+
+        def popen(_argv, env=None, **_kwargs):
+            recorded.append(json.loads(Path(env["RAVEN_UPGRADE_MARKER"]).read_text(encoding="utf-8")))
+            return Mock()
+
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234, status_port=18950)
+
+        assert recorded[0]["port"] == 18950
 
     def test_a_helper_that_never_started_leaves_no_marker(
         self, plan: object, isolated_raven_home: Path, monkeypatch: pytest.MonkeyPatch

@@ -176,3 +176,129 @@ describe('an upgrade the server refused', () => {
     expect(asked).toEqual([[t('gui.upg.title'), t('gui.upg.why.busy')]])
   })
 })
+
+describe('the progress the upgrade helper reports', () => {
+  const report = (fields: Partial<import('./updates').UpStatus>): import('./updates').UpStatus => ({
+    upgrading: true,
+    phase: 'downloading',
+    done: 0,
+    total: 0,
+    rate: 0,
+    message: null,
+    ...fields,
+  })
+
+  it('says how much, of how much, and how fast', async () => {
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+
+    const seen = mod.describeStatus(report({ done: 18.4 * 1048576, total: 71.6 * 1048576, rate: 52 * 1024 }))
+
+    expect(seen.text).toBe(t('gui.upg.phase.download', { progress: '18.4 / 71.6 MiB · 52 KB/s' }))
+    expect(seen.fraction).toBeCloseTo(18.4 / 71.6, 5)
+  })
+
+  it('does not pretend to measure a download of unknown size', async () => {
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+
+    const seen = mod.describeStatus(report({ done: 3 * 1048576 }))
+
+    expect(seen.text).toBe(t('gui.upg.phase.download', { progress: '3.0 MiB' }))
+    expect(seen.fraction).toBeNull()
+  })
+
+  it('slides while uv installs, since there are no bytes to count', async () => {
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+
+    expect(mod.describeStatus(report({ phase: 'installing', done: 9, total: 9 }))).toEqual({
+      text: t('gui.upg.phase.install'),
+      fraction: null,
+    })
+  })
+})
+
+describe('waiting out an upgrade the page started', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  type Shade = { say: ReturnType<typeof vi.fn>; measure: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }
+  const shade = (): Shade => ({ say: vi.fn(), measure: vi.fn(), fail: vi.fn(), close: vi.fn() })
+
+  /* The helper's port: `/upgrade/status` answers with the report, everything
+     else 503, exactly what the page sees between the two Ravens. `null` is
+     nothing listening at all. */
+  function port(status: () => Record<string, unknown> | null): void {
+    vi.stubGlobal('fetch', async (url: string) => {
+      const body = status()
+      if (body === null) throw new TypeError('connection refused')
+      if (url === '/upgrade/status') return { ok: true, status: 200, json: async () => body }
+      return { ok: false, status: 503 }
+    })
+  }
+
+  it('draws the helper report on the bar', async () => {
+    vi.useFakeTimers()
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    port(() => ({ upgrading: true, phase: 'downloading', done: 50, total: 100, rate: 0, message: null }))
+    const card = shade()
+
+    mod.watchUpgrade(card as never)
+    await vi.advanceTimersByTimeAsync(2600)
+
+    expect(card.measure).toHaveBeenCalledWith(t('gui.upg.phase.download', { progress: '0.0 / 0.0 MiB' }), 0.5)
+    expect(card.fail).not.toHaveBeenCalled()
+  })
+
+  it('shows a failure the helper holds instead of reloading onto the old Raven', async () => {
+    vi.useFakeTimers()
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    port(() => ({ upgrading: true, phase: 'failed', done: 0, total: 0, rate: 0, message: 'uv exited with status 1.' }))
+    const card = shade()
+
+    mod.watchUpgrade(card as never)
+    await vi.advanceTimersByTimeAsync(2600)
+
+    expect(card.fail).toHaveBeenCalledWith(t('gui.upg.failed'), 'uv exited with status 1.')
+  })
+
+  it('keeps waiting past the ceiling while the helper keeps reporting', async () => {
+    /* A slow link can take longer than the ceiling to download a release. */
+    vi.useFakeTimers()
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    port(() => ({ upgrading: true, phase: 'downloading', done: 1, total: 100, rate: 1, message: null }))
+    const card = shade()
+
+    mod.watchUpgrade(card as never)
+    await vi.advanceTimersByTimeAsync(21 * 60 * 1000)
+
+    expect(card.fail).not.toHaveBeenCalled()
+  })
+
+  it('still gives up on twenty minutes with no answer at all', async () => {
+    vi.useFakeTimers()
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    port(() => null)
+    const card = shade()
+
+    mod.watchUpgrade(card as never)
+    await vi.advanceTimersByTimeAsync(21 * 60 * 1000)
+
+    expect(card.fail).toHaveBeenCalledWith(t('gui.upg.failed'), t('gui.upg.gave_up'))
+  })
+
+  it('says the new Raven is starting once the helper lets the port go', async () => {
+    vi.useFakeTimers()
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    let helperUp = true
+    port(() => (helperUp ? { upgrading: true, phase: 'installing', done: 0, total: 0, rate: 0, message: null } : null))
+    const card = shade()
+
+    mod.watchUpgrade(card as never)
+    await vi.advanceTimersByTimeAsync(2600)
+    helperUp = false
+    await vi.advanceTimersByTimeAsync(1100)
+
+    expect(card.measure).toHaveBeenLastCalledWith(t('gui.upg.phase.restart'), null)
+  })
+})

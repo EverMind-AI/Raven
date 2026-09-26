@@ -296,6 +296,7 @@ async def system_upgrade(params: dict) -> dict:
             parent_pid=parent_pid,
             relaunch=relaunch,
             extra_env=extra_env or None,
+            status_port=SERVE.port if relaunch is not None else None,
         )
     except UpgradeError as exc:
         raise _refuse("handoff_failed", str(exc)) from exc
