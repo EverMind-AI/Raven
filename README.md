@@ -101,11 +101,13 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 <p align="center"><em>Raven-Oncall significantly outperforms Claude Code on both success rate and cost for AI4S tasks</em></p>
 
-## ❯❯ Runtime Self-Evolution (Experimental)
+## ❯❯ Runtime Self-Evolution
 
-**Raven is built for this from the ground up.** Its agent loop is split into four decoupled strategy modules — **Memory**, **Planning**, **Capability**, and **Action** — so what an agent is told, what it treats as finished, which tools it reaches for, and which checks it must pass can all be rewritten **while it is running**. What changes belongs to that agent alone: a setting, or a small piece of judgement code written for it. The next turn of the same conversation already runs on it, with nothing restarted.
+**Raven is built for this from the ground up.** Its agent loop is split into four decoupled strategy modules — **Memory** for what a turn gets to see, **Planning** for how it approaches the work, **Capability** for which tools an iteration exposes, **Action** for what to do next and for judging it before it runs. A **Curator** keeps rewriting those four seats: a setting, or a small piece of judgement code written for that agent. What it changes belongs to that agent alone, and once installed the agent runs on it.
 
-**A Persona is the first thing this builds.** Describe the assistant you want and Raven assembles one: a lead role that talks to you, and specialists drawn from the agents you already have. What you asked for does not stop at a prompt — it lands in that assistant's **harness**, as its division of work, the tools it may reach for, and the checks it must pass before it acts. Raven keeps reworking the assistant from your feedback until it does the job.
+**A Curator changes more than the prompt** — the tools and outside services it reaches for, the skills and procedures it follows, and its own judgement at each point can all be replaced. It keeps going round after round — you put it to work, you say what was wrong, it reworks — until you are satisfied, until it has nothing left worth changing, or until the round budget runs out. Two things hold the quality: nothing is installed before it is verified, and a failed check sends it back; and the reference answer is never handed to it, so it cannot copy an answer in and pass.
+
+**A Persona is the first thing it builds.** Describe the assistant you want and the Curator assembles one: a lead role that talks to you, and specialists drawn from the agents you already have. What you asked for lands in that assistant's **harness** — its division of work, the tools it may reach for, and the checks it must pass before it acts.
 
 > Describe what you need once. Raven assembles the assistant, keeps improving it while you work, and afterwards a sentence is enough to put it to work again.
 
