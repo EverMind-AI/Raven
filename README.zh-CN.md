@@ -132,7 +132,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 </tr>
 <tr>
 <td width="45.8%" valign="top"><p align="center"><b>海报</b></p></td>
-<td width="31.4%" valign="top"><p align="center"><b>演示文稿</b></p></td>
+<td width="31.4%" valign="top"><p align="center"><b>演示文稿</b> · <b><a href="https://github.com/LivXue/Raven/releases/download/showcase-decks-2026-09-25/Raven-Game-0925.pptx">PPTX ↓</a></b></p></td>
 </tr>
 <tr>
 <td width="45.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/edc9e0df-1a76-4302-8c6d-be73e088d65d"><img src="https://github.com/user-attachments/assets/edc9e0df-1a76-4302-8c6d-be73e088d65d" alt="THRESHOLD poster with its Chinese title: the Warden towers over the player on a molten arena floor" width="100%"></a></p></td>
@@ -157,7 +157,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 </tr>
 <tr>
 <td colspan="2" width="41%" valign="top"><p align="center"><b>海报</b></p></td>
-<td width="30.4%" valign="top"><p align="center"><b>演示文稿</b></p></td>
+<td width="30.4%" valign="top"><p align="center"><b>演示文稿</b> · <b><a href="https://github.com/LivXue/Raven/releases/download/showcase-decks-2026-09-25/Raven-RSI-0925.pptx">PPTX ↓</a></b></p></td>
 </tr>
 <tr>
 <td colspan="2" width="41%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092"><img src="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092" alt="Raven RSI poster with its Chinese title: a spiral stone stair climbing into the light, with ravens circling it" width="100%"></a></p></td>
@@ -184,7 +184,7 @@ https://github.com/user-attachments/assets/dd186b6d-3752-4c59-89c7-eeea5c6fa962
 </tr>
 <tr>
 <td width="46.2%" valign="top"><p align="center"><b>海报</b></p></td>
-<td width="34.3%" valign="top"><p align="center"><b>演示文稿</b></p></td>
+<td width="34.3%" valign="top"><p align="center"><b>演示文稿</b> · <b><a href="https://github.com/LivXue/Raven/releases/download/showcase-decks-2026-09-25/Raven-Overview-0925.pptx">PPTX ↓</a></b></p></td>
 </tr>
 <tr>
 <td width="46.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9152b06b-74a3-4059-adff-41267a69a207"><img src="https://github.com/user-attachments/assets/9152b06b-74a3-4059-adff-41267a69a207" alt="Raven poster with its Chinese title: a raven on a standing stone above sea cliffs at sunset" width="100%"></a></p></td>
