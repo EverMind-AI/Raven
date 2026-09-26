@@ -127,20 +127,106 @@ def test_every_page_mount_hands_the_gateway_stop_to_the_page() -> None:
     src = inspect.getsource(gateway_commands.register)
     bind = src.split("async def _bind_generation():", 1)[1].split("def _request_stop() -> None:", 1)[0]
     mount_at = bind.index("page_mount = await mount_page(")
-    hand_at = bind.index("SERVE.hand_over(_request_stop, _busy, supervisor)")
+    hand_at = bind.index("_hand_page_the_gateway(_request_stop, _busy)")
     assert mount_at < hand_at
 
 
-def test_only_its_own_parent_counts_as_the_gateway_supervisor() -> None:
-    """web.json outlives the run that wrote it. A supervisor that is not this
-    process's parent would never bring the gateway back, and treating it as
-    one would install an upgrade and leave nothing running."""
-    import inspect
+class TestHandingThePageTheGateway:
+    """What the page's upgrade needs from the gateway it runs in."""
 
-    from raven.cli import gateway_commands
+    @pytest.fixture(autouse=True)
+    def _disarm(self):
+        from raven.rpc.serve_control import SERVE
 
-    src = inspect.getsource(gateway_commands.register)
-    assert "supervisor != _os.getppid()" in src
+        yield
+        SERVE.disarm()
+
+    def test_its_own_supervisor_is_handed_over(self, monkeypatch) -> None:
+        import os
+
+        from raven.cli import gateway_commands, serve_commands
+        from raven.rpc.serve_control import SERVE
+
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: os.getppid())
+        SERVE.arm_hosted(18792, "tok", "cookie")
+
+        gateway_commands._hand_page_the_gateway(lambda: None, lambda: None)
+
+        assert SERVE.supervisor_pid == os.getppid()
+        assert SERVE.running
+
+    def test_a_supervisor_that_is_not_its_parent_is_not_trusted(self, monkeypatch) -> None:
+        """web.json outlives the run that wrote it. A supervisor that is not
+        this process's parent would never bring the gateway back, so treating
+        it as one would install an upgrade and leave nothing running."""
+        import os
+
+        from raven.cli import gateway_commands, serve_commands
+        from raven.rpc.serve_control import SERVE
+
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: os.getppid() + 1)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+
+        gateway_commands._hand_page_the_gateway(lambda: None, lambda: None)
+
+        assert SERVE.supervisor_pid is None
+
+    def test_no_supervisor_at_all_is_handed_over_as_none(self, monkeypatch) -> None:
+        from raven.cli import gateway_commands, serve_commands
+        from raven.rpc.serve_control import SERVE
+
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: None)
+        SERVE.arm_hosted(18792, "tok", "cookie")
+
+        gateway_commands._hand_page_the_gateway(lambda: None, lambda: None)
+
+        assert SERVE.supervisor_pid is None
+
+
+class TestWorkInFlight:
+    """The one answer a config swap and an upgrade restart both refuse on."""
+
+    def _agent(self, *, processing=False, subagents=0):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            is_processing=processing,
+            subagents=SimpleNamespace(get_running_count=lambda: subagents),
+        )
+
+    def _broker(self, pending):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(pending_count=lambda: pending)
+
+    def test_an_idle_gateway_reports_nothing(self) -> None:
+        from raven.cli.gateway_commands import _work_in_flight
+
+        assert _work_in_flight(self._agent(), [self._broker(0), None], None) is None
+
+    def test_a_question_waiting_on_either_surface_counts(self) -> None:
+        """The IM round-trip and the page each hold their own broker, and a
+        restart drops what is pending on both."""
+        from raven.cli.gateway_commands import _work_in_flight
+
+        assert _work_in_flight(self._agent(), [self._broker(1), self._broker(2)], None) == {
+            "subagents": 0,
+            "questions": 3,
+        }
+
+    def test_a_running_sub_agent_counts(self) -> None:
+        from raven.cli.gateway_commands import _work_in_flight
+
+        assert _work_in_flight(self._agent(subagents=2), [], None) == {"subagents": 2, "questions": 0}
+
+    def test_a_turn_in_flight_counts_whether_the_agent_or_the_scheduler_holds_it(self) -> None:
+        from types import SimpleNamespace
+
+        from raven.cli.gateway_commands import _work_in_flight
+
+        assert _work_in_flight(self._agent(processing=True), [], None) is not None
+        scheduler = SimpleNamespace(has_running=lambda: True)
+        assert _work_in_flight(self._agent(), [], scheduler) is not None
 
 
 def test_the_swap_and_the_upgrade_refuse_on_one_busy_answer() -> None:
