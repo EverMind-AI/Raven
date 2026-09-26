@@ -6,9 +6,22 @@
  * in styles/page.css; a new rule for this domain's markup comes here.
  */
 
-/* The download and folder buttons are one group -- the file, and the file among
-   the others -- and so is the new-tab button in front of them on a PDF or an
-   HTML file, the file on a tab of its own. Their squares touch: none of
-   the gap the bar puts between the rest of its controls, and no overlap
-   either, so each square stays its button's whole hit area. */
+/* The folder button and, on a PDF or an HTML file, the new-tab button in front
+   of it are one group -- the file among the others, and the file on a tab of
+   its own. Their squares touch: none of the gap the bar puts between the rest
+   of its controls, and no overlap either, so each square stays its button's
+   whole hit area. */
 .workspace-file-acts { display: flex; align-items: center; flex: none; }
+
+/* A file's folder and a change's counts, as the muted line after the name in
+   a desk pane's header. The folder in the face paths are written in. */
+.workspace-dir { font-family: var(--mono); font-size: 11px; }
+.workspace-stat { margin-left: 8px; font-family: var(--mono); font-size: 11px; }
+.workspace-add { font-weight: 400; color: var(--moss); }
+.workspace-del { font-weight: 400; color: var(--clay); }
+
+/* In a pane's header these two glyphs are taller than the folder beside them
+   (a portrait page, a box with an arrow out of it), so they are drawn smaller
+   to put their strokes on the same 10px as the rest of the row. */
+.fcopy.ghost-ic svg { width: 14px; height: 14px; }
+.workspace-ext.ghost-ic svg { width: 14px; height: 14px; }

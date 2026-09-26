@@ -249,134 +249,20 @@ describe('workspace island', () => {
     expect(frame.getAttribute('src')).toContain('/file?path=%2Frepo%2Fdeck.pdf')
   })
 
-  /* HTML is a script carrier the agent wrote, so it keeps the empty sandbox:
-     readable, never run. */
-  it('keeps the sandbox on an HTML frame', async () => {
+  /* An HTML file renders as the page it is: scripts granted on both halves --
+     the frame's attribute and the route's header, asked for with run=1 --
+     never same-origin, and no note above the frame about what was withheld. */
+  it('renders an HTML file with its scripts, isolated, and says nothing above it', async () => {
     install(emptyWs({
-      file: { path: '/repo/report.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
+      file: { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
     }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     await mount()
     const frame = document.querySelector('.fview iframe') as HTMLIFrameElement
     expect(frame).not.toBeNull()
-    expect(frame.getAttribute('sandbox')).toBe('')
-  })
-
-  /* A page drawn on a canvas arrives as a rectangle of its own background
-     colour, which reads as a broken file rather than a withheld capability --
-     so the viewer says which it is, beside the frame that cannot say it. */
-  it('says why an HTML preview may look empty', async () => {
-    install(emptyWs({
-      file: { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
-    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-    const note = document.querySelector('.fview .vnote')
-    expect(note).not.toBeNull()
-    expect(note?.textContent || '').toContain('gui.ws.html_no_scripts')
-  })
-
-  /* One grant, both halves: the frame's attribute and the route's header have
-     to agree, so the test asserts the pair rather than either alone. */
-  it('runs an HTML preview only once the reader asks, and then on both halves', async () => {
-    install(emptyWs({
-      file: { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
-    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-
-    const before = document.querySelector('.fview iframe') as HTMLIFrameElement
-    expect(before.getAttribute('sandbox')).toBe('')
-    expect(before.getAttribute('src') || '').not.toContain('run=1')
-
-    await act(async () => {
-      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
-    })
-
-    const after = document.querySelector('.fview iframe') as HTMLIFrameElement
-    expect(after.getAttribute('sandbox')).toBe('allow-scripts')
-    expect(after.getAttribute('src') || '').toContain('run=1')
-    expect(document.querySelector('.fview .vnote')).toBeNull()
-  })
-
-  /* Opening another file starts read-only: the grant is held as the path it was
-     given for, so there is no flag left set over a page nobody looked at. */
-  it('does not carry a run grant onto the next file', async () => {
-    install(emptyWs({
-      file: { path: '/repo/one.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
-    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-    await act(async () => {
-      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
-    })
-    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
-
-    await act(async () => {
-      store.restore(emptyWs({
-        file: { path: '/repo/two.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false },
-      }))
-      store.sync()
-    })
-
-    const next = document.querySelector('.fview iframe') as HTMLIFrameElement
-    expect(next.getAttribute('sandbox')).toBe('')
-    expect(document.querySelector('.fview .vnote')).not.toBeNull()
-  })
-
-  /* Reopening is a fresh view, and a fresh view has not been consented to. The
-     file may have been rewritten between the two opens -- which is the ordinary
-     case here, since the agent is still working -- so a grant that survived
-     would run content nobody agreed to run. */
-  it('asks again when the same path is opened as a new view', async () => {
-    const one = { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false, seq: 1 }
-    install(emptyWs({ file: one }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-    await act(async () => {
-      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
-    })
-    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
-
-    await act(async () => {
-      store.restore(emptyWs({
-        file: { path: '/repo/other.md', kind: 'md', raw: false, text: 'x', err: null, size: 1, loading: false, seq: 2 },
-      }))
-      store.sync()
-    })
-    await act(async () => {
-      store.restore(emptyWs({ file: { ...one, seq: 3 } }))
-      store.sync()
-    })
-
-    const back = document.querySelector('.fview iframe') as HTMLIFrameElement
-    expect(back.getAttribute('sandbox')).toBe('')
-    expect(back.getAttribute('src') || '').not.toContain('run=1')
-    expect(document.querySelector('.fview .vnote')).not.toBeNull()
-  })
-
-  /* The agent rewriting a file it is still working on replaces the view without
-     any other file in between, which is the path that never passes through a
-     revoke if the grant is keyed by name. */
-  it('asks again when the open file is rewritten in place', async () => {
-    const one = { path: '/repo/game.html', kind: 'html', raw: false, text: null, err: null, size: 9, loading: false, seq: 4 }
-    install(emptyWs({ file: one }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-    await act(async () => {
-      (screen.getByText('gui.ws.html_run') as HTMLElement).click()
-    })
-    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('allow-scripts')
-
-    await act(async () => {
-      store.restore(emptyWs({ file: { ...one, size: 21, seq: 5 } }))
-      store.sync()
-    })
-    expect((document.querySelector('.fview iframe') as HTMLIFrameElement).getAttribute('sandbox')).toBe('')
-  })
-
-  /* The PDF frame runs its viewer's own scripts, so there is nothing withheld
-     to explain and a note there would be noise. */
-  it('says nothing of the sort beside a PDF', async () => {
-    install(emptyWs({
-      file: { path: '/repo/deck.pdf', kind: 'pdf', raw: false, text: null, err: null, size: 9, loading: false },
-    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-    expect(document.querySelector('.fview .vnote')).toBeNull()
+    expect(frame.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(frame.getAttribute('src') || '').toContain('run=1')
+    expect(document.querySelector('.fview')?.textContent || '').toBe('')
+    expect(document.querySelectorAll('.fview button')).toHaveLength(0)
   })
 
   /* The source flag belongs to the rendered and source pair, and a PDF is not
@@ -495,10 +381,8 @@ describe('workspace island', () => {
     deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
                        download_path: '/files/download?token=deck', size: 9 }])
     await mount()
-    /* The deck's own bytes, from its delivery, rather than the PDF it is drawn
-       from. */
-    expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/files/download?token=deck')
-    expect(document.querySelector('.fbar .kseg')).toBeNull()
+    expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
+    expect(document.querySelector('.fbar .pane-head-seg')).toBeNull()
   })
 
   it('keeps the deck bar as it is even when the gateway is this desktop', async () => {
@@ -508,72 +392,40 @@ describe('workspace island', () => {
       openIn: async () => ({}),
     }, { tab: 'file', open: true, picked: true })
     await mount()
-    expect(screen.getByLabelText('gui.ws.download')).toBeTruthy()
-    expect(document.querySelector('.fbar .kseg')).toBeNull()
+    expect(document.querySelector('.fbar .pane-head-seg')).toBeNull()
     expect(screen.getByRole('button', { name: /gui\.ws\.reveal_/ })).toBeTruthy()
     expect(screen.queryByText('gui.ws.open')).toBeNull()
     expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()
   })
 
-  /* A file nobody delivered is saved from the route the viewer reads it
-     through. That route answers inline under a name of its own, so the copy's
-     name has to come from the `download` attribute. */
-  it('saves a file nobody delivered from the route the viewer reads it by', async () => {
-    install(emptyWs({
-      file: { path: '/repo/out/shot.png', kind: 'img', raw: false, text: null, err: null, size: 9, loading: false },
-    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-    const save = screen.getByLabelText('gui.ws.download')
-    expect(save.tagName).toBe('A')
-    expect(save.getAttribute('href')).toBe('/file?path=%2Frepo%2Fout%2Fshot.png')
-    expect(save.getAttribute('download')).toBe('shot.png')
-    expect(save.nextElementSibling).toBe(screen.getByRole('button', { name: /gui\.ws\.reveal_/ }))
-    /* One pair, spaced tighter than the rest of the bar by the domain's own
-       rule; happy-dom applies no stylesheet, so this pins the markup the rule
-       selects and the browser shows the spacing. */
-    expect(save.parentElement?.classList.contains('workspace-file-acts')).toBe(true)
-  })
+  /* A viewer shows a file; it does not hand out copies of it. No kind carries
+     a download, delivered or not -- the file stays where the agent wrote it,
+     one reveal away. */
+  it.each(['/repo/out/shot.png', '/repo/out/paper.pdf', '/repo/report.html', '/repo/notes.md', '/repo/deck.pptx', '/repo/blob.bin'])(
+    'offers no download on %s', async (path) => {
+      install(emptyWs({ file: store.makeFile(path) }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+      deliveries.seed([{ path, name: path.split('/').pop()!, title: 'T', download_path: '/files/download?token=x', size: 9 }])
+      await mount()
+      expect(document.querySelector('.fwrap a[download]')).toBeNull()
+      expect(document.querySelector('.fwrap [href*="/files/download"]')).toBeNull()
+      expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
+      expect(screen.queryByText('gui.ws.save_copy')).toBeNull()
+    })
 
-  /* Where the bar offers a new tab, that button joins the group too, in front
-     of the download, so the three squares touch. The same markup pin as above:
-     the browser shows the spacing. */
+  /* Where the bar offers a new tab, that button joins the reveal in one group,
+     so the squares touch. happy-dom applies no stylesheet, so this pins the
+     markup the domain's rule selects and the browser shows the spacing. */
   const GROUPED: Array<[string, string[]]> = [
-    ['/repo/out/paper.pdf', ['gui.ws.file_newtab', 'gui.ws.download', 'gui.ws.reveal_finder']],
-    ['/repo/report.html', ['gui.ws.file_newtab', 'gui.ws.download', 'gui.ws.reveal_finder']],
-    ['/repo/out/shot.png', ['gui.ws.download', 'gui.ws.reveal_finder']],
+    ['/repo/out/paper.pdf', ['gui.ws.file_newtab', 'gui.ws.reveal_finder']],
+    ['/repo/report.html', ['gui.ws.file_newtab', 'gui.ws.reveal_finder']],
+    ['/repo/out/shot.png', ['gui.ws.reveal_finder']],
   ]
   it.each(GROUPED)('keeps the file actions on %s in one group', async (path, labels) => {
     install(emptyWs({ file: store.makeFile(path) }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     await mount()
-    const group = screen.getByLabelText('gui.ws.download').parentElement!
+    const group = screen.getByLabelText('gui.ws.reveal_finder').parentElement!
     expect(group.classList.contains('workspace-file-acts')).toBe(true)
     expect([...group.children].map((el) => el.getAttribute('aria-label'))).toEqual(labels)
-  })
-
-  it('names the copy after the file on a Windows gateway too', async () => {
-    install(emptyWs({
-      file: { path: 'C:\\Users\\me\\out\\shot.png', kind: 'img', raw: false, text: null, err: null, size: 9, loading: false },
-    }), { canBrowse: true, hostPlatform: () => 'windows' }, { tab: 'file', open: true, picked: true })
-    await mount()
-    expect(screen.getByLabelText('gui.ws.download').getAttribute('download')).toBe('shot.png')
-  })
-
-  /* The ordering BinNote meets too: a reopened session can restore the pane
-     before `deliverables.list` answers. The delivery is the better copy -- it
-     has no size cap -- so the link moves onto it once the row lands. */
-  it('moves the download onto the delivery when its row arrives after the pane', async () => {
-    install(emptyWs({
-      file: { path: '/repo/out/shot.png', kind: 'img', raw: false, text: null, err: null, size: 9, loading: false },
-    }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
-    await mount()
-    expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/file?path=%2Frepo%2Fout%2Fshot.png')
-
-    await act(async () => {
-      deliveries.seed([{ path: '/repo/out/shot.png', name: 'shot.png', title: 'Shot',
-                         download_path: '/files/download?token=shot', size: 9 }])
-    })
-
-    expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/files/download?token=shot')
   })
 
   it('says why a reveal was refused, not the wire code', async () => {
@@ -700,7 +552,7 @@ describe('workspace island', () => {
         path: '/repo/deck.pptx', kind: 'bin',
         raw: false, text: null, err: null, size: 9, loading: false,
       },
-      /* Delivered, which is what gives the note a URL to save from. */
+      /* Delivered: even so, the note hands out no copy to save. */
       deliveries: [{
         path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck', description: '',
         ext: 'pptx', mediaType: '', size: 9, turn: 1, missing: false,
@@ -716,62 +568,7 @@ describe('workspace island', () => {
     expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
     /* And copying the path, which needs no host at all, stays. */
     expect(screen.getByText('gui.ws.copy_path_do')).toBeTruthy()
-    /* The bar's download again, in the note's words, and this is the reader
-       the note is for: the viewer cannot render this kind, the host cannot be
-       asked to open it, and the path in the note is a path on the gateway's
-       machine. */
-    expect(screen.getByText('gui.ws.save_copy').closest('a')?.getAttribute('href'))
-      .toBe('/files/download?token=deck')
-  })
-
-  /* And a file that was never delivered gets no save in the note: its copy is
-     the bar's, from the route the viewer reads it through. */
-  it('offers no copy to save for a file this session never delivered', async () => {
-    install(emptyWs({
-      file: {
-        path: '/repo/vendor/blob.bin', kind: 'bin',
-        raw: false, text: null, err: null, size: 9, loading: false,
-      },
-    }), {
-      canBrowse: true,
-      openIn: async () => ({}),
-      hostIsLocal: () => false,
-    }, { tab: 'file', open: true, picked: true })
-    await mount()
-
-    expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
-    expect(screen.queryByText('gui.ws.save_copy')).toBeNull()
     expect(document.querySelector('.binote a')).toBeNull()
-    expect(screen.getByLabelText('gui.ws.download').getAttribute('href')).toBe('/file?path=%2Frepo%2Fvendor%2Fblob.bin')
-  })
-
-  /* The ordering a session reopen actually produces: `resume()` restores this
-     pane while `loadDeliveries()` is still in flight, so the row arrives after
-     the note is on screen. Read once, the link never appears; the remote reader
-     is stranded by timing rather than by policy. */
-  it('offers the copy when the delivery row arrives after the note mounts', async () => {
-    install(emptyWs({
-      file: {
-        path: '/repo/deck.pptx', kind: 'bin',
-        raw: false, text: null, err: null, size: 9, loading: false,
-      },
-    }), {
-      canBrowse: true,
-      openIn: async () => ({}),
-      hostIsLocal: () => false,
-    }, { tab: 'file', open: true, picked: true })
-    await mount()
-    expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
-    expect(screen.queryByText('gui.ws.save_copy')).toBeNull()
-
-    /* What `deliverables.list` answering looks like from here. */
-    await act(async () => {
-      deliveries.seed([{ path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck',
-                         download_path: '/files/download?token=deck', size: 9 }])
-    })
-
-    expect(screen.getByText('gui.ws.save_copy').closest('a')?.getAttribute('href'))
-      .toBe('/files/download?token=deck')
   })
 
   it('withholds the offer when the source cannot open at all', async () => {
@@ -878,7 +675,7 @@ describe('workspace island', () => {
   it.each(PAIRED)('offers the rendered and source pair on %s: %s', async (path, paired) => {
     install(emptyWs({ file: store.makeFile(path) }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     await mount()
-    const pair = [...document.querySelectorAll('.fbar .kseg button')].map((b) => b.textContent)
+    const pair = [...document.querySelectorAll('.fbar .pane-head-seg button')].map((b) => b.textContent)
     expect(pair).toEqual(paired ? ['gui.ws.file_rendered', 'gui.ws.file_source'] : [])
   })
 
@@ -890,17 +687,17 @@ describe('workspace island', () => {
       },
     }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
     await mount()
-    const rendered = screen.getByRole('button', { name: 'gui.ws.file_rendered' })
-    const source = screen.getByRole('button', { name: 'gui.ws.file_source' })
+    const rendered = screen.getByRole('tab', { name: 'gui.ws.file_rendered' })
+    const source = screen.getByRole('tab', { name: 'gui.ws.file_source' })
     expect(document.querySelector('.fview .prose h2')?.textContent).toBe('Title')
 
     await act(async () => { source.click() })
-    expect(source.getAttribute('aria-pressed')).toBe('true')
+    expect(source.getAttribute('aria-selected')).toBe('true')
     expect(document.querySelector('.fview .prose')).toBeNull()
     expect(screen.getByText('# Title').closest('.code')).not.toBeNull()
 
     await act(async () => { rendered.click() })
-    expect(rendered.getAttribute('aria-pressed')).toBe('true')
+    expect(rendered.getAttribute('aria-selected')).toBe('true')
     expect(document.querySelector('.fview .prose h2')?.textContent).toBe('Title')
   })
 
