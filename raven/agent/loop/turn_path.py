@@ -2768,6 +2768,20 @@ class TurnPathMixin:
             entry["origin"] = mark
         session.record(entry)
 
+    def _file_unanswered(self, messages: list[dict]) -> None:
+        """Append one notice for questions this turn could not put to anyone."""
+        from raven.permissions.turn import UNANSWERED_KIND, unanswered_filing
+
+        filing = unanswered_filing()
+        if filing is None:
+            return
+        for message in messages:
+            notice = message.get(_NOTICE_KEY) or message.get("notice")
+            if isinstance(notice, dict) and notice.get("kind") == UNANSWERED_KIND:
+                return
+        text, notice = filing
+        messages.append({"role": "assistant", "content": text, _NOTICE_KEY: notice})
+
     def _save_turn(
         self,
         session: Session,
@@ -2786,6 +2800,10 @@ class TurnPathMixin:
         and a restored transcript reads the gap between those two as the turn's
         duration.
         """
+        # Both exits that persist a turn come through here, so a question noted
+        # on the turn is filed once whichever exit runs. The early inbound write
+        # also comes through, before any question, and files nothing.
+        self._file_unanswered(messages)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),

@@ -2375,6 +2375,10 @@
       "en": "Part of the runtime is unavailable, so this answer comes without it.",
       "zh": "本回合有部分能力不可用，这个回答不会用到它们。"
     },
+    "gui.notice.question_unanswered": {
+      "en": "A question went unanswered, so the turn continued without an answer.",
+      "zh": "有提问没有得到回答，这一回合在没有答案的情况下继续了。"
+    },
     "gui.hub.auto_use": {
       "zh": "技能由 Raven 按需自动使用，暂不支持单独停用",
       "en": "Skills are picked up by Raven on demand; per-skill toggling is not supported yet"

@@ -407,6 +407,29 @@ async def test_build_one_shot_spine_hands_the_turns_refusals_to_the_caller():
     assert [(r.tool_name, r.source) for r in received] == [("write_file", "unattended")]
 
 
+async def test_build_one_shot_spine_hands_unanswered_questions_to_the_caller():
+    """A question noted inside the turn is readable after teardown, the same
+    way a refusal is: the entrance cannot read its own context back."""
+    from raven.permissions.turn import note_unanswered
+
+    class _AskingLoop:
+        async def run_turn(self, req, emit, drain, *, stream) -> TurnOutcome:
+            note_unanswered("Which base branch?")
+            await emit(Text(content="assumed main", source=req.source))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    received: list = []
+    scheduler, hub, teardown = build_one_shot_spine(_AskingLoop(), "cli", lambda t: None, on_unanswered=received.extend)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
+        await handle.result()
+        await hub.wait_idle("cli")
+    finally:
+        await teardown()
+
+    assert [item.question for item in received] == ["Which base branch?"]
+
+
 async def test_background_refusals_are_collected_after_the_parent_turn_finishes():
     from raven.permissions.turn import note_refusal
 

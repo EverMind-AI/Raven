@@ -173,6 +173,13 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- An unattended turn that asks a question now leaves a record of it. A one-shot
+  run lists those questions after the reply, beside the refused calls, and a
+  session opened later shows the same questions as their own notice. Previously
+  the only trace was the line the model was told ("the user did not answer;
+  proceed with best judgment"), and a sub-agent turn with no page subscribed
+  to the session never wrote even that into the session.
+
 - A heartbeat on an untouched `HEARTBEAT.md` no longer costs a model call every
   interval. The shipped template promises that a file of only headers and
   comments is skipped, and the service skipped only a file with no bytes at all,

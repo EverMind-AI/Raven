@@ -32,6 +32,7 @@ from typing import Any
 from raven.acp_client.asker import held_question
 from raven.contracts.asking import QuestionResponder
 from raven.contracts.tool import Tool, ToolResult
+from raven.permissions.turn import note_unanswered
 
 # Last-resort wait for one whole call when the responder exposes no
 # ``default_timeout_s`` of its own. The broker machinery ships the same value;
@@ -528,6 +529,10 @@ class AskUserTool(Tool):
                     hint = f' recommended option was "{item.recommended}";' if item.recommended else ""
                     told.append(f'For "{item.question}": (user did not answer;{hint} proceed with best judgment).')
                     picks.append(f"{item.question} -> (no answer)" if len(prepared) > 1 else "(no answer)")
+                    # The sentence above is what the model reads. The turn's
+                    # audit is what a reopened session and a one-shot report
+                    # have: the tool result is not that event.
+                    note_unanswered(item.question)
 
         return ToolResult(
             model_text=" ".join(told) + " Continue.",

@@ -93,6 +93,31 @@ async def test_unanswered_question_is_explicit_in_both_texts():
 
 
 @pytest.mark.asyncio
+async def test_an_unanswered_question_is_recorded_on_the_turn():
+    """The model sentence is not the session's record of the question."""
+    from raven.permissions.turn import start_permission_turn
+
+    turn = start_permission_turn(None, conversation_id="tui:test", turn_id="t")
+    tool, _ = _tool({})
+
+    await tool.execute(questions=[{"question": "Ship it?"}, {"question": "Which branch?"}])
+
+    assert [item.question for item in turn.unanswered] == ["Ship it?", "Which branch?"]
+
+
+@pytest.mark.asyncio
+async def test_an_answered_question_is_not_recorded_as_unanswered():
+    from raven.permissions.turn import start_permission_turn
+
+    turn = start_permission_turn(None, conversation_id="tui:test", turn_id="t")
+    tool, _ = _tool({"Ship it?": "yes"})
+
+    await tool.execute(questions=[{"question": "Ship it?"}])
+
+    assert turn.unanswered == []
+
+
+@pytest.mark.asyncio
 async def test_error_paths_return_plain_strings():
     # No broker / no conversation id / no questions predate ToolResult and stay
     # bare strings, so the loop's str branch still has to work.

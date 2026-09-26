@@ -35,7 +35,9 @@ reviewer fails or times out, the call escalates rather than being auto-approved.
 If no approval responder is available, a still-asking call is refused.
 `raven agent -m` never has one: after the reply it lists every refused call,
 and exits with status 3 when any of them needed approval, so an unattended
-driver can tell a run that skipped its changes from one that made them. Pass
+driver can tell a run that skipped its changes from one that made them. It
+also lists questions nobody could answer. Those do not change the exit
+status, because the turn continued with its best judgment. Pass
 `--permission-mode full` when a one-shot must mutate.
 
 The global config supplies the starting mode. A conversation can override it
