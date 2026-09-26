@@ -39,6 +39,7 @@ import { manifest as installed } from './installed/manifest'
 import { manifest as memory } from './memory/manifest'
 import { manifest as model } from './model/manifest'
 import { manifest as onboard } from './onboard/manifest'
+import { manifest as persona } from './persona/manifest'
 import { manifest as rail } from './rail/manifest'
 import { manifest as settings } from './settings/manifest'
 import { manifest as subagents } from './subagents/manifest'
@@ -73,7 +74,7 @@ export interface DomainManifest {
   readonly cssPrefix?: string
 }
 
-/** The nineteen, alphabetically: nothing reads them in an order. */
+/** The twenty, alphabetically: nothing reads them in an order. */
 export const MANIFESTS: readonly DomainManifest[] = [
   browser,
   composer,
@@ -87,6 +88,7 @@ export const MANIFESTS: readonly DomainManifest[] = [
   memory,
   model,
   onboard,
+  persona,
   rail,
   settings,
   subagents,

@@ -28,6 +28,7 @@
 
 import { busy as turnBusy } from '../features/composer/turn'
 import * as extAgents from '../features/extAgents/store'
+import * as persona from '../features/persona/store'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
 import { byEscape } from './pages'
@@ -65,6 +66,7 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
    silence. The verb is the domain's; the order is the table's. */
 const CLOSERS: Record<PageId, () => void> = {
   extAgentsPage: () => extAgents.close(),
+  personaPage: () => persona.closePage(),
 }
 
 /* The four layers Escape reaches before any page. Two of them are raised from

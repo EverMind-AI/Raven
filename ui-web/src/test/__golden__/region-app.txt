@@ -44,6 +44,11 @@ div.app
             path
             path
         span
+      button#personaBtn.navi
+        svg
+          path
+          path
+        span
     div#findBox.find
       span.ic
         svg

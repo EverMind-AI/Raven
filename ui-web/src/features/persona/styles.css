@@ -1,0 +1,155 @@
+/* The persona wall's own rules.
+ *
+ * Self-contained on purpose: the classes this page wore in the shell it came
+ * from -- `card`, `cards`, `desc`, `muted`, `toolbar`, `primary` -- were the
+ * old global stylesheet's, and a class a new domain introduces carries that
+ * domain's prefix with its rule here (ui-web/scripts/check-class-namespace.mjs).
+ * So the wall names its own, and reads the same in both themes because every
+ * colour below is a token.
+ */
+
+.persona-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 0 12px;
+}
+.persona-toolbar input[type="search"] {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--ink);
+  padding: 7px 10px; color: var(--text); font: inherit; font-size: 13px;
+}
+
+.persona-wall {
+  display: grid; gap: 11px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.persona-card {
+  border: 1px solid var(--line); border-radius: 12px; background: var(--ink);
+  box-shadow: var(--elev);
+  padding: 13px 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.persona-card header { display: flex; align-items: center; gap: 8px; }
+.persona-card h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+
+.persona-desc { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text); }
+.persona-muted { margin: 0; font-size: 12px; color: var(--faint); }
+
+.persona-workers { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; list-style: none; }
+
+.persona-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  border: 0; border-radius: 7px; padding: 3px 8px; background: var(--surface);
+  font-family: var(--mono); font-size: 11px; color: var(--faint);
+}
+
+.persona-start {
+  align-self: flex-start; margin-top: 2px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--surface);
+  padding: 6px 12px; font: inherit; font-size: 12px; color: var(--text); cursor: pointer;
+}
+.persona-start:hover:not(:disabled) { border-color: var(--faint); }
+.persona-start:disabled { opacity: 0.5; cursor: default; }
+
+/* ---- the maker ----------------------------------------------------------- */
+
+.persona-tabs { display: flex; gap: 4px; padding: 0 0 12px; }
+.persona-tab {
+  border: 1px solid transparent; border-radius: 9px; background: none;
+  padding: 5px 11px; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer;
+}
+.persona-tab[aria-selected="true"] { border-color: var(--line); background: var(--surface); color: var(--text); }
+
+.persona-maker { display: flex; flex-direction: column; gap: 10px; max-width: 620px; }
+
+.persona-ask {
+  min-height: 92px; resize: vertical;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--ink);
+  padding: 11px 12px; color: var(--text); font: inherit; font-size: 13px; line-height: 1.55;
+}
+.persona-ask:disabled { opacity: 0.6; }
+
+.persona-acts { display: flex; align-items: center; gap: 8px; }
+
+.persona-drop {
+  border: 1px solid transparent; border-radius: 9px; background: none;
+  padding: 6px 12px; font: inherit; font-size: 12px; color: var(--faint); cursor: pointer;
+}
+.persona-drop:hover:not(:disabled) { color: var(--text); background: var(--surface); }
+.persona-drop:disabled { opacity: 0.5; cursor: default; }
+
+/* The one card that is not on the wall: dashed, because nothing is on disk. */
+.persona-draft { border-style: dashed; }
+
+.persona-name { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--faint); }
+.persona-name input {
+  flex: 1; min-width: 0;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--ink);
+  padding: 5px 9px; color: var(--text); font: inherit; font-size: 12px;
+}
+
+/* ---- the making conversation --------------------------------------------- */
+
+.persona-said { display: flex; flex-direction: column; gap: 10px; }
+.persona-said p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text); }
+.persona-who {
+  display: block; margin-bottom: 2px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--faint);
+}
+.persona-mine { padding-left: 10px; border-left: 2px solid var(--line); }
+.persona-theirs { padding-left: 10px; border-left: 2px solid transparent; }
+
+/* The question the turn is blocked on. Boxed, because until it is answered
+   nothing else on this page can move. */
+.persona-asked {
+  border: 1px solid var(--line); border-radius: 11px; background: var(--surface);
+  padding: 11px 12px; display: flex; flex-direction: column; gap: 9px;
+}
+.persona-question { margin: 0; font-size: 13px; line-height: 1.55; color: var(--text); }
+.persona-choices { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.persona-choice {
+  border: 1px solid var(--line); border-radius: 9px; background: var(--ink);
+  padding: 6px 11px; font: inherit; font-size: 12px; color: var(--text); cursor: pointer; text-align: left;
+}
+.persona-choice:hover { border-color: var(--faint); }
+
+.persona-lapsed { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* ---- what the turn is doing ---------------------------------------------- */
+
+.persona-progress { display: flex; flex-direction: column; gap: 7px; }
+.persona-doing {
+  display: flex; align-items: center; gap: 7px; margin: 0;
+  font-size: 12px; color: var(--faint);
+}
+.persona-secs { font-family: var(--mono); font-size: 11px; opacity: 0.8; }
+.persona-spin {
+  width: 9px; height: 9px; flex: none; border-radius: 50%;
+  border: 1.5px solid var(--line); border-top-color: var(--faint);
+  animation: persona-turn 0.9s linear infinite;
+}
+@keyframes persona-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .persona-spin { animation: none; } }
+
+.persona-ran { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 0; padding: 0; list-style: none; }
+
+/* A seat: the local label, and the registered sub-agent it dispatches to. */
+.persona-seat { display: inline-flex; align-items: center; gap: 5px; }
+.persona-to { color: var(--line); font-size: 11px; }
+.persona-agent { font-family: var(--mono); font-size: 11px; color: var(--text); }
+
+/* The seat list reads as rows now, not chips in a line: one identity and the
+   sub-agents under it. */
+.persona-workers { flex-direction: column; align-items: flex-start; gap: 4px; }
+.persona-seat { flex-wrap: wrap; }
+.persona-lead { padding-bottom: 3px; }
+.persona-brief {
+  flex-basis: 100%; padding-left: 2px;
+  font-size: 11px; line-height: 1.5; color: var(--faint);
+}
+
+/* The delete question, answered on the card so the name is in front of the
+   reader when they confirm. */
+.persona-confirm { flex-wrap: wrap; }
+.persona-danger { color: var(--bad, #b3261e); }
+.persona-danger:hover:not(:disabled) { color: var(--bad, #b3261e); background: var(--surface); }

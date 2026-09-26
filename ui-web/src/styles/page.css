@@ -6274,6 +6274,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* Structure only. Colour on a card would be an encoding with no key on the
    card; the executor's name is in the detail, where it can be read. */
 .pbcell { fill: var(--faint); opacity: .5; }
+.pbcell.worker { fill: var(--sky); opacity: .58; }
 .pbcell.open { fill: none; stroke: var(--sky); stroke-width: 1.1; stroke-dasharray: 3 3; }
 .pbedge { stroke: color-mix(in oklab, var(--faint) 45%, transparent); stroke-width: 1.2; fill: none; }
 .pbedge.cut { stroke-dasharray: 3 3; }
@@ -6304,12 +6305,28 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* The standing facts: label over value, packed left. Three short values spread
    across equal columns would read as three unrelated things. */
 .pbmeta {
-  display: grid; grid-template-columns: repeat(3, max-content); gap: 56px;
+  display: grid; grid-template-columns: repeat(4, max-content); gap: 56px;
   padding: 15px 0 16px; border-top: 1px solid var(--line);
 }
 /* Named `pblab` / `pbval` rather than the bare `lab` / `val` the page already
    has: those two carry an uppercase transform and a 9px left margin, which is
    what put every value out of line with its own label. */
+.pbharness { margin: 0 0 18px; }
+.pbharness h2 { margin: 0 0 10px; font-size: var(--step-0); font-weight: 600; }
+.pbworkers { display: flex; flex-wrap: wrap; gap: 8px; }
+.pbworker {
+  display: grid; grid-template-columns: max-content max-content; align-items: baseline; gap: 5px 12px;
+  min-width: 220px; max-width: 380px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+}
+.pbworkername { font-family: var(--mono); font-size: 12.5px; color: var(--text); }
+.pbworkeragent { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.pbworker p {
+  grid-column: 1 / -1; margin: 0; font-size: 12px; line-height: 1.45; color: var(--muted);
+}
+@media (max-width: 760px) {
+  .pbmeta { grid-template-columns: repeat(2, max-content); gap: 20px 42px; }
+}
 .pblab { display: block; font-size: 11.5px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
 .pbval { font-size: 15px; color: var(--text); }
 .pbval.mono { font-family: var(--mono); font-size: 14px; }

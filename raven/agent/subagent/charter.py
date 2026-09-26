@@ -235,6 +235,24 @@ def current_charter() -> Charter | None:
     return _CHARTER.get()
 
 
+def bind_charter_for_turn(charter: Charter | None) -> None:
+    """Replace the charter inside the caller's existing turn scope.
+
+    The counterpart of ``bind_delegate_for_turn``: ``load_playbook`` runs after
+    the outer scope has opened, so a stored Persona's coordinator seat reaches
+    the rest of that turn the same way its workers do, and the outer scope's
+    token still restores the previous value.
+
+    The call log is opened with it. ``charter_scope`` opens one only when it was
+    given a charter, so a turn that started without one has ``None`` there, and
+    a coordinator bound here would otherwise have its ``judge`` asked with an
+    empty history on every call.
+    """
+    _CHARTER.set(charter or None)
+    if charter and _CALLS.get() is None:
+        _CALLS.set([])
+
+
 def record_call(name: str, params: Mapping[str, Any]) -> None:
     """Remember a call that ran and did not fail.
 
@@ -509,6 +527,7 @@ def narrowed_timeout(configured: int | None) -> int | None:
 __all__ = [
     "Charter",
     "CheckRule",
+    "bind_charter_for_turn",
     "charter_scope",
     "current_charter",
     "judge",

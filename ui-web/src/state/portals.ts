@@ -51,7 +51,7 @@ export interface Portal {
    static regions (#splash and #noJs are removed before the snapshot is taken)
    then the four appended while the page installs itself. Keyed by tag plus id,
    or tag plus classes when there is no id -- the model picker's wrapper has
-   neither, which is why one entry is a bare `div`. The seven module pages are
+   neither, which is why one entry is a bare `div`. The module pages are
    the table in state/pages.ts, in its order, because that IS the order they
    are rendered in (src/App.tsx). */
 export const BOOT_BODY_ORDER = [
