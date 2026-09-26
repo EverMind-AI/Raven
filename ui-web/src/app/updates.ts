@@ -243,22 +243,30 @@ export function describeStatus(s: UpStatus): { text: string; fraction: number | 
 
 export function watchUpgrade(shade: UpgradeShade, since?: number): void {
   const t0 = since || Date.now()
-  /* The ceiling counts silence, not the whole upgrade. A slow link can take
-     longer than the ceiling to download a release, and giving up on one that
-     is visibly still moving would be the one wrong answer left. */
-  let heard: number | null = null
+  /* The ceiling counts time without progress, not the whole upgrade. A slow
+     link can take longer than the ceiling to download a release, and giving up
+     on one that is visibly still moving would be the wrong answer. But the
+     helper's status server is its own thread and keeps answering while a
+     download or uv is stuck, so an answer alone is not progress: only a new
+     phase or more bytes move the deadline. Otherwise a stalled helper holds
+     the reader under a card with no way out, and a reload resumes it. */
+  let moved: number | null = null
+  let last: { phase: string; done: number } | null = null
   let helperSeen = false
   shade.say(t('gui.upg.working'))
   const tick = async (): Promise<void> => {
-    if (Date.now() - (heard ?? t0) > UPG_CEILING_MS) {
+    if (Date.now() - (moved ?? t0) > UPG_CEILING_MS) {
       upMarkClear()
       shade.fail(t('gui.upg.failed'), t('gui.upg.gave_up'))
       return
     }
     const status = await readStatus()
     if (status) {
-      heard = Date.now()
       helperSeen = true
+      if (!last || status.phase !== last.phase || status.done > last.done) {
+        moved = Date.now()
+        last = { phase: status.phase, done: status.done }
+      }
       if (status.phase === 'failed') {
         /* The helper holds this until it has been read, then brings the old
            Raven back; without the card the page would reload onto it and the

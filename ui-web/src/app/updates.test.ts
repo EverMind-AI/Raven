@@ -262,15 +262,47 @@ describe('waiting out an upgrade the page started', () => {
     expect(card.fail).toHaveBeenCalledWith(t('gui.upg.failed'), 'uv exited with status 1.')
   })
 
-  it('keeps waiting past the ceiling while the helper keeps reporting', async () => {
+  it('keeps waiting past the ceiling while the download keeps moving', async () => {
     /* A slow link can take longer than the ceiling to download a release. */
     vi.useFakeTimers()
     const mod = (await loadPart(() => import('./updates'), {})) as Updates
-    port(() => ({ upgrading: true, phase: 'downloading', done: 1, total: 100, rate: 1, message: null }))
+    let done = 0
+    port(() => ({ upgrading: true, phase: 'downloading', done: (done += 1), total: 1e9, rate: 1, message: null }))
     const card = shade()
 
     mod.watchUpgrade(card as never)
     await vi.advanceTimersByTimeAsync(21 * 60 * 1000)
+
+    expect(card.fail).not.toHaveBeenCalled()
+  })
+
+  it('gives up on a helper that keeps answering while nothing moves', async () => {
+    /* The status server is its own thread: it answers while a download or uv
+       is stuck. An answer is not progress, or the card would never let go. */
+    vi.useFakeTimers()
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    port(() => ({ upgrading: true, phase: 'downloading', done: 5, total: 100, rate: 0, message: null }))
+    const card = shade()
+
+    mod.watchUpgrade(card as never)
+    await vi.advanceTimersByTimeAsync(21 * 60 * 1000)
+
+    expect(card.fail).toHaveBeenCalledWith(t('gui.upg.failed'), t('gui.upg.gave_up'))
+  })
+
+  it('counts a new phase as progress even when the bytes stay put', async () => {
+    /* uv resolving after the download reports no bytes, and must not inherit
+       the time the download took. */
+    vi.useFakeTimers()
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    let phase = 'downloading'
+    port(() => ({ upgrading: true, phase, done: 100, total: 100, rate: 0, message: null }))
+    const card = shade()
+
+    mod.watchUpgrade(card as never)
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000)
+    phase = 'installing'
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000)
 
     expect(card.fail).not.toHaveBeenCalled()
   })
