@@ -856,6 +856,45 @@ def test_upgrade_helper_upgrades_when_no_size_can_be_probed(
     ]
 
 
+def test_upgrade_helper_manifest_reaches_a_log_file_before_uv_does(
+    monkeypatch: pytest.MonkeyPatch,
+    release_directory: _ReleaseDirectory,
+) -> None:
+    """From the page the helper's output is web.log, a file, which Python
+    buffers by the block, while uv writes to the same file at once. Unflushed,
+    the manifest landed after uv's lines -- the one place it exists to precede."""
+    release_directory.sizes = {"raven-0.1.4-py3-none-any.whl": 6 * 1048576}
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="utf-8", write_through=False))
+    seen: dict[str, str] = {}
+
+    def run(argv, check):
+        seen.setdefault("before_uv", raw.getvalue().decode("utf-8"))
+        return Mock(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert "Downloading 4 packages for Raven 0.1.4." in seen["before_uv"]
+    assert "total" in seen["before_uv"]
+
+
+def test_upgrade_helper_says_package_for_one(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    release_directory: _ReleaseDirectory,
+) -> None:
+    release_directory.files["raven-plugins.txt"] = b"# no plugins in this release\n"
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    helper_main = _load_upgrade_helper()
+
+    helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert "Downloading 1 package for Raven 0.1.4." in capsys.readouterr().out
+
+
 def test_upgrade_helper_refuses_to_upgrade_without_the_plugin_list(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

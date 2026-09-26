@@ -397,7 +397,12 @@ def run(argv=None):
         # engines are tens of megabytes reads exactly like one that has stopped.
         # The size up front is what separates a slow link from a dead one, and
         # the line comes before the probes so a probe that hangs adds no silence.
-        print(f"Downloading {len(assets)} packages for Raven {latest_version}.")
+        #
+        # Flushed by hand: from the page, this output goes to web.log, a file,
+        # where Python buffers it by the block -- and uv writes to the same file
+        # straight away, so an unflushed manifest landed after uv's own lines.
+        noun = "package" if len(assets) == 1 else "packages"
+        print(f"Downloading {len(assets)} {noun} for Raven {latest_version}.", flush=True)
         sizes = []
         for name, url in assets:
             try:
@@ -409,7 +414,7 @@ def run(argv=None):
         width = max(len(name) for name, _ in sizes)
         for name, size in sizes:
             print(f"  {name.ljust(width)}  " + (f"{size / 1048576:6.1f} MiB" if size else "     unknown"))
-        print(f"  {'total'.ljust(width)}  {sum(size for _, size in sizes) / 1048576:6.1f} MiB")
+        print(f"  {'total'.ljust(width)}  {sum(size for _, size in sizes) / 1048576:6.1f} MiB", flush=True)
 
     def write_list(lines, prefix):
         fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
