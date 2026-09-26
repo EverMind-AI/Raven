@@ -47,3 +47,20 @@ def test_shared_protocols_reuse_sources_but_child_implementations_keep_their_own
     assert len(sources) == 3
     with pytest.raises(ValueError, match="collision"):
         merge_sources(sources, {"strategy.impl": {**incoming["strategy.impl"], "digest": "changed"}}, "child.Research")
+
+
+def test_only_dag_playbooks_contribute_nodes_that_can_hold_requirements(tmp_path):
+    from types import SimpleNamespace
+
+    from experimental.curator.raven_adapter.inspection.runtime import playbook_nodes
+
+    specs = {
+        "work": SimpleNamespace(nodes=[SimpleNamespace(id="draft", model_dump=lambda mode: {"id": "draft"})]),
+        "composed": SimpleNamespace(nodes=None),
+    }
+    library = SimpleNamespace(names=lambda: list(specs), store=SimpleNamespace(load=specs.__getitem__))
+    runtime = SimpleNamespace(loop=SimpleNamespace(_playbooks=library))
+    baseline = SimpleNamespace(config=SimpleNamespace(workspace_path=tmp_path))
+    assert playbook_nodes(runtime, baseline) == {
+        "work/draft": {"playbook": "work", "node": {"id": "draft"}, "requirements": []}
+    }

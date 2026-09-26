@@ -26,13 +26,16 @@ def playbook_library(loop):
 
 
 def playbook_nodes(runtime, baseline):
-    """Every loaded playbook node with the requirements file beside it in the agent home."""
+    """Every node a loaded dag playbook ships, with the requirements file beside it in the agent home.
+
+    Prompt and rounds playbooks compose their graph at run time, so they have no fixed node to hold requirements.
+    """
     library = playbook_library(runtime.loop)
     nodes = {}
     if library is not None:
         for name in library.names():
             spec = library.store.load(name)
-            for node in spec.nodes:
+            for node in spec.nodes or ():
                 key = f"{name}/{node.id}"
                 path = baseline.config.workspace_path / "playbooks" / name / "nodes" / node.id / "requirements.json"
                 nodes[key] = {

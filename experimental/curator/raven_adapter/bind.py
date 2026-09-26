@@ -503,7 +503,7 @@ def _verify_playbooks(runtime, artifact):
             if (
                 library is None
                 or parts[0] not in loaded
-                or parts[2] not in {node.id for node in library.store.load(parts[0]).nodes}
+                or parts[2] not in {node.id for node in library.store.load(parts[0]).nodes or ()}
             ):
                 raise ValueError(f"requirements refer to a missing native playbook node: {name}")
         elif len(parts) != 2 or parts[1] != "playbook.md":

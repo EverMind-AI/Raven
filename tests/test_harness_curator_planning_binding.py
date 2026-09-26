@@ -177,7 +177,11 @@ async def test_changed_policy_rejects_unverified_completion_without_losing_state
 @pytest.mark.asyncio
 async def test_each_session_keeps_its_own_plan_across_restarts(tmp_path):
     from experimental.curator.raven_adapter.strategy import SESSION
+    from raven.permissions.turn import start_permission_turn
 
+    # Outside an explicit session the key falls back to the current turn's conversation, and a turn another test
+    # bound in this process would otherwise name one here.
+    start_permission_turn(None, conversation_id="", turn_id="unattended")
     planning = make(tmp_path)
     await planning.prepare()
     tool = planning.tool()
