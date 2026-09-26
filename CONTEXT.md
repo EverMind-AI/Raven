@@ -85,6 +85,12 @@ drives the LLM + tool-execution iterations, consolidates memory, and emits `Deli
 events via the Spine `emit` callback. Exposed to the Spine via `AgentTurnRunner`.
 _Avoid_: calling a single LLM call the "agent loop" — the loop spans all Iterations of one turn.
 
+**Turn synthesis policy** (`agent/loop/_shared.py:TurnSynthesisPolicy`):
+Product guidance for the tool-free reply when a Turn stops at its iteration or time
+budget or on a repeating tool call. A product may request one buffered format repair
+and format the static fallback; a Turn without this policy keeps the Agent Loop's
+generic wrap-up.
+
 **Harness Modules** (`agent/harness/`, paper `contracts/harness.py`):
 The four generation-scoped strategy roles the Agent Loop delegates to without giving up its
 Turn state machine: **Memory** assembles the window the model sees, **Planning** may prepare

@@ -389,6 +389,7 @@ async def test_a_spent_wall_clock_wraps_up_rather_than_going_silent(tmp_path):
 
     assert outcome.status == "interrupted"
     assert final, "the turn is never silent"
+    assert "time limit" in final
     assert meta["turn_end"]["stopped_by"] == "wall_clock"
     assert meta["turn_end"]["wall_clock_budget_s"] == 0
 

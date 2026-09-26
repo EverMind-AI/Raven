@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from raven.agent.loop import AgentLoop
+from raven.agent.loop import TURN_SYNTHESIS_KEY, AgentLoop, TurnSynthesisPolicy
 from raven.agent.loop._shared import _MAX_ITER_STATIC_FALLBACK, _MAX_ITER_SYNTHESIS_PROMPT
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.config.raven import CheckpointConfig, RuntimeConfig
@@ -140,6 +140,44 @@ async def test_synthesized_reply_lands_in_history(workspace):
     assert not any("used up the tool-calling budget" in (m.get("content") or "") for m in messages)
 
 
+@pytest.mark.asyncio
+async def test_exhaustion_repairs_a_product_report_before_streaming_or_persisting(workspace):
+    class Provider(_ToolThenSynthProvider):
+        async def chat(self, messages, tools=None, **kwargs):
+            if tools is not None:
+                return await super().chat(messages, tools=tools, **kwargs)
+            self.synth_calls += 1
+            content = (
+                "Partial summary: did A and B; C is still pending."
+                if self.synth_calls == 1
+                else "## Answer\nA and B are done.\n\n## Findings\nA and B.\n\n## Limitations\nC is pending."
+            )
+            return LLMResponse(content=content, finish_reason="stop")
+
+    provider = Provider()
+    agent = _make_agent(workspace, provider)
+    streamed = []
+
+    async def on_token_delta(delta):
+        streamed.append(delta)
+
+    policy = TurnSynthesisPolicy(
+        guidance="Write the partial result under Answer, Findings, and Limitations.",
+        repair_prompt=lambda text: "Rewrite into three sections." if "## Answer" not in text else None,
+    )
+    final, _used, messages, outcome = await agent._run_agent_loop(
+        [{"role": "user", "content": "do the thing"}],
+        hook_metadata={TURN_SYNTHESIS_KEY: policy},
+        on_token_delta=on_token_delta,
+    )
+
+    assert outcome.status == "interrupted"
+    assert provider.synth_calls == 2
+    assert streamed == [final]
+    assert final.startswith("## Answer")
+    assert messages[-1]["content"] == final
+
+
 # --------------------------------------------------------------------------- #
 # Unit-level: _synthesize_final_on_exhaustion behavior                         #
 # --------------------------------------------------------------------------- #
@@ -187,6 +225,23 @@ async def test_synthesis_withholds_tools_and_threads_fallback_chain():
     # The synthesis nudge is appended as a trailing user turn.
     assert call["messages"][-1]["role"] == "user"
     assert call["messages"][-1]["content"] == _MAX_ITER_SYNTHESIS_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_product_synthesis_formats_the_static_fallback():
+    provider = _RecordingProvider(raises=RuntimeError("unavailable"))
+    synth = _bind_synth(provider)
+    policy = TurnSynthesisPolicy(
+        guidance="Use three sections.",
+        format_fallback=lambda reason: f"## Answer\n{reason}\n\n## Findings\nNone\n\n## Limitations\nInterrupted",
+    )
+
+    result = await synth([], "primary", None, synthesis_policy=policy)
+
+    assert result.startswith("## Answer\n")
+    assert "maximum number of tool call iterations" in result
+    assert provider.calls[0]["tools"] is None
+    assert provider.calls[0]["messages"][-1]["content"].endswith("Use three sections.")
 
 
 def test_synthesis_prompt_pins_reply_language():
