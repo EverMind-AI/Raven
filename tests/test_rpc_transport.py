@@ -748,3 +748,28 @@ async def test_a_page_with_no_judgement_of_its_sources_says_nothing(tmp_path: Pa
         assert "X-Raven-Page-Behind" not in (await client.get("/")).headers
     finally:
         await client.close()
+
+
+async def test_stopping_the_server_closes_an_open_page_instead_of_waiting_on_it() -> None:
+    """aiohttp's cleanup waits for live handlers rather than closing websockets,
+    so a tab left open held the whole process up for most of a minute after it
+    was told to stop. A page-started upgrade cannot begin installing until this
+    process exits, so that minute was dead air on the reader's screen."""
+    import asyncio
+
+    from aiohttp import WSCloseCode, WSMsgType
+
+    gateway = WsGateway()
+    server = TestServer(build_app(gateway, None))
+    client = TestClient(server)
+    await client.start_server()
+    gateway.port = server.port
+    ws = await client.ws_connect("/rpc", headers={"X-Raven-Token": gateway.session_token})
+    try:
+        await asyncio.wait_for(server.close(), timeout=5)
+        message = await asyncio.wait_for(ws.receive(), timeout=5)
+    finally:
+        await client.close()
+
+    assert message.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED)
+    assert ws.close_code == WSCloseCode.GOING_AWAY
