@@ -231,6 +231,26 @@ def _reasoning_wire_keys(provider: Any, model: str | None) -> Any:
     return shape
 
 
+def _file_unanswered(messages: list[dict]) -> None:
+    """Append one notice for questions this turn could not put to anyone.
+
+    A function rather than a method: ``_save_turn`` is borrowed by stubs that
+    are not the loop, and a method those stubs do not have would fail the save
+    they are there to exercise.
+    """
+    from raven.permissions.turn import UNANSWERED_KIND, unanswered_filing
+
+    filing = unanswered_filing()
+    if filing is None:
+        return
+    for message in messages:
+        notice = message.get(_NOTICE_KEY) or message.get("notice")
+        if isinstance(notice, dict) and notice.get("kind") == UNANSWERED_KIND:
+            return
+    text, notice = filing
+    messages.append({"role": "assistant", "content": text, _NOTICE_KEY: notice})
+
+
 class TurnPathMixin:
     """The turn execution path: dispatch, the agent loop, streaming, recovery,
     persistence."""
@@ -2786,6 +2806,10 @@ class TurnPathMixin:
         and a restored transcript reads the gap between those two as the turn's
         duration.
         """
+        # Both exits that persist a turn come through here, so a question noted
+        # on the turn is filed once whichever exit runs. The early inbound write
+        # also comes through, before any question, and files nothing.
+        _file_unanswered(messages)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),

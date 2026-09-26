@@ -15,6 +15,7 @@ from loguru import logger
 
 from raven.acp_client import autofill, elicitation
 from raven.acp_client.asker import attribute, current_ask, current_autofill, question_lock
+from raven.permissions.turn import current_turn, note_unanswered
 
 LOCK_WAIT_SECONDS = 600.0
 """How long a queued form waits for its conversation before declining.
@@ -81,8 +82,14 @@ class Elicitor:
         # autofill left over from the first turn would answer this turn's
         # questions out of a conversation that is not this one.
         self._autofill = current_autofill()
+        # Same capture as the asker: `elicit` is awaited from the connection's
+        # read loop, whose context is not this run's.
+        self._permission_turn = current_turn()
         self._cancelled = False
         self._tasks: set[asyncio.Task] = set()
+
+    def _note_unseen(self, message: str) -> None:
+        note_unanswered(attribute(self._agent, self._instance, message), turn=self._permission_turn)
 
     def cancel(self) -> None:
         """Stop answering: the run whose questions these are has ended.
@@ -139,6 +146,7 @@ class Elicitor:
                 self._agent,
                 conversation_id,
             )
+            self._note_unseen(ask.message)
             return elicitation.decline()
 
         if self._cancelled:
@@ -187,6 +195,7 @@ class Elicitor:
                 conversation_id,
                 LOCK_WAIT_SECONDS,
             )
+            self._note_unseen(ask.message)
             return elicitation.decline()
         try:
             # What the user is being taken through, so a frontend can show the

@@ -32,6 +32,7 @@ from typing import Any
 from raven.acp_client.asker import held_question
 from raven.contracts.asking import QuestionResponder
 from raven.contracts.tool import Tool, ToolResult
+from raven.permissions.turn import note_unanswered
 
 # Last-resort wait for one whole call when the responder exposes no
 # ``default_timeout_s`` of its own. The broker machinery ships the same value;
@@ -240,6 +241,24 @@ def _prepare(entries: list[dict[str, Any]]) -> tuple[list["_Question"], str]:
             )
         )
     return prepared, ""
+
+
+def _note_prepared(questions: Any) -> None:
+    """Record questions a structurally unavailable call would have asked.
+
+    A call that does not normalize, or that ``_prepare`` rejects, is not one
+    of those: there is no question to put to anyone, and the error already
+    tells the model to send a different call.
+    """
+    try:
+        entries = _normalize_questions(questions, strict_json=True)
+    except ValueError:
+        return
+    prepared, rejection = _prepare(entries)
+    if rejection or not prepared:
+        return
+    for item in prepared:
+        note_unanswered(item.question)
 
 
 class AskUserTool(Tool):
@@ -453,9 +472,13 @@ class AskUserTool(Tool):
 
     async def execute(self, questions: Any, **kwargs: Any) -> "str | ToolResult":
         cid = self._cid.get()
-        if not self._broker:
-            return "Error: ask_user not configured (no question broker)"
-        if not cid:
+        # A one-shot turn never wires a broker, so this returns before any
+        # round trip. The questions are still what the run asked; record the
+        # ones that would have been put to someone, then keep the same error.
+        if not self._broker or not cid:
+            _note_prepared(questions)
+            if not self._broker:
+                return "Error: ask_user not configured (no question broker)"
             return "Error: ask_user has no conversation context"
         try:
             entries = _normalize_questions(questions, strict_json=True)
@@ -528,6 +551,10 @@ class AskUserTool(Tool):
                     hint = f' recommended option was "{item.recommended}";' if item.recommended else ""
                     told.append(f'For "{item.question}": (user did not answer;{hint} proceed with best judgment).')
                     picks.append(f"{item.question} -> (no answer)" if len(prepared) > 1 else "(no answer)")
+                    # The sentence above is what the model reads. The turn's
+                    # audit is what a reopened session and a one-shot report
+                    # have: the tool result is not that event.
+                    note_unanswered(item.question)
 
         return ToolResult(
             model_text=" ".join(told) + " Continue.",

@@ -984,6 +984,32 @@ def test_a_one_shot_refused_only_by_a_deny_rule_reports_it_and_exits_0(
     assert "--permission-mode" not in r.stdout
 
 
+def test_a_one_shot_whose_questions_went_unanswered_says_so_and_exits_0(
+    tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A question nobody could answer used to vanish into the model's context.
+    The run still succeeded: the model was told to continue."""
+    from raven.permissions.turn import note_unanswered
+
+    ws = tmp_path / "chanwork"
+    ws.mkdir()
+
+    def ask_twice() -> None:
+        note_unanswered("Which base branch?")
+        note_unanswered("Which base branch?")
+
+    r, _ = _invoke_agent_capturing_session(monkeypatch, ws, [], during_turn=ask_twice)
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", r.stdout)
+
+    assert r.exit_code == 0, plain
+    assert "stub-response" in plain
+    assert "1 question(s) went unanswered" in plain
+    assert plain.count("Which base branch?") == 1
+    assert "best judgment" in plain
+    assert "were refused" not in plain
+    assert "--permission-mode" not in plain
+
+
 def test_a_one_shot_with_nothing_refused_prints_no_report(
     tmp_config: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
