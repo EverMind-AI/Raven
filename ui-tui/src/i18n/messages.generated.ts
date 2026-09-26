@@ -1289,6 +1289,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.upg.note_bare': 'new version available',
     'gui.upg.reauth': 'Raven restarted but this page is no longer signed in. Reopen Raven.',
     'gui.upg.title': 'Upgrade Raven?',
+    'gui.upg.why.gateway_hosted':
+      'This page runs inside the Raven gateway, which cannot restart itself from here yet. After upgrading in a terminal, run raven web --stop and then raven web to load the new version.',
+    'gui.upg.why.not_serving': 'This page is not being served by a running Raven, so it has nothing here to upgrade.',
     'gui.upg.working': 'Upgrading Raven...',
     'gui.wd.back': 'Back',
     'gui.wd.blocked': "Not a workspace: Raven's own data is here or beneath it. Its folders may still be.",
@@ -3807,6 +3810,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.upg.note_bare': '有新版本',
     'gui.upg.reauth': 'Raven 已重启，但这个页面的登录失效了，请重新打开 Raven。',
     'gui.upg.title': '升级 Raven？',
+    'gui.upg.why.gateway_hosted':
+      '这个页面跑在 Raven gateway 里，暂时还不能从页面上自己重启。在终端里升级完之后，再依次运行 raven web --stop 和 raven web，才会用上新版本。',
+    'gui.upg.why.not_serving': '这个页面当前没有正在运行的 Raven 在托管，这里没有可以升级的对象。',
     'gui.upg.working': '正在升级 Raven…',
     'gui.wd.back': '返回',
     'gui.wd.blocked': '这里不能作为工作区：Raven 自己的数据在此处或其下；里面的文件夹可以',

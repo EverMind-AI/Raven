@@ -360,6 +360,17 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
         """Start the Raven gateway."""
         if ctx.invoked_subcommand is not None:
             return
+        # Before the instance lock, not after: the wait inside can last the
+        # whole install, and holding the lock through it is what would stop the
+        # gateway that the finished install is supposed to bring back.
+        #
+        # `raven serve` has guarded this since the marker existed; the gateway
+        # is the surface `raven web` actually supervises, so a restart landing
+        # inside an upgrade window came up on a half-written environment and
+        # served the placeholder page for the rest of its life.
+        from raven.cli.serve_commands import _refuse_incomplete_install
+
+        _refuse_incomplete_install("raven gateway")
         from raven.agent.loop.bundles import HostWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override

@@ -4383,6 +4383,14 @@
       "en": "Upgrade Raven?",
       "zh": "升级 Raven？"
     },
+    "gui.upg.why.gateway_hosted": {
+      "en": "This page runs inside the Raven gateway, which cannot restart itself from here yet. After upgrading in a terminal, run raven web --stop and then raven web to load the new version.",
+      "zh": "这个页面跑在 Raven gateway 里，暂时还不能从页面上自己重启。在终端里升级完之后，再依次运行 raven web --stop 和 raven web，才会用上新版本。"
+    },
+    "gui.upg.why.not_serving": {
+      "en": "This page is not being served by a running Raven, so it has nothing here to upgrade.",
+      "zh": "这个页面当前没有正在运行的 Raven 在托管，这里没有可以升级的对象。"
+    },
     "gui.upg.working": {
       "en": "Upgrading Raven...",
       "zh": "正在升级 Raven…"

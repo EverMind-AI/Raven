@@ -522,8 +522,12 @@ Sized like ``PARENT_EXIT_TIMEOUT_S``: the same install is at the other end."""
 _UPGRADE_POLL_S = 1.0
 
 
-def _refuse_incomplete_install() -> None:
+def _refuse_incomplete_install(label: str = "raven serve") -> None:
     """Stop before binding a port if this environment is not whole.
+
+    ``label`` names the caller in the refusal, because both surfaces that serve
+    the page reach this: `raven serve` standalone, and `raven gateway`, which is
+    the one `raven web` actually supervises.
 
     ``build_app`` chooses the page route once, so a serve that starts while uv
     is still writing the environment does not merely start slowly -- it answers
@@ -542,7 +546,7 @@ def _refuse_incomplete_install() -> None:
         return
 
     if fault.reason == "upgrading":
-        typer.echo(f"raven serve: {fault.detail}; waiting for it to finish", err=True)
+        typer.echo(f"{label}: {fault.detail}; waiting for it to finish", err=True)
         deadline = time.monotonic() + _UPGRADE_WAIT_S
         while time.monotonic() < deadline:
             time.sleep(_UPGRADE_POLL_S)
@@ -555,14 +559,14 @@ def _refuse_incomplete_install() -> None:
         # sound -- but not for this process to run. It already holds half of the
         # build that was replaced, and every import still to come would load off
         # disk from the other one.
-        typer.echo("raven serve: the upgrade finished; start Raven again to run it.", err=True)
+        typer.echo(f"{label}: the upgrade finished; start Raven again to run it.", err=True)
     elif fault.reason == "upgrading":
         typer.echo(
-            "raven serve: the upgrade has not finished; not starting on a half-written installation.",
+            f"{label}: the upgrade has not finished; not starting on a half-written installation.",
             err=True,
         )
     else:
-        typer.echo(f"raven serve: {fault.detail}; not starting.", err=True)
+        typer.echo(f"{label}: {fault.detail}; not starting.", err=True)
         typer.echo(
             "Repair it by rerunning the installer: curl -fsSL https://raven.evermind.ai/install.sh | sh",
             err=True,

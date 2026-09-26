@@ -146,6 +146,22 @@ export function resumeUpgrade(): void {
   if (running) watchUpgrade(upShade(), running.t0)
 }
 
+/* A refusal the page can name in the reader's language. The server's `detail`
+   is one English sentence for every surface that calls it; showing it raw
+   dropped an English paragraph into the middle of a Chinese card. Reasons whose
+   detail carries run-specific facts (the uv error, the failed lookup) keep it,
+   because translating the frame would throw the facts away. */
+const REFUSALS: Record<string, string> = {
+  gateway_hosted: 'gui.upg.why.gateway_hosted',
+  not_serving: 'gui.upg.why.not_serving',
+}
+
+export function refusalText(err: { data?: { reason?: string; detail?: string }; message?: string }): string {
+  const key = err.data && err.data.reason ? REFUSALS[err.data.reason] : undefined
+  if (key) return t(key)
+  return (err.data && err.data.detail) || err.message || String(err)
+}
+
 /* `system.upgrade` hands the install to a detached helper and then lets serve
    exit, so this page has to survive a gap with no backend: it polls until serve
    answers again and only then reloads (the new dist needs a reload anyway). The
@@ -166,7 +182,7 @@ export async function runUpgrade(): Promise<void> {
       return
     }
     upMarkClear()
-    shade.fail(t('gui.upg.failed'), (err.data && err.data.detail) || err.message || String(e))
+    shade.fail(t('gui.upg.failed'), refusalText(err))
     return
   }
   upMark(upLatest)

@@ -115,3 +115,45 @@ describe('the behind-sources notice', () => {
     expect(note.hidden).toBe(true)
   })
 })
+
+/* A refusal is shown on a card whose title and command line are already in the
+   reader's language. The server's `detail` is one English sentence for every
+   caller, so a reason the page can name is named from the catalogue; a reason
+   whose detail carries facts from this run keeps them. */
+describe('an upgrade the server refused', () => {
+  it('names a refusal it knows in the reader language instead of the server sentence', async () => {
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    const err = {
+      data: {
+        reason: 'gateway_hosted',
+        detail: 'This page is hosted by `raven gateway`. Run `raven upgrade`, then restart the gateway.',
+      },
+    }
+
+    const text = mod.refusalText(err)
+
+    expect(text).toBe(t('gui.upg.why.gateway_hosted'))
+    expect(text).not.toContain('This page is hosted by')
+  })
+
+  it('tells a hand-started gateway how to load the new version, not only how to install it', async () => {
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+
+    const text = mod.refusalText({ data: { reason: 'gateway_hosted', detail: 'x' } })
+
+    expect(text).toContain('raven web --stop')
+  })
+
+  it('keeps the detail when it carries facts from this run', async () => {
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+    const detail = 'This Raven installation is not managed by uv.'
+
+    expect(mod.refusalText({ data: { reason: 'not_upgradable', detail } })).toBe(detail)
+  })
+
+  it('still says something when the error carries no data at all', async () => {
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+
+    expect(mod.refusalText({ message: 'socket closed' })).toBe('socket closed')
+  })
+})

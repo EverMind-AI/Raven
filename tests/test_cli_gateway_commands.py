@@ -164,6 +164,88 @@ def test_gateway_refuses_second_instance(tmp_config: Path, monkeypatch) -> None:
     assert "4242" in r.stdout
 
 
+class TestTheGatewayWillNotServeAHalfWrittenInstall:
+    """`raven web` supervises the gateway, and the supervisor restarts it the
+    moment it exits -- including during an upgrade, when uv has removed the old
+    environment and not yet written the new one. `build_app` picks the page
+    route once, so a gateway that came up in that window answers `/` with the
+    placeholder for the rest of its life, on an installation that was sound
+    seconds later."""
+
+    def test_it_refuses_instead_of_serving(self, monkeypatch) -> None:
+        from raven.cli import serve_commands
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(
+            _install_guard,
+            "inspect_install",
+            lambda: _install_guard.InstallFault("incomplete", "this installation is missing the packaged page"),
+        )
+
+        r = runner.invoke(app, ["gateway"])
+
+        assert r.exit_code == serve_commands.INCOMPLETE_INSTALL_EXIT
+
+    def test_it_refuses_before_it_takes_the_instance_lock(self, monkeypatch) -> None:
+        """The wait inside the guard can last the whole install. Holding the
+        lock through it would block the gateway the finished install is meant
+        to bring back."""
+        from raven.gateway import lock as _gateway_lock
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(
+            _install_guard,
+            "inspect_install",
+            lambda: _install_guard.InstallFault("incomplete", "this installation is missing the packaged page"),
+        )
+
+        def unreachable(**_kwargs):
+            raise AssertionError("the gateway took the lock on a half-written installation")
+
+        monkeypatch.setattr(_gateway_lock, "acquire", unreachable)
+
+        r = runner.invoke(app, ["gateway"])
+
+        assert r.exit_code != 0
+
+    def test_the_refusal_names_the_gateway_not_serve(self, monkeypatch) -> None:
+        """Both surfaces reach the same guard, and a reader told to restart
+        `raven serve` when the gateway refused would restart the wrong one."""
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(
+            _install_guard,
+            "inspect_install",
+            lambda: _install_guard.InstallFault("incomplete", "this installation is missing the packaged page"),
+        )
+
+        r = runner.invoke(app, ["gateway"])
+
+        # The module runner mixes the streams, so the refusal is read off output.
+        assert "raven gateway:" in r.output
+        assert "raven serve:" not in r.output
+
+    def test_a_sound_install_is_not_stopped_here(self, monkeypatch) -> None:
+        """The guard must be invisible on every normal start."""
+        from raven.gateway import lock as _gateway_lock
+        from raven.updates import install_guard as _install_guard
+
+        monkeypatch.setattr(_install_guard, "inspect_install", lambda: None)
+        reached: list[bool] = []
+
+        def _raise(now: float):
+            reached.append(True)
+            raise _gateway_lock.GatewayAlreadyRunningError(
+                _gateway_lock.LockInfo(pid=4242, started_at=0.0, config_path="/tmp/whatever.json")
+            )
+
+        monkeypatch.setattr(_gateway_lock, "acquire", _raise)
+
+        runner.invoke(app, ["gateway"])
+
+        assert reached == [True]
+
+
 def test_gateway_log_config_defaults() -> None:
     from raven.config.schema import GatewayConfig
 
