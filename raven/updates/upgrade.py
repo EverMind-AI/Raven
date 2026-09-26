@@ -78,6 +78,11 @@ import time
 # little costs the user a Raven they have to restart by hand.
 PARENT_EXIT_TIMEOUT_S = 300
 
+# How long one size probe may take. Deliberately well under the socket
+# default: the sizes are a courtesy, and four unanswered probes must not add
+# minutes of silence to the very wait they exist to explain.
+SIZE_TIMEOUT_S = 5
+
 # Where the spawning side recorded that this environment is being replaced. The
 # helper runs under `python -I` outside the environment it is rewriting, so it
 # cannot import raven to ask; the path is handed over instead.
@@ -362,21 +367,49 @@ def run(argv=None):
             return url
         return urllib.parse.urlunsplit(parts._replace(netloc=wheel_parts.netloc))
 
-    def download(url, prefix):
+    def unwrap_credentials(url):
         # urllib takes `user:token@host` for the host name, so the credentials
         # move into the header and out of the URL before the request is made.
         parts = urllib.parse.urlsplit(url)
-        headers = {}
-        if parts.username:
-            creds = urllib.parse.unquote(parts.username) + ":" + urllib.parse.unquote(parts.password or "")
-            headers["Authorization"] = "Basic " + base64.b64encode(creds.encode("utf-8")).decode("ascii")
-            host = parts.hostname if parts.port is None else f"{parts.hostname}:{parts.port}"
-            url = urllib.parse.urlunsplit(parts._replace(netloc=host))
+        if not parts.username:
+            return url, {}
+        creds = urllib.parse.unquote(parts.username) + ":" + urllib.parse.unquote(parts.password or "")
+        host = parts.hostname if parts.port is None else f"{parts.hostname}:{parts.port}"
+        headers = {"Authorization": "Basic " + base64.b64encode(creds.encode("utf-8")).decode("ascii")}
+        return urllib.parse.urlunsplit(parts._replace(netloc=host)), headers
+
+    def download(url, prefix):
+        url, headers = unwrap_credentials(url)
         fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
         request = urllib.request.Request(url, headers=headers)
         with os.fdopen(fd, "wb") as handle, urllib.request.urlopen(request) as response:
             handle.write(response.read())
         return path
+
+    def asset_size(url):
+        url, headers = unwrap_credentials(url)
+        request = urllib.request.Request(url, headers=headers, method="HEAD")
+        with urllib.request.urlopen(request, timeout=SIZE_TIMEOUT_S) as response:
+            return int(response.headers.get("Content-Length") or 0)
+
+    def announce_download(assets):
+        # uv draws one bar per package and no overall total, so an upgrade whose
+        # engines are tens of megabytes reads exactly like one that has stopped.
+        # The size up front is what separates a slow link from a dead one, and
+        # the line comes before the probes so a probe that hangs adds no silence.
+        print(f"Downloading {len(assets)} packages for Raven {latest_version}.")
+        sizes = []
+        for name, url in assets:
+            try:
+                sizes.append((name, asset_size(url)))
+            except Exception:
+                sizes.append((name, 0))
+        if not any(size for _, size in sizes):
+            return
+        width = max(len(name) for name, _ in sizes)
+        for name, size in sizes:
+            print(f"  {name.ljust(width)}  " + (f"{size / 1048576:6.1f} MiB" if size else "     unknown"))
+        print(f"  {'total'.ljust(width)}  {sum(size for _, size in sizes) / 1048576:6.1f} MiB")
 
     def write_list(lines, prefix):
         fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
@@ -434,6 +467,13 @@ def run(argv=None):
     if full is not None:
         rungs.append((None, "raven[channels]", [lost_plugins]))
         rungs.append((None, "raven", [lost_plugins, lost_channels]))
+
+    assets = [("raven", wheel_url)]
+    for line in plugin_lines:
+        name, sep, url = line.partition(" @ ")
+        if sep:
+            assets.append((name.strip(), url.strip()))
+    announce_download(assets)
 
     try:
         status = 0

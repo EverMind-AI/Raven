@@ -671,6 +671,14 @@ def test_uv_tool_target_rejects_malformed_target_fields(
         upgrade_commands._uv_tool_target()
 
 
+class _Response(io.BytesIO):
+    """A body with the headers a size probe reads off it."""
+
+    def __init__(self, payload: bytes, headers: dict[str, str]) -> None:
+        super().__init__(payload)
+        self.headers = headers
+
+
 class _ReleaseDirectory:
     """The release directory beside the wheel, served in memory to the helper's
     downloads. Ships the plugin list by default and no constraints, so the
@@ -679,15 +687,23 @@ class _ReleaseDirectory:
 
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {"raven-plugins.txt": PLUGIN_LIST.encode("utf-8")}
+        # Sizes the helper's HEAD probes can see. Empty by default, so the
+        # manifest degrades to its one headline and the older assertions in
+        # this file keep observing the output they were written against.
+        self.sizes: dict[str, int] = {}
         self.requests: list[urllib.request.Request] = []
 
     def urlopen(self, request: urllib.request.Request, *args: object, **kwargs: object) -> io.BytesIO:
         self.requests.append(request)
         url = request.full_url
         name = url.rsplit("/", 1)[1]
+        if request.get_method() == "HEAD":
+            if name not in self.sizes:
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
+            return _Response(b"", {"Content-Length": str(self.sizes[name])})
         if name not in self.files:
             raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)  # type: ignore[arg-type]
-        return io.BytesIO(self.files[name])
+        return _Response(self.files[name], {"Content-Length": str(len(self.files[name]))})
 
 
 @pytest.fixture(autouse=True)
@@ -780,6 +796,64 @@ def test_upgrade_helper_installs_the_release_plugins_beside_the_wheel(
         },
     ]
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in capsys.readouterr().out
+
+
+def test_upgrade_helper_names_the_total_size_before_uv_takes_the_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    release_directory: _ReleaseDirectory,
+) -> None:
+    """uv reports bytes per package and never a total, so a release whose
+    engines are tens of megabytes looks the same as an install that stopped.
+    The manifest is the only place the whole cost is stated."""
+    release_directory.sizes = {
+        "raven-0.1.4-py3-none-any.whl": 6 * 1048576,
+        "everos_memory-1.2.0-py3-none-any.whl": 1048576 // 2,
+        "design_engine-0.2.0-py3-none-any.whl": 17 * 1048576,
+        "ppt_engine-0.2.0-py3-none-any.whl": 48 * 1048576,
+    }
+    monkeypatch.setattr(subprocess, "run", Mock(return_value=Mock(returncode=0)))
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    out = capsys.readouterr().out
+    assert "Downloading 4 packages for Raven 0.1.4." in out
+    for line in ("raven", "everos-memory", "design-engine", "ppt-engine"):
+        assert line in out
+    assert "48.0 MiB" in out
+    assert "total" in out and "71.5 MiB" in out
+    # Said before uv runs, not after: a total that arrives with the result is
+    # not the reassurance the wait needed.
+    assert out.index("Downloading 4 packages") < out.index("Raven upgraded")
+
+
+def test_upgrade_helper_upgrades_when_no_size_can_be_probed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The sizes are a courtesy. A release directory that answers no HEAD --
+    or a link that drops them -- must cost the upgrade nothing."""
+    run = Mock(return_value=Mock(returncode=0))
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    out = capsys.readouterr().out
+    assert "Downloading 4 packages for Raven 0.1.4." in out
+    assert "MiB" not in out
+    assert "Raven upgraded: 0.1.3 -> 0.1.4" in out
+    assert _uv_calls(run) == [
+        {
+            "mode": REINSTALL,
+            "constraints": None,
+            "plugins": PLUGIN_LIST,
+            "requirement": f"raven[channels] @ {WHEEL_URL}",
+        },
+    ]
 
 
 def test_upgrade_helper_refuses_to_upgrade_without_the_plugin_list(
@@ -939,6 +1013,10 @@ def test_upgrade_helper_pins_constraints_when_download_succeeds(
     assert [request.full_url for request in release_directory.requests] == [
         f"{RELEASE_DIR}/raven-constraints.txt",
         f"{RELEASE_DIR}/raven-plugins.txt",
+        WHEEL_URL,
+        f"{RELEASE_DIR}/everos_memory-1.2.0-py3-none-any.whl",
+        f"{RELEASE_DIR}/design_engine-0.2.0-py3-none-any.whl",
+        f"{RELEASE_DIR}/ppt_engine-0.2.0-py3-none-any.whl",
     ]
     assert _uv_calls(run) == [
         {
@@ -1009,7 +1087,11 @@ def test_upgrade_helper_carries_the_beta_credentials_to_the_release_directory(
     assert [request.full_url for request in release_directory.requests] == [
         f"{BETA_DIR}/raven-constraints.txt",
         f"{BETA_DIR}/raven-plugins.txt",
+        f"{BETA_DIR}/raven-0.1.4b1-py3-none-any.whl",
+        f"{BETA_DIR}/everos_memory-1.2.0-py3-none-any.whl",
     ]
+    # The size probes are on the same protected host, so they need the header
+    # for the same reason the downloads do.
     assert all(request.get_header("Authorization") == expected_header for request in release_directory.requests)
     (call,) = _uv_calls(run)
     assert call["plugins"] == (
