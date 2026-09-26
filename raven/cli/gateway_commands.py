@@ -1124,8 +1124,8 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     # leaves before the teardown closes its socket.
                     asyncio.get_running_loop().call_soon(main_task.cancel)
 
-            async def _shutdown() -> None:
-                _request_stop()  # pragma: no cover
+            async def _shutdown() -> None:  # pragma: no cover - closure over run(); pinned by source
+                _request_stop()
 
             def _busy() -> dict | None:  # pragma: no cover - closure over run(); logic in _work_in_flight
                 page_questions = page_mount.question_broker if page_mount is not None else None

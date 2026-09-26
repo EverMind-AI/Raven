@@ -778,3 +778,28 @@ async def test_stopping_the_server_closes_an_open_page_instead_of_waiting_on_it(
 
     assert message.type in (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED)
     assert ws.close_code == WSCloseCode.GOING_AWAY
+
+
+async def test_a_socket_that_will_not_close_does_not_stop_the_others() -> None:
+    """One tab whose socket errors on close must not keep the rest open, and is
+    forgotten rather than retried on every later broadcast."""
+
+    class Socket:
+        def __init__(self, fails: bool) -> None:
+            self.fails, self.closed_with = fails, None
+
+        async def close(self, *, code, message):
+            if self.fails:
+                raise ConnectionResetError("peer went away")
+            self.closed_with = code
+
+    from aiohttp import WSCloseCode
+
+    gateway = WsGateway()
+    broken, fine = Socket(fails=True), Socket(fails=False)
+    gateway._sockets.update({broken, fine})
+
+    await gateway.close_all()
+
+    assert fine.closed_with == WSCloseCode.GOING_AWAY
+    assert broken not in gateway._sockets

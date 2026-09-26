@@ -863,6 +863,23 @@ def test_bare_raven_passes_a_plain_value_for_every_tui_option(monkeypatch: pytes
     assert [name for name, value in received.items() if isinstance(value, OptionInfo)] == []
 
 
+def test_a_machine_with_no_browser_is_told_apart_before_anything_starts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`webbrowser.get()` raising is the whole question: no browser registered
+    means the page would come up on a URL nobody on this machine can open."""
+    import webbrowser
+
+    from raven.cli import commands
+
+    def none_registered():
+        raise webbrowser.Error("could not locate runnable browser")
+
+    monkeypatch.setattr(webbrowser, "get", none_registered)
+    assert commands._can_open_a_browser() is False
+
+    monkeypatch.setattr(webbrowser, "get", lambda: object())
+    assert commands._can_open_a_browser() is True
+
+
 def test_bare_raven_opens_the_page_when_a_browser_is_there(monkeypatch: pytest.MonkeyPatch) -> None:
     """The installer ends in `raven web`, so the bare command has to land on the
     same surface rather than a second, quieter one."""
