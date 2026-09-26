@@ -430,6 +430,31 @@ async def test_build_one_shot_spine_hands_unanswered_questions_to_the_caller():
     assert [item.question for item in received] == ["Which base branch?"]
 
 
+async def test_a_one_shot_ask_user_call_with_no_broker_is_what_gets_reported():
+    """The runner binds the turn, and the tool's no-broker return is the path
+    ``raven agent -m`` actually takes. Noting the question by hand does not."""
+    from raven.agent.tools.ask_user import AskUserTool
+
+    class _Asking:
+        async def run_turn(self, req, emit, drain, *, stream) -> TurnOutcome:
+            tool = AskUserTool(broker=None, conversation_id=req.conversation or "")
+            result = await tool.execute(questions=[{"question": "Which base branch?"}, {"question": "  "}])
+            assert result == "Error: ask_user not configured (no question broker)"
+            await emit(Text(content="assumed main", source=req.source))
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    received: list = []
+    scheduler, hub, teardown = build_one_shot_spine(_Asking(), "cli", lambda t: None, on_unanswered=received.extend)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="cli:c1"))
+        await handle.result()
+        await hub.wait_idle("cli")
+    finally:
+        await teardown()
+
+    assert [item.question for item in received] == ["Which base branch?"]
+
+
 async def test_background_refusals_are_collected_after_the_parent_turn_finishes():
     from raven.permissions.turn import note_refusal
 

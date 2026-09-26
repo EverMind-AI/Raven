@@ -118,6 +118,36 @@ async def test_an_answered_question_is_not_recorded_as_unanswered():
 
 
 @pytest.mark.asyncio
+async def test_a_call_with_no_broker_records_the_normalized_questions():
+    """One-shot never wires a broker, so the call returns at that guard.
+
+    The questions that would have been asked are still the run's questions.
+    A blank one is dropped, a JSON string is read, and a call ``_prepare``
+    rejects is not a question anyone failed to answer.
+    """
+    from raven.permissions.turn import start_permission_turn
+
+    turn = start_permission_turn(None, conversation_id="tui:test", turn_id="t")
+    tool = AskUserTool(broker=None, conversation_id="tui:test")
+
+    missing = await tool.execute(
+        questions='[{"question": " Which base branch? "}, {"question": "  "}, {"question": "Ship it?"}]'
+    )
+    assert missing == "Error: ask_user not configured (no question broker)"
+    assert [item.question for item in turn.unanswered] == ["Which base branch?", "Ship it?"]
+
+    turn.unanswered.clear()
+    rejected = await tool.execute(questions=[{"question": "Only one?", "options": ["yes"]}])
+    assert rejected == "Error: ask_user not configured (no question broker)"
+    assert turn.unanswered == []
+
+    bare = AskUserTool(broker=object(), conversation_id="")  # type: ignore[arg-type]
+    no_cid = await bare.execute(questions=[{"question": "Where?"}])
+    assert no_cid == "Error: ask_user has no conversation context"
+    assert [item.question for item in turn.unanswered] == ["Where?"]
+
+
+@pytest.mark.asyncio
 async def test_error_paths_return_plain_strings():
     # No broker / no conversation id / no questions predate ToolResult and stay
     # bare strings, so the loop's str branch still has to work.

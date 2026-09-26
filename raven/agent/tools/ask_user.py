@@ -243,6 +243,24 @@ def _prepare(entries: list[dict[str, Any]]) -> tuple[list["_Question"], str]:
     return prepared, ""
 
 
+def _note_prepared(questions: Any) -> None:
+    """Record questions a structurally unavailable call would have asked.
+
+    A call that does not normalize, or that ``_prepare`` rejects, is not one
+    of those: there is no question to put to anyone, and the error already
+    tells the model to send a different call.
+    """
+    try:
+        entries = _normalize_questions(questions, strict_json=True)
+    except ValueError:
+        return
+    prepared, rejection = _prepare(entries)
+    if rejection or not prepared:
+        return
+    for item in prepared:
+        note_unanswered(item.question)
+
+
 class AskUserTool(Tool):
     """Ask the user a question mid-turn and wait for their answer.
 
@@ -454,9 +472,13 @@ class AskUserTool(Tool):
 
     async def execute(self, questions: Any, **kwargs: Any) -> "str | ToolResult":
         cid = self._cid.get()
-        if not self._broker:
-            return "Error: ask_user not configured (no question broker)"
-        if not cid:
+        # A one-shot turn never wires a broker, so this returns before any
+        # round trip. The questions are still what the run asked; record the
+        # ones that would have been put to someone, then keep the same error.
+        if not self._broker or not cid:
+            _note_prepared(questions)
+            if not self._broker:
+                return "Error: ask_user not configured (no question broker)"
             return "Error: ask_user has no conversation context"
         try:
             entries = _normalize_questions(questions, strict_json=True)
