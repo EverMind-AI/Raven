@@ -473,7 +473,7 @@ class TurnPathMixin:
                     fallback_models=fallback_models,
                     **effort_kwargs,
                 )
-                return self._strip_think(response.content) if response.finish_reason != "error" else ""
+                return (self._strip_think(response.content) or "") if response.finish_reason != "error" else ""
 
             try:
                 text = await _call(synth_messages)
