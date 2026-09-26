@@ -827,7 +827,7 @@ def test_every_interactive_spawn_names_the_binary(monkeypatch: pytest.MonkeyPatc
 
 
 def test_bare_raven_passes_a_plain_value_for_every_tui_option(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bare ``raven`` calls ``tui`` as a plain function, so typer never fills
+    """On the fallback path, bare ``raven`` calls ``tui`` as a plain function, so typer never fills
     its defaults: any option the call site forgets arrives as an ``OptionInfo``
     sentinel instead. That is not inert -- ``--home``'s sentinel is truthy, so
     ``load_runtime_config`` assigns it over ``agents.defaults.workspace`` and
@@ -854,12 +854,32 @@ def test_bare_raven_passes_a_plain_value_for_every_tui_option(monkeypatch: pytes
         received.update(kwargs)
 
     monkeypatch.setattr(tui_commands, "tui", recorder)
+    monkeypatch.setattr(commands, "_can_open_a_browser", lambda: False)
 
     r = CliRunner(mix_stderr=False).invoke(commands.app, [])
 
     assert r.exit_code == 0, r.output
     assert received.keys() == options
     assert [name for name, value in received.items() if isinstance(value, OptionInfo)] == []
+
+
+def test_bare_raven_opens_the_page_when_a_browser_is_there(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The installer ends in `raven web`, so the bare command has to land on the
+    same surface rather than a second, quieter one."""
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, serve_commands, tui_commands
+    from raven.rpc.transports.ws import DEFAULT_PORT
+
+    opened: list[int] = []
+    monkeypatch.setattr(commands, "_can_open_a_browser", lambda: True)
+    monkeypatch.setattr(serve_commands, "_web", lambda port, **kwargs: opened.append(port))
+    monkeypatch.setattr(tui_commands, "tui", lambda *a, **k: pytest.fail("the TUI ran with a browser available"))
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, [])
+
+    assert r.exit_code == 0, r.output
+    assert opened == [DEFAULT_PORT]
 
 
 # ---------------------------------------------------------------------------
