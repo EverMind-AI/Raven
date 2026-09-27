@@ -1390,6 +1390,82 @@ class TestBoxliteStartFailureCleanup:
         assert executor._box is None
 
 
+class TestBoxliteEnsureBoxNetworkSpec:
+    """boxlite 0.9.5 replaced string/list BoxOptions network kwargs with NetworkSpec (#797)."""
+
+    @staticmethod
+    def _setup_boxlite_mocks(monkeypatch):
+        from raven.sandbox import _runtime as rt_mod
+
+        mock_box = MagicMock()
+        mock_box.id = "vm-net-1"
+        mock_box.start = AsyncMock()
+        mock_box.stop = AsyncMock()
+
+        fake_runtime = MagicMock()
+        fake_runtime.create = AsyncMock(return_value=mock_box)
+        fake_runtime.remove = AsyncMock()
+        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
+
+        fake_boxlite = MagicMock()
+        fake_boxlite.BoxOptions = MagicMock(return_value=MagicMock())
+        fake_boxlite.NetworkSpec = MagicMock(side_effect=lambda **kw: ("NetworkSpec", kw))
+        monkeypatch.setitem(sys.modules, "boxlite", fake_boxlite)
+        return fake_boxlite
+
+    async def test_allow_net_false_passes_disabled_network_spec(self, tmp_path, monkeypatch):
+        fake_boxlite = self._setup_boxlite_mocks(monkeypatch)
+        executor = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=tmp_path,
+            allow_net=False,
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+
+        await executor._ensure_box()
+
+        fake_boxlite.NetworkSpec.assert_called_once_with(mode="disabled")
+        box_options_kwargs = fake_boxlite.BoxOptions.call_args.kwargs
+        assert box_options_kwargs["network"] == ("NetworkSpec", {"mode": "disabled"})
+        assert "allow_net" not in box_options_kwargs
+
+    async def test_allow_net_domain_list_passes_enabled_network_spec(self, tmp_path, monkeypatch):
+        fake_boxlite = self._setup_boxlite_mocks(monkeypatch)
+        domains = ["pypi.org", "files.pythonhosted.org"]
+        executor = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=tmp_path,
+            allow_net=domains,
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+
+        await executor._ensure_box()
+
+        fake_boxlite.NetworkSpec.assert_called_once_with(mode="enabled", allow_net=domains)
+        box_options_kwargs = fake_boxlite.BoxOptions.call_args.kwargs
+        assert box_options_kwargs["network"] == (
+            "NetworkSpec",
+            {"mode": "enabled", "allow_net": domains},
+        )
+        assert "allow_net" not in box_options_kwargs
+
+    async def test_allow_net_true_omits_network_spec(self, tmp_path, monkeypatch):
+        fake_boxlite = self._setup_boxlite_mocks(monkeypatch)
+        executor = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=tmp_path,
+            allow_net=True,
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+
+        await executor._ensure_box()
+
+        fake_boxlite.NetworkSpec.assert_not_called()
+        box_options_kwargs = fake_boxlite.BoxOptions.call_args.kwargs
+        assert "network" not in box_options_kwargs
+        assert "allow_net" not in box_options_kwargs
+
+
 class TestBoxliteStartProcessBridges:
     """Bridge behaviour tests via mock Execution."""
 
