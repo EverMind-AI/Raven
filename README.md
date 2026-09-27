@@ -9,7 +9,7 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
-[Website](https://raven.evermind.ai) · [Documentation](https://evermind-ai.github.io/Raven/) · [中文](README.zh-CN.md)
+[Technical Report](docs/technical-report/) · [Website](https://raven.evermind.ai) · [Documentation](https://evermind-ai.github.io/Raven/) · [中文](README.zh-CN.md)
 
 </div>
 
@@ -407,3 +407,18 @@ Issues and pull requests are welcome. Start with the [developer workflow](docs/d
 ## ❯❯ License
 
 [Apache License 2.0](LICENSE)
+
+## ❯❯ Citation
+
+If you use Raven in your research, please cite the [technical report](docs/technical-report/):
+
+```bibtex
+@techreport{evermind2026raven,
+  title       = {{Raven: The Harness of Harnesses for Composable Agentic Intelligence}},
+  author      = {{EverMind AI}},
+  institution = {EverMind AI},
+  year        = {2026},
+  month       = sep,
+  url         = {https://github.com/EverMind-AI/Raven/releases/tag/tech-report-v1}
+}
+```
