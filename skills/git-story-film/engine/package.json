@@ -1,0 +1,15 @@
+{
+  "name": "hand-drawn-canvas-render",
+  "private": true,
+  "type": "module",
+  "description": "Renders a hand-drawn canvas film (one HTML file) to PNG frames, mp4 and a contact sheet.",
+  "scripts": {
+    "render": "node render.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

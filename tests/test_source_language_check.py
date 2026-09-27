@@ -67,6 +67,9 @@ def _gate_verdict(tmp_path: Path, monkeypatch, path: str, text: str) -> int:
 # --- revoked boundary, so a zone added or removed flips a named case ------------
 
 ACCEPTED = (
+    ("skills/git-story-film/examples/raven-story/zh/raven-flight.js", 'const label = "{cjk}";\n'),
+    ("skills/git-story-film/examples/raven-story/storyboard/storyboard.html", "<p>{cjk}</p>\n"),
+    ("skills/git-story-film/scripts/storyboard.py", 'LABEL = "{cjk}"\n'),
     ("plugins-dist/ppt-engine/raven_ppt/marks.py", 'MARK = "{cjk}"\n'),
     ("tests/test_ppt_engine_marks.py", 'EXPECT = "{cjk}"\n'),
     ("plugins-dist/design-engine/raven_design/skills/palette.py", 'NAME = "{cjk}"\n'),
@@ -79,6 +82,13 @@ ACCEPTED = (
 )
 
 REJECTED = (
+    ("skills/git-story-film/engine/core.js", 'const label = "{cjk}";\n'),
+    ("skills/git-story-film/examples/raven-story/raven-flight.js", 'const label = "{cjk}";\n'),
+    ("skills/git-story-film/examples/raven-story/zh-copy/raven-flight.js", 'const label = "{cjk}";\n'),
+    ("skills/git-story-film/examples/raven-story/storyboard/other.html", "<p>{cjk}</p>\n"),
+    ("skills/git-story-film/examples/raven-story/storyboard/storyboard.html.bak", "{cjk}\n"),
+    ("skills/git-story-film/scripts/storyboard.py.bak", "{cjk}\n"),
+    ("skills/git-story-film/scripts/other.py", 'LABEL = "{cjk}"\n'),
     ("i18n/zh.json", '{{"label": "{cjk}"}}\n'),
     ("ui-tui/src/new.ts", 'const label = "{cjk}";\n'),
     ("ui-web/src/new.js", 'const label = "{cjk}";\n'),
@@ -195,10 +205,10 @@ def _section_1_3() -> str:
     return section
 
 
-def test_agents_md_zone_bullets_equal_the_gate_prefixes() -> None:
+def test_agents_md_zone_bullets_equal_the_gate_exemptions() -> None:
     zones = {bullet.rstrip("*") for bullet in ZONE_BULLET.findall(_section_1_3())}
 
-    assert zones == set(check_source_language.EXEMPT_PREFIXES)
+    assert zones == set(check_source_language.EXEMPT_PREFIXES) | check_source_language.EXEMPT_FILES
 
 
 def test_agents_md_writes_down_the_suffix_and_fixture_rules_the_gate_applies() -> None:

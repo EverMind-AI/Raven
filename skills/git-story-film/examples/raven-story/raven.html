@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Raven Story</title>
+<style>
+body{margin:0;background:#1d1b19;color:#d9d3c7;font:13px -apple-system,system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:10px}
+canvas{max-width:96vw;max-height:84vh;object-fit:contain;box-shadow:0 0 0 1px #ffffff14}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:6px 12px}
+.bar button{font:inherit;color:#f1ece2;background:#ffffff12;border:1px solid #ffffff2a;border-radius:4px;padding:6px 12px;cursor:pointer}
+.bar button:hover{background:#ffffff22}
+#scrub{width:min(46vw,520px);accent-color:#c9962f}
+#info{font:11px ui-monospace,Menlo,monospace;color:#a39c90}
+</style>
+<canvas id="c"></canvas>
+<script src="../../engine/core.js"></script><script src="../../engine/studio-ui.js"></script><script src="../../engine/studio.js"></script><script src="../../engine/cels.js"></script><script src="../../engine/materials.js"></script>
+<script src="raven-cast.js"></script><script src="raven-world.js"></script><script src="raven-route.js"></script><script src="raven-flight.js"></script><script src="raven-score.js"></script>
+<script>
+'use strict';
+/* Brief
+Subject: a raven tells how it was made, one commit at a time. 128 s, one continuous shot for new users;
+  OUTLINE.md holds the whole route. Act I lives in raven-route.js, Acts II to V in raven-flight.js.
+Staging: one continuous shot. From the nest on, Raven only moves left to right along the branch,
+  which is the timeline; the camera follows and never cuts or turns back. Dates are stops.
+Format: 16:9, 1920x1080, 24 fps. Look: pencil, then ink past the v0.1.0 seam.
+Why the material changes: the first commits are a draft; open-sourcing makes it permanent. The
+  page itself is inked from that date on, so the chick is inked by walking into it.
+Cast: Raven (chick in pencil; inked chick; fledgling). Big eyes, crown tuft, heavy beak, wedge tail.
+Devices: branch = timeline drawn up to "today"; a commit = a shiny bead; margin notes = hashes.
+
+Route (x on the page)            time                what happens
+ nest 700, 6-28                   0.0  - 11.0         the page is drawn, the egg hatches
+ hops 700 -> 1600                 11.0 - 13.8         hop out of the nest, along the branch
+ 6-29 stop at 1600                13.8 - 17.05        a stranger's note, an untrusted tag
+ hops 1600 -> 2460                17.05 - 18.95       on to the next day
+ 6-30 stop at 2460..2740          18.95 - 24.95       memory merged, erased, the first fall
+ hops 2740 -> 3340, seam at 3080  24.95 - 26.93       under the shiny cluster, into the ink
+ inked at 3340                    26.93 - 31.73       shake, fledgling, wings open
+*/
+const TIMELINE = [
+  ['page', T.page, T.hatch], ['hatch', T.hatch, T.walk1], ['to-06-29', T.walk1, T.slip], ['untrusted-tag', T.slip, T.walk2],
+  ['to-06-30', T.walk2, T.fall], ['first-fall', T.fall, T.walk3], ['into-ink', T.walk3, T.ink], ['inked', T.ink, T.end],
+].map(([name, a, b]) => ({name, dur: b - a, fn: (c, tau) => journey(c, a + tau)})).concat([
+  ['memory', T.end, ST.hopB], ['skills', ST.hopB, ST.fly], ['research', ST.fly, ST.evo], ['self-evolution', ST.evo, ST.july], ['import', ST.july, ST.flock],
+  ['orchestration', ST.flock, ST.code], ['raven-code', ST.code, ST.oncall], ['raven-oncall', ST.oncall, ST.third], ['third-party-agents', ST.third, ST.blue],
+  ['no-restart-upgrade', ST.blue, ST.design], ['raven-design', ST.design, ST.book], ['playbook', ST.book, ST.remind], ['reminders', ST.remind, ST.harness],
+  ['harness-of-harnesses', ST.harness, ST.finale], ['finale', ST.finale, ST.end],
+].map(([name, a, b]) => ({name, dur: b - a, fn: (c, tau) => journey2(c, a + tau)})));
+defineFilm({palette: {...PALETTES.pencilMinimal, paper: RC.paper}, format: {ar: '16:9', width: 1920}, fps: [12, 24, 60].includes(+new URLSearchParams(location.search).get('fps')) ? +new URLSearchParams(location.search).get('fps') : 24, timeline: TIMELINE, score: ravenScore});
+addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); document.getElementById('play')?.click(); } });
+</script>

@@ -45,8 +45,8 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
 - The English rule covers **all repo source**, not just comments: string constants, prompts,
   log messages, test fixtures, docs. Non-English content anywhere else gets reverted.
 - **Exemption zones** (owner-signed) -- CJK is admissible only here, and only as capability
-  data the feature itself needs. One zone per bullet; the leading backticked path is the
-  prefix the gate reads, and a contract test holds the two lists equal:
+  data the feature itself needs. One zone per bullet; the leading backticked path is a
+  prefix unless marked as an exact file, and a contract test holds the lists equal:
   - `plugins-dist/ppt-engine/` -- the Chinese-deck engine: caption markers, font names,
     language words the model must see, the skill corpus;
   - `tests/test_ppt_engine_*` -- the deck engine's fixtures;
@@ -58,6 +58,12 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
     render in Chinese; the site's own pages are already exempt as `*.md`;
   - `raven/i18n/` -- the zh catalog and lexicon;
   - `raven/templates/prompts/zh/` -- the zh prompt pack;
+  - `skills/git-story-film/examples/raven-story/zh/` -- the Chinese film variant's
+    captions and on-screen labels (owner-approved);
+  - `skills/git-story-film/examples/raven-story/storyboard/storyboard.html` -- exact
+    file: bilingual reference captions (owner-approved);
+  - `skills/git-story-film/scripts/storyboard.py` -- exact file: localized UI labels
+    and language-name keys required by the storyboard generator (owner-approved);
   - `tests/test_i18n_*` -- zh-i18n test fixtures: a CJK fixture is admissible **only when
     the test exercises zh functionality**, and the machine-checkable proxy for that is this
     file-name prefix plus an import of `raven.i18n` or a zh plugin module (`raven_ppt` /
@@ -68,7 +74,7 @@ Hard constraints only (violations get reverted / rejected). Soft suggestions and
   a non-markdown file under `docs/` has no fallback exemption.
 - Machine enforcement: `scripts/check_source_language.py` gates every PR's added lines
   (`make check-source-language`), the way `make check-large-files` enforces section 7. A
-  CJK-adding line passes only through one of: a zone prefix above, the `*.md` suffix, the
+  CJK-adding line passes only through one of: a zone prefix or exact file above, the `*.md` suffix, the
   `tests/test_i18n_*` prefix with its import proof, the relocation pass (the same CJK run
   was removed elsewhere in the same diff), or the carrier pass (the file already carried
   CJK at the base revision) -- so relocating existing CJK and editing a file that already
@@ -401,6 +407,12 @@ Naming: `test_<scope>_<kind>.py`, where `<kind>` ∈:
 - The application source trees (`bridge/`, `ui-web/`, `ui-tui/`) are exempt from that extension list: a product frontend carries its own entry HTML and icon SVGs as source, not as report assets. Everything else in this section, including the 1 MiB limit, still applies to them.
 - Packaged `.jpg` benchmark plates under `plugins-dist/design-engine/raven_design/skills/<skill>/references/` are functional Skill inputs, not report assets, and are allowed: `.jpg` only, only under a skill's `references/`, and the 1 MiB limit still applies.
 - Store public-report assets outside git and link to them when needed.
+- The git-story-film skill's bundled HTML inputs are allowed at exactly
+  `skills/git-story-film/examples/raven-story/raven.html`,
+  `skills/git-story-film/examples/raven-story/cast-sheet.html`, and
+  `skills/git-story-film/examples/raven-story/storyboard/storyboard.html` (owner-approved).
+  These are functional Skill inputs; pre-rendered images, generated exports, and other
+  asset types remain prohibited. The 1 MiB limit still applies to every allowed HTML file.
 - Do not add or modify files over 1 MiB unless the maintainer explicitly approves it before the commit.
 - Run `make check-large-files` when touching docs, demos, reports, assets, or generated outputs; CI enforces the same rule on added and modified PR files.
 

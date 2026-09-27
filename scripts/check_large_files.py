@@ -66,6 +66,13 @@ APP_SOURCE_PREFIXES = (
     "ui-tui/",
 )
 ALLOWED_SKILL_REFERENCE_IMAGE_EXTENSIONS = frozenset({".jpg"})
+GIT_STORY_FILM_HTML_FILES = frozenset(
+    {
+        "skills/git-story-film/examples/raven-story/raven.html",
+        "skills/git-story-film/examples/raven-story/cast-sheet.html",
+        "skills/git-story-film/examples/raven-story/storyboard/storyboard.html",
+    }
+)
 # The one home of the raven-design skill plates: the design-engine wheel they
 # migrated to (verdict C4; the frozen fork seat retired with the tree). The
 # rule is unchanged: .jpg only, only under a skill's references/, and the
@@ -188,7 +195,11 @@ def find_blocked_asset_files(paths: list[str], *, root: Path) -> list[BlockedAss
         if not candidate.is_file():
             continue
         extension = candidate.suffix.lower()
-        if extension in BLOCKED_ASSET_EXTENSIONS and not _is_allowed_skill_reference_image(path, extension):
+        if (
+            extension in BLOCKED_ASSET_EXTENSIONS
+            and not _is_allowed_skill_reference_image(path, extension)
+            and path not in GIT_STORY_FILM_HTML_FILES
+        ):
             violations.append(BlockedAssetViolation(path=path, extension=extension))
     return violations
 
