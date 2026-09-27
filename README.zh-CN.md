@@ -9,7 +9,7 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
-[技术报告](docs/technical-report/) · [官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
+[技术报告](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf) · [官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
 
 </div>
 
@@ -391,7 +391,7 @@ raven web
 
 ## ❯❯ 引用
 
-如果你在研究中使用了 Raven，请引用我们的[技术报告](docs/technical-report/)：
+如果你在研究中使用了 Raven，请引用我们的[技术报告](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf)：
 
 ```bibtex
 @techreport{evermind2026raven,
