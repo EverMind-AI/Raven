@@ -164,6 +164,12 @@ export function approvalRequest(frame: unknown): void {
          this grant put on disk and nothing the reader wrote themselves. */
       onRevoke: () => gateway().call('approval.revoke', { approval_id: p.approval_id })
         .then((r) => !!(r as { ok?: boolean } | null)?.ok, () => false),
+      /* The same methods the settings page saves these keys with: a provider's
+         key through the model service, a tool vendor's through settings. */
+      saveSecret: async (field, setting, value) => {
+        if (field.via === 'model.save_key') await gateway().call('model.save_key', { slug: field.slug || '', api_key: value })
+        else await gateway().call('settings.set', { key: setting, value })
+      },
     },
     owner,
   )

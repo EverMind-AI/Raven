@@ -1044,7 +1044,12 @@ class WiringMixin:
             from raven.agent.tools.raven_config import GUIDE_SKILL_ID as _CONFIG_GUIDE
             from raven.agent.tools.raven_config import RavenConfigTool
 
-            self.tools.register(RavenConfigTool(guide_skill_id=self._shipped_guide(_CONFIG_GUIDE)))
+            self.tools.register(
+                RavenConfigTool(
+                    guide_skill_id=self._shipped_guide(_CONFIG_GUIDE),
+                    session_model=lambda key: (self.session_model(key), self.has_session_binding(key)),
+                )
+            )
         if self.cron_service:
             # Function-scope import on purpose: the cron tool is cargo the loop must
             # not name at module level (tests/test_l3_open_world.py counts module-level

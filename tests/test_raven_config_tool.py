@@ -167,7 +167,7 @@ async def test_the_default_model_needs_its_provider(config_file):
 async def test_secrets_and_inert_settings_are_not_written(config_file):
     tool = RavenConfigTool()
     reply = await _run(tool, action="set", path="providers.openrouter.apiKey", value='"sk-new"')
-    assert "never passed through a tool call" in reply
+    assert "never goes through a tool call" in reply
     reply = await _run(tool, action="set", path="cron.defaultTimezone", value='"UTC"')
     assert "nothing was changed" in reply
     data = json.loads(config_file.read_text())
@@ -492,3 +492,125 @@ async def test_describe_answers_a_prefix_with_what_sits_under_it(config_file):
     assert below["prefix"] == "tools.exec"
     assert "tools.exec.timeout" in [s["path"] for s in below["settings"]]
     assert "not in the catalog" in await _run(tool, action="describe", path="tools.nothing")
+
+
+@pytest.mark.asyncio
+async def test_a_batch_is_checked_whole_before_anything_is_written(config_file):
+    tool = RavenConfigTool()
+    both = {"tools.exec.timeout": 300, "agents.defaults.maxToolIterations": 80}
+    assert "nothing was changed" in await _run(tool, action="set", value=json.dumps(both))
+    assert json.loads(config_file.read_text())["tools"]["exec"]["timeout"] == 60
+
+    calls = Calls()
+    tool.set_rpc_caller(calls)
+    bad = json.dumps({"tools.exec.timeout": 300, "agents.defaults.maxToolIterations": "many"})
+    assert (await _run(tool, action="set", value=bad)).startswith("Error")
+    assert json.loads(config_file.read_text())["tools"]["exec"]["timeout"] == 60 and calls.calls == []
+
+    reply = await _run(tool, action="set", value=json.dumps(both))
+    assert calls.calls == [
+        ("settings.set", {"key": "tools.exec.timeout", "value": 300}),
+        ("settings.set", {"key": "agents.defaults.maxToolIterations", "value": 80}),
+    ]
+    assert reply.count("Set ") == 2
+
+
+@pytest.mark.asyncio
+async def test_a_secret_is_asked_for_on_the_card_and_reported_by_whether_it_is_set(config_file):
+    """The card saves the key itself; the tool only learns whether it landed."""
+    tool = RavenConfigTool()
+    calls = Calls()
+    tool.set_rpc_caller(calls)
+    batch = json.dumps({"tools.web.search.provider": "tavily", "tools.web.providers.tavily.apiKey": None})
+    reply = await _run(tool, action="set", value=batch)
+    assert "tools.web.providers.tavily.apiKey is still not set" in reply
+    assert calls.calls == [("settings.set", {"key": "tools.web.search.provider", "value": "tavily"})]
+
+    data = json.loads(config_file.read_text())
+    data["tools"]["web"] = {"providers": {"tavily": {"apiKey": "tvly-typed-on-the-card"}}}
+    config_file.write_text(json.dumps(data))
+    reply = await _run(tool, action="set", path="tools.web.providers.tavily.apiKey", value="null")
+    assert "is set" in reply and "tvly-typed-on-the-card" not in reply
+
+
+def test_the_card_offers_a_field_only_where_the_page_can_save_it(config_file):
+    from raven.config import self_surface as surface
+    from raven.rpc.methods import console
+
+    view = RavenConfigTool().approval_evidence(
+        {
+            "action": "set",
+            "value": json.dumps({"tools.web.search.provider": "tavily", "tools.web.providers.tavily.apiKey": None}),
+        }
+    )
+    provider, key = view["changes"]
+    assert provider["value"] == "tavily" and "secret" not in provider
+    assert key == {**key, "secret": True, "was": "not set", "input": {"via": "settings.set"}}
+    assert "value" not in key
+    assert surface.secret_input("providers.openrouter.apiKey") == {"via": "model.save_key", "slug": "openrouter"}
+    for setting in surface.all_settings():
+        field = surface.secret_input(setting.path)
+        if field is not None and field["via"] == "settings.set":
+            assert setting.path in console._SETTINGS_SIMPLE_KEYS, setting.path
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"action": "set", "path": "tools.web.providers.tavily.apiKey", "value": '"tvly-pasted"'},
+        {
+            "action": "set",
+            "value": json.dumps(
+                {"tools.web.search.provider": "tavily", "tools.web.providers.tavily.apiKey": "tvly-pasted"}
+            ),
+        },
+    ],
+)
+async def test_a_key_pasted_into_the_chat_is_refused_before_anyone_is_asked(params):
+    from raven.contracts.permissions import Deny
+
+    decision = await _gate(PermissionsConfig(mode="full")).check("raven_config", params)
+    assert isinstance(decision, Deny) and "rotated" in decision.reason
+
+
+@pytest.mark.asyncio
+async def test_a_secret_named_to_be_typed_asks_like_any_change():
+    params = {"action": "set", "path": "tools.web.providers.tavily.apiKey", "value": "null"}
+    decision = await _gate(PermissionsConfig(mode="ask")).check("raven_config", params)
+    assert isinstance(decision, NeedsApproval) and decision.session_keys == ()
+
+
+@pytest.mark.asyncio
+async def test_the_conversation_model_moves_only_this_conversation(config_file):
+    seen: list[str] = []
+
+    def session_model(key: str) -> tuple[str, bool]:
+        seen.append(key)
+        return "openrouter/deepseek/deepseek-v4.1-flash", False
+
+    tool = RavenConfigTool(session_model=session_model)
+    calls = Calls()
+    tool.set_rpc_caller(calls)
+    value = json.dumps({"provider": "openrouter", "model": "z-ai/glm-5.3"})
+    assert "needs a conversation" in await _run(tool, action="set", path="session.model", value=value)
+
+    start_permission_turn(None, conversation_id="tui:abc", turn_id="t-1")
+    got = json.loads(await _run(tool, action="get", path="session.model"))
+    assert got == {"session.model": "openrouter/deepseek/deepseek-v4.1-flash (the default)"}
+    await _run(tool, action="set", path="session.model", value=value)
+    assert calls.calls[-1] == (
+        "config.set",
+        {
+            "key": "model",
+            "value": "z-ai/glm-5.3",
+            "provider": "openrouter",
+            "scope": "session",
+            "session_id": "tui:abc",
+        },
+    )
+    assert tool.approval_evidence({"action": "set", "path": "session.model", "value": value})["was"].endswith(
+        "(the default)"
+    )
+    assert set(seen) == {"tui:abc"}
+    assert "session" not in json.loads(config_file.read_text())

@@ -56,8 +56,11 @@ is that vendor's key).
 - `unset <path>` returns a setting to its default.
 - The user confirms every change. State in one sentence what you are about to
   change and why before calling; if they refuse, do not look for another way.
-- One setting per call. When the user asked for several, make the calls one
-  after another; each is confirmed on its own.
+- Several settings that belong to one request go in one call, so the user
+  confirms them on one card: `set` with no `path` and `value` as an object,
+  `{"tools.web.search.provider": "tavily", "tools.web.providers.tavily.apiKey": null}`.
+  Every value is checked before anything is written. Channels and sub-agents
+  are changed one call each.
 
 ## When it takes effect
 
@@ -90,7 +93,12 @@ The reply to `set` says it; repeat it to the user in plain words.
 
 ## Models
 
-- Default model: `set agents.defaults.model` with `{"provider", "model"}`.
+- Two scopes. `session.model` switches only this conversation, from its next
+  message; `agents.defaults.model` is what new conversations start on (and
+  conversations that never switched). "Switch to X" or "use X here" is the
+  conversation; "from now on", "by default", "for everything" is the default.
+  When it is unclear, ask which one.
+- Both take `{"provider", "model"}`.
   `get providers` shows which providers have a key (the key itself is masked);
   offer models only from those, with ids from the provider's own catalog, not
   from memory. The user picks: a model changes cost and behaviour, so name two
@@ -115,9 +123,18 @@ The reply to `set` says it; repeat it to the user in plain words.
 ## Secrets
 
 API keys, bot tokens and passwords are never passed through a tool call and
-never asked for in chat. `get` reports only `set` / `not set`. When one is
-missing, tell the user where to enter it (the setting's `note`, usually a page
-in Settings) and continue once they say it is done.
+never asked for in chat. `get` reports only `set` / `not set`.
+
+- To have the user enter one, name it with an empty value (`null`), together
+  with whatever else the request changes: the confirmation card on the web page
+  shows a field for it and saves what they type directly, never through you.
+  The reply says whether it is set now.
+- If it is still not set, the user left the field empty or answered where there
+  is no field (the terminal, a chat channel): tell them where to enter it (the
+  setting's `note`, usually a page in Settings) and continue once they say it is
+  done.
+- A key the user pasted into the chat is refused outright. Do not retry it;
+  tell them to rotate it and enter the new one on the card or in Settings.
 
 ## Security-sensitive settings
 

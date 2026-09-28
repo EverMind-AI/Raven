@@ -41,6 +41,8 @@ from raven.contracts.tool import Tool
 
 RpcCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 Restarter = Callable[[str], Awaitable[str]]
+#: A conversation's model and whether it chose it (False: it follows the default).
+SessionModel = Callable[[str], tuple[str, bool]]
 
 GUIDE_SKILL_ID = "local/raven-self-config"
 
@@ -62,6 +64,13 @@ def _parse_value(raw: Any) -> Any:
         return raw
 
 
+def _conversation() -> str:
+    """The conversation this call runs in, as the permission turn names it; empty outside one."""
+    from raven.permissions.turn import current_turn
+
+    return current_turn().conversation_id
+
+
 def _dump(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
@@ -72,8 +81,11 @@ class RavenConfigTool(Tool):
     timeout_seconds = 120.0
     approval_kind = "config.change"
 
-    def __init__(self, *, guide_skill_id: str | None = GUIDE_SKILL_ID) -> None:
+    def __init__(
+        self, *, guide_skill_id: str | None = GUIDE_SKILL_ID, session_model: SessionModel | None = None
+    ) -> None:
         self._guide = guide_skill_id
+        self._session_model = session_model
         self._call: RpcCaller | None = None
         self._restart: Restarter | None = None
         self._pending: dict[str, Effect] = {}
@@ -89,7 +101,11 @@ class RavenConfigTool(Tool):
     def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
         if params.get("action") == "restart" and not params.get("value"):
             params = {**params, "value": self._needed_restart()}
-        return surface.change_view(params, surface.read_raw())
+        view = surface.change_view(params, surface.read_raw())
+        for row in view.get("changes") or [view]:
+            if row.get("setting") == "session.model" and (now := self._conversation_model()) is not None:
+                row["was"] = now
+        return view
 
     @property
     def name(self) -> str:
@@ -136,6 +152,8 @@ class RavenConfigTool(Tool):
             if action == "get":
                 return await self._get(path)
             if action == "set":
+                if not path and isinstance(value, dict):
+                    return await self._set_many(value)
                 return await self._set(path, value)
             if action == "unset":
                 return await self._unset(path)
@@ -270,8 +288,10 @@ class RavenConfigTool(Tool):
             raise LookupError(f"{path} is not in the catalog; describe with no path lists the sections")
         return _dump({path: self._value_view(raw, found[0], path)})
 
-    @staticmethod
-    def _value_view(raw: dict[str, Any], setting: Setting, path: str) -> Any:
+    def _value_view(self, raw: dict[str, Any], setting: Setting, path: str) -> Any:
+        if setting.session:
+            now = self._conversation_model()
+            return now if now is not None else "unknown outside a conversation"
         present, value = surface.lookup(raw, path)
         if setting.secret:
             return "set" if present and value else "not set"
@@ -305,10 +325,7 @@ class RavenConfigTool(Tool):
             raise LookupError(f"{path} is not in the catalog; describe with no path lists the sections")
         setting, bound = found
         if setting.secret:
-            return (
-                f"{path} is a secret, and secrets are never passed through a tool call. "
-                f"Ask the user to enter it themselves ({setting.note or 'in Settings'})."
-            )
+            return await self._secret_outcome(path, setting, value)
         if setting.effect is Effect.INERT:
             return f"{path} is not read by anything ({setting.note or EFFECT_TEXT[Effect.INERT]}); nothing was changed."
         value = surface.check_value(setting, value)
@@ -319,6 +336,67 @@ class RavenConfigTool(Tool):
                 raise LookupError(f"{instance} is not configured; describe {setting.path.split('.*')[0]} first")
         previous = await self._write(setting, path, bound, value)
         return self._report(path, setting.effect, previous, value)
+
+    async def _set_many(self, changes: dict[str, Any]) -> str:
+        """Several settings under the one confirmation the user already gave.
+
+        Every value is checked before anything is written, so a typo in the last
+        one does not leave the first ones applied. Secrets are reported the way
+        a single set reports them: entered on the card, or still to enter.
+        """
+        plan: list[tuple[str, Setting, list[str], Any]] = []
+        for path, raw in changes.items():
+            found = surface.find(path)
+            if found is None:
+                raise LookupError(
+                    f"{path} is not in the catalog (channels and sub-agents are changed one at a time); nothing "
+                    "was changed"
+                )
+            setting, bound = found
+            if setting.effect is Effect.INERT:
+                raise ValueError(f"{path} is not read by anything; nothing was changed")
+            if not setting.secret and setting.writer != "raw" and self._call is None:
+                raise ValueError(
+                    f"{path} is changed through Raven's settings service, which this process does not serve; "
+                    "nothing was changed"
+                )
+            value = raw if setting.secret else surface.check_value(setting, _parse_value(raw))
+            plan.append((path, setting, bound, value))
+        lines = []
+        for path, setting, bound, value in plan:
+            if setting.secret:
+                lines.append(await self._secret_outcome(path, setting, value))
+                continue
+            previous = await self._write(setting, path, bound, value)
+            lines.append(self._report(path, setting.effect, previous, value))
+        return "\n".join(lines)
+
+    async def _secret_outcome(self, path: str, setting: Setting, value: Any) -> str:
+        """What became of a secret the confirmation card asked the user to type.
+
+        The value never reaches this tool: the card saves it through the page's
+        settings methods before it answers the approval. So the only question
+        left is whether it is set now.
+        """
+        if value not in (None, ""):
+            return f"{path} was not written: a key never goes through a tool call. Ask the user to rotate it."
+        present, now = surface.lookup(await asyncio.to_thread(surface.read_raw), path)
+        if present and now:
+            return f"{path} is set (the user entered it; the value is not shown). It {EFFECT_TEXT[setting.effect]}."
+        where = setting.note or "set it in Settings"
+        if surface.secret_input(path) is None:
+            return f"{path} is still not set: the confirmation card has no field for it. Ask the user to {where}."
+        return (
+            f"{path} is still not set: the user left the field empty, or answered where there is no field "
+            f"(the terminal, a chat channel). Ask them to {where}."
+        )
+
+    def _conversation_model(self) -> str | None:
+        conversation = _conversation()
+        if self._session_model is None or not conversation:
+            return None
+        model, own = self._session_model(conversation)
+        return model if own else f"{model} (the default)"
 
     async def _write(self, setting: Setting, path: str, bound: list[str], value: Any) -> Any:
         writer = setting.writer
@@ -331,7 +409,13 @@ class RavenConfigTool(Tool):
             model, provider = self._model_ref(value)
             if not provider:
                 raise ValueError('the default model needs its provider: {"provider": ..., "model": ...}')
-            result = await self._rpc("config.set", {"key": "model", "value": model, "provider": provider})
+            params: dict[str, Any] = {"key": "model", "value": model, "provider": provider}
+            if setting.session:
+                conversation = _conversation()
+                if not conversation:
+                    raise ValueError("session.model needs a conversation; this call is not part of one")
+                params |= {"scope": "session", "session_id": conversation}
+            result = await self._rpc("config.set", params)
             return result.get("previous") if isinstance(result, dict) else None
         if writer == "model.fields":
             result = await self._rpc("model.set_fields", {"slug": bound[0], "fields": {"api_base": value}})

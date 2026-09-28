@@ -442,6 +442,72 @@ describe('the permission approval sheet', () => {
     expect(document.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive')
   })
 
+  /* Seen live: asked to switch the search vendor and set its key, the agent
+     changed the vendor, then told the reader to go to Settings for the key.
+     One card now carries both, and the key is typed into it. */
+  describe('a configuration card with a key to enter', () => {
+    const batch = {
+      ...base, approvalId: 'ap-key', command: "raven_config action='set'", kind: 'config.change', family: '',
+      evidence: {
+        action: 'set',
+        changes: [
+          { action: 'set', setting: 'tools.web.search.provider', was: 'serper', was_default: true, value: 'tavily', effect: 'next_turn' },
+          { action: 'set', setting: 'tools.web.providers.tavily.apiKey', secret: true, was: 'not set', input: { via: 'settings.set' } },
+          { action: 'set', setting: 'tools.media.speech.apiKey', secret: true, was: 'set' },
+        ],
+      },
+    }
+    const saved: Array<[string, string, string]> = []
+    const keyHandlers = (fail?: string): ApprovalHandlers => handlers({
+      saveSecret: async (field, setting, value) => {
+        if (fail) throw new Error(fail)
+        saved.push([field.via, setting, value])
+      },
+    })
+    beforeEach(() => { saved.length = 0 })
+
+    it('lays out every change, and a field only for the key the page can save', () => {
+      openApproval(fresh(batch), keyHandlers())
+      const paths = [...document.querySelectorAll('.csheet .cp-ev-path')].map((el) => el.textContent)
+      expect(paths).toEqual(['tools.web.search.provider', 'tools.web.providers.tavily.apiKey', 'tools.media.speech.apiKey'])
+      const fields = document.querySelectorAll<HTMLInputElement>('.csheet input[data-secret]')
+      expect(fields.length).toBe(1)
+      expect(fields[0]!.type).toBe('password')
+      expect(document.querySelector('.csheet')!.textContent).toContain('gui.confirm.cfg.key_no_field')
+      expect(document.querySelector('.csheet')!.textContent).toContain('gui.confirm.cfg.key_is_set')
+    })
+
+    it('saves the typed key, clears the field, then answers allow', async () => {
+      openApproval(fresh(batch), keyHandlers())
+      const field = document.querySelector<HTMLInputElement>('.csheet input[data-secret]')!
+      field.value = '  tvly-typed  '
+      opts()[1]!.click()
+      await tick()
+      expect(saved).toEqual([['settings.set', 'tools.web.providers.tavily.apiKey', 'tvly-typed']])
+      expect(field.value).toBe('')
+      expect(said).toEqual([['allow', '', undefined]])
+    })
+
+    it('answers allow without saving when the field is left empty', async () => {
+      openApproval(fresh(batch), keyHandlers())
+      opts()[1]!.click()
+      await tick()
+      expect(saved).toEqual([])
+      expect(said).toEqual([['allow', '', undefined]])
+    })
+
+    it('keeps the card up and says why when the key could not be saved', async () => {
+      openApproval(fresh(batch), keyHandlers('bad key'))
+      document.querySelector<HTMLInputElement>('.csheet input[data-secret]')!.value = 'tvly-typed'
+      opts()[1]!.click()
+      await tick()
+      await tick()
+      expect(said).toEqual([])
+      expect(sheets().length).toBe(1)
+      expect(document.querySelector('.csheet [role="alert"]')!.textContent).toBe('gui.confirm.cfg.key_failed')
+    })
+  })
+
   /* The one sweep that could still strand a turn. A confirm request arriving on
      the same conversation used to take the gate's pending ask down with it, and
      nothing under that ask retires it but an answer: the call would then wait

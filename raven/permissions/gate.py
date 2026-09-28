@@ -130,6 +130,15 @@ class PermissionGate:
                 source=DecisionSource.USER_DENY,
             )
         own = self_config_tier(tool_name, params)
+        if own is Tier.DENY:
+            return Deny(
+                reason=(
+                    "A key or token never goes through a tool call. Name the secret with an empty value and the "
+                    "confirmation card asks the user to type it; tell them a key pasted into the chat should be "
+                    "rotated"
+                ),
+                source=DecisionSource.DEFAULT,
+            )
         if own is Tier.ALLOW:
             return Allow(source=DecisionSource.DEFAULT)
         if own is Tier.ASK:

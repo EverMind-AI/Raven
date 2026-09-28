@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -94,6 +95,9 @@ class Setting:
     #: For a setting that names a block (a model pin), the keys of it that are
     #: the setting; a read shows only these, never the rest of the block.
     keys: tuple[str, ...] = ()
+    #: Held by the conversation that asks rather than by config.json, so it
+    #: moves no other conversation and has no default in the file.
+    session: bool = False
 
     def describe(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -110,6 +114,9 @@ class Setting:
             out["nullable"] = True
         if self.secret:
             out["secret"] = True
+            out["entered_by"] = "the user, in a field on the confirmation card (web) or in Settings"
+        if self.session:
+            out["scope"] = "this conversation only"
         if self.sensitive:
             out["sensitive"] = self.sensitive
         if self.note:
@@ -143,6 +150,16 @@ SECTIONS: tuple[Section, ...] = (
                 _E.IMMEDIATE,
                 writer="config.model",
                 note='value is {"provider": "<provider>", "model": "<model id>"}',
+            ),
+            Setting(
+                "session.model",
+                "The model this conversation runs on; the default and every other conversation stay as they are",
+                "model_ref",
+                _E.NEXT_TURN,
+                writer="config.model",
+                session=True,
+                note='value is {"provider": "<provider>", "model": "<model id>"}; takes over from this '
+                "conversation's next turn",
             ),
             Setting(
                 "agents.defaults.reasoningEffort",
@@ -717,10 +734,69 @@ def check_value(setting: Setting, value: Any) -> Any:
     return value
 
 
+def batch_of(params: dict[str, Any]) -> list[tuple[str, Any]] | None:
+    """The changes of a ``set`` that names no path and carries ``{path: value, ...}``, else None."""
+    if params.get("action") != "set" or params.get("path"):
+        return None
+    value = _decoded(params.get("value"))
+    if not isinstance(value, dict) or not value:
+        return None
+    return [(str(path), item) for path, item in value.items()]
+
+
+def is_secret_path(path: str) -> bool:
+    found = find(path)
+    return (found is not None and found[0].secret) or _credential_key(path.rsplit(".", 1)[-1])
+
+
+def carries_secret_value(params: dict[str, Any]) -> bool:
+    """Whether a call holds a credential's value -- one the user typed into the chat.
+
+    A secret is named with an empty value, which asks the user to type it into
+    the confirmation card; a value in the arguments has already passed through
+    the model and must not be written or shown anywhere else.
+    """
+    changes = batch_of(params)
+    if changes is None:
+        if params.get("action") not in ("set", "add"):
+            return False
+        changes = [(str(params.get("path") or ""), params.get("value"))]
+    return any(is_secret_path(path) and _decoded(value) not in (None, "") for path, value in changes) or (
+        params.get("action") == "add" and _holds_credential(_decoded(params.get("value")))
+    )
+
+
+def _holds_credential(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any((_credential_key(k) and item) or _holds_credential(item) for k, item in value.items())
+    if isinstance(value, list):
+        return any(_holds_credential(item) for item in value)
+    return False
+
+
+def secret_input(path: str) -> dict[str, str] | None:
+    """How the confirmation card saves a secret typed into it, or None where it has no field.
+
+    Through the page's own settings methods, the ones the settings page saves
+    the same key with, so the value goes from the field to the file and never
+    through the model.
+    """
+    if re.fullmatch(r"tools\.web\.providers\.\w+\.apiKey", path) or path == "tools.media.image.apiKey":
+        return {"via": "settings.set"}
+    if match := re.fullmatch(r"providers\.([\w-]+)\.apiKey", path):
+        return {"via": "model.save_key", "slug": match.group(1)}
+    return None
+
+
 def change_line(params: dict[str, Any]) -> str:
     """One sentence for a confirmation prompt about a ``raven_config`` call."""
+    changes = batch_of(params)
+    if changes is not None:
+        return "; ".join(change_line({"action": "set", "path": path, "value": value}) for path, value in changes)
     action = str(params.get("action") or "")
     path = str(params.get("path") or "")
+    if action == "set" and is_secret_path(path):
+        return f"Ask you to enter {path} (typed into the card on the web page; elsewhere, in Settings)"
     if action == "restart":
         if restart_target(params) == "restart":
             return "Restart the whole Raven process so pending configuration changes take effect"
@@ -741,15 +817,19 @@ def change_line(params: dict[str, Any]) -> str:
 
 def _shown(path: str, value: Any) -> str:
     """``value`` as a prompt may print it: decoded, credentials masked, a secret setting hidden whole."""
-    found = find(path)
-    if (found is not None and found[0].secret) or _credential_key(path.rsplit(".", 1)[-1]):
+    if is_secret_path(path):
         return "(hidden)"
+    return _short(redacted(_decoded(value)))
+
+
+def _decoded(value: Any) -> Any:
+    """A JSON-encoded argument as the value it spells; anything else as it is."""
     if isinstance(value, str):
         try:
-            value = json.loads(value)
+            return json.loads(value)
         except ValueError:
-            pass
-    return _short(redacted(value))
+            return value
+    return value
 
 
 def restart_target(params: dict[str, Any]) -> str:
@@ -765,9 +845,23 @@ def restart_target(params: dict[str, Any]) -> str:
 
 def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     """The same change as ``change_line``, in fields a confirmation card lays out itself."""
+    changes = batch_of(params)
+    if changes is not None:
+        return {
+            "action": "set",
+            "changes": [change_view({"action": "set", "path": p, "value": v}, data) for p, v in changes],
+            "change": change_line(params),
+        }
     action = str(params.get("action") or "")
     path = str(params.get("path") or "")
     view: dict[str, Any] = {"action": action, "setting": path, "change": change_line(params)}
+    if action == "set" and is_secret_path(path):
+        view["secret"] = True
+        present, was = lookup(data, path)
+        view["was"] = "set" if present and was else "not set"
+        if (field := secret_input(path)) is not None:
+            view["input"] = field
+        return view
     if action == "restart":
         view["target"] = restart_target(params)
         return view

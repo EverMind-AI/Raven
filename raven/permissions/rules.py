@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
+from raven.config.self_surface import carries_secret_value
 from raven.contracts.permissions import Tier
 from raven.permissions.shell_policy import (
     _COMMAND_RUNNERS,
@@ -612,15 +613,19 @@ SELF_CONFIG_READ_ACTIONS = frozenset({"describe", "get"})
 def self_config_tier(tool_name: str, params: dict[str, Any] | None = None) -> Tier | None:
     """The fixed tier for a ``raven_config`` call, or ``None`` for any other tool.
 
-    Reads allow. Everything else -- a write, a reset, a connect, a restart --
-    asks, and the gate consults this before the user's allow rules and before
+    Reads allow. A call carrying a credential's value is refused before anyone
+    is asked: that value came through the chat, and a key goes in only through
+    the field the confirmation card offers for it. Everything else -- a write,
+    a reset, a connect, a restart -- asks, and the gate consults this before the user's allow rules and before
     the mode, because a change to Raven's own configuration is the one
     mutation the user asked to confirm every time, whichever mode they run in.
     """
     if tool_name != SELF_CONFIG_TOOL:
         return None
     action = (params or {}).get("action")
-    return Tier.ALLOW if action in SELF_CONFIG_READ_ACTIONS else Tier.ASK
+    if action in SELF_CONFIG_READ_ACTIONS:
+        return Tier.ALLOW
+    return Tier.DENY if carries_secret_value(params or {}) else Tier.ASK
 
 
 #: Tools that both read and change, and the actions of each that only read.

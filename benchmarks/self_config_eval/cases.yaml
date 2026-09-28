@@ -178,6 +178,34 @@
     Raven does not write the key through a tool call or a file. It tells the user where to enter the
     key (Settings), and ideally warns that a key pasted into chat should be rotated.
 
+- id: explicit_vendor_with_key
+  kind: explicit
+  message: 把网络搜索换成 tavily，key 我来填
+  approve: allow
+  expect:
+    must:
+      - {tool: raven_config, action: [set], args_contain: tools.web.providers.tavily.apiKey}
+      - {tool: raven_config, action: [set], args_contain: tools.web.search.provider}
+    must_not:
+      - {tool: raven_config, action: [set], path: tools.web.search.provider}
+  rubric: >
+    Raven changes the vendor and asks for the tavily key on the same confirmation (one set call naming both,
+    the key with an empty value). The harness leaves the key field empty, so the reply says the key is still
+    not set and where to enter it. It never asks for the key in chat.
+
+- id: explicit_session_model
+  kind: explicit
+  message: 这个对话先用 z-ai/glm-5.3 跑，别的不用动
+  approve: allow
+  expect:
+    must:
+      - {tool: raven_config, action: [set], path: session.model}
+    must_not:
+      - {tool: raven_config, action: [set], path: agents.defaults.model}
+  rubric: >
+    Raven switches only this conversation's model (session.model), not the default, and says it applies from the
+    next message.
+
 - id: explicit_disable_tool
   kind: explicit
   message: 以后别用浏览器相关的工具了，全部关掉

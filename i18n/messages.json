@@ -615,6 +615,30 @@
       "en": "writing",
       "zh": "正在写入"
     },
+    "gui.act.ing.raven_config_read": {
+      "en": "checking settings",
+      "zh": "正在查看配置"
+    },
+    "gui.act.ing.raven_config_change": {
+      "en": "changing settings",
+      "zh": "正在修改配置"
+    },
+    "gui.act.ing.raven_config_restart": {
+      "en": "reloading Raven",
+      "zh": "正在重载 Raven"
+    },
+    "gui.act.ing.plugin_read": {
+      "en": "checking plugins",
+      "zh": "正在查看插件"
+    },
+    "gui.act.ing.plugin_connect": {
+      "en": "connecting a plugin",
+      "zh": "正在连接插件"
+    },
+    "gui.act.ing.plugin_remove": {
+      "en": "removing a plugin",
+      "zh": "正在移除插件"
+    },
     "gui.act.n.edit_file": {
       "en": "edited {n} files",
       "zh": "修改 {n} 个文件"
@@ -658,6 +682,30 @@
     "gui.act.n.write_file": {
       "en": "wrote {n} files",
       "zh": "写入 {n} 个文件"
+    },
+    "gui.act.n.raven_config_read": {
+      "en": "checked settings {n} times",
+      "zh": "查看配置 {n} 次"
+    },
+    "gui.act.n.raven_config_change": {
+      "en": "changed settings {n} times",
+      "zh": "修改配置 {n} 次"
+    },
+    "gui.act.n.raven_config_restart": {
+      "en": "reloaded Raven {n} times",
+      "zh": "重载 Raven {n} 次"
+    },
+    "gui.act.n.plugin_read": {
+      "en": "checked plugins {n} times",
+      "zh": "查看插件 {n} 次"
+    },
+    "gui.act.n.plugin_connect": {
+      "en": "connected {n} plugins",
+      "zh": "连接插件 {n} 次"
+    },
+    "gui.act.n.plugin_remove": {
+      "en": "removed {n} plugins",
+      "zh": "移除插件 {n} 次"
     },
     "gui.act.v.ask_user": {
       "en": "asked",
@@ -742,6 +790,30 @@
     "gui.act.v.write_file": {
       "en": "wrote",
       "zh": "写入"
+    },
+    "gui.act.v.raven_config_read": {
+      "en": "checked settings",
+      "zh": "查看配置"
+    },
+    "gui.act.v.raven_config_change": {
+      "en": "changed settings",
+      "zh": "修改配置"
+    },
+    "gui.act.v.raven_config_restart": {
+      "en": "reloaded Raven",
+      "zh": "重载 Raven"
+    },
+    "gui.act.v.plugin_read": {
+      "en": "checked plugins",
+      "zh": "查看插件"
+    },
+    "gui.act.v.plugin_connect": {
+      "en": "connected a plugin",
+      "zh": "连接插件"
+    },
+    "gui.act.v.plugin_remove": {
+      "en": "removed a plugin",
+      "zh": "移除插件"
     },
     "gui.add": {
       "en": "Add",
@@ -6030,6 +6102,22 @@
     "gui.confirm.cfg.restart": {
       "en": "Restart the whole Raven process so the pending changes take effect. Channels reconnect after a few seconds.",
       "zh": "重启整个 Raven 进程，让待生效的改动生效。渠道会断开几秒后重连。"
+    },
+    "gui.confirm.cfg.key_field": {
+      "en": "Paste the key here. It is saved directly and never goes through Raven.",
+      "zh": "在这里粘贴 key，会直接保存，不经过 Raven"
+    },
+    "gui.confirm.cfg.key_is_set": {
+      "en": "A key is already set; what you type replaces it. Leave it empty to keep it.",
+      "zh": "已经填过 key，输入新的会替换；留空保持不变"
+    },
+    "gui.confirm.cfg.key_no_field": {
+      "en": "This key cannot be entered here; set it in Settings.",
+      "zh": "这个 key 不能在这里填，请去设置里填写"
+    },
+    "gui.confirm.cfg.key_failed": {
+      "en": "The key was not saved: {e}",
+      "zh": "key 没有保存成功：{e}"
     },
     "gui.confirm.cfg.sensitive": {
       "en": "Security: {note}",

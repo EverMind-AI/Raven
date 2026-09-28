@@ -1,5 +1,5 @@
 import { t } from '../../i18n/t'
-import { argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
+import { actName, argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
 import { readMessage } from '../../lib/attachments'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
@@ -64,7 +64,7 @@ const shortPath = (p: string): string => {
 const MIN_RUN_STEPS = 2
 export const DTL_MAX_LINES = 80
 
-export { argPath, firstErrLine, phraseOf, shortArg, verbIngOf, verbOf }
+export { actName, argPath, firstErrLine, phraseOf, shortArg, verbIngOf, verbOf }
 
 /* The demo replay hands the one string it displays where the live RPC hands
    the argument object; normalised here so a row reads the same either way. */
@@ -127,6 +127,9 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
     case 'cron': return [a.action, a.cron_expr, a.every_seconds ? `${a.every_seconds}s` : '',
       s('message').split('\n')[0]].filter(Boolean).join(' · ')
     case 'use_skill': case 'read_skill': return s('skill_id')
+    /* Its `path` names a setting, not a file: the action and the setting read as
+       the line, where the default branch picked whichever string came first. */
+    case 'raven_config': return [s('action'), s('path')].filter(Boolean).join(' ')
     case 'image_generate': case 'video_generate': return s('prompt').split('\n')[0] as string
     case 'text_to_speech': return s('text').split('\n')[0] as string
     default: {
