@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from raven.knowledge._chunker import ChunkerBase
 from raven.knowledge._sections import SECTION_ORDINAL
@@ -41,6 +42,9 @@ from raven.knowledge.parser import (
     READING_ORDER,
     LayoutType,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 #: Where a section records the headings above it. Not a parser constant: the
 #: structured parsers write it and the page reads it, and a merged chunk has to
@@ -417,8 +421,8 @@ class NaiveChunker(ChunkerBase):
             size = self.table_context_size if unit.kind == "table" else self.image_context_size
             if size <= 0 or unit.kind not in ("table", "figure"):
                 continue
-            unit.above = _tail_sentences(_text_before(units, index), size)
-            unit.below = _head_sentences(_text_after(units, index), size)
+            unit.above = _tail_sentences(_text_before(units, index, size), size)
+            unit.below = _head_sentences(_text_after(units, index, size), size)
 
     # ── merge ─────────────────────────────────────────────────────
 
@@ -519,18 +523,42 @@ def _split(text: str, pattern: str) -> list[str]:
     return pieces
 
 
-def _text_before(units: list[_Unit], index: int) -> str:
-    for unit in reversed(units[:index]):
-        if unit.kind == "text":
-            return unit.text
-    return ""
+def _text_before(units: list[_Unit], index: int, budget: int) -> str:
+    """The prose nearest above, as much of it as ``budget`` can hold.
+
+    The nearest *run* of prose, not the nearest paragraph. Taking one unit and
+    stopping made the setting inert past that unit's length: a table under a
+    short paragraph got the same context at 64 tokens as at 512, because there
+    was never more than the paragraph to give.
+
+    Non-text units before the run are stepped over, because a table directly
+    under another table still has prose somewhere above it. Once the run has
+    started, one ends it -- gluing the prose from before an intervening table
+    onto the prose after it would make a passage the document never had.
+    """
+    return _run(reversed(units[:index]), budget, before=True)
 
 
-def _text_after(units: list[_Unit], index: int) -> str:
-    for unit in units[index + 1 :]:
-        if unit.kind == "text":
-            return unit.text
-    return ""
+def _text_after(units: list[_Unit], index: int, budget: int) -> str:
+    """The same, reading down."""
+    return _run(units[index + 1 :], budget, before=False)
+
+
+def _run(units: "Iterable[_Unit]", budget: int, *, before: bool) -> str:
+    held = ""
+    started = False
+    for unit in units:
+        if unit.kind != "text":
+            if started:
+                break
+            continue
+        started = True
+        # The joiner units are folded together with, so the context reads the
+        # way the same passage would inside a chunk.
+        held = f"{unit.text}\n{held}" if before else f"{held}\n{unit.text}"
+        if count_tokens(held) >= budget:
+            break
+    return held.strip()
 
 
 def _sentences(text: str) -> list[str]:

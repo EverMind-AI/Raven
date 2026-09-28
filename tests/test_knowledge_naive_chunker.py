@@ -189,6 +189,68 @@ def test_context_comes_along_by_default() -> None:
     assert "Around it." in table
 
 
+def test_a_bigger_context_carries_more_of_the_prose() -> None:
+    """The setting has to do something across its whole range.
+
+    A parser gives one element per paragraph, so the prose above a table is
+    several units, not one. Reading the nearest unit and stopping made every
+    budget past that paragraph's length identical -- raising the setting from
+    64 to 164 changed nothing, because there was never more than the one
+    paragraph on offer.
+    """
+    rows = [(f"Paragraph {n}. " + " ".join(f"w{n}x{i}" for i in range(24)) + ".", "text") for n in range(1, 5)]
+    rows.append(("Region | EU | 1.2M", "table"))
+    rows += [(f"After {n}. " + " ".join(f"v{n}x{i}" for i in range(24)) + ".", "text") for n in range(1, 5)]
+    section = _with_elements(rows)
+
+    def table_at(size: int) -> str:
+        chunks = _chunk([section], chunk_size=2048, table_context_size=size)
+        return next(text for text in _texts(chunks) if "1.2M" in text)
+
+    small, large = table_at(64), table_at(164)
+
+    assert len(large) > len(small), "a bigger budget carries more prose"
+    # And both are still bounded by what was asked for, rather than the whole
+    # document arriving around every table.
+    assert len(large) < len(section.content.text)
+
+
+def test_the_context_stops_at_the_thing_next_to_it() -> None:
+    """Gluing the prose from before an intervening table onto the prose after
+    it would make a passage the document never had."""
+    section = _with_elements(
+        [
+            ("Far above, about something else entirely.", "text"),
+            ("Other | table", "table"),
+            ("Directly above.", "text"),
+            ("Region | EU | 1.2M", "table"),
+        ]
+    )
+
+    chunks = _chunk([section], chunk_size=1000, table_context_size=512)
+    table = next(text for text in _texts(chunks) if "1.2M" in text)
+
+    assert "Directly above." in table
+    assert "something else entirely" not in table
+
+
+def test_the_context_steps_over_what_sits_between_it_and_prose() -> None:
+    """A table directly under another table still has prose somewhere above
+    it, and some context beats none."""
+    section = _with_elements(
+        [
+            ("The only prose here.", "text"),
+            ("Other | table", "table"),
+            ("Region | EU | 1.2M", "table"),
+        ]
+    )
+
+    chunks = _chunk([section], chunk_size=1000, table_context_size=512)
+    table = next(text for text in _texts(chunks) if "1.2M" in text)
+
+    assert "The only prose here." in table
+
+
 def test_context_can_be_turned_off() -> None:
     section = _with_elements([("Around it.", "text"), ("Region | EU", "table")])
 
