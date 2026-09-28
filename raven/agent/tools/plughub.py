@@ -462,8 +462,27 @@ class PluginTool(Tool):
         """
         tools = self._tools_of(server)
         if self._registry is not None:
-            self._registry.admit_to_this_turn(tools)
+            self._registry.admit_to_this_turn([*tools, *self._meta_tools_of(server)])
         return tools
+
+    def _meta_tools_of(self, server: str) -> list[str]:
+        """The resource / prompt meta-tools this server's connect may have added.
+
+        Registered by the loop without an origin, so ``_tools_of`` cannot see
+        them; a server that is the first to offer resources is otherwise
+        connected with its resources out of reach for the rest of the turn.
+        """
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+        manager = getattr(self._loop, "mcp_manager", None) if self._loop is not None else None
+        if manager is None:
+            return []
+        names: list[str] = []
+        for primitive, group in (("resources", RESOURCE_TOOL_NAMES), ("prompts", PROMPT_TOOL_NAMES)):
+            if server in manager.servers_offering(primitive):
+                names.extend(sorted(group))
+        return names
 
     def _tools_of(self, server: str) -> list[str]:
         """Tool names the live registry holds for one server."""

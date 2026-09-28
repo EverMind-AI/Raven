@@ -336,8 +336,9 @@ class ToolRegistry:
         # unreachable everywhere), the second a design property (a hidden tool
         # stays callable -- ``tool_call`` resolves by registry, never by schema
         # -- it is just not advertised), and the freeze is per turn (a mid-turn
-        # arrival is unreachable through every surface until the next turn --
-        # ``offers`` consults it for schema and tool-search, and ``execute``
+        # arrival is unreachable through every surface until the next turn,
+        # unless the turn's own call admits it -- ``admit_to_this_turn`` --
+        # and ``offers`` consults it for schema and tool-search, and ``execute``
         # consults it for dispatch, so the three cannot disagree).
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
@@ -535,7 +536,10 @@ class ToolRegistry:
         dispatched to whatever now wears the name.
 
         Session-overlay tools are admitted by name: they enter with the turn
-        that carries them, after the freeze captured the base registry.
+        that carries them, after the freeze captured the base registry. A name
+        :meth:`admit_to_this_turn` let in is an entry pair like any other, and
+        that method adds only names the turn did not already hold, so a
+        replacement stays dropped through it too.
         """
         frozen = self._turn_names.get()
         if frozen is None:
@@ -680,11 +684,17 @@ class ToolRegistry:
         all the wait buys is a user having to say "go on" before the agent can
         use it. That is paid for with one rebuilt cache prefix, once.
 
-        Mutated in place rather than re-set: the tool runs in a copy of the
-        turn's context, and a ``set`` there would not reach the loop's reads.
-        Only the entry pair changes, so the off switch and the channel
-        restriction still decide whether an admitted name is offered.
-        Outside a scope this is a no-op; everything is already offered.
+        Mutated in place rather than re-set, so the admission reaches the
+        loop's reads however the call was dispatched: a ``set`` made inside a
+        task would stay in that task's copy of the context.
+
+        Only names the turn does not already hold are added. A name it holds
+        against an instance that has since been replaced keeps the stale pair
+        and so stays dropped -- the identity rule in
+        :meth:`_visible_to_this_turn` -- rather than swapping in a schema the
+        turn's earlier calls were never composed against. The off switch and
+        the channel restriction still decide whether an admitted name is
+        offered. Outside a scope this is a no-op; everything is already offered.
         """
         frozen = self._turn_names.get()
         if frozen is None:
@@ -692,7 +702,7 @@ class ToolRegistry:
         for name in names:
             tool = self._tools.get(name)
             if tool is not None:
-                frozen[name] = tool
+                frozen.setdefault(name, tool)
 
     def session_tools_in_scope(self) -> dict[str, Tool]:
         """The session tools this turn can see; empty outside any scope.

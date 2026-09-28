@@ -307,3 +307,15 @@ def test_admission_outside_a_turn_is_a_no_op() -> None:
     reg = _registry("read_file")
     reg.admit_to_this_turn(["read_file", "missing"])
     assert _offered(reg) == {"read_file"}
+
+
+def test_admission_does_not_swap_in_a_same_name_replacement() -> None:
+    # The identity rule holds through admission too: the turn composed calls
+    # against the entry instance, so its replacement must not start answering
+    # to the name mid-turn just because a connect named it.
+    reg = _registry("mcp_svc_a")
+    with reg.turn_scope():
+        reg.register(_Stub("mcp_svc_a"))
+        reg.admit_to_this_turn(["mcp_svc_a"])
+        assert not reg.offers_by_name("mcp_svc_a")
+    assert reg.offers_by_name("mcp_svc_a")

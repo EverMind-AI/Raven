@@ -74,6 +74,7 @@ class _FakeManager:
         self.tools = tools or []
         self.dropped: list[str] = []
         self.interactive: bool | None = None
+        self.offers: set[str] = set()
 
     def status(self) -> list[dict]:
         return [
@@ -90,6 +91,9 @@ class _FakeManager:
 
     def tool_map(self) -> dict[str, str]:
         return {t: self.name for t in self.tools} if self.state == "connected" else {}
+
+    def servers_offering(self, primitive: str) -> list[str]:
+        return [self.name] if self.state == "connected" and primitive in self.offers else []
 
     async def disconnect(self, name: str, *, drop: bool = False) -> None:
         self.dropped.append(name)
@@ -410,6 +414,33 @@ async def test_the_tools_a_call_connects_are_usable_in_the_same_turn(_isolated, 
         assert "mcp_svc_a" in out
         assert "mcp_svc_a" in _offered(reg)
         assert await reg.execute("mcp_svc_a", {}) == "ran"
+
+
+@pytest.mark.parametrize("offers", [set(), {"resources"}, {"prompts"}])
+async def test_a_connect_admits_the_meta_tools_its_server_brought(monkeypatch, offers) -> None:
+    """The resource and prompt meta-tools register without an origin, so a
+    server that is the first to offer resources would otherwise be connected
+    with its resources unreachable for the rest of the turn."""
+    from raven.mcp.prompts import PROMPT_TOOL_NAMES
+    from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+    _patch_catalog(monkeypatch, _entry("none"))
+    reg = ToolRegistry()
+    loop = _FakeLoop("svc", "connected", ["mcp_svc_a"])
+    loop.mcp_manager.offers = offers
+    reg.register(PluginTool(loop=loop, registry=reg))
+    meta = set(RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES)
+
+    with reg.turn_scope():
+        for name in ["mcp_svc_a", *sorted(meta)]:
+            reg.register(_Named(name))
+        await reg.execute("plugin", {"action": "connect", "name": "svc"})
+        expected = set()
+        if "resources" in offers:
+            expected |= RESOURCE_TOOL_NAMES
+        if "prompts" in offers:
+            expected |= PROMPT_TOOL_NAMES
+        assert _offered(reg) & meta == expected
 
 
 async def test_authorize_from_a_turn_does_not_take_this_hosts_browser(_isolated) -> None:

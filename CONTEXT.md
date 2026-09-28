@@ -1493,7 +1493,10 @@ fingerprint cache, or the generation swap. Timing is asymmetric by design: a rev
 binds the next read (a tightened deny pattern gates the very next tool call), while an
 addition to the model's tool array lands on the next turn -- `ToolRegistry.turn_scope`
 freezes both registry membership and the withheld set at turn entry, because the array
-is the prompt-cache prefix and must not move between two model calls of one turn.
+is the prompt-cache prefix and must not move between two model calls of one turn. The one
+exception is an addition the turn's own call produced: `ToolRegistry.admit_to_this_turn`
+lets the tools a `plugin` connect or authorize registered join that turn from its next
+model call, at the cost of one rebuilt prefix.
 _Avoid_: reading `config.json` keys ad hoc outside this module; treating a live
 preference as a door (doors reconcile members after a durable write; this lane never
 touches member identity).
