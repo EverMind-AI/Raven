@@ -478,13 +478,15 @@ export function sheetPatch(patch: Partial<Sheet>): void {
    on a later `model.options`, so the page polls that read until it does or the
    code expires. */
 export async function oauthStart(slug: string): Promise<void> {
-  oauthStop()
   let r
   try {
     r = await source().oauthLogin(slug)
   } catch {
+    /* A code already out stays watched: it is still on screen, and still the
+       one the reader will type. */
     return
   }
+  oauthStop()
   const until = Date.now() + Math.max(30, r.expires_in) * 1000
   set({ oauth: { slug, uri: r.verification_uri, code: r.user_code, until, expired: false } })
   oauthTimer = setInterval(() => { void oauthPoll() }, OAUTH_POLL_MS)
@@ -503,6 +505,10 @@ async function oauthPoll(): Promise<void> {
        slug that is now connected, it silently redrew itself for the next
        unconnected vendor. */
     set({ oauth: null, provAdd: get().provAdd === o.slug ? null : get().provAdd })
+    /* The one provider write that does not go through this store, so no
+       write's reload carries it to the pickers: onboarding's role slots read
+       the provider as signed out and said it had no model added. */
+    reloadOffer()
     return
   }
   if (Date.now() > o.until) { oauthStop(); set({ oauth: { ...o, expired: true } }) }
