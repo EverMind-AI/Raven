@@ -394,3 +394,89 @@ async def test_finding_nothing_files_nothing() -> None:
         await tool.execute(query="q")
 
     assert tool.take_metadata() is None
+
+
+# ---------------------------------------------------------------------------
+# the whole chain: a session's selection reaching a turn's tool schema
+# ---------------------------------------------------------------------------
+
+
+class _Watching:
+    """A provider that records the tools it was offered, then says nothing.
+
+    The schema is assembled per model call, so what it saw is what the turn
+    decided -- which is the one thing no unit test above can show.
+    """
+
+    def __init__(self) -> None:
+        self.offered: list[set[str]] = []
+        self.api_key = "test"
+
+    async def chat(self, messages: Any, tools: Any = None, **kwargs: Any) -> Any:
+        from raven.providers.base import LLMResponse
+
+        self.offered.append({d["function"]["name"] for d in (tools or [])})
+        return LLMResponse(content="done", tool_calls=[])
+
+    async def chat_with_retry(self, **kwargs: Any) -> Any:
+        return await self.chat(kwargs.get("messages"), kwargs.get("tools"))
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+    def classify_error(self, exc: BaseException) -> Any:  # pragma: no cover - never reached
+        raise exc
+
+
+async def _turn(workspace: Any, picked: list[str]) -> _Watching:
+    """One turn on a session pointed at ``picked``, and what it was offered."""
+    from raven.agent import knowledge_scope
+    from raven.agent.loop import AgentLoop
+    from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+    from raven.spine.message import ChatType, Source
+    from raven.spine.turn import Origin, TurnRequest
+
+    provider = _Watching()
+    loop = AgentLoop(
+        provider=provider,
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=1),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    request = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="chat1", sender_id="user", chat_type=ChatType.DM),
+        text="what do the documents say",
+    )
+    if picked:
+        knowledge_scope.write(loop.sessions, "tui:chat1", picked)
+    # Through `run_turn`, which is how a turn arrives -- the spine calls it and
+    # it is where the session's bindings are made. `_process_message` is the
+    # older direct path that makes none of them, so a test knocking on that
+    # door would report the feature dead however well it was wired.
+    await loop.run_turn(request, _nowhere, lambda: [], stream=False)
+    return provider
+
+
+async def _nowhere(*_args: Any, **_kwargs: Any) -> None:
+    """A turn's output, dropped: what it says is not what these are about."""
+    return None
+
+
+async def test_a_turn_offers_the_search_when_its_session_named_a_base(tmp_path: Any) -> None:
+    """The whole chain in one case: the record the picker wrote, the binding the
+    turn makes from it, the withholding that reads the binding, and the schema
+    the model is handed. Every link is one line, and any of them dropped leaves
+    the feature silently dead."""
+    provider = await _turn(tmp_path / "ws", ["kb-a"])
+
+    assert provider.offered, "the turn made no model call"
+    assert "knowledge_search" in provider.offered[0]
+
+
+async def test_a_turn_whose_session_named_none_is_offered_none(tmp_path: Any) -> None:
+    provider = await _turn(tmp_path / "ws", [])
+
+    assert provider.offered, "the turn made no model call"
+    assert "knowledge_search" not in provider.offered[0]
