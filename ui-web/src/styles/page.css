@@ -3138,17 +3138,6 @@ textarea:focus, textarea:focus-visible,
   border: 1px solid var(--line-soft); padding: 4px 9px; text-align: left; white-space: nowrap;
 }
 .fview table.csvt th { background: var(--surface); font-weight: 600; position: sticky; top: 0; }
-.fview .binote { padding: 20px 16px; display: grid; gap: 8px; justify-items: start; }
-.fview .binote .h { font-size: 13px; }
-.fview .binote .w { font-size: 12px; color: var(--muted); line-height: 1.6; }
-/* The note's grid stacks its rows; the two open actions belong on one line.
-
-   NOT `.acts`, which this used to be called: that is the transcript answer's
-   icon bar (`.acts button` is a 27px square with `display: grid`), and these
-   two are text buttons. Sharing the name squeezed both labels into 27x27
-   boxes, where they overflowed and drew on top of each other -- the note read
-   as a font or encoding fault rather than as two buttons. */
-.fview .binote .binacts { display: flex; flex-wrap: wrap; gap: 7px; }
 .fview .vspin { padding: 22px 16px; font-size: 12px; color: var(--faint); }
 .fview .verr { padding: 18px 16px; font-size: 12.5px; color: var(--clay); line-height: 1.6; }
 
@@ -5476,7 +5465,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-dlv-row .dlv-kind[data-kind="img"],
 .desk-dlv-row .dlv-kind[data-kind="svg"],
 .desk-dlv-row .dlv-kind[data-kind="pdf"],
-.desk-dlv-row .dlv-kind[data-kind="pptx"] { color: var(--clay); }
+.desk-dlv-row .dlv-kind[data-kind="office"] { color: var(--clay); }
 .desk-dlv-row .dlv-kind[data-kind="csv"],
 .desk-dlv-row .dlv-kind[data-kind="json"] { color: var(--moss); }
 .desk-dlv-row .desk-name { display: grid; gap: 2px; }

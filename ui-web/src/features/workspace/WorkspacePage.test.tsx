@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import catalogue from '../../../../i18n/messages.json'
@@ -282,17 +282,20 @@ describe('workspace island', () => {
     expect(asked).not.toHaveBeenCalled()
   })
 
-  /* A deck is its own kind: the page cannot draw one, but the gateway can
-     render it as a PDF, and that is what the viewer frames. */
-  it('classifies a deck as its own kind and asks the file route for its PDF', () => {
-    expect(store.fileKind('/repo/out/deck.pptx')).toBe('pptx')
-    expect(store.fileKind('/repo/out/DECK.PPTX')).toBe('pptx')
-    expect(store.fileKind('/repo/out/deck.ppt')).toBe('bin')
-    expect(store.makeFile('/repo/out/deck.pptx').kind).toBe('pptx')
+  /* Every Office source the gateway's LibreOffice renders is one kind: the page
+     cannot draw any of them, but the gateway can render each as a PDF, and the
+     viewer draws that. The list is raven/rpc/pdf_preview.py's. */
+  it('classifies what the gateway renders as a PDF as one kind', () => {
+    for (const ext of ['ppt', 'pptx', 'doc', 'docx', 'xls', 'xlsx', 'odp', 'odt', 'ods', 'rtf']) {
+      expect(store.fileKind(`/repo/out/a.${ext}`)).toBe('office')
+    }
+    expect(store.fileKind('/repo/out/DECK.PPTX')).toBe('office')
+    expect(store.fileKind('/repo/out/deck.key')).toBe('bin')
+    expect(store.makeFile('/repo/out/deck.pptx').kind).toBe('office')
     expect(store.renderURL('/repo/out/deck.pptx')).toBe('/file?path=%2Frepo%2Fout%2Fdeck.pptx&render=pdf')
   })
 
-  const deckFile = { path: '/repo/deck.pptx', kind: 'pptx', raw: false, text: null, err: null, size: 9, loading: false }
+  const deckFile = { path: '/repo/deck.pptx', kind: 'office', raw: false, text: null, err: null, size: 9, loading: false }
 
   it('says it is rendering while the gateway converts a deck', async () => {
     install(emptyWs({ file: { ...deckFile } }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
@@ -459,9 +462,8 @@ describe('workspace island', () => {
     }))
     await mount()
     expect(await screen.findByText(/LibreOffice took longer than 180s/)).toBeTruthy()
-    expect(screen.getByText(/gui.ws.render_failed/)).toBeTruthy()
-    expect(screen.getByText('gui.ws.file_binary')).toBeTruthy()
-    expect(screen.getByText('gui.ws.open_with_host {"k":"PPTX"}')).toBeTruthy()
+    expect(screen.getByText('gui.ws.render_failed')).toBeTruthy()
+    expect(screen.getByText('gui.ws.open_with_host')).toBeTruthy()
     expect(document.querySelector('.fview iframe')).toBeNull()
     expect(screen.queryByText('gui.ws.file_rendering')).toBeNull()
   })
@@ -472,7 +474,7 @@ describe('workspace island', () => {
   it('offers the host application for a file it cannot render', async () => {
     const opened: Array<[string, string | undefined]> = []
     const state = install(emptyWs({
-      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+      file: { path: '/repo/deck.key', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
       openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
@@ -480,23 +482,23 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     /* Nothing chosen yet, so the button names the kind and the host decides. */
-    const go = await screen.findByText('gui.ws.open_with_host {"k":"PPTX"}')
+    const go = await screen.findByText('gui.ws.open_with_host')
     await act(async () => { (go.closest('button') as HTMLButtonElement).click() })
-    expect(opened).toEqual([['/repo/deck.pptx', undefined]])
+    expect(opened).toEqual([['/repo/deck.key', undefined]])
     expect(state.shellCalls.filter((c) => c[0] === 'toast')).toEqual([])
   })
 
   it('remembers the application per kind, not per file', async () => {
     const opened: Array<[string, string | undefined]> = []
     const state = install(emptyWs({
-      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+      file: { path: '/repo/deck.key', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
       openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
       hostIsLocal: () => true,
     }, { tab: 'file', open: true, picked: true })
     await mount()
-    const pick = await screen.findByText('gui.ws.open_with_pick')
+    const pick = await screen.findByLabelText('gui.ws.open_with_pick')
     await act(async () => {
       ;(pick.closest('button') as HTMLButtonElement)
         .dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
@@ -504,17 +506,17 @@ describe('workspace island', () => {
     const menu = state.shellCalls.find((c) => c[0] === 'menuAt')?.[1] as Array<{ label: string; fn: () => void }>
     expect(menu.map((x) => (typeof x === 'string' ? x : x.label))).toContain('Keynote')
     await act(async () => { menu.find((x) => x.label === 'Keynote')!.fn() })
-    expect(opened).toEqual([['/repo/deck.pptx', 'Keynote']])
-    /* The choice was for pptx, so ANOTHER pptx inherits it. */
-    expect(store.appFor('/elsewhere/other.pptx')).toBe('Keynote')
+    expect(opened).toEqual([['/repo/deck.key', 'Keynote']])
+    /* The choice was for key, so ANOTHER key inherits it. */
+    expect(store.appFor('/elsewhere/other.key')).toBe('Keynote')
     expect(store.appFor('/elsewhere/sheet.xlsx')).toBeNull()
   })
 
   it('lets the reader hand the kind back to the host default', async () => {
     const opened: Array<[string, string | undefined]> = []
-    store.setAppFor('/x/a.pptx', 'Keynote')
+    store.setAppFor('/x/a.key', 'Keynote')
     const state = install(emptyWs({
-      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+      file: { path: '/repo/deck.key', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
       openIn: async (p: string, app?: string) => { opened.push([p, app]); return {} },
@@ -526,9 +528,9 @@ describe('workspace island', () => {
        says. */
     const go = await screen.findByText('gui.ws.open_with_app {"a":"Keynote"}')
     await act(async () => { (go.closest('button') as HTMLButtonElement).click() })
-    expect(opened).toEqual([['/repo/deck.pptx', 'Keynote']])
+    expect(opened).toEqual([['/repo/deck.key', 'Keynote']])
     opened.length = 0
-    const pick = screen.getByText('gui.ws.open_with_pick')
+    const pick = screen.getByLabelText('gui.ws.open_with_pick')
     await act(async () => {
       ;(pick.closest('button') as HTMLButtonElement)
         .dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
@@ -539,8 +541,8 @@ describe('workspace island', () => {
     await act(async () => {
       menu.find((x) => typeof x !== 'string' && x.label === 'gui.ws.open_with_default')!.fn()
     })
-    expect(opened).toEqual([['/repo/deck.pptx', undefined]])
-    expect(store.appFor('/x/a.pptx')).toBeNull()
+    expect(opened).toEqual([['/repo/deck.key', undefined]])
+    expect(store.appFor('/x/a.key')).toBeNull()
   })
 
   /* `open` runs on the gateway's host. On a remote serve that is not the
@@ -549,13 +551,13 @@ describe('workspace island', () => {
   it('withholds the offer when the gateway is not this desktop', async () => {
     install(emptyWs({
       file: {
-        path: '/repo/deck.pptx', kind: 'bin',
+        path: '/repo/deck.key', kind: 'bin',
         raw: false, text: null, err: null, size: 9, loading: false,
       },
       /* Delivered: even so, the note hands out no copy to save. */
       deliveries: [{
-        path: '/repo/deck.pptx', name: 'deck.pptx', title: 'Deck', description: '',
-        ext: 'pptx', mediaType: '', size: 9, turn: 1, missing: false,
+        path: '/repo/deck.key', name: 'deck.key', title: 'Deck', description: '',
+        ext: 'key', mediaType: '', size: 9, turn: 1, missing: false,
         downloadPath: '/files/download?token=deck',
       }],
     }), {
@@ -565,34 +567,135 @@ describe('workspace island', () => {
     }, { tab: 'file', open: true, picked: true })
     await mount()
     expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
-    expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
-    /* And copying the path, which needs no host at all, stays. */
-    expect(screen.getByText('gui.ws.copy_path_do')).toBeTruthy()
-    expect(document.querySelector('.binote a')).toBeNull()
+    expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()
+    expect(screen.queryByText('gui.ws.open_with_host')).toBeNull()
+    expect(document.querySelector('.workspace-bin a')).toBeNull()
+    expect(screen.getByText('gui.ws.file_kind {"k":"KEY"} \u00b7 9 B')).toBeTruthy()
   })
 
   it('withholds the offer when the source cannot open at all', async () => {
     install(emptyWs({
-      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+      file: { path: '/repo/deck.key', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
       hostIsLocal: () => true,
     }, { tab: 'file', open: true, picked: true })
     await mount()
     expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
-    expect(screen.queryByText('gui.ws.open_with_pick')).toBeNull()
+    expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()
+  })
+
+  /* A name the kind table does not know is as often text as not, so its head
+     is read before anything is drawn, and the bytes decide. */
+  const ranged = (body: Uint8Array | string, total?: number) => {
+    const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body
+    const size = total ?? bytes.length
+    return {
+      ok: true, status: 206,
+      headers: new Headers({ 'Content-Range': `bytes 0-${bytes.length - 1}/${size}` }),
+      arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      text: async () => new TextDecoder().decode(bytes),
+    }
+  }
+  const unknown = (path: string) => ({ path, kind: 'bin', raw: false, text: null, err: null, size: null, loading: false })
+
+  it('reads an unknown kind as text when its head is text, in one request', async () => {
+    install(emptyWs({ file: unknown('/repo/tools.media.image.model') }),
+      { canBrowse: true, hostIsLocal: () => false }, { tab: 'file', open: true, picked: true })
+    const asked: Array<Record<string, string>> = []
+    vi.stubGlobal('fetch', (_u: string, init?: { headers?: Record<string, string> }) => {
+      asked.push(init?.headers ?? {})
+      return Promise.resolve(ranged('model: gpt-image\nsize: 1024'))
+    })
+    await mount()
+    expect(await screen.findByText('model: gpt-image')).toBeTruthy()
+    expect(screen.queryByText('gui.ws.file_binary')).toBeNull()
+    /* The head covered the whole file, so it was not fetched a second time. */
+    expect(asked).toEqual([{ Range: 'bytes=0-8191' }])
+  })
+
+  it('reads the rest when the head was only the start of the text', async () => {
+    install(emptyWs({ file: unknown('/repo/Makefile') }),
+      { canBrowse: true, hostIsLocal: () => false }, { tab: 'file', open: true, picked: true })
+    const whole = 'all:\n\techo ' + 'x'.repeat(9000)
+    const asked: string[] = []
+    vi.stubGlobal('fetch', (_u: string, init?: { headers?: Record<string, string> }) => {
+      asked.push(init?.headers?.Range ?? 'whole')
+      return Promise.resolve(init?.headers?.Range
+        ? ranged(whole.slice(0, 8192), whole.length)
+        : { ok: true, status: 200, text: async () => whole })
+    })
+    await mount()
+    expect(await screen.findByText('all:')).toBeTruthy()
+    expect(asked).toEqual(['bytes=0-8191', 'whole'])
+  })
+
+  it('shows the note, with the size the range reported, when the head is binary', async () => {
+    install(emptyWs({ file: unknown('/repo/weights.model') }),
+      { canBrowse: true, hostIsLocal: () => false }, { tab: 'file', open: true, picked: true })
+    vi.stubGlobal('fetch', () => Promise.resolve(ranged(new Uint8Array([0x50, 0x4b, 3, 4, 0, 0, 0x6a]), 2048)))
+    await mount()
+    expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
+    expect(screen.getByText('gui.ws.file_kind {"k":"MODEL"} \u00b7 2.0 KB')).toBeTruthy()
+    expect(document.querySelector('.fview .code')).toBeNull()
+  })
+
+  it('does not read the head of a name that is never text', async () => {
+    install(emptyWs({ file: unknown('/repo/out.zip') }),
+      { canBrowse: true, hostIsLocal: () => false }, { tab: 'file', open: true, picked: true })
+    const asked = vi.fn()
+    vi.stubGlobal('fetch', asked)
+    await mount()
+    expect(await screen.findByText('gui.ws.file_binary')).toBeTruthy()
+    expect(asked).not.toHaveBeenCalled()
+  })
+
+  it('shows an empty file as empty text rather than as the note', async () => {
+    install(emptyWs({ file: unknown('/repo/.keep') }),
+      { canBrowse: true, hostIsLocal: () => false }, { tab: 'file', open: true, picked: true })
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, status: 416, headers: new Headers() }))
+    await mount()
+    await waitFor(() => expect(document.querySelector('.fview .code')).toBeTruthy())
+    expect(screen.queryByText('gui.ws.file_binary')).toBeNull()
+  })
+
+  it('goes back to the note when text turns binary past its head', async () => {
+    install(emptyWs({ file: unknown('/repo/mixed.dat') }),
+      { canBrowse: true, hostIsLocal: () => false }, { tab: 'file', open: true, picked: true })
+    const head = 'a'.repeat(8192)
+    vi.stubGlobal('fetch', (_u: string, init?: { headers?: Record<string, string> }) => Promise.resolve(
+      init?.headers?.Range ? ranged(head, 9000)
+        : { ok: true, status: 200, text: async () => '\u0000' + head },
+    ))
+    await mount()
+    expect(await screen.findByText('gui.ws.file_not_text')).toBeTruthy()
+    expect(document.querySelector('.fview .code')).toBeNull()
+  })
+
+  /* A picture that did not come is gone only when the route says 404; over
+     the view ceiling is its own sentence, and so is one the browser could
+     not draw. */
+  it('says why a picture did not draw', async () => {
+    install(emptyWs({ file: { path: '/repo/huge.png', kind: 'img', raw: false, text: null, err: null, size: null, loading: false } }),
+      { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, status: 413 }))
+    await mount()
+    const img = document.querySelector('.fview .shot img') as HTMLImageElement
+    await act(async () => { img.dispatchEvent(new Event('error')) })
+    expect(await screen.findByText('gui.ws.file_big')).toBeTruthy()
+    expect(screen.queryByText('gui.ws.file_gone')).toBeNull()
   })
 
   it('says why nothing opened rather than failing silently', async () => {
     const state = install(emptyWs({
-      file: { path: '/repo/deck.pptx', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
+      file: { path: '/repo/deck.key', kind: 'bin', raw: false, text: null, err: null, size: 9, loading: false },
     }), {
       canBrowse: true,
       openIn: async () => { throw new Error('open failed: no such application') },
       hostIsLocal: () => true,
     }, { tab: 'file', open: true, picked: true })
     await mount()
-    const go = await screen.findByText('gui.ws.open_with_host {"k":"PPTX"}')
+    const go = await screen.findByText('gui.ws.open_with_host')
     await act(async () => { (go.closest('button') as HTMLButtonElement).click() })
     await act(async () => { await Promise.resolve() })
     expect(state.shellCalls).toContainEqual(['toast', 'open failed: no such application'])
@@ -603,7 +706,7 @@ describe('workspace island', () => {
   it('refuses a stored application name that is not one', async () => {
     localStorage.setItem('raven.openWith', JSON.stringify({ pptx: '/bin/sh', xlsx: 'Numbers' }))
     store._resetForTests()
-    expect(store.appFor('/x/a.pptx')).toBeNull()
+    expect(store.appFor('/x/a.key')).toBeNull()
     expect(store.appFor('/x/a.xlsx')).toBe('Numbers')
     localStorage.setItem('raven.openWith', 'not json at all')
     store._resetForTests()

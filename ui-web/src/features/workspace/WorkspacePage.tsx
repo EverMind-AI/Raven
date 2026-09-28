@@ -9,7 +9,7 @@ import { show as toast } from '../../state/toast'
 import * as deliveries from './deliveries'
 import {
   RENDERED, TWO_VIEWS, appFor, canOpenInApp, copyToClip, extOf, fileURL, pageURL,
-  hostPlatform, mdHtml, openInApp, runURL, setAppFor,
+  hostPlatform, looksBinary, mdHtml, openInApp, runURL, setAppFor,
 } from './store'
 import * as store from './store'
 import './styles.css'
@@ -30,6 +30,7 @@ const ICO = {
   reveal: 'M4 7.5c0-1.1.9-2 2-2h3.5l2 2.5H18c1.1 0 2 .9 2 2v7c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2v-9.5Z'
     + 'M9.5 16l5-4.5M14.5 15V11.5H11',
   chev: 'M9.5 6.5 15 12l-5.5 5.5',
+  down: 'M7 10l5 5 5-5',
 }
 
 const FT_ICO = {
@@ -292,14 +293,19 @@ const OPEN_WITH: Record<string, string[]> = {
   windows: [],
 }
 
-/* A file the page cannot render. It says so, and offers the two things that
-   can still be done with it: hand it to an application, or show it in the file
-   manager. Both of those run where the GATEWAY runs, so the first is withheld
-   unless that host is this desktop -- a remote serve would start a program on
-   somebody else's screen. Reveal was already here and keeps its own behaviour. */
-function BinNote({ f }: { f: WsFile }): JSX.Element {
+/* A file the page cannot render. It says so, and offers what can still be
+   done with it: hand it to an application. That runs where the GATEWAY runs,
+   so it is withheld unless that host is this desktop -- a remote serve would
+   start a program on somebody else's screen. Copying the path and revealing
+   the file stay in the header, which every file gets. */
+function BinNote({ f, title, detail }: { f: WsFile; title?: string; detail?: string | null }): JSX.Element {
+  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   const chosen = appFor(f.path)
   const canApp = canOpenInApp()
+  const ext = extOf(f.path)
+  const size = f.size ?? (deliveries.byPath(f.path) as { size?: number } | null)?.size ?? 0
+  const meta = [ext ? t('gui.ws.file_kind', { k: ext.toUpperCase() }) : '', deliveries.humanSize(size)]
+    .filter(Boolean).join(' \u00b7 ')
   const hand = (app: string | null): void => {
     void openInApp(f.path, app).then(
       () => {},
@@ -323,27 +329,38 @@ function BinNote({ f }: { f: WsFile }): JSX.Element {
     menuAt(r.left, r.bottom + 6, items)
   }
   return (
-    <div className="binote">
-      <div className="h">{t('gui.ws.file_binary')}</div>
-      <div className="w">{f.path}</div>
-      {canApp ? (
-        <div className="binacts">
-          <button className="mini ghost" onClick={() => hand(chosen)}>
-            {chosen
-              ? t('gui.ws.open_with_app', { a: chosen })
-              : t('gui.ws.open_with_host', { k: extOf(f.path).toUpperCase() })}
-          </button>
-          <button className="mini ghost" onPointerUp={pick}>{t('gui.ws.open_with_pick')}</button>
+    <div className="workspace-bin">
+      <div className="workspace-bin-card">
+        <div className="workspace-bin-tile" aria-hidden="true">
+          <svg viewBox="0 0 48 60">
+            <path className="workspace-bin-sheet"
+              d="M8 1.5h22.5L46.5 17.5V51a7.5 7.5 0 0 1-7.5 7.5H8A6.5 6.5 0 0 1 1.5 52V8A6.5 6.5 0 0 1 8 1.5Z" />
+            <path className="workspace-bin-fold" d="M30.5 1.5V12a5.5 5.5 0 0 0 5.5 5.5h10.5" />
+          </svg>
+          {ext ? <span className="workspace-bin-ext">{ext}</span> : null}
         </div>
-      ) : null}
-      <button
-        className="mini ghost"
-        onClick={() => {
-          if (navigator.clipboard) void navigator.clipboard.writeText(f.path)
-        }}
-      >
-        {t('gui.ws.copy_path_do')}
-      </button>
+        <div className="workspace-bin-title">{title ?? t('gui.ws.file_binary')}</div>
+        {meta ? <div className="workspace-bin-meta">{meta}</div> : null}
+        {detail ? <div className="workspace-bin-detail">{detail}</div> : null}
+        {canApp ? (
+          <div className="workspace-bin-acts">
+            <span className="workspace-bin-split">
+              <button className="mini go" onClick={() => hand(chosen)}>
+                {chosen ? t('gui.ws.open_with_app', { a: chosen }) : t('gui.ws.open_with_host')}
+              </button>
+              <button
+                className="mini go workspace-bin-more tipdn"
+                data-tip={t('gui.ws.open_with_pick')}
+                aria-label={t('gui.ws.open_with_pick')}
+                aria-haspopup="menu"
+                onPointerUp={pick}
+              >
+                <Ico d={ICO.down} />
+              </button>
+            </span>
+          </div>
+        ) : null}
+      </div>
     </div>
   )
 }
@@ -515,28 +532,38 @@ function diffLineCls(line: string): string {
 }
 
 function FileBody({ f }: { f: WsFile }): JSX.Element {
-  const [broken, setBroken] = useState(false)
+  const [broken, setBroken] = useState<string | null>(null)
   const asSource = TWO_VIEWS[f.kind] ? f.raw : !RENDERED[f.kind]
   const asImage = f.kind === 'img' || (f.kind === 'svg' && !asSource)
   const asFrame = (f.kind === 'pdf' || f.kind === 'html') && !asSource
-  const asDeck = f.kind === 'pptx'
-  const wantsText = !asImage && !asFrame && !asDeck && f.kind !== 'bin'
+  const asDeck = f.kind === 'office'
+  const sniffs = f.kind === 'bin' && !f.raw && !f.sniffed && store.sniffable(f.path)
+  const wantsText = !asImage && !asFrame && !asDeck && (f.kind !== 'bin' || f.raw)
   useEffect(() => {
-    if (wantsText && !f.err && f.text == null && !f.loading) void store.loadFileText(f)
+    if (f.err || f.loading) return
+    if (sniffs) void store.sniffFile(f)
+    else if (wantsText && f.text == null) void store.loadFileText(f)
   })
   let body: JSX.Element
+  let fills = asFrame || asDeck
   if (f.err) {
     body = <div className="verr">{f.err}</div>
   } else if (asImage) {
     body = (
       <div className="shot">
         {broken
-          ? <div className="verr">{t('gui.ws.file_gone')}</div>
+          ? <div className="verr">{broken}</div>
           : <img src={fileURL(f.path)} alt={f.path}
             /* The picture kinds never read text, so this is the only place they
-               can find out the file is gone -- but the error itself does not say
-               that, which is why the probe asks for a status first. */
-            onError={() => { setBroken(true); void store.probeDeliveryMissing(f.path) }} />}
+               learn why nothing came -- and the error itself does not say, which
+               is why the probe asks for a status: gone, over the ceiling, or
+               served and still not a picture this browser can draw. */
+            onError={() => {
+              void store.probeDeliveryMissing(f.path).then((status) => setBroken(
+                status === 404 ? t('gui.ws.file_gone')
+                  : status === 413 ? t('gui.ws.file_big')
+                    : status === 403 ? t('gui.ws.file_denied') : t('gui.ws.img_broken')))
+            }} />}
       </div>
     )
   } else if (asFrame) {
@@ -558,19 +585,25 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
       : <iframe sandbox="allow-scripts" referrerPolicy="no-referrer" src={runURL(f.path)} />
   } else if (asDeck) {
     body = <DeckBody f={f} />
-  } else if (f.kind === 'bin') {
+  } else if (sniffs) {
+    body = <div className="vspin">{t('gui.ws.file_loading')}</div>
+  } else if (f.kind === 'bin' && !f.raw) {
     body = <BinNote f={f} />
+    fills = true
   } else if (f.text == null) {
     body = <div className="vspin">{t('gui.ws.file_loading')}</div>
   } else if (f.kind === 'md' && !asSource) {
     body = <div className="prose" dangerouslySetInnerHTML={{ __html: mdHtml(f.text) }} />
   } else if (f.kind === 'csv' && !asSource) {
     body = <CsvTable text={f.text} tab={/\.tsv$/i.test(f.path)} />
+  } else if (f.kind === 'bin' && looksBinary(f.text)) {
+    body = <BinNote f={f} title={t('gui.ws.file_not_text')} />
+    fills = true
   } else {
     const parsed = f.kind === 'json' && !asSource ? parseJsonCapped(f.text) : null
     body = parsed ? <JsonView v={parsed.v} /> : <CodeLines text={f.text} kind={f.kind} />
   }
-  return <div className={asFrame || asDeck ? 'fview workspace-fill' : 'fview'}>{body}</div>
+  return <div className={fills ? 'fview workspace-fill' : 'fview'}>{body}</div>
 }
 
 /* A deck is shown as the PDF the gateway renders of it. The render is asked
@@ -618,12 +651,7 @@ function DeckBody({ f }: { f: WsFile }): JSX.Element {
     return () => { alive = false }
   }, [first])
   if (failed != null) {
-    return (
-      <>
-        <div className="verr">{t('gui.ws.render_failed')} {failed}</div>
-        <BinNote f={f} />
-      </>
-    )
+    return <BinNote f={f} title={t('gui.ws.render_failed')} detail={failed} />
   }
   if (pages == null) return <div className="vspin">{t('gui.ws.file_rendering')}</div>
   return (
