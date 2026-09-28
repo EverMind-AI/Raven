@@ -7939,6 +7939,10 @@
       "en": "Files",
       "zh": "文件"
     },
+    "gui.settings.tools.grp_knowledge": {
+      "en": "Knowledge bases",
+      "zh": "知识库"
+    },
     "gui.settings.tools.grp_run": {
       "en": "Execution",
       "zh": "执行"

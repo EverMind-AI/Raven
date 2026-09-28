@@ -2895,6 +2895,12 @@ export interface SessionCreateParams {
    * Absolute directory this session's turns run in, persisted as the session's workdir override. How a client attached to a shared gateway keeps its launch directory.
    */
   workdir?: string;
+  /**
+   * Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all.
+   *
+   * @maxItems 32
+   */
+  knowledge_bases?: string[];
 }
 /**
  * The key is minted lazily -- no file is written until the first save.
@@ -4013,6 +4019,26 @@ export interface SessionSetModeResult {
     name?: string;
     description?: string;
   }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetKnowledgeParams".
+ */
+export interface SessionSetKnowledgeParams {
+  session_id: string;
+  /**
+   * Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all.
+   *
+   * @maxItems 32
+   */
+  knowledge_bases?: string[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetKnowledgeResult".
+ */
+export interface SessionSetKnowledgeResult {
+  knowledge_bases: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

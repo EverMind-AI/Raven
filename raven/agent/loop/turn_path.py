@@ -63,6 +63,7 @@ from raven.agent.loop._shared import (
     is_hard_tool_failure,
     is_only_think_debris,
     json,
+    knowledge_scope,
     logger,
     loop_break_nudge,
     merge_mid_turn,
@@ -3257,6 +3258,12 @@ class TurnPathMixin:
 
             with (
                 workdir.bind(turn_workdir),
+                # Beside the working directory and for the same reason: which
+                # bases this conversation may search is a fact about the
+                # session, and one loop serves every session on the process, so
+                # a tool that held the list would answer with the session it
+                # was built for.
+                knowledge_scope.bind(knowledge_scope.read(self.sessions, cid)),
                 usage_context.bind(cid, self.sessions.get_or_create(cid).metadata.get("usage_owner", {})),
             ):
                 try:

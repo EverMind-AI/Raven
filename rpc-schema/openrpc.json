@@ -125,6 +125,17 @@
             "type": "string",
             "description": "Absolute directory this session's turns run in, persisted as the session's workdir override. How a client attached to a shared gateway keeps its launch directory."
           }
+        },
+        {
+          "name": "knowledge_bases",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "description": "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
+          }
         }
       ],
       "result": {
@@ -2959,6 +2970,49 @@
         }
       },
       "errors": []
+    },
+    {
+      "name": "session.set_knowledge",
+      "summary": "Choose which knowledge bases this session's turns may search.",
+      "description": "Replaces the selection rather than adding to it: the picker sends what is ticked, and a call that added would have no way to say that something was unticked. Answers the selection as it now stands, deduplicated with the order kept -- the order is the only thing saying which base the reader reached for first.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "knowledge_bases",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 32,
+            "description": "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
+          }
+        }
+      ],
+      "result": {
+        "name": "SessionSetKnowledgeResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "knowledge_bases": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "knowledge_bases"
+          ]
+        }
+      }
     },
     {
       "name": "system.hello",

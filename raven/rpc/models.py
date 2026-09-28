@@ -1399,6 +1399,13 @@ class SessionCreateParams(_Strict):
             "How a client attached to a shared gateway keeps its launch directory."
         ),
     )
+    knowledge_bases: list[str] | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
+        ),
+    )
 
 
 class SessionCreateResult(_Strict):
@@ -2894,6 +2901,27 @@ class SubagentsInstanceSetModelResult(_Strict):
         alias="availableModels",
         description="Everything this agent offers, so one reply is enough to draw the control.",
     )
+
+
+class SessionSetKnowledgeParams(_Strict):
+    session_id: str
+    knowledge_bases: list[str] | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
+        ),
+    )
+
+
+class SessionSetKnowledgeResult(_Strict):
+    """The selection as it now stands.
+
+    Replaced rather than added to: the picker sends what is ticked, and a call
+    that added would have no way to say that something was unticked.
+    """
+
+    knowledge_bases: list[str]
 
 
 class SessionSetModeParams(_Strict):
@@ -5733,6 +5761,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.compress": (SessionCompressParams, SessionCompressResult),
     "session.usage": (SessionUsageParams, SessionUsageResult),
     "session.status": (SessionStatusParams, SessionStatusResult),
+    "session.set_knowledge": (SessionSetKnowledgeParams, SessionSetKnowledgeResult),
     "session.set_mode": (SessionSetModeParams, SessionSetModeResult),
     # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
     "ext.list": (ExtListParams, ExtListResult),

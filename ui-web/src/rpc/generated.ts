@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 213 methods, 125 component schemas.
+// 214 methods, 125 component schemas.
 
 /* eslint-disable */
 /**
@@ -2353,6 +2353,12 @@ export interface SessionCreateParams {
    * Absolute directory this session's turns run in, persisted as the session's workdir override. How a client attached to a shared gateway keeps its launch directory.
    */
   workdir?: string;
+  /**
+   * Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all.
+   *
+   * @maxItems 32
+   */
+  knowledge_bases?: string[];
 }
 /**
  * The key is minted lazily -- no file is written until the first save.
@@ -3028,6 +3034,18 @@ export interface SessionSetModeResult {
     name?: string;
     description?: string;
   }[];
+}
+export interface SessionSetKnowledgeParams {
+  session_id: string;
+  /**
+   * Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all.
+   *
+   * @maxItems 32
+   */
+  knowledge_bases?: string[];
+}
+export interface SessionSetKnowledgeResult {
+  knowledge_bases: string[];
 }
 export interface SystemHelloParams {
   client_version: string;
@@ -5394,6 +5412,7 @@ export interface RpcMethods {
   'subagents.instance.set_mode': { params: SubagentsInstanceSetModeParams; result: SubagentsInstanceSetModeResult };
   'subagents.instance.set_model': { params: SubagentsInstanceSetModelParams; result: SubagentsInstanceSetModelResult };
   'session.set_mode': { params: SessionSetModeParams; result: SessionSetModeResult };
+  'session.set_knowledge': { params: SessionSetKnowledgeParams; result: SessionSetKnowledgeResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
   'system.version': { params: SystemVersionParams; result: SystemVersionResult };
@@ -5710,6 +5729,7 @@ export const RPC_METHODS = [
   "session.pin",
   "session.resume",
   "session.save",
+  "session.set_knowledge",
   "session.set_mode",
   "session.status",
   "session.steer",
