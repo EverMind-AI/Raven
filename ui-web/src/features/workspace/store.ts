@@ -230,13 +230,14 @@ export function fileKind(p: string): string {
 export const sniffable = (p: string): boolean => !BIN_EXT.has(extOf(p))
 
 /* A NUL byte never appears in text, and a decoder that had to replace more
-   than a sliver of what it read was not reading UTF-8. */
+   than a sliver of what it read was not reading UTF-8. It reads all it is
+   given: the sniff hands it the head, and the text view the whole file, so a
+   binary whose first 8 KB happen to read as text is still caught. */
 export function looksBinary(text: string): boolean {
-  const head = text.slice(0, SNIFF_BYTES)
-  if (head.includes('\u0000')) return true
+  if (text.includes('\u0000')) return true
   let bad = 0
-  for (const ch of head) if (ch === '\ufffd') bad += 1
-  return bad > head.length * 0.02
+  for (let i = text.indexOf('\ufffd'); i !== -1; i = text.indexOf('\ufffd', i + 1)) bad += 1
+  return bad > text.length * 0.02
 }
 export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1, office: 1 }
 /* The kinds with two ways to be read, the rendered form and the text under it,

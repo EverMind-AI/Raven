@@ -676,9 +676,12 @@ describe('workspace island', () => {
     install(emptyWs({ file: unknown('/repo/mixed.dat') }),
       { canBrowse: true, hostIsLocal: () => false }, { tab: 'file', open: true, picked: true })
     const head = 'a'.repeat(8192)
+    /* The same bytes both times: a text header longer than the sniff reads,
+       and the binary after it. */
+    const whole = head + '\u0000\u0001\u0002' + 'x'.repeat(800)
     vi.stubGlobal('fetch', (_u: string, init?: { headers?: Record<string, string> }) => Promise.resolve(
-      init?.headers?.Range ? ranged(head, 9000)
-        : { ok: true, status: 200, text: async () => '\u0000' + head },
+      init?.headers?.Range ? ranged(whole.slice(0, 8192), whole.length)
+        : { ok: true, status: 200, text: async () => whole },
     ))
     await mount()
     expect(await screen.findByText('gui.ws.file_not_text')).toBeTruthy()
