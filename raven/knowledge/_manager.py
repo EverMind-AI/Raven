@@ -900,6 +900,31 @@ class KnowledgeManager:
         # looks exactly like one with none.
         return self._records.set_status(document_id, "ready", chunk_count=len(chunks), warning=warning)
 
+    # -- folders -------------------------------------------------------
+
+    def list_folders(self, base_id: str) -> list[Any]:
+        """One base's folders. Root is not one of them -- it is their absence."""
+        return self._records.list_folders(base_id)
+
+    def create_folder(self, base_id: str, name: str) -> Any:
+        return self._records.create_folder(base_id, name)
+
+    def rename_folder(self, folder_id: str, name: str) -> Any:
+        return self._records.rename_folder(folder_id, name)
+
+    def delete_folder(self, folder_id: str) -> int:
+        """Drop the folder; its documents return to Root. Answers how many did."""
+        return self._records.delete_folder(folder_id)
+
+    def move_document(self, document_id: str, folder_id: str) -> Any:
+        """File a document under a folder, or under Root for an empty id.
+
+        Nothing is reindexed: a folder is a label a reader sorts by, and what
+        a search retrieves is scoped to the base. Moving a document changes
+        where it is listed and nothing about what it answers.
+        """
+        return self._records.move_document(document_id, folder_id)
+
     def _indexed_document(self, document_id: str) -> tuple[KnowledgeDocumentRecord, KnowledgeBaseRecord] | None:
         """The document and its base, when the pair can hold chunks at all.
 

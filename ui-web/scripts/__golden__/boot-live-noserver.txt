@@ -45,6 +45,12 @@ div.app[data-rail=on]
             path
             path
         span
+      button#knowledgeBtn.navi
+        svg
+          g
+            path
+            path
+        span
     div#findBox.find
       span.ic
         svg
@@ -200,6 +206,11 @@ section#extAgentsPage.page[data-open=false]
     h2
   div.work
     div#extAgentsBody.wrap
+section#knowledgePage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#knowledgeBody.wrap
 aside#detail.detail[data-open=false]
   div.dpanel
     header

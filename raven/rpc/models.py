@@ -4457,6 +4457,10 @@ class KnowledgeBase(_Strict):
     created_at: str
     updated_at: str
     documents: int
+    #: How many pieces the base holds. Not how many documents are in it: one
+    #: that failed, one still queued and one in a base with no model all count
+    #: as documents and hold nothing.
+    chunks: int = 0
     #: At most this many chunks come back from one search of this base. A
     #: property of the base rather than of each call: how much context this
     #: material is worth is a fact about the material.
@@ -4479,6 +4483,13 @@ class KnowledgeBase(_Strict):
     #: Which pre-processing a file goes through on the way in. Empty is
     #: "don't use", the only setting there is so far.
     file_processing: str = ""
+    #: Kept at the head of the list. A property of the base rather than of the
+    #: browser looking at it: pinning says something about the base, not about
+    #: this machine.
+    pinned: bool = False
+    #: Marked by the reader, and the whole of what the starred tab shows. Not
+    #: the same fact as ``pinned``, which is about order.
+    starred: bool = False
 
 
 class KnowledgeBasesListParams(_Strict):
@@ -4514,6 +4525,8 @@ class KnowledgeDocument(_Strict):
     #: Which kind of data source this arrived through: ``file``, ``note`` or
     #: ``url``. A folder is not one of them -- the browser walks it and sends
     #: the files, so each lands here as a file.
+    #: Which folder of its base it is filed under. Empty is Root.
+    folder_id: str = ""
     origin: str = "file"
     #: What the origin points back at: a url document's page. Empty otherwise.
     origin_ref: str = ""
@@ -4566,6 +4579,8 @@ class KnowledgeBasesSettingsParams(_Strict):
     #: Where this base's model is reached. Sent alone, it only moves the
     #: address the same model is called at, which costs nothing.
     embedding_provider: str | None = None
+    pinned: bool | None = None
+    starred: bool | None = None
     #: The model itself. Sent, the base is rebuilt onto it; empty turns
     #: embedding off. Every document is requeued either way.
     embedding_model: str | None = None
@@ -4591,6 +4606,10 @@ class KnowledgeBasesDeleteResult(_Strict):
 
 class KnowledgeDocumentsListParams(_Strict):
     base_id: str
+
+
+class KnowledgeDocumentsMoveResult(_Strict):
+    document: KnowledgeDocument
 
 
 class KnowledgeDocumentsListResult(_Strict):
@@ -4698,6 +4717,63 @@ class KnowledgeChunkPart(_Strict):
     section_ordinal: int | None = None
 
 
+class KnowledgeFolder(_Strict):
+    """One folder inside a knowledge base.
+
+    One level deep. Root is not one of these but the absence of one, so a
+    document with no folder is in Root and nothing had to be written to put
+    every pre-folder document somewhere sensible.
+    """
+
+    id: str
+    base_id: str
+    name: str
+    created_at: str
+    #: How many documents are filed under it.
+    documents: int
+
+
+class KnowledgeFoldersListParams(_Strict):
+    base_id: str
+
+
+class KnowledgeFoldersListResult(_Strict):
+    folders: list[KnowledgeFolder] = Field(default_factory=list)
+
+
+class KnowledgeFoldersCreateParams(_Strict):
+    base_id: str
+    name: str
+
+
+class KnowledgeFoldersCreateResult(_Strict):
+    folder: KnowledgeFolder
+
+
+class KnowledgeFoldersRenameParams(_Strict):
+    folder_id: str
+    name: str
+
+
+class KnowledgeFoldersRenameResult(_Strict):
+    folder: KnowledgeFolder
+
+
+class KnowledgeFoldersDeleteParams(_Strict):
+    folder_id: str
+
+
+class KnowledgeFoldersDeleteResult(_Strict):
+    #: How many documents returned to Root.
+    moved: int
+
+
+class KnowledgeDocumentsMoveParams(_Strict):
+    document_id: str
+    #: Empty is Root.
+    folder_id: str | None = None
+
+
 class KnowledgeChunkRegion(_Strict):
     """One place on a page that a chunk was cut from.
 
@@ -4782,6 +4858,31 @@ class KnowledgeDocumentsChunksResult(_Strict):
 
     chunks: list[KnowledgeChunk]
     total: int
+
+
+class KnowledgePage(_Strict):
+    """One page of a document, as the reader's side draws it."""
+
+    #: 1-based, and the number a chunk's region names.
+    number: int
+    #: Points. What a region's x coordinates are a fraction of.
+    width: float
+    #: Points. What a region's y coordinates are a fraction of.
+    height: float
+
+
+class KnowledgeDocumentsPagesParams(_Strict):
+    document_id: str
+
+
+class KnowledgeDocumentsPagesResult(_Strict):
+    """Every page of one document, numbered and measured.
+
+    Empty for everything that is not pages -- a text file, a note, a format
+    that cannot be rendered. Not a failure: the page frames the file instead.
+    """
+
+    pages: list[KnowledgePage]
 
 
 class KnowledgeChunksSwitchParams(_Strict):
@@ -5515,8 +5616,14 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     ),
     "knowledge.documents.add_url": (KnowledgeDocumentsAddUrlParams, KnowledgeDocumentsAddUrlResult),
     "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
+    "knowledge.documents.move": (KnowledgeDocumentsMoveParams, KnowledgeDocumentsMoveResult),
+    "knowledge.folders.list": (KnowledgeFoldersListParams, KnowledgeFoldersListResult),
+    "knowledge.folders.create": (KnowledgeFoldersCreateParams, KnowledgeFoldersCreateResult),
+    "knowledge.folders.rename": (KnowledgeFoldersRenameParams, KnowledgeFoldersRenameResult),
+    "knowledge.folders.delete": (KnowledgeFoldersDeleteParams, KnowledgeFoldersDeleteResult),
     "knowledge.documents.delete": (KnowledgeDocumentsDeleteParams, KnowledgeDocumentsDeleteResult),
     "knowledge.documents.chunks": (KnowledgeDocumentsChunksParams, KnowledgeDocumentsChunksResult),
+    "knowledge.documents.pages": (KnowledgeDocumentsPagesParams, KnowledgeDocumentsPagesResult),
     "knowledge.chunks.switch": (KnowledgeChunksSwitchParams, KnowledgeChunksSwitchResult),
     "knowledge.chunks.delete": (KnowledgeChunksDeleteParams, KnowledgeChunksDeleteResult),
     "knowledge.chunks.create": (KnowledgeChunksCreateParams, KnowledgeChunksCreateResult),

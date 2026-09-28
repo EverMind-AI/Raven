@@ -8135,6 +8135,20 @@
             "type": "string",
             "description": "The model this base holds vectors from. Not a setting: sending it rebuilds the base -- the collection is made again at the new width and every document goes back to the queue. Empty turns embedding off."
           }
+        },
+        {
+          "name": "pinned",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "starred",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
         }
       ],
       "result": {
@@ -8557,6 +8571,38 @@
       }
     },
     {
+      "name": "knowledge.documents.pages",
+      "summary": "Every page of one document, numbered and measured.",
+      "description": "What the reader's side needs to draw a file as a column of pictures and put a chunk's region on the right part of the right one. Empty for everything that is not pages -- a text file, a note, a format that cannot be rendered -- which is not a failure: the page frames the file instead. Fetch each page's picture from `/knowledge/page?document=<id>&page=<n>`.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsPagesResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pages": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/KnowledgePage"
+              }
+            }
+          },
+          "required": [
+            "pages"
+          ]
+        }
+      }
+    },
+    {
       "name": "knowledge.chunks.switch",
       "summary": "Turn pieces of one document on or off.",
       "description": "Disabled means out of retrieval entirely -- not a ranking penalty. The filter is applied by the store, so every present and future caller inherits it.",
@@ -8717,6 +8763,171 @@
           },
           "required": [
             "chunk"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.folders.list",
+      "summary": "One base's folders, oldest first.",
+      "description": "Root is not among them: a document with no folder is in Root, which is why every document written before folders existed is already somewhere sensible.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeFoldersListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "folders": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/KnowledgeFolder"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "knowledge.folders.create",
+      "summary": "Make a folder in a base.",
+      "params": [
+        {
+          "name": "base_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeFoldersCreateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "folder": {
+              "$ref": "#/components/schemas/KnowledgeFolder"
+            }
+          },
+          "required": [
+            "folder"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.folders.rename",
+      "summary": "Rename one folder.",
+      "params": [
+        {
+          "name": "folder_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "name",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeFoldersRenameResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "folder": {
+              "$ref": "#/components/schemas/KnowledgeFolder"
+            }
+          },
+          "required": [
+            "folder"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.folders.delete",
+      "summary": "Drop a folder; its documents return to Root.",
+      "description": "The documents stay. A folder is a label a reader put on them, and taking the label off is not a reason to destroy what it labelled.",
+      "params": [
+        {
+          "name": "folder_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeFoldersDeleteResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "moved": {
+              "type": "integer",
+              "description": "How many documents returned to Root."
+            }
+          },
+          "required": [
+            "moved"
+          ]
+        }
+      }
+    },
+    {
+      "name": "knowledge.documents.move",
+      "summary": "File one document under a folder, or under Root.",
+      "description": "An empty folder_id is Root. Nothing is reindexed: what a search retrieves is scoped to the base, so a move changes where a document is listed and nothing it answers.",
+      "params": [
+        {
+          "name": "document_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "folder_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "KnowledgeDocumentsMoveResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "document": {
+              "$ref": "#/components/schemas/KnowledgeDocument"
+            }
+          },
+          "required": [
+            "document"
           ]
         }
       }
@@ -13761,6 +13972,10 @@
           "documents": {
             "type": "integer"
           },
+          "chunks": {
+            "type": "integer",
+            "description": "How many pieces the base holds. Not how many documents are in it: one that failed, one still queued and one in a base with no model all count as documents and hold nothing."
+          },
           "top_k": {
             "type": "integer"
           },
@@ -13790,6 +14005,14 @@
           "embedding_reach": {
             "type": "string",
             "description": "Empty when this base's model can be reached. Otherwise why not: `no_provider` for a base whose model is not the configured one and which records no provider of its own, `no_credential` for one whose recorded provider has no usable credential. Answered from what is recorded rather than by calling the endpoint, so an endpoint that is merely down still reads as reachable here."
+          },
+          "pinned": {
+            "type": "boolean",
+            "description": "Kept at the head of the list."
+          },
+          "starred": {
+            "type": "boolean",
+            "description": "Marked by the reader, and the whole of what the starred tab shows. Not the same fact as `pinned`, which is about order."
           }
         },
         "required": [
@@ -13846,6 +14069,10 @@
           },
           "origin_ref": {
             "type": "string"
+          },
+          "folder_id": {
+            "type": "string",
+            "description": "Which folder of its base it is filed under. Empty is Root."
           }
         },
         "required": [
@@ -15127,6 +15354,60 @@
           "rounds",
           "questions",
           "reply"
+        ]
+      },
+      "KnowledgeFolder": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One folder inside a knowledge base. One level deep: Root is not a folder but the absence of one, so a document with no folder is in Root.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "base_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "documents": {
+            "type": "integer",
+            "description": "How many documents are filed under it."
+          }
+        },
+        "required": [
+          "id",
+          "base_id",
+          "name",
+          "created_at",
+          "documents"
+        ]
+      },
+      "KnowledgePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One page of a document, as the reader's side draws it.",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "description": "1-based, and the number a chunk's region names."
+          },
+          "width": {
+            "type": "number",
+            "description": "Points. What a region's x coordinates are a fraction of."
+          },
+          "height": {
+            "type": "number",
+            "description": "Points. What a region's y coordinates are a fraction of."
+          }
+        },
+        "required": [
+          "number",
+          "width",
+          "height"
         ]
       }
     },

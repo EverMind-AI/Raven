@@ -10,6 +10,7 @@ one question about a document.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -95,6 +96,7 @@ async def knowledge_bases_list(_params: dict[str, Any]) -> dict[str, Any]:
 
 def _base_row(manager: KnowledgeManager, base: Any) -> dict[str, Any]:
     """One base in the shape the contract declares, counts included."""
+    held = manager.list_documents(base.id)
     return {
         "id": base.id,
         "name": base.name,
@@ -107,10 +109,21 @@ def _base_row(manager: KnowledgeManager, base: Any) -> dict[str, Any]:
         "dimensions": base.dimensions,
         "created_at": base.created_at,
         "updated_at": base.updated_at,
-        "documents": len(manager.list_documents(base.id)),
+        "documents": len(held),
+        # What the base actually holds, which is not how many files are in it:
+        # a document that failed, one still queued, and one in a base with no
+        # model all count as documents and hold nothing. The reader's side uses
+        # this to decide whether moving the embedding model would throw
+        # anything away.
+        "chunks": sum(int(getattr(row, "chunk_count", 0) or 0) for row in held),
         # The settings panel's fields, read off the record rather than
         # defaulted in the page: a base written before they existed answers
         # with what it actually behaves as.
+        # The reader's two marks. Different facts: the pin is about order and
+        # the star is a collection, so a tab filtered by the pin would be a tab
+        # of the two bases someone is working in this week.
+        "pinned": bool(getattr(base, "pinned", False)),
+        "starred": bool(getattr(base, "starred", False)),
         "top_k": int(getattr(base, "top_k", DEFAULT_TOP_K) or DEFAULT_TOP_K),
         "smart_chunking": bool(getattr(base, "smart_chunking", True)),
         "separator": str(getattr(base, "separator", DEFAULT_SEPARATOR)),
@@ -250,6 +263,9 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
         settings["chunk_overlap"] = overlap
     if params.get("smart_chunking") is not None:
         settings["smart_chunking"] = bool(params["smart_chunking"])
+    for mark in ("pinned", "starred"):
+        if params.get(mark) is not None:
+            settings[mark] = bool(params[mark])
     if params.get("separator") is not None:
         settings["separator"] = str(params["separator"])
     # Only when the model is not being moved: the rebuild below records the
@@ -357,6 +373,9 @@ def _doc_row(doc: Any) -> dict[str, Any]:
         "updated_at": doc.updated_at,
         "origin": getattr(doc, "origin", "file"),
         "origin_ref": getattr(doc, "origin_ref", "") or "",
+        # Which folder it is filed under. Empty is Root, which is where a
+        # document written before folders existed already is.
+        "folder_id": str(getattr(doc, "folder_id", "") or ""),
     }
 
 
@@ -523,6 +542,86 @@ def _jina_key() -> str:
         return ""
 
 
+def _folder_row(manager: Any, folder: Any) -> dict[str, Any]:
+    """One folder in the shape the contract declares, with its count."""
+    under = sum(1 for doc in manager.list_documents(folder.base_id) if getattr(doc, "folder_id", "") == folder.id)
+    return {
+        "id": folder.id,
+        "base_id": folder.base_id,
+        "name": folder.name,
+        "created_at": folder.created_at,
+        "documents": under,
+    }
+
+
+async def knowledge_folders_list(params: dict[str, Any]) -> dict[str, Any]:
+    """One base's folders, oldest first.
+
+    Root is not among them. A document with no folder is in Root, which is why
+    every document written before folders existed is already somewhere
+    sensible and nothing had to be written to put it there.
+    """
+    base_id = str(params.get("base_id") or "")
+    manager = _base_or_refuse(base_id)
+    return {"folders": [_folder_row(manager, f) for f in manager.list_folders(base_id)]}
+
+
+async def knowledge_folders_create(params: dict[str, Any]) -> dict[str, Any]:
+    """Make a folder in a base."""
+    base_id = str(params.get("base_id") or "")
+    manager = _base_or_refuse(base_id)
+    name = str(params.get("name") or "").strip()
+    if not name:
+        raise ConfigValidationError("name is required")
+    return {"folder": _folder_row(manager, manager.create_folder(base_id, name))}
+
+
+async def knowledge_folders_rename(params: dict[str, Any]) -> dict[str, Any]:
+    """Rename one folder."""
+    folder_id = str(params.get("folder_id") or "")
+    if not folder_id:
+        raise ConfigValidationError("folder_id is required")
+    name = str(params.get("name") or "").strip()
+    if not name:
+        raise ConfigValidationError("name is required")
+    manager = knowledge_manager()
+    folder = manager.rename_folder(folder_id, name)
+    if folder is None:
+        raise ConfigValidationError(f"no folder {folder_id!r}")
+    return {"folder": _folder_row(manager, folder)}
+
+
+async def knowledge_folders_delete(params: dict[str, Any]) -> dict[str, Any]:
+    """Drop a folder; its documents return to Root.
+
+    The documents stay. A folder is a label a reader put on them, and taking
+    the label off is not a reason to destroy what it labelled -- deleting a
+    document is its own action, and it asks first.
+    """
+    folder_id = str(params.get("folder_id") or "")
+    if not folder_id:
+        raise ConfigValidationError("folder_id is required")
+    moved = knowledge_manager().delete_folder(folder_id)
+    if moved < 0:
+        raise ConfigValidationError(f"no folder {folder_id!r}")
+    return {"moved": moved}
+
+
+async def knowledge_documents_move(params: dict[str, Any]) -> dict[str, Any]:
+    """File one document under a folder, or under Root for an empty id.
+
+    Nothing is reindexed: what a search retrieves is scoped to the base, so a
+    move changes where a document is listed and nothing about what it answers.
+    """
+    document_id = str(params.get("document_id") or "")
+    if not document_id:
+        raise ConfigValidationError("document_id is required")
+    doc = knowledge_manager().move_document(document_id, str(params.get("folder_id") or ""))
+    if doc is None:
+        raise ConfigValidationError("no such document, or no such folder to file it under")
+    return {"document": _doc_row(doc)}
+
+
 async def knowledge_documents_index(params: dict[str, Any]) -> dict[str, Any]:
     """Embed one document's chunks, and answer where that got to.
 
@@ -574,6 +673,46 @@ async def knowledge_documents_chunks(params: dict[str, Any]) -> dict[str, Any]:
         raise InternalError(f"reading chunks failed: {exc}") from exc
     cropped = _cropped(manager, document_id, held)
     return {"chunks": [_chunk_row(piece, cropped) for piece in held], "total": total}
+
+
+async def knowledge_documents_pages(params: dict[str, Any]) -> dict[str, Any]:
+    """Every page of one document, numbered and measured.
+
+    What the reader's side needs to draw the file as a column of pictures and
+    put a chunk's region on the right part of the right one: a region is a box
+    in points, and a page that does not say how big it is cannot have anything
+    placed on it.
+
+    An empty list is the answer for everything that is not pages -- a text file,
+    a note, a format LibreOffice cannot render. It is not a failure and the
+    page does not treat it as one: it falls back to framing the file, which is
+    what every format had before this.
+    """
+    from raven.rpc import knowledge_pages
+
+    document_id = _document_id(params)
+    # Through the manager rather than `knowledge_preview.resolve`, which does
+    # the same two lookups: that module reaches back here for the manager, and
+    # importing it from this one would close the loop
+    # (tests/test_import_cycle_budget.py).
+    manager = knowledge_manager()
+    record = manager.get_document(document_id)
+    if record is None:
+        raise ConfigValidationError(f"no such document: {document_id}")
+    blob = manager.document_path(document_id)
+    if blob is None:
+        raise ConfigValidationError(f"the stored copy of {record.source!r} is missing")
+    try:
+        pdf = await knowledge_pages.pdf_of(document_id, blob, record.source)
+    except Exception as exc:  # noqa: BLE001 - a file that will not render is not pages
+        logger.debug("knowledge: no pages for {} ({})", record.source, exc)
+        return {"pages": []}
+    if pdf is None:
+        return {"pages": []}
+    try:
+        return {"pages": await asyncio.to_thread(knowledge_pages.sizes, pdf)}
+    except Exception as exc:  # noqa: BLE001 - surfaced as a typed RPC error
+        raise InternalError(f"reading the pages failed: {exc}") from exc
 
 
 async def knowledge_chunks_switch(params: dict[str, Any]) -> dict[str, Any]:
@@ -792,12 +931,15 @@ def _forget_preview(document_id: str) -> None:
     # Through the module that owns the cache directory rather than the one that
     # fills it: `knowledge_preview` imports this module, so reaching back for it
     # here would put the two in an import cycle.
-    from raven.rpc import pdf_preview
+    from raven.rpc import knowledge_pages, pdf_preview
 
     try:
         pdf_preview.forget_source(document_id)
     except Exception as exc:  # noqa: BLE001 - a cache copy is not worth a failed delete
         logger.warning("knowledge: could not drop the retained source for {}: {}", document_id, exc)
+    # The pages drawn from it, for the same reason and with the same licence to
+    # fail: they are pictures of the document's content under its own id.
+    knowledge_pages.forget(document_id)
 
 
 async def knowledge_documents_delete(params: dict[str, Any]) -> dict[str, Any]:
@@ -896,6 +1038,7 @@ def register_knowledge_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("knowledge.bases.delete", knowledge_bases_delete)
     dispatcher.register("knowledge.documents.list", knowledge_documents_list)
     dispatcher.register("knowledge.documents.chunks", knowledge_documents_chunks)
+    dispatcher.register("knowledge.documents.pages", knowledge_documents_pages)
     dispatcher.register("knowledge.chunks.switch", knowledge_chunks_switch)
     dispatcher.register("knowledge.chunks.delete", knowledge_chunks_delete)
     dispatcher.register("knowledge.chunks.create", knowledge_chunks_create)
@@ -905,6 +1048,11 @@ def register_knowledge_methods(dispatcher: Dispatcher) -> None:
     dispatcher.register("knowledge.documents.update_note", knowledge_documents_update_note)
     dispatcher.register("knowledge.documents.add_url", knowledge_documents_add_url)
     dispatcher.register("knowledge.documents.index", knowledge_documents_index)
+    dispatcher.register("knowledge.documents.move", knowledge_documents_move)
+    dispatcher.register("knowledge.folders.list", knowledge_folders_list)
+    dispatcher.register("knowledge.folders.create", knowledge_folders_create)
+    dispatcher.register("knowledge.folders.rename", knowledge_folders_rename)
+    dispatcher.register("knowledge.folders.delete", knowledge_folders_delete)
     dispatcher.register("knowledge.documents.delete", knowledge_documents_delete)
     dispatcher.register("knowledge.search", knowledge_search)
 
@@ -920,6 +1068,11 @@ __all__ = [
     "knowledge_documents_add_url",
     "knowledge_documents_update_note",
     "knowledge_documents_index",
+    "knowledge_documents_move",
+    "knowledge_folders_create",
+    "knowledge_folders_delete",
+    "knowledge_folders_list",
+    "knowledge_folders_rename",
     "knowledge_documents_delete",
     "knowledge_documents_list",
     "knowledge_manager",

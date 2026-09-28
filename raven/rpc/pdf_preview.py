@@ -157,6 +157,47 @@ def sources_dir() -> Path:
     return cache_dir() / "sources"
 
 
+async def pdf_for_stored(document_id: str, blob: Path, name: str) -> Path:
+    """A PDF for a file kept under a bare id rather than its own name.
+
+    Here rather than with its caller for the reason `forget_source` gives: this
+    module owns the directory, so the function that fills it belongs beside the
+    one that empties it.
+
+    The renderer is handed a suffixed alias rather than the stored file. It
+    decides the input filter partly from the extension, and a legacy `.doc`
+    arriving as an extensionless file is exactly the case its sniffing is worst
+    at -- the conversion fails, or worse, succeeds as the wrong format.
+
+    A hard link, so the alias is the same inode: `cache_key` reads size and
+    mtime, and a copy would change neither by accident but would double the
+    bytes on disk for every preview. The fallback is a copy, for the case the
+    cache and the stored files are on different filesystems.
+    """
+    return await pdf_for(source_alias(document_id, blob, name))
+
+
+def source_alias(document_id: str, blob: Path, name: str) -> Path:
+    """The suffixed alias for one stored file, made if it is not there.
+
+    Separate from the render above so that the name a renderer will be handed
+    can be asked for without rendering anything.
+    """
+    import os
+    import shutil
+
+    alias = sources_dir() / f"{document_id}{Path(name or 'document').suffix}"
+    if alias.is_file() and alias.stat().st_mtime == blob.stat().st_mtime:
+        return alias
+    alias.parent.mkdir(parents=True, exist_ok=True)
+    alias.unlink(missing_ok=True)
+    try:
+        os.link(blob, alias)
+    except OSError:
+        shutil.copy2(blob, alias)
+    return alias
+
+
 def forget_source(document_id: str) -> None:
     """Drop the retained copy for one document, if there is one.
 

@@ -211,6 +211,8 @@ async def test_creating_a_base_answers_the_row_the_list_would_show() -> None:
     assert out["base"]["name"] == "handbook"
     assert out["base"]["description"] == "ops"
     assert out["base"]["documents"] == 0
+    # And holds nothing, which is what leaves its model still movable.
+    assert out["base"]["chunks"] == 0
     assert set(out["base"]) == {
         "id",
         "name",
@@ -218,6 +220,10 @@ async def test_creating_a_base_answers_the_row_the_list_would_show() -> None:
         "embedding_model",
         "embedding_provider",
         "dimensions",
+        "chunks",
+        # The reader's two marks, both false on a base nobody has marked yet.
+        "pinned",
+        "starred",
         "created_at",
         "updated_at",
         "documents",
@@ -1597,3 +1603,141 @@ async def test_a_written_chunk_comes_back_as_the_page_reads_it(monkeypatch) -> N
 async def test_an_empty_written_chunk_is_refused() -> None:
     with pytest.raises(ConfigValidationError):
         await kb.knowledge_chunks_create({"document_id": "d1", "text": "   "})
+
+
+# ---------------------------------------------------------------------------
+# knowledge.documents.pages -- what the panel needs to draw the file
+# ---------------------------------------------------------------------------
+
+
+async def test_pages_are_numbered_and_measured_in_the_points_regions_use(monkeypatch, tmp_path) -> None:
+    """A region is a box in points, and a page that does not say how big it is
+    cannot have anything placed on it."""
+    import pymupdf
+
+    made = pymupdf.open()
+    made.new_page(width=595, height=842)
+    made.new_page(width=842, height=595)
+    pdf = tmp_path / "two.pdf"
+    made.save(pdf)
+    made.close()
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Library(pdf))
+
+    out = await kb.knowledge_documents_pages({"document_id": "d1"})
+
+    assert out == {
+        "pages": [
+            {"number": 1, "width": 595.0, "height": 842.0},
+            # Landscape, and reported as it is: a page that is wider than it is
+            # tall is not a page rotated by the reader's side.
+            {"number": 2, "width": 842.0, "height": 595.0},
+        ]
+    }
+
+
+class _Record:
+    id = "d1"
+    source = "report.pdf"
+
+
+class _Library:
+    """A manager holding one document, whose stored copy is this path."""
+
+    def __init__(self, blob) -> None:
+        self._blob = blob
+
+    def get_document(self, document_id: str):
+        return _Record() if document_id == "d1" else None
+
+    def document_path(self, document_id: str):
+        return self._blob if document_id == "d1" else None
+
+
+async def test_a_format_with_no_pages_answers_an_empty_list(monkeypatch, tmp_path) -> None:
+    """Not a failure: the panel frames the file instead, which is what every
+    format had before pages."""
+    blob = tmp_path / "blob"
+    blob.write_bytes(b"just words")
+
+    class _Note(_Record):
+        source = "a note.md"
+
+    class _Held(_Library):
+        def get_document(self, document_id: str):
+            return _Note()
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Held(blob))
+
+    assert await kb.knowledge_documents_pages({"document_id": "d1"}) == {"pages": []}
+
+
+async def test_a_document_past_the_ceiling_is_framed_rather_than_half_drawn(monkeypatch, tmp_path) -> None:
+    """Most of a document, with nothing saying which part is missing, is worse
+    than the frame -- and a chunk cut from a page past the cut would have
+    nowhere to be marked."""
+    import pymupdf
+
+    from raven.rpc import knowledge_pages
+
+    monkeypatch.setattr(knowledge_pages, "MAX_PAGES", 2)
+    made = pymupdf.open()
+    for _ in range(3):
+        made.new_page(width=595, height=842)
+    pdf = tmp_path / "three.pdf"
+    made.save(pdf)
+    made.close()
+
+    assert knowledge_pages.sizes(pdf) == []
+
+
+async def test_pages_refuses_a_document_whose_stored_copy_is_gone(monkeypatch) -> None:
+    class _Swept(_Library):
+        def document_path(self, document_id: str):
+            return None
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Swept(None))
+
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_documents_pages({"document_id": "d1"})
+
+
+async def test_pages_refuses_a_document_it_does_not_have(monkeypatch) -> None:
+    class _Empty(_Library):
+        def get_document(self, document_id: str):
+            return None
+
+    monkeypatch.setattr(kb, "knowledge_manager", lambda: _Empty(None))
+
+    with pytest.raises(ConfigValidationError):
+        await kb.knowledge_documents_pages({"document_id": "d9"})
+
+
+async def test_deleting_a_document_drops_the_pages_drawn_from_it(monkeypatch, tmp_path) -> None:
+    """They are pictures of its content, under its own id."""
+    from raven.rpc import knowledge_pages
+
+    monkeypatch.setattr("raven.config.paths.get_cache_dir", lambda: tmp_path)
+    held = knowledge_pages.cache_dir() / "d1"
+    held.mkdir(parents=True)
+    (held / "1.webp").write_bytes(b"RIFF")
+
+    knowledge_pages.forget("d1")
+
+    assert not held.exists()
+
+
+@pytest.mark.parametrize("document_id", ["", "..", "a/b", "a\\b"], ids=["nothing", "parent", "slash", "backslash"])
+async def test_forgetting_pages_never_walks_out_of_its_own_directory(
+    monkeypatch, tmp_path, document_id: str
+) -> None:
+    from raven.rpc import knowledge_pages
+
+    monkeypatch.setattr("raven.config.paths.get_cache_dir", lambda: tmp_path)
+    beside = tmp_path / "knowledge-pages"
+    beside.mkdir(parents=True)
+    (beside / "keep.webp").write_bytes(b"RIFF")
+
+    knowledge_pages.forget(document_id)
+
+    assert (beside / "keep.webp").exists()

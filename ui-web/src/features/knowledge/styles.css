@@ -1,0 +1,1340 @@
+/* The knowledge page: a bar of tabs over a grid of cards.
+ *
+ * Every class here carries the domain's own prefix, which is what
+ * scripts/check-class-namespace.mjs holds the tree to. Colour comes from the
+ * page's tokens and nowhere else; a card is paper on the page's ground, and
+ * the only colour spent is on the star a reader set and the one warning a card
+ * can carry.
+ */
+
+/* The page fills the panel rather than sitting in the shared centred column.
+   `.wrap` caps every module page at 1080px and centres it, which is right for
+   a page of prose and wrong for a grid: it left the cards in a narrow band
+   with a gutter either side while the panel beside them was empty. The agent
+   hub overrides the same rule for the opposite reason -- it wants the
+   composer's width -- so the cap is a default, not a law. */
+#knowledgePage .work {
+  overflow: hidden;
+}
+
+#knowledgePage .wrap {
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 22px 22px;
+}
+
+.knowledge-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+}
+
+.knowledge-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+}
+
+.knowledge-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.knowledge-tabs button {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 11px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.knowledge-tabs button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+/* Selected is one flat step of colour, not a box: the row of tabs is already
+   bounded by the whitespace around it. */
+.knowledge-tabs button.knowledge-cur {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* The grid fills the width it is given rather than fixing a column count: this
+   page sits in a pane a reader can drag, and a fixed count either overflows it
+   or leaves a gutter. */
+.knowledge-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  overflow-y: auto;
+  align-content: start;
+  padding-bottom: 8px;
+}
+
+.knowledge-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 14px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--ink);
+}
+
+.knowledge-card:hover {
+  box-shadow: var(--elev);
+}
+
+/* A pinned card is marked on its leading edge rather than tinted: the tint
+   would have to compete with the star, which is the mark a reader set on
+   purpose. */
+.knowledge-pinned {
+  border-left: 3px solid var(--amber);
+}
+
+.knowledge-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.knowledge-head svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  color: var(--muted);
+}
+
+.knowledge-head h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-star,
+.knowledge-dots {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.knowledge-star:hover,
+.knowledge-dots:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.knowledge-star svg,
+.knowledge-dots svg {
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}
+
+/* The create button carries the page's own `mini`; what it adds is that it
+   never shrinks when the tab row beside it grows. */
+.knowledge-new {
+  flex: none;
+}
+
+/* The one place this page spends colour, because it is the one mark the reader
+   set themselves. */
+.knowledge-star.knowledge-on {
+  color: var(--amber);
+}
+
+.knowledge-desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.knowledge-none {
+  color: var(--faint);
+  font-style: italic;
+}
+
+.knowledge-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* Pushed left of anything after it, so the warning sits at the far end of the
+   footer rather than next to the count. */
+.knowledge-count {
+  margin-right: auto;
+}
+
+.knowledge-warn {
+  color: var(--clay);
+}
+
+.knowledge-menu {
+  position: absolute;
+  top: 38px;
+  right: 10px;
+  z-index: 2;
+  display: grid;
+  min-width: 150px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--ink);
+  box-shadow: var(--elev-up);
+}
+
+.knowledge-menu button {
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.knowledge-menu button:hover {
+  background: var(--raised);
+}
+
+.knowledge-danger {
+  color: var(--clay);
+}
+
+.knowledge-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: var(--scrim-detail);
+}
+
+.knowledge-sheet {
+  display: grid;
+  gap: 12px;
+  width: min(440px, calc(100vw - 48px));
+  padding: 18px;
+  border-radius: 14px;
+  background: var(--ink);
+  box-shadow: var(--elev-up);
+}
+
+.knowledge-sheet h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.knowledge-sheet label {
+  display: grid;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.knowledge-sheet input,
+.knowledge-sheet textarea {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  resize: vertical;
+}
+
+.knowledge-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* -- inside a base ------------------------------------------------- */
+
+/* The path across the top. The base's name is the one part of it a reader can
+   change, so it is a button and the other two are not. */
+.knowledge-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 15px;
+}
+
+.knowledge-crumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: inherit;
+  color: var(--muted);
+  padding: 3px 7px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.knowledge-crumb:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.knowledge-switch {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.knowledge-caret {
+  font-size: 10px;
+  color: var(--faint);
+}
+
+.knowledge-sep {
+  color: var(--faint);
+}
+
+/* Where the reader is. Not a button: pressing it would do nothing. */
+.knowledge-here {
+  color: var(--text);
+  font-weight: 600;
+  padding: 3px 2px;
+}
+
+/* The two-button group that swaps cards for rows. */
+.knowledge-views {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.knowledge-views button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.knowledge-views button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.knowledge-views button.knowledge-cur {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.knowledge-views svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* The file's mark: a drawing where the format has one, and the page below
+   where it does not. Both are the same box, so a column of mixed formats is
+   one column of one object. */
+.knowledge-file {
+  flex: none;
+  width: 30px;
+  height: 30px;
+}
+
+/* The drawn fallback. Its letters sit on the page rather than beside it, for
+   the same reason. */
+.knowledge-plain {
+  position: relative;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.knowledge-plain svg {
+  width: 26px;
+  height: 26px;
+}
+
+.knowledge-filemark {
+  position: absolute;
+  bottom: 4px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+/* A document as a card, in the same grid the bases use. */
+.knowledge-doccard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--ink);
+}
+
+.knowledge-doccard:hover {
+  box-shadow: var(--elev);
+}
+
+.knowledge-doccard h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-docs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--ink);
+}
+
+/* One grid for the header and every row, so the columns line up without any
+   of them being told a width twice. */
+.knowledge-doc,
+.knowledge-dochead {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) 72px 88px 130px 28px;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13px;
+}
+
+/* The header names the columns and takes no glyph, so its first cell is the
+   empty one the rows put the file mark in. */
+.knowledge-dochead {
+  grid-template-columns: 30px minmax(0, 1fr) 72px 88px 130px 28px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: var(--surface);
+  border-radius: 12px 12px 0 0;
+}
+
+.knowledge-dochead .knowledge-docname {
+  grid-column: 2;
+}
+
+.knowledge-doc:last-child {
+  border-bottom: 0;
+}
+
+.knowledge-docname {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The server's sentence under the name, in the row's own width. */
+.knowledge-docname em {
+  font-style: normal;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Right-aligned, because it is the column a reader scans down. */
+.knowledge-when {
+  text-align: right;
+}
+
+.knowledge-docmeta {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* One word for where a document is up to. Colour only on the two states that
+   are asking for something: everything else is the page's own text. */
+.knowledge-status {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.knowledge-indexing {
+  color: var(--sky);
+}
+
+.knowledge-failed {
+  color: var(--clay);
+}
+
+.knowledge-err {
+  font-size: 11.5px;
+  color: var(--clay);
+}
+
+/* -- folders ------------------------------------------------------- */
+
+/* The panel and the list beside it. The panel is a fixed column because its
+   contents are names a reader scans, and a column that resized with the
+   longest of them would move every time one was added. */
+.knowledge-split {
+  display: flex;
+  gap: 14px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.knowledge-tree {
+  flex: none;
+  width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-right: 12px;
+  border-right: 1px solid var(--line-soft);
+  overflow-y: auto;
+}
+
+.knowledge-treehd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 6px;
+  font-size: 12.5px;
+}
+
+.knowledge-treehd b {
+  flex: 1 1 auto;
+}
+
+.knowledge-fadd,
+.knowledge-fhide,
+.knowledge-fshow,
+.knowledge-add {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.knowledge-fadd:hover,
+.knowledge-fhide:hover,
+.knowledge-fshow:hover,
+.knowledge-add:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+/* The folded-away panel leaves one control behind, so the column can come
+   back without a trip through a menu. */
+.knowledge-fshow {
+  align-self: start;
+  margin-right: 2px;
+}
+
+.knowledge-frow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 7px;
+  padding-right: 4px;
+}
+
+.knowledge-frow:hover {
+  background: var(--raised);
+}
+
+.knowledge-frow.knowledge-cur {
+  background: var(--raised);
+}
+
+.knowledge-frow.knowledge-cur .knowledge-fname {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.knowledge-fname {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: left;
+  padding: 6px 4px 6px 7px;
+  cursor: pointer;
+}
+
+.knowledge-fname svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.knowledge-fname span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-fcount {
+  flex: none;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.knowledge-fdots {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 13px;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.knowledge-fdots:hover {
+  color: var(--text);
+}
+
+/* One level, and the indent is the whole of what says so. */
+.knowledge-under {
+  padding-left: 14px;
+  display: grid;
+  gap: 1px;
+}
+
+.knowledge-fnew {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  padding: 5px 7px;
+  margin-top: 2px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+  width: 100%;
+}
+
+.knowledge-files {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Where in the base the list is standing. */
+.knowledge-where {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 12.5px;
+}
+
+.knowledge-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* The move sheet: the folders there are, with the one it is in ticked. */
+.knowledge-move {
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 48px));
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--ink);
+  box-shadow: var(--elev-up);
+}
+
+.knowledge-move h2 {
+  margin: 0;
+  font-size: 14.5px;
+}
+
+.knowledge-movelist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.knowledge-movelist button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  text-align: left;
+  padding: 7px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.knowledge-movelist button:hover {
+  background: var(--raised);
+}
+
+.knowledge-movelist button.knowledge-cur {
+  font-weight: 600;
+}
+
+.knowledge-movenew {
+  justify-self: start;
+}
+
+/* -- one document, over the whole page ------------------------------------
+   Two fifths for the file, three for its pieces. The pieces are the half
+   being worked with -- ticked, searched, rewritten, each row carrying its
+   badges and a crop above its text -- and the file beside them is being
+   referred to rather than read through, so the wider column is the list.
+
+   Fixed shares rather than one side taking what is left: both halves scroll
+   independently, and a preview that grew with a long piece of text would move
+   the list out from under the reader mid-scan. The two add to 100, and every
+   box here is border-box, so their padding and rule sit inside the share.
+*/
+.knowledge-view .knowledge-split {
+  gap: 0;
+}
+
+.knowledge-orig {
+  flex: 0 0 40%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding-right: 14px;
+  border-right: 1px solid var(--line-soft);
+  overflow: auto;
+}
+
+.knowledge-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 10px;
+  background: var(--raised);
+}
+
+.knowledge-prose {
+  padding: 4px 2px;
+  font-size: 13.5px;
+}
+
+.knowledge-chunks {
+  flex: 0 0 60%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 14px;
+  min-height: 0;
+}
+
+.knowledge-chunkshd {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: none;
+}
+
+.knowledge-chunklist {
+  display: grid;
+  gap: 8px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.knowledge-chunk {
+  display: grid;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--raised);
+}
+
+/* A piece that is never searched, dimmed rather than hidden: it is still part
+   of the document, and a gap in the numbering would read as a bug. */
+.knowledge-chunk.knowledge-off {
+  opacity: 0.55;
+}
+
+.knowledge-chunkhd {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.knowledge-chunkix {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.knowledge-chunkty,
+.knowledge-chunkpg {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+/* The headings it sits under. Last on the line and clipped, because it is the
+   longest of the badges and the least often what a reader is scanning for. */
+.knowledge-chunkpath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* A fifth of the column at rest: a reader scanning twenty pieces reads their
+   text and glances at the shapes, and a full-width plate per piece turns the
+   list into a contact sheet. The whole of it is one hover away. */
+.knowledge-cropwrap {
+  display: block;
+  width: 20%;
+  min-width: 56px;
+}
+
+.knowledge-crop {
+  display: block;
+  width: 100%;
+  border-radius: 5px;
+  border: 1px solid var(--line-soft);
+  background: var(--ink);
+  cursor: zoom-in;
+}
+
+/* Fixed, so the list's own scrolling does not clip it and the piece under the
+   cursor does not move. Placed over the file it was cut from. */
+.knowledge-cropbig {
+  position: fixed;
+  z-index: 60;
+  display: block;
+  max-width: 38vw;
+  max-height: 76vh;
+  padding: 4px;
+  border-radius: 9px;
+  background: var(--ink);
+  box-shadow: var(--elev-up);
+  pointer-events: none;
+}
+
+.knowledge-cropbig img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(76vh - 8px);
+  border-radius: 6px;
+}
+
+/* The piece the file beside it is open at. */
+.knowledge-chunk.knowledge-cur {
+  border-color: var(--amber);
+}
+
+.knowledge-chunksheet {
+  width: min(720px, calc(100vw - 48px));
+}
+
+.knowledge-chunktx {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* The chunk toolbar: what the list is filtered by, and what a batch acts on.
+   It wraps onto a second line rather than crushing its controls -- a label
+   broken across two lines inside a button is not a narrower button, it is a
+   taller one that reads as two. */
+.knowledge-chunkbar {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex: none;
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+/* Every label on this bar keeps its own line and its own width. */
+.knowledge-seg,
+.knowledge-chunkbar .knowledge-batch,
+.knowledge-chunkbar .knowledge-chunkall {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A toggle of two words. The document list's `.knowledge-views` is the same
+   idea drawn as two icons, and its buttons are fixed 30px boxes -- borrowing
+   it here put "Full text" and "Clipped" on top of each other. */
+.knowledge-seg {
+  display: flex;
+  gap: 2px;
+}
+
+.knowledge-seg button {
+  padding: 4px 9px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.knowledge-seg button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.knowledge-seg button.knowledge-cur {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.knowledge-chunkall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.knowledge-batch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.knowledge-batch .knowledge-bad {
+  color: var(--clay);
+}
+
+.knowledge-chunkq {
+  /* A search box, not the whole bar. It grows to fill what is spare and stops:
+     a field eight words wide for a one-word query is the panel telling the
+     reader it expects a sentence. */
+  flex: 0 1 240px;
+  min-width: 130px;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Wrapping as one: the funnel and the plus are two ways of changing what this
+   list holds, and a line break between them reads as a control that fell off. */
+.knowledge-chunktools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Everything from the toggle rightwards is held to the right-hand end, with
+   only the select-all on the left. They are the controls for what the list
+   shows; the tick beside them is for what it does, and the gap between the
+   two is the line saying so.
+
+   The auto margin rides on the toggle, the first of them, rather than on a
+   box around all three: a wrapping flex container nested in a wrapping flex
+   row is sized by its narrowest line, so the box wrapped its own contents
+   while the bar around it still had room to spare. */
+.knowledge-seg {
+  margin-left: auto;
+}
+
+.knowledge-chunkfilter {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.knowledge-chunkfilter svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* A filter that is narrowing the list says so on the control that set it:
+   an empty list under an unmarked funnel reads as a document with nothing
+   in it. */
+.knowledge-chunkfilter.knowledge-cur {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--raised);
+}
+
+/* On or off, as one press. */
+.knowledge-chunkon {
+  flex: none;
+  width: 26px;
+  height: 15px;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--line);
+  cursor: pointer;
+}
+
+.knowledge-chunkon[aria-checked='true'] {
+  background: var(--amber);
+  justify-content: flex-end;
+}
+
+.knowledge-chunkon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.knowledge-knob {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.knowledge-chunkhd .knowledge-dots {
+  flex: none;
+}
+
+/* Clipped by default: a reader scanning for one piece reads the first lines
+   of each, and the toolbar's other half hands back the whole of it. */
+.knowledge-chunktx.knowledge-clip {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.knowledge-chunkedit {
+  display: grid;
+  gap: 8px;
+}
+
+.knowledge-chunkedit textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  padding: 8px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+
+.knowledge-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* -- the file as its own pages -------------------------------------------
+   A column of pictures this panel owns, so a piece can be scrolled to and the
+   region it came from covered. The alternative is the browser's PDF frame,
+   which is another document with its own painting and its own scroll.
+*/
+/* A column, not a grid. A grid sizes each row from what its item contributes,
+   and a box whose height comes from `aspect-ratio` has nothing to contribute
+   until its width is known -- so every row came out the height of an unloaded
+   image while the page inside it kept its true height, and each page overlapped
+   the next by two thirds of itself. A flex column takes the item's own height. */
+.knowledge-pages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-right: 4px;
+  scroll-behavior: smooth;
+}
+
+.knowledge-sheet2 {
+  position: relative;
+  flex: none;
+  width: 100%;
+  border-radius: 6px;
+  border: 1px solid var(--line-soft);
+  background: var(--ink);
+  overflow: hidden;
+}
+
+.knowledge-sheet2 img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Where the piece being read was cut from. Translucent rather than outlined:
+   an outline says "these words", a wash says "this part of the page", and what
+   a parser hands back is a region, not a selection.
+
+   `--amber` is the app's own accent and reads as a highlighter over paper.
+   Written with `color-mix` rather than `opacity` so the wash is translucent
+   and its edge is not: an outline at a fifth of its strength is a smudge. */
+.knowledge-mark {
+  position: absolute;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--amber) 26%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--amber) 70%, transparent);
+  pointer-events: none;
+}
+
+/* Which sheet this is, for a reader who has scrolled away from the piece they
+   pressed. In the corner, over the paper, because the page is the whole width
+   of the panel and a caption under it would be a line per page of nothing. */
+.knowledge-pagenum {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--raised);
+  pointer-events: none;
+}
+
+/* -- how a base is tuned --------------------------------------------------
+   One row a setting: what it is, the control, and the sentence saying what it
+   does to a search. The sentence is not a tooltip, because every one of these
+   changes what this base will answer and a reader choosing between 512 and
+   2048 needs it in front of them.
+*/
+.knowledge-sets {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+}
+
+.knowledge-field {
+  display: grid;
+  gap: 3px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.knowledge-fieldhd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 26px;
+}
+
+.knowledge-fieldhd > b {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.knowledge-help {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* A value the panel states rather than offers. */
+.knowledge-fixed {
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.knowledge-slide {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.knowledge-slide input {
+  width: 170px;
+  accent-color: var(--amber);
+}
+
+.knowledge-slide b {
+  min-width: 2ch;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.knowledge-unit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.knowledge-small {
+  width: 104px;
+  font: inherit;
+  font-size: 12.5px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.knowledge-small:disabled {
+  opacity: 0.5;
+}
+
+/* Away from the two that commit, because it changes five fields at once. */
+.knowledge-restore {
+  margin-right: auto;
+}
+
+.knowledge-gear {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.knowledge-gear:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.knowledge-gear svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* A picker the width of the value it holds, not of a number field. */
+.knowledge-wide {
+  width: auto;
+  max-width: 260px;
+}
+
+/* A status that has a sentence behind it. The cursor is the whole of the
+   affordance: a reader who does not hover loses a caveat, not the state --
+   the word itself already says whether the document is in the index. */
+.knowledge-why {
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}

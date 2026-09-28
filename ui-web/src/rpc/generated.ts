@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 207 methods, 123 component schemas.
+// 213 methods, 125 component schemas.
 
 /* eslint-disable */
 /**
@@ -1717,6 +1717,10 @@ export interface KnowledgeBase {
   created_at: string;
   updated_at: string;
   documents: number;
+  /**
+   * How many pieces the base holds. Not how many documents are in it: one that failed, one still queued and one in a base with no model all count as documents and hold nothing.
+   */
+  chunks?: number;
   top_k?: number;
   smart_chunking?: boolean;
   separator?: string;
@@ -1735,6 +1739,14 @@ export interface KnowledgeBase {
    * Empty when this base's model can be reached. Otherwise why not: `no_provider` for a base whose model is not the configured one and which records no provider of its own, `no_credential` for one whose recorded provider has no usable credential. Answered from what is recorded rather than by calling the endpoint, so an endpoint that is merely down still reads as reachable here.
    */
   embedding_reach?: string;
+  /**
+   * Kept at the head of the list.
+   */
+  pinned?: boolean;
+  /**
+   * Marked by the reader, and the whole of what the starred tab shows. Not the same fact as `pinned`, which is about order.
+   */
+  starred?: boolean;
 }
 /**
  * One uploaded document and where its indexing got to.
@@ -1760,6 +1772,10 @@ export interface KnowledgeDocument {
   updated_at: string;
   origin?: string;
   origin_ref?: string;
+  /**
+   * Which folder of its base it is filed under. Empty is Root.
+   */
+  folder_id?: string;
 }
 /**
  * One indexed piece of a document, as the search sees it. The positional fields are absent for a format that does not have them -- absent means the parser did not know, never that the value is zero.
@@ -2244,6 +2260,36 @@ export interface StintTakeUp {
   rounds: StintRoundRow[];
   questions: StintQuestionRow[];
   reply: string;
+}
+/**
+ * One folder inside a knowledge base. One level deep: Root is not a folder but the absence of one, so a document with no folder is in Root.
+ */
+export interface KnowledgeFolder {
+  id: string;
+  base_id: string;
+  name: string;
+  created_at: string;
+  /**
+   * How many documents are filed under it.
+   */
+  documents: number;
+}
+/**
+ * One page of a document, as the reader's side draws it.
+ */
+export interface KnowledgePage {
+  /**
+   * 1-based, and the number a chunk's region names.
+   */
+  number: number;
+  /**
+   * Points. What a region's x coordinates are a fraction of.
+   */
+  width: number;
+  /**
+   * Points. What a region's y coordinates are a fraction of.
+   */
+  height: number;
 }
 export interface SessionListParams {
   /**
@@ -4793,6 +4839,8 @@ export interface KnowledgeBasesSettingsParams {
    * The model this base holds vectors from. Not a setting: sending it rebuilds the base -- the collection is made again at the new width and every document goes back to the queue. Empty turns embedding off.
    */
   embedding_model?: string;
+  pinned?: boolean;
+  starred?: boolean;
 }
 export interface KnowledgeBasesSettingsResult {
   base: KnowledgeBase;
@@ -4895,6 +4943,12 @@ export interface KnowledgeDocumentsChunksResult {
    */
   total: number;
 }
+export interface KnowledgeDocumentsPagesParams {
+  document_id: string;
+}
+export interface KnowledgeDocumentsPagesResult {
+  pages: KnowledgePage[];
+}
 export interface KnowledgeChunksSwitchParams {
   document_id: string;
   chunk_ids: string[];
@@ -4927,6 +4981,42 @@ export interface KnowledgeChunksUpdateParams {
 }
 export interface KnowledgeChunksUpdateResult {
   chunk: KnowledgeChunk;
+}
+export interface KnowledgeFoldersListParams {
+  base_id: string;
+}
+export interface KnowledgeFoldersListResult {
+  folders?: KnowledgeFolder[];
+}
+export interface KnowledgeFoldersCreateParams {
+  base_id: string;
+  name: string;
+}
+export interface KnowledgeFoldersCreateResult {
+  folder: KnowledgeFolder;
+}
+export interface KnowledgeFoldersRenameParams {
+  folder_id: string;
+  name: string;
+}
+export interface KnowledgeFoldersRenameResult {
+  folder: KnowledgeFolder;
+}
+export interface KnowledgeFoldersDeleteParams {
+  folder_id: string;
+}
+export interface KnowledgeFoldersDeleteResult {
+  /**
+   * How many documents returned to Root.
+   */
+  moved: number;
+}
+export interface KnowledgeDocumentsMoveParams {
+  document_id: string;
+  folder_id?: string;
+}
+export interface KnowledgeDocumentsMoveResult {
+  document: KnowledgeDocument;
 }
 export interface ClipboardPasteParams {}
 export interface ClipboardPasteResult {
@@ -5399,10 +5489,16 @@ export interface RpcMethods {
   'knowledge.documents.delete': { params: KnowledgeDocumentsDeleteParams; result: KnowledgeDocumentsDeleteResult };
   'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
   'knowledge.documents.chunks': { params: KnowledgeDocumentsChunksParams; result: KnowledgeDocumentsChunksResult };
+  'knowledge.documents.pages': { params: KnowledgeDocumentsPagesParams; result: KnowledgeDocumentsPagesResult };
   'knowledge.chunks.switch': { params: KnowledgeChunksSwitchParams; result: KnowledgeChunksSwitchResult };
   'knowledge.chunks.delete': { params: KnowledgeChunksDeleteParams; result: KnowledgeChunksDeleteResult };
   'knowledge.chunks.create': { params: KnowledgeChunksCreateParams; result: KnowledgeChunksCreateResult };
   'knowledge.chunks.update': { params: KnowledgeChunksUpdateParams; result: KnowledgeChunksUpdateResult };
+  'knowledge.folders.list': { params: KnowledgeFoldersListParams; result: KnowledgeFoldersListResult };
+  'knowledge.folders.create': { params: KnowledgeFoldersCreateParams; result: KnowledgeFoldersCreateResult };
+  'knowledge.folders.rename': { params: KnowledgeFoldersRenameParams; result: KnowledgeFoldersRenameResult };
+  'knowledge.folders.delete': { params: KnowledgeFoldersDeleteParams; result: KnowledgeFoldersDeleteResult };
+  'knowledge.documents.move': { params: KnowledgeDocumentsMoveParams; result: KnowledgeDocumentsMoveResult };
   'clipboard.paste': { params: ClipboardPasteParams; result: ClipboardPasteResult };
   'command.dispatch': { params: CommandDispatchParams; result: CommandDispatchResult };
   'delegation.status': { params: DelegationStatusParams; result: DelegationStatusResult };
@@ -5507,7 +5603,13 @@ export const RPC_METHODS = [
   "knowledge.documents.delete",
   "knowledge.documents.index",
   "knowledge.documents.list",
+  "knowledge.documents.move",
+  "knowledge.documents.pages",
   "knowledge.documents.update_note",
+  "knowledge.folders.create",
+  "knowledge.folders.delete",
+  "knowledge.folders.list",
+  "knowledge.folders.rename",
   "knowledge.search",
   "knowledge.status",
   "mcp.list",

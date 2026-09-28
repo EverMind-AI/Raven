@@ -69,10 +69,17 @@ retained in `LICENSES/`.
   recognizer (`ocr.py`), and the table-structure model with the row, column and
   span reconstruction around it (`table_structure_recognizer.py`). The parser
   package's layout follows `deepdoc.parser` the same way; each module names its
-  origin in its own docstring. `raven/knowledge/_crops.py` follows
+  origin in its own docstring. `ui-web/src/assets/file-icon/` is eighteen of
+  RAGFlow's own file-format icons (`web/src/assets/svg/file-icon/`): a page
+  outline with the format's letters on a coloured band. The drawings are
+  byte-for-byte theirs; each file gained the one trailing newline this repo's
+  hooks require, and nothing else. `raven/knowledge/_crops.py` follows
   `RAGFlowPdfParser.crop` in what it produces: one image a chunk, with the
   regions that chunk covers cut out of the rendered pages and stacked top to
-  bottom.
+  bottom. The chunk reader takes its shape from the same product: the file
+  drawn as a column of page images (`raven/rpc/knowledge_pages.py`) with the
+  region a chunk was cut from washed over in colour, beside the list of what
+  the index holds.
 - Modifications: rewritten rather than vendored -- it carries no RAGFlow
   import, is written against this package's Section and Chunk shapes, keeps the
   positional metadata RAGFlow discards, and answers a tokenizer failure with an
@@ -111,7 +118,11 @@ retained in `LICENSES/`.
   reaches the same HTML through `_tables.html_table` rather than through the
   vision stack, and states its merges as `colspan` and `rowspan`: the flat form
   it used to produce had to repeat a straddling cell across the columns it
-  covered, because there was nowhere to record a span. The slide parser reads the
+  covered, because there was nowhere to record a span. Of RAGFlow's forty-one
+  file icons only the nineteen whose formats a parser here accepts were taken:
+  an icon for a format nothing can ingest is a drawing nobody can ever see, and
+  the handful this tree takes that RAGFlow draws no icon for fall back to a
+  page carrying their own suffix. The slide parser reads the
   OOXML package with the standard library instead of python-pptx, which this
   package does not carry, and reads slide order through the presentation's own
   relationships -- python-pptx resolves that, and the part names do not. Its

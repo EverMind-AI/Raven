@@ -44,7 +44,7 @@ export interface ModulePage {
    from it. Read through `PAGES`, which is the same rows with the shape above
    rather than a shape per row.
 
-   One page, because a place and a setting are different things. Schedules,
+   Two pages, because a place and a setting are different things. Schedules,
    channels and memory are set up once and then left alone, so they are
    sections of the settings dialog now (features/settings/store.ts's SECTIONS)
    rather than pages of their own; the agent hub is the one module a reader
@@ -52,6 +52,7 @@ export interface ModulePage {
    six registrations from going stale, and it is the same cost for one row. */
 const DECLARED = [
   { id: 'extAgentsPage', bodyId: 'extAgentsBody', navButtons: ['agentsBtn'], escapeRank: 1, head: 'gui.page.agents', aria: 'gui.page.agents' },
+  { id: 'knowledgePage', bodyId: 'knowledgeBody', navButtons: ['knowledgeBtn'], escapeRank: 2, head: 'gui.page.knowledge', aria: 'gui.page.knowledge' },
 ] as const satisfies readonly ModulePage[]
 
 /** The module pages, keyed as their `<section>` ids. */

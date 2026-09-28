@@ -464,6 +464,60 @@ class WsGateway:
             },
         )
 
+    async def handle_knowledge_page(self, request: web.Request) -> web.StreamResponse:
+        """Serve one page of a document as a picture.
+
+        The panel beside a chunk list draws the file as a column of these and
+        lays a translucent box over the region a chunk was cut from. That is
+        what the browser's own PDF viewer cannot do: it is another document in
+        another frame, with its own painting and its own idea of where it is
+        scrolled to.
+
+        An id and a page number, for the reason the two routes beside this one
+        take ids: the renderings sit under raven's cache directory, and a
+        request that names no location cannot be pointed at the rest of it.
+
+        Cached like the crops and unlike the document: a page is immutable for
+        the life of its document id, because the bytes behind an id never
+        change -- re-uploading a file makes a new document.
+        """
+        from raven.rpc import knowledge_pages, knowledge_preview
+
+        if not self._origin_ok(request):
+            raise web.HTTPForbidden(reason="bad origin")
+        if not self._authorized(request):
+            raise web.HTTPUnauthorized(reason="missing or invalid session")
+
+        try:
+            page = int(request.query.get("page", ""))
+        except ValueError:
+            raise web.HTTPBadRequest(reason="page must be a number") from None
+        if page < 1:
+            raise web.HTTPBadRequest(reason="page must be 1 or more")
+        try:
+            record, blob = knowledge_preview.resolve(request.query.get("document", ""))
+        except knowledge_preview.DocumentMissingError as exc:
+            raise web.HTTPNotFound(reason=str(exc)) from exc
+        pdf = await knowledge_pages.pdf_of(record.id, blob, record.source)
+        if pdf is None:
+            raise web.HTTPNotFound(reason="this format has no pages")
+        try:
+            drawn = await knowledge_pages.image_for(record.id, pdf, page)
+        except knowledge_pages.PagesUnavailableError as exc:
+            raise web.HTTPNotFound(reason=str(exc)) from exc
+        return web.FileResponse(
+            drawn,
+            headers={
+                "Content-Type": "image/webp",
+                "Content-Disposition": "inline",
+                # An image, and only ever an image: the same strictest sandbox
+                # the crop route serves under.
+                "Content-Security-Policy": "sandbox; default-src 'none'; img-src data: blob:",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, max-age=86400, immutable",
+            },
+        )
+
     async def _rendered_knowledge_pdf(self, record: object, blob: Path) -> Path:
         """The PDF for one document, or the HTTP error the page can show.
 
@@ -618,6 +672,7 @@ def build_app(
     app.router.add_get("/file", gateway.handle_file)
     app.router.add_get("/knowledge/file", gateway.handle_knowledge_file)
     app.router.add_get("/knowledge/crop", gateway.handle_knowledge_crop)
+    app.router.add_get("/knowledge/page", gateway.handle_knowledge_page)
     app.router.add_get("/rpc", gateway.handle_ws)
     app.router.add_get("/oauth/callback", handle_oauth_callback)
 

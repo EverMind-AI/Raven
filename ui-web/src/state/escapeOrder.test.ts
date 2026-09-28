@@ -13,7 +13,7 @@
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
  * fullscreen -> node -> pane -> collapse retreat). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all forty-five pairs of layers. The three
+ * fixture page, and all fifty-five pairs of layers. The three
  * capture-phase handlers
  * each open sheet registers run *before* the table and two of them act on
  * Escape without stopping propagation, so one Escape can both deny an approval
@@ -53,6 +53,7 @@ const LAYER_IDS = [
   '#veil',
   '#detail',
   '#extAgentsPage',
+  '#knowledgePage',
   'setIsOpen()',
   'desk.escapeOpen()',
   '#permPop',
@@ -77,6 +78,7 @@ const PAGE = [
   '<div class="pop" id="plusPop" data-open="false"></div>',
   '<div class="pop" id="wdPop" data-open="false"></div></div></div></div>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
+  '<section class="page" id="knowledgePage" data-open="false"></section>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
   '<div class="veil setveil" id="setVeil" data-open="false"><div id="setModal"></div></div>',
   '<div class="veil" id="veil" data-open="false"><button id="cfNo"></button></div>',
@@ -119,6 +121,9 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
+  /* Closed by `page.show(null)` rather than by a verb of the domain's, so what
+     says it was taken back is the flag going down rather than a spy. */
+  '#knowledgePage': { up: flag('knowledgePage'), taken: lowered('knowledgePage') },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
   /* Its four-rung retreat (fullscreen -> node -> pane -> collapse) is
      store.test.ts's to prove; this fixture only needs one rung on screen and
@@ -188,11 +193,11 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the ten layers in', () => {
+  it('is the order the table reaches the eleven layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
-  it('has no eleventh entry, and every entry is in the fixture', () => {
+  it('has no twelfth entry, and every entry is in the fixture', () => {
     expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
     expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
@@ -215,8 +220,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
-  it('has forty-five pairs to answer for', () => {
-    expect(pairs).toHaveLength(45)
+  it('has fifty-five pairs to answer for', () => {
+    expect(pairs).toHaveLength(55)
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {

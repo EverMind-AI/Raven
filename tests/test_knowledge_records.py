@@ -450,3 +450,103 @@ def test_a_field_from_a_later_version_is_ignored_rather_than_losing_the_row(tmp_
 
     assert base is not None
     assert base.top_k == 9
+
+
+# -- folders -------------------------------------------------------------------
+
+
+def test_a_document_starts_in_root(tmp_path) -> None:
+    """Root is the absence of a folder, so every document ever written is
+    already in it and nothing had to be migrated to make that true."""
+    store = RecordStore(tmp_path / "records.json")
+    base = store.create_base(name="b", embedding_model="m", dimensions=8)
+    doc = store.add_document(base_id=base.id, source="a.pdf", media_type="application/pdf", size=1)
+
+    assert doc.folder_id == ""
+
+
+def test_a_folder_holds_the_documents_moved_into_it(tmp_path) -> None:
+    store = RecordStore(tmp_path / "records.json")
+    base = store.create_base(name="b", embedding_model="m", dimensions=8)
+    doc = store.add_document(base_id=base.id, source="a.pdf", media_type="application/pdf", size=1)
+    folder = store.create_folder(base.id, "notes")
+
+    moved = store.move_document(doc.id, folder.id)
+
+    assert moved is not None and moved.folder_id == folder.id
+    assert [f.id for f in store.list_folders(base.id)] == [folder.id]
+
+
+def test_a_document_moves_back_to_root(tmp_path) -> None:
+    store = RecordStore(tmp_path / "records.json")
+    base = store.create_base(name="b", embedding_model="m", dimensions=8)
+    doc = store.add_document(base_id=base.id, source="a.pdf", media_type="application/pdf", size=1)
+    folder = store.create_folder(base.id, "notes")
+    store.move_document(doc.id, folder.id)
+
+    back = store.move_document(doc.id, "")
+
+    assert back is not None and back.folder_id == ""
+
+
+def test_a_move_into_a_folder_that_is_not_there_is_refused(tmp_path) -> None:
+    """Otherwise the document is filed under an id nothing lists, which reads
+    to a page as a document that has vanished."""
+    store = RecordStore(tmp_path / "records.json")
+    base = store.create_base(name="b", embedding_model="m", dimensions=8)
+    doc = store.add_document(base_id=base.id, source="a.pdf", media_type="application/pdf", size=1)
+
+    assert store.move_document(doc.id, "nosuchfolder") is None
+    assert store.get_document(doc.id).folder_id == ""
+
+
+def test_deleting_a_folder_returns_its_documents_to_root(tmp_path) -> None:
+    """The documents stay. A folder is a label a reader put on them, and
+    taking the label off is not a reason to destroy what it labelled."""
+    store = RecordStore(tmp_path / "records.json")
+    base = store.create_base(name="b", embedding_model="m", dimensions=8)
+    folder = store.create_folder(base.id, "notes")
+    kept = store.add_document(base_id=base.id, source="a.pdf", media_type="application/pdf", size=1)
+    store.move_document(kept.id, folder.id)
+
+    moved = store.delete_folder(folder.id)
+
+    assert moved == 1
+    assert store.get_document(kept.id).folder_id == ""
+    assert store.list_folders(base.id) == []
+
+
+def test_deleting_a_base_takes_its_folders(tmp_path) -> None:
+    store = RecordStore(tmp_path / "records.json")
+    base = store.create_base(name="b", embedding_model="m", dimensions=8)
+    store.create_folder(base.id, "notes")
+
+    store.delete_base(base.id)
+
+    assert store.list_folders(base.id) == []
+
+
+def test_folders_survive_a_reload(tmp_path) -> None:
+    path = tmp_path / "records.json"
+    store = RecordStore(path)
+    base = store.create_base(name="b", embedding_model="m", dimensions=8)
+    folder = store.create_folder(base.id, "notes")
+    doc = store.add_document(base_id=base.id, source="a.pdf", media_type="application/pdf", size=1)
+    store.move_document(doc.id, folder.id)
+
+    again = RecordStore(path)
+
+    assert [f.name for f in again.list_folders(base.id)] == ["notes"]
+    assert again.get_document(doc.id).folder_id == folder.id
+
+
+def test_a_registry_with_no_folder_writes_no_folders_key(tmp_path) -> None:
+    """Byte-for-byte what the writer before folders produced, so an install
+    that never makes one cannot tell this shipped."""
+    import json
+
+    path = tmp_path / "records.json"
+    store = RecordStore(path)
+    store.create_base(name="b", embedding_model="m", dimensions=8)
+
+    assert "folders" not in json.loads(path.read_text(encoding="utf-8"))

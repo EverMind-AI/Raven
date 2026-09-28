@@ -22,6 +22,7 @@ import * as extAgentsStore from '../features/extAgents/store'
 import { importSyncSource } from '../features/importSync/source'
 import * as importSyncStore from '../features/importSync/store'
 import { capabilitiesSource, loadExt } from '../features/installed/source'
+import { knowledgeSource } from '../features/knowledge/source'
 import { memorySource } from '../features/memory/source'
 import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
@@ -230,6 +231,7 @@ export function installSources(): void {
     onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
   }
   sources.extAgents = extAgentsSource
+  sources.knowledge = knowledgeSource
 
   /* The workspace panel's chrome is still the page's, so the two things its
      source cannot work out for itself are handed over here. */

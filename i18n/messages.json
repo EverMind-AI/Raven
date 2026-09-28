@@ -3215,10 +3215,6 @@
       "en": "Playbooks",
       "zh": "剧本"
     },
-    "gui.kb.none": {
-      "en": "No knowledge base yet.",
-      "zh": "还没有知识库。"
-    },
     "gui.kb.unconfigured": {
       "en": "No embedding endpoint is configured, so no base can be created yet.",
       "zh": "还没有配置 embedding 端点，现在建不了知识库。"
@@ -3238,10 +3234,6 @@
     "gui.kb.new_hint": {
       "en": "Name a knowledge base",
       "zh": "给知识库起个名字"
-    },
-    "gui.kb.delete": {
-      "en": "Delete",
-      "zh": "删除"
     },
     "gui.kb.delete_body": {
       "en": "Delete {name} and its {n} documents? The vectors go with them.",
@@ -3287,10 +3279,6 @@
       "en": "Updated",
       "zh": "更新时间"
     },
-    "gui.kb.create": {
-      "en": "Create",
-      "zh": "创建"
-    },
     "gui.kb.doc_disable": {
       "en": "Disable",
       "zh": "停用"
@@ -3335,10 +3323,6 @@
       "en": "No embedding model. The base stores its documents and is not searched by vector.",
       "zh": "不使用嵌入模型。该知识库仅保存文档，不进行向量检索。"
     },
-    "gui.kb.name": {
-      "en": "Name",
-      "zh": "名称"
-    },
     "gui.kb.new_title": {
       "en": "New Knowledge Base",
       "zh": "新建知识库"
@@ -3350,10 +3334,6 @@
     "gui.kb.recall_test": {
       "en": "Recall Test",
       "zh": "召回测试"
-    },
-    "gui.kb.settings": {
-      "en": "Settings",
-      "zh": "设置"
     },
     "gui.kb.soon": {
       "en": "Not built yet",
@@ -9942,6 +9922,462 @@
     "gui.pb.stint_status_finished": {
       "en": "finished",
       "zh": "已完成"
+    },
+    "gui.nav.knowledge": {
+      "en": "Knowledge",
+      "zh": "知识库"
+    },
+    "gui.page.knowledge": {
+      "en": "Knowledge",
+      "zh": "知识库"
+    },
+    "gui.knowledge.tab_all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.knowledge.tab_starred": {
+      "en": "Starred",
+      "zh": "星标"
+    },
+    "gui.knowledge.tab_recent": {
+      "en": "Recent",
+      "zh": "最近"
+    },
+    "gui.knowledge.create": {
+      "en": "New knowledge base",
+      "zh": "新建知识库"
+    },
+    "gui.knowledge.name": {
+      "en": "Name",
+      "zh": "名称"
+    },
+    "gui.knowledge.description": {
+      "en": "Description",
+      "zh": "描述"
+    },
+    "gui.knowledge.no_description": {
+      "en": "No description",
+      "zh": "暂无描述"
+    },
+    "gui.knowledge.documents_n": {
+      "en": "{n} documents",
+      "zh": "{n} 个文档"
+    },
+    "gui.knowledge.no_model": {
+      "en": "No embedding model",
+      "zh": "未配置向量模型"
+    },
+    "gui.knowledge.star": {
+      "en": "Star",
+      "zh": "星标"
+    },
+    "gui.knowledge.unstar": {
+      "en": "Remove star",
+      "zh": "取消星标"
+    },
+    "gui.knowledge.more": {
+      "en": "More",
+      "zh": "更多"
+    },
+    "gui.knowledge.pin": {
+      "en": "Pin to top",
+      "zh": "置顶"
+    },
+    "gui.knowledge.unpin": {
+      "en": "Unpin",
+      "zh": "取消置顶"
+    },
+    "gui.knowledge.settings": {
+      "en": "Settings",
+      "zh": "设置"
+    },
+    "gui.knowledge.delete": {
+      "en": "Delete",
+      "zh": "删除"
+    },
+    "gui.knowledge.delete_sure": {
+      "en": "Delete, really",
+      "zh": "确认删除"
+    },
+    "gui.knowledge.loading": {
+      "en": "Reading your knowledge bases",
+      "zh": "正在读取知识库"
+    },
+    "gui.knowledge.none": {
+      "en": "No knowledge bases yet",
+      "zh": "还没有知识库"
+    },
+    "gui.knowledge.none_starred": {
+      "en": "Nothing starred yet",
+      "zh": "还没有星标的知识库"
+    },
+    "gui.knowledge.documents": {
+      "en": "Documents",
+      "zh": "文档"
+    },
+    "gui.knowledge.no_documents": {
+      "en": "No documents yet",
+      "zh": "还没有文档"
+    },
+    "gui.knowledge.chunks_n": {
+      "en": "{n} pieces",
+      "zh": "{n} 个分片"
+    },
+    "gui.knowledge.status_pending": {
+      "en": "Queued",
+      "zh": "排队中"
+    },
+    "gui.knowledge.status_indexing": {
+      "en": "Indexing",
+      "zh": "索引中"
+    },
+    "gui.knowledge.status_ready": {
+      "en": "Ready",
+      "zh": "就绪"
+    },
+    "gui.knowledge.status_failed": {
+      "en": "Failed",
+      "zh": "失败"
+    },
+    "gui.knowledge.title": {
+      "en": "Knowledge",
+      "zh": "知识库"
+    },
+    "gui.knowledge.view": {
+      "en": "How documents are shown",
+      "zh": "文档展示方式"
+    },
+    "gui.knowledge.view_grid": {
+      "en": "Card view",
+      "zh": "卡片视图"
+    },
+    "gui.knowledge.view_list": {
+      "en": "List view",
+      "zh": "列表视图"
+    },
+    "gui.knowledge.download": {
+      "en": "Download",
+      "zh": "下载"
+    },
+    "gui.knowledge.rebuild": {
+      "en": "Rebuild document",
+      "zh": "重建文档"
+    },
+    "gui.knowledge.doc_delete": {
+      "en": "Delete document",
+      "zh": "删除文档"
+    },
+    "gui.knowledge.doc_delete_sure": {
+      "en": "Delete, really",
+      "zh": "确认删除"
+    },
+    "gui.knowledge.col_name": {
+      "en": "Name",
+      "zh": "名称"
+    },
+    "gui.knowledge.col_size": {
+      "en": "Size",
+      "zh": "大小"
+    },
+    "gui.knowledge.col_status": {
+      "en": "Status",
+      "zh": "状态"
+    },
+    "gui.knowledge.col_updated": {
+      "en": "Updated",
+      "zh": "更新时间"
+    },
+    "gui.knowledge.folders": {
+      "en": "Folders",
+      "zh": "文件夹"
+    },
+    "gui.knowledge.folders_hide": {
+      "en": "Hide folders",
+      "zh": "收起文件夹"
+    },
+    "gui.knowledge.folders_show": {
+      "en": "Show folders",
+      "zh": "展开文件夹"
+    },
+    "gui.knowledge.root": {
+      "en": "Root",
+      "zh": "根目录"
+    },
+    "gui.knowledge.chunks": {
+      "en": "Chunks",
+      "zh": "分块"
+    },
+    "gui.knowledge.chunks_n": {
+      "en": "{n} in reading order",
+      "zh": "共 {n} 块，按阅读顺序"
+    },
+    "gui.knowledge.no_chunks": {
+      "en": "Nothing indexed yet",
+      "zh": "尚未建立索引"
+    },
+    "gui.knowledge.no_preview": {
+      "en": "This format cannot be shown here",
+      "zh": "此格式无法在此预览"
+    },
+    "gui.knowledge.chunk_page": {
+      "en": "p. {n}",
+      "zh": "第 {n} 页"
+    },
+    "gui.knowledge.chunk_pages": {
+      "en": "p. {a}-{b}",
+      "zh": "第 {a}-{b} 页"
+    },
+    "gui.knowledge.chunk_manual": {
+      "en": "written",
+      "zh": "手写"
+    },
+    "gui.knowledge.chunk_off": {
+      "en": "not searched",
+      "zh": "已停用"
+    },
+    "gui.knowledge.set_title": {
+      "en": "Knowledge base settings",
+      "zh": "知识库设置"
+    },
+    "gui.knowledge.set_embed": {
+      "en": "Embedding model",
+      "zh": "向量模型"
+    },
+    "gui.knowledge.set_embed_help": {
+      "en": "What this base holds vectors from. Changing it would mean cutting and embedding every document again, so it is shown rather than offered.",
+      "zh": "该知识库向量所用的模型。更改它意味着重新切分并嵌入全部文档，因此这里只作展示。"
+    },
+    "gui.knowledge.set_embed_off": {
+      "en": "None: this base cannot be searched",
+      "zh": "未配置：该知识库无法检索"
+    },
+    "gui.knowledge.set_embed_free": {
+      "en": "Nothing is indexed yet, so this can still be changed. Once the base holds pieces, moving it means every document cut and embedded again.",
+      "zh": "尚未建立索引，此时仍可更改。一旦知识库已有分块，更换模型意味着全部文档重新切分并嵌入。"
+    },
+    "gui.knowledge.set_embed_none": {
+      "en": "Off: store documents, do not embed them",
+      "zh": "关闭：仅保存文档，不做向量化"
+    },
+    "gui.knowledge.set_topk": {
+      "en": "Pieces per search",
+      "zh": "每次检索返回的分块数"
+    },
+    "gui.knowledge.set_topk_help": {
+      "en": "How many pieces a search over this base brings back.",
+      "zh": "一次检索从该知识库取回多少个分块。"
+    },
+    "gui.knowledge.set_adv": {
+      "en": "How documents are cut",
+      "zh": "文档切分方式"
+    },
+    "gui.knowledge.set_smart": {
+      "en": "Cut on structure",
+      "zh": "按结构切分"
+    },
+    "gui.knowledge.set_smart_help": {
+      "en": "Cut on the document's own headings and sections. With this off, the separator below is what it cuts on instead.",
+      "zh": "按文档自身的标题与章节切分。关闭后，改为按下方的分隔符切分。"
+    },
+    "gui.knowledge.set_sep": {
+      "en": "Separator",
+      "zh": "分隔符"
+    },
+    "gui.knowledge.set_sep_help": {
+      "en": "Written as it is typed: \\n is a newline.",
+      "zh": "按输入的字面写法，\\n 表示换行。"
+    },
+    "gui.knowledge.set_size": {
+      "en": "Piece size",
+      "zh": "分块大小"
+    },
+    "gui.knowledge.set_size_help": {
+      "en": "What the chunker aims for. Bigger pieces carry more context and match less precisely.",
+      "zh": "切分器的目标长度。分块越大，上下文越完整，匹配越粗。"
+    },
+    "gui.knowledge.set_lap": {
+      "en": "Overlap",
+      "zh": "重叠"
+    },
+    "gui.knowledge.set_lap_help": {
+      "en": "How much of each piece the next one repeats, so a sentence cut in half is still findable whole.",
+      "zh": "相邻分块之间重复的长度，使被切断的句子仍能被完整检索到。"
+    },
+    "gui.knowledge.set_table": {
+      "en": "Table context",
+      "zh": "表格上下文"
+    },
+    "gui.knowledge.set_table_help": {
+      "en": "How much of the prose either side of a table comes with it. A table on its own embeds as a grid of values with nothing saying what they are about. Zero carries none.",
+      "zh": "表格前后附带多少正文一同入库。孤立的表格只是一组数值，没有任何说明其含义的文字。填 0 表示不附带。"
+    },
+    "gui.knowledge.set_figure": {
+      "en": "Figure context",
+      "zh": "图片上下文"
+    },
+    "gui.knowledge.set_figure_help": {
+      "en": "The same for a figure, which on its own is a caption and nothing else.",
+      "zh": "图片同理：孤立的图片只剩一句图注。"
+    },
+    "gui.knowledge.set_tokens": {
+      "en": "tokens",
+      "zh": "token"
+    },
+    "gui.knowledge.set_newonly": {
+      "en": "These apply to what is indexed from now on. The pieces already in this base were cut by the old numbers and stay that way until their documents are rebuilt.",
+      "zh": "以下设置仅对之后建立索引的内容生效。已入库的分块仍按旧参数切分，直到对应文档被重建。"
+    },
+    "gui.knowledge.set_restore": {
+      "en": "Restore defaults",
+      "zh": "恢复默认"
+    },
+    "gui.knowledge.set_range": {
+      "en": "Overlap must be less than the piece size",
+      "zh": "重叠必须小于分块大小"
+    },
+    "gui.knowledge.settings_open": {
+      "en": "Knowledge base settings",
+      "zh": "知识库设置"
+    },
+    "gui.knowledge.chunk_crop": {
+      "en": "the page region chunk {n} was cut from",
+      "zh": "第 {n} 块所在的页面区域"
+    },
+    "gui.knowledge.chunks_total": {
+      "en": "Total {n}",
+      "zh": "共 {n} 块"
+    },
+    "gui.knowledge.chunk_all": {
+      "en": "Select all",
+      "zh": "全选"
+    },
+    "gui.knowledge.chunk_picked": {
+      "en": "{n} selected",
+      "zh": "已选 {n} 块"
+    },
+    "gui.knowledge.chunk_full": {
+      "en": "Full text",
+      "zh": "全文"
+    },
+    "gui.knowledge.chunk_clip": {
+      "en": "Clipped",
+      "zh": "折叠"
+    },
+    "gui.knowledge.chunk_search": {
+      "en": "Search",
+      "zh": "搜索"
+    },
+    "gui.knowledge.chunk_filter": {
+      "en": "Filter",
+      "zh": "筛选"
+    },
+    "gui.knowledge.chunk_any": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.knowledge.chunk_on": {
+      "en": "Enabled",
+      "zh": "已启用"
+    },
+    "gui.knowledge.chunk_off_only": {
+      "en": "Disabled",
+      "zh": "已停用"
+    },
+    "gui.knowledge.chunk_new": {
+      "en": "Write a chunk",
+      "zh": "新增分块"
+    },
+    "gui.knowledge.chunk_edit": {
+      "en": "Edit",
+      "zh": "编辑"
+    },
+    "gui.knowledge.chunk_delete": {
+      "en": "Delete",
+      "zh": "删除"
+    },
+    "gui.knowledge.chunk_delete_sure": {
+      "en": "Delete, really",
+      "zh": "确认删除"
+    },
+    "gui.knowledge.chunk_enable": {
+      "en": "Enable",
+      "zh": "启用"
+    },
+    "gui.knowledge.chunk_disable": {
+      "en": "Disable",
+      "zh": "停用"
+    },
+    "gui.knowledge.chunk_text": {
+      "en": "What this piece says",
+      "zh": "该分块的内容"
+    },
+    "gui.knowledge.chunk_nomatch": {
+      "en": "Nothing matched",
+      "zh": "没有匹配的分块"
+    },
+    "gui.knowledge.chunk_range": {
+      "en": "{a}-{b} of {n}",
+      "zh": "第 {a}-{b} 块，共 {n} 块"
+    },
+    "gui.knowledge.chunk_prev": {
+      "en": "Previous page",
+      "zh": "上一页"
+    },
+    "gui.knowledge.chunk_next": {
+      "en": "Next page",
+      "zh": "下一页"
+    },
+    "gui.knowledge.chunk_noid": {
+      "en": "written before pieces had ids; rebuild the document to act on it",
+      "zh": "该分块早于分块编号，重建文档后才能操作"
+    },
+    "gui.knowledge.folder_new": {
+      "en": "New folder",
+      "zh": "新建文件夹"
+    },
+    "gui.knowledge.folder_name": {
+      "en": "New folder name",
+      "zh": "文件夹名称"
+    },
+    "gui.knowledge.folder_delete": {
+      "en": "Delete folder",
+      "zh": "删除文件夹"
+    },
+    "gui.knowledge.move": {
+      "en": "Move to folder",
+      "zh": "移动到文件夹"
+    },
+    "gui.knowledge.add": {
+      "en": "Add document",
+      "zh": "添加文档"
+    },
+    "gui.knowledge.add_file": {
+      "en": "Upload document",
+      "zh": "上传文档"
+    },
+    "gui.knowledge.add_folder": {
+      "en": "Upload folder",
+      "zh": "上传文件夹"
+    },
+    "gui.knowledge.add_url": {
+      "en": "Import from URL",
+      "zh": "从链接导入"
+    },
+    "gui.knowledge.add_note": {
+      "en": "Write a note",
+      "zh": "写笔记"
+    },
+    "gui.knowledge.url": {
+      "en": "Address",
+      "zh": "链接"
+    },
+    "gui.knowledge.note_title": {
+      "en": "Title",
+      "zh": "标题"
+    },
+    "gui.knowledge.note_text": {
+      "en": "Text",
+      "zh": "正文"
     }
   }
 }

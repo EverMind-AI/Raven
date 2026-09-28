@@ -30,6 +30,7 @@ import { busy as turnBusy } from '../features/composer/turn'
 import * as extAgents from '../features/extAgents/store'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
+import * as page from './page'
 import { byEscape } from './pages'
 import * as perm from './perm'
 import * as plus from './plus'
@@ -65,6 +66,11 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
    silence. The verb is the domain's; the order is the table's. */
 const CLOSERS: Record<PageId, () => void> = {
   extAgentsPage: () => extAgents.close(),
+  /* The generic close rather than the domain's own verb. `close()` there IS
+     `page.show(null)`, and reaching for it would put an upward edge into this
+     file that scripts/gates/import-direction.test.mjs refuses -- rightly: a
+     page with nothing to tear down has no verb of its own to call. */
+  knowledgePage: () => page.show(null),
 }
 
 /* The four layers Escape reaches before any page. Two of them are raised from

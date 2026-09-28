@@ -192,6 +192,40 @@ class KnowledgeBaseRecord:
     #: Which pre-processing a file goes through on the way in. Empty is
     #: "don't use", which is the only setting there is so far.
     file_processing: str = ""
+    #: Kept at the head of the list.
+    #:
+    #: A property of the base rather than of the browser looking at it: a
+    #: reader who pins a base has said something about the base, and saying it
+    #: again on their other machine is not what they meant. Defaulted, so every
+    #: base written before this loads unpinned.
+    pinned: bool = False
+    #: Marked by the reader, and the whole of what the starred tab shows.
+    #:
+    #: Not the same fact as :attr:`pinned`, which is about order: a reader
+    #: pins the two bases they are working in this week and stars the ten they
+    #: come back to, so a tab filtered by the pin would be a tab of two.
+    starred: bool = False
+
+
+@dataclass(frozen=True)
+class KnowledgeFolderRecord:
+    """One folder inside a knowledge base.
+
+    One level deep, deliberately: a folder here is a label a reader sorts by,
+    and a tree of them is a filing system with its own rules -- where a move
+    into a descendant goes, what a delete takes with it, how deep a path may
+    be. None of that earns its keep for sorting a few dozen documents, and the
+    shape can grow later without moving what is stored.
+
+    Root is not one of these. A document with no folder is in Root, so every
+    document that existed before folders did is already somewhere sensible and
+    nothing had to be written to make it so.
+    """
+
+    id: str
+    base_id: str
+    name: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -216,6 +250,10 @@ class KnowledgeDocumentRecord:
     #: the case is undiscoverable, because the row says ready and the only
     #: symptom is that a search about the missing part answers worse.
     warning: str = ""
+    #: Which folder of its base it is filed under. Empty is Root, which is
+    #: where everything starts and where a deleted folder's documents return
+    #: to.
+    folder_id: str = ""
     #: Which kind of data source this came in as. Defaulted rather than
     #: required so a registry written before the field existed still loads --
     #: every document in one is a file, which is what the default says.
@@ -241,12 +279,13 @@ def _without_the_unused_overlap(base: KnowledgeBaseRecord) -> KnowledgeBaseRecor
 
 
 class RecordStore:
-    """Knowledge bases and documents, persisted as one JSON object."""
+    """Knowledge bases, their folders and their documents, as one JSON object."""
 
     def __init__(self, path: "str | Path") -> None:
         self._path = Path(path)
         self._bases: dict[str, KnowledgeBaseRecord] = {}
         self._documents: dict[str, KnowledgeDocumentRecord] = {}
+        self._folders: dict[str, KnowledgeFolderRecord] = {}
         self._load()
 
     # ── persistence ───────────────────────────────────────────────
@@ -275,6 +314,12 @@ class RecordStore:
                 logger.warning("knowledge: dropping malformed document {}", doc_id)
             else:
                 self._documents[doc_id] = record
+        for folder_id, fields in (raw.get("folders") or {}).items():
+            record = _build(KnowledgeFolderRecord, folder_id, fields, None)
+            if record is None:
+                logger.warning("knowledge: dropping malformed folder {}", folder_id)
+            else:
+                self._folders[folder_id] = record
         self._requeue_interrupted()
 
     def _requeue_interrupted(self) -> None:
@@ -296,10 +341,19 @@ class RecordStore:
     def _save(self) -> None:
         bases = {b.id: _split(b, LEGACY_BASE_FIELDS) for b in self._bases.values()}
         documents = {d.id: _split(d, LEGACY_DOCUMENT_FIELDS) for d in self._documents.values()}
-        payload = {
+        payload: dict[str, Any] = {
             "bases": {i: known for i, (known, _) in bases.items()},
             "documents": {i: known for i, (known, _) in documents.items()},
         }
+        # Whole rather than split into known and extra halves: a folder has no
+        # older shape to be compatible with, and every field it has is
+        # required. Written only when there are any, so a registry that has
+        # never had a folder is byte-for-byte what the writer before them
+        # produced.
+        if self._folders:
+            payload["folders"] = {
+                i: {k: v for k, v in asdict(f).items() if k != "id"} for i, f in self._folders.items()
+            }
         # Only when there is something to put there, so a registry that uses
         # none of them is byte-for-byte what the older writer produced.
         base_extra = {i: extra for i, (_, extra) in bases.items() if extra}
@@ -394,6 +448,8 @@ class RecordStore:
             "chunk_size",
             "chunk_overlap",
             "file_processing",
+            "pinned",
+            "starred",
         }
         unknown = set(settings) - allowed
         if unknown:
@@ -445,8 +501,9 @@ class RecordStore:
     def delete_base(self, base_id: str) -> bool:
         """Drop a base and every document record under it.
 
-        The documents go with it in the same write: leaving them would strand
-        rows that list by base id and can never be reached or deleted again.
+        The documents and the folders go with it in the same write: leaving
+        either would strand rows that list by base id and can never be reached
+        or deleted again.
         Dropping the base's *collection* is the caller's half -- this store
         does not reach into the index.
         """
@@ -455,10 +512,71 @@ class RecordStore:
         del self._bases[base_id]
         for doc_id in [d.id for d in self._documents.values() if d.base_id == base_id]:
             del self._documents[doc_id]
+        for folder_id in [f.id for f in self._folders.values() if f.base_id == base_id]:
+            del self._folders[folder_id]
         self._save()
         return True
 
     # ── documents ─────────────────────────────────────────────────
+
+    # -- folders -------------------------------------------------------
+
+    def list_folders(self, base_id: str) -> "list[KnowledgeFolderRecord]":
+        """One base's folders, oldest first. Root is not among them."""
+        return sorted(
+            (f for f in self._folders.values() if f.base_id == base_id),
+            key=lambda f: f.created_at,
+        )
+
+    def get_folder(self, folder_id: str) -> "KnowledgeFolderRecord | None":
+        return self._folders.get(folder_id)
+
+    def create_folder(self, base_id: str, name: str) -> KnowledgeFolderRecord:
+        record = KnowledgeFolderRecord(id=_new_id(), base_id=base_id, name=name, created_at=_now())
+        self._folders[record.id] = record
+        self._save()
+        return record
+
+    def rename_folder(self, folder_id: str, name: str) -> "KnowledgeFolderRecord | None":
+        record = self._folders.get(folder_id)
+        if record is None:
+            return None
+        updated = replace(record, name=name)
+        self._folders[folder_id] = updated
+        self._save()
+        return updated
+
+    def delete_folder(self, folder_id: str) -> int:
+        """Drop the folder and return its documents to Root; say how many moved.
+
+        The documents stay. A folder is a label a reader put on them, and
+        taking a label off is not a reason to destroy what it labelled --
+        deleting documents is its own action, and it asks first.
+        """
+        if folder_id not in self._folders:
+            return -1
+        moved = 0
+        for doc_id, doc in list(self._documents.items()):
+            if doc.folder_id == folder_id:
+                self._documents[doc_id] = replace(doc, folder_id="", updated_at=_now())
+                moved += 1
+        del self._folders[folder_id]
+        self._save()
+        return moved
+
+    def move_document(self, document_id: str, folder_id: str) -> "KnowledgeDocumentRecord | None":
+        """File one document under a folder, or under Root for an empty id."""
+        record = self._documents.get(document_id)
+        if record is None:
+            return None
+        if folder_id and folder_id not in self._folders:
+            return None
+        updated = replace(record, folder_id=folder_id, updated_at=_now())
+        self._documents[document_id] = updated
+        self._save()
+        return updated
+
+    # -- documents -----------------------------------------------------
 
     def add_document(
         self,
