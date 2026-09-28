@@ -67,7 +67,6 @@ import { ModelChip } from './ModelChip'
 import { PermChip } from './PermChip'
 import { PermPopover } from './PermPopover'
 import { Plus } from './PlusMenu'
-import { WorkdirChip } from './WorkdirChip'
 
 import type { JSX } from 'react'
 
@@ -86,13 +85,12 @@ function DockIn(): JSX.Element {
            nothing shares the row the reader types in. */}
       <div className="under">
         {/* A file or a deck template, behind one button (src/chrome/PlusMenu.tsx);
-            then the folder a draft runs in (src/chrome/WorkdirChip.tsx), which
-            a conversation says beside its title instead. */}
+            then what the conversation is pointed at -- the folder it runs in
+            and the bases it may search -- behind another (src/chrome/AtMenu.tsx).
+            The folder a conversation settled on it says beside its title
+            instead, where it cannot be changed. */}
         <Plus />
-        {/* What the conversation is pointed at: the folder it runs in and the
-            bases it may search, behind one button (src/chrome/AtMenu.tsx). */}
         <At />
-        <WorkdirChip />
         <span className="chrome-anch">
           <PermChip />
           <PermPopover />

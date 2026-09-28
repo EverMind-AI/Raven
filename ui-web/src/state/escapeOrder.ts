@@ -30,6 +30,7 @@ import { busy as turnBusy } from '../features/composer/turn'
 import * as extAgents from '../features/extAgents/store'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
+import * as mentions from './mentions'
 import * as page from './page'
 import { byEscape } from './pages'
 import * as perm from './perm'
@@ -117,7 +118,7 @@ const BELOW: readonly EscapeLayer[] = [
     isOpen: () => deskLayer?.isOpen() ?? false,
     close: () => deskLayer?.close(),
   },
-  /* The composer bar's three, which have no close button of their own. They sit
+  /* The composer bar's four, which have no close button of their own. They sit
      under everything above because every one of those covers the bar: --z-pop is
      15, beneath --z-page 24, --z-detail 26, --z-desk 34, --z-veil 40 and
      --z-lightbox 95. They sit above the turn because a popover standing over a
@@ -126,6 +127,7 @@ const BELOW: readonly EscapeLayer[] = [
      it from. */
   { id: '#permPop', isOpen: flagged('permPop'), close: () => perm.close() },
   { id: '#plusPop', isOpen: flagged('plusPop'), close: () => plus.close() },
+  { id: '#atPop', isOpen: flagged('atPop'), close: () => mentions.close() },
   { id: '#wdPop', isOpen: flagged('wdPop'), close: () => workdir.close() },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */

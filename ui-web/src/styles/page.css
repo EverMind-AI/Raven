@@ -1022,8 +1022,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chip.risk { color: var(--clay); }
 .chip.risk:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
 
-/* The three small popovers off the bar -- the "+" menu (#plusPop), the
-   workspace (#wdPop) and the permission modes (#permPop) -- hang off their own
+/* The four small popovers off the bar -- the "+" menu (#plusPop), the "@"
+   (#atPop), the workspace (#wdPop) and the permission modes (#permPop) -- hang
+   off their own
    chips: each is a child of the `.chrome-anch` wrapper around its chip, and sits 6px
    above the chip's top edge, left edges lined up. Names only, no heading: the
    chip already says what is being chosen, and the sentence behind a name is on
@@ -1031,19 +1032,20 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    filled band behind the row, which on a translucent panel reads as a second
    material. */
 .chrome-anch { position: relative; display: inline-flex; align-items: center; }
-#plusPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
+#plusPop, #atPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
 #plusPop { width: 220px; }
+#atPop { width: 240px; }
 #wdPop { width: 200px; }
 #wdPop[data-view="browse"] { width: 300px; }
 #permPop { width: 200px; }
 .pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }
-#plusPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
-#plusPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
+#plusPop .prow, #atPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
+#plusPop .prow .nm, #atPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
 #wdPop .prow[aria-checked="true"] .nm, #permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
 #wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); }
 /* The tier with no brakes says so in its row too, in the chip's colour. */
 #permPop .prow.risk .nm { color: var(--clay); }
-#plusPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
+#plusPop .chrome-plus-row .pico, #atPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
 /* The "@" (src/chrome/AtMenu.tsx): what the conversation is pointed at. The
    button carries the count, because the scope of a question is worth seeing
    while it is being typed and not only while it is being set. */
@@ -1061,9 +1063,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #atPop .chrome-at-back { color: var(--muted); }
 .chrome-at-note { padding: 7px 9px; color: var(--muted); font-size: 11.5px; }
 
-/* The workspace chip names a folder in the text colour, the default in the
-   bar's muted one. */
-#wdChip.chrome-wd-set { color: var(--text); }
 #wdPop .chrome-wd-open .nm { font-weight: 500; color: var(--amber); }
 #wdPop .chrome-wd-err { color: var(--clay); }
 /* The folder browser under the menu: a path bar, a scrolling list, two buttons. */
@@ -2499,9 +2498,8 @@ textarea:focus, textarea:focus-visible,
 @container dock (max-width: 480px) {
   .under .meter { visibility: hidden; width: 0; }
   .under #permName, .under #wdName { display: none; }
-  .under #permChip, .under #wdChip { padding: 0 9px; }
+  .under #permChip { padding: 0 9px; }
 }
-@container dock (max-width: 360px) { .under .chrome-anch:has(#wdChip) { display: none; } }
 @container dock (max-width: 320px) { .under #ctxChip { display: none; } }
 @container dock (max-width: 280px) { .under .chrome-anch:has(#permChip) { display: none; } }
 

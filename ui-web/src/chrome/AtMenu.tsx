@@ -21,7 +21,7 @@ import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import * as mentions from '../state/mentions'
 import * as wd from '../state/workdir'
-import { FOLDER } from './WorkdirChip'
+import { FOLDER, WorkdirPopover } from './WorkdirPopover'
 
 import type { JSX } from 'react'
 
@@ -97,7 +97,14 @@ function Bases({ s }: { s: mentions.MentionState }): JSX.Element {
 
 export function AtPopover(): JSX.Element {
   const s = useSyncExternalStore(mentions.subscribe, mentions.get)
+  const folder = useSyncExternalStore(wd.subscribe, wd.get)
   useSyncExternalStore(lang.subscribe, lang.get)
+  /* A conversation takes its working directory at the create and cannot be
+     moved afterwards, which is why the chip hides itself there. The row has to
+     go with it: offered and pressed, it would open a popover the same state
+     forces shut, under an anchor that is not on screen -- a row that does
+     nothing, which is worse than one that is not there. */
+  const movable = !folder.paint?.locked
   return (
     <div
       className="pop"
@@ -121,16 +128,22 @@ export function AtPopover(): JSX.Element {
           <>
             {/* The folder first, because it is the one every conversation has
                 whether or not anybody set it. */}
-            <button
-              className="prow chrome-plus-row"
-              onClick={() => {
-                mentions.close()
-                wd.toggle()
-              }}
-            >
-              <Glyph d={FOLDER} />
-              <span className="nm">{t('gui.at.folder')}</span>
-            </button>
+            {movable && (
+              <button
+                className="prow chrome-plus-row"
+                onClick={() => {
+                  mentions.close()
+                  wd.toggle()
+                }}
+              >
+                <Glyph d={FOLDER} />
+                <span className="nm">{t('gui.at.folder')}</span>
+                {/* Which one, on the row rather than only behind it: a reader
+                    opening this menu is asking what the conversation is
+                    pointed at, and half the answer is a name. */}
+                <span className="chrome-at-count">{folder.paint?.label ?? ''}</span>
+              </button>
+            )}
             <button className="prow chrome-plus-row" onClick={() => mentions.openBases()}>
               <Glyph d={BOOKS} />
               <span className="nm">{t('gui.at.bases')}</span>
@@ -143,12 +156,20 @@ export function AtPopover(): JSX.Element {
   )
 }
 
-/* The button and its menu in one anchor, the way the "+" is. */
+/* The button and its menus in one anchor, the way the "+" is.
+ *
+ * Both menus. The folder used to be chosen from a chip of its own, and its
+ * popover hung off that chip; the chip said which folder and opened the
+ * popover, and this button's Folder row did the same thing one click further
+ * in. The row names the folder now, so the chip was a second door to one
+ * place -- and the popover it anchored had to come here with it, or the row
+ * would open something with nowhere to hang. */
 export function At(): JSX.Element {
   return (
     <span className="chrome-anch">
       <AtBtn />
       <AtPopover />
+      <WorkdirPopover />
     </span>
   )
 }

@@ -32,7 +32,10 @@ const HOME = 'M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1Z'
 const UP = 'M12 19V6M6 12l6-6 6 6'
 /* The chip's folder, spelled here rather than imported: the chip imports this
    file, and a glyph is not worth a cycle. */
-const FOLDER = 'M3.5 7.5A2 2 0 0 1 5.5 5.5h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z'
+/** A folder, in the same 24-unit outline the shield next door is drawn in.
+ *  Here because this is where the folder is chosen; the tag beside a
+ *  conversation's title and the "@" menu's row both draw the same one. */
+export const FOLDER = 'M3.5 7.5A2 2 0 0 1 5.5 5.5h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z'
 
 function Glyph({ d, className }: { d: string; className?: string }): JSX.Element {
   return (

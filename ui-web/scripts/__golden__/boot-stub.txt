@@ -137,11 +137,6 @@ div.app[data-rail=on]
                 button#atBtn.plus[data-tip]
                   span
                 div#atPop.pop[data-open=false]
-              span.chrome-anch
-                button#wdChip.chip
-                  svg.pico
-                    path
-                  span#wdName
                 div#wdPop.pop[data-open=false][data-view=menu]
               span.chrome-anch
                 button#permChip.chip

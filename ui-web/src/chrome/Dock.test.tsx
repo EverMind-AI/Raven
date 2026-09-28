@@ -22,6 +22,7 @@ import * as session from '../lib/session'
 import * as confirmStore from '../state/confirm'
 import * as ctx from '../state/ctxChip'
 import * as lang from '../state/lang'
+import * as mentions from '../state/mentions'
 import * as pageStore from '../state/page'
 import * as perm from '../state/perm'
 import * as plus from '../state/plus'
@@ -122,7 +123,7 @@ describe('the dock', () => {
     render()
     for (const id of [
       'sheetRack', 'queued', 'ta',
-      'plusBtn', 'wdChip', 'wdName', 'permChip', 'permName', 'envChip', 'envName', 'meter', 'ctxChip',
+      'plusBtn', 'atBtn', 'permChip', 'permName', 'envChip', 'envName', 'meter', 'ctxChip',
       'modelChip', 'modelName', 'go',
       'slashPop', 'slashList', 'plusPop', 'wdPop', 'permPop', 'wdTag',
     ]) {
@@ -140,7 +141,7 @@ describe('the dock', () => {
     expect(el('wdPop').getAttribute('role')).toBe('dialog')
     expect(el('wdPop').dataset.view).toBe('menu')
     expect(el('plusBtn').getAttribute('aria-haspopup')).toBe('true')
-    expect(el('wdChip').getAttribute('aria-haspopup')).toBe('true')
+    expect(el('atBtn').getAttribute('aria-haspopup')).toBe('true')
     expect(el('permChip').getAttribute('aria-haspopup')).toBe('true')
     expect(el('permChip').getAttribute('aria-expanded')).toBe('false')
     expect(el('modelChip').getAttribute('aria-haspopup')).toBe('true')
@@ -148,11 +149,9 @@ describe('the dock', () => {
     expect(ta().placeholder).not.toBe('')
     /* Four things the page is served hidden or disabled: the "+" waits for the
        composer's first repaint to say what it can offer, and the title tag for
-       a conversation. The workspace chip is a draft's, and the page is served
-       on a draft. */
+       a conversation. The page is served on a draft. */
     expect(el('envChip').hidden).toBe(true)
     expect(anchor('plusBtn').hidden).toBe(true)
-    expect(anchor('wdChip').hidden).toBe(false)
     expect(el('wdTag').hidden).toBe(true)
     expect(el('ctxChip').hidden).toBe(true)
     expect((el('go') as HTMLButtonElement).disabled).toBe(true)
@@ -205,23 +204,25 @@ describe('the dock', () => {
     expect([...el('plusPop').querySelectorAll('.prow .nm')].map((n) => n.textContent)).toEqual(['t:gui.plus.template'])
   })
 
-  /* The chip is a draft's: it names the default, then the folder picked, and
-     opens the folder list off itself. A conversation cannot change its folder,
-     so the chip goes and the tag beside the title says which folder it is. */
-  it('shows the workspace chip on a draft and the title tag in a conversation', () => {
+  /* The folder is a draft's to choose, from the "@" menu's row; the popover it
+     is chosen from hangs off that button. A conversation cannot change its
+     folder, so the row is not offered and the tag beside the title says which
+     folder it is. */
+  it('chooses the folder from the at menu on a draft, and says it beside the title in a conversation', () => {
     render()
     act(() => { wd.draw() })
-    expect(anchor('wdChip').hidden).toBe(false)
-    expect(el('wdName').textContent).toBe('t:gui.wd.none')
     expect(el('wdTag').hidden).toBe(true)
     act(() => { wd.pick('/w/thesis') })
-    expect(el('wdName').textContent).toBe('thesis')
-    expect(el('wdChip').className).toBe('chip chrome-wd-set')
-    act(() => { el('wdChip').click() })
+    act(() => { el('atBtn').click() })
+    act(() => {
+      ;[...el('atPop').querySelectorAll<HTMLElement>('.prow')]
+        .find((row) => row.textContent?.includes('t:gui.at.folder'))!
+        .click()
+    })
     expect(el('wdPop').dataset.open).toBe('true')
-    expect(el('wdPop').closest('.chrome-anch')).toBe(anchor('wdChip'))
-    act(() => { el('wdChip').click() })
-    expect(el('wdPop').dataset.open).toBe('false')
+    /* Under the same anchor as the button that raised it, which is what the
+       stylesheet hangs it off. */
+    expect(el('wdPop').closest('.chrome-anch')).toBe(anchor('atBtn'))
 
     setSources({
       rail: {
@@ -232,7 +233,6 @@ describe('the dock', () => {
     })
     session.setCurrent('s1')
     act(() => { wd.draw() })
-    expect(anchor('wdChip').hidden).toBe(true)
     expect(el('wdTag').hidden).toBe(false)
     expect(el('wdTag').textContent).toBe('thesis')
     expect(el('wdTag').title).toBe('/w/thesis')
@@ -288,7 +288,7 @@ describe('the dock', () => {
   it('takes the chips, and leaves the send button to the module that owns it', () => {
     render()
     expect(el('go').onclick).toBe(null)
-    const OWN = ['plusBtn', 'atBtn', 'wdChip', 'permChip', 'modelChip']
+    const OWN = ['plusBtn', 'atBtn', 'permChip', 'modelChip']
     for (const id of OWN) expect(typeof el(id).onclick, id).toBe('function')
     for (const node of dock().querySelectorAll('*')) {
       if (OWN.includes(node.id)) continue
@@ -465,7 +465,7 @@ describe('the bar under the field', () => {
 
   it('lets every box between a label and the bar give, and ends the label in an ellipsis', () => {
     styled()
-    for (const id of ['wdName', 'permName', 'modelName', 'meter']) {
+    for (const id of ['permName', 'modelName', 'meter']) {
       for (const n of upTo(id)) {
         const at = `${id} at ${n.id || n.className}`
         expect(style(n).minWidth, at).toMatch(/^0(px)?$/)
@@ -483,7 +483,7 @@ describe('the bar under the field', () => {
      width -- a short name stays whole while a long one gives. */
   it('shares what the controls leave equally, each at most its own width', () => {
     styled()
-    for (const n of [anchor('wdChip'), anchor('permChip'), el('modelChip'), el('meter')]) {
+    for (const n of [anchor('permChip'), el('modelChip'), el('meter')]) {
       const at = n.id || (n.firstElementChild as Element).id
       expect([style(n).flexGrow, style(n).maxWidth], at).toEqual(['1', 'max-content'])
       expect(style(n).flexBasis, at).toMatch(/^0(px|%)?$/)
@@ -515,9 +515,19 @@ describe('the anchored popovers', () => {
     readonly close: () => void
     readonly isOpen: () => boolean
   }
-  const POPOVERS: ReadonlyArray<{ name: string, pop: string, chip: string, popover: Popover }> = [
+  /* `toggles` is false for the folder, which is the one popover with no button
+     of its own: it is raised from a row of the "@" menu, which shares its
+     anchor. Everything else about it is every other popover's. */
+  const POPOVERS: ReadonlyArray<{
+    name: string
+    pop: string
+    chip: string
+    popover: Popover
+    toggles?: boolean
+  }> = [
     { name: 'plus', pop: 'plusPop', chip: 'plusBtn', popover: plus },
-    { name: 'workdir', pop: 'wdPop', chip: 'wdChip', popover: wd },
+    { name: 'at', pop: 'atPop', chip: 'atBtn', popover: mentions },
+    { name: 'workdir', pop: 'wdPop', chip: 'atBtn', popover: wd, toggles: false },
     { name: 'perm', pop: 'permPop', chip: 'permChip', popover: perm },
   ]
 
@@ -528,10 +538,13 @@ describe('the anchored popovers', () => {
     act(() => { composer.goPaint(); wd.draw() })
   }
 
-  it('stands beside its chip, in the card, open or closed', () => {
+  it('stands in its button\'s anchor, in the card, open or closed', () => {
     ready()
     for (const { name, pop, chip, popover } of POPOVERS) {
-      expect(el(pop).previousElementSibling, name).toBe(el(chip))
+      /* The anchor its button is in, which is what the stylesheet hangs it
+         off. Not the button's immediate sibling: one anchor carries two
+         popovers, because one button raises both. */
+      expect(el(pop).parentElement, name).toBe(anchor(chip))
       expect(el(pop).parentElement!.className, name).toBe('chrome-anch')
       popover.open()
       expect(el(pop).dataset.open, name).toBe('true')
@@ -548,7 +561,8 @@ describe('the anchored popovers', () => {
      step moved it into the component. */
   it('takes exactly one handler per chip, so one press toggles once', () => {
     ready()
-    for (const { name, chip, popover } of POPOVERS) {
+    for (const { name, chip, popover, toggles } of POPOVERS) {
+      if (toggles === false) continue
       act(() => { el(chip).click() })
       expect(popover.isOpen(), name).toBe(true)
       expect(el(chip).getAttribute('aria-expanded'), name).toBe('true')

@@ -142,4 +142,69 @@ describe('the at menu', () => {
     const row = screen.getByText('Knowledge bases').closest('button')!
     expect(row.querySelector('.chrome-at-count')?.textContent).toBe('1')
   })
+  it('shuts when a pointer lands outside it', async () => {
+    /* The popover has no close button. A pointer outside is one way back out
+       and Escape is the other, and both are registered per popover by id --
+       state/globalListeners.ts and state/escapeOrder.ts -- so a new one that
+       nobody adds to either list stays up until its own button is pressed
+       again. */
+    const { installGlobalListeners } = await import('../state/globalListeners')
+    installGlobalListeners()
+    render(<At />)
+    await act(async () => {
+      ;(document.getElementById('atBtn') as HTMLButtonElement).click()
+    })
+    expect(mentions.get().open).toBe(true)
+
+    await act(async () => {
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
+
+    expect(mentions.get().open).toBe(false)
+  })
+
+  it('stays up for a pointer inside it', async () => {
+    const { installGlobalListeners } = await import('../state/globalListeners')
+    installGlobalListeners()
+    render(<At />)
+    await act(async () => {
+      ;(document.getElementById('atBtn') as HTMLButtonElement).click()
+    })
+
+    await act(async () => {
+      document.getElementById('atPop')!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    })
+
+    expect(mentions.get().open).toBe(true)
+  })
+  it('offers the folder only while it can still be changed', async () => {
+    /* A conversation takes its working directory at the create and cannot be
+       moved afterwards, which is why the chip hides itself there. Offered and
+       pressed, the row would open a popover the same state forces shut, under
+       an anchor that is not on screen. */
+    const wd = await import('../state/workdir')
+    wd.set({ ...wd.get(), paint: { label: 'thesis', title: '/w/thesis', set: true, locked: true } })
+    render(<At />)
+
+    await act(async () => {
+      ;(document.getElementById('atBtn') as HTMLButtonElement).click()
+    })
+
+    expect([...document.querySelectorAll('#atPop .prow .nm')].map((n) => n.textContent)).toEqual([
+      'Knowledge bases',
+    ])
+  })
+
+  it('says which folder on the row rather than only behind it', async () => {
+    const wd = await import('../state/workdir')
+    wd.set({ ...wd.get(), paint: { label: 'thesis', title: '/w/thesis', set: true, locked: false } })
+    render(<At />)
+
+    await act(async () => {
+      ;(document.getElementById('atBtn') as HTMLButtonElement).click()
+    })
+
+    const row = screen.getByText('Folder').closest('button')!
+    expect(row.querySelector('.chrome-at-count')?.textContent).toBe('thesis')
+  })
 })

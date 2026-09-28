@@ -60,7 +60,7 @@ const ORDER: ReadonlyArray<readonly [string, string, string, unknown, string]> =
   ['document', 'keydown', 'bubble', chips.onKey, 'a prose chip by keyboard (state/proseChips)'],
   ['document', 'pointerdown', 'capture', menu.onPointerDown, 'a pointer outside the menu (state/menu)'],
   ['document', 'contextmenu', 'bubble', contextMenu.onContextMenu, 'the right-click rule (state/contextMenu)'],
-  ['document', 'pointerdown', 'capture', null, 'a pointer outside the two popovers'],
+  ['document', 'pointerdown', 'capture', null, 'a pointer outside the composer popovers'],
   ['document', 'pointerover', 'bubble', tip.follow, 'the hover pill following (state/tooltip)'],
   ['document', 'scroll', 'capture', tip.hide, 'the hover pill going down (state/tooltip)'],
   ['document', 'mousedown', 'bubble', shellWindow.onMouseDown, "the shell window's drag band"],

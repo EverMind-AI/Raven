@@ -55,17 +55,25 @@ const patch = (next: Partial<MentionState>): void => set((prev) => ({ ...prev, .
 /** How many bases this conversation is pointed at. What the chip counts. */
 export const count = (): number => get().picked.length
 
-export function toggle(): void {
-  const now = get()
-  if (now.open) {
-    patch({ open: false, panel: null })
-    return
-  }
+/* The three verbs every popover on this bar has, in the shape the others have
+   them (state/plus.ts, state/perm.ts): the chrome's own table reads all four
+   through one interface, and a store that answered only to `toggle` would be
+   the one that had to be special-cased. */
+export function open(): void {
   patch({ open: true, panel: null })
 }
 
 export function close(): void {
   patch({ open: false, panel: null })
+}
+
+export const isOpen = (): boolean => get().open
+
+/* The button toggles rather than opens: the popover has no close button of its
+   own, so the button is the way back out with the pointer. */
+export function toggle(): void {
+  if (isOpen()) close()
+  else open()
 }
 
 /* The bases, read once. A failure is kept rather than retried: the menu says
