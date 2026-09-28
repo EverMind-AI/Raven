@@ -34,6 +34,7 @@ from loguru import logger
 from raven.contracts.tool import Tool
 
 if TYPE_CHECKING:
+    from raven.agent.tools.registry import ToolRegistry
     from raven.contracts.mcp_host import McpHost
 
 _ACTIONS = ("find", "connect", "authorize", "list", "remove")
@@ -90,13 +91,16 @@ class PluginTool(Tool):
 
     timeout_seconds = _TOOL_TIMEOUT
 
-    def __init__(self, loop: "McpHost | None" = None) -> None:
+    def __init__(self, loop: "McpHost | None" = None, registry: "ToolRegistry | None" = None) -> None:
         # The loop through its MCP control face (paper: contracts/mcp_host.py):
         # the connection organ, ``apply_mcp_config`` and the executor provider a
         # sandboxed stdio server needs -- and nothing else of it. Held rather than
         # resolved per call because there is exactly one for the life of a loop,
         # and the tool is registered by that loop's own constructor.
         self._loop = loop
+        # The registry this tool is registered in, so a connect can let the
+        # tools it produced into the running turn (``admit_to_this_turn``).
+        self._registry = registry
 
     @property
     def name(self) -> str:
@@ -305,7 +309,7 @@ class PluginTool(Tool):
         snap = result.get("mcp") or {}
         state = snap.get("state") or "unknown"
         if state == "connected":
-            tools = self._tools_of(name)
+            tools = self._join_turn(name)
             named = f": {', '.join(tools)}" if tools else ""
             return (
                 f"Connected '{name}'. It registered {snap.get('tool_count') or len(tools)} tool(s){named}. "
@@ -370,9 +374,12 @@ class PluginTool(Tool):
         snap = out.get("mcp") or {}
         state = snap.get("state") or "unknown"
         if state == "connected":
-            tools = self._tools_of(name)
+            tools = self._join_turn(name)
             named = f": {', '.join(tools)}" if tools else ""
-            return f"'{name}' is authorized and connected, with {snap.get('tool_count') or len(tools)} tool(s){named}."
+            return (
+                f"'{name}' is authorized and connected, with {snap.get('tool_count') or len(tools)} tool(s){named}. "
+                f"They are in your tool list from the next step on."
+            )
         url = pending_url(name)
         if url:
             return (
@@ -445,6 +452,18 @@ class PluginTool(Tool):
         ``catalog_detail`` call that rejected it, so this cannot be the first
         reader of a refused hub."""
         return (await self._lookup(name, _NEAR_LIMIT))[:_NEAR_LIMIT]
+
+    def _join_turn(self, server: str) -> list[str]:
+        """The server's tools, let into the running turn.
+
+        Without this the turn freeze holds them back until the user sends
+        another message, and the result's "from the next step on" is a promise
+        the agent then fails to keep.
+        """
+        tools = self._tools_of(server)
+        if self._registry is not None:
+            self._registry.admit_to_this_turn(tools)
+        return tools
 
     def _tools_of(self, server: str) -> list[str]:
         """Tool names the live registry holds for one server."""

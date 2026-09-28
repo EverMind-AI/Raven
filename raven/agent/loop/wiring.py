@@ -1036,7 +1036,7 @@ class WiringMixin:
         # engine no other way than telling the user to go to the panel.
         from raven.agent.tools.plughub import PluginTool
 
-        self.tools.register(PluginTool(loop=self))
+        self.tools.register(PluginTool(loop=self, registry=self.tools))
         if self.cron_service:
             # Function-scope import on purpose: the cron tool is cargo the loop must
             # not name at module level (tests/test_l3_open_world.py counts module-level

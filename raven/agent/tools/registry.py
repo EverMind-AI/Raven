@@ -3,7 +3,7 @@
 import asyncio
 import copy
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -659,7 +659,8 @@ class ToolRegistry:
         (``schema_dynamic``): its instance is stable and its variability is its
         contract, so the freeze pins the pair and leaves the rendering to it.
         Session-overlay tools are exempt: they enter with the turn that carries
-        them.
+        them, and so are arrivals the turn itself asked for
+        (:meth:`admit_to_this_turn`).
         """
         token = self._turn_names.set(dict(self._tools))
         wtoken = self._turn_withheld.set(self.withheld_names())
@@ -668,6 +669,30 @@ class ToolRegistry:
         finally:
             self._turn_withheld.reset(wtoken)
             self._turn_names.reset(token)
+
+    def admit_to_this_turn(self, names: Iterable[str]) -> None:
+        """Let arrivals the turn itself asked for join it from the next step.
+
+        The one exception to the freeze in :meth:`turn_scope`. The freeze is
+        right for a background arrival: nobody in the turn is waiting for it.
+        It is wrong when the turn's own call produced the arrival -- the
+        ``plugin`` tool connecting what the user just asked for -- because then
+        all the wait buys is a user having to say "go on" before the agent can
+        use it. That is paid for with one rebuilt cache prefix, once.
+
+        Mutated in place rather than re-set: the tool runs in a copy of the
+        turn's context, and a ``set`` there would not reach the loop's reads.
+        Only the entry pair changes, so the off switch and the channel
+        restriction still decide whether an admitted name is offered.
+        Outside a scope this is a no-op; everything is already offered.
+        """
+        frozen = self._turn_names.get()
+        if frozen is None:
+            return
+        for name in names:
+            tool = self._tools.get(name)
+            if tool is not None:
+                frozen[name] = tool
 
     def session_tools_in_scope(self) -> dict[str, Tool]:
         """The session tools this turn can see; empty outside any scope.

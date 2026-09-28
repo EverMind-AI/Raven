@@ -16,6 +16,8 @@ import pytest
 
 from raven.agent.loop.bundles import TurnPolicy
 from raven.agent.tools.plughub import PluginTool
+from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import Tool
 from raven.market import install as install_mod
 from raven.market import ledger as ledger_mod
 from raven.market.ledger import read_ledger
@@ -362,6 +364,54 @@ async def test_authorize_reconnects_and_names_the_tools(_isolated) -> None:
     assert "mcp_svc_a" in out
 
 
+class _Named(Tool):
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return "stub"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs) -> str:
+        return "ran"
+
+
+def _offered(reg: ToolRegistry) -> set[str]:
+    return {d["function"]["name"] for d in reg.get_definitions()}
+
+
+@pytest.mark.parametrize("action", ["connect", "authorize"])
+async def test_the_tools_a_call_connects_are_usable_in_the_same_turn(_isolated, monkeypatch, action) -> None:
+    """The result says "from the next step on", and the turn freeze used to make
+    that false: the agent saw the tools named and could not call them until the
+    user sent another message."""
+    _patch_catalog(monkeypatch, _entry("none"))
+    if action == "authorize":
+        _isolated["cfg_path"].write_text(
+            json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
+        )
+    reg = ToolRegistry()
+    loop = _FakeLoop("svc", "connected" if action == "connect" else "auth_required", ["mcp_svc_a"])
+    tool = PluginTool(loop=loop, registry=reg)
+    reg.register(tool)
+
+    with reg.turn_scope():
+        reg.register(_Named("mcp_svc_a"))
+        assert "mcp_svc_a" not in _offered(reg)
+        out = await reg.execute("plugin", {"action": action, "name": "svc"})
+        assert "mcp_svc_a" in out
+        assert "mcp_svc_a" in _offered(reg)
+        assert await reg.execute("mcp_svc_a", {}) == "ran"
+
+
 async def test_authorize_from_a_turn_does_not_take_this_hosts_browser(_isolated) -> None:
     """``interactive`` is what permits the OAuth flow to open a page, and a turn
     is not it: the person who asked is at the far end of a channel, which on a
@@ -448,5 +498,6 @@ def test_a_real_loop_registers_the_tool(tmp_path) -> None:
     loop = AgentLoop(provider=_Stub(), workspace=tmp_path, model="stub", policy=TurnPolicy(max_iterations=1))
     tool = loop.tools.get("plugin")
     assert isinstance(tool, PluginTool)
+    assert tool._registry is loop.tools, "a connect could not let its tools into the running turn"
     assert tool._loop is loop
     assert tool.blocking_interaction is False, "a tool that waits on a human would hold the turn open"
