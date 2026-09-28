@@ -33,6 +33,7 @@
 import { createElement } from 'react'
 
 import { t } from '../../i18n/t'
+import { sendChord } from '../../lib/platform'
 import * as drafts from '../../state/sheetDrafts'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { ClarifySheet } from './ClarifySheet'
@@ -180,12 +181,15 @@ export function open(req: ClarifyRequest, answered: (answers: string[]) => void)
     multiHint: t('gui.clarify.multi_hint'),
     stepAria: batch.map((_, i) => t('gui.clarify.step_aria', { n: i + 1, m: batch.length })),
   }
-  const ctl: ClarifyControls = { input: null, move: null, pick: null, setFold: null }
+  const ctl: ClarifyControls = { input: null, move: null, pick: null, setFold: null, forward: null }
 
   /* Number keys pick an option and the arrows walk the batch, while the focus
-     is outside any field. What each does is the interior's to decide -- it is
-     the half that knows which step is on screen -- so the handler here asks it
-     and only claims the key when it was taken. */
+     is outside any field; Cmd+Enter is Next, and Submit on the last step, from
+     anywhere -- the field reads it itself, because it stops its own keys. What
+     each does is the interior's to decide -- it is the half that knows which
+     step is on screen -- so the handler here asks it and only claims the key
+     when it was taken. Escape is not read here: it falls through to the page,
+     where it stops the turn, which is what it means in an agent. */
   const onKey = (e: KeyboardEvent): void => {
     /* Parked with another conversation, this sheet is still on the document's
        keydown: the rack detaches the element rather than destroying it, so the
@@ -194,6 +198,11 @@ export function open(req: ClarifyRequest, answered: (answers: string[]) => void)
        conversation. */
     if (!sheet.isConnected || composing(e)) return
     if (typing(document.activeElement)) return
+    if (sendChord(e) === 'plain') {
+      e.preventDefault()
+      ctl.forward?.()
+      return
+    }
     const n = Number(e.key)
     if (e.key.length === 1 && n >= 1 && ctl.pick?.(n)) { e.preventDefault(); return }
     if (e.key === 'ArrowLeft' && ctl.move?.(-1)) e.preventDefault()

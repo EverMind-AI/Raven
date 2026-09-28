@@ -112,7 +112,7 @@ export function GateSheet({ kind, evidence, command, words, opts, onDeny }: Gate
         <div className="cp-why">{words.why}</div>
         <EvidenceBlock kind={kind} evidence={evidence} command={command} words={words} />
         <div className="cp-acts">
-          {opts.map((row, i) => <SheetOption key={i} n={i + 1} row={row} />)}
+          {opts.map((row, i) => <SheetOption key={i} row={row} />)}
         </div>
       </div>
     </>

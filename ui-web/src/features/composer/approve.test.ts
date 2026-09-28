@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
+import { ESC_LABEL, chordLabel } from '../../lib/platform'
 import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
@@ -34,6 +35,8 @@ const opts = (): HTMLElement[] => [...rack().querySelectorAll<HTMLElement>('.opt
 const key = (k: string, over: Partial<KeyboardEventInit> = {}): void => {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, ...over }))
 }
+const allowKey = (over: Partial<KeyboardEventInit> = {}): void => key('Enter', { metaKey: true, ...over })
+const broaderKey = (): void => key('Enter', { metaKey: true, shiftKey: true })
 
 beforeEach(() => {
   sessionReset()
@@ -107,13 +110,13 @@ describe('the approval sheet', () => {
     /* B's question is untouched, and it is still B's that answers here. */
     expect(sheets().length).toBe(1)
     expect(rack().querySelector('.what')!.textContent).toBe('B asks')
-    key('1')
+    allowKey()
     expect(said).toEqual(['B-allow'])
 
     setCurrent('a')
     sync()
     expect(rack().querySelector('.what')!.textContent).toBe('A asks')
-    key('1')
+    allowKey()
     expect(said).toEqual(['B-allow', 'A-allow'])
   })
 
@@ -134,13 +137,13 @@ describe('the approval sheet', () => {
     expect(sheets().length).toBe(1)
     expect(rack().querySelector('.what')!.textContent).toBe('A asks')
     expect(said).toEqual([])
-    key('1')
+    allowKey()
     expect(said).toEqual(['A-allow'])
   })
 
-  it('offers allow first, numbered, and marks it as the default', () => {
+  it('offers allow first, with the key that answers it, and marks it as the default', () => {
     open('do it')
-    expect(opts().map((b) => b.textContent)).toEqual(['1gui.confirm.allow', '2gui.confirm.deny'])
+    expect(opts().map((b) => b.textContent)).toEqual([`gui.confirm.allow${chordLabel()}`, `gui.confirm.deny${ESC_LABEL}`])
     expect(opts()[0]!.className).toContain('go')
     expect(opts()[1]!.className).not.toContain('go')
   })
@@ -162,15 +165,20 @@ describe('the approval sheet', () => {
     expect(said).toEqual(['deny', 'deny'])
   })
 
-  it('reads Escape and the digits as answers', () => {
+  it('reads Escape and Cmd+Enter as answers, and a digit as nothing', () => {
     const said: string[] = []
     open('a', () => said.push('allow'), () => said.push('deny'))
     key('Escape')
     open('b', () => said.push('allow'), () => said.push('deny'))
-    key('1')
+    allowKey()
     open('c', () => said.push('allow'), () => said.push('deny'))
+    key('1')
     key('2')
-    expect(said).toEqual(['deny', 'allow', 'deny'])
+    key('Enter')
+    expect(said).toEqual(['deny', 'allow'])
+    /* Control is the same chord off a Mac. */
+    key('Enter', { ctrlKey: true })
+    expect(said).toEqual(['deny', 'allow', 'allow'])
   })
 
   /* The turn is blocked on one answer, so a second one must not arrive -- from
@@ -184,7 +192,7 @@ describe('the approval sheet', () => {
     allow.click()
     deny.click()
     key('Escape')
-    key('2')
+    allowKey()
     expect(said).toEqual(['allow'])
   })
 
@@ -196,23 +204,23 @@ describe('the approval sheet', () => {
     open('a', () => said.push('allow'), () => said.push('deny'))
     setCurrent('b')
     sync()
-    key('1')
+    allowKey()
     key('Escape')
     expect(said).toEqual([])
     /* And it is still answerable when the reader comes back. */
     setCurrent('a')
     sync()
-    key('1')
+    allowKey()
     expect(said).toEqual(['allow'])
   })
 
   it('leaves an input method alone mid-composition', () => {
     const said: string[] = []
     open('a', () => said.push('allow'), () => said.push('deny'))
-    key('1', { isComposing: true })
+    allowKey({ isComposing: true })
     key('Escape', { keyCode: 229 })
     expect(said).toEqual([])
-    key('1')
+    allowKey()
     expect(said).toEqual(['allow'])
   })
 
@@ -235,7 +243,7 @@ describe('the approval sheet', () => {
     expect(rack().querySelector('.what')!.textContent).toBe('A asks')
     /* Still answerable, and answering it answers A. */
     expect(said).toEqual([])
-    key('1')
+    allowKey()
     expect(said).toEqual(['A-allow'])
   })
 
@@ -255,7 +263,7 @@ describe('the approval sheet', () => {
     expect(sheets().length).toBe(0)
     expect(said).toEqual([])
     /* And the withdrawn sheet's handler is gone with it. */
-    key('1')
+    allowKey()
     expect(said).toEqual([])
   })
 
@@ -327,7 +335,7 @@ describe('the approval sheet', () => {
     expect(sheets().length).toBe(0)
     expect(said).toEqual([])
     /* And the keyboard is no longer answering for it. */
-    key('1')
+    allowKey()
     expect(said).toEqual([])
   })
 
@@ -393,7 +401,7 @@ describe('the permission approval sheet', () => {
        same question repeating through a task. */
     openApproval(base, handlers())
     expect(opts().map((b) => b.textContent)).toEqual(
-      ['1gui.confirm.deny', '2gui.confirm.allow_session', '3gui.confirm.allow'])
+      [`gui.confirm.deny${ESC_LABEL}`, `gui.confirm.allow_session${chordLabel(true)}`, `gui.confirm.allow${chordLabel()}`])
     expect(opts()[0]!.className).toContain('go')
     expect(document.activeElement).toBe(opts()[0])
 
@@ -401,7 +409,7 @@ describe('the permission approval sheet', () => {
        than adding a fourth answer beside it. */
     openApproval(suggested, handlers())
     expect(opts().map((b) => b.textContent)).toEqual(
-      ['1gui.confirm.deny', '2gui.confirm.always', '3gui.confirm.allow'])
+      [`gui.confirm.deny${ESC_LABEL}`, `gui.confirm.always${chordLabel(true)}`, `gui.confirm.allow${chordLabel()}`])
   })
 
   it('sends the session grant the engine knows by name', () => {
@@ -533,14 +541,40 @@ describe('the permission approval sheet', () => {
     expect(landed()!.textContent).toBe('gui.confirm.land.revoke_failed')
   })
 
-  it('reads Escape and the digits, deny being the default', () => {
+  it('reads Escape, Cmd+Enter and Shift+Cmd+Enter, deny being the default', () => {
     openApproval(fresh(suggested), handlers())
     key('Escape')
     openApproval(fresh(suggested), handlers())
-    key('3')
+    allowKey()
     openApproval(fresh(suggested), handlers())
-    key('2')
+    broaderKey()
     expect(said.map(([c]) => c)).toEqual(['deny', 'allow', 'allow_always'])
+    expect(said[2]![2]).toBe('git push *')
+  })
+
+  /* With no rule to save, the broader grant is the conversation's, and the
+     chord follows it rather than doing nothing. */
+  it('takes Shift+Cmd+Enter as the conversation grant when there is no rule', () => {
+    openApproval(base, handlers())
+    broaderKey()
+    expect(said.map(([c]) => c)).toEqual(['allow_session'])
+  })
+
+  it('answers nothing to a digit or a bare Enter', () => {
+    openApproval(base, handlers())
+    key('1')
+    key('2')
+    key('3')
+    key('Enter', { altKey: true, metaKey: true })
+    expect(said).toEqual([])
+    expect(sheets().length).toBe(1)
+  })
+
+  it('draws each answer with the key that gives it', () => {
+    openApproval(base, handlers())
+    expect(opts().map((b) => b.querySelector('kbd')?.textContent))
+      .toEqual([ESC_LABEL, chordLabel(true), chordLabel()])
+    expect(rack().querySelector('.opt .n')).toBeNull()
   })
 
   it('answers once, whichever door is used twice', () => {
@@ -556,12 +590,12 @@ describe('the permission approval sheet', () => {
     openApproval(base, handlers())
     setCurrent('b')
     sync()
-    key('1')
+    allowKey()
     key('Escape')
     expect(said).toEqual([])
     setCurrent('a')
     sync()
-    key('3')
+    allowKey()
     expect(said.map(([c]) => c)).toEqual(['allow'])
   })
 
@@ -600,12 +634,12 @@ describe('the permission approval sheet', () => {
     expect(landed()!.textContent).toBe('gui.confirm.land.unsent')
   })
 
-  it('reads no digit typed into a field, where it is text -- Escape still refuses', () => {
+  it('reads no chord pressed in a field, where it is the field\'s -- Escape still refuses', () => {
     const ta = document.createElement('textarea')
     document.body.appendChild(ta)
     openApproval(suggested, handlers())
-    ta.dispatchEvent(new KeyboardEvent('keydown', { key: '2', bubbles: true }))
-    ta.dispatchEvent(new KeyboardEvent('keydown', { key: '3', bubbles: true }))
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }))
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, shiftKey: true, bubbles: true }))
     expect(said).toEqual([])
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     expect(said.map(([c]) => c)).toEqual(['deny'])
@@ -616,10 +650,11 @@ describe('the permission approval sheet', () => {
     const above = document.createElement('div')
     above.className = 'csheet'
     rackAdd(above, session())
-    key('2')
+    broaderKey()
+    allowKey()
     expect(said).toEqual([])
     rackRemove(above)
-    key('3')
+    allowKey()
     expect(said.map(([c]) => c)).toEqual(['allow'])
   })
 

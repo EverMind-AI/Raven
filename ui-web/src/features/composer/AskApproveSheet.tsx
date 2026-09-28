@@ -48,7 +48,7 @@ export function AskApproveSheet({ title, deny, prompt, opts, onDeny }: ApprovePr
           so it is quoted rather than restated. */}
       <div className="body">
         <div className="what">{prompt}</div>
-        {opts.map((row, i) => <SheetOption key={i} n={i + 1} row={row} />)}
+        {opts.map((row, i) => <SheetOption key={i} row={row} />)}
       </div>
     </>
   )
