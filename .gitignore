@@ -76,6 +76,7 @@ benchmarks/proactivity_eval/data/probe/.cache/
 benchmarks/clawbench/results/
 benchmarks/pinchbench/benchmark.log
 benchmarks/pinchbench/results/*.json
+benchmarks/self_config_eval/results/
 benchmarks/proactivity_eval/output/**/*.json
 benchmarks/proactivity_eval/output/**/*.md
 benchmarks/proactivity_eval/output/**/*.log

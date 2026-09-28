@@ -1502,6 +1502,20 @@ _Avoid_: reading `config.json` keys ad hoc outside this module; treating a live
 preference as a door (doors reconcile members after a durable write; this lane never
 touches member identity).
 
+**Self-configuration surface** (`config/self_surface.py`, tool `raven_config`):
+The catalog of settings the agent may read and change about itself: each entry is a
+dotted `config.json` path, its value kind, the writer that owns it (the catalog's own
+validated raw writer, or a settings-page RPC lent by the entrance), and its effect --
+next turn (a Live preference reader), immediate (a door, or a writer that applies), a
+Generation reload, a whole-process restart, the memory server's restart, or inert. The
+effect is a claim about the runtime, pinned against the schema and the Live preference
+roster by `tests/test_config_self_surface.py`. Every mutating call of the tool is
+confirmed by the user regardless of permission mode or allow rules
+(`permissions.rules.self_config_tier`); secrets are reported as set / not set and never
+carried through a call.
+_Avoid_: "config tool" for the catalog (the tool is one reader of it; the permission
+gate is another); editing `config.json` with file tools as a way to configure Raven.
+
 **Wire Schema** (`rpc-schema/openrpc.json` at repo root):
 The hand-maintained OpenRPC contract for the terminal dialect every interactive client
 speaks (TUI, the served page, ACP). Cross-language neutral ground, machine-read by both
@@ -1738,7 +1752,8 @@ is the fallback -- with read-only tools defaulting to allow and everything
 else, unknown tools included, to ask. `exec` is the one tool whose default
 reads its argument: a command whose every segment only reads (`ls`, `cat`,
 `git status`; no redirection, no command substitution, no wrapper) defaults to
-allow, and every other command asks. A grant from the approval prompt outlasts
+allow, and every other command asks. `plugin` defaults by action: `find` and
+`list` allow, the actions that connect or remove something ask. A grant from the approval prompt outlasts
 the click two ways. `allow_session` remembers the still-asking parts of the
 action on the conversation (`permissions/session.py`: for `exec` one key per
 segment no rule covers, with the machine and the directory it runs in; for a

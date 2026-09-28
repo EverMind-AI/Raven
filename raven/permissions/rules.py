@@ -9,7 +9,9 @@ read-only tools run, everything else asks -- with one exception, and
 a file they asked for, which is not a read and is not an effect they approve.
 ``exec`` is the one tool whose default reads its argument: a command every
 segment of which only reads (``READ_ONLY_COMMANDS`` and its three companions)
-allows, everything else asks.
+allows, everything else asks. A tool that both reads and changes defaults by
+action instead (``DEFAULT_ALLOW_ACTIONS``): ``plugin`` finds and lists without
+asking, and connects, authorizes and removes only after a human says so.
 
 Exec pattern matching is prefix-by-token on the raw command, deliberately
 without wrapper stripping: ``git *`` must not allow ``sudo git push``. A
@@ -602,8 +604,33 @@ def _strictest(tiers: "list[Tier]") -> Tier | None:
     return max(tiers, key=lambda t: _STRICTNESS[t])
 
 
+#: The agent's own configuration tool, and the actions of it that only read.
+SELF_CONFIG_TOOL = "raven_config"
+SELF_CONFIG_READ_ACTIONS = frozenset({"describe", "get"})
+
+
+def self_config_tier(tool_name: str, params: dict[str, Any] | None = None) -> Tier | None:
+    """The fixed tier for a ``raven_config`` call, or ``None`` for any other tool.
+
+    Reads allow. Everything else -- a write, a reset, a connect, a restart --
+    asks, and the gate consults this before the user's allow rules and before
+    the mode, because a change to Raven's own configuration is the one
+    mutation the user asked to confirm every time, whichever mode they run in.
+    """
+    if tool_name != SELF_CONFIG_TOOL:
+        return None
+    action = (params or {}).get("action")
+    return Tier.ALLOW if action in SELF_CONFIG_READ_ACTIONS else Tier.ASK
+
+
+#: Tools that both read and change, and the actions of each that only read.
+DEFAULT_ALLOW_ACTIONS: dict[str, frozenset[str]] = {"plugin": frozenset({"find", "list"})}
+
+
 def default_tier(tool_name: str, params: dict[str, Any] | None = None) -> Tier:
     if tool_name in DEFAULT_ALLOW_TOOLS:
+        return Tier.ALLOW
+    if (params or {}).get("action") in DEFAULT_ALLOW_ACTIONS.get(tool_name, ()):
         return Tier.ALLOW
     if tool_name == "exec" and params is not None:
         command = params.get("command")

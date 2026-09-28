@@ -112,7 +112,8 @@ class PluginTool(Tool):
             "Connect third-party integrations (MCP plugins: Asana, Notion, Linear, "
             "GitHub, Stripe, Playwright, ...) from Raven's built-in plugin catalog, "
             "and report what is connected. Use it when the user asks to connect, add, "
-            "install, re-authorize or check an integration.\n"
+            "install, re-authorize or check an integration, or a task involves one (a GitHub "
+            "link): if not connected, say so and offer to, even when a public page would do.\n"
             "Actions:\n"
             "- find: search the catalog. `query` is a name or a description "
             "('asana', 'issue tracker'). Returns each entry's id, what it needs to "
@@ -226,8 +227,12 @@ class PluginTool(Tool):
         from raven.market.connect import installed_overview
 
         rows = installed_overview(self._loop)
+        tail = (
+            "If the task involves a service not listed here, it is not connected: tell the user so and offer "
+            "to connect it (plugin(action='find', query='...')), even if you can work around it."
+        )
         if not rows:
-            return "No plugins are installed. plugin(action='find', query='...') searches the catalog."
+            return f"No plugins are installed. {tail}"
         awaiting = [r["name"] for r in rows if r.get("awaiting_auth")]
         out = [f"{len(rows)} installed plugin(s):"] + [_row(r) for r in rows]
         if awaiting:
@@ -236,6 +241,7 @@ class PluginTool(Tool):
                 + ", ".join(awaiting)
                 + ". plugin(action='authorize', name='<name>') mints a fresh authorization link."
             )
+        out.append(tail)
         return "\n".join(out)
 
     async def _connect(self, name: str) -> str:

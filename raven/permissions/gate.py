@@ -31,6 +31,7 @@ from typing import Any
 from loguru import logger
 
 from raven.config.schema import PermissionsConfig
+from raven.config.self_surface import change_line
 from raven.config.update import allow_exec_pattern
 from raven.contracts.permissions import (
     Allow,
@@ -45,7 +46,13 @@ from raven.contracts.permissions import (
 from raven.contracts.tool import PARSE_RETRY_INSTRUCTION, STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolResult
 from raven.permissions.builtin import BuiltinRulings, action_digest, action_line, session_keys
 from raven.permissions.judge import review
-from raven.permissions.rules import default_tier, exec_approval_shape, user_tier, validate_exec_pattern
+from raven.permissions.rules import (
+    default_tier,
+    exec_approval_shape,
+    self_config_tier,
+    user_tier,
+    validate_exec_pattern,
+)
 from raven.permissions.session import remember_allowed, session_allows, session_mode
 from raven.permissions.turn import current_tool_call_id, current_turn, note_refusal
 from raven.tracing import trace
@@ -121,6 +128,20 @@ class PermissionGate:
             return Deny(
                 reason="This call is blocked by a deny rule in your permissions config",
                 source=DecisionSource.USER_DENY,
+            )
+        own = self_config_tier(tool_name, params)
+        if own is Tier.ALLOW:
+            return Allow(source=DecisionSource.DEFAULT)
+        if own is Tier.ASK:
+            # No session keys: a grant "for this session" must not carry the
+            # next change through unseen, so every change is asked about.
+            return NeedsApproval(
+                reason="Changing Raven's own configuration always needs the user's approval",
+                description=change_line(params),
+                digest=action_digest(tool_name, params),
+                family="",
+                session_keys=(),
+                suggested_pattern="",
             )
         tier = user_tier(tool_name, params, cfg.tools)
         if tier is Tier.ALLOW:

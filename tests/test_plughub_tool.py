@@ -332,6 +332,17 @@ async def test_list_reports_state_and_tool_count(_isolated, monkeypatch) -> None
     assert "state connected" in out
     assert "1 tools" in out
     assert "mcp_svc_a" in out
+    assert "not connected: tell the user" in out
+
+
+async def test_an_empty_list_tells_the_agent_to_say_so_rather_than_work_around_it(_isolated, monkeypatch) -> None:
+    """Seen in the self-config eval: told only "no plugins", the agent read a GitHub PR through the
+    browser and never mentioned that GitHub was not connected."""
+    monkeypatch.setattr("raven.market.connect.installed_overview", lambda loop: [])
+    out = await PluginTool(loop=_FakeLoop("svc", "connected", [])).execute(action="list")
+
+    assert out.startswith("No plugins are installed.")
+    assert "tell the user so and offer to connect it" in out
 
 
 async def test_list_points_at_authorize_for_a_parked_plugin(_isolated) -> None:

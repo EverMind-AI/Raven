@@ -324,6 +324,21 @@ def _work_in_flight(agent, brokers, scheduler) -> dict | None:
     return None
 
 
+async def _await_idle(busy, *, poll_s: float = 2.0, limit_s: float = 600.0, sleep=asyncio.sleep) -> bool:
+    """Wait until ``busy()`` reports nothing in flight; False once ``limit_s`` passes.
+
+    The first poll waits too: the caller is a tool inside the turn it wants to
+    outlive, and that turn is still busy at the moment it asks.
+    """
+    waited = 0.0
+    while waited < limit_s:
+        await sleep(poll_s)
+        waited += poll_s
+        if busy() is None:
+            return True
+    return False
+
+
 def _hand_page_the_gateway(stop, busy) -> None:
     """Give the mounted page this gateway's own stop, busy check and supervisor.
 
@@ -809,6 +824,11 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # Wire the broker into the mid-turn askers.
                 if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                     ask_tool.set_broker(question_broker)
+                # The agent's own restart, per generation because each one has
+                # its own tool. `_restart_when_idle` is bound later in `run`,
+                # before any bind runs, like `_busy` below.
+                if callable(getattr(config_tool := agent.tools.get("raven_config"), "set_restarter", None)):
+                    config_tool.set_restarter(_restart_when_idle)  # pragma: no cover
 
                 # The served page, on this same engine. Mounted after the broker
                 # wiring above on purpose: build_rpc_stack rebinds the streaming
@@ -1137,6 +1157,36 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     if busy is not None:  # pragma: no cover
                         return {"ok": False, "reason": "busy", **busy}
                 return await _request_swap()
+
+            async def _restart_when_idle(target: str) -> str:  # pragma: no cover - closure over run()
+                # Asked from inside a turn, so it cannot run now: a swap would
+                # refuse as busy, a forced one would cancel the very turn that
+                # asked. It waits for the gateway to go idle -- that turn
+                # answered, nothing else in flight -- in the background.
+                async def _when_idle() -> None:
+                    if not await _await_idle(_busy):
+                        logger.warning("raven_config {}: the gateway never went idle; not applied", target)
+                        return
+                    if target == "reload":
+                        reply = await _request_swap()
+                        if not reply.get("ok"):
+                            logger.warning("raven_config reload refused: {}", reply.get("reason"))
+                        return
+                    import os
+                    import sys
+
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+                swaps.track(asyncio.create_task(_when_idle()))
+                if target == "reload":
+                    return (
+                        "Scheduled a gateway reload: it runs once this turn has answered and nothing else is "
+                        "in flight. Channels stay connected; this conversation continues on the new generation."
+                    )
+                return (
+                    "Scheduled a full restart: it runs once this turn has answered and nothing else is in "
+                    "flight. Channels reconnect after a few seconds."
+                )
 
             control_dispatcher = Dispatcher()
             register_control_methods(

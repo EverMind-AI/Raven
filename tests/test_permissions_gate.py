@@ -1636,3 +1636,14 @@ async def test_a_refusal_answered_by_a_person_is_recorded_with_its_own_source():
 
     assert [r.source for r in turn.refusals] == ["approval_denied", "denied_earlier"]
     assert "not in prod" in turn.refusals[0].reason
+
+
+@pytest.mark.asyncio
+async def test_plugin_reads_run_without_asking_and_its_changes_ask():
+    """Checking whether GitHub is connected must not cost the user a prompt; connecting it must."""
+    gate = gate_for(PermissionsConfig())
+    bind(None)
+    assert await gate.enforce("plugin", {"action": "list"}) is None
+    assert await gate.enforce("plugin", {"action": "find", "query": "github"}) is None
+    for action in ("connect", "authorize", "remove"):
+        assert await gate.enforce("plugin", {"action": action, "name": "github"}) is not None

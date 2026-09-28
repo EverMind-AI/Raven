@@ -10,6 +10,7 @@ WebSocket broadcast), so the same engine assembly serves both transports.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import sys
 from collections.abc import Awaitable, Callable
@@ -134,6 +135,51 @@ def build_agent_loop(workspace: str | None = None, home: str | None = None, chan
                 "log_path": "~/.raven/logs/tui.log",
             },
         ) from e
+
+
+#: The only methods ``raven_config`` may reach through the dispatcher it is lent.
+SELF_CONFIG_METHODS = frozenset(
+    {
+        "settings.set",
+        "config.set",
+        "model.set_fields",
+        "channels.configure",
+        "subagents.list",
+        "subagents.add",
+        "subagents.update",
+        "subagents.toggle",
+    }
+)
+
+
+def _lend_settings_writers(agent_loop: Any, dispatcher: Any) -> None:
+    """Give the loop's ``raven_config`` tool this stack's settings methods.
+
+    The tool changes a setting the way the settings page does -- the same
+    handler, the same validation, the same apply -- rather than through a
+    second writer of its own. A later stack on the same loop (another
+    connection) lends its dispatcher again; the handlers carry no connection
+    state for these methods, so whichever lent last serves.
+    """
+    tool = agent_loop.tools.get("raven_config") if getattr(agent_loop, "tools", None) is not None else None
+    if tool is None or not hasattr(tool, "set_rpc_caller"):
+        return
+    ids = itertools.count(1)
+
+    async def _call(method: str, params: dict[str, Any]) -> Any:
+        if method not in SELF_CONFIG_METHODS:
+            raise PermissionError(f"raven_config may not call {method}")
+        reply = await dispatcher.dispatch(
+            {"jsonrpc": "2.0", "id": f"raven_config-{next(ids)}", "method": method, "params": params}
+        )
+        error = reply.get("error") if isinstance(reply, dict) else None
+        if error:
+            data = error.get("data") if isinstance(error, dict) else None
+            detail = data.get("detail") if isinstance(data, dict) else None
+            raise RuntimeError(detail or (error.get("message") if isinstance(error, dict) else str(error)))
+        return reply.get("result") if isinstance(reply, dict) else None
+
+    tool.set_rpc_caller(_call)
 
 
 async def build_rpc_stack(
@@ -377,6 +423,8 @@ async def build_rpc_stack(
         default_channel=channel,
         ensure_stack=ensure_stack,
     )
+    if agent_loop is not None:
+        _lend_settings_writers(agent_loop, dispatcher)
 
     if owns_loop and agent_loop is not None:
         # A one-time runtime preparation belongs to whoever assembles the engine.

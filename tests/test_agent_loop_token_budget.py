@@ -137,7 +137,12 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     # reading on one tier. The bill is only paid where the browser extra is
     # installed: without playwright the tools report themselves unconfigured
     # and never reach the schema.
-    assert budget.reserved_tools < 7_400, f"tool surface grew: {budget.reserved_tools} tokens reserved"
+    #
+    # Raised from 7_400 (measured 7407) when `raven_config` was admitted. What
+    # was traded: its first draft listed every action and cost ~540 tokens; the
+    # schema now names no setting and no action beyond the enum, and the how-to
+    # lives in the raven-self-config skill, read on demand -- ~130 tokens left.
+    assert budget.reserved_tools < 7_500, f"tool surface grew: {budget.reserved_tools} tokens reserved"
 
 
 def test_an_honest_but_large_ceiling_does_not_eat_the_window(workspace, monkeypatch) -> None:
