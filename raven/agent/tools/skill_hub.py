@@ -152,7 +152,14 @@ class ReadSkillTool(Tool):
                 )
             if is_blocked(self._policy.blocked_now(), meta.name):
                 return f"Error: skill {meta.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
-            return f"## {meta.name}\n{meta.content}"
+            # The renderer context injection uses, so a body fetched here names its
+            # directory and links its bundled files absolute. The raw body left
+            # `references/x.md` for the model to place, and three deck runs on two
+            # models each went hunting the filesystem for it, one reading another
+            # checkout's copy.
+            from raven.memory_engine import render_skill_body
+
+            return render_skill_body(meta)
 
         if self._client is None:
             # A bare id (no '<source>/') lands here, so name the local form:

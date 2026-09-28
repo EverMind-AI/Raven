@@ -10,6 +10,10 @@ each such file carries a banner saying so.
 
 ## Index
 
+- `showcase.md` / `showcase.zh-CN.md` - more showcases, linked from each root
+  README: real runs, each shown as its task graph and what the run produced.
+- `technical-report/` - the Raven technical report: abstract, citation, and a
+  link to the PDF, which lives on a GitHub Release rather than in git.
 - `documentation-references.md` - public reference sources and implementation
   evidence behind the protocol, orchestration, permissions, and extension guides.
 - `dev.md` - local development notes.

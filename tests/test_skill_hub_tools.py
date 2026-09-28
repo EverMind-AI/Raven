@@ -120,6 +120,29 @@ class TestReadSkill:
         out = await ReadSkillTool(registry=reg).execute(skill_id="local/x")
         assert "local body" in out
 
+    async def test_a_local_body_names_its_directory_and_links_its_references_absolute(self, tmp_path: Path) -> None:
+        """The skill menu sends the model here, and a body only says `references/x.md`.
+
+        A mounted skill lives nowhere near the agent home, so a raw body left the
+        model to guess its directory: deck runs on two models each searched the
+        filesystem for the reference files, one reading another checkout's copy.
+        The fetched body reads the way the injected one does.
+        """
+        from raven.memory_engine.skill_forge.catalog import render_skill_body
+
+        body = "Read [layouts](references/layouts.md) before placing a page."
+        meta = _meta(tmp_path, "deck", body, with_scripts=False)
+        skill_dir = tmp_path / "deck"
+        (skill_dir / "references").mkdir()
+        (skill_dir / "references" / "layouts.md").write_text("shapes", encoding="utf-8")
+        reg = _FakeRegistry({("builtin", "deck"): meta})
+
+        out = await ReadSkillTool(registry=reg).execute(skill_id="local/deck")
+
+        assert f"**Skill directory**: `{skill_dir}`" in out
+        assert f"[layouts]({skill_dir}/references/layouts.md)" in out
+        assert out == render_skill_body(meta), "one renderer for the fetched and the injected body"
+
     async def test_the_blocklist_is_read_per_call(self, tmp_path: Path) -> None:
         """Enabling a skill stops the refusal without restarting the loop.
 

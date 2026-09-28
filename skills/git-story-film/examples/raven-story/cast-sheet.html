@@ -1,0 +1,35 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Raven - Character Sheet</title>
+<style>body{margin:0;background:#1f1d1b;display:grid;place-items:center;min-height:100vh}canvas{max-width:100vw;max-height:100vh}</style>
+<canvas id="c"></canvas>
+<script src="../../engine/core.js"></script><script src="../../engine/studio.js"></script><script src="../../engine/cels.js"></script><script src="../../engine/materials.js"></script>
+<script src="raven-cast.js"></script>
+<script>
+'use strict';
+// Model sheet: chick in pencil, fledgling and adult in ink. Checks silhouette, eyes and expressions.
+function label(c, t, x, y) { c.save(); c.font = `600 28px ${RV_FONT}`; c.fillStyle = RC.lead; c.textAlign = 'center'; c.fillText(t, x, y); c.restore(); }
+function sheet(c) {
+  paper(c, RC.paper, null, 87);
+  const row1 = [
+    ['Curious', rvPose('chick', {})],
+    ['Look left', rvPose('chick', {gx: -.9, tilt: -.12, lean: -.05})],
+    ['Starry-eyed', rvPose('chick', {spark: 1, pupil: 1.25, gx: .6, gy: -.2, lean: .12, tilt: .08})],
+    ['Happy', rvPose('chick', {mood: 'happy', tilt: .1, beakOpen: .5})],
+    ['Skeptical', rvPose('chick', {lid: .42, lidTilt: .5, gx: .4, tilt: .05})],
+    ['Dizzy', rvPose('chick', {mood: 'dizzy', tilt: -.15, squash: .92})],
+    ['Flutter', rvPose('chick', {flap: 1.1, beakOpen: .6, eyeS: 1.12, pupil: .72, squash: 1.08, lift: 20, tuck: .6})],
+  ];
+  row1.forEach(([t, p], i) => { const x = 170 + i * 262; drawRaven(c, p, {x, y: 470, scale: 1.25, look: 'pencil'}); label(c, t, x, 520); });
+  const row2 = [
+    ['Inked chick', rvPose('adult', {young: .6})],
+    ['Surprised', rvPose('adult', {young: .6, eyeS: 1.14, pupil: .72, gx: -.5, gy: .6, tuft: 1, beakOpen: .4})],
+    ['Proud', rvPose('adult', {mood: 'happy', tilt: -.08, tuft: .6, lean: -.02})],
+    ['Focused', rvPose('adult', {lid: .38, lidTilt: .6, gx: .8, lean: .2, tuft: -.4})],
+    ['Wings spread', rvPose('adult', {wingMode: 'spread', flap: -.2, gy: -.6, beakOpen: .5, tuft: 1, young: .3})],
+    ['Blink', rvPose('adult', {mood: 'blink'})],
+  ];
+  row2.forEach(([t, p], i) => { const x = 190 + i * 305; drawRaven(c, p, {x, y: 990, scale: 1.12, look: 'ink'}); label(c, t, x, 1040); });
+}
+defineFilm({palette: {...PALETTES.pencilMinimal, paper: RC.paper}, format: {ar: '16:9', width: 1920}, fps: 24, timeline: [{name: 'cast', dur: 1 / 24, fn: sheet}]});
+</script>

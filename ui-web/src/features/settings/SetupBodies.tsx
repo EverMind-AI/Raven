@@ -23,14 +23,14 @@ export function ModelStepBody(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <div className="settings-panel settings-setup" data-section="model" key={s.epoch}>
-      {s.loaded ? (
-        <>
-          <Providers setup />
-          <Roles setup />
-        </>
-      ) : (
-        <SetupWait step="model" />
-      )}
+      {/* Drawn before the payload lands, not after. On the run this step exists
+          for -- a fresh install -- there are no providers and no roles set, so
+          the unloaded snapshot says exactly what the loaded one will: an empty
+          list with its add form, and roles that ask for a provider first. The
+          catalogue fills in behind it. A skeleton here would have been a second
+          shape for the reader to learn on the way to the same page. */}
+      <Providers setup />
+      <Roles setup />
       {/* An open add form says it beside its own button: down here it is a
           screen below the field it is about. */}
       <InlineErr text={s.provAdd === null ? s.err : ''} />

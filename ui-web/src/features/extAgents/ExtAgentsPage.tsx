@@ -9,12 +9,13 @@ import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered, withCurrent } from '../model/types'
 import { byOf, installOf, isOwnRow } from './catalogue'
-import { CardGrid, Spin, Tile, connect, ordered, pendingLabel, refusedWrite, shownOf } from './Rows'
+import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
+import { CardGrid, Spin, Tile, WaitGrid, ago, connect, ordered, refusedLabel } from './Rows'
 import { sectionOf, stageOf } from './source'
 import * as store from './store'
 
 import type { PickerProvider } from '../../components/ModelPicker'
-import type { Shown } from './Rows'
+import type { Shown } from './health'
 import type { Section } from './source'
 import type { ExtAgentsState } from './store'
 import type { ExtAgentRow, Remedy } from './types'
@@ -315,110 +316,208 @@ function ModelPill({ row, busy }: { row: ExtAgentRow; busy: boolean }): JSX.Elem
   )
 }
 
-/* A refusal, and the fix when the server named one. The server's sentence is
-   English and written for a log; a remedy is the same verdict as data, so here
-   it is said in the reader's language -- what is missing, the command that
-   supplies it on a line of its own, and the button to press after -- with the
-   agent's own words folded under it instead of put first. Without a remedy the
-   reader is still told in their own language that it failed and what to press
-   (`unknown`), and the server's sentence is folded the same way: shown first it
-   was a red English paragraph, and all a reader could do with it was copy it. */
-function Refusal({ agent, detail, remedy, button, unknown, lead = (say) => say }: {
-  agent: string
-  detail: string
-  remedy: Remedy | null
-  button: string
-  unknown: string
-  lead?: (say: string) => string
-}): JSX.Element {
-  const command = remedy && remedy.kind !== 'api_key' ? remedy.command : ''
-  const say = !remedy
-    ? unknown
-    : remedy.kind === 'api_key'
-      ? t('gui.agent.fix_api_key', { agent, button })
-      : remedy.kind === 'download'
-        ? t(command ? 'gui.agent.fix_download' : 'gui.agent.fix_download_bare', { agent, button })
-        : !command
-          ? t('gui.agent.fix_sign_in_bare', { agent, button })
-          : remedy.kind === 'setup'
-            ? t('gui.agent.fix_setup', { agent, button })
-            : t('gui.agent.fix_sign_in', { agent, button })
+/* The sentence for each kind of fix. `command` says whether a command follows
+   it: a kind that may come without one has a bare spelling that ends the
+   sentence instead of leading into a command that is not there. `then` says the
+   command is only the way in and a step follows it. Every key is written out,
+   so the catalogue gate reads each one. */
+const FIX_SAY: Record<
+  Remedy['kind'],
+  (vars: { agent: string; button: string }, command: boolean, then: boolean, remedy: Remedy) => string
+> = {
+  sign_in: (v, command) => (command ? t('gui.agent.fix_sign_in', v) : t('gui.agent.fix_sign_in_bare', v)),
+  setup: (v, command, then) =>
+    !command ? t('gui.agent.fix_sign_in_bare', v) : then ? t('gui.agent.fix_setup_then', v) : t('gui.agent.fix_setup', v),
+  api_key: (v) => t('gui.agent.fix_api_key', v),
+  download: (v, command) => (command ? t('gui.agent.fix_download', v) : t('gui.agent.fix_download_bare', v)),
+  model: (v, command) => (command ? t('gui.agent.fix_model', v) : t('gui.agent.fix_model_bare', v)),
+  billing: (v, command) => (command ? t('gui.agent.fix_billing', v) : t('gui.agent.fix_billing_bare', v)),
+  quota: (v, command) => (command ? t('gui.agent.fix_quota', v) : t('gui.agent.fix_quota_bare', v)),
+  network: (v, command) => (command ? t('gui.agent.fix_network', v) : t('gui.agent.fix_network_bare', v)),
+  silent: (v, command) => (command ? t('gui.agent.fix_silent', v) : t('gui.agent.fix_silent_bare', v)),
+  upgrade: (v, command) => (command ? t('gui.agent.fix_upgrade', v) : t('gui.agent.fix_upgrade_bare', v)),
+  exited: (v) => t('gui.agent.fix_exited', v),
+  /* Both versions or neither: without them the sentence would name no Node.js,
+     and what is left is a launch that quit. */
+  runtime: (v, command, _then, r) =>
+    !r.needs || !r.found
+      ? t('gui.agent.fix_exited', v)
+      : command
+        ? t('gui.agent.fix_runtime', { ...v, needs: r.needs, found: r.found })
+        : t('gui.agent.fix_runtime_bare', { ...v, needs: r.needs, found: r.found }),
+  plan: (v, command) => (command ? t('gui.agent.fix_plan', v) : t('gui.agent.fix_plan_bare', v)),
+  config: (v, command) => (command ? t('gui.agent.fix_config', v) : t('gui.agent.fix_config_bare', v)),
+}
+
+/* What to do about the last thing that went wrong, as the block at the top of
+   the sheet's body draws it. The head only says what state the agent is in;
+   this is the why and the how. */
+interface NoteSpec {
+  title: string
+  /* How long ago, for a remembered test verdict. */
+  when?: string
+  lead: string
+  command?: string
+  /* What to type once `command` runs, when the fix is a step inside the agent:
+     the note then draws two numbered steps, each with its own copy button. */
+  then?: string
+  /* The server's own sentence. Folded under the lead when the lead already
+     explains it (a classified refusal); shown as it came when it is all there
+     is to go on. */
+  raw: string
+  folded: boolean
+}
+
+/* A refusal the server classified: what is missing, in the reader's language,
+   the command that supplies it on a line of its own, and the button to press
+   after -- with the agent's own words folded under, since the sentence is
+   English and written for a log. Null when the server named no fix. */
+function remedied(agent: string, remedy: Remedy | null, button: string, raw: string): NoteSpec | null {
+  if (!remedy) return null
+  const command = remedy.kind === 'api_key' ? '' : remedy.command
+  const then = command ? remedy.then || '' : ''
+  const lead = FIX_SAY[remedy.kind]({ agent, button }, !!command, !!then, remedy)
+  return { title: badOf(kindOf(remedy), agent), lead, command, then, raw, folded: true }
+}
+
+/* The block for this row, or none. A write this page refused comes first; then
+   a test the server remembers failing, which the sheet reports from the
+   unauthorized state too, since Test is offered there and its failure would
+   otherwise leave no trace. Without a fix the reader is told in their own
+   language what failed and what to press, and the server's sentence is shown
+   as it came: it is the only reason there is, and folding it away made the
+   block say nothing. */
+/* The press the sheet's action bar offers after a failed test, which is the
+   one its note has to name: read off the same branches as the bar in
+   `AgentSheet`. A connected row retests; an unauthorized one tests, since that
+   is how it earns its Connect back; any other row that is not connected offers
+   Connect alone -- a key to fill in, or a handshake a test has since cleared --
+   and connecting runs the same test. Empty where the bar offers nothing to
+   press, which is Raven itself, whose rows are never tested. */
+function testPress(row: ExtAgentRow, shown: Shown): string {
+  if (shown === 'on') return canTest(row) ? t('gui.agent.test_again') : ''
+  if (shown !== 'off') return ''
+  return t(stageOf(row) === 'unauthorized' ? 'gui.agent.test_label' : 'gui.agent.connect')
+}
+
+/* `press` is the primary's current label, so a refused write's note names the
+   press the reader will actually make: Retry, or Connect once a key is typed
+   beside it. */
+function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string): NoteSpec | null {
+  const agent = row.name
+  const failed = s.failed[row.name]
+  if (failed) {
+    const spec = remedied(agent, failed.remedy || null, press, failed.detail)
+    if (spec) return spec
+    const write = refusedWrite(failed)
+    return {
+      title: write === 'save' ? t('gui.agent.bad_save') : t(write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', { agent }),
+      lead: write === 'save' ? t('gui.agent.said_save') : t(write === 'disconnect' ? 'gui.agent.said_disconnect' : 'gui.agent.said_connect', { button: press }),
+      raw: failed.detail,
+      folded: false,
+    }
+  }
+  if (row.last_test_ok !== false) return null
+  const button = testPress(row, shown)
+  if (!button) return null
+  const when = ago(row.last_test_at_ms)
+  const spec = remedied(agent, row.last_test_remedy || null, button, row.last_test_detail || '')
+  if (spec) return { ...spec, when }
+  return { title: t('gui.agent.st_test_bad'), when, lead: t('gui.agent.said_test', { button }), raw: row.last_test_detail || '', folded: false }
+}
+
+function Note({ title, when, lead, command, then, raw, folded }: NoteSpec): JSX.Element {
   return (
-    <div className="extAgents-fix">
-      <div>{lead(say)}</div>
-      {command ? <CmdCopy cmd={command} /> : null}
-      {detail ? (
-        <details className="extAgents-raw">
-          <summary>{t('gui.agent.fix_raw')}</summary>
-          {detail}
-        </details>
+    <div className="extAgents-note">
+      <div className="extAgents-note-t">
+        {title}
+        {when ? <span className="extAgents-note-when">{when}</span> : null}
+      </div>
+      <div className="extAgents-note-p">{lead}</div>
+      {command && then ? (
+        <ol className="extAgents-steps">
+          <li>
+            {t('gui.agent.fix_step_run')}
+            <CmdCopy cmd={command} />
+          </li>
+          <li>
+            {t('gui.agent.fix_step_type')}
+            <CmdCopy cmd={then} />
+          </li>
+        </ol>
+      ) : command ? (
+        <CmdCopy cmd={command} />
       ) : null}
+      {!raw ? null : folded ? (
+        <details className="extAgents-note-raw">
+          <summary>{t('gui.agent.fix_raw')}</summary>
+          <pre>{raw}</pre>
+        </details>
+      ) : (
+        <pre className="extAgents-note-said">{raw}</pre>
+      )}
     </div>
   )
 }
 
-/* One line under the name in the sheet: what is happening to this agent right
-   now, or who makes it when nothing is. */
+/* One line under the name in the sheet: `healthOf`'s verdict, drawn with the
+   room a sheet has -- a refusal with its fix, a caveat with the probe's own
+   words folded under it -- or who makes the agent when there is nothing to say
+   about it. */
 function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtAgentsState }): JSX.Element {
   const by = byOf(row)
-  const testing = s.testing.includes(row.name) || row.test_running
-  if (shown === 'pending' || testing) {
+  const health = healthOf(row, s)
+  const led = <span aria-hidden="true" className={ledClass(health.tone)} />
+  if (health.tone === 'busy') {
     return (
       <div className="extAgents-by">
         <Spin />
-        {t(testing ? 'gui.agent.testing_head' : pendingLabel(row, s))}
+        {health.label}
       </div>
     )
   }
-  if (shown === 'failed') {
+  /* The head says only which state: the why and the how are the block at the
+     top of the body (`noteOf`). */
+  if (health.from === 'write') {
     const failed = s.failed[row.name]
-    const write = failed ? refusedWrite(failed) : 'connect'
-    const button = t('gui.retry')
     return (
-      <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
-        <span className="extAgents-led extAgents-led-bad" />
-        <Refusal
-          agent={row.name}
-          detail={failed?.detail || ''}
-          remedy={failed?.remedy || null}
-          button={button}
-          unknown={t(
-            write === 'save'
-              ? 'gui.agent.fix_unknown_save'
-              : write === 'disconnect'
-                ? 'gui.agent.fix_unknown_disconnect'
-                : 'gui.agent.fix_unknown_connect',
-            { agent: row.name, button },
-          )}
-        />
+      <div className="extAgents-by extAgents-by-bad">
+        {led}
+        {[failed ? refusedLabel(failed) : t('gui.agent.st_connect_bad'), by].filter(Boolean).join(' · ')}
       </div>
     )
   }
-  /* Not only when connected: the sheet offers Test from the unauthorized state
-     too, and a test pressed there can now fail on the agent's own answer while
-     the handshake passes -- which clears the label and leaves nothing saying the
-     test failed. `missing` keeps its own line, since "not found" outranks a
-     verdict measured before the executable went away. */
-  if (row.last_test_ok === false && shown !== 'missing') {
+  if (health.from === 'test') {
     return (
-      <div className="extAgents-by extAgents-by-bad extAgents-by-fix">
-        <span className="extAgents-led extAgents-led-bad" />
-        <Refusal
-          agent={row.name}
-          detail={row.last_test_detail || ''}
-          remedy={row.last_test_remedy || null}
-          button={t('gui.agent.test_label')}
-          unknown={t('gui.agent.fix_unknown_test', { button: t('gui.agent.test_label') })}
-          lead={(say) => t('gui.agent.hd_test_bad', { detail: say })}
-        />
+      <div className="extAgents-by extAgents-by-bad">
+        {led}
+        {shown === 'on' ? t('gui.agent.hd_on_test_bad') : [t('gui.agent.st_test_bad'), by].filter(Boolean).join(' · ')}
       </div>
     )
   }
-  if (shown === 'on') {
+  /* The probe's sentence is English and written for a log, so it is folded
+     under the line the way a refusal's is, not put in it. */
+  if (health.tone === 'warn') {
+    return (
+      <div className="extAgents-by extAgents-by-fix">
+        {led}
+        <div className="extAgents-fix">
+          <div>{health.label}</div>
+          {row.probe_detail ? (
+            <details className="extAgents-raw">
+              <summary>{t('gui.agent.probe_raw')}</summary>
+              {row.probe_detail}
+            </details>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+  if (health.tone === 'good') {
     return (
       <div className="extAgents-by">
-        <span className="extAgents-led" />
-        {row.last_test_ok ? t('gui.agent.hd_on_tested') : t('gui.agent.hd_on_by', { by })}
+        {led}
+        {health.label}
       </div>
     )
   }
@@ -440,12 +539,32 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
   const testing = s.testing.includes(row.name) || row.test_running
   const saveKey = (): void => {
     const api_key = keyRef.current ? keyRef.current.value.trim() : ''
-    store.saveKey(row, api_key)
+    void store.saveKey(row, api_key)
   }
-  const needsKey = stage === 'key'
-  const primaryDisabled = shown === 'pending' || (needsKey && !keyTyped)
+  /* The field is drawn at every stage but live and stale, not only where a
+     key is missing: a stored key the endpoint rejects has no other way to be
+     replaced from here, and the refusal's own sentence says to replace it.
+     Not at stage live, whatever the row's last write did -- there the button
+     retries that write, and a key typed beside it would displace it. Not at
+     stale either: that connect is a migration, and a key would let the press
+     put the old command line on the roster instead. A missing key and a
+     write in flight hold the button; a key typed into the field is what the
+     press means, and the button says so rather than promising a retry it
+     will not make. */
+  const keyField = row.kind === 'openai' && stage !== 'live' && stage !== 'stale'
+  const keyMissing = stage === 'key'
+  const primaryDisabled = shown === 'pending' || (keyMissing && !keyTyped)
+  const verb = keyTyped ? 'gui.agent.connect' : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect'
+  /* A key typed beside a refusal supersedes every retry but a connect's: the
+     press will connect with the key, not save the refused change again, so
+     that refusal leaves the head and the note -- both read a state without
+     it, and say what they would have said otherwise. */
+  const failed = s.failed[row.name]
+  const refusalStands = !keyTyped || !failed || refusedWrite(failed) === 'connect'
+  const lineState = refusalStands ? s : { ...s, failed: Object.fromEntries(Object.entries(s.failed).filter(([name]) => name !== row.name)) }
+  const note = noteOf(row, lineState, shownOf(row, lineState), t(verb))
   const primary = (): void => {
-    if (needsKey) saveKey()
+    if (keyTyped) saveKey()
     else if (shown === 'failed') store.retry(row)
     else connect(row)
   }
@@ -475,7 +594,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
           </button>
         ) : canTest(row) ? (
           <button className="mini" onClick={() => void store.runTest(row)}>
-            {t('gui.agent.test_label')}
+            {t(row.last_test_ok === false ? 'gui.agent.test_again' : 'gui.agent.test_label')}
           </button>
         ) : null}
       </>
@@ -505,7 +624,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
     actions = (
       <button className="mini go" disabled={primaryDisabled} onClick={primary}>
         {shown === 'pending' ? <Spin /> : null}
-        {t(shown === 'pending' ? pendingLabel(row, s) : shown === 'failed' ? 'gui.retry' : 'gui.agent.connect')}
+        {t(shown === 'pending' ? pendingLabel(row, s) : verb)}
       </button>
     )
   }
@@ -516,7 +635,7 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
         <Tile row={row} />
         <div className="extAgents-meta">
           <h3>{row.name}</h3>
-          <StatusLine row={row} s={s} shown={shown} />
+          <StatusLine row={row} s={lineState} shown={shownOf(row, lineState)} />
         </div>
       </div>
       <div className="extAgents-body">
@@ -530,20 +649,21 @@ function AgentSheet({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.El
           </>
         ) : (
           <>
+            {note ? <Note {...note} /> : null}
             <GoodAt
               readOnly={!!row.builtin}
               row={row}
               saved={(!row.configured && !row.vendored && store.draftOf(row.name)) || row.description || ''}
             />
             <ModelPill busy={shown === 'pending'} row={asAsked(row, s)} />
-            {needsKey ? (
+            {keyField ? (
               <label className="extAgents-fld">
                 <span className="extAgents-k">{t('gui.agent.key')}</span>
                 <KeyInput
                   aria-label={t('gui.agent.key')}
                   onChange={(e) => setKeyTyped(!!e.target.value.trim())}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && keyTyped) saveKey()
+                    if (e.key === 'Enter' && keyTyped && !primaryDisabled) saveKey()
                   }}
                   placeholder={row.has_api_key ? t('gui.agent.key_set') : ''}
                   ref={keyRef}
@@ -578,6 +698,9 @@ export function ExtAgentsApp(): JSX.Element {
   const rows: Record<Tab, ExtAgentRow[]> = { all: [], on: by('on'), avail: by('avail'), missing: by('missing') }
   rows.all = [...rows.on, ...rows.avail, ...rows.missing]
   const current = TABS.find((x) => x.tab === tab)!
+  /* Before the first answer only: a later reload keeps showing the rows it
+     has, the way the wizard's step does. */
+  const scanning = s.loading && s.rows.length === 0
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   return (
     <>
@@ -601,11 +724,11 @@ export function ExtAgentsApp(): JSX.Element {
             type="button"
           >
             {t(x.label)}
-            <span className="extAgents-tn">{String(rows[x.tab].length)}</span>
+            {scanning ? <span className="extAgents-wbar extAgents-wtn" /> : <span className="extAgents-tn">{String(rows[x.tab].length)}</span>}
           </button>
         ))}
       </div>
-      <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />
+      {scanning ? <WaitGrid /> : <CardGrid empty={t(current.empty)} rows={rows[tab]} s={s} />}
       {sheetRow ? <AgentSheet key={`${s.sheet}:${s.epoch}`} row={sheetRow} s={s} /> : null}
     </>
   )

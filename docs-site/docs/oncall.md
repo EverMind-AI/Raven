@@ -50,10 +50,23 @@ raven ops connection add --id local-lab --name "Local lab" \
   --non-interactive
 ```
 
-Registration writes `connections.json` beside the active config, or the path
-selected by `RAVEN_CONNECTIONS`. SSH registration can also write a managed
-alias in `~/.ssh/config`; the key path is recorded, not the private key bytes.
-Do not put keys or passwords in a task message.
+The registry is the path selected by `RAVEN_CONNECTIONS`. Otherwise a
+sub-agent reads the one in the raven home (`RAVEN_HOME`, or `~/.raven`) that the
+host hands it, and any other instance -- the host itself, including one started
+with `--config` -- reads the `connections.json` beside its config when there is
+one, else the home. A first registration lands in the home. Sub-agents run on a
+rendered config in a state directory of their own and inherit the home, so
+they read the owner's registry rather than a copy of it. SSH registration can
+also write a managed alias in `~/.ssh/config`; the key path is recorded, not
+the private key bytes. Do not put keys or passwords in a task message.
+
+An agent can register a machine too. The `ops_connection_add` tool (on in
+raven-oncall and raven-code through `tools.connectionAdd`; off elsewhere) takes
+what the owner said in conversation -- this computer or another, what they
+call it, an address if another -- fills a port, user or key they left out from
+their own ssh config, reaches the machine, and only then writes the row. When
+the registry lists no machine that fits, the agent asks the owner rather than
+looking for a way in with a raw ssh command.
 
 `doctor` validates registry usability; it is not a fresh execution test of
 every remote environment. `--skip-probe` on `add` skips contacting the machine
@@ -157,4 +170,5 @@ A “done” message without evidence is not a benchmark result.
 | Restart left uncertain state | Read ledger and remote status before retrying or killing anything |
 
 Implementation evidence lives in `agents/raven-oncall/plugins/oncall-flow/`,
-`raven/ops/connections.py`, and `raven/cli/ops_connection_commands.py`.
+`raven/ops/connections.py`, `raven/ops/connection_add.py`,
+`raven/agent/tools/connection_add.py`, and `raven/cli/ops_connection_commands.py`.

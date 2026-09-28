@@ -3,6 +3,7 @@
    the answer to "how is this one set up" is a form -- paging between them was
    the shape this replaces, and twenty rows in it is already too many. */
 import { t } from '../../../i18n/t'
+import { Empty, GLYPH } from '../Fields'
 import { ProviderDetail } from '../providers/ProviderDetail'
 import { ProviderSide } from '../providers/ProviderSide'
 import * as store from '../store'
@@ -26,7 +27,7 @@ export function Provider(): JSX.Element {
           A page that reached the pane by navigation never had this. */}
       {shown
         ? <ProviderDetail key={shown} slug={shown} />
-        : <div className="settings-tp-none">{t('gui.settings.providers.pick_one')}</div>}
+        : <div className="settings-tp-none"><Empty icon={GLYPH.pick}>{t('gui.settings.providers.pick_one')}</Empty></div>}
     </div>
   )
 }

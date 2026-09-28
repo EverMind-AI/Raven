@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -238,20 +237,6 @@ async def test_scan_ready_false_when_everos_not_installed(cfg: Path, monkeypatch
 
     assert out["ready"] is False
     assert out["reason"] == import_sync.everos_plugin_missing_note()
-
-
-async def test_scan_ready_false_on_windows_where_everos_cannot_run(cfg: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A configured EverOS is not a usable one here: offering the wizard's sync
-    step would fail it at the first write, with the same sentence, later."""
-    monkeypatch.setattr(import_sync, "build_scanners", lambda: [])
-    monkeypatch.setattr(import_sync, "scan_all", AsyncMock(return_value=[]))
-    monkeypatch.setattr(import_sync, "memory_enabled", lambda *_a: True)
-    monkeypatch.setattr(sys, "platform", "win32")
-
-    out = await import_sync.import_scan({})
-
-    assert out["ready"] is False
-    assert "Windows" in out["reason"]
 
 
 # ---------------------------------------------------------------------------

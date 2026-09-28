@@ -26,6 +26,13 @@ EXEMPT_PREFIXES = (
     "raven/i18n/",
     "raven/templates/prompts/zh/",
     "tests/test_i18n_",
+    "skills/git-story-film/examples/raven-story/zh/",
+)
+EXEMPT_FILES = frozenset(
+    {
+        "skills/git-story-film/examples/raven-story/storyboard/storyboard.html",
+        "skills/git-story-film/scripts/storyboard.py",
+    }
 )
 
 #: The fixture prefix holds only while the test exercises zh machinery: the
@@ -139,7 +146,7 @@ def find_violations(
 
 
 def is_exempt_path(path: str) -> bool:
-    return path.startswith(EXEMPT_PREFIXES) or path.endswith(".md")
+    return path in EXEMPT_FILES or path.startswith(EXEMPT_PREFIXES) or path.endswith(".md")
 
 
 def imports_zh_machinery(source: str) -> bool:

@@ -38,6 +38,23 @@ class Refusal:
     source: str = ""
 
 
+# Stored on an assistant entry the runtime wrote, the same way a blocked action
+# is. A free string rather than a spine ``NoticeKind``: nothing emits it live,
+# because the turn that owes it has no subscriber to emit to.
+UNANSWERED_KIND = "question_unanswered"
+
+
+@dataclass(frozen=True)
+class Unanswered:
+    """One question nobody was available to answer.
+
+    ``question`` is the text a reader should see. A sub-agent's question already
+    names who asked it; the host's own question is the question alone.
+    """
+
+    question: str
+
+
 @dataclass
 class PermissionTurn:
     """One turn's approval capability and its refusal memory.
@@ -55,6 +72,10 @@ class PermissionTurn:
     was refused, this says which one and why. A surface with no human on it --
     the one-shot ``-m`` path is the case -- has nothing else to read them from,
     and a turn whose mutations were all refused otherwise reports success.
+
+    ``unanswered`` is the same audit for a question. The model is told to
+    proceed, and that sentence is not a session event: a reader who opens the
+    session later has nothing that says a question was asked.
     """
 
     responder: ApprovalResponder | None = None
@@ -67,6 +88,7 @@ class PermissionTurn:
     denied_digests: set[str] = field(default_factory=set)
     lapsed_digests: set[str] = field(default_factory=set)
     refusals: list[Refusal] = field(default_factory=list)
+    unanswered: list[Unanswered] = field(default_factory=list)
     # Purely presentational: lets a watching surface say "the reviewer is
     # looking at this" instead of an unexplained pause. Never load-bearing --
     # the gate swallows its errors and decides identically without it.
@@ -138,6 +160,47 @@ def note_refusal(tool_name: str, action: str, reason: str, source: str = "") -> 
     current_turn().refusals.append(Refusal(tool_name=tool_name, action=action, reason=reason, source=source))
 
 
+def note_unanswered(question: str, *, turn: PermissionTurn | None = None) -> None:
+    """Record a question this turn could not put to anyone.
+
+    ``turn`` is the object captured where the asker was captured. The task that
+    answers an ACP question belongs to the connection's read loop, and that
+    loop's context is a copy from whichever turn first opened the connection,
+    so ``current_turn()`` there is the wrong turn or none at all.
+    """
+    text = question.strip()
+    if not text:
+        return
+    (turn if turn is not None else current_turn()).unanswered.append(Unanswered(text))
+
+
+def unanswered_lines(turn: PermissionTurn | None = None) -> list[str]:
+    """The questions ``turn`` could not put to anyone, each once, in order."""
+    seen: list[str] = []
+    for item in (turn if turn is not None else current_turn()).unanswered:
+        text = item.question.strip()
+        if text and text not in seen:
+            seen.append(text)
+    return seen
+
+
+def unanswered_filing() -> tuple[str, dict[str, str]] | None:
+    """The assistant entry to file for this task's unanswered questions.
+
+    ``None`` when there are none. The text is what the next turn's model reads;
+    the notice is what a reopened session draws instead of that prose.
+    """
+    lines = unanswered_lines()
+    if not lines:
+        return None
+    detail = "\n".join(lines)
+    text = (
+        "These questions went unanswered because nobody was available to answer them. "
+        "The turn continued with best judgment:\n" + detail
+    )
+    return text, {"kind": UNANSWERED_KIND, "detail": detail}
+
+
 def current_tool_call_id() -> str:
     return _TOOL_CALL_ID.get()
 
@@ -145,9 +208,14 @@ def current_tool_call_id() -> str:
 __all__ = [
     "PermissionTurn",
     "Refusal",
+    "UNANSWERED_KIND",
+    "Unanswered",
     "current_tool_call_id",
     "current_turn",
     "note_refusal",
+    "note_unanswered",
     "set_current_tool_call_id",
     "start_permission_turn",
+    "unanswered_filing",
+    "unanswered_lines",
 ]

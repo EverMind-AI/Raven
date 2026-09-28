@@ -93,10 +93,36 @@ describe('memory island', () => {
     expect(screen.getByText('gui.mem.n_total {"n":2}')).toBeTruthy()
   })
 
-  it('shows the empty note when the kind has nothing', async () => {
+  it('shows the empty state once, in the right column, when the kind has nothing', async () => {
     install({ list: async () => ({ items: [], total: 0 }) })
     await mount()
-    expect(await screen.findByText('gui.mem.empty')).toBeTruthy()
+    const main = document.querySelector('.two-pane-main') as HTMLElement
+    expect(within(main).getByText('gui.mem.empty_t')).toBeTruthy()
+    expect(within(main).getByText('gui.mem.empty')).toBeTruthy()
+    expect(screen.queryByText('gui.mem.err_t')).toBeNull()
+    expect(screen.queryByText('gui.plug.retry')).toBeNull()
+    expect(screen.queryByText(/gui\.mem\.n_total/)).toBeNull()
+    expect(document.querySelector('.two-pane-list')!.textContent).toBe('')
+  })
+
+  /* A page turn keeps the rows up while the next page is read; the count line
+     under them went away for that moment, and the pager slid down under the
+     pointer that had just clicked it, then back up when the rows landed. */
+  it('keeps the count line through a page turn, so the pager does not move', async () => {
+    let land: ((r: { items: MemItem[]; total: number }) => void) | null = null
+    install({
+      list: ({ page }) => page === 1
+        ? Promise.resolve({ items: [item()], total: 45 })
+        : new Promise((resolve) => { land = resolve }),
+    })
+    await mount()
+    expect(screen.getByText('gui.mem.n_total {"n":45}')).toBeTruthy()
+    await act(async () => { screen.getByText('gui.mem.next').click() })
+    expect(store.get().phase).toBe('loading')
+    expect(screen.getByText('gui.mem.n_total {"n":45}')).toBeTruthy()
+    expect(screen.getByText('gui.mem.page {"p":2,"n":3}')).toBeTruthy()
+    await act(async () => { land!({ items: [item({ id: 'm2', subject: 'page two' })], total: 45 }); await Promise.resolve() })
+    expect(row('page two')).toBeTruthy()
   })
 
   it('renders the demo down note, without the stat band', async () => {
@@ -122,7 +148,9 @@ describe('memory island', () => {
     expect(screen.queryByText('gui.mem.tab_episode')).toBeNull()
   })
 
-  it('renders a live failure inline with its detail and recovers on retry', async () => {
+  /* The whole frame, not a red paragraph under the search: the switch and the
+     list have nothing to work on while the read fails. */
+  it('renders a live failure across the frame with its detail, and recovers on retry', async () => {
     let failed = false
     install({
       list: async () => {
@@ -134,7 +162,12 @@ describe('memory island', () => {
       },
     })
     await mount()
-    expect(await screen.findByText('gui.mem.down · engine offline')).toBeTruthy()
+    expect(await screen.findByText('gui.mem.err_t')).toBeTruthy()
+    expect(screen.getByText('gui.mem.err_sub')).toBeTruthy()
+    expect(screen.getByText('engine offline')).toBeTruthy()
+    /* Down is not empty: the empty store's words are not in this state. */
+    expect(screen.queryByText('gui.mem.empty_t')).toBeNull()
+    expect(document.querySelector('.two-pane-side')).toBeNull()
     await act(async () => {
       screen.getByText('gui.plug.retry').click()
     })

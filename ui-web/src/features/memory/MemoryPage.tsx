@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 import {
-  TwoPane, TwoPaneFind, TwoPaneHead, TwoPaneList, TwoPaneNone, TwoPaneRow, TwoPaneWait,
+  TwoPane, TwoPaneFind, TwoPaneHead, TwoPaneList, TwoPaneNoHit, TwoPaneNone, TwoPaneRow, TwoPaneWait,
 } from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import { subscribe as langSubscribe, tag as langTag } from '../../state/lang'
@@ -45,6 +45,10 @@ function Meter({ v }: { v: number | null | undefined }): JSX.Element {
   )
 }
 
+const MEM_GLYPH = (
+  <svg viewBox="0 0 24 24"><path d="m12 4.5 8 4-8 4-8-4z" /><path d="m4 12.5 8 4 8-4" /><path d="m4 16.5 8 4 8-4" /></svg>
+)
+
 export function MemoryApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: memWhen
@@ -52,20 +56,44 @@ export function MemoryApp(): JSX.Element {
      This subscription is what carries the repaint -- the whole-page redraw no
      longer lists this island. */
   useSyncExternalStore(langSubscribe, langTag)
-  if (s.phase === 'down') return <div className="empty-note">{t('gui.mem.down')}</div>
+  if (s.phase === 'down') {
+    return <TwoPane><TwoPaneNone icon={MEM_GLYPH} title={t('gui.mem.off_t')}>{t('gui.mem.down')}</TwoPaneNone></TwoPane>
+  }
   /* Not a failure and not an empty store: this install keeps its memories
      somewhere this page does not read. Saying so beats four zeros, which a
      reader takes for loss. */
-  if (s.note) return <div className="empty-note">{s.note}</div>
+  if (s.note) return <TwoPane><TwoPaneNone icon={MEM_GLYPH} title={t('gui.mem.off_t')}>{s.note}</TwoPaneNone></TwoPane>
+  /* A read that failed is the service being down, not an empty store -- an
+     empty store answers, with no rows -- and it leaves the kind switch, the
+     search and the list nothing to work on, their counts dashes. So it takes
+     the whole frame, with the retry as its one control, instead of a red
+     paragraph and a full-width button squeezed under a search box. */
+  if (s.phase === 'error') {
+    return (
+      <TwoPane>
+        <TwoPaneNone
+          icon={MEM_GLYPH}
+          title={t('gui.mem.err_t')}
+          detail={s.err}
+          action={{ label: t('gui.plug.retry'), onClick: () => void Promise.all([store.load(), store.refreshStats()]) }}
+        >
+          {t('gui.mem.err_sub')}
+        </TwoPaneNone>
+      </TwoPane>
+    )
+  }
+  const none = <TwoPaneNone icon={MEM_GLYPH} title={t('gui.mem.empty_t')}>{t('gui.mem.empty')}</TwoPaneNone>
   return (
     <TwoPane side={<MemSide s={s} />}>
       {s.kind === 'profile' ? (
-        s.items[0] ? <ProfileCard it={s.items[0]} /> : <TwoPaneNone>{t('gui.mem.empty')}</TwoPaneNone>
+        s.items[0] ? <ProfileCard it={s.items[0]} /> : s.phase === 'ready' ? none : null
       ) : s.detail ? (
         <MemDetail it={s.detail} />
+      ) : s.phase === 'ready' && !s.items.length && !s.q ? (
+        /* "Nothing here yet" is this column's, and the list says nothing: said
+           in both columns it reads as two separate emptinesses. */
+        none
       ) : (
-        /* "Nothing here yet" is the list's line, not this one: said in both
-           columns it reads as two separate emptinesses. */
         <TwoPaneNone>{t('gui.mem.pick')}</TwoPaneNone>
       )}
     </TwoPane>
@@ -103,18 +131,13 @@ function MemSide({ s }: { s: store.MemoryState }): JSX.Element {
           placeholder={t('gui.mem.search_ph')}
         />
       )}
-      <TwoPaneList>
-        {s.kind === 'profile' ? null : s.phase === 'error' ? (
-          <>
-            <div className="errline-lite">{`${t('gui.mem.down')} · ${s.err}`}</div>
-            <button className="mini ghost" onClick={() => void store.load()}>
-              {t('gui.plug.retry')}
-            </button>
-          </>
-        ) : s.phase !== 'ready' && s.items.length === 0 ? (
+      {/* Keyed by page: a new page starts at its first row, not wherever the
+          last one was scrolled to. */}
+      <TwoPaneList key={s.page}>
+        {s.kind === 'profile' ? null : s.phase !== 'ready' && s.items.length === 0 ? (
           <TwoPaneWait />
         ) : s.items.length === 0 ? (
-          <div className="empty-note">{s.q ? t('gui.mem.none_found', { q: s.q }) : t('gui.mem.empty')}</div>
+          s.q ? <TwoPaneNoHit>{t('gui.mem.none_found', { q: s.q })}</TwoPaneNoHit> : null
         ) : (
           s.items.map((it) => (
             <TwoPaneRow
@@ -129,7 +152,12 @@ function MemSide({ s }: { s: store.MemoryState }): JSX.Element {
         )}
       </TwoPaneList>
       {s.kind === 'profile' ? null : <Pager s={s} />}
-      {s.phase === 'ready' && s.kind !== 'profile' ? (
+      {/* Kept through a page turn's reload: the rows stay up while the next
+          page is read, and dropping this line for that moment moved the pager
+          under the pointer that had just clicked it. Absent with no rows: "0
+          total" under an empty list is a number about nothing, and the empty
+          state beside it already says so. */}
+      {s.kind !== 'profile' && s.items.length > 0 && (s.phase === 'ready' || s.phase === 'loading') ? (
         <div className="memnote">{t(s.q ? 'gui.mem.n_hits' : 'gui.mem.n_total', { n: s.total })}</div>
       ) : null}
     </>

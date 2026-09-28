@@ -65,6 +65,9 @@ def test_tool_groups_cover_the_default_tools() -> None:
                 search_api_key="test-serper-key",
                 jina_api_key="test-jina-key",
                 image_search=True,
+                # Opt-in like image_search: without the flag the loop cannot
+                # register the tool, and an ungrouped one would pass unseen.
+                connection_add=True,
                 tool_search_config=ToolSearchConfig(enabled=True),
             ),
             engine=EngineWiring(),

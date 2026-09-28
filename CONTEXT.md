@@ -85,6 +85,12 @@ drives the LLM + tool-execution iterations, consolidates memory, and emits `Deli
 events via the Spine `emit` callback. Exposed to the Spine via `AgentTurnRunner`.
 _Avoid_: calling a single LLM call the "agent loop" — the loop spans all Iterations of one turn.
 
+**Turn synthesis policy** (`agent/loop/_shared.py:TurnSynthesisPolicy`):
+Product guidance for the tool-free reply when a Turn stops at its iteration or time
+budget or on a repeating tool call. A product may request one buffered format repair
+and format the static fallback; a Turn without this policy keeps the Agent Loop's
+generic wrap-up.
+
 **Harness Modules** (`agent/harness/`, paper `contracts/harness.py`):
 The four generation-scoped strategy roles the Agent Loop delegates to without giving up its
 Turn state machine: **Memory** assembles the window the model sees, **Planning** may prepare
@@ -103,6 +109,31 @@ merge what they answer (`ask_intake`, `ask_advice`, `ask_review`, `ask_salvage`,
 different things: a new way to produce, or a new rule for adjudicating what the products say.
 Frozen per Generation: the tool array is the prompt-cache prefix, so the set a turn runs on
 cannot move between two of its model calls.
+
+**Harness Curator** (`experimental/curator/`):
+Experimental generation of a worker's Harness from its task, the materials handed to it and
+feedback. The `harness/` contracts supply one host-owned `Declaration` for model schemas, grants
+and artifact checks; a `Candidate` carries both baseline and contract identity. `generation/`
+runs bounded understand, select, design, implement and repair stages with read-only source
+queries. `raven_adapter/` inspects actual assembly, binds generated code through native sockets
+and records execution in a persistent worker process; its `targets/` owns native authoring
+entries. `harness/strategies/` defines the four host-independent strategy protocols
+(`MemoryStrategy`, `PlanningStrategy`, `CapabilityStrategy`, `ActionStrategy`), each bound by its
+`<facet>.strategy` target. `workflow.improve` delivers contracts, current code and execution
+evidence to generation, validates and installs a revision, and records its feedback association;
+`workflow.propose` keeps a checked candidate without activation. A worker with child Harnesses is
+curated by `composition/`: a root candidate, then one candidate per managed child against the
+root's node requirements, checked and activated together. Children run through
+`raven_adapter/hosting/acp.py` on the native ACP/RPC turn pipeline; a `Child` in
+`raven_adapter/deployment.py` holds a host-provided baseline, its active artifact, authoring
+grants and prior plan.
+`experimental/analyst/` turns a round's `Signal`s and execution records into `Feedback`: a
+decision plus behavior requirements stated in observable terms, never a mechanism. `experimental/iteration/`
+is the generic loop: `Trial`s run the worker (a conversation, a dataset, a simulation), `Evaluator`s
+measure the sessions into `Signal`s (text, per-item results, metrics, their own satisfied verdict), the
+analyst decides, and only a `curate` decision reaches `workflow.improve`.
+_Avoid_: conflating this experiment with the Context Engine's Curator; calling the analyst an
+evaluator, which names the source of a `Signal`.
 
 **Window Shrink** (`agent/window/`, paper `contracts/harness.py:MemoryModule.shrink`):
 How a Turn's transcript is made to fit again after it is assembled. The Memory role is
@@ -337,16 +368,20 @@ agents, and nobody registered them; "builtin" — that is the in-process row, wh
 no subprocess and no launcher.
 
 **Machine** (`raven/ops/connections.py`):
-A compute host the owner registered with `raven ops connection add`, held in
-`connections.json` beside the config or wherever `RAVEN_CONNECTIONS` points.
-An on-call-style agent runs its work outside the dispatching Raven
-process — on a GPU box, a lab workstation, another machine entirely — and the
-host's whole part in that is keeping the registry and handing it over: a
-launcher points the agent's `RAVEN_CONNECTIONS` at the owner's store rather
-than copying rows into the agent's own home. Which machine a job lands on,
-and whether it can run at all, is settled inside the agent that runs it.
-Nothing on the dispatch path reads the registry, so no graph and no spawn is
-ever refused over the state of it.
+A compute host the owner registered — with `raven ops connection add`, or,
+since 2026-09-23, with the `ops_connection_add` tool an agent drives from the
+owner's answers in conversation. The registry is the path `RAVEN_CONNECTIONS`
+points at; else, for a sub-agent, the one in the raven home the host hands it,
+and for any other instance the one beside its active config, falling back to
+the home, where a first registration lands. An on-call-style agent runs
+its work outside the dispatching Raven process — on a GPU box, a lab
+workstation, another machine entirely — and the host's whole part in that is
+keeping the registry and handing it over: a launcher points the agent's
+`RAVEN_CONNECTIONS` at the owner's store rather than copying rows into the
+agent's own home, and a sub-agent inherits `RAVEN_HOME` so it resolves the
+same file. Which machine a job lands on, and whether it can run at all, is
+settled inside the agent that runs it. Nothing on the dispatch path reads the
+registry, so no graph and no spawn is ever refused over the state of it.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);

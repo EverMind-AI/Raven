@@ -47,7 +47,7 @@ class TestPackageSurface:
         import raven_everos
         from raven_everos.backend import EverosBackend, make_backend
 
-        assert raven_everos.__version__ == "1.1.0"
+        assert raven_everos.__version__ == "1.4.0"
         assert callable(make_backend)
         assert EverosBackend is not None
 

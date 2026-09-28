@@ -23,6 +23,7 @@ import { css, decls } from './css.mjs'
 
 const settings = readFileSync(new URL('../../src/features/settings/styles.css', import.meta.url), 'utf8')
 const cron = readFileSync(new URL('../../src/features/cron/styles.css', import.meta.url), 'utf8')
+const extAgents = readFileSync(new URL('../../src/features/extAgents/styles.css', import.meta.url), 'utf8')
 
 const escape = (sel) => sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -30,6 +31,7 @@ const BARS = [
   ['.settings-wbar', settings],
   ['.two-pane-wbar', css],
   ['.cronwbar', cron],
+  ['.extAgents-wbar', extAgents],
 ]
 
 describe('the bars a wait is drawn with', () => {

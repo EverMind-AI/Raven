@@ -54,6 +54,34 @@ describe('usage page', () => {
     expect(calls[1]).toEqual(['usage', { kind: '7', ...lastDays(7) }])
   })
 
+  /* A read that failed says so as a state with its one way out, not as a
+     right-aligned mono line in an otherwise empty row. */
+  it('says usage could not be read, and the retry asks again for the same range', async () => {
+    let n = 0
+    install(undefined, { usage: async () => (++n === 1 ? null : stats(['2026-09-10'])) })
+    await mount('usage')
+    expect(screen.getByText('gui.settings.usage.unavailable')).toBeTruthy()
+    expect(screen.getByText('gui.settings.usage.unavailable_sub')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByText('gui.plug.retry')) })
+    expect(n).toBe(2)
+    expect(screen.queryByText('gui.settings.usage.unavailable')).toBeNull()
+    expect(document.querySelectorAll('.settings-bb')).toHaveLength(1)
+  })
+
+  /* The gateway answers an empty range with zeros, not with nothing: a row of
+     0 tiles over two tables that each said "nothing" became one card. */
+  it('says there is no usage yet when the range holds no call, instead of drawing zeros', async () => {
+    const empty = stats(['2026-09-10'])
+    empty.llm.total = { ...empty.llm.total, calls: 0 }
+    empty.llm.models = []
+    empty.tools.counts = []
+    install(undefined, { usage: async () => empty })
+    await mount('usage')
+    expect(screen.getByText('gui.settings.usage.empty_t')).toBeTruthy()
+    expect(document.querySelector('.settings-tiles4')).toBeNull()
+    expect(screen.queryByText('gui.settings.usage.none')).toBeNull()
+  })
+
   it('draws one bar per day, the tiles from the totals, no price where cost is null, and the write column only when written', async () => {
     const days = ['2026-09-10', '2026-09-11', '2026-09-12']
     install(undefined, { usage: async () => stats(days) })

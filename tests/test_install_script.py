@@ -146,11 +146,13 @@ def test_launch_web_answers_each_release_shape_it_exists_for(tmp_path: Path) -> 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "calls.log"
+    started_in = tmp_path / "pwd.log"
     # `uv tool dir --bin` names the shim directory; the fake answers with ours.
     (bin_dir / "uv").write_text(f"#!/bin/sh\nprintf '%s' '{bin_dir}'\n", encoding="utf-8")
     (bin_dir / "raven").write_text(
         "#!/bin/sh\n"
         f"echo \"$*\" >> '{log}'\n"
+        f"[ \"$1:$2\" = web:--foreground ] && pwd >> '{started_in}'\n"
         'case "$FAKE_SHAPE:$1:$2" in\n'
         # The latest release: typer answers an unknown command with usage and exit 2.
         '  without-web:web:*) echo "Usage: raven [OPTIONS] COMMAND [ARGS]..." >&2; '
@@ -166,6 +168,7 @@ def test_launch_web_answers_each_release_shape_it_exists_for(tmp_path: Path) -> 
 
     def run(shape: str) -> tuple[int, str, str, list[str]]:
         log.unlink(missing_ok=True)
+        started_in.unlink(missing_ok=True)
         r = subprocess.run(
             ["sh", str(harness)],
             capture_output=True,
@@ -184,6 +187,9 @@ def test_launch_web_answers_each_release_shape_it_exists_for(tmp_path: Path) -> 
     code, _out, _err, calls = run("with-web")
     assert code == 0
     assert calls == ["web --help", "web --stop", "web --foreground"], "a release with `web` gets the launch"
+    # pytest runs this from the repository root, which is exactly the source
+    # checkout the launch must not start the page from.
+    assert started_in.read_text(encoding="utf-8").strip() == str(tmp_path), "the page starts from HOME"
 
     code, _out, err, calls = run("stop-fails")
     assert code == 0
@@ -194,6 +200,21 @@ def test_launch_web_answers_each_release_shape_it_exists_for(tmp_path: Path) -> 
     assert code == 0, "the page's own exit code is not the script's"
     assert calls[-1] == "web --foreground"
     assert "130" in err and "raven web" in err
+
+
+def test_the_launch_leaves_the_working_directory_before_starting_the_page() -> None:
+    """`raven web` starts its engine as `python -m raven`, which puts the working
+    directory first on sys.path -- so an install run from inside a source
+    checkout would bring the release up on that checkout's raven. Both
+    installers move to the home directory first. The PowerShell one moves back
+    afterwards: under `irm | iex` it runs in the caller's own shell."""
+    sh = INSTALL_SH.read_text(encoding="utf-8")
+    launch = sh[sh.index("launch_web() {") :]
+    assert launch.index('cd "${HOME:-/}"') < launch.index('"$bin" web --stop')
+    ps1 = INSTALL_PS1.read_text(encoding="utf-8")
+    start = ps1[ps1.index("function Start-Web") :]
+    assert start.index("Push-Location $HOME") < start.index("& $bin web --stop")
+    assert start.index("Pop-Location") > start.index("& $bin web --foreground")
 
 
 def test_the_path_hint_precedes_the_launch() -> None:

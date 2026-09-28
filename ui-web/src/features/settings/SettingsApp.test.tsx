@@ -56,6 +56,30 @@ describe('settings root', () => {
     expect(document.querySelector('.settings-gen .settings-wbar')).toBeNull()
   })
 
+  /* A reopen draws the values it already has and reloads behind them. When
+     the reload answered the same values the page used to remount about half a
+     second in, so the first pick of a language after opening did nothing: the
+     press landed on one button and the release on its replacement. */
+  it('keeps the same controls on screen through a reopen whose reload answers nothing new', async () => {
+    let land: (() => void) | null = null
+    let loads = 0
+    install(snap(), {
+      load: () => (++loads === 1
+        ? Promise.resolve(snap())
+        : new Promise((resolve) => { land = () => resolve(snap()) })),
+    })
+    settingsDialog.settingsTab.id = 'general'
+    render(createElement(SettingsApp), { container: document.getElementById('spanels')! })
+    await act(async () => { await store.open() })
+
+    const reopening = store.open()
+    await settle()
+    const before = screen.getByText('gui.settings.general.lang_en')
+    land!()
+    await act(async () => { await reopening })
+    expect(screen.getByText('gui.settings.general.lang_en'), 'the same button, not a replacement').toBe(before)
+  })
+
   it('portals every nav entry into the shell and titles the header with the open section', async () => {
     install()
     await mount('general')

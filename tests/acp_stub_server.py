@@ -573,6 +573,15 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "start by"}})
         ok(request_id, {"stopReason": "cancelled"})
         return
+    if MODE == "kimi_refuses":
+        # Kimi Code 2.1.0's shape for a provider refusing the credential: the
+        # provider's status and words behind its own "Authentication required".
+        err(request_id, -32000, os.environ.get("ACP_STUB_MESSAGE", "Authentication required"))
+        return
+    if MODE == "prompt_hangs":
+        # Kimi Code waiting on a provider that never answers: the prompt is
+        # taken and never finished.
+        return
     if MODE == "empty_turn":
         print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
         ok(request_id, {"stopReason": "end_turn"})
@@ -715,6 +724,10 @@ def main() -> None:
                 err(request_id, -32000, "no api key configured for this agent")
             elif MODE == "no_session_other":
                 err(request_id, -32000, "selected model is unavailable")
+            elif MODE == "kimi_not_ready":
+                # Kimi Code 2.1.0 refuses every session it cannot start this way,
+                # signed out, keyless or with a config it cannot parse alike.
+                err(request_id, -32000, "Authentication required")
             elif MODE == "no_session_sdk":
                 err(
                     request_id,

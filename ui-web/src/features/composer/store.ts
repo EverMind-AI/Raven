@@ -225,7 +225,9 @@ export function goPaint(): void {
 
 /* What the empty field says: the task on a draft, a continuation once the
    conversation exists, and while a turn is running, that a message typed now
-   waits for it -- the one fact about the queue a reader cannot see. */
+   goes into that turn (`sendMidTurn` merges it at the turn's next gap) rather
+   than waiting for it to end -- the one fact about sending mid-turn a reader
+   cannot see. */
 function placeholder(): string {
   if (currentSession() === null) return t('gui.composer_ph')
   return t(turn.busy() ? 'gui.composer.ph_busy' : 'gui.composer.ph_session')

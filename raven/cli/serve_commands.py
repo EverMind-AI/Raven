@@ -522,8 +522,12 @@ Sized like ``PARENT_EXIT_TIMEOUT_S``: the same install is at the other end."""
 _UPGRADE_POLL_S = 1.0
 
 
-def _refuse_incomplete_install() -> None:
+def _refuse_incomplete_install(label: str = "raven serve") -> None:
     """Stop before binding a port if this environment is not whole.
+
+    ``label`` names the caller in the refusal, because both surfaces that serve
+    the page reach this: `raven serve` standalone, and `raven gateway`, which is
+    the one `raven web` actually supervises.
 
     ``build_app`` chooses the page route once, so a serve that starts while uv
     is still writing the environment does not merely start slowly -- it answers
@@ -542,7 +546,7 @@ def _refuse_incomplete_install() -> None:
         return
 
     if fault.reason == "upgrading":
-        typer.echo(f"raven serve: {fault.detail}; waiting for it to finish", err=True)
+        typer.echo(f"{label}: {fault.detail}; waiting for it to finish", err=True)
         deadline = time.monotonic() + _UPGRADE_WAIT_S
         while time.monotonic() < deadline:
             time.sleep(_UPGRADE_POLL_S)
@@ -555,14 +559,14 @@ def _refuse_incomplete_install() -> None:
         # sound -- but not for this process to run. It already holds half of the
         # build that was replaced, and every import still to come would load off
         # disk from the other one.
-        typer.echo("raven serve: the upgrade finished; start Raven again to run it.", err=True)
+        typer.echo(f"{label}: the upgrade finished; start Raven again to run it.", err=True)
     elif fault.reason == "upgrading":
         typer.echo(
-            "raven serve: the upgrade has not finished; not starting on a half-written installation.",
+            f"{label}: the upgrade has not finished; not starting on a half-written installation.",
             err=True,
         )
     else:
-        typer.echo(f"raven serve: {fault.detail}; not starting.", err=True)
+        typer.echo(f"{label}: {fault.detail}; not starting.", err=True)
         typer.echo(
             "Repair it by rerunning the installer: curl -fsSL https://raven.evermind.ai/install.sh | sh",
             err=True,
@@ -808,12 +812,18 @@ def _gateway_argv(port: int) -> list[str]:
     resolved in the caller's working directory, and the supervisor outlives that
     directory. The interpreter running this process is the one thing that is
     certain to still be there.
+
+    ``-P`` because ``-m`` puts the working directory first on ``sys.path``: a
+    page started from inside a source checkout would otherwise run that
+    checkout's ``raven`` on the installed environment's dependencies, and the
+    supervisor, which keeps that directory for as long as the page is up,
+    would do it again on every restart.
     """
     import sys
 
     if _gateway_holds_the_lock():
-        return [sys.executable, "-m", "raven", "serve", "--port", str(port)]
-    return [sys.executable, "-m", "raven", "gateway", "--page-port", str(port)]
+        return [sys.executable, "-P", "-m", "raven", "serve", "--port", str(port)]
+    return [sys.executable, "-P", "-m", "raven", "gateway", "--page-port", str(port)]
 
 
 def _spawn_supervisor(port: int) -> None:
@@ -822,6 +832,9 @@ def _spawn_supervisor(port: int) -> None:
     ``start_new_session`` is what makes it resident: without its own session the
     supervisor stays in the terminal's process group and takes the same SIGHUP
     the shell does when the window closes -- taking the page's engine with it.
+
+    ``-P`` for the reason ``_gateway_argv`` gives: this is the process that
+    keeps the working directory it was started from.
     """
     import subprocess
     import sys
@@ -831,7 +844,7 @@ def _spawn_supervisor(port: int) -> None:
     handle = open(log, "a", encoding="utf-8")  # noqa: SIM115 - handed to the child, closed with it
     try:
         subprocess.Popen(  # noqa: S603 - argv is this interpreter plus literals
-            [sys.executable, "-m", "raven", "web", "--supervise", "--port", str(port)],
+            [sys.executable, "-P", "-m", "raven", "web", "--supervise", "--port", str(port)],
             stdout=handle,
             stderr=handle,
             stdin=subprocess.DEVNULL,

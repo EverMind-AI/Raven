@@ -107,6 +107,11 @@ function entryOf(row: ExtAgentRow): CatalogueEntry | undefined {
    server that predates `own`: an install that registered a shipped product as
    a config row (its `install.py` does that) carries no flag there, and the row
    is still Raven's. */
+/* How many rows a roster has before the server has said: the catalogue is
+   the roster on every machine -- Raven's own agents and every preset, whether
+   or not it is installed -- and only a hand-written agent adds to it. */
+export const catalogueSize = (): number => Object.keys(CATALOGUE).length
+
 export function isOwnRow(row: ExtAgentRow): boolean {
   return !!row.own || !!row.builtin || !!row.vendored || entryOf(row)?.by === OWN_BY
 }

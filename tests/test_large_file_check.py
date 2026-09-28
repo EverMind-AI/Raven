@@ -231,3 +231,44 @@ def test_main_skips_without_range(capsys) -> None:
     captured = capsys.readouterr()
     assert result == 0
     assert "No commit range detected; skipping large file check" in captured.out
+
+
+def test_git_story_film_allows_only_bundled_example_assets(tmp_path: Path) -> None:
+    prefix = "skills/git-story-film/examples/raven-story"
+    allowed = [
+        f"{prefix}/raven.html",
+        f"{prefix}/cast-sheet.html",
+        f"{prefix}/storyboard/storyboard.html",
+    ]
+    blocked = [
+        f"{prefix}/storyboard/frames/0086.jpg",
+        f"{prefix}/other.html",
+        f"{prefix}/storyboard/other.html",
+        f"{prefix}/storyboard/frames/0086.png",
+        f"{prefix}/storyboard/frames/nested/0086.jpg",
+        f"{prefix}/storyboard/0086.jpg",
+        f"{prefix}/storyboard/frames/../outside.jpg",
+        "skills/git-story-film/out/film.mp4",
+        "skills/other/examples/raven-story/raven.html",
+    ]
+    for path in allowed + blocked:
+        candidate = tmp_path / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(b"x")
+
+    violations = check_large_files.find_blocked_asset_files(allowed + blocked, root=tmp_path)
+
+    assert [violation.path for violation in violations] == blocked
+
+
+def test_git_story_film_asset_exemption_keeps_size_limit(tmp_path: Path) -> None:
+    prefix = "skills/git-story-film/examples/raven-story"
+    paths = [f"{prefix}/raven.html", f"{prefix}/cast-sheet.html", f"{prefix}/storyboard/storyboard.html"]
+    for path in paths:
+        candidate = tmp_path / path
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_bytes(b"x" * 1025)
+
+    assert check_large_files.find_oversized_files(paths, max_bytes=1024, root=tmp_path) == [
+        check_large_files.FileSizeViolation(path=path, size=1025, limit=1024) for path in paths
+    ]

@@ -98,7 +98,20 @@ def _image_tool(monkeypatch, handler, *, model: str, workspace: Path, api_base: 
     return ImageGenerateTool(SimpleNamespace(api_base=api_base, model=model, api_key="k"), workspace=workspace)
 
 
-async def test_a_dedicated_image_model_goes_to_the_images_api_with_its_references(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize(
+    "model,wire_model",
+    [
+        ("openai/gpt-image-2", "openai/gpt-image-2"),
+        ("openai/gpt-image-2.5-sunburst", "openai/gpt-image-2.5-sunburst"),
+        ("openrouter/openai/gpt-image-2.5-sunburst", "openai/gpt-image-2.5-sunburst"),
+        ("openai/gpt-image-2.5-flare", "openai/gpt-image-2.5-flare"),
+        ("openrouter/openai/gpt-image-2.5-flare", "openai/gpt-image-2.5-flare"),
+    ],
+)
+@pytest.mark.parametrize("from_config", [True, False])
+async def test_a_dedicated_image_model_goes_to_the_images_api_with_its_references(
+    monkeypatch, tmp_path, model, wire_model, from_config
+) -> None:
     """gpt-image-2 answers 404 on chat/completions whatever the modalities say;
     OpenRouter serves it only through ``/images``, where edit inputs travel as
     ``input_references``."""
@@ -110,12 +123,20 @@ async def test_a_dedicated_image_model_goes_to_the_images_api_with_its_reference
 
     ref = tmp_path / "logo.png"
     ref.write_bytes(_PNG)
-    tool = _image_tool(monkeypatch, handler, model="openai/gpt-image-2", workspace=tmp_path / "ws")
-    out = json.loads(await tool.execute("a poster", images=[str(ref)], aspect_ratio="3:4", quality="high"))
+    configured = model if from_config else ""
+    tool = _image_tool(monkeypatch, handler, model=configured, workspace=tmp_path / "ws")
+    out = json.loads(
+        await tool.execute(
+            "a poster", model=None if from_config else model, images=[str(ref)], aspect_ratio="3:4", quality="high"
+        )
+    )
     assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+    assert out["model"] == wire_model
+    assert tool._config_static.model == configured
+    assert len(seen) == 1
     path, body = seen[0]
     assert path == "/api/v1/images"
-    assert (body["model"], body["aspect_ratio"], body["quality"]) == ("openai/gpt-image-2", "3:4", "high")
+    assert (body["model"], body["aspect_ratio"], body["quality"]) == (wire_model, "3:4", "high")
     reference = body["input_references"][0]
     assert reference["type"] == "image_url" and reference["image_url"]["url"].startswith("data:image/png;base64,")
 
@@ -223,11 +244,15 @@ async def test_a_reference_pointing_inward_is_refused_before_anything_is_fetched
     assert seen == []
 
 
-async def test_a_chat_refusal_for_an_image_only_model_falls_back_to_the_images_api(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("model", ["vendor/pictures-only", "openrouter/vendor/pictures-only"])
+async def test_a_chat_refusal_for_an_image_only_model_falls_back_to_the_images_api(
+    monkeypatch, tmp_path, model
+) -> None:
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
+        assert json.loads(request.content)["model"] == "vendor/pictures-only"
         if request.url.path.endswith("/chat/completions"):
             message = (
                 "vendor/pictures-only is an image generation model and cannot be used with the "
@@ -236,23 +261,41 @@ async def test_a_chat_refusal_for_an_image_only_model_falls_back_to_the_images_a
             return httpx.Response(404, json={"error": {"message": message, "code": 404}})
         return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
 
-    tool = _image_tool(monkeypatch, handler, model="vendor/pictures-only", workspace=tmp_path / "ws")
+    tool = _image_tool(monkeypatch, handler, model=model, workspace=tmp_path / "ws")
     assert json.loads(await tool.execute("a poster"))["success"]
     assert seen == ["/api/v1/chat/completions", "/api/v1/images"]
 
 
-async def test_a_chat_routed_image_model_still_takes_chat_completions(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("model", ["google/gemini-2.5-flash-image", "openrouter/google/gemini-2.5-flash-image"])
+async def test_a_chat_routed_image_model_still_takes_chat_completions(monkeypatch, tmp_path, model) -> None:
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.url.path)
         assert json.loads(request.content)["modalities"] == ["image", "text"]
+        assert json.loads(request.content)["model"] == "google/gemini-2.5-flash-image"
         message = {"images": [{"image_url": {"url": "data:image/png;base64," + _B64}}]}
         return httpx.Response(200, json={"choices": [{"message": message}]})
 
-    tool = _image_tool(monkeypatch, handler, model="google/gemini-2.5-flash-image", workspace=tmp_path / "ws")
+    tool = _image_tool(monkeypatch, handler, model=model, workspace=tmp_path / "ws")
     assert json.loads(await tool.execute("a poster"))["success"]
     assert seen == ["/api/v1/chat/completions"]
+
+
+@pytest.mark.parametrize("api_base", ["https://gateway.test/v1", "https://openrouter.ai.gateway.test/v1"])
+async def test_a_custom_image_endpoint_keeps_its_model_prefix(monkeypatch, tmp_path, api_base) -> None:
+    seen = []
+    model = "openrouter/openai/gpt-image-2.5-sunburst"
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _image_tool(monkeypatch, handler, model=model, workspace=tmp_path, api_base=api_base)
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"] and out["model"] == model
+    assert len(seen) == 1 and str(seen[0].url) == api_base + "/images/generations"
+    assert json.loads(seen[0].content)["model"] == model
 
 
 # ── the image path: several pictures in one call ──
@@ -793,10 +836,15 @@ async def test_borrowed_image_selection_updates_without_recreating_tool(monkeypa
     assert result["model"] == "openai/gpt-image-2" and result["quality"] == "low"
     assert seen[-1][:2] == ("https://custom.example/v1/images/generations", "Bearer custom-key")
     assert seen[-1][2]["quality"] == "low"
-    configure("https://openrouter.ai/api/v1", "router-key", "openai/gpt-image-2", "low")
-    await tool.execute("a circle", quality="high")
+    configure("https://openrouter.ai/api/v1", "router-key", "openrouter/openai/gpt-image-2.5-sunburst", "low")
+    result = json.loads(await tool.execute("a circle", model="google/gemini-3-pro-image", quality="high"))
+    assert result["model"] == "openai/gpt-image-2.5-sunburst"
     assert seen[-1][:2] == ("https://openrouter.ai/api/v1/images", "Bearer router-key")
+    assert seen[-1][2]["model"] == "openai/gpt-image-2.5-sunburst"
     assert seen[-1][2]["quality"] == "low"
+    assert json.loads(source.read_text())["tools"]["media"]["image"]["model"] == (
+        "openrouter/openai/gpt-image-2.5-sunburst"
+    )
     configure("https://openrouter.ai/api/v1", "rotated-key", "qwen/qwen-image-3", "")
     result = json.loads(await tool.execute("a circle", model="openai/gpt-image-2", quality="high"))
     assert result["model"] == "qwen/qwen-image-3" and result["quality"] == ""

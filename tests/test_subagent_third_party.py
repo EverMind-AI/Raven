@@ -32,7 +32,7 @@ from raven.agent.subagent.backends import (
     format_agent_listing,
     third_party_agent_meta,
 )
-from raven.agent.subagent.backends.env import login_shell_env
+from raven.agent.subagent.backends.env import login_shell_env, refresh_login_shell_env
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
 from raven.agent.subagent.mcp_grant import McpGrant
@@ -208,6 +208,99 @@ def test_login_shell_env_cache_hit_returns_a_copy(
     first["PATH"] = "poisoned"
     second = login_shell_env()
     assert second["PATH"] == "/usr/bin"
+
+
+def _shell_printing(paths: list[str], calls: list[list[str]]):
+    """A `subprocess.run` stand-in whose login shell prints the next PATH each run."""
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, f"PATH={paths[len(calls) - 1]}\0".encode(), b"")
+
+    return fake_run
+
+
+def test_a_refresh_takes_the_login_env_again_and_swaps_it_in(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """The memo lasts the process; a refresh is the one way to read the shell again.
+
+    What it answers, measured 2026-09-24: Kimi Code's installer appended its PATH
+    line to ~/.zshrc after the gateway had started, and every probe and spawn
+    went on reading the PATH from before it.
+    """
+    calls: list[list[str]] = []
+    monkeypatch.setattr(env_mod.subprocess, "run", _shell_printing(["/usr/bin", "/opt/kimi/bin:/usr/bin"], calls))
+    assert login_shell_env()["PATH"] == "/usr/bin"
+    assert login_shell_env()["PATH"] == "/usr/bin", "still one capture per process by default"
+    assert len(calls) == 1
+
+    assert refresh_login_shell_env() is True
+    assert len(calls) == 2
+    assert login_shell_env()["PATH"] == "/opt/kimi/bin:/usr/bin"
+    assert len(calls) == 2, "and the new capture is the memo, not a one-off"
+
+
+def test_a_failed_refresh_keeps_the_capture_it_had(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A working PATH is not traded for raven's own because one retry failed."""
+    calls: list[list[str]] = []
+    monkeypatch.setattr(env_mod.subprocess, "run", _shell_printing(["/usr/bin"], calls))
+    login_shell_env()
+
+    def boom(argv, **kwargs):
+        raise OSError("shell went away")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", boom)
+    monkeypatch.setenv("PATH", "/raven/own/bin")
+    assert refresh_login_shell_env() is False
+    assert login_shell_env()["PATH"] == "/usr/bin"
+
+
+def test_a_refresh_retries_a_capture_that_failed_at_start(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A first capture that failed is sticky for the process; a refresh is its second chance."""
+
+    def boom(argv, **kwargs):
+        raise OSError("profile timed out")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", boom)
+    monkeypatch.setenv("RAVEN_ENV_PROBE", "inherited")
+    assert login_shell_env()["RAVEN_ENV_PROBE"] == "inherited"
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(env_mod.subprocess, "run", _shell_printing(["/opt/kimi/bin"], calls))
+    assert refresh_login_shell_env() is True
+    assert login_shell_env() == {"PATH": "/opt/kimi/bin"}
+
+
+def test_a_reader_during_a_refresh_gets_the_old_capture_not_a_second_one(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """The memo is read without a lock by spawns and probes on other threads.
+
+    Emptied first and filled after, a reader in between would capture again
+    itself -- and the MCP grant path reads it on the event loop, where that is
+    up to fifteen seconds of a stalled gateway. So the old capture stays until
+    the new one replaces it whole.
+    """
+    seen_during: list[str] = []
+    calls: list[list[str]] = []
+    paths = ["/usr/bin", "/opt/kimi/bin:/usr/bin"]
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) == 2:
+            seen_during.append(login_shell_env()["PATH"])
+        return subprocess.CompletedProcess(argv, 0, f"PATH={paths[len(calls) - 1]}\0".encode(), b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    login_shell_env()
+    assert refresh_login_shell_env() is True
+    assert seen_during == ["/usr/bin"]
+    assert len(calls) == 2, "the reader in the middle started no capture of its own"
 
 
 def test_login_shell_env_capture_starts_from_a_minimal_base_not_ravens_env(
@@ -4334,6 +4427,56 @@ def test_a_row_with_one_spelling_is_not_offered_a_second(monkeypatch: pytest.Mon
     assert "None" not in off_path
 
 
+def test_grok_login_is_the_one_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Grok Build signs in with `grok login`, and has no second spelling.
+
+    Read from `grok login --help` on 1.0.41, which titles that command "Sign in
+    to Grok". The row launches `grok agent stdio`, a local install, so a machine
+    without `grok` is told the executable is missing rather than handed an `npx`
+    command. The binary is native, so an exit is not a Node.js problem, and a
+    provider status is not given an in-agent command: none was measured that
+    fixes a missing model, a missing credit and a rate limit together.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import NODE_RUNTIME_PRESETS, SHIM_LAUNCHED_PRESETS, SIGN_IN_HINTS
+    from raven.agent.subagent.probe_state import Remedy
+
+    assert "grok" not in SHIM_LAUNCHED_PRESETS
+    assert "grok" not in NODE_RUNTIME_PRESETS
+    hint = SIGN_IN_HINTS["grok"]
+    assert (hint.exe, hint.local, hint.anywhere, hint.does, hint.then) == ("grok", "grok login", None, "sign_in", None)
+    said = "Failed to authenticate: OAuth session expired and could not be refreshed."
+    cfg = SimpleNamespace(preset="grok", kind="acp")
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/opt/homebrew/bin/grok")
+    signed_in = probe_mod._refusal_detail(cfg, said)
+    assert "sign in with `grok login`" in signed_in
+    assert "npx" not in signed_in
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    off_path = probe_mod._refusal_detail(cfg, said)
+    assert "`grok login`" in off_path
+    assert "None" not in off_path
+
+    key = "Incorrect API key provided"
+    assert "sign in with `grok login`" in probe_mod._refusal_detail(cfg, key)
+
+    for other in (
+        "Your subscription has expired. Please renew to continue.",
+        "The model grok-nope does not exist",
+        "Rate limit reached. Please slow down.",
+    ):
+        assert probe_mod._refusal(cfg, other) == (other, None), other
+
+    answer = "Internal error: 404 The model grok-nope does not exist"
+    text, remedy = probe_mod._refusal(cfg, f"request failed: [-32603] {answer}", answer)
+    assert remedy == Remedy("model")
+    assert remedy.command is None
+    assert "switch the model it uses" in text
+
+
 def test_an_endpoint_row_is_told_where_its_key_goes() -> None:
     """A row that is a URL and a key cannot be signed in to, so it is not told to.
 
@@ -4560,6 +4703,65 @@ async def test_the_connect_path_reads_the_answer_whole(monkeypatch: pytest.Monke
     assert "not connected to any AI provider" in result.detail
 
 
+def test_copilot_login_is_the_one_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GitHub Copilot signs in with `copilot login`, and has no second spelling.
+
+    Read from `copilot login --help` on 1.0.88, which says "Authenticate with
+    Copilot via OAuth" and opens a browser by default. The row launches
+    `copilot --acp`, a local install, so a machine without `copilot` is told
+    the executable is missing rather than handed an `npx` command. A provider
+    status is not given an in-agent command: none was measured that fixes a
+    missing model, a missing credit and a rate limit together.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.presets import NODE_RUNTIME_PRESETS, SHIM_LAUNCHED_PRESETS, SIGN_IN_HINTS
+    from raven.agent.subagent.probe_state import Remedy
+
+    assert "github_copilot" not in SHIM_LAUNCHED_PRESETS
+    assert "github_copilot" not in NODE_RUNTIME_PRESETS
+    hint = SIGN_IN_HINTS["github_copilot"]
+    assert (hint.exe, hint.local, hint.anywhere, hint.does, hint.then) == (
+        "copilot",
+        "copilot login",
+        None,
+        "sign_in",
+        None,
+    )
+    said = "request failed: [-32000] Authentication required"
+    cfg = SimpleNamespace(preset="github_copilot", kind="acp")
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: "/opt/homebrew/bin/copilot")
+    signed_in = probe_mod._refusal_detail(cfg, said)
+    assert "sign in with `copilot login`" in signed_in
+    assert "npx" not in signed_in
+    assert said in signed_in
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: None)
+    off_path = probe_mod._refusal_detail(cfg, said)
+    assert "`copilot login`" in off_path
+    assert "None" not in off_path
+
+    expired = "Your Copilot subscription has expired. Please renew to continue."
+    text, remedy = probe_mod._refusal(cfg, expired)
+    assert remedy == Remedy("plan")
+    assert "renew the plan" in text and expired in text
+
+    for other in (
+        "The model not-a-model does not exist",
+        "Rate limit reached. Please slow down.",
+        "Offline mode requires a local model provider. Set COPILOT_PROVIDER_BASE_URL to configure one.",
+    ):
+        assert probe_mod._refusal(cfg, other) == (other, None), other
+
+    answer = "Internal error: 404 The model not-a-model does not exist"
+    text, remedy = probe_mod._refusal(cfg, f"request failed: [-32603] {answer}", answer)
+    assert remedy == Remedy("model")
+    assert remedy.command is None
+    assert "switch the model it uses" in text
+
+
 def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: pytest.MonkeyPatch) -> None:
     """The page's fix and the terminal's sentence come out of the same call.
 
@@ -4582,6 +4784,8 @@ def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: py
         (SimpleNamespace(preset="claude_code", kind="acp"), Remedy("sign_in", "claude auth login")),
         (SimpleNamespace(preset="codex", kind="acp"), Remedy("sign_in", "npx -y @openai/codex login")),
         (SimpleNamespace(preset="hermes", kind="acp"), Remedy("setup", "hermes model")),
+        (SimpleNamespace(preset="github_copilot", kind="acp"), Remedy("sign_in", "copilot login")),
+        (SimpleNamespace(preset="grok", kind="acp"), Remedy("sign_in", "grok login")),
         (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in")),
         (SimpleNamespace(preset="mirothinker", kind="openai"), Remedy("api_key")),
     ]
@@ -4640,6 +4844,213 @@ def test_the_connect_path_and_the_roster_ask_one_question() -> None:
     said = "Failed to authenticate: OAuth session expired and could not be refreshed."
     assert looks_like_auth(said)
     assert not looks_like_auth("it started and then answered nothing")
+
+
+def test_qwen_is_set_up_at_its_own_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`qwen auth` is gone from 0.24: the fix is `qwen`, then `/auth` typed at its prompt.
+
+    Measured 2026-09-24 on qwen 0.24.4, where `qwen auth` itself answers "run
+    qwen and use /auth to configure providers". Told only to run `qwen`, a
+    reader lands at a prompt with nothing saying what to type there.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: f"/usr/local/bin/{exe}")
+    answer = "Internal error: 401 No auth credentials found"
+    text, remedy = probe_mod._refusal(
+        SimpleNamespace(preset="qwen_code", kind="acp"), f"request failed: [-32603] {answer}", answer
+    )
+    assert remedy == Remedy("setup", "qwen", "/auth")
+    assert "run `qwen` in a terminal and type `/auth` there, then connect again" in text
+
+
+@pytest.mark.parametrize(
+    ("answer", "kind"),
+    [
+        (
+            "Internal error: 404 This model is unavailable for free. The paid version is available now - use this "
+            "slug instead: <model>",
+            "model",
+        ),
+        ("Internal error: 402 Insufficient credits. Add more using https://provider.example/credits", "billing"),
+        ("Internal error: 429 Rate limit exceeded: free-models-per-day", "quota"),
+    ],
+)
+def test_a_refusal_the_provider_made_is_named_by_the_status_it_gave(answer: str, kind: str) -> None:
+    """The provider's own status picks among three different fixes, made inside the agent.
+
+    Measured on qwen 0.24.4 against a stand-in endpoint answering each status;
+    the first is the connect this was written for, a model withdrawn from a free
+    tier. All three came back as the agent's English error and nothing else.
+
+    The step is `/auth`, not `/model`: `/model` picks among the models already
+    registered, and qwen's own OpenRouter preset registers two free models
+    OpenRouter has since withdrawn, so its list offers only dead ones.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    said = f"request failed: [-32603] {answer}"
+    text, remedy = probe_mod._refusal(SimpleNamespace(preset="qwen_code", kind="acp"), said, answer)
+    assert remedy == Remedy(kind, "qwen", "/auth")
+    assert "run `qwen` in a terminal and type `/auth` there" in text
+    assert text.endswith(f"It said: {said}"), "the agent's own words stay in the record"
+
+    # No known way to switch this agent's model: what happened, and no command.
+    text, remedy = probe_mod._refusal(SimpleNamespace(preset="codex", kind="acp"), said, answer)
+    assert remedy == Remedy(kind)
+    assert "switch the model it uses" in text
+
+
+def test_a_provider_out_of_reach_is_named_with_the_command_that_says_why() -> None:
+    """Measured on qwen 0.24.4: a refused port answers "Internal error: Connection error." in five seconds."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    answer = "Internal error: Connection error."
+    said = f"request failed: [-32603] {answer}"
+    text, remedy = probe_mod._refusal(SimpleNamespace(preset="qwen_code", kind="acp"), said, answer)
+    assert remedy == Remedy("network", "qwen hi")
+    assert "`qwen hi` in a terminal prints the cause" in text
+    assert probe_mod._refusal(SimpleNamespace(preset="codex", kind="acp"), said, answer)[1] == Remedy("network")
+
+
+def test_a_status_is_read_only_where_the_agent_gave_one() -> None:
+    """A number in a sentence is not a status, and a launch that died gave none.
+
+    Anchored on the code following ``error:``, so a context window or a frame
+    count is not read as a verdict. And read off the agent's answer alone: a
+    process's stderr can name a host that is not its provider -- a bridge's own
+    gateway -- and calling that "could not reach its model provider" would send
+    the reader to the wrong place.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+
+    qwen = SimpleNamespace(preset="qwen_code", kind="acp")
+    for answer in ("the model has a context window of 404 tokens", "Internal error: 4040 frames dropped"):
+        assert probe_mod._refusal(qwen, answer, answer) == (answer, None), answer
+    died = "acp agent 'OpenClaw': connection ended (exit 1); stderr tail: connect ECONNREFUSED 127.0.0.1:18789"
+    assert probe_mod._refusal(qwen, died) == (died, None)
+
+
+def test_a_launch_that_quit_is_named_by_what_it_said_on_its_way_out() -> None:
+    """An exit that left a reason is an exit, and one refusing its own ACP flag is an old release.
+
+    The flag is the one the preset launches with, so an agent that does not
+    know it predates the release the preset was written against. yargs, which
+    qwen is built on, answers an unknown option "Unknown argument: acp".
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpConnectionError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    qwen = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
+    old = AcpConnectionError("acp agent 'Qwen Code': connection ended (exit 1); stderr tail: Unknown argument: acp")
+    text, remedy = probe_mod._ping_refusal(qwen, old)
+    assert remedy == Remedy("upgrade", "npm i -g @qwen-code/qwen-code@latest")
+    assert "upgrade it with `npm i -g @qwen-code/qwen-code@latest` and connect again" in text
+
+    crashed = AcpConnectionError(
+        "acp agent 'Qwen Code': connection ended (exit 1); stderr tail: Error: Cannot find module 'undici'"
+    )
+    assert probe_mod._ping_refusal(qwen, crashed) == (str(crashed), Remedy("exited"))
+
+    # Quitting without a word leaves nothing to point the reader at.
+    mute = AcpConnectionError("acp agent 'Qwen Code': connection ended (exit 1); stderr tail: <empty>")
+    assert probe_mod._ping_refusal(qwen, mute) == (str(mute), None)
+
+
+def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Over an old copy a bare package name can leave it where it is; `@latest` moves it.
+
+    Only for an `npm i -g <package>` hint: a hint that pins a version already, or
+    installs some other way, is not one this can safely rewrite.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import presets as presets_mod
+
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="qwen_code")) == "npm i -g @qwen-code/qwen-code@latest"
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="claude_code")) is None, "no install hint, no upgrade"
+    for hint, upgrade in (
+        ("npm install -g plain-agent", "npm install -g plain-agent@latest"),
+        ("npm i -g @scope/agent@1.2.3", None),
+        ("npm i -g agent@2", None),
+        ("curl -fsSL https://agent.example/install.sh | sh", None),
+    ):
+        monkeypatch.setitem(presets_mod.ACP_REGISTRY_INSTALL_HINTS, "stand_in", hint)
+        assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="stand_in")) == upgrade, hint
+
+
+async def test_a_connect_that_outlasted_its_wait_says_how_to_hear_why(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Qwen Code retries a refused call for minutes and says nothing while it does.
+
+    Measured on qwen 0.24.4: 90 s of ACP traffic under a 429 carried no update
+    and no stderr, while the same failure run in a terminal printed its reason
+    at 91 s. So what a timeout can usefully say is the command that makes the
+    agent talk -- for an agent measured to go silent that way, and no other.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpTimeoutError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    class _Silent:
+        async def run(self, *args: object, **kwargs: object) -> str:
+            await asyncio.sleep(3600)
+            return ""
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda *args, **kwargs: _Silent())
+    monkeypatch.setattr(probe_mod, "_ping_bounds", lambda cfg: (100, 1, 0.05))
+    qwen = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
+    silent = await probe_mod.ping_agent(qwen)
+    assert silent.remedy == Remedy("silent", "qwen hi")
+    assert "run `qwen hi` in a terminal" in silent.detail
+    other = await probe_mod.ping_agent(SimpleNamespace(name="Codex", preset="codex", kind="acp"))
+    assert (other.detail, other.remedy) == ("it did not answer within 0s", None)
+
+    # The prompt's own budget running out is the same silence, seen from inside.
+    timed_out = AcpTimeoutError("acp agent 'Qwen Code': session/prompt timed out after 60s", method="session/prompt")
+    assert probe_mod._ping_refusal(qwen, timed_out)[1] == Remedy("silent", "qwen hi")
+
+
+async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test fails on the handshake first, and that verdict named no fix for a launch that quit.
+
+    So the two buttons named one crash two ways: Connect said to upgrade, Test
+    printed the English error.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    detail = (
+        "handshake failed: acp agent 'Qwen Code': connection ended (exit 1); stderr tail: Unknown argument: acp; "
+        "stderr: Unknown argument: acp"
+    )
+
+    async def _refused(cfg: object) -> object:
+        return SimpleNamespace(usable=False, needs_auth=False, unfetched=False, detail=detail, available_models=[])
+
+    monkeypatch.setattr(probe_mod, "record_capabilities", _refused)
+    cfg = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
+    result = await probe_mod.run_test(cfg, source="config")
+    assert not result.ok
+    assert result.remedy == Remedy("upgrade", "npm i -g @qwen-code/qwen-code@latest")
+    assert detail in result.detail
 
 
 def test_the_sign_in_command_is_one_the_machine_can_run(monkeypatch: pytest.MonkeyPatch) -> None:

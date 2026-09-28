@@ -17,6 +17,16 @@ import type { FoundAgent, ImportPlatform, ImportScan, OnboardSource, StepId, Ste
 
 export const STEPS: readonly StepId[] = ['model', 'search', 'agents', 'sync']
 
+/* The agents and data-sync steps are held back from the strip for now: a first
+   run asks only for a model and a search tool, then enters. Their bodies and
+   verbs stay, so bringing them back is widening this list. */
+const SHOWN: readonly StepId[] = ['model', 'search']
+let shown: readonly StepId[] = SHOWN
+
+/* The step body whose data each step draws on; the sync step waits on the
+   embedding model's. */
+const BODY_OF: Record<StepId, keyof StepBodies> = { model: 'model', search: 'search', agents: 'agents', sync: 'memory' }
+
 /** How long the closing fade runs before the island comes down (styles.css). */
 export const CLOSE_MS = 500
 
@@ -68,16 +78,17 @@ export function setBodies(bodies: StepBodies): void {
 let scanning: Promise<void> | null = null
 let closeTimer: ReturnType<typeof setTimeout> | null = null
 
-/* Every step's data is asked for at once: the scan and the probe are slow and
-   the reader spends the first step on the provider form, so by the time they
-   reach the agents step the answers are in. */
+/* Every shown step's data is asked for at once: the scan and the probe are
+   slow and the reader spends the first step on the provider form, so by the
+   time they reach the agents step the answers are in. A hidden step's data is
+   not asked for at all -- the roster's load probes every agent. */
 export function open(): void {
   const bodies = get().bodies
   if (!bodies) return
   if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
   set({ ...initial(), bodies, open: true, epoch: get().epoch + 1 })
-  for (const body of Object.values(bodies)) void body.load().catch(() => {})
-  void scan()
+  for (const key of new Set(shown.map((id) => BODY_OF[id]))) void bodies[key].load().catch(() => {})
+  if (shown.includes('sync')) void scan()
 }
 
 /* One importer read. The latest one issued is the only one whose answer
@@ -120,19 +131,25 @@ export const syncable = (): FoundAgent[] => found().filter((a) => platformOf(a)?
 export const syncReady = (): boolean => !!get().bodies?.memory.done()
 
 export function visibleSteps(): StepId[] {
-  return [...STEPS]
+  return [...shown]
 }
 
 export function stepDone(id: StepId): boolean {
   const s = get()
   if (!s.bodies) return false
   if (id === 'model') return s.bodies.model.done()
-  if (id === 'search') return s.bodies.search.done()
+  /* Search is optional: nothing on the step holds the reader. */
+  if (id === 'search') return true
   if (id === 'agents') return s.bodies.agents.done()
   /* Nothing to import is a finished step: the wizard ends on it. */
   if (!syncable().length) return true
   return syncReady() && Object.values(s.syncPick).some(Boolean)
 }
+
+/* Which steps carry a Skip. The model step has nothing to skip -- without a
+   chat model nothing runs -- and the search step is always done, so a Skip
+   there would only be a second way to press the primary. */
+export const skippable = (id: StepId): boolean => id !== 'model' && id !== 'search'
 
 export function isLast(id: StepId): boolean {
   const steps = visibleSteps()
@@ -223,9 +240,15 @@ export function setLang(v: Lang): void {
   void pickLang(v, { persist: true })
 }
 
+/* The held-back steps' tests put them back on the strip. */
+export function _showStepsForTests(steps: readonly StepId[]): void {
+  shown = steps
+}
+
 export function _resetForTests(): void {
   if (closeTimer) { clearTimeout(closeTimer); closeTimer = null }
   scanning = null
+  shown = SHOWN
   store._resetForTests()
   store.set(initial())
 }

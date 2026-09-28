@@ -29,7 +29,7 @@ PLUGIN_DIR = REPO / "agents" / "raven-research" / "plugins" / "research-flow"
 sys.path.insert(0, str(PLUGIN_DIR))
 
 from research_flow.config import FlowConfig  # noqa: E402
-from research_flow.flow import TurnFrame  # noqa: E402
+from research_flow.flow import ResearchFlowHook, ToolHandles, TurnFrame  # noqa: E402
 from research_flow.gates.report_shape import (  # noqa: E402
     REMINDER_CLOSE,
     REMINDER_OPEN,
@@ -40,6 +40,7 @@ from research_flow.gates.report_shape import (  # noqa: E402
 )
 from research_flow.state import SessionStore  # noqa: E402
 
+from raven.agent.loop import TURN_BUDGETS_KEY, turn_synthesis  # noqa: E402
 from raven.agent.loop.main import AgentLoop  # noqa: E402
 from raven.contracts.loop_hooks import AgentHookContext  # noqa: E402
 from raven.session.manager import Session  # noqa: E402
@@ -490,3 +491,35 @@ async def test_the_reminder_is_absent_when_the_arm_did_not_ask_for_the_template(
     ctx = AgentHookContext(session_key="cli:t", inbound_content="what is H100?")
     decision = await _frame(tmp_path, report_reminder=False).before_user_inbound(ctx)
     assert decision.modified_content is None, "the inbound text must pass through untouched"
+
+
+@pytest.mark.asyncio
+async def test_interrupted_turn_receives_the_report_policy(tmp_path):
+    cfg = FlowConfig(enabled=True)
+    cfg.final_shape.report_bounce = True
+    cfg.wall_clock_seconds = 7
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="who founded X?")
+    hook = ResearchFlowHook(cfg, None, ToolHandles(), SessionStore(tmp_path))
+
+    await hook.before_user_inbound(ctx)
+
+    policy = turn_synthesis(ctx.metadata)
+    assert policy is not None
+    assert ctx.metadata[TURN_BUDGETS_KEY]["wall_clock_seconds"] == 7
+    assert "## Answer" in policy.guidance
+    assert "interrupted" in policy.guidance
+    assert policy.repair_prompt("A partial answer without headings") is not None
+    assert policy.repair_prompt(_GOOD) is None
+    assert ReportShape(policy.format_fallback("The time limit was reached.")).well_formed
+
+
+@pytest.mark.asyncio
+async def test_interrupted_report_policy_follows_the_structure_switch(tmp_path):
+    cfg = FlowConfig(enabled=True)
+    cfg.final_shape.report_structure = False
+    ctx = AgentHookContext(session_key="cli:t", inbound_content="who founded X?")
+    hook = ResearchFlowHook(cfg, None, ToolHandles(), SessionStore(tmp_path))
+
+    await hook.before_user_inbound(ctx)
+
+    assert turn_synthesis(ctx.metadata) is None

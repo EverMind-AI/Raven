@@ -16,13 +16,15 @@ import { AgentMark } from '../../components/AgentMark'
 import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import { ask as confirmAsk } from '../../state/confirm'
-import { isOwnRow, shortOf } from './catalogue'
-import { sectionOf, stageOf } from './source'
+import { catalogueSize, isOwnRow, shortOf } from './catalogue'
+import { healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
+import { stageOf } from './source'
 import * as store from './store'
 
+import type { Health, Shown } from './health'
 import type { ExtAgentsState, Failure } from './store'
-import type { ExtAgentRow } from './types'
-import type { JSX } from 'react'
+import type { ExtAgentRow, Remedy } from './types'
+import type { JSX, ReactNode } from 'react'
 
 const kindText = (kind: string): string =>
   t(
@@ -35,46 +37,24 @@ const kindText = (kind: string): string =>
           : 'gui.agent.kind_cli',
   )
 
-/* The states a row and its sheet are drawn in. `pending` and `failed` are
-   this page's own, about a write in flight or refused; the other three are the
-   section the server's facts put the row in. */
-export type Shown = 'pending' | 'failed' | 'missing' | 'on' | 'off'
-
-/* The word a row wears while its own write is in flight. One `pending` covers
-   every write this page makes, so the word comes from the write rather than
-   from the state: a switch-on waits on the readiness ping and says it is
-   testing, a switch-off waits on its own write alone and says it is
-   disconnecting, and the rest -- a key, a model, a description -- keep the
-   older word, being neither. */
-export function pendingLabel(row: ExtAgentRow, s: ExtAgentsState): string {
-  const write = s.joining[row.name]
-  if (!write) return 'gui.agent.setup_connecting'
-  if (store.probes(write)) return 'gui.agent.testing'
-  return store.disconnects(write) ? 'gui.agent.disconnecting' : 'gui.agent.setup_connecting'
-}
-
-export function shownOf(row: ExtAgentRow, s: ExtAgentsState): Shown {
-  if (row.name in s.joining) return 'pending'
-  if (s.failed[row.name]) return 'failed'
-  const section = sectionOf(row)
-  return section === 'missing' ? 'missing' : section === 'on' ? 'on' : 'off'
-}
-
 export function Spin(): JSX.Element {
   return <span className="extAgents-spin" aria-hidden="true" />
 }
 
-/* The dot: green for a working agent, gold when the probe has a caveat, amber
-   and pulsing while a write is in flight, red for a refusal. None at all for a
-   row that is merely off or absent -- "not connected" is what the section
-   already says. */
-function Led({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
-  if (shown === 'pending') return <span className="extAgents-led extAgents-led-busy" />
-  if (shown === 'failed') return <span className="extAgents-led extAgents-led-bad" />
-  if (shown !== 'on') return null
-  const warn = !row.builtin && row.probe_status === 'attention'
-  return <span className={'extAgents-led' + (warn ? ' extAgents-led-warn' : '')} />
+/* The dot: `healthOf`'s verdict, or nothing. None for a row that is merely
+   off or absent -- "not connected" is what the section already says -- and a
+   failed test is drawn only on a connected row, by the same rule: an off row's
+   section says it is not in use, and its sheet keeps the verdict. A test under
+   way pulses on any row, since the sheet says the same of it. The verdict is
+   the dot's accessible name; the tooltip sits on the name beside it, which is
+   a target a pointer can find. */
+function Led({ health, shown }: { health: Health; shown: Shown }): JSX.Element | null {
+  if (health.tone === 'none' || (health.from === 'test' && shown !== 'on')) return null
+  return <span aria-label={health.label} className={ledClass(health.tone)} role="img" />
 }
+
+const tooltip = (health: Health, shown: Shown): string | undefined =>
+  health.tone === 'none' || (health.from === 'test' && shown !== 'on') ? undefined : health.label
 
 export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
   const own = isOwnRow(row)
@@ -97,47 +77,184 @@ function oneLine(row: ExtAgentRow): string {
   return stale ? `${base} · ${stale}` : base
 }
 
-/* What a refused write comes to, in the reader's language: the fix the server
-   named, by its kind, or what failed when it named none. The server's own
-   sentence is English, and cut to the two lines a card has it said neither
-   what went wrong nor what to do -- so it is shown only in the sheet, folded
-   under the fix. */
-function whatFailed(row: ExtAgentRow, failed: Failure): string {
-  const agent = row.name
-  const kind = failed.remedy?.kind
-  if (kind === 'sign_in') return t('gui.agent.bad_sign_in', { agent })
-  if (kind === 'setup') return t('gui.agent.bad_setup', { agent })
-  if (kind === 'api_key') return t('gui.agent.bad_api_key', { agent })
-  if (kind === 'download') return t('gui.agent.bad_download', { agent })
+/* The one word for what went wrong, by the write that was refused. */
+export function refusedLabel(failed: Failure): string {
   const write = refusedWrite(failed)
-  return t(write === 'save' ? 'gui.agent.bad_save' : write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', {
-    agent,
-  })
+  return t(write === 'save' ? 'gui.agent.st_save_bad' : write === 'disconnect' ? 'gui.agent.st_disconnect_bad' : 'gui.agent.st_connect_bad')
 }
 
-/* Which write a refusal refused, which decides its words when no fix is named:
-   a switch-off is not a connect (`disconnects` says so for the pending ring
-   too), and an edit is neither. The sheet asks the same question, so a card and
-   its sheet cannot say two things about one refusal. */
-export function refusedWrite(failed: Failure): 'connect' | 'disconnect' | 'save' {
-  if (store.disconnects(failed)) return 'disconnect'
-  return failed.op === 'model' || failed.op === 'update' ? 'save' : 'connect'
+/* The short reason, by the fix the server named. Spelled out rather than built
+   from the kind, so the i18n gate can see every key. */
+const WHY: Record<Remedy['kind'], string> = {
+  sign_in: 'gui.agent.why_sign_in',
+  setup: 'gui.agent.why_setup',
+  api_key: 'gui.agent.why_api_key',
+  download: 'gui.agent.why_download',
+  model: 'gui.agent.why_model',
+  billing: 'gui.agent.why_billing',
+  quota: 'gui.agent.why_quota',
+  network: 'gui.agent.why_network',
+  silent: 'gui.agent.why_silent',
+  upgrade: 'gui.agent.why_upgrade',
+  exited: 'gui.agent.why_exited',
+  runtime: 'gui.agent.why_runtime',
+  plan: 'gui.agent.why_plan',
+  config: 'gui.agent.why_config',
 }
 
-/* The red line itself. A card or row that opens a sheet points there, where
-   the steps and the original error are. The wizard's rows open nothing, so
-   theirs has to carry the step: the command, when it is one to run in a
-   terminal, and the retry to press after. */
-function failureLine(row: ExtAgentRow, failed: Failure, opens: boolean): string {
-  const what = whatFailed(row, failed)
-  if (opens) return t('gui.agent.bad_open', { what })
-  const button = t('gui.retry')
-  const kind = failed.remedy?.kind
-  /* The adapter's own command is too long for a row, and what fixes a
-     download is the network anyway, so the row names where to look. */
-  if (kind === 'download') return t('gui.agent.bad_download_retry', { what, button })
-  const command = kind === 'sign_in' || kind === 'setup' ? failed.remedy?.command : ''
-  return command ? t('gui.agent.bad_run', { what, command, button }) : t('gui.agent.bad_retry', { what, button })
+export function whyOf(remedy: Remedy): string {
+  return t(WHY[kindOf(remedy)])
+}
+
+/* How long ago a verdict was measured, in the largest unit that is not zero. */
+export function ago(atMs: number | null, now = Date.now()): string {
+  if (!atMs) return ''
+  const m = Math.floor((now - atMs) / 60_000)
+  if (m < 1) return t('gui.time.ago_now')
+  if (m < 60) return t('gui.time.ago_m', { n: m })
+  const h = Math.floor(m / 60)
+  if (h < 24) return t('gui.time.ago_h', { n: h })
+  return t('gui.time.ago_d', { n: Math.floor(h / 24) })
+}
+
+/* What a card or row says about the last thing that went wrong, under the
+   line about the agent rather than instead of it: one word for what failed, a
+   short reason, and the press that answers it (the card's corner, a row's
+   button). Two sources, in this order: a
+   write this page refused (held on the page, gone with the next write on the
+   row), then a test the server remembered failing (on the row, so it survives
+   a reload). A test under way shows as such, so the press cannot be pressed
+   twice. Nothing for a row whose state already says it all: pending, absent,
+   or waiting on a sign-in. */
+export interface Verdict {
+  label: string
+  /* The short reason, or '' when the label is the whole of it. */
+  why: string
+  /* The server's own sentence, for a row with no sheet to fold it into. */
+  raw: string
+  /* The fix the server named, when it did. */
+  remedy: Remedy | null
+  act: string
+  onAct: () => void
+  busy?: boolean
+  /* Nothing wrong: the line says how the row is doing, with no wash. */
+  quiet?: boolean
+}
+
+/* What a card says when there is nothing to answer: which state it is in,
+   in the words the tabs use, so the slot under the line is never blank and a
+   grid reads the same whether or not a card is in trouble. A passed test says
+   when it passed. Not the vendor: the mark beside the name already says that. */
+export function quietOf(row: ExtAgentRow, shown: Shown, health: Health): Verdict {
+  let label: string
+  if (health.tone === 'warn') {
+    label = health.label
+  } else if (shown === 'on') {
+    label = row.last_test_ok ? [t('gui.agent.hd_on_tested'), ago(row.last_test_at_ms)].filter(Boolean).join(' · ') : t('gui.agent.g_on')
+  } else if (shown === 'missing') {
+    label = t('gui.agent.g_missing')
+  } else {
+    label = t('gui.agent.g_avail')
+  }
+  return { label, why: '', raw: '', remedy: null, act: '', onAct: () => {}, quiet: true }
+}
+
+function busyVerdict(label: string): Verdict {
+  return { label, why: '', raw: '', remedy: null, act: '', onAct: () => {}, busy: true }
+}
+
+export function verdictOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, opens: boolean): Verdict | null {
+  if (shown === 'pending' || shown === 'missing') return null
+  const failed = s.failed[row.name]
+  if (failed) {
+    return {
+      label: refusedLabel(failed),
+      why: failed.remedy ? whyOf(failed.remedy) : t(opens ? 'gui.agent.why_open' : 'gui.agent.why_hover'),
+      raw: failed.detail,
+      remedy: failed.remedy || null,
+      act: t('gui.retry'),
+      onAct: () => store.retry(row),
+    }
+  }
+  if (stageOf(row) === 'unauthorized') return null
+  if (s.testing.includes(row.name) || row.test_running) return busyVerdict(t('gui.agent.testing'))
+  if (row.last_test_ok === false) {
+    return {
+      label: t('gui.agent.st_test_bad'),
+      why: row.last_test_remedy ? whyOf(row.last_test_remedy) : ago(row.last_test_at_ms),
+      raw: row.last_test_detail,
+      remedy: row.last_test_remedy || null,
+      act: t('gui.agent.test_again_short'),
+      onAct: () => void store.runTest(row),
+    }
+  }
+  return null
+}
+
+/* The verdict as a card's footer: a strip under the line about the agent.
+   It only says; the press that answers it is the card's corner control. */
+function Foot({ v }: { v: Verdict }): JSX.Element {
+  return (
+    <div className={'extAgents-foot' + (v.busy ? ' extAgents-foot-busy' : '') + (v.quiet ? ' extAgents-foot-quiet' : '')}>
+      <span className="extAgents-foot-say">
+        <span className="extAgents-foot-k">
+          {v.busy ? <Spin /> : null}
+          {v.label}
+        </span>
+        {v.why ? <span className="extAgents-foot-r">{v.why}</span> : null}
+      </span>
+    </div>
+  )
+}
+
+/* Private-use characters: never in a catalogue string, and left alone by the
+   JSON the test double renders its arguments with. */
+const MARK = '\uE000'
+const MARK_THEN = '\uE001'
+
+/* A sentence with commands in it, as text with each command a piece of code:
+   split around markers the catalogue cannot contain. */
+function withCode(sentence: string, codes: Record<string, string>): ReactNode {
+  return sentence.split(/(\uE000|\uE001)/).map((part, i) =>
+    part in codes ? <code key={i}>{codes[part]}</code> : part,
+  )
+}
+
+/* The verdict as a row's second line. A row with no sheet has to carry the
+   step itself: the command to run as a piece of code -- and what to type once
+   it runs, when the fix is inside the agent; a command that only makes the
+   agent say why it fails is named as that -- or where to look for a download;
+   and the server's sentence on hover, when there is no fix. */
+function RowVerdict({ v, opens }: { v: Verdict; opens: boolean }): JSX.Element {
+  const kind = v.remedy?.kind
+  const command = !opens && kind && kind !== 'api_key' && kind !== 'download' ? v.remedy?.command || '' : ''
+  const then = command ? v.remedy?.then || '' : ''
+  let why: ReactNode = v.why
+  if (command) {
+    const vars = then ? { why: v.why, command: MARK, then: MARK_THEN, button: v.act } : { why: v.why, command: MARK, button: v.act }
+    /* A plan's `command` is the page that sells one, opened in a browser; a
+       config's and a network's only make the agent say what is wrong. */
+    const key =
+      kind === 'plan'
+        ? 'gui.agent.row_open'
+        : then
+          ? 'gui.agent.row_run_then'
+          : kind === 'network' || kind === 'silent' || kind === 'config'
+            ? 'gui.agent.row_run_diagnose'
+            : 'gui.agent.row_run'
+    why = withCode(t(key, vars), { [MARK]: command, [MARK_THEN]: then })
+  } else if (!opens && kind === 'download') {
+    why = t('gui.agent.row_download', { button: v.act })
+  }
+  return (
+    <div className={'extAgents-row2' + (v.busy ? ' extAgents-foot-busy' : '')} title={opens || v.remedy || !v.raw ? undefined : v.raw}>
+      <span className="extAgents-foot-k">
+        {v.busy ? <Spin /> : null}
+        {v.label}
+      </span>
+      {v.why ? <span className="extAgents-foot-r">{why}</span> : null}
+    </div>
+  )
 }
 
 /* Connect, by what the row's stage calls for. The one case with a question in
@@ -166,7 +283,7 @@ function RowControl({ row, s, shown }: { row: ExtAgentRow; s: ExtAgentsState; sh
   if (shown === 'pending') return <span className="extAgents-state">{t(pendingLabel(row, s))}</span>
   if (shown === 'failed') {
     return (
-      <button className="mini danger" onClick={() => store.retry(row)}>
+      <button className="mini" onClick={() => store.retry(row)}>
         {t('gui.retry')}
       </button>
     )
@@ -209,8 +326,9 @@ function AgentRow({
   row, s, onOpen,
 }: { row: ExtAgentRow; s: ExtAgentsState; onOpen?: (row: ExtAgentRow) => void }): JSX.Element {
   const shown = shownOf(row, s)
-  const failed = s.failed[row.name]
+  const health = healthOf(row, s)
   const open = onOpen ? (): void => onOpen(row) : undefined
+  const verdict = verdictOf(row, s, shown, !!open)
   return (
     <div
       className="extAgents-row"
@@ -230,8 +348,8 @@ function AgentRow({
     >
       <Tile row={row} />
       <div className="extAgents-who">
-        <div className="extAgents-nm">
-          <Led row={row} shown={shown} />
+        <div className="extAgents-nm" title={tooltip(health, shown)}>
+          <Led health={health} shown={shown} />
           <span className="extAgents-t">{row.name}</span>
         </div>
         {shown === 'pending' ? (
@@ -239,12 +357,8 @@ function AgentRow({
             <Spin />
             {t(pendingLabel(row, s))}
           </div>
-        ) : shown === 'failed' && failed ? (
-          /* With no sheet to fold it into, the server's sentence -- all a row
-             with no named fix has to say why -- is kept on hover, not shown. */
-          <div className="extAgents-one extAgents-one-bad" title={open ? undefined : failed.detail}>
-            {failureLine(row, failed, !!open)}
-          </div>
+        ) : verdict ? (
+          <RowVerdict opens={!!open} v={verdict} />
         ) : (
           <div className="extAgents-one">{oneLine(row)}</div>
         )}
@@ -258,15 +372,15 @@ function AgentRow({
   )
 }
 
+const RETRY = 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4'
 const PLUS = 'M12 5v14M5 12h14'
 const DOWNLOAD = 'M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14'
-const RETRY = 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4'
 
-/* The card's corner control: Connect, Install, Retry, or the sign-in the
-   agent wants. A connected card carries none -- Disconnect is in the sheet,
-   one click away and out of reach of a stray click -- and a write in flight is
-   said by the line itself. */
-function CardControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.Element | null {
+/* The corner holds the one press the card calls for, so every press on a
+   card is in the same place: connect, install, and after a refusal the retry;
+   on a connected agent whose last test failed, the retest. A card still to
+   connect keeps its connect over a retest, since connecting tests it anyway. */
+function CardControl({ row, shown, verdict }: { row: ExtAgentRow; shown: Shown; verdict: Verdict | null }): JSX.Element | null {
   const iconButton = (label: string, d: string, onClick: () => void, cls = ''): JSX.Element => (
     <button
       aria-label={label}
@@ -278,16 +392,23 @@ function CardControl({ row, shown }: { row: ExtAgentRow; shown: Shown }): JSX.El
       <Glyph d={d} />
     </button>
   )
-  if (shown === 'failed') return iconButton(t('gui.retry'), RETRY, () => store.retry(row), 'extAgents-cbtn-bad')
+  if (shown === 'failed' && verdict) return iconButton(verdict.act, RETRY, verdict.onAct)
   if (shown === 'missing') return iconButton(t('gui.agent.go_install'), DOWNLOAD, () => store.sheetOpen(row))
+  if (shown === 'on' && verdict && !verdict.busy && !verdict.quiet) return iconButton(verdict.act, RETRY, verdict.onAct)
   if (shown !== 'off') return null
   if (stageOf(row) === 'unauthorized') return <span className="extAgents-ctag">{t('gui.agent.unauthorized')}</span>
   return iconButton(t('gui.agent.connect'), PLUS, () => connect(row))
 }
 
+/* A card's own write in flight wears the same amber strip as a test under
+   way, so the line about the agent stays put. The slot under the line is
+   always filled -- a quiet word on how the row is doing when nothing is
+   wrong -- so a card is the same height before a press, during it and after a
+   refusal. */
 function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Element {
   const shown = shownOf(row, s)
-  const failed = s.failed[row.name]
+  const health = healthOf(row, s)
+  const verdict = shown === 'pending' ? busyVerdict(t(pendingLabel(row, s))) : verdictOf(row, s, shown, true) || quietOf(row, shown, health)
   const open = (): void => store.sheetOpen(row)
   return (
     <div
@@ -306,24 +427,41 @@ function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Ele
     >
       <div className="extAgents-ctop">
         <Tile row={row} />
-        <div className="extAgents-nm">
+        <div className="extAgents-nm" title={tooltip(health, shown)}>
           <span className="extAgents-t">{row.name}</span>
-          <Led row={row} shown={shown} />
+          <Led health={health} shown={shown} />
         </div>
         <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
-          <CardControl row={row} shown={shown} />
+          <CardControl row={row} shown={shown} verdict={verdict} />
         </div>
       </div>
-      {shown === 'pending' ? (
-        <div className="extAgents-one extAgents-one-work">
-          <Spin />
-          {t(pendingLabel(row, s))}
+      <div className="extAgents-one">{oneLine(row)}</div>
+      <div className="extAgents-foot-slot">
+        <Foot v={verdict} />
+      </div>
+    </div>
+  )
+}
+
+/* The grid before the first answer: one card of the fixed shape a real card
+   has per catalogue entry, which is the roster on every machine, so it lands
+   in place instead of after an empty message and a jump. Bars, not rows: a
+   card would be claiming a state the server has not confirmed. */
+export function WaitGrid(): JSX.Element {
+  return (
+    <div className="extAgents-grid" aria-busy="true">
+      {Array.from({ length: catalogueSize() }, (_, i) => (
+        <div className="extAgents-card extAgents-wcard" key={i}>
+          <div className="extAgents-ctop">
+            <span className="extAgents-wbar extAgents-wtile" />
+            <span className="extAgents-wbar extAgents-wname" />
+          </div>
+          <span className="extAgents-wbar extAgents-wline" />
+          <div className="extAgents-foot-slot">
+            <span className="extAgents-wbar extAgents-wfoot" />
+          </div>
         </div>
-      ) : shown === 'failed' && failed ? (
-        <div className="extAgents-one extAgents-one-bad">{failureLine(row, failed, true)}</div>
-      ) : (
-        <div className="extAgents-one">{oneLine(row)}</div>
-      )}
+      ))}
     </div>
   )
 }

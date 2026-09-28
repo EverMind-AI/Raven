@@ -15,6 +15,7 @@ import pytest
 import raven_everos.server as everos_server
 from raven_everos.server import (
     EverosNotConfiguredError,
+    EverosStillStartingError,
     _everos_executable,
     ensure_everos_server,
 )
@@ -79,6 +80,16 @@ class TestEverosExecutable:
         monkeypatch.setenv("PATH", str(path_dir))
 
         assert _everos_executable() == str(path_dir / "everos")
+
+    def test_on_windows_the_sibling_is_everos_exe(self, tmp_path, monkeypatch) -> None:
+        scripts = tmp_path / "venv" / "Scripts"
+        scripts.mkdir(parents=True)
+        _make_executable(scripts / "everos.exe")
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr("sys.executable", str(scripts / "python.exe"))
+        monkeypatch.setenv("PATH", "")
+
+        assert _everos_executable() == str(scripts / "everos.exe")
 
     def test_missing_everywhere_names_the_interpreter_dir(self, tmp_path, monkeypatch) -> None:
         venv_bin = tmp_path / "venv" / "bin"
@@ -490,6 +501,36 @@ class TestTheRootDescribesItsOwnAddress:
         assert record["pid"] == 4242
         assert record["root"] == str(everos_toml.parent)
 
+    def test_a_pidfile_naming_a_live_server_survives_a_second_start(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Two starts inside one boot window: the lock covers the spawn, not
+        the boot, so the second child dies on the OME lock. On Windows the
+        pidfile is the only way back to the first server, and the loser must
+        not put its own pid there."""
+        import json
+
+        from raven_everos import server as _server
+
+        _pin_llm_role(everos_toml)
+        _server._write_pidfile(77, base_url="http://localhost:18791", root=everos_toml.parent)
+        monkeypatch.setattr(_server, "_is_everos_server", lambda pid: pid == 77)
+
+        _server._start_server_if_unlocked("http://localhost:18791")
+
+        assert json.loads((tmp_path / "everos-server.pid").read_text())["pid"] == 77
+
+    def test_a_pidfile_naming_a_dead_server_is_replaced(self, everos_toml, tmp_path, monkeypatch) -> None:
+        import json
+
+        from raven_everos import server as _server
+
+        _pin_llm_role(everos_toml)
+        _server._write_pidfile(77, base_url="http://localhost:18791", root=everos_toml.parent)
+        monkeypatch.setattr(_server, "_is_everos_server", lambda pid: False)
+
+        _server._start_server_if_unlocked("http://localhost:18791")
+
+        assert json.loads((tmp_path / "everos-server.pid").read_text())["pid"] == 4242
+
 
 class TestThePrimitivesAgainstTheRealOS:
     """The four OS-touching helpers, unmocked.
@@ -763,7 +804,7 @@ class TestDeadChildDetection:
             return False
 
         with patch("raven_everos.server._probe_health", side_effect=_probe):
-            with pytest.raises(RuntimeError, match="is still starting"):
+            with pytest.raises(EverosStillStartingError, match="is still starting"):
                 await ensure_everos_server("http://localhost:18791", timeout=1.0)
 
         # One pre-loop probe plus one per 0.5s poll interval across a 1s budget.
@@ -874,7 +915,7 @@ class TestEnsureEverosServer:
                 "raven_everos.server.get_logs_dir",
                 return_value=tmp_path,
             ),
-            pytest.raises(RuntimeError, match="is still starting"),
+            pytest.raises(EverosStillStartingError, match="is still starting"),
         ):
             await ensure_everos_server("http://localhost:18791", timeout=0.05)
 
@@ -1079,6 +1120,182 @@ class TestTheWrittenAddressIsVerified:
 
         with pytest.raises(RuntimeError, match="did not take effect"):
             _server._start_server_if_unlocked("http://localhost:18791")
+
+
+class TestWindowsProcessIdentification:
+    """Native Windows has no ``ps``: the command line comes from WMI through
+    PowerShell, and it prints the executable quoted with its extension, which
+    the bare marker never matched."""
+
+    _CMDLINE = '"C:\\py\\python.exe" "C:\\venv\\Scripts\\everos.exe" server start --root C:\\home\\everos-root'
+
+    def test_the_command_line_is_asked_of_wmi(self, monkeypatch) -> None:
+        import subprocess
+
+        from raven_everos.server import _cmdline_of, _is_everos_server
+
+        seen: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout=self._CMDLINE + "\r\n", stderr="")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        assert _cmdline_of(4242) == self._CMDLINE
+        assert _is_everos_server(4242) is True, "the quoted .exe shape is still an everos server"
+        assert seen[0][0] == "powershell" and "ProcessId = 4242" in seen[0][-1]
+
+    def test_the_posix_shape_still_matches(self) -> None:
+        from raven_everos.server import _SERVER_CMDLINE_RE
+
+        assert _SERVER_CMDLINE_RE.search("/Users/x/.venv/bin/python3 /Users/x/.venv/bin/everos server start --root /r")
+        assert _SERVER_CMDLINE_RE.search("/usr/bin/vim everos-notes server start.txt") is None
+
+    def test_a_process_that_is_gone_reads_as_no_command_line(self, monkeypatch) -> None:
+        import subprocess
+
+        from raven_everos.server import _cmdline_of, _is_everos_server
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        )
+
+        assert _cmdline_of(4242) == ""
+        assert _is_everos_server(4242) is False
+
+    def test_the_listening_port_comes_from_the_tcp_table(self, monkeypatch) -> None:
+        """No lsof, no /proc: the TCP table is asked, for the launcher and its
+        descendants -- the socket belongs to the base interpreter two launchers
+        down from ``everos.exe``."""
+        import subprocess
+
+        from raven_everos.server import _listening_port
+
+        seen: list[list[str]] = []
+
+        def fake_run(argv, **kwargs):
+            seen.append(argv)
+            return subprocess.CompletedProcess(argv, 0, stdout="18791\r\n", stderr="")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        assert _listening_port(4242) == 18791
+        script = seen[0][-1]
+        assert "$ids = @(4242)" in script and "ParentProcessId" in script and "Get-NetTCPConnection" in script
+
+    def test_no_listener_reads_as_no_port(self, monkeypatch) -> None:
+        import subprocess
+
+        from raven_everos.server import _listening_port
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+        )
+
+        assert _listening_port(4242) is None
+
+    def test_a_lookup_that_failed_is_not_a_process_that_is_gone(self, monkeypatch) -> None:
+        """PowerShell missing or blocked, WMI wedged, the timeout hit: the
+        answer is unknown, and a stop keeps waiting rather than declaring the
+        server gone, deleting the pidfile and starting a second one against
+        the lock the first still holds."""
+        import subprocess
+
+        from raven_everos.server import _cmdline_of, _is_everos_server
+
+        def refuse(argv, **kwargs):
+            raise OSError("powershell is not available")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(subprocess, "run", refuse)
+
+        assert _cmdline_of(4242) is None
+        assert _is_everos_server(4242) is None
+
+    def test_a_powershell_that_exits_with_an_error_is_also_unknown(self, monkeypatch) -> None:
+        import subprocess
+
+        from raven_everos.server import _cmdline_of
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, stdout="", stderr="blocked")
+        )
+
+        assert _cmdline_of(4242) is None
+
+
+class TestStoppingOnWindows:
+    """Windows has no SIGTERM. The request is Ctrl-Break to the process group
+    the spawn created; a server that ignores it, or one no group can be
+    addressed to, gets TerminateProcess -- the stop every server there had."""
+
+    @pytest.fixture(autouse=True)
+    def _windows(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        # CTRL_BREAK_EVENT's value there; the attribute does not exist here.
+        monkeypatch.setattr(everos_server, "_GRACEFUL_SIGNAL", 21)
+        monkeypatch.setattr(everos_server, "_WINDOWS_GRACE_S", 0.0)
+        monkeypatch.setattr(everos_server.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(everos_server, "_pidfile_path", lambda: tmp_path / "everos-server.pid")
+
+    def test_ctrl_break_first_and_terminate_only_when_ignored(self, monkeypatch) -> None:
+        signalled: list[int] = []
+        monkeypatch.setattr(everos_server.os, "kill", lambda _pid, sig: signalled.append(sig))
+        alive = iter([True, True, False])
+        monkeypatch.setattr(everos_server, "_is_everos_server", lambda _p: next(alive, False))
+
+        assert everos_server.stop_pid(4242) is everos_server.StopOutcome.STOPPED
+        assert signalled == [21, everos_server.signal.SIGTERM]
+
+    def test_a_server_that_acts_on_ctrl_break_is_never_terminated(self, monkeypatch) -> None:
+        signalled: list[int] = []
+        monkeypatch.setattr(everos_server.os, "kill", lambda _pid, sig: signalled.append(sig))
+        monkeypatch.setattr(everos_server, "_is_everos_server", lambda _p: False)
+
+        assert everos_server.stop_pid(4242) is everos_server.StopOutcome.STOPPED
+        assert signalled == [21]
+
+    def test_a_server_outside_any_group_is_terminated_at_once(self, monkeypatch) -> None:
+        """An older raven's server, spawned without a group: Ctrl-Break has no
+        address, and the stop must not be reported as undeliverable."""
+        signalled: list[int] = []
+
+        def kill(_pid, sig):
+            signalled.append(sig)
+            if sig == 21:
+                raise OSError("not a process group")
+
+        monkeypatch.setattr(everos_server.os, "kill", kill)
+        monkeypatch.setattr(everos_server, "_is_everos_server", lambda _p: False)
+
+        assert everos_server.stop_pid(4242) is everos_server.StopOutcome.STOPPED
+        assert signalled == [21, everos_server.signal.SIGTERM]
+
+    def test_an_unknown_answer_keeps_the_stop_waiting(self, monkeypatch) -> None:
+        signalled: list[int] = []
+        monkeypatch.setattr(everos_server.os, "kill", lambda _pid, sig: signalled.append(sig))
+        monkeypatch.setattr(everos_server, "_is_everos_server", lambda _p: None)
+
+        assert everos_server.stop_pid(4242, timeout=0.05) is everos_server.StopOutcome.STILL_DRAINING
+        assert everos_server.signal.SIGTERM in signalled, "the bounded fallback still fires"
+
+    def test_the_child_gets_a_process_group_of_its_own(self, monkeypatch) -> None:
+        import subprocess
+
+        monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+
+        assert everos_server._spawn_kwargs() == {"creationflags": 0x200}
+
+    def test_a_posix_child_gets_a_session_of_its_own(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+
+        assert everos_server._spawn_kwargs() == {"start_new_session": True}
 
 
 class TestParsingLsofListenOutput:
@@ -1427,11 +1644,31 @@ class TestRestartingForAConfigChange:
         """No holder is not a failure: the person just configured memory, and
         starting what they configured is what the save meant."""
         seen = self._wire(monkeypatch, stop=None)
+        monkeypatch.setattr(everos_server, "_probe_health", lambda _url: False)
 
         await self._run(seen)
 
         assert seen["ensure"] == ["http://127.0.0.1:18791"]
         assert seen["result"] == [(True, None)]
+
+    async def test_a_server_that_answers_but_cannot_be_named_is_not_reported_applied(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A lookup that failed, or a pidfile lost on Windows: something serves
+        the address and the lock cannot say what. Adopting it would report the
+        save as applied over a server still running the old configuration."""
+        seen = self._wire(monkeypatch, stop=None)
+        monkeypatch.setattr(everos_server, "_probe_health", lambda _url: True)
+
+        await self._run(seen)
+
+        assert seen["ensure"] == []
+        assert seen["result"] == [
+            (
+                False,
+                "the process serving it could not be identified, so it was not restarted; restart the memory service yourself to pick this up.",
+            )
+        ]
 
     async def test_a_startup_failure_reaches_the_caller_verbatim(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen = self._wire(
@@ -1478,23 +1715,12 @@ class TestThePiecesTheChainIsMadeOf:
 
         assert everos_server.precheck_spawn() is None
 
-    def test_the_precheck_refuses_windows_before_asking_anything_else(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The settings-page restart chain reads this first; on Windows it must
-        report the platform, not stop a server and then fail to spawn one."""
-        monkeypatch.setattr("raven_everos.config.everos_role_configured", lambda _s: True)
-        monkeypatch.setattr(everos_server, "_inotify_gate", lambda: None)
-        monkeypatch.setattr(sys, "platform", "win32")
-
-        answer = everos_server.precheck_spawn()
-
-        assert answer and "Windows" in answer
-
     def test_stopping_a_root_nothing_is_serving_is_not_a_failure(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """None, not an outcome: there was nothing to stop, which is what lets
         the chain go on and start one."""
-        monkeypatch.setattr(everos_server, "lock_holder", lambda _root: None)
+        monkeypatch.setattr(everos_server, "lock_holder", lambda _root, **_kw: None)
 
         assert everos_server.stop_for_reload(tmp_path) is None
 
@@ -1503,7 +1729,7 @@ class TestThePiecesTheChainIsMadeOf:
         process the lock just identified, which is the state the lock lookup
         exists to get out of."""
         asked: list[int] = []
-        monkeypatch.setattr(everos_server, "lock_holder", lambda _root: SimpleNamespace(pid=4321))
+        monkeypatch.setattr(everos_server, "lock_holder", lambda _root, **_kw: SimpleNamespace(pid=4321))
         monkeypatch.setattr(
             everos_server, "stop_pid", lambda pid: asked.append(pid) or everos_server.StopOutcome.STOPPED
         )
@@ -1674,8 +1900,13 @@ class TestRoleDigest:
         everos_server.record_role_digest(tmp_path / "no" / "such" / "root")
 
 
-class TestStaleCredentialRestart:
-    """``ensure_everos_server`` is the door every session passes through."""
+class TestStaleServerRestart:
+    """``ensure_everos_server`` is the door every session passes through.
+
+    A healthy server is adopted only when it holds the credentials raven holds
+    now and runs the everos raven installs now; either being stale sends it
+    through precheck, stop and spawn.
+    """
 
     @pytest.fixture(autouse=True)
     def _no_ambient_role_env(self, monkeypatch) -> None:
@@ -1685,6 +1916,123 @@ class TestStaleCredentialRestart:
         from raven_everos import config as ue
 
         ue._BOUND_HERE.clear()
+
+    @pytest.mark.asyncio
+    async def test_a_server_from_before_the_upgrade_is_replaced(self, everos_toml, tmp_path, monkeypatch) -> None:
+        """Raven reuses whatever answers on the port, so moving the everos pin
+        left the old server serving until something unrelated restarted it --
+        every surface green, the new adapter talking to the old substrate. The
+        running version is read from ``/health``, so a server nothing recorded
+        a digest for is covered too."""
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        monkeypatch.setattr(everos_server, "installed_everos_version", lambda: "1.4.1")
+        monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: "1.2.3")
+
+        order: list[str] = []
+        monkeypatch.setattr(everos_server, "precheck_spawn", lambda: order.append("precheck") or "")
+        monkeypatch.setattr(
+            everos_server,
+            "stop_for_reload",
+            lambda _root: order.append("stop") or everos_server.StopOutcome.STOPPED,
+        )
+        monkeypatch.setattr("raven_everos.server._start_server_if_unlocked", lambda *a, **kw: order.append("spawn"))
+        monkeypatch.setattr("raven_everos.server.get_logs_dir", lambda: tmp_path)
+
+        with (
+            patch("raven_everos.server._probe_health", side_effect=[True, True]),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            await ensure_everos_server("http://localhost:18791", timeout=5.0)
+
+        assert order == ["precheck", "stop", "spawn"]
+
+    @pytest.mark.asyncio
+    async def test_a_server_on_the_installed_version_is_adopted(self, everos_toml, monkeypatch) -> None:
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        monkeypatch.setattr(everos_server, "installed_everos_version", lambda: "1.4.1")
+        monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: "1.4.1")
+        stop = MagicMock()
+        monkeypatch.setattr(everos_server, "stop_for_reload", stop)
+
+        with (
+            patch("raven_everos.server._probe_health", return_value=True),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+
+        stop.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_version_that_cannot_be_read_is_not_a_verdict(self, everos_toml, monkeypatch) -> None:
+        """A ``/health`` without a version says nothing about staleness; the
+        credential comparison alone decides, and here it says adopt."""
+        _pin_llm_role(everos_toml)
+        everos_toml.parent.mkdir(parents=True, exist_ok=True)
+        everos_server.record_role_digest(everos_toml.parent)
+        monkeypatch.setattr(everos_server, "installed_everos_version", lambda: "1.4.1")
+        monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: None)
+        stop = MagicMock()
+        monkeypatch.setattr(everos_server, "stop_for_reload", stop)
+
+        with (
+            patch("raven_everos.server._probe_health", return_value=True),
+            patch("raven_everos.server._speaks_our_api", return_value=True),
+        ):
+            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+
+        stop.assert_not_called()
+
+    def test_the_running_version_is_read_from_health(self, monkeypatch, real_running_everos_version) -> None:
+        import httpx
+
+        seen: list[str] = []
+
+        def fake_get(url, timeout):
+            seen.append(url)
+            return httpx.Response(200, json={"status": "ok", "version": "1.2.3"})
+
+        monkeypatch.setattr(httpx, "get", fake_get)
+
+        assert real_running_everos_version("http://localhost:18791") == "1.2.3"
+        assert seen == ["http://localhost:18791/health"]
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            lambda url, timeout: (_ for _ in ()).throw(ConnectionError("gone")),
+            lambda url, timeout: __import__("httpx").Response(200, json={"status": "ok"}),
+            lambda url, timeout: __import__("httpx").Response(200, json=["not", "a", "dict"]),
+        ],
+    )
+    def test_a_version_that_cannot_be_read_is_none(self, monkeypatch, answer, real_running_everos_version) -> None:
+        import httpx
+
+        monkeypatch.setattr(httpx, "get", answer)
+
+        assert real_running_everos_version("http://localhost:18791") is None
+
+    def test_the_installed_version_is_the_package_metadata(self, monkeypatch) -> None:
+        import importlib.metadata as md
+
+        assert everos_server.installed_everos_version() == md.version("everos")
+
+        def missing(name):
+            raise md.PackageNotFoundError(name)
+
+        monkeypatch.setattr(md, "version", missing)
+        assert everos_server.installed_everos_version() is None
+
+    def test_a_root_the_user_manages_is_never_called_stale(self, everos_toml, monkeypatch) -> None:
+        """Their server, their restart: the version gap is reported nowhere here."""
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: False)
+        monkeypatch.setattr(everos_server, "installed_everos_version", lambda: "1.4.1")
+        monkeypatch.setattr(everos_server, "running_everos_version", lambda _url: "1.2.3")
+
+        assert everos_server.stale_reason("http://localhost:18791", everos_toml.parent) is None
 
     @pytest.mark.asyncio
     async def test_a_stale_credential_stops_and_respawns(self, everos_toml, tmp_path, monkeypatch) -> None:
@@ -1744,7 +2092,11 @@ class TestStaleCredentialRestart:
         spawn.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_a_stop_that_does_not_finish_keeps_the_old_server(self, everos_toml, monkeypatch) -> None:
+    async def test_a_stop_that_does_not_finish_is_not_adopted(self, everos_toml, monkeypatch) -> None:
+        """The request is out and cannot be taken back: the server has closed its
+        port and is finishing what it had. Reported as ready, a gateway would
+        sit on it without memory until it was restarted by hand; refused, the
+        probes start a new one once the old one is gone."""
         _pin_llm_role(everos_toml, api_key="old-key")
         everos_toml.parent.mkdir(parents=True, exist_ok=True)
         everos_server.record_role_digest(everos_toml.parent)
@@ -1758,8 +2110,9 @@ class TestStaleCredentialRestart:
         with (
             patch("raven_everos.server._probe_health", return_value=True),
             patch("raven_everos.server._speaks_our_api", return_value=True),
+            pytest.raises(RuntimeError, match="still shutting down"),
         ):
-            assert await ensure_everos_server("http://localhost:18791", timeout=5.0) is None
+            await ensure_everos_server("http://localhost:18791", timeout=5.0)
 
         spawn.assert_not_called()
 

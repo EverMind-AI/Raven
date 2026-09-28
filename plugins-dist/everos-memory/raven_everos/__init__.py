@@ -32,4 +32,4 @@ What the host may reach, declared rather than assumed:
 Anything else in the package is the plugin's own.
 """
 
-__version__ = "1.1.0"
+__version__ = "1.4.0"

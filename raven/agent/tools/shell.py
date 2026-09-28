@@ -119,12 +119,27 @@ class ExecTool(Tool):
     # that does not exist under that name.
     _GLOB_CHARS = frozenset("*?[")
 
+    def to_schema(self) -> dict[str, Any]:
+        """This call's shape, rendered fresh for every model call.
+
+        Authored rather than inherited on purpose: ``ToolRegistry`` serves a
+        tool from the copy it took at registration unless the tool writes its
+        own ``to_schema``, and the machine lane below depends on the registry,
+        which can be written mid-session. Served from that copy, a process that
+        started with no machine kept an ``exec`` without ``machine`` after the
+        first ``ops_connection_add`` -- while that tool's reply, the typed-ssh
+        refusal and the coding guide all sent the model to ``machine=<id>``
+        (reviewed 2026-09-24). The shape moves only when the registry goes from
+        empty to not, so the array stays stable across calls otherwise.
+        """
+        return super().to_schema()
+
     @property
     def description(self) -> str:
         # Two descriptions, because the second sentence is a lie for an owner
         # who registered no machines. Read per call rather than fixed at
-        # construction -- the registry can be written mid-session, and the loop
-        # rebuilds the tool schema every turn.
+        # construction -- the registry can be written mid-session, and
+        # ``to_schema`` above is what makes the registry serve this live.
         base = "Execute a shell command and return its output. Use with caution."
         from raven.agent.tools.machine_exec import machines_registered
 
@@ -231,6 +246,24 @@ class ExecTool(Tool):
             from raven.agent.tools.machine_exec import run_on_machine
 
             return await run_on_machine(command, connection=machine, cwd=working_dir)
+        # Same import discipline as above: the registry is read only to
+        # recognise a registered address, and a registry that cannot be read
+        # recognises nothing.
+        from raven.agent.tools.machine_exec import raw_ssh_target
+
+        if (row := raw_ssh_target(command)) is not None:
+            # Typed ssh to a registered machine is the registry bypassed: the
+            # cap, the process-group sweep and the ledger all live on the
+            # other two paths. Refused by name so the model learns the path,
+            # not just that this one closed.
+            conn_id = str(row.get("id") or "").strip()
+            return (
+                f"Error: this command reaches {row.get('display_name') or conn_id} over raw ssh from "
+                f"this computer, and that machine is registered as {conn_id!r}. Look at it with "
+                f"exec(machine={conn_id!r}) (capped at 60s, nothing left running), and hand anything "
+                "longer, or anything that must keep running, to the on-call agent's ops_submit "
+                "(budget, dedup, ledger). scp and rsync to it are still fine here. Nothing was run."
+            )
 
         cwd = self._cwd_for(working_dir)
 

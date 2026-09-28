@@ -1006,6 +1006,36 @@ def role_is_env_managed(section: str) -> bool:
     return not all(k in _BOUND_HERE for k in keys)
 
 
+_WITHHELD_ROLES: dict[str, tuple[str, str]] = {}
+
+
+def withhold_role(section: str, pin: tuple[str, str]) -> None:
+    """Emit ``section`` empty on every spawn for as long as raven holds ``pin``.
+
+    For a pin that cannot serve -- an embedding model narrower than the index
+    -- EverOS would fail every store and search; without the role it runs the
+    lesser search and keeps storing. Process-wide, because the digest and the
+    spawn read the same environment and must agree. Bound to the pin it was
+    measured on: the fix the notice asks for is a different model, and that
+    has to reach the very next spawn on its own -- the settings page restarts
+    the server without measuring anything, and nothing else would release it.
+    """
+    _WITHHELD_ROLES[section] = pin
+
+
+def release_role(section: str) -> None:
+    _WITHHELD_ROLES.pop(section, None)
+
+
+def _is_withheld(section: str) -> bool:
+    pin = _WITHHELD_ROLES.get(section)
+    return pin is not None and pin == role_pin(section)
+
+
+def withheld_roles() -> frozenset[str]:
+    return frozenset(section for section in _WITHHELD_ROLES if _is_withheld(section))
+
+
 def everos_env() -> dict[str, str]:
     """The binding all four roles earn, from raven's own config.
 
@@ -1039,7 +1069,7 @@ def everos_env() -> dict[str, str]:
             # complete endpoint in the environment on purpose.
             continue
         prefix = f"EVEROS_{section.upper()}__"
-        endpoint = resolve_role(section)
+        endpoint = None if _is_withheld(section) else resolve_role(section)
         env[f"{prefix}MODEL"] = endpoint.model if endpoint else ""
         env[f"{prefix}BASE_URL"] = endpoint.base_url if endpoint else ""
         env[f"{prefix}API_KEY"] = endpoint.api_key if endpoint else ""

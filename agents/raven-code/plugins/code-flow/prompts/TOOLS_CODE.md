@@ -33,6 +33,32 @@ the host exec instead; follow that tool's stated limits and failure behavior.
   the timeout ceiling; poll its log with `read_file`. Stop the ones that were
   only scaffolding before you finish
 
+## exec on another machine — when, and how a machine gets listed
+
+- Write here when you can. A case, a script, an input deck: this computer
+  writes them. Go to another machine only to *verify* — one short run where
+  the software is — and only when installing that software here is the wrong
+  move: it needs a GPU or memory this box has not (installed here it would run
+  nowhere), or it is heavy to install (a compiled solver, a system toolchain,
+  a download that outlasts the verification itself). A small library that
+  installs in seconds is installed here, and nobody is asked.
+- Before building, name what the task needs to run — GPU, solver, library,
+  memory. If this box lacks it and installing it here is wrong, look at the
+  machines the owner listed: `exec` takes a `machine` id when any is listed,
+  and an unknown id answers with the list and what each machine has installed.
+  Pick the one that has what the task needs, and say which and why.
+- When none fits, or none is listed at all, ask the owner what
+  `ops_connection_add` says to ask — this computer or another, what they call
+  it, an address if another — and hand their answer to that tool. It reaches
+  the machine before writing anything; ssh's own config fills a port, user or
+  key they left out. The owner is asked once: the machine it writes is the
+  one the on-call agent reads afterwards.
+- Never reach a machine by typing an `ssh user@address` from a task statement
+  or a config file, and never put a key path or an address into a command.
+  The way onto a machine belongs to its registry row, below you; `machine=<id>`
+  is how you use it. Could not verify on the machine? Say so in the hand-off,
+  so the first on-call round is a smoke test and not a full run.
+
 ## read_file / write_file / edit_file — paging, reading before editing
 
 - `read_file` returns 2000 lines per call by default. A large file is NOT fully

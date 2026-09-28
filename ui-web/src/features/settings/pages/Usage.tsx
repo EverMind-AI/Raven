@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 
 import { t } from '../../../i18n/t'
 import { show as toast } from '../../../state/toast'
-import { Card, Row, Rov, Seg, fmt } from '../Fields'
+import { Card, Empty, GLYPH, Row, Seg, fmt } from '../Fields'
 import { UsageWait } from '../Skeletons'
 import * as store from '../store'
 import { isoDay, lastDays } from '../store'
@@ -77,6 +77,9 @@ function Models({ u }: { u: UsageStats }): JSX.Element {
   const most = Math.max(1, ...rows.map((m) => m.calls))
   return (
     <Card title={t('gui.settings.usage.by_model')} raw>
+      {/* A table of headers over one "nothing" row said the range was empty
+          in eight columns; the empty card says it once. */}
+      {!rows.length ? <Empty icon={GLYPH.chart}>{t('gui.settings.usage.none')}</Empty> : (
       <div style={{ overflowX: 'auto' }}>
         <table className="settings-utab">
           <thead>
@@ -101,10 +104,10 @@ function Models({ u }: { u: UsageStats }): JSX.Element {
                 {priced && <td>{m.cost_usd == null ? <span className="settings-dim">{t('gui.settings.usage.no_price')}</span> : money(m.cost_usd)}</td>}
               </tr>
             ))}
-            {!rows.length && <tr><td colSpan={(anyWrite ? 8 : 7) - (priced ? 0 : 1)}><Rov>{t('gui.settings.usage.none')}</Rov></td></tr>}
           </tbody>
         </table>
       </div>
+      )}
     </Card>
   )
 }
@@ -112,15 +115,16 @@ function Models({ u }: { u: UsageStats }): JSX.Element {
 function ToolsTable({ u }: { u: UsageStats }): JSX.Element {
   return (
     <Card title={t('gui.settings.usage.by_tool')} raw>
+      {!u.tools.counts.length ? <Empty icon={GLYPH.chart}>{t('gui.settings.usage.none')}</Empty> : (
       <div style={{ overflowX: 'auto' }}>
         <table className="settings-utab">
           <thead><tr><th>{t('gui.settings.usage.tool')}</th><th>{t('gui.settings.usage.count')}</th></tr></thead>
           <tbody>
             {u.tools.counts.map((c) => <tr key={c.name}><td>{c.name}</td><td>{c.count}</td></tr>)}
-            {!u.tools.counts.length && <tr><td colSpan={2}><Rov>{t('gui.settings.usage.none')}</Rov></td></tr>}
           </tbody>
         </table>
       </div>
+      )}
     </Card>
   )
 }
@@ -172,8 +176,28 @@ export function Usage(): JSX.Element {
         )}
       </Card>
       {u === undefined && <UsageWait />}
-      {u === null && <Card><Row><Rov>{t('gui.settings.usage.unavailable')}</Rov></Row></Card>}
-      {u && (
+      {u === null && (
+        <Card raw>
+          <Empty
+            icon={GLYPH.offline}
+            title={t('gui.settings.usage.unavailable')}
+            /* Cleared rather than reloaded here: the effect above reads whenever
+               the answer is missing, so calling the load as well asked twice. */
+            action={{ label: t('gui.plug.retry'), onClick: () => store.set({ usage: undefined }) }}
+          >
+            {t('gui.settings.usage.unavailable_sub')}
+          </Empty>
+        </Card>
+      )}
+      {/* A range with nothing in it: the gateway answers zeros rather than
+          nothing, and drawn as is that was a row of 0 tiles over two tables
+          saying "nothing" each. One card says it once. */}
+      {u && !u.llm.total.calls && !u.tools.counts.length && (
+        <Card raw>
+          <Empty icon={GLYPH.chart} title={t('gui.settings.usage.empty_t')}>{t('gui.settings.usage.empty_sub')}</Empty>
+        </Card>
+      )}
+      {u && (u.llm.total.calls > 0 || u.tools.counts.length > 0) && (
         <>
           <Tiles u={u} />
           {anyPriced(u) && <Bars u={u} />}

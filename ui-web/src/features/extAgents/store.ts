@@ -4,7 +4,7 @@ import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
-import { isFound, remedyOf, sectionOf, stageOf } from './source'
+import { isFound, remedyOf, runsAgent, sectionOf, stageOf } from './source'
 
 import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
 
@@ -32,31 +32,11 @@ export interface Pending {
   args: ExtAgentActArgs
 }
 
-/* Whether the server may answer this write by running the agent. The gate sends
-   one real prompt through the agent's own backend and waits up to 60s for the
-   reply, so the reader is waiting on a test rather than on a connection being
-   opened, and the row should say so.
-
-   `may`, not `will`: the server also asks whether the row is on and whether the
-   value actually moved, and neither fact travels with the write -- the page
-   posts what is in the field, and only the stored row knows what was there
-   before. Mirroring that here would put the same condition in two layers with
-   nothing holding them together. The two wrong answers do not cost the same:
-   answering yes for a write the server settles without asking puts a word on
-   something that returns in milliseconds, while answering no for one it does
-   ask leaves "connecting" on the row for the length of a real ping. So this
-   errs towards yes.
-
-   `migrate` counts because it is a remove plus an add from the preset, so it
-   goes through the same gate any other add does. A credential and a model are
-   the two fields an update can change that the agent has never been asked
-   about; a rename or a description cannot change what it answers. */
-export const probes = (p: Pending): boolean =>
-  p.op === 'connect' ||
-  p.op === 'migrate' ||
-  p.op === 'model' ||
-  (p.op === 'toggle' && p.args.enabled === true) ||
-  (p.op === 'update' && !!p.args.api_key)
+/* Whether the server may answer this write by running the agent -- the
+   source's `runsAgent`, which also decides whether the read that ends the
+   write probes. Here it picks the word: the reader is waiting on a test rather
+   than on a connection being opened, and the row should say so. */
+export const probes = (p: Pending): boolean => runsAgent(p.op, p.args)
 
 /* The other write that changes whether the agent is on the roster. It reaches no
    gate -- the server pings on the way on and not on the way off -- so it waits
@@ -143,11 +123,12 @@ const remedyFrom = (e: unknown): Remedy | null => remedyOf((e as { data?: { reme
 /* `load(true)` re-measures availability. Opening the page is one caller --
    the section heading there is a fresh answer every time the reader arrives --
    the sheet's re-check button is another, and the wizard's agents step a third,
-   on its own schedule rather than through page navigation. */
-export async function load(probe: boolean): Promise<void> {
+   on its own schedule rather than through page navigation. `rescan` is the
+   re-check's alone: see `ExtAgentsSource.load`. */
+export async function load(probe: boolean, rescan = false): Promise<void> {
   set({ loading: true })
   try {
-    const rows = await source().load(probe)
+    const rows = await source().load(probe, rescan)
     set({ rows, epoch: get().epoch + 1, loading: false })
   } catch (e) {
     set({ loading: false })
@@ -166,6 +147,17 @@ export function open(): void {
 export function close(): void {
   page.show(null)
 }
+
+/* Writes run side by side, and each ends in a whole-roster read that takes
+   as long as a probe. A read that began before a later write landed does not
+   have that write, and painted as read it would offer the later agent as
+   connectable again though its write succeeded. So writes are counted as
+   they start and as they land, and one whose read came back after a later
+   write landed reads the roster again -- with the probe, since the verdicts
+   it carries must be the newer ones too -- until nothing newer has landed
+   under it. */
+let started = 0
+let landed = 0
 
 /* Every write goes through here: one place that repaints from whatever the
    source answered, so no caller has to remember to. A failure is toasted
@@ -186,21 +178,30 @@ export async function run(
      length of the write. Set on success only, or a rejected rename would point
      the sheet at a name no row will ever have and close the drawer. */
   let renamed = ''
+  let gen = ++started
   try {
     rows = await source().act(op, row as ExtAgentRow, args || {})
     if (row && args?.new_name && args.new_name !== row.name) renamed = args.new_name
   } catch (e) {
     const remedy = remedyFrom(e)
     failedWith = remedy ? { detail: failure(e), remedy } : { detail: failure(e) }
-    /* A refused model write may have been checked against a menu the row has
-       since moved off -- it is re-measured behind the page -- so the sheet
-       repaints from the listing as it is now rather than from what it held. */
-    if (op === 'model') rows = await source().load(false).catch(() => rows)
+    /* A refusal repaints from the listing as it is now, never from the rows
+       held when this write started: writes run side by side (five Connects
+       pressed at once), and a slow one that fails would otherwise put back the
+       rows from before the others landed -- rows connected meanwhile read as
+       connectable again. It is also how a refused model pick leaves a menu the
+       row has since moved off, since rows are re-measured behind the page. */
+    rows = await source().load(false).catch(() => get().rows)
     if (!opts.quiet) toast(t('gui.agent.failed', { detail: failedWith.detail }))
   }
-  const landed: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
-  if (renamed && get().sheet === row?.name) landed.sheet = renamed
-  set(landed)
+  while (landed > gen) {
+    gen = ++started
+    rows = await source().load(true).catch(() => get().rows)
+  }
+  landed = gen
+  const next: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
+  if (renamed && get().sheet === row?.name) next.sheet = renamed
+  set(next)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
   return failedWith
@@ -255,10 +256,20 @@ export function disconnectRow(row: ExtAgentRow): void {
 
 /* The credential, and the connect that spends it: an entry that exists takes
    the key as an edit; one that does not is written from its preset with the
-   key in hand. */
-export function saveKey(row: ExtAgentRow, api_key: string): void {
+   key in hand, and with whatever the reader wrote about it while it was still
+   a preset. An edit on a row that is off is followed by the switch: the
+   server does not prove a key written to a row that is off -- only the switch
+   asks the endpoint -- so the edit alone would store it untried and leave the
+   row off, and to the reader the two are one press. Not when the edit itself
+   was refused. */
+export async function saveKey(row: ExtAgentRow, api_key: string): Promise<void> {
   if (!api_key) return
-  void act(row, row.configured ? 'update' : 'connect', { api_key })
+  if (!row.configured) {
+    const description = get().drafts[row.name]
+    return act(row, 'connect', description ? { api_key, description } : { api_key })
+  }
+  await act(row, 'update', { api_key })
+  if (!row.enabled && !get().failed[row.name]) await act(row, 'toggle', { enabled: true })
 }
 
 /* What this agent is good at, as the reader words it. A row that exists takes
@@ -283,9 +294,12 @@ export function clearModel(row: ExtAgentRow): Promise<void> {
 export const draftOf = (name: string): string | undefined => get().drafts[name]
 
 /* Measure the machine again for one absent row, and remember when it is still
-   absent afterwards -- that is the one answer the sheet has to say out loud. */
+   absent afterwards -- that is the one answer the sheet has to say out loud.
+   Again means from the shell's PATH as it is now: an agent is usually installed
+   while this page is open, and its installer's PATH line is invisible to the
+   environment the gateway captured when it started. */
 export async function recheck(row: ExtAgentRow): Promise<void> {
-  await load(true)
+  await load(true, true)
   const now = get().rows.find((r) => r.name === row.name)
   const still = !!now && sectionOf(now) === 'missing'
   const rest = get().stillMissing.filter((name) => name !== row.name)

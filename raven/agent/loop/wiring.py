@@ -14,6 +14,7 @@ from raven.agent.loop._shared import (
     Any,
     AskUserTool,
     Callable,
+    ConnectionAddTool,
     EditFileTool,
     ExecTool,
     FindTool,
@@ -935,6 +936,13 @@ class WiringMixin:
                 extra_allowed_dirs=(self.workspace,),
             )
         )
+        # The registry writer beside exec's machine channel, for the products
+        # that run work on the owner's machines. Registered on the flag rather
+        # than withheld: this is a deploy-time product choice, not a credential
+        # that may arrive mid-session, and five product tool faces are pinned
+        # against a tool boarding uninvited.
+        if self.connection_add:
+            self.tools.register(ConnectionAddTool())
         # web_search and the media tools register whatever the config holds and
         # are *withheld* while their section asks for nothing -- see
         # ``_unconfigured_tool_names``. Registration used to be the gate, which

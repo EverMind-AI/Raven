@@ -111,7 +111,6 @@ def test_the_manifest_contributes_the_watcher_service_and_the_ops_tools() -> Non
         "ops_note",
         "ops_campaigns",
         "ops_connections",
-        "ops_connection_add",
         "ops_declare",
         "ops_kill",
         "ops_outputs",

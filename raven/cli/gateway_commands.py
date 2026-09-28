@@ -309,6 +309,41 @@ def _retire_generation_watchers(swaps: "SwapCoordinator", agent) -> None:
             logger.exception("skill watcher stop failed during shutdown; continuing")
 
 
+def _work_in_flight(agent, brokers, scheduler) -> dict | None:
+    """What a config swap or an upgrade restart would cut off, or None when idle.
+
+    Both refuse on this one answer rather than each keeping a copy: turns in
+    flight, sub-agents still running, and questions waiting on any surface --
+    the IM round-trip's broker and the page's.
+    """
+    questions = sum(broker.pending_count() for broker in brokers if broker is not None)
+    subagents = agent.subagents.get_running_count()
+    in_flight = agent.is_processing or (scheduler is not None and scheduler.has_running())
+    if in_flight or questions or subagents:
+        return {"subagents": subagents, "questions": questions}
+    return None
+
+
+def _hand_page_the_gateway(stop, busy) -> None:
+    """Give the mounted page this gateway's own stop, busy check and supervisor.
+
+    The page's upgrade restarts the whole process, so it needs the stop the
+    control plane uses and the busy check a swap refuses on. The supervisor is
+    trusted only as this process's own parent: web.json outlives the run that
+    wrote it, and a supervisor that is not ours would never bring this gateway
+    back.
+    """
+    import os
+
+    from raven.cli.serve_commands import _read_web_state
+    from raven.rpc.serve_control import SERVE
+
+    supervisor = _read_web_state()
+    if supervisor is not None and supervisor != os.getppid():
+        supervisor = None
+    SERVE.hand_over(stop, busy, supervisor)
+
+
 def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, above the ceiling)
     """Attach the ``gateway`` group to ``app``: the daemon as the bare command,
     the control-plane verbs (reload / status / stop) as sub-commands."""
@@ -360,6 +395,17 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
         """Start the Raven gateway."""
         if ctx.invoked_subcommand is not None:
             return
+        # Before the instance lock, not after: the wait inside can last the
+        # whole install, and holding the lock through it is what would stop the
+        # gateway that the finished install is supposed to bring back.
+        #
+        # `raven serve` has guarded this since the marker existed; the gateway
+        # is the surface `raven web` actually supervises, so a restart landing
+        # inside an upgrade window came up on a half-written environment and
+        # served the placeholder page for the rest of its life.
+        from raven.cli.serve_commands import _refuse_incomplete_install
+
+        _refuse_incomplete_install("raven gateway")
         from raven.agent.loop.bundles import HostWiring, TurnPolicy
         from raven.agent.loop.recovery import limits_from_defaults
         from raven.agent.workdir import WorkdirPolicy, WorkdirResolver, validate_override
@@ -783,6 +829,11 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     except OSError as exc:
                         logger.warning("page mount failed ({}); gateway continues without the page", exc)
                 if page_mount is not None:
+                    # On every mount, not once: a swap's teardown disarms the
+                    # page and the next generation mounts it afresh. Both names
+                    # are bound later in `run`, before any bind runs. Pinned by
+                    # source in tests/test_cli_gateway_commands.py.
+                    _hand_page_the_gateway(_request_stop, _busy)  # pragma: no cover
                     # The page is what shows the deck template gallery, so its
                     # covers are drawn now, in the background, rather than on
                     # the click that opens it; a no-op without the engine or
@@ -1064,25 +1115,27 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     "page": {"mounted": page_mount is not None, "url": getattr(page_mount, "url", None)},
                 }
 
-            async def _shutdown() -> None:
+            def _request_stop() -> None:  # pragma: no cover - closure state; pinned by source
                 nonlocal shutdown_requested
                 shutdown_requested = True
                 if main_task is not None:
-                    # One tick later, so the {ok: true} reply leaves before
-                    # the teardown closes the control socket.
+                    # One tick later, so a reply already queued -- the control
+                    # plane's {ok: true}, the page's system.upgrade result --
+                    # leaves before the teardown closes its socket.
                     asyncio.get_running_loop().call_soon(main_task.cancel)
 
+            async def _shutdown() -> None:  # pragma: no cover - closure over run(); pinned by source
+                _request_stop()
+
+            def _busy() -> dict | None:  # pragma: no cover - closure over run(); logic in _work_in_flight
+                page_questions = page_mount.question_broker if page_mount is not None else None
+                return _work_in_flight(agent, [question_broker, page_questions], gw_scheduler)
+
             async def _reload(force: bool) -> dict:
-                # A swap cancels every in-flight turn, sub-agent and pending
-                # question; refuse while there is work unless told to force.
                 if not force:
-                    questions = question_broker.pending_count() if question_broker is not None else 0
-                    if page_mount is not None:
-                        questions += page_mount.question_broker.pending_count()
-                    subagents = agent.subagents.get_running_count()
-                    in_flight = agent.is_processing or (gw_scheduler is not None and gw_scheduler.has_running())
-                    if in_flight or questions or subagents:
-                        return {"ok": False, "reason": "busy", "subagents": subagents, "questions": questions}
+                    busy = _busy()  # pragma: no cover
+                    if busy is not None:  # pragma: no cover
+                        return {"ok": False, "reason": "busy", **busy}
                 return await _request_swap()
 
             control_dispatcher = Dispatcher()

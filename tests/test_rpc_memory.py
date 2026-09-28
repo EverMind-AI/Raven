@@ -6,7 +6,6 @@ HTTP; tests replace :func:`memory._post` so no sockets open.
 
 from __future__ import annotations
 
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +18,9 @@ from tests._everos_presence import everos_plugin_absent
 @pytest.fixture(autouse=True)
 def fake_cfg(monkeypatch):
     monkeypatch.setattr(memory, "_cfg", lambda: ("http://x", "u1", "a1"))
+    # A full server, so no test pays a real capability probe: ``http://x`` is
+    # a hostname, and resolving it cost the one search test five seconds.
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=True))
 
 
 def _post_returning(payloads):
@@ -92,7 +94,7 @@ async def test_list_projects_episode_rows(monkeypatch):
     post, calls = _post_returning(payloads)
     monkeypatch.setattr(memory, "_post", post)
     out = await memory.memory_list({"kind": "episode", "page": 2, "page_size": 10})
-    assert calls[0][0] == "/api/v1/memory/get"
+    assert calls[0][0] == "/api/v2/memory/get"
     assert calls[0][1]["page"] == 2
     assert out["total"] == 41 and out["page"] == 2
     item = out["items"][0]
@@ -124,7 +126,7 @@ async def test_list_with_query_uses_search(monkeypatch):
     post, calls = _post_returning(payloads)
     monkeypatch.setattr(memory, "_post", post)
     out = await memory.memory_list({"kind": "agent_skill", "q": "fallback"})
-    assert calls[0][0] == "/api/v1/memory/search"
+    assert calls[0][0] == "/api/v2/memory/search"
     assert calls[0][1]["agent_id"] == "a1"
     assert out["page"] == 1
     assert out["items"][0]["score"] == 0.9
@@ -230,49 +232,6 @@ def _everos_configured(monkeypatch, backend="everos"):
 
 
 @pytest.mark.asyncio
-async def test_windows_says_memory_is_not_here_yet(monkeypatch):
-    """Nothing to probe: the server cannot run on Windows, so the page says so
-    instead of a connection refused and a retry button that cannot help."""
-    monkeypatch.setattr(sys, "platform", "win32")
-    _everos_configured(monkeypatch)
-
-    async def _post(*args, **kwargs):
-        raise AssertionError("no request may leave for a server that cannot run here")
-
-    monkeypatch.setattr(memory, "_post", _post)
-
-    stats = await memory.memory_stats({})
-    listing = await memory.memory_list({"kind": "episode"})
-
-    assert stats["ok"] is False and "Windows" in stats["note"]
-    assert listing["items"] == [] and "Windows" in listing["note"]
-
-
-@pytest.mark.asyncio
-async def test_windows_without_the_plugin_names_the_platform_not_the_install(monkeypatch):
-    """Telling a Windows install to install the plugin sends it to fetch
-    something that cannot run there."""
-    monkeypatch.setattr(sys, "platform", "win32")
-
-    with everos_plugin_absent():
-        stats = await memory.memory_stats({})
-
-    assert "Windows" in stats["note"] and "everos-memory" not in stats["note"]
-
-
-@pytest.mark.asyncio
-async def test_windows_with_another_backend_still_names_that_backend(monkeypatch):
-    """The platform sentence is for an install pointed at EverOS. One whose
-    memory runs on mem0 has memory, and saying otherwise would be false."""
-    monkeypatch.setattr(sys, "platform", "win32")
-    _everos_configured(monkeypatch, backend="mem0")
-
-    stats = await memory.memory_stats({})
-
-    assert "mem0" in stats["note"] and "Windows" not in stats["note"]
-
-
-@pytest.mark.asyncio
 async def test_the_configured_backend_gets_no_note(monkeypatch):
     """The note exists to explain an empty page, not to decorate a working one."""
     monkeypatch.setattr(
@@ -287,3 +246,74 @@ async def test_the_configured_backend_gets_no_note(monkeypatch):
     stats = await memory.memory_stats({})
 
     assert stats["note"] is None
+
+
+def _server_that(embedding: bool | None, rerank: bool | None):
+    return lambda base_url: SimpleNamespace(available=lambda s: {"embedding": embedding, "rerank": rerank}.get(s))
+
+
+@pytest.mark.asyncio
+async def test_search_asks_for_what_the_server_can_do(monkeypatch):
+    """No embedding: keyword, whatever the track. Without it the server
+    answered 422 and the page called it unreachable."""
+    post, calls = _post_returning([{"data": {"agent_cases": []}}])
+    monkeypatch.setattr(memory, "_post", post)
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=False, rerank=False))
+
+    await memory.memory_list({"kind": "agent_case", "q": "x"})
+
+    assert calls[0][1]["method"] == "keyword"
+    assert "enable_llm_rerank" not in calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_the_agent_tabs_search_by_vector_without_a_cross_encoder(monkeypatch):
+    """The default install has no rerank role. The LLM rerank lane the server
+    offers instead measured 10-12 s a search -- past this page's timeout once
+    the reranker has anything to read -- so the page asks for the dense half
+    on its own: under two seconds, no LLM call."""
+    post, calls = _post_returning([{"data": {"agent_skills": []}}])
+    monkeypatch.setattr(memory, "_post", post)
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=False))
+
+    await memory.memory_list({"kind": "agent_skill", "q": "x"})
+
+    assert calls[0][1]["method"] == "vector"
+    assert "enable_llm_rerank" not in calls[0][1]
+
+
+def test_a_timeout_says_what_it_waited_for():
+    """``str()`` of an httpx timeout is empty, which left the page reading
+    ``everos unreachable:`` and nothing after the colon."""
+    import httpx
+
+    assert memory._everos_error(httpx.ReadTimeout("")) == "everos did not answer within 15s"
+
+
+@pytest.mark.asyncio
+async def test_a_full_server_gets_the_plain_request_and_the_profile_tab_opts_in(monkeypatch):
+    post, calls = _post_returning([{"data": {"profiles": []}}])
+    monkeypatch.setattr(memory, "_post", post)
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=True))
+
+    await memory.memory_list({"kind": "profile", "q": "x"})
+
+    assert calls[0][1] == {"user_id": "u1", "query": "x", "top_k": 20, "include_profile": True}
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_carries_the_servers_own_sentence(monkeypatch):
+    import httpx
+
+    async def _post(base_url, path, body):
+        request = httpx.Request("POST", "http://x" + path)
+        response = httpx.Response(
+            422, json={"error": {"code": "x", "message": "set enable_llm_rerank=true"}}, request=request
+        )
+        raise httpx.HTTPStatusError("422", request=request, response=response)
+
+    monkeypatch.setattr(memory, "_post", _post)
+    monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=None, rerank=None))
+
+    with pytest.raises(InternalError, match="set enable_llm_rerank=true"):
+        await memory.memory_list({"kind": "agent_case", "q": "x"})

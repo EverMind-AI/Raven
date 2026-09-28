@@ -78,6 +78,33 @@ def _report_refusals(refusals: list) -> None:
         _ONE_SHOT_EXIT["code"] = _ONE_SHOT_EXIT["code"] or EXIT_ACTIONS_REFUSED
 
 
+def _report_unanswered(questions: list) -> None:
+    """Say which questions nobody could answer, once, after the reply.
+
+    Deduplicated by the question text: a repeat is the same question to a
+    reader. This does not change the exit code. The turn continued, which is
+    what the model was told to do; a refusal is the run that did not.
+    """
+    from rich.markup import escape
+
+    seen: dict[str, object] = {}
+    for item in questions:
+        text = str(getattr(item, "question", "") or "").strip()
+        if text:
+            seen.setdefault(text, item)
+    if not seen:
+        return
+    console.print()
+    console.print(f"[yellow]{len(seen)} question(s) went unanswered in this run:[/yellow]")
+    for text in seen:
+        shown = text if len(text) <= 160 else text[:157] + "..."
+        console.print(f"  - {escape(shown)}")
+    console.print(
+        "[yellow]A one-shot run has nobody to answer a question. "
+        "The model was told to proceed with its best judgment.[/yellow]"
+    )
+
+
 async def _wait_for_background_work(agent_loop, scheduler, conversation: str) -> None:
     """Wait for sub-agents and their follow-up turns before one-shot teardown.
 
@@ -421,6 +448,7 @@ def register(app: typer.Typer) -> None:
         from raven.spine import ChatType, Origin, Source, TurnRequest
 
         refusals: list = []
+        unanswered: list = []
 
         async def run_once():
             # Bring the memory-backend plugin online before any turn
@@ -445,6 +473,7 @@ def register(app: typer.Typer) -> None:
                     send_progress=bool(ch.send_progress) if ch else False,
                     send_tool_hints=bool(ch.send_tool_hints) if ch else False,
                     on_refusals=refusals.extend,
+                    on_unanswered=unanswered.extend,
                 )
                 # A one-shot spawn rarely finishes before the hard-exit below,
                 # but wire submit for parity with the TUI.
@@ -489,6 +518,7 @@ def register(app: typer.Typer) -> None:
         _ONE_SHOT_EXIT["code"] = 0
         asyncio.run(run_once())
         _report_refusals(refusals)
+        _report_unanswered(unanswered)
         if _ONE_SHOT_EXIT["code"]:
             raise typer.Exit(_ONE_SHOT_EXIT["code"])
 

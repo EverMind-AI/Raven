@@ -165,6 +165,48 @@ async def test_a_question_with_no_choices_is_put_as_free_text() -> None:
     assert sent.sent[0]["answer"] == "2024"
 
 
+async def test_a_question_nobody_can_be_asked_is_recorded_on_the_turn() -> None:
+    """No asker means the question never reached a person. The empty answer the
+    agent is told is not a session event unless the turn records it."""
+    from raven.acp_client.ask_user import AskUserResponder
+    from raven.acp_client.asker import start_ask_turn
+    from raven.permissions.turn import start_permission_turn
+
+    turn = start_permission_turn(None, conversation_id="tui:c1", turn_id="t")
+    start_ask_turn(None, conversation_id="tui:c1")
+    sent = _Recorder()
+    AskUserResponder("research", "t1", sent).dispatch(_frame("which market?"))
+    await _settle()
+
+    assert sent.sent[0]["answer"] == ""
+    assert [item.question for item in turn.unanswered] == ["research(t1): which market?"]
+
+
+async def test_an_answer_and_a_skip_are_not_recorded_as_unseen() -> None:
+    """``""`` is a sheet someone saw. ``None`` is a round trip that could not be made."""
+    from raven.acp_client.ask_user import AskUserResponder
+    from raven.acp_client.asker import start_ask_turn
+    from raven.permissions.turn import start_permission_turn
+
+    answered = start_permission_turn(None, conversation_id="tui:c1", turn_id="t1")
+    start_ask_turn(_Answers("EU"), conversation_id="tui:c1")
+    AskUserResponder("research", "t1", _Recorder()).dispatch(_frame())
+    await _settle()
+    assert answered.unanswered == []
+
+    skipped = start_permission_turn(None, conversation_id="tui:c1", turn_id="t2")
+    start_ask_turn(_Answers(""), conversation_id="tui:c1")
+    AskUserResponder("research", "t1", _Recorder()).dispatch(_frame("keep it?"))
+    await _settle()
+    assert skipped.unanswered == []
+
+    unavailable = start_permission_turn(None, conversation_id="tui:c1", turn_id="t3")
+    start_ask_turn(_Answers(None), conversation_id="tui:c1")
+    AskUserResponder("research", "t1", _Recorder()).dispatch(_frame("which year?"))
+    await _settle()
+    assert [item.question for item in unavailable.unanswered] == ["research(t1): which year?"]
+
+
 async def test_a_turn_with_no_reachable_user_answers_empty_at_once() -> None:
     """A CRON turn binds no asker. Answering is the whole point of this case.
 
@@ -326,6 +368,9 @@ async def test_a_question_kept_waiting_for_its_conversation_answers_empty(monkey
             await asyncio.sleep(0.2)
             return "late"
 
+    from raven.permissions.turn import start_permission_turn
+
+    turn = start_permission_turn(None, conversation_id="tui:c1", turn_id="t")
     monkeypatch.setattr(ask_user_module, "LOCK_WAIT_SECONDS", 0.01)
     start_ask_turn(Parked(), conversation_id="tui:c1")
     holder = AskUserResponder("a", "h1", sent)
@@ -341,6 +386,9 @@ async def test_a_question_kept_waiting_for_its_conversation_answers_empty(monkey
 
     by_request = {s["requestId"]: s["answer"] for s in sent.sent}
     assert by_request == {"q-1": "late", "q-2": ""}
+    # The one that waited the lock out was never put to anyone. The one that
+    # was answered was.
+    assert [item.question for item in turn.unanswered] == ["b(h2): second"]
 
 
 async def test_an_elicitation_form_and_a_question_share_the_lock() -> None:

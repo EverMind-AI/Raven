@@ -749,6 +749,11 @@ launch_web() {
   printf '\n'
   ok "Starting Raven -- your browser will open in a moment. Ctrl-C here stops it."
   printf '\n'
+  # `raven web` starts its engine as `python -m raven`, which puts the working
+  # directory first on sys.path: run from inside a source checkout, a release
+  # without the `-P` guard comes up on that checkout's raven. The guard is on
+  # main; the published release this script installs may predate it.
+  cd "${HOME:-/}" 2>/dev/null || cd /
   "$bin" web --stop >/dev/null 2>&1 || warn "could not stop a previous gateway; continuing"
   # The page's exit code is not the install's: Ctrl-C is how a foreground page
   # ends, and the install above it already succeeded.

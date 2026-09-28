@@ -21,11 +21,12 @@ stamps on stored turns, so the page sees exactly what recall sees.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.core.plugin_stack import everos_platform_note, everos_plugin_installed, everos_plugin_missing_note
+from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.rpc.errors import ConfigValidationError, InternalError
 
 if TYPE_CHECKING:
@@ -77,6 +78,51 @@ async def _post(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any
         return r.json() or {}
 
 
+async def _search_tuning(base_url: str, kind: str) -> dict[str, Any]:
+    """What ``/search`` needs on this server, asked the way the chat adapter
+    asks (``_search_tuning`` in ``raven_everos.backend``).
+
+    Keyword when nothing can embed; vector when the agent track has no
+    cross-encoder, which is every install without a rerank role -- the LLM
+    rerank lane the server offers instead measured 10-12 s a search, past this
+    page's own timeout; the profile opted in on its own tab. Without these the
+    server refuses the search with 422 and the page reported "everos
+    unreachable" over a retry button.
+    """
+    from raven_everos.health import probe_capabilities
+
+    report = await asyncio.to_thread(probe_capabilities, base_url)
+    body: dict[str, Any] = {}
+    if report.available("embedding") is False:
+        body["method"] = "keyword"
+    elif kind in _AGENT_KINDS and report.available("rerank") is False:
+        body["method"] = "vector"
+    if kind == "profile":
+        body["include_profile"] = True
+    return body
+
+
+def _everos_error(exc: Exception) -> str:
+    """The server's own sentence when it refused, the transport error otherwise.
+
+    A 4xx from EverOS carries ``error.message`` saying what to change; folding
+    it into "unreachable" sent people to check a server that was answering. A
+    timeout carries no message at all, so it says what it waited for.
+    """
+    import httpx
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            message = ((exc.response.json() or {}).get("error") or {}).get("message")
+        except ValueError:
+            message = None
+        if message:
+            return f"everos refused the request: {message}"
+    if isinstance(exc, httpx.TimeoutException):
+        return f"everos did not answer within {_HTTP_TIMEOUT_S:g}s"
+    return f"everos unreachable: {str(exc) or type(exc).__name__}"
+
+
 def _owner_body(kind: str, user_id: str, agent_id: str) -> dict[str, Any]:
     if kind in _USER_KINDS:
         return {"user_id": user_id}
@@ -125,27 +171,22 @@ def _project(kind: str, row: dict[str, Any]) -> dict[str, Any]:
 def _unavailable_note() -> str | None:
     """Why this page has nothing to show, in a sentence, or ``None``.
 
-    Three ways to arrive at an empty memory browser that are not a failure and
-    that a person cannot tell apart from one: the plugin is not installed, the
-    plugin is installed but is not what ``memory.backend`` names, and the
-    install is pointed at EverOS on a platform where it cannot run. All used to
-    render as four zeros or a retry button, which reads as "your memories are
+    Two ways to arrive at an empty memory browser that are not a failure and
+    that a person cannot tell apart from one: the plugin is not installed, and
+    the plugin is installed but is not what ``memory.backend`` names. Both used
+    to render as four zeros or a retry button, which reads as "your memories are
     gone" rather than "this page is not where they are".
-
-    The platform sentence is only for an install that would otherwise be sent
-    to EverOS: one whose memory runs on another backend has memory, and telling
-    it otherwise would be false.
     """
     from raven.config.raven import load_raven_config
 
     if not everos_plugin_installed():
-        return everos_platform_note() or everos_plugin_missing_note()
+        return everos_plugin_missing_note()
     try:
         backend = load_raven_config().memory.backend
     except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
         return None
     if backend == _EVEROS_BACKEND:
-        return everos_platform_note()
+        return None
     if not backend:
         return "Long-term memory is turned off, so there is nothing stored to browse."
     return (
@@ -183,7 +224,7 @@ async def memory_stats(params: dict) -> dict:
             "page_size": 1,
         }
         try:
-            payload = await _post(base_url, "/api/v1/memory/get", body)
+            payload = await _post(base_url, "/api/v2/memory/get", body)
             counts[kind] = int((payload.get("data") or {}).get("total_count", 0))
         except Exception as e:  # noqa: BLE001 — stats degrade, never break the page
             logger.warning("memory.stats: {} unavailable ({})", kind, e)
@@ -220,15 +261,15 @@ async def memory_list(params: dict) -> dict:
         if q:
             payload = await _post(
                 base_url,
-                "/api/v1/memory/search",
-                owner | {"query": q, "top_k": page_size},
+                "/api/v2/memory/search",
+                owner | {"query": q, "top_k": page_size} | await _search_tuning(base_url, kind),
             )
             rows = (payload.get("data") or {}).get(_KIND_FIELD[kind]) or []
             items = [_project(kind, r) for r in rows]
             return {"items": items, "total": len(items), "page": 1, "page_size": page_size, "note": None}
         payload = await _post(
             base_url,
-            "/api/v1/memory/get",
+            "/api/v2/memory/get",
             owner | {"memory_type": kind, "page": page, "page_size": page_size},
         )
         data = payload.get("data") or {}
@@ -244,7 +285,7 @@ async def memory_list(params: dict) -> dict:
     except ConfigValidationError:
         raise
     except Exception as e:  # noqa: BLE001 — surface as a typed RPC error
-        raise InternalError(f"everos unreachable: {e}") from e
+        raise InternalError(_everos_error(e)) from e
 
 
 def register_memory_methods(dispatcher: "Dispatcher") -> None:

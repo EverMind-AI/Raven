@@ -252,7 +252,7 @@ const LEGACY_LOCAL = {
      `.ln`, `.dagcap` and `.workv` were that box's own classes, and every
      caller now hands DagGraph a `renderNode` of its own. */
   dag: 7,
-  desk: 5,
+  desk: 4,
   /* Was none with the agent hub: every class the page writes carries its
      prefix, and its rules live in features/extAgents/styles.css. Up to three
      with the playbooks page gone -- `.kd`, `.pmhero` and `.sulist` were shared
@@ -266,8 +266,10 @@ const LEGACY_LOCAL = {
   installed: 0,
   /* Down from 14 with the memory section: the page's hero, its own list and
      row classes and the shared drawer's head went with the two-pane frame
-     (src/components/TwoPane.tsx owns those names now). */
-  memory: 8,
+     (src/components/TwoPane.tsx owns those names now), and 8 to 7 when its
+     failure moved from an inline `.errline-lite` into the frame's own empty
+     state. */
+  memory: 7,
   /* `.empty` and the row's `.ct`, `.nm`, `.tick`: the picker's own list
      vocabulary, shared with the popovers beside it. */
   model: 4,
@@ -306,7 +308,7 @@ const LEGACY_LOCAL = {
      domain's alone now. */
   transcript: 60,
   /* Up from 37 with the playbooks page gone: `.t` was shared with it. */
-  workspace: 38,
+  workspace: 35,
 }
 
 // The same count for the classes a domain names from inside a `className={...}`

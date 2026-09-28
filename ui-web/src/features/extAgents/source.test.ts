@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FixtureTransport } from '../../rpc/fixtureTransport'
 import { setGateway } from '../../rpc/gateway'
-import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource, isFound, sectionOf, stageOf, wizardSection } from './source'
+import { resetExtAgentsSeen, extAgentsFetch, extAgentRowOf, extAgentsSource, isFound, remeasures, sectionOf, stageOf, wizardSection } from './source'
 
 import type { ExtAgentRowWire, Section } from './source'
 import type { ExtAgentRow } from './types'
@@ -37,16 +37,18 @@ function fullRow(over: Partial<ExtAgentRow> = {}): ExtAgentRow {
 
 /* A transport whose `subagents.list` answers from a queue, so a test can play
    a probing read and the probe-less read that follows it. */
-function listing(...answers: ExtAgentRowWire[][]): { probes: boolean[] } {
+function listing(...answers: ExtAgentRowWire[][]): { probes: boolean[]; sent: Array<Record<string, unknown>> } {
   const probes: boolean[] = []
+  const sent: Array<Record<string, unknown>> = []
   const transport = new FixtureTransport({})
   transport.call = (async (method: string, params: { probe?: boolean }) => {
     expect(method).toBe('subagents.list')
     probes.push(!!params.probe)
+    sent.push({ ...params })
     return { rows: answers.shift() ?? [] }
   }) as typeof transport.call
   setGateway(transport)
-  return { probes }
+  return { probes, sent }
 }
 
 beforeEach(() => {
@@ -68,6 +70,31 @@ describe('one agent row', () => {
     expect('last_test_remedy' in extAgentRowOf(junk)).toBe(false)
     const fetch = extAgentRowOf(wire({ last_test_remedy: { kind: 'download', command: 'npx -y a@1' } }))
     expect(fetch.last_test_remedy).toEqual({ kind: 'download', command: 'npx -y a@1' })
+  })
+
+  /* The provider's refusals and the failures to answer are fixes too, and a
+     step to type travels only beside the command that opens where to type it:
+     alone it would tell the reader to type into nothing. */
+  it('reads the kinds past a credential, and keeps a step only beside its command', () => {
+    const inAgent = extAgentRowOf(wire({ last_test_remedy: { kind: 'model', command: 'qwen', then: '/model' } }))
+    expect(inAgent.last_test_remedy).toEqual({ kind: 'model', command: 'qwen', then: '/model' })
+    const quit = extAgentRowOf(wire({ last_test_remedy: { kind: 'exited' } }))
+    expect(quit.last_test_remedy).toEqual({ kind: 'exited', command: '' })
+    const stray = extAgentRowOf(wire({ last_test_remedy: { kind: 'setup', then: '/auth' } }))
+    expect(stray.last_test_remedy).toEqual({ kind: 'setup', command: '' })
+    expect('then' in stray.last_test_remedy!).toBe(false)
+    const oldNode = extAgentRowOf(wire({ last_test_remedy: { kind: 'runtime', needs: '22', found: '18.20.8' } }))
+    expect(oldNode.last_test_remedy).toEqual({ kind: 'runtime', command: '', needs: '22', found: '18.20.8' })
+  })
+
+  /* The two about the agent's own account and files: a plan carries the page
+     that sells one where a command would go, a broken config the command that
+     says where it is wrong. */
+  it('reads an account whose plan does not include the agent, and a config it cannot read', () => {
+    const plan = extAgentRowOf(wire({ last_test_remedy: { kind: 'plan', command: 'https://www.kimi.com/code/#pricing' } }))
+    expect(plan.last_test_remedy).toEqual({ kind: 'plan', command: 'https://www.kimi.com/code/#pricing' })
+    const config = extAgentRowOf(wire({ last_test_remedy: { kind: 'config', command: 'kimi doctor config' } }))
+    expect(config.last_test_remedy).toEqual({ kind: 'config', command: 'kimi doctor config' })
   })
 
   /* What to install, as the executable the probe did not find. Absent unless
@@ -133,6 +160,23 @@ describe('refetching the list', () => {
     expect(row).toMatchObject({ probe_status: 'missing', probe_missing: 'npx' })
   })
 
+  /* Only a re-check asks the server to read the login shell again, and it asks
+     by name: the capture runs the user's shell, which a plain listing on every
+     page open must not pay for. */
+  it('asks for a fresh login-shell capture only when told to', async () => {
+    const { sent } = listing([], [], [])
+    await extAgentsFetch(true, true)
+    await extAgentsFetch(true)
+    /* And through the source the store actually calls, which is where a
+       re-check's second argument has to survive the hop. */
+    await extAgentsSource.load(true, true)
+    expect(sent).toEqual([
+      { probe: true, refresh_login_env: true },
+      { probe: true },
+      { probe: true, refresh_login_env: true },
+    ])
+  })
+
   it('lets a probing answer overwrite what it remembered', async () => {
     listing(
       [wire({ probe_status: 'ready', probe_detail: 'v2 on PATH' })],
@@ -141,6 +185,18 @@ describe('refetching the list', () => {
     await extAgentsFetch(true)
     const [row] = await extAgentsFetch(true)
     expect(row).toMatchObject({ probe_status: 'missing', probe_detail: 'not on PATH' })
+  })
+
+  /* Once a write's own re-read probes, a genuine "unknown" -- an empty or
+     unparseable command -- is the newer evidence, not a blank to fill in. */
+  it('does not carry a stale verdict onto a probing answer', async () => {
+    listing(
+      [wire({ probe_status: 'attention', probe_detail: 'not verified' })],
+      [wire({ probe_status: 'unknown', probe_detail: 'command is empty' })],
+    )
+    await extAgentsFetch(true)
+    const [row] = await extAgentsFetch(true)
+    expect(row).toMatchObject({ probe_status: 'unknown', probe_detail: 'command is empty' })
   })
 
   it('remembers nothing about an agent it has not seen', async () => {
@@ -191,7 +247,7 @@ describe('the seven writes a card can make', () => {
 
     expect(asked).toEqual([
       ['subagents.add', { preset: 'codex-cli', name: 'mine', description: 'd', api_key: 'k' }],
-      ['subagents.list', { probe: false }],
+      ['subagents.list', { probe: true }],
     ])
   })
 
@@ -254,6 +310,87 @@ describe('the seven writes a card can make', () => {
     await extAgentsSource.act('build', card())
 
     expect(asked[0]).toEqual(['subagents.build', { name: 'codex' }])
+  })
+})
+
+/* A transport for a write and the re-read that ends it: `subagents.list`
+   answers from one queue when asked to probe and from another when not, and
+   every other method is acknowledged and forgotten. */
+function roster(probed: ExtAgentRowWire[][], unprobed: ExtAgentRowWire[][] = []): { probes: boolean[] } {
+  const probes: boolean[] = []
+  const transport = new FixtureTransport({})
+  transport.call = (async (method: string, params: { probe?: boolean }) => {
+    if (method !== 'subagents.list') return {}
+    probes.push(!!params.probe)
+    return { rows: (params.probe ? probed : unprobed).shift() ?? [] }
+  }) as typeof transport.call
+  setGateway(transport)
+  return { probes }
+}
+
+/* The read that ends a write asks for the probe when the write can have moved
+   the verdict, and not otherwise. Read back off the source's own memory, the
+   pre-connect "not verified" stayed on a row that had just connected until a
+   reload -- the connect's own ping had recorded the verdict the last probe
+   never saw. */
+describe('the read that ends a write', () => {
+  const unverified = wire({ probe_status: 'attention', probe_detail: 'capabilities not recorded yet -- run a test' })
+  const verified = wire({ probe_status: 'ready', probe_detail: 'connected over ACP v1' })
+
+  it('re-measures after a connect, so the pre-connect verdict is not read back off its own memory', async () => {
+    const { probes } = roster([[unverified], [verified]])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsSource.act('connect', card({ configured: false }))
+    expect(probes).toEqual([true, true])
+    expect(row).toMatchObject({ probe_status: 'ready', probe_detail: 'connected over ACP v1' })
+  })
+
+  it('re-measures after a test, so a test can clear a caveat instead of restating it', async () => {
+    const { probes } = roster([[unverified], [verified]])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsSource.act('test', card())
+    expect(probes).toEqual([true, true])
+    expect(row?.probe_status).toBe('ready')
+  })
+
+  /* Through the write itself, not only the predicate: `act` decides on its own
+     whether a name is a rename, and the two must not drift apart. */
+  it('re-measures after a rename, whose new name the memory has nothing under', async () => {
+    const { probes } = roster([[unverified], [wire({ name: 'mine', probe_status: 'ready' })]])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsSource.act('update', card(), { new_name: 'mine' })
+    expect(probes).toEqual([true, true])
+    expect(row).toMatchObject({ name: 'mine', probe_status: 'ready' })
+  })
+
+  /* The write a reader repeats, and one of the writes the machine is not
+     re-measured for: the verdict it remembered stands. */
+  it('keeps a description edit on the cheap list, with the verdict it remembered', async () => {
+    const { probes } = roster([[unverified]], [[wire({})]])
+    await extAgentsFetch(true)
+    const [row] = await extAgentsSource.act('update', card(), { description: 'a new line' })
+    expect(probes).toEqual([true, false])
+    expect(row).toMatchObject({ probe_status: 'attention', probe_detail: 'capabilities not recorded yet -- run a test' })
+  })
+
+  it('asks for the probe after exactly the writes that can move the verdict', () => {
+    const on = card()
+    expect(remeasures('connect', on, {})).toBe(true)
+    expect(remeasures('migrate', on, {})).toBe(true)
+    expect(remeasures('model', on, { model: 'v/m2' })).toBe(true)
+    expect(remeasures('model', on, { clear_model: true })).toBe(true)
+    expect(remeasures('toggle', on, { enabled: true })).toBe(true)
+    expect(remeasures('update', on, { api_key: 'sk-new' })).toBe(true)
+    expect(remeasures('test', on, {})).toBe(true)
+    /* The memory is keyed by name: without the probe a renamed row would read
+       "unknown" and drop the caveat it had. A name written back unchanged is
+       not a rename. */
+    expect(remeasures('update', on, { new_name: 'mine' })).toBe(true)
+    expect(remeasures('update', on, { new_name: on.name })).toBe(false)
+    expect(remeasures('update', on, { description: 'new words' })).toBe(false)
+    expect(remeasures('toggle', on, { enabled: false })).toBe(false)
+    expect(remeasures('test_cancel', on, {})).toBe(false)
+    expect(remeasures('build', on, {})).toBe(false)
   })
 })
 
@@ -323,6 +460,14 @@ describe('a credential refusal the handshake measured', () => {
     expect(stageOf(fullRow({ ...refused, configured: true, enabled: true }))).toBe('live')
     /* An endpoint's credential is the key field, settled by its own probe. */
     expect(stageOf(fullRow({ ...refused, kind: 'openai' }))).toBe('key')
+    /* Off the roster with a preset that moved transport: stale before keyless,
+       since the migration is written from the preset and needs no key -- but
+       not before a refused handshake, which only a sign-in settles. */
+    expect(stageOf(fullRow({ kind: 'openai', configured: true, enabled: false, has_api_key: false, upgrade_to: 'acp' }))).toBe('stale')
+    expect(stageOf(fullRow({ ...refused, configured: true, enabled: false, upgrade_to: 'cli' }))).toBe('unauthorized')
+    /* The flag only ever lands on a stored row, so a preset carrying one is
+       still an add, not a migration of a row that does not exist. */
+    expect(stageOf(fullRow({ kind: 'cli', configured: false, enabled: false, upgrade_to: 'acp' }))).toBe('add')
     /* The same row without the refusal is a preset to add. */
     expect(stageOf(fullRow({ ...refused, needs_auth: false }))).toBe('add')
   })

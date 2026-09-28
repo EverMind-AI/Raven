@@ -57,7 +57,7 @@ def marker_path() -> Path:
     return raven_home() / MARKER_NAME
 
 
-def write_marker(*, to_version: str | None = None, pid: int | None = None) -> Path:
+def write_marker(*, to_version: str | None = None, pid: int | None = None, port: int | None = None) -> Path:
     """Record that the environment is about to be replaced.
 
     Written by the side that still has a working Raven, before the helper is
@@ -70,6 +70,10 @@ def write_marker(*, to_version: str | None = None, pid: int | None = None) -> Pa
         payload["to_version"] = to_version
     if pid is not None:
         payload["pid"] = pid
+    if port is not None:
+        # The page's port, for the helper to answer on with progress once the
+        # process that held it has exited.
+        payload["port"] = port
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path

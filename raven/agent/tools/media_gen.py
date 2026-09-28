@@ -59,6 +59,7 @@ from raven.agent import workdir
 from raven.contracts.token_strategy import UsageSnapshot
 from raven.contracts.tool import Tool
 from raven.providers.usage import image_usage
+from raven.providers.wire import wire_model
 from raven.security.network import guarded_fetch
 from raven.utils.images import ImagePart, image_block
 
@@ -637,6 +638,8 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         aspect_ratio = spec.get("aspect_ratio") or None
         config = self._config
         model_id = getattr(config, "model", "") or model or self.default_model
+        if httpx.URL(self.api_base).host == "openrouter.ai":
+            model_id = wire_model(model_id, client_provider="openrouter")
         quality = self.effective_quality(spec.get("quality"), model_id)
         # The Images API takes the frame only from the families known to honour
         # it; the chat route takes it from any model, as image_config below.
@@ -725,7 +728,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         """The Images API: OpenRouter's unified ``/images``, or ``/images/generations``
         and ``/images/edits`` on an OpenAI-compatible base."""
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        openrouter = "openrouter.ai" in self.api_base
+        openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
         try:
             # OpenRouter takes the chat content-part shape verbatim; the OpenAI
             # edits form takes the bytes behind it.

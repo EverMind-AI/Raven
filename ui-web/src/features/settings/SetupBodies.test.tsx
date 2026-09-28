@@ -89,11 +89,15 @@ describe('ModelStepBody', () => {
     expect(behind).not.toHaveBeenCalled()
   })
 
-  it('shows the loading line until the store has loaded, then the model cards', async () => {
+  it('draws both cards on the empty snapshot, and never a wait shape', async () => {
     install()
     render(createElement(ModelStepBody))
     expect(document.querySelector('.settings-panel.settings-setup')!.getAttribute('data-section')).toBe('model')
-    expect(document.querySelector('.settings-wait')!.getAttribute('aria-label')).toBe('gui.settings.loading')
+    /* Before the payload: the real cards, counting the providers it knows of,
+       which on the run this step exists for is none. */
+    expect(document.querySelector('.settings-wait')).toBeNull()
+    expect(screen.getByText('gui.settings.providers.title {"n":0}')).toBeTruthy()
+    expect(screen.getByText('gui.settings.roles.title_card')).toBeTruthy()
     await act(async () => { await store.refresh() })
     expect(document.querySelector('.settings-wait')).toBeNull()
     expect(screen.getByText('gui.settings.providers.title {"n":2}')).toBeTruthy()

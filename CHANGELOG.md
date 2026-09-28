@@ -6,6 +6,38 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- Memory runs on native Windows. EverOS 1.4.0 runs there without WSL, so
+  the memory plugin's pin moves to `everos[multimodal]==1.4.1` and the
+  platform gate that made memory unavailable on Windows is gone, together
+  with the wizard's WSL notice and the import scan's refusal. Finding a
+  running server reads the command line through WMI and the TCP table
+  through PowerShell rather than `ps`; the server is spawned in a process
+  group of its own and stopped with Ctrl-Break, which uvicorn takes as a
+  shutdown. Because Windows cannot replace a running executable, the
+  upgrade helper stops whatever still runs from under the tool environment
+  before it installs.
+
+- An embedding model narrower than the 1024-wide memory index is refused
+  where it is pinned, and withheld from the server it would otherwise have
+  started with. A 768-dimension model saved from the settings page had left
+  every memory store and search answering 500 about a mismatched width,
+  with nothing on the page saying why; EverOS now runs keyword recall and
+  keeps storing, and the notice names the model and its width. A probe that
+  cannot reach the provider is not a verdict: the pin is written and a
+  warning logged.
+
+- `ops_connection_add` is a trunk tool, served on `tools.connectionAdd`
+  (on in raven-code and raven-oncall, off elsewhere). It writes the machine
+  an owner described into their connection registry after reaching it, with
+  `ssh -G` filling a port, user or key they left out and each candidate key
+  probed on its own (`raven.ops.transport.make_ssh_runner(identities_only=)`).
+  The probe, the writer and the `~/.ssh/config` alias live in
+  `raven.ops.connection_add`, behind both this tool and `raven ops connection
+  add`; the on-call plugin's copies are gone. Raven-Code's guide gains the
+  rule for when to leave this computer at all: write here, verify where the
+  software is, and ask the owner for a machine only when installing the
+  software here would be wrong or heavy.
+
 - Serply joins the `web_search` vendors: `tools.web.search.provider: serply`
   with the key under `tools.web.providers.serply.apiKey` (or `SERPLY_API_KEY`).
   Google SERP rows normalised into the shared render path; the research
@@ -21,6 +53,30 @@ All notable changes to Raven are documented here.
   a technology register.
 
 ### Changed
+
+- A running EverOS whose version no longer matches the installed one is
+  replaced rather than reused, through the same precheck, stop and spawn
+  chain a rotated credential takes. An upgrade used to leave the old server
+  answering until something unrelated restarted it. A root the user manages
+  is never touched. A gateway that finds nothing listening and no lock held
+  starts the server again, at most once every thirty seconds, so a server
+  that goes away no longer leaves that gateway without memory until it is
+  restarted by hand.
+
+- Recall on the `agent_case` and `agent_skill` tracks (the Cases and
+  Know-how tabs) searches by vector when no reranker is configured,
+  instead of asking for an LLM rerank that the four-second recall budget
+  can never wait out.
+
+- A sub-agent reads the connection registry in the owner's home
+  (`raven_home()/connections.json`), which the host hands it as `RAVEN_HOME`;
+  any other instance reads the one beside its config first, so a `--config`
+  host keeps its own file. A first write lands in the home. A sub-agent runs on a rendered
+  config in a state directory of its own and is handed `RAVEN_HOME`, not a
+  copy of the file; resolved beside the config alone, Raven-Code read an
+  empty directory while the owner's machines sat one level up, and reached
+  for the raw ssh address instead. The on-call plugin's `connections` module
+  now imports trunk's reader rather than mirroring it.
 
 - Progressive tool disclosure ships on (`tools.toolSearch.enabled`). Below
   `compactionThreshold` (50) nothing changes: the strategy drops `tool_search`
@@ -116,6 +172,13 @@ All notable changes to Raven are documented here.
   from the session's mode overlay.
 
 ### Fixed
+
+- An unattended turn that asks a question now leaves a record of it. A one-shot
+  run lists those questions after the reply, beside the refused calls, and a
+  session opened later shows the same questions as their own notice. Previously
+  the only trace was the line the model was told ("the user did not answer;
+  proceed with best judgment"), and a sub-agent turn with no page subscribed
+  to the session never wrote even that into the session.
 
 - A heartbeat on an untouched `HEARTBEAT.md` no longer costs a model call every
   interval. The shipped template promises that a file of only headers and
@@ -253,6 +316,17 @@ All notable changes to Raven are documented here.
   Measured with four sessions in one process: 18 of 183 approvals lost, each
   inside another session's `ssh`. The command's stdin now reads EOF at once, as the
   background executor's already did.
+
+- `exec` on this computer refuses a typed `ssh` to a machine the connection
+  registry knows, and names the two paths that exist for it: `machine=<id>`
+  for a look (capped at 60 s, nothing left running) and the on-call agent's
+  `ops_submit` for anything longer. Two field runs on 2026-09-14 had put the
+  machine's address in the task statement, and the coding nodes started GPU
+  work over raw ssh from the local shell 58 times, past the cap, the sweep
+  and the ledger. `scp` and `rsync` to the machine are untouched; a registry
+  that cannot be read refuses nothing. Options are read the way ssh reads
+  them -- a bundled group like `-vp 58717`, and options written after the
+  host -- so a spelling ssh honours does not read as port 22.
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused

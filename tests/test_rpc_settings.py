@@ -507,6 +507,65 @@ async def test_a_pair_that_cannot_embed_is_refused_readably(everos_cfg):
         await rpc_console.settings_everos_set({"section": "embedding", "model": "gpt-4o", "provider": "openai"})
 
 
+async def test_a_model_narrower_than_the_index_is_refused_readably(everos_cfg, monkeypatch):
+    """The memory index is 1024 wide. A 768-dimension model pinned through this
+    page left every store and search answering 500 about a mismatched width,
+    with nothing on the page saying why; the width is asked before the write."""
+    cfg = everos_cfg(providers={"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}})
+    asked: list[tuple[str, str]] = []
+
+    def _narrow(url, headers, model):
+        asked.append((url, model))
+        return 768
+
+    monkeypatch.setattr("raven.config.update.probe_embedding_dimensions", _narrow)
+
+    with pytest.raises(ConfigValidationError, match="768") as excinfo:
+        await rpc_console.settings_everos_set(
+            {"section": "embedding", "model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}
+        )
+
+    assert "1024" in str(excinfo.value)
+    # Asked the way the pin will be used: at the provider's embeddings route,
+    # under the id the provider knows rather than raven's prefixed spelling.
+    assert asked == [("https://d/v1/embeddings", "BAAI/bge-base-en-v1.5")]
+    assert "embedding" not in json.loads(cfg.read_text())
+
+
+@pytest.mark.parametrize("backend", [None, "mem0"])
+async def test_a_narrow_model_is_fine_where_everos_does_not_consume_the_pin(everos_cfg, monkeypatch, backend):
+    """The width requirement is the memory index's. A knowledge base sizes
+    itself to the model, so an install with memory off, or on another backend,
+    keeps a 768-dimension pin."""
+    cfg = everos_cfg(providers={"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}})
+    raw = json.loads(cfg.read_text())
+    raw["memory"] = {"backend": backend}
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+    asked: list[str] = []
+    monkeypatch.setattr(
+        "raven.config.update.probe_embedding_dimensions", lambda url, headers, model: asked.append(model) or 768
+    )
+
+    await rpc_console.settings_everos_set(
+        {"section": "embedding", "model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}
+    )
+
+    assert json.loads(cfg.read_text())["embedding"]["model"] == "deepinfra/BAAI/bge-base-en-v1.5"
+    assert asked == [], "no request leaves for a width nobody here requires"
+
+
+async def test_a_width_that_could_not_be_measured_does_not_block_the_pin(everos_cfg, monkeypatch):
+    """A refused connection is a fact about the network, not about the model."""
+    cfg = everos_cfg(providers={"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}})
+    monkeypatch.setattr("raven.config.update.probe_embedding_dimensions", lambda url, headers, model: "HTTP 503")
+
+    await rpc_console.settings_everos_set(
+        {"section": "embedding", "model": "Qwen/Qwen3-Embedding-4B", "provider": "deepinfra"}
+    )
+
+    assert json.loads(cfg.read_text())["embedding"] == {"model": "Qwen/Qwen3-Embedding-4B", "provider": "deepinfra"}
+
+
 async def test_a_write_to_a_root_the_user_manages_is_refused_readably(everos_cfg, monkeypatch):
     """Same shape, different exception: the refusal carries the path of the root
     somebody else manages, which is the one thing the reader needs."""

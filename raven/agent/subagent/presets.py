@@ -360,6 +360,13 @@ class SignIn(NamedTuple):
     interactive setup, where a provider is chosen and signed in to. The English
     advice reads the same for both -- this only lets a page that renders the
     remedy itself describe the step truthfully."""
+    then: str | None = None
+    """What to type once the command is running, for an agent whose setup is not
+    the first thing it shows.
+
+    Qwen Code opens on its prompt, not on a sign-in, and the command that reaches
+    its providers is a slash command typed there. Without this a reader told to
+    run ``qwen`` is left at a prompt with nothing saying what to do next."""
 
 
 SIGN_IN_HINTS: dict[str, SignIn] = {
@@ -382,6 +389,36 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # holds a key. Shim-launched it is not: the command is a bare `hermes`, so the
     # local spelling is the only one it can reach.
     "hermes": SignIn(exe="hermes", local="hermes model", does="setup"),
+    # `grok login` is what `grok login --help` titles "Sign in to Grok"
+    # (measured 2026-09-24, Grok Build 1.0.41). `--oauth` names the default
+    # path; the bare command is the one a reader runs. A local install, like
+    # hermes: the row's command is `grok agent stdio`, so a reader with no
+    # `grok` stops at the absent executable and never reaches this sentence.
+    "grok": SignIn(exe="grok", local="grok login"),
+    # `qwen auth` is gone from 0.24 -- run, it says so and names the replacement:
+    # "Interactive -> run qwen and use /auth to configure providers" (measured
+    # 2026-09-24, qwen 0.24.4). `/auth` ("Connect an LLM provider") is among the
+    # commands the same build advertises over ACP. It covers every credential
+    # refusal qwen gives -- never configured, a provider with its key unset, a
+    # key the provider refuses, an expired Qwen OAuth -- because each is fixed by
+    # choosing the provider again.
+    "qwen_code": SignIn(exe="qwen", local="qwen", does="setup", then="/auth"),
+    # `kimi login` ("Authenticate with Kimi Code CLI via the device-code flow")
+    # is in `kimi --help`, and it is the command Kimi Code names over ACP too:
+    # its `initialize` advertises a terminal auth method whose
+    # `_meta.terminal-auth` is `kimi` with `login` (measured 2026-09-24, Kimi
+    # Code 2.1.0). Its own installer puts `kimi` on PATH, so the local spelling
+    # is the only one.
+    "kimi_code": SignIn(exe="kimi", local="kimi login"),
+    # `copilot login` ("Authenticate with Copilot via OAuth") is what
+    # `copilot login --help` prints (measured 2026-09-24, GitHub Copilot CLI
+    # 1.0.88). The default on a desktop is the browser flow, so the bare
+    # command is the one a reader runs. A local install: the row's command is
+    # `copilot --acp`, so a reader with no `copilot` stops at the absent
+    # executable. Its npm loader is `#!/usr/bin/env node`, but the package
+    # declares no `engines.node` and a launch that quits on an old Node.js
+    # was not measured, so it is not in `NODE_RUNTIME_PRESETS`.
+    "github_copilot": SignIn(exe="copilot", local="copilot login"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -401,6 +438,122 @@ unlisted agent gets the sentence without a command, which is still the
 difference between "go and sign in" and a JSON-RPC error code -- and a command
 that is not there to run is the same mistake as a guessed one.
 """
+
+
+class InAgent(NamedTuple):
+    """A fix made from inside the agent: the command that opens it, and what to type there."""
+
+    command: str
+    then: str | None = None
+
+
+MODEL_SWITCH_HINTS: dict[str, InAgent] = {
+    # `/auth`, not `/model`. `/model` only picks among the models already
+    # registered in ~/.qwen/settings.json, and qwen 0.24.4's own OpenRouter
+    # preset registers exactly two free models, both since withdrawn from
+    # OpenRouter's free tier (measured 2026-09-24: each answers 404 "unavailable
+    # for free"), so for anyone set up the default way the list it offers is the
+    # dead ones. `/auth` re-runs the provider setup, whose "Model IDs" step takes
+    # any id the provider serves.
+    "qwen_code": InAgent("qwen", "/auth"),
+    # `/model` ("Switch LLM model") saves the pick as `default_model` in
+    # ~/.kimi-code/config.toml: its picker's plain select persists the choice
+    # (`persistModelSelection`, "Saved ... as default"), and only a separate
+    # "this session only" select does not (read from Kimi Code 2.1.0).
+    "kimi_code": InAgent("kimi", "/model"),
+}
+"""How to change the model the agent a row defers to is set to use, by preset key.
+
+For a provider that answered but would not serve that model: gone from its free
+tier, not found, out of credit or out of quota on it. Read from the installed
+tool, like :data:`SIGN_IN_HINTS`; an unlisted agent is told what happened
+without a command."""
+
+
+DIAGNOSE_HINTS: dict[str, str] = {
+    # Qwen Code retries a refused model call for minutes and says nothing while
+    # it does -- measured, 90 s of ACP traffic under a 429 carried no update and
+    # no stderr -- so a connect that waits 60 s learns nothing. Run in a terminal
+    # the same failure prints its reason: after 91 s for a 429 ("Retrying in 60s
+    # (attempt 1/10): [API Error: 429 ...]"), 93 s for an unresolvable host, 104
+    # s for a provider's 500, a second or two for the rest. The positional prompt
+    # is the one-shot form 0.24's own help names; `-p` is marked deprecated.
+    "qwen_code": "qwen hi",
+    # Kimi Code does the same: 5xx, 429, an unreachable or refused host and a
+    # reply it cannot read are retried ten times over about 150 s, with nothing
+    # over ACP while it does. `-p` ("Run one prompt non-interactively") prints
+    # the reason once it gives up, and within a second for everything it does not
+    # retry (measured 2026-09-24, Kimi Code 2.1.0).
+    "kimi_code": "kimi -p hi",
+    # `-p` / `--single` ("Single-turn prompt. Prints the response to stdout and
+    # exits") is the flag `grok --help` names (1.0.41).
+    "grok": "grok -p hi",
+    # `-p` / `--prompt` ("Execute a prompt in non-interactive mode") is the flag
+    # `copilot --help` names (1.0.88). A 429 against a stand-in provider was
+    # still retrying when the connect's wait ran out, so the reply carried no
+    # reason.
+    "github_copilot": "copilot -p hi",
+}
+"""A command that makes the agent a row defers to say why it is not answering.
+
+For the failure that carries no reason at all: a connect that timed out while
+the agent kept working. Only for an agent measured to fail that way, because
+for the rest a timeout is not known to mean anything in particular."""
+
+
+NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(
+    {
+        # `#!/usr/bin/env node`, and a hard floor: measured 2026-09-24 on 0.24.4,
+        # Node 18.20.8 exits at import ("does not provide an export named
+        # 'openAsBlob'") while 20.20.2 and 22 run; the package asks for >=22.
+        "qwen_code",
+    }
+)
+"""Presets whose agent is a Node.js script, so a launch that quits may be the
+wrong Node.js rather than the agent (`node_runtime.node_too_old`).
+
+Only for an agent measured to die that way: the check runs ``node --version``
+on a failure, and naming Node.js for an agent that does not care about it would
+send its reader after the wrong fix."""
+
+
+def runs_on_node(cfg: Any) -> bool:
+    """Whether this row's agent is one of :data:`NODE_RUNTIME_PRESETS`, by provenance."""
+    return getattr(cfg, "preset", None) in NODE_RUNTIME_PRESETS
+
+
+def model_switch_hint_for(cfg: Any) -> InAgent | None:
+    """How to change this row's model, by provenance like :func:`sign_in_hint_for`."""
+    preset = getattr(cfg, "preset", None)
+    return MODEL_SWITCH_HINTS.get(preset) if preset else None
+
+
+def diagnose_hint_for(cfg: Any) -> str | None:
+    """How to see why this row's agent is silent, by provenance like :func:`sign_in_hint_for`."""
+    preset = getattr(cfg, "preset", None)
+    return DIAGNOSE_HINTS.get(preset) if preset else None
+
+
+def upgrade_hint_for(cfg: Any) -> str | None:
+    """How to move this row's agent to its latest release, or ``None`` when unknown.
+
+    The install hint with the package pinned to ``latest``: an npm global install
+    of a bare package name installs whatever is newest only when nothing is
+    installed yet, so over an old copy the plain hint can leave it where it is.
+    Only for an ``npm i -g <package>`` hint, the one shape whose version is known
+    to go on the package's own word.
+    """
+    hint = install_hint_for(cfg)
+    if not hint:
+        return None
+    words = hint.split()
+    if words[:3] not in (["npm", "i", "-g"], ["npm", "install", "-g"]) or len(words) != 4:
+        return None
+    package = words[3]
+    # A scoped package keeps its leading "@"; a version is the "@" after that.
+    if "@" in package[1:]:
+        return None
+    return f"{hint}@latest"
 
 
 def sign_in_hint_for(cfg: Any) -> SignIn | None:

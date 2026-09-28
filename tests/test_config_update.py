@@ -590,3 +590,222 @@ def test_skill_unblock_removes_from_an_existing_snake_blocklist(cfg_path: Path) 
     )
     assert set_skill_blocked("alpha", False, config_path=cfg_path) == ["beta"]
     assert _read(cfg_path)["skill_forge"]["blocklist"] == ["beta"]
+
+
+class TestTheWidthGateIsEverosOnly:
+    """The 1024-width requirement is the memory index's, so it applies only
+    where an EverOS backend will read the pin: the plugin installed and the
+    config naming it (or carrying the schema default)."""
+
+    @staticmethod
+    def _config(tmp_path, *, memory=None):
+        import json
+
+        raw = {"providers": {"deepinfra": {"apiKey": "k", "apiBase": "https://d/v1"}}}
+        if memory is not None:
+            raw["memory"] = memory
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps(raw), encoding="utf-8")
+        return cfg
+
+    def test_without_the_plugin_a_knowledge_only_install_keeps_any_width(self, tmp_path, monkeypatch) -> None:
+        """A core/knowledge install ships without everos-memory and still
+        carries the schema default; nothing there reads the pin at 1024."""
+        from raven.config.update import set_embedding_endpoint
+        from tests._everos_presence import everos_plugin_absent
+
+        cfg = self._config(tmp_path)
+        monkeypatch.setattr("raven.config.update.probe_embedding_dimensions", lambda url, headers, model: 768)
+
+        with everos_plugin_absent():
+            set_embedding_endpoint(
+                {"model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}, config_path=cfg
+            )
+
+        import json
+
+        assert json.loads(cfg.read_text())["embedding"]["model"] == "deepinfra/BAAI/bge-base-en-v1.5"
+
+    def test_with_the_plugin_and_the_default_backend_the_width_is_required(self, tmp_path, monkeypatch) -> None:
+        from raven.config.update import EmbeddingPinError, set_embedding_endpoint
+
+        cfg = self._config(tmp_path)
+        monkeypatch.setattr("raven.config.update.probe_embedding_dimensions", lambda url, headers, model: 768)
+
+        with pytest.raises(EmbeddingPinError, match="768"):
+            set_embedding_endpoint(
+                {"model": "deepinfra/BAAI/bge-base-en-v1.5", "provider": "deepinfra"}, config_path=cfg
+            )
+
+
+class TestProbeEmbeddingDimensions:
+    """The one request the pin writer makes, against a fake provider."""
+
+    @staticmethod
+    def _client_factory(monkeypatch, handler):
+        import httpx
+
+        real = httpx.Client
+
+        def factory(**kwargs):
+            kwargs.pop("transport", None)
+            return real(transport=httpx.MockTransport(handler), **kwargs)
+
+        monkeypatch.setattr(httpx, "Client", factory)
+
+    def test_a_model_that_honours_dimensions_answers_the_index_width(
+        self, monkeypatch, real_probe_embedding_dimensions
+    ) -> None:
+        import httpx
+
+        from raven.config.update import REQUIRED_EMBEDDING_DIMENSIONS
+
+        probe_embedding_dimensions = real_probe_embedding_dimensions
+
+        bodies: list[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json as _json
+
+            body = _json.loads(request.content)
+            bodies.append(body)
+            width = body.get("dimensions") or 2560
+            return httpx.Response(200, json={"data": [{"embedding": [0.0] * width}]})
+
+        self._client_factory(monkeypatch, handler)
+
+        assert probe_embedding_dimensions("https://d/v1/embeddings", {}, "m") == REQUIRED_EMBEDDING_DIMENSIONS
+        assert [b.get("dimensions") for b in bodies] == [REQUIRED_EMBEDDING_DIMENSIONS]
+
+    def test_a_model_that_ignores_dimensions_answers_its_native_width(
+        self, monkeypatch, real_probe_embedding_dimensions
+    ) -> None:
+        import httpx
+
+        probe_embedding_dimensions = real_probe_embedding_dimensions
+
+        calls: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(1)
+            return httpx.Response(200, json={"data": [{"embedding": [0.0] * 768}]})
+
+        self._client_factory(monkeypatch, handler)
+
+        assert probe_embedding_dimensions("https://d/v1/embeddings", {}, "bge-base") == 768
+        # Asked with the index width first, then without it.
+        assert len(calls) == 2
+
+    @pytest.mark.parametrize(
+        ("response", "verdict"),
+        [
+            (lambda: httpx_response(503, text="down"), "HTTP 503"),
+            (lambda: httpx_response(200, json={"data": []}), "empty response"),
+            (lambda: httpx_response(200, json={"data": ["not-a-dict"]}), "unexpected response format"),
+        ],
+    )
+    def test_a_failure_is_described_not_measured(
+        self, monkeypatch, response, verdict, real_probe_embedding_dimensions
+    ) -> None:
+        probe_embedding_dimensions = real_probe_embedding_dimensions
+
+        self._client_factory(monkeypatch, lambda request: response())
+
+        assert probe_embedding_dimensions("https://d/v1/embeddings", {}, "m") == verdict
+
+    def test_a_transport_error_is_described_not_raised(self, monkeypatch, real_probe_embedding_dimensions) -> None:
+        import httpx
+
+        probe_embedding_dimensions = real_probe_embedding_dimensions
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=request)
+
+        self._client_factory(monkeypatch, handler)
+
+        assert "refused" in str(probe_embedding_dimensions("https://d/v1/embeddings", {}, "m"))
+
+
+def httpx_response(status: int, **kwargs):
+    import httpx
+
+    return httpx.Response(status, **kwargs)
+
+
+class TestTheProbeNeverRaises:
+    """A provider answering something other than the OpenAI shape is a
+    measurement failure, reported as one, never a traceback on the settings
+    page or in the wizard."""
+
+    @pytest.mark.parametrize(
+        "payload",
+        [["not", "a", "dict"], {"data": [{"embedding": None}]}, {"data": "nope"}],
+        ids=["list-body", "null-embedding", "string-data"],
+    )
+    def test_an_odd_body_is_a_string_not_a_verdict(self, monkeypatch, real_probe_embedding_dimensions, payload) -> None:
+        import httpx
+
+        real = httpx.Client
+        handler = lambda request: httpx.Response(200, json=payload)  # noqa: E731
+        monkeypatch.setattr(httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+
+        width = real_probe_embedding_dimensions("http://x/embeddings", {}, "m")
+
+        assert isinstance(width, str)
+
+
+class TestADisabledPluginConsumesNothing:
+    def test_a_plugin_on_the_disabled_list_does_not_gate(self, tmp_path, monkeypatch) -> None:
+        from raven.config import update
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"plugins": {"disabled": ["everos-memory"]}}), encoding="utf-8")
+        monkeypatch.setattr(update, "_everos_plugin_present", lambda: True)
+
+        assert update._everos_consumes_the_pin(cfg) is False
+
+
+class TestTheWidthOfThePinnedModel:
+    """What the backend asks at start: the pin as it stands, measured, so a
+    pin that reached the file around the write-time check is caught before
+    EverOS is started on it."""
+
+    def test_no_pin_means_nothing_to_measure(self, tmp_path, monkeypatch) -> None:
+        from raven.config import update
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(update, "_everos_plugin_present", lambda: True)
+
+        assert update.configured_embedding_width(cfg) is None
+
+    def test_a_pin_is_measured_through_its_provider(self, tmp_path, monkeypatch) -> None:
+        from raven.config import update
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"embedding": {"provider": "deepinfra", "model": "m"}}), encoding="utf-8")
+        monkeypatch.setattr(update, "_everos_plugin_present", lambda: True)
+        monkeypatch.setattr(
+            "raven.config.update_providers.resolve_provider_credentials",
+            lambda provider, config_path=None: ("http://p/v1", "k"),
+        )
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(
+            update,
+            "probe_embedding_dimensions",
+            lambda url, headers, model: seen.update(url=url, headers=headers) or 768,
+        )
+
+        assert update.configured_embedding_width(cfg) == 768
+        assert seen == {"url": "http://p/v1/embeddings", "headers": {"Authorization": "Bearer k"}}
+
+    def test_a_backend_that_is_not_everos_is_not_measured(self, tmp_path, monkeypatch) -> None:
+        from raven.config import update
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(
+            json.dumps({"memory": {"backend": None}, "embedding": {"provider": "p", "model": "m"}}), encoding="utf-8"
+        )
+        monkeypatch.setattr(update, "_everos_plugin_present", lambda: True)
+
+        assert update.configured_embedding_width(cfg) is None

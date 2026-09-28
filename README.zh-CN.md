@@ -9,7 +9,7 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
-[官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
+[技术报告](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf) · [官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
 
 </div>
 
@@ -36,6 +36,91 @@ Raven 构建于 EverMind 的自进化 harness 引擎之上，由 [EverOS](https:
 </p>
 
 <p align="center"><em>Raven 在多 Agent 编排基准测试上的表现</em></p>
+
+## ❯❯ 案例展示
+
+以下是三个由 Raven 驱动多智能体团队完成的完整项目案例。每个项目都从需求或目标出发，经由团队协作完成全过程，并交付下方展示的整套成果。
+
+### ❯ THRESHOLD 阈限：一个完整的游戏开发项目
+
+**需求文档由人编写，整个项目由 Raven 完成。** Raven 自主运行约 4 天，历经 42 轮规划、开发与验收，用 Godot 4 开发出一款以竞技场 Boss 战为核心玩法的第一人称射击游戏。项目最终交付可玩的游戏、游戏海报、演示文稿和官网，全部由 Raven 制作。
+
+<table>
+<tr>
+<td colspan="2" valign="top"><p align="center"><b>实机视频</b></p></td>
+<td width="22.8%" valign="top"><p align="center"><b><a href="https://livxue.github.io/threshold/">官网 ↗</a></b></p></td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+
+https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
+
+</td>
+<td rowspan="3" width="22.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/bf8f62c3-a78d-46ae-b964-94e6fea91435"><img src="https://github.com/user-attachments/assets/bf8f62c3-a78d-46ae-b964-94e6fea91435" alt="The Chinese THRESHOLD website as one long capture: hero, fight, kill cam, attack tells, evolution, making-of and footer" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="45.8%" valign="top"><p align="center"><b>海报</b></p></td>
+<td width="31.4%" valign="top"><p align="center"><b>演示文稿</b> · <b><a href="https://github.com/LivXue/Raven/releases/download/showcase-decks-2026-09-25/Raven-Game-0925.pptx">PPTX ↓</a></b></p></td>
+</tr>
+<tr>
+<td width="45.8%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/edc9e0df-1a76-4302-8c6d-be73e088d65d"><img src="https://github.com/user-attachments/assets/edc9e0df-1a76-4302-8c6d-be73e088d65d" alt="THRESHOLD poster with its Chinese title: the Warden towers over the player on a molten arena floor" width="100%"></a></p></td>
+<td width="31.4%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/3852c187-3412-4501-9b62-809a3dfd0b81"><img src="https://github.com/user-attachments/assets/3852c187-3412-4501-9b62-809a3dfd0b81" alt="Cover, slides and closing slide of the THRESHOLD deck" width="100%"></a></p></td>
+</tr>
+</table>
+
+### ❯ Raven RSI：一个完整的递归自我改进项目
+
+**让 AI 改进 AI，整个项目由 Raven 完成。** 给定任务目标与不可修改的评估标准，Raven RSI 会自主制定每轮计划、编写代码、运行实验并评估结果。在 nanochat 预训练实验中，它完成了 7 轮迭代、172 次训练，全程无崩溃，并在相同的单卡 20 分钟预算内，将 `val_bpb` 降低了 5.8%。同一流程还将溃坝仿真的越界量降低了三个数量级，并经过 8 轮二分迭代，完成了 FEA 极限载荷搜索。项目完整交付包括实验结果、可视化图表、海报、演示文稿和项目网站，全部由 Raven 制作。
+
+<table>
+<tr>
+<td width="35.7%" valign="top"><p align="center"><b>CFD 溃坝仿真</b></p></td>
+<td colspan="2" width="35.7%" valign="top"><p align="center"><b>FEA 极限载荷搜索</b></p></td>
+<td width="28.6%" valign="top"><p align="center"><b><a href="https://livxue.github.io/raven-rsi/">网站 ↗</a></b></p></td>
+</tr>
+<tr>
+<td width="35.7%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24"><img src="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="100%"></a></p></td>
+<td colspan="2" width="35.7%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7"><img src="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="100%"></a></p></td>
+<td rowspan="3" width="28.6%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/5e001c7d-f861-470b-8f11-5b5e4cc6c020"><img src="https://github.com/user-attachments/assets/5e001c7d-f861-470b-8f11-5b5e4cc6c020" alt="The Chinese Raven RSI website as one long capture: research overview, nanochat, dam-break CFD, FEA solver convergence and model cost comparison" width="100%"></a></p></td>
+</tr>
+<tr>
+<td colspan="2" width="41%" valign="top"><p align="center"><b>海报</b></p></td>
+<td width="30.4%" valign="top"><p align="center"><b>演示文稿</b> · <b><a href="https://github.com/LivXue/Raven/releases/download/showcase-decks-2026-09-25/Raven-RSI-0925.pptx">PPTX ↓</a></b></p></td>
+</tr>
+<tr>
+<td colspan="2" width="41%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092"><img src="https://github.com/user-attachments/assets/56ce36b7-05e9-4656-a332-7bbba91b5092" alt="Raven RSI poster with its Chinese title: a spiral stone stair climbing into the light, with ravens circling it" width="100%"></a></p></td>
+<td width="30.4%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/f2c368e3-789e-4a8d-890f-384240b36c25"><img src="https://github.com/user-attachments/assets/f2c368e3-789e-4a8d-890f-384240b36c25" alt="Cover, slides and closing slide of the Raven RSI deck" width="100%"></a></p></td>
+</tr>
+</table>
+
+### ❯ Raven：一个完整的产品发布项目
+
+**一只渡鸦，汇聚各路专家；整个项目由 Raven 完成。** Raven 的产品发布项目包括一款可在浏览器中直接游玩的物理小游戏、一份 16 页的产品介绍演示文稿、中英文海报，以及你正在阅读的这份 README，整套内容均由 Raven 制作。
+
+<table>
+<tr>
+<td colspan="2" valign="top"><p align="center"><b>物理小游戏</b> · <b><a href="https://livxue.github.io/angry-raven/">在线试玩 ↗</a></b></p></td>
+<td width="19.5%" valign="top"><p align="center"><b>README</b></p></td>
+</tr>
+<tr>
+<td colspan="2" valign="top">
+
+https://github.com/user-attachments/assets/dd186b6d-3752-4c59-89c7-eeea5c6fa962
+
+</td>
+<td rowspan="3" width="19.5%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/97476a17-f779-47ae-9006-2285ef2fe58a"><img src="https://github.com/user-attachments/assets/97476a17-f779-47ae-9006-2285ef2fe58a" alt="The top of the Chinese Raven README as one long capture: banner, introduction, the four built-in agents with their benchmarks, and runtime self-evolution" width="100%"></a></p></td>
+</tr>
+<tr>
+<td width="46.2%" valign="top"><p align="center"><b>海报</b></p></td>
+<td width="34.3%" valign="top"><p align="center"><b>演示文稿</b> · <b><a href="https://github.com/LivXue/Raven/releases/download/showcase-decks-2026-09-25/Raven-Overview-0925.pptx">PPTX ↓</a></b></p></td>
+</tr>
+<tr>
+<td width="46.2%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9152b06b-74a3-4059-adff-41267a69a207"><img src="https://github.com/user-attachments/assets/9152b06b-74a3-4059-adff-41267a69a207" alt="Raven poster with its Chinese title: a raven on a standing stone above sea cliffs at sunset" width="100%"></a></p></td>
+<td width="34.3%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/2e19674e-83a8-4a77-a114-39f906c240d0"><img src="https://github.com/user-attachments/assets/2e19674e-83a8-4a77-a114-39f906c240d0" alt="Cover, slides and closing slide of the Raven overview deck" width="100%"></a></p></td>
+</tr>
+</table>
+
+**[更多案例](docs/showcase.zh-CN.md)**
 
 ## ❯❯ 内置 Agent
 
@@ -101,100 +186,15 @@ Raven 采用模块化架构，专为 harness 自进化与子 Agent 创建而设�
 
 <p align="center"><em>在 AI4S 任务上，Raven-Oncall 的成功率与成本均显著优于 Claude Code</em></p>
 
-## ❯❯ 案例展示
+## ❯❯ 运行时自进化
 
-以下均为真实运行记录，每条都取自 Raven 的任务图。任务图展示 Raven 为该任务生成的编排，下方是本次运行的产出。
+**Raven 从架构设计之初就支持运行时自进化。** 它将 Agent 的运行循环拆分为四个相互解耦的策略模块——**Memory** 决定本轮能看到什么，**Planning** 决定如何着手，**Capability** 决定本轮开放哪些工具，**Action** 决定做什么并在执行前加以判断。**Curator** 正是在这四个位置上持续改写：可以是一项配置变更，也可以是为该 Agent 编写的一段判断逻辑。改动仅作用于对应的 Agent，装配完成后即按新的实现运行。
 
-<table>
-<tr>
-<td valign="top"><p align="center"><b>用 Godot 4 开发的 FPS Boss 竞技场游戏（自主运行约 4 天）</b></p></td>
-</tr>
-<tr>
-<td valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1"><img src="https://github.com/user-attachments/assets/951e35bd-ff9c-4456-b539-32dd192827e1" alt="Task graph: three Raven-Code nodes running in sequence across 42 game rounds" width="100%"></a></p></td>
-</tr>
-<tr>
-<td valign="top">
+**Curator 改写的不止是提示词。** 它所使用的工具与外部服务、所遵循的技能与流程、在每个环节上的判断，都可以被替换。改写按轮次进行：你使用它完成工作，指出不足，它据此改写后再来一轮，直到你认可、它判断已无可改之处，或轮次预算用尽。质量由两点保障：装配前必须通过校验，未通过则返工；常规轮次的信号在交给它之前会剥掉参考答案，以减少答案的直接暴露。Curator 目前仍是实验性的：它随仓库提供，不包含在安装包中。
 
-https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
+**数字人是它构建的第一个成果。** 只需描述你想要什么样的助手，Curator 就会为你构建：由一个主角色负责与你沟通，再从已有的 Agent 中选择合适的成员分工协作。你的需求会完整落实到助手的 **harness** 中，成为具体的职责分工、工具使用范围和行动前的检查规则。
 
-</td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td width="50%" valign="top"><p align="center"><b>演示文稿：宋代居家美学（成本约 5.5 元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>演示文稿：古希腊是怎样变“白”的（成本约 5.5 元）</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489"><img src="https://github.com/user-attachments/assets/7bf450bb-3d5c-4d4a-826a-e5a06344d489" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257"><img src="https://github.com/user-attachments/assets/c8e9ac77-0377-487e-9d07-fb4fe51a0257" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/92fafcb0-8e17-4f17-819f-d18d970f2c3c"><img src="https://github.com/user-attachments/assets/92fafcb0-8e17-4f17-819f-d18d970f2c3c" alt="Cover, slides and closing slide of the Song-dynasty aesthetics deck" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/82801a70-edb3-4ca7-b7f0-a2c11431d6d3"><img src="https://github.com/user-attachments/assets/82801a70-edb3-4ca7-b7f0-a2c11431d6d3" alt="Cover, slides and closing slide of the Greek polychromy deck" width="100%"></a></p></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td width="50%" valign="top"><p align="center"><b>演示文稿：流行音乐是如何被制造出来的（成本约 5.5 元）</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>演示文稿：抽象艺术百年（成本约 5.5 元）</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451"><img src="https://github.com/user-attachments/assets/032fdf6e-8b65-49a0-92ba-2ea3066a7451" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6"><img src="https://github.com/user-attachments/assets/4b606bae-667e-4f2f-ae7d-2880b47ddbf6" alt="Task graph: three Raven-Research nodes running in parallel into a synthesis node, then one Raven-Design node" width="98%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/350f902e-838a-4233-af44-d86c3240e757"><img src="https://github.com/user-attachments/assets/350f902e-838a-4233-af44-d86c3240e757" alt="Cover, slides and closing slide of the pop music deck" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/4feda7e4-bb2e-4d63-b592-dc75c77f3406"><img src="https://github.com/user-attachments/assets/4feda7e4-bb2e-4d63-b592-dc75c77f3406" alt="Cover, slides and closing slide of the abstract art deck" width="100%"></a></p></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td width="50%" valign="top"><p align="center"><b>海报：六个 Agent 编排框架横向对比</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>数据分析：参数扫描</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4"><img src="https://github.com/user-attachments/assets/db8ac2b2-bf18-4d18-a8f4-6d4904a7a0c4" alt="Task graph: two Raven-Research nodes running in parallel into one Raven-Design node" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/0048ee55-9102-407c-a58a-366dc0a8a9da"><img src="https://github.com/user-attachments/assets/0048ee55-9102-407c-a58a-366dc0a8a9da" alt="Task graph: Raven-Code into Raven-Oncall into Raven-Design, run in sequence" width="100%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/15396c71-10ff-4077-9193-44c3a25d2d60"><img src="https://github.com/user-attachments/assets/15396c71-10ff-4077-9193-44c3a25d2d60" alt="Comparison board: six orchestration frameworks against four dimensions, each tagged explicit graph or canvas, declared task flow, or dynamic at runtime" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9e0ee7b0-4265-4b84-bb50-8034406894b3"><img src="https://github.com/user-attachments/assets/9e0ee7b0-4265-4b84-bb50-8034406894b3" alt="Retrieval sweep dashboard: recall@k is set by top_k alone and latency stays broadly flat, with a sixteen-cell grid of measured recall and latency and the best cell ringed at top_k 10, chunk_size 1024" width="99%"></a></p></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td width="50%" valign="top"><p align="center"><b>海报：光污染如何偷走野生动物的睡眠</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>网站：GPS 为什么需要第四颗卫星</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd"><img src="https://github.com/user-attachments/assets/d3e4c873-cf95-4011-8471-0fda72778cfd" alt="Task graph: three Raven-Research nodes in parallel into a Raven-Code node; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="83%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da"><img src="https://github.com/user-attachments/assets/9754976b-11ff-4738-b53d-0621ec6ae7da" alt="Task graph: two Raven-Code nodes in parallel into a Raven-Oncall cross-check; that node and a Raven-Design plate node running alongside them both feed the final Raven-Design node" width="100%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/fd70acb8-ec48-4adc-bf51-1e1c316e939e"><img src="https://github.com/user-attachments/assets/fd70acb8-ec48-4adc-bf51-1e1c316e939e" alt="Key visual plus the derived series: street poster, data panel, social square and wide banner" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/dbf6fa43-5a68-4e6a-95d4-a9902770ee4b"><img src="https://github.com/user-attachments/assets/dbf6fa43-5a68-4e6a-95d4-a9902770ee4b" alt="GPS trilateration explainer: the live page, and the fix at two, three and four satellites" width="97%"></a></p></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td width="50%" valign="top"><p align="center"><b>仿真：用二分法求出梁的极限载荷</b></p></td>
-<td width="50%" valign="top"><p align="center"><b>仿真：溃坝模拟，调优至水相不再越界</b></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783"><img src="https://github.com/user-attachments/assets/05fd70ce-85ca-4f8a-9891-d9085d3f4783" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a CalculiX cantilever plastic limit chain, 3 of 3 done in 5m21s, 1m28s and 4m11s" width="100%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d"><img src="https://github.com/user-attachments/assets/050707b5-2af9-4f29-9d65-1564e96fef9d" alt="Task graph: Raven-Research into Raven-Code into Raven-Oncall, run in sequence for a dam-break chain, 3 of 3 done in 11m48s, 1m16s and 3m58s" width="100%"></a></p></td>
-</tr>
-<tr>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7"><img src="https://github.com/user-attachments/assets/89878a01-ab5c-4070-8359-5bc34c3d58b7" alt="Limit-load search: a cantilever beam under rising load colored by von Mises stress, with the bisection bracket narrowing from 1800-2000 kN down to 3.125 kN over eight rounds" width="90%"></a></p></td>
-<td width="50%" valign="top"><p align="center"><a href="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24"><img src="https://github.com/user-attachments/assets/44f81db4-4c17-47be-ad3b-047e26762a24" alt="Dam-break solve: a collapsing water column resolved to fine free-surface structure, with the out-of-bounds water fraction falling from 1e0 to 1.36e-10 over seven rounds" width="90%"></a></p></td>
-</tr>
-</table>
+> 描述你的需求，Raven 会为你创建助手，并在使用中持续改进。之后，只需一句话，就能让它再次为你工作。
 
 ## ❯❯ 连接第三方 Agent
 
@@ -243,6 +243,16 @@ cd Raven
 ```
 
 直接运行本地的 `install.sh` 文件时，脚本会以可编辑（editable）模式安装当前检出目录：Raven 及其内置插件都链接回你的工作树，TUI 包和 Web 页面也从该目录构建。而通过管道运行时，即使当前位于克隆仓库内，也始终安装已发布的 wheel，确保一行命令安装不会误用工作树中的内容。如需在管道方式下强制可编辑安装，请设置 `RAVEN_LOCAL_SRC=<dir>`。
+
+如果不想在宿主机上装任何东西，也可以用容器运行，只需 Git 和 Docker：
+
+```bash
+git clone https://github.com/EverMind-AI/Raven.git
+cd Raven
+docker compose -f docker/docker-compose.yml up
+```
+
+然后在浏览器中打开 `http://localhost:18793`。容器里跑了哪些进程、页面如何自动登录，以及端口对外暴露时该怎么配置，详见 [`docker/README.md`](docker/README.md)。前置依赖：[Git](https://git-scm.com/)、[Docker](https://www.docker.com/) 与 [Docker Compose](https://docs.docker.com/compose/)。
 
 内置 Agent 随 Raven 一同分发：wheel 包自带 `agents/` 目录，首次使用时会复制到 Raven 主目录；源码安装则直接读取仓库中的该目录。配置向导会逐个询问：该 Agent 是使用其调优所用的模型（需要单独的 key），还是直接使用当前 Raven 的 LLM。这一步不做注册：只要目录存在，Agent 就会出现在名册中。详见 [`agents/README.md`](agents/README.md)。
 
@@ -378,3 +388,18 @@ raven web
 ## ❯❯ 许可证
 
 [Apache License 2.0](LICENSE)
+
+## ❯❯ 引用
+
+如果你在研究中使用了 Raven，请引用我们的[技术报告](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf)：
+
+```bibtex
+@techreport{evermind2026raven,
+  title       = {{Raven: The Harness of Harnesses for Composable Agentic Intelligence}},
+  author      = {{EverMind AI}},
+  institution = {EverMind AI},
+  year        = {2026},
+  month       = sep,
+  url         = {https://github.com/EverMind-AI/Raven/releases/tag/tech-report-v1}
+}
+```

@@ -9,15 +9,15 @@
    The list is re-fetched after every mutation rather than patched locally: the
    handler recomputes `group`, `enabled` and the probe verdict together, and a
    client that guesses any one of them is how the page starts disagreeing with
-   the config on disk. `probe: false` on that follow-up call skips the
-   availability check, which can cost up to ten seconds per entry and would only
-   re-measure what the write just changed. */
+   the config on disk. That follow-up call asks for the probe only after a
+   write that can have moved the verdict (`remeasures`); a text edit skips the
+   availability check, which can cost up to ten seconds per entry. */
 
 import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 
 import type { ResultOf } from '../../rpc/generated'
-import type { ExtAgentRow, ExtAgentsSource, Remedy } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
 
 /** One agent as `subagents.list` sends it. */
 export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]
@@ -84,10 +84,6 @@ export function stageOf(row: ExtAgentRow): Stage {
     if (row.probe_status === 'missing') return 'install'
     return row.enabled ? 'live' : 'off'
   }
-  /* An HTTP agent cannot answer without its key, so it is not connected by
-     writing an entry -- the key is the missing part, whether the entry exists
-     yet or not. */
-  if (row.kind === 'openai' && !row.has_api_key) return 'key'
   /* Named, not offered: the handshake already refused this agent for want of
      a credential, and the remedy -- signing in -- is outside this page, so a
      Connect here would spend a launch to arrive at the same sentence. Only
@@ -95,15 +91,24 @@ export function stageOf(row: ExtAgentRow): Stage {
      its credential has since done. The way back is the card's Test, which
      re-measures. */
   if (!row.enabled && (row.kind === 'cli' || row.kind === 'acp') && row.needs_auth) return 'unauthorized'
-  if (!row.configured) return 'add'
-  if (row.enabled) return 'live'
   /* Out of service and its preset has moved to another transport. Connecting it
      is a remove plus an add, not a flag, so it is its own stage rather than a
      variant of `off` -- the flag left `upgrade_to` standing and the old command
      line in place, which is an agent the card offered to migrate and never did.
-     After `live`, so an agent still in service keeps offering the one verb its
-     state calls for, which is disconnect. */
-  if (row.upgrade_to) return 'stale'
+     Off the roster only, so an agent still in service keeps offering the one
+     verb its state calls for, which is disconnect; configured, because the
+     flag only ever lands on a stored row and a preset must stay an add. After
+     `unauthorized`: a refused handshake is settled by signing in, not by a
+     migration this row cannot pass either. Before the key stage: the
+     migration is written from the preset and needs no key, and a key taken
+     here would be stored on, and switch on, the old command line. */
+  if (row.configured && !row.enabled && row.upgrade_to) return 'stale'
+  /* An HTTP agent cannot answer without its key, so it is not connected by
+     writing an entry -- the key is the missing part, whether the entry exists
+     yet or not. */
+  if (row.kind === 'openai' && !row.has_api_key) return 'key'
+  if (!row.configured) return 'add'
+  if (row.enabled) return 'live'
   return 'off'
 }
 
@@ -160,17 +165,19 @@ export function isFound(row: ExtAgentRow): boolean {
    instead of reaching into the array the page is rendering. */
 let extAgentsSeen = new Map<string, ExtAgentRow>()
 
-export async function extAgentsFetch(probe: boolean): Promise<ExtAgentRow[]> {
-  const res = await gateway().call('subagents.list', { probe: !!probe })
+export async function extAgentsFetch(probe: boolean, rescan = false): Promise<ExtAgentRow[]> {
+  const res = await gateway().call('subagents.list', { probe: !!probe, ...(rescan ? { refresh_login_env: true } : {}) })
   /* A probe-less list reports every row as "unknown", which would blank the
-     health line of a row that was ready a second ago -- connecting an agent
-     would look like it broke it. The verdict cannot have changed by writing
-     config, so the last known one is carried over -- with what it found
-     absent, or a missing row's install falls back to the agent's own. */
+     health line of a row that was ready a second ago -- editing a description
+     would look like it broke the agent. Only a read that asked for no probe
+     carries the last verdict over: a write that can move the verdict asks for
+     the probe (`remeasures`), and a probing answer is the newer evidence even
+     when it says "unknown". Carried with what it found absent, or a missing
+     row's install falls back to the agent's own. */
   const rows = (res.rows || []).map((r) => {
     const row = extAgentRowOf(r)
     const prev = extAgentsSeen.get(row.name)
-    if (row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
+    if (!probe && row.probe_status === 'unknown' && prev && prev.probe_status !== 'unknown') {
       row.probe_status = prev.probe_status
       row.probe_detail = prev.probe_detail
       if (prev.probe_missing) row.probe_missing = prev.probe_missing
@@ -186,8 +193,45 @@ export function resetExtAgentsSeen(): void {
   extAgentsSeen = new Map()
 }
 
+/* Whether the server may answer this write by running the agent. The enable
+   gate sends one real prompt through the agent's own backend and waits up to
+   60s for the reply, so the reader is waiting on a test rather than on a
+   connection being opened, and the row should say so (store.ts `probes`).
+
+   `may`, not `will`: the server also asks whether the row is on and whether the
+   value actually moved, and neither fact travels with the write -- the page
+   posts what is in the field, and only the stored row knows what was there
+   before. Mirroring that here would put the same condition in two layers with
+   nothing holding them together. The two wrong answers do not cost the same:
+   answering yes for a write the server settles without asking puts a word on
+   something that returns in milliseconds, while answering no for one it does
+   ask leaves "connecting" on the row for the length of a real ping. So this
+   errs towards yes.
+
+   `migrate` counts because it is a remove plus an add from the preset, so it
+   goes through the same gate any other add does. A credential and a model are
+   the two fields an update can change that the agent has never been asked
+   about; a rename or a description cannot change what it answers. */
+export const runsAgent = (op: ExtAgentOp, args: ExtAgentActArgs): boolean =>
+  op === 'connect' ||
+  op === 'migrate' ||
+  op === 'model' ||
+  (op === 'toggle' && args.enabled === true) ||
+  (op === 'update' && !!args.api_key)
+
+/* Whether the read that ends this write has to probe. A write the gate answers
+   by running the agent leaves a verdict the last probe never saw -- an acp
+   connect records the capability snapshot the probe reads -- and an acp test
+   writes its own; carrying the pre-write verdict over either kept the "not verified"
+   dot on a row that had just connected, until a reload. A rename is here for
+   the memory's sake: it is keyed by name, so the renamed row would otherwise
+   read "unknown" and drop the caveat it had. A description edit is the one
+   write a reader repeats, and it stays on the cheap list. */
+export const remeasures = (op: ExtAgentOp, row: ExtAgentRow, args: ExtAgentActArgs): boolean =>
+  runsAgent(op, args) || op === 'test' || (!!args.new_name && args.new_name !== row.name)
+
 export const extAgentsSource: ExtAgentsSource = {
-  load: (probe) => extAgentsFetch(!!probe),
+  load: (probe, rescan) => extAgentsFetch(!!probe, !!rescan),
   act: async (op, row, args) => {
     const a = args || {}
     if (op === 'connect') {
@@ -262,7 +306,7 @@ export const extAgentsSource: ExtAgentsSource = {
          still going, and the store polls the list while any row carries it. */
       await gateway().call('subagents.build', { name: row.name })
     }
-    return extAgentsFetch(false)
+    return extAgentsFetch(remeasures(op, row, a))
   },
 }
 
@@ -271,10 +315,38 @@ export function _resetForTests(): void {
   extAgentsSeen = new Map()
 }
 
+const REMEDY_KINDS: ReadonlySet<string> = new Set<Remedy['kind']>([
+  'sign_in',
+  'setup',
+  'api_key',
+  'download',
+  'model',
+  'billing',
+  'quota',
+  'network',
+  'silent',
+  'upgrade',
+  'exited',
+  'runtime',
+  'plan',
+  'config',
+])
+
 /* A remedy off the wire, or null for anything that is not one. Read from a row
-   and from a refused call's `data` alike, so both land in the one shape. */
+   and from a refused call's `data` alike, so both land in the one shape. A step
+   to type is kept only beside the command that opens the place to type it. */
 export function remedyOf(raw: unknown): Remedy | null {
-  const r = raw as { kind?: unknown; command?: unknown } | null | undefined
-  if (!r || (r.kind !== 'sign_in' && r.kind !== 'setup' && r.kind !== 'api_key' && r.kind !== 'download')) return null
-  return { kind: r.kind, command: typeof r.command === 'string' ? r.command : '' }
+  const r = raw as { kind?: unknown; command?: unknown; then?: unknown; needs?: unknown; found?: unknown } | null | undefined
+  if (!r || typeof r.kind !== 'string' || !REMEDY_KINDS.has(r.kind)) return null
+  const command = typeof r.command === 'string' ? r.command : ''
+  const then = command && typeof r.then === 'string' ? r.then : ''
+  const needs = typeof r.needs === 'string' ? r.needs : ''
+  const found = typeof r.found === 'string' ? r.found : ''
+  return {
+    kind: r.kind as Remedy['kind'],
+    command,
+    ...(then ? { then } : {}),
+    ...(needs ? { needs } : {}),
+    ...(found ? { found } : {}),
+  }
 }

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 
 import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
-import { Card, Chip, KeyLink, Row, Rov, Spin, Switch, Xrow } from '../Fields'
+import { Card, Chip, Empty, GLYPH, KeyLink, Row, Rov, Spin, Switch, Xrow } from '../Fields'
 import { KeyFieldsWait } from '../Skeletons'
 import * as store from '../store'
 
@@ -178,11 +178,17 @@ export function Plugins(): JSX.Element {
   }
   return (
     <>
-      <div className="settings-crumb">
-        <Rov>{t('gui.settings.plugins.counter', { on: connected, total: rows.length })}</Rov>
-      </div>
+      {/* "0 of 0 connected" is a number about nothing: the empty card below
+          already says there is no server, so the count only runs with rows. */}
+      {rows.length > 0 && (
+        <div className="settings-crumb">
+          <Rov>{t('gui.settings.plugins.counter', { on: connected, total: rows.length })}</Rov>
+        </div>
+      )}
       <Card>
-        {!rows.length && <Row><Rov>{t('gui.settings.plugins.none')}</Rov></Row>}
+        {!rows.length && (
+          <Empty icon={GLYPH.plug} title={t('gui.settings.plugins.none')}>{t('gui.settings.plugins.none_sub')}</Empty>
+        )}
         {rows.map((m) => {
           const panel = <Panel m={m} />
           return (

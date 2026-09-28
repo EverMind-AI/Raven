@@ -12,9 +12,16 @@
   border-bottom: 1px solid var(--line-soft); }
 .ob-brand { flex: none; min-width: 160px; font-size: 15px; font-weight: 600; letter-spacing: .01em; }
 
-.ob-steps { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; }
+/* A track of fixed width whose connectors stretch to fill it, so two steps read
+   as a progress bar rather than two labels a hair apart. A connector fills
+   from the left once the step before it is behind the reader. */
+.ob-steps { flex: 0 1 480px; min-width: 0; margin: 0 auto; display: flex; align-items: center; }
 .ob-sitem { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--faint); white-space: nowrap; }
-.ob-sitem + .ob-sitem::before { content: ""; width: 34px; height: 1px; background: var(--line); margin: 0 12px 0 10px; }
+.ob-sitem + .ob-sitem { flex: 1; min-width: 0; }
+.ob-sitem + .ob-sitem::before { content: ""; flex: 1; min-width: 34px; height: 2px; border-radius: 2px; margin: 0 12px 0 10px;
+  background: linear-gradient(var(--moss), var(--moss)) left / 0% 100% no-repeat, var(--line);
+  transition: background-size .35s ease; }
+.ob-sitem:is([data-state="done"], [data-state="skipped"]) + .ob-sitem::before { background-size: 100% 100%, auto; }
 .ob-dot { width: 20px; height: 20px; border-radius: 99px; border: 1.5px solid var(--line); display: grid; place-items: center;
   font-size: 10.5px; font-weight: 700; color: var(--faint); background: var(--paper); }
 .ob-sitem[data-state="current"] { color: var(--text); font-weight: 600; }
@@ -23,7 +30,7 @@
 .ob-sitem[data-state="done"] .ob-dot { border-color: var(--moss); color: var(--moss); }
 .ob-sitem[data-state="skipped"] .ob-dot { border-style: dashed; }
 
-.ob-lang { margin-left: auto; flex: none; position: relative; }
+.ob-lang { flex: none; min-width: 160px; display: flex; justify-content: flex-end; position: relative; }
 .ob-langbtn { font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 5px; border: 0;
   border-radius: 7px; background: none; color: var(--text); padding: 5px 8px; cursor: pointer; }
 .ob-langbtn:hover, .ob-langbtn[aria-expanded="true"] { background: var(--raised); }

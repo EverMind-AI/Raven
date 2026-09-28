@@ -14,22 +14,22 @@ import type { JSX } from 'react'
    exception is miromind.svg, which that package does not carry and which is
    MiroMind's own favicon, also verbatim.
 
-   `tone` says how the file answers the theme, which is a fact about the file
-   rather than a preference -- tests/test_ui_agent_marks.py derives each one
-   from the shapes in the SVG it names, and the stylesheet reads it back off
-   `data-tone`. Three answers, because an <img> resolves `currentColor` against
-   its own document rather than the page and so renders it black:
+   `tone` says what the file is made of, which is a fact about the file rather
+   than a preference -- tests/test_ui_agent_marks.py derives each one from the
+   shapes in the SVG it names. Three answers, because an <img> resolves
+   `currentColor` against its own document rather than the page and so renders
+   it black:
 
-   - absent: every shape carries its own fill. Theme-independent, touch nothing.
-   - `mono`: every shape is `currentColor`. Black until the dark theme inverts
-     the lot, which is what the provider marks already do.
-   - `hybrid`: some shapes are, some are not. Only qoder, whose mark is brand
-     green beside one tone the vendor means to follow the page's text -- so a
-     plain invert would take the green to magenta with it, and the hue rotation
-     puts it back. Measured: #2ADB5C -> #D524A3 inverted, -> #008203 with the
-     rotation. Not the same green, and the closest a filter gets without
-     constants fitted to one hex; the alternative that reproduces it exactly is
-     inlining the file, which ui-web/build.py's assets comment rules out. */
+   - absent: every shape carries its own fill.
+   - `mono`: every shape is `currentColor`, so the file draws black.
+   - `hybrid`: some shapes are, some are not. Only qoder: brand green beside one
+     tone the vendor means to follow the page's text.
+
+   No rule reads it back any more. Every mark sits on a light plate in both
+   themes (page.css, `.agent-mark`), because recolouring a mark for a dark
+   ground is a per-file guess: inverting a mono illustration gives its negative
+   and rotating qoder's hue back lands on a different green. The attribute
+   stays as the file's fact, for the test that ties each tone to its file. */
 const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   claude_code: { file: 'claudecode-color' },
   codebuddy: { file: 'codebuddy-color' },
@@ -57,9 +57,8 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
    against @lobehub/icons-static-svg that settles provenance for the thirteen
    does not apply to it and LICENSES/README.md counts it separately. It answers
    the theme from a prefers-color-scheme rule inside the file, the way
-   miromind.svg does: every shape carries its own fill, so no `tone` filter
-   reaches it, and a raven is black -- which on the dark theme's surface is a
-   silhouette at 1.2:1, two white eyes floating in an empty frame. */
+   miromind.svg does; the tile pins that scheme light, so on its light plate the
+   raven is black under either theme, as the app icon draws it. */
 const OWN_MARK: { file: string } = { file: 'raven' }
 
 /* Spelled once, because four call sites read it off three different row types

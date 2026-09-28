@@ -398,10 +398,9 @@ export interface TranscriptSource {
      Read to find the record a restored card's run wrote -- once per
      conversation, not once per card. */
   spawnList?: () => Promise<SpawnListRow[]>
-  /* `nodeId` is the tasks store's own id for the spawn (present on the wire's
-     `delegated` payload once the run is live). When it names a row there,
-     the caller opens that task directly rather than guessing by label. */
-  openSpawn?: (agent: string, label: string, nodeId?: string) => void
+  /* Open a spawn's task pane by its record id -- the call's `node_id`, which
+     the card's arguments and the wire's `delegated` payload both carry. */
+  openSpawn?: (nodeId: string) => void
   /* Open the run's task pane on the desk. Both the delivered row and the
      card's own task cell go through this one verb, so the replayed row opens
      the same place the live one does. */

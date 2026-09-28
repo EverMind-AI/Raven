@@ -14,6 +14,7 @@ from raven.config.schema import ThirdPartyCliSubagentConfig
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError
 from raven.rpc.methods.subagents import (
+    _read_the_shell_again,
     register_subagents_methods,
     subagents_list,
     subagents_probe,
@@ -68,6 +69,10 @@ async def _probe_openai_without_network(cfg, *, source):
     return ProbeResult(cfg.name, source, "openai", "unknown", "not probed in this test", "", 0)
 
 
+async def _shell_not_read(cfg) -> None:
+    """A ``_read_the_shell_again`` stand-in: the login shell is the machine's, not the test's."""
+
+
 @pytest.fixture(autouse=True)
 def _skip_live_probes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep ``_rows(probe=True)`` off both the login shell and the network.
@@ -78,9 +83,14 @@ def _skip_live_probes(monkeypatch: pytest.MonkeyPatch) -> None:
     its PATH. Neither carries a signal these assertions read, and a unit test
     that answers differently when a vendor is down is not one. A test about the
     PATH capture itself sets ``_login_path`` again, which lands after this.
+
+    A connect and a Test run that shell too, before they ask the agent
+    (``_read_the_shell_again``), so it is stood in for the same way; a test
+    about that capture wires the real one back.
     """
     monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: "")
     monkeypatch.setattr("raven.agent.subagent.probe._probe_openai", _probe_openai_without_network)
+    monkeypatch.setattr("raven.rpc.methods.subagents._read_the_shell_again", _shell_not_read)
 
 
 async def test_list_returns_configured_entries_and_unconfigured_presets(config_path: Path) -> None:
@@ -241,6 +251,55 @@ async def test_a_missing_row_names_the_executable_to_install(config_path: Path, 
 
     unmeasured = (await subagents_list({"probe": False}))["rows"]
     assert all(row["probe_missing"] is None for row in unmeasured)
+
+
+async def test_a_recheck_finds_an_agent_installed_after_the_gateway_started(
+    config_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page's "Check again" reads the shell's PATH as it is now, not as it was at start.
+
+    Measured 2026-09-24 with Kimi Code: installed from a terminal after the
+    gateway had started, its installer adding a PATH line to ~/.zshrc, and the
+    card kept saying "still not found" until a restart -- every probe read the
+    login-shell PATH the gateway captured once. A plain listing still reads that
+    capture, since every page open lists and must not run a login shell to do
+    it; only the flag the re-check sends takes the shell's environment again.
+    """
+    import raven.agent.subagent.backends.env as env_mod
+
+    # The shell itself is the stand-in, and everything above it is real: the
+    # memo, the refresh, and the probe reading the memo (which `_skip_live_probes`
+    # cut off, so it is wired back here, as that fixture says to).
+    shell = {"PATH": "/usr/bin:/bin"}
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", None)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
+    monkeypatch.setattr(env_mod, "_capture", lambda *, consequence: dict(shell))
+    monkeypatch.setattr("raven.agent.subagent.probe._login_path", lambda: env_mod.login_shell_env().get("PATH", ""))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+
+    def kimi(result: dict) -> dict:
+        return next(row for row in result["rows"] if row["name"] == "Kimi Code")
+
+    assert kimi(await subagents_list({}))["probe_status"] == "missing"
+
+    # The install: the executable lands, and the shell rc now puts its directory on PATH.
+    bindir = tmp_path / "kimi-code" / "bin"
+    bindir.mkdir(parents=True)
+    exe = bindir / "kimi"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    shell["PATH"] = f"{bindir}:/usr/bin:/bin"
+
+    assert kimi(await subagents_list({}))["probe_status"] == "missing", "a plain listing reads the capture from start"
+
+    found = kimi(await subagents_list({"refresh_login_env": True}))
+    assert found["probe_status"] != "missing"
+    assert found["probe_missing"] is None
+
+    # It is now the capture every later listing and spawn reads, and only a real
+    # boolean asks for another: "true" is truthy in Python but is not a request.
+    shell["PATH"] = "/usr/bin:/bin"
+    assert kimi(await subagents_list({"refresh_login_env": "true"}))["probe_status"] != "missing"
 
 
 async def test_list_surfaces_a_malformed_config_section_instead_of_an_empty_list(
@@ -1692,6 +1751,77 @@ async def test_enabling_a_local_agent_succeeds_when_the_ping_answers(
     assert await subagents_toggle({"name": "Coder", "enabled": True}) == {"enabled": True}
     entry = next(e for e in _stored(config_path) if e["name"] == "Coder")
     assert entry["enabled"] is True
+
+
+def _a_shell_that_can_change(monkeypatch: pytest.MonkeyPatch, path: str) -> dict[str, str]:
+    """The login shell, as a dict a test edits the way a terminal edits ~/.zshrc.
+
+    Everything above the shell is real -- the memo, the refresh, and the
+    connect's own call to it, which `_skip_live_probes` cut off and this wires
+    back. The memo starts as the capture taken at start.
+    """
+    import raven.agent.subagent.backends.env as env_mod
+    import raven.rpc.methods.subagents as subagents_mod
+
+    shell = {"PATH": path}
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", dict(shell))
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
+    monkeypatch.setattr(env_mod, "_capture", lambda *, consequence: dict(shell))
+    monkeypatch.setattr(subagents_mod, "_read_the_shell_again", _read_the_shell_again)
+    return shell
+
+
+async def test_a_connect_pressed_again_launches_with_the_shell_as_it_is_now(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fix made in the shell's rc reaches the agent on the next Connect, not the next restart.
+
+    Some of what a refused connect names is fixed in a terminal: a Node too old
+    for the agent swapped with nvm, a proxy exported in ~/.zshrc. Every spawn
+    read the login shell as this process captured it at start, so the Connect
+    pressed after the fix launched the agent as before and failed as before.
+    An endpoint launches nothing, so its connect runs no shell.
+    """
+    import raven.agent.subagent.backends.env as env_mod
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import PingResult
+
+    shell = _a_shell_that_can_change(monkeypatch, "/opt/node18/bin")
+    launched_with: list[tuple[str, str]] = []
+
+    async def _answers(cfg):
+        launched_with.append((cfg.name, env_mod.login_shell_env()["PATH"]))
+        return PingResult(True, "it ran and replied")
+
+    monkeypatch.setattr(subagents_mod, "ping_agent", _answers)
+    await subagents_toggle({"name": "Coder", "enabled": False})
+
+    shell["PATH"] = "/opt/node20/bin"
+    await subagents_toggle({"name": "Coder", "enabled": True})
+    assert launched_with == [("Coder", "/opt/node20/bin")], "the connect launched from the capture taken at start"
+
+    shell["PATH"] = "/opt/node22/bin"
+    await subagents_toggle({"name": "Researcher", "enabled": True})
+    assert launched_with[-1] == ("Researcher", "/opt/node20/bin"), "an endpoint's connect ran the shell"
+
+
+async def test_a_test_launches_with_the_shell_as_it_is_now(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test is the other press that follows a fix, so it reads the shell again the same way."""
+    import raven.agent.subagent.backends.env as env_mod
+    import raven.rpc.methods.subagents as subagents_mod
+    from raven.agent.subagent.probe import TestResult
+
+    shell = _a_shell_that_can_change(monkeypatch, "/opt/node18/bin")
+    launched_with: list[str] = []
+
+    async def fake_run_test(cfg, *, source):
+        launched_with.append(env_mod.login_shell_env()["PATH"])
+        return TestResult(cfg.name, source, "cli", True, "the agent ran and replied", "PONG", 1)
+
+    monkeypatch.setattr(subagents_mod, "run_test", fake_run_test)
+    shell["PATH"] = "/opt/node20/bin"
+    assert (await subagents_test({"name": "Coder", "source": "config"}))["ok"] is True
+    assert launched_with == ["/opt/node20/bin"]
 
 
 async def test_an_openai_agent_is_asked_to_answer_before_it_switches_on(

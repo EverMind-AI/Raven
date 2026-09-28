@@ -174,6 +174,10 @@ class _OneShotTurnRunner(AgentTurnRunner):
         """What this run's turn had refused, in the order it refused it."""
         return [refusal for turn in self.turns for refusal in (getattr(turn, "refusals", ()) or ())]
 
+    def unanswered(self) -> list[Any]:
+        """Questions this run could not put to anyone, in the order it met them."""
+        return [item for turn in self.turns for item in (getattr(turn, "unanswered", ()) or ())]
+
 
 def _build_turn_summary(agent_loop: Any) -> TurnUsageSummary | None:
     """Wire the per-turn usage summary when the config switch is on.
@@ -271,6 +275,7 @@ def build_one_shot_spine(
     system_pool: int = 1,
     shutdown_grace: float = 0.0,
     on_refusals: Callable[[list[Any]], None] | None = None,
+    on_unanswered: Callable[[list[Any]], None] | None = None,
 ) -> tuple[Scheduler, DeliveryHub, Callable[[], Awaitable[None]]]:
     """Wire the spine pieces a one-shot ``-m`` turn flows through: a hub with the
     channel's CliOutlet registered, and a Scheduler whose runner bridges the agent
@@ -288,6 +293,9 @@ def build_one_shot_spine(
     teardown. A one-shot run has no human on it, so without this a run whose
     mutations were all refused is indistinguishable from one that made them; a
     caller that omits it keeps the old silence.
+
+    ``on_unanswered`` receives questions the run could not put to anyone, read
+    at the same moment. A caller that omits it keeps that list off the report.
 
     The per-turn usage summary (cli.turn_summary) is wired here, at the
     CliOutlet's deliver tail, so it renders once right after the reply."""
@@ -326,6 +334,8 @@ def build_one_shot_spine(
         await scheduler.shutdown(grace=shutdown_grace)
         if on_refusals is not None:
             on_refusals(inner.refusals())
+        if on_unanswered is not None:
+            on_unanswered(inner.unanswered())
         await hub.aclose()
 
     return scheduler, hub, teardown

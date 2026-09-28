@@ -102,14 +102,6 @@ def make_ops_connections(ctx: "PluginContext"):
     return base.adopt(OpsConnectionsTool())
 
 
-def make_ops_connection_add(ctx: "PluginContext"):
-    if not _wired(ctx):
-        return None
-    from oncall_flow.tools.ops_connection_add import OpsConnectionAddTool
-
-    return base.adopt(OpsConnectionAddTool())
-
-
 def make_ops_declare(ctx: "PluginContext"):
     if not _wired(ctx):
         return None

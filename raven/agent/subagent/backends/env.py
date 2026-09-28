@@ -77,22 +77,66 @@ def login_shell_env() -> dict[str, str]:
     empty, or ``$SHELL`` names a shell this module cannot drive, so an unusual
     login shell degrades to the previous behaviour instead of making every spawn
     fail -- or, worse, succeeding with a PATH from a shell the user never uses.
+
+    Once per process is what makes it cheap, and also what makes it go stale;
+    `refresh_login_shell_env` is the way to take it again without a restart.
     """
     global _LOGIN_ENV, _LOGIN_ENV_FAILED
     if _LOGIN_ENV is not None:
         return dict(_LOGIN_ENV)
     if _LOGIN_ENV_FAILED:
         return dict(os.environ)
+    captured = _capture(consequence="subagents inherit raven's environment")
+    if captured is None:
+        _LOGIN_ENV_FAILED = True
+        return dict(os.environ)
+    _LOGIN_ENV = captured
+    return dict(captured)
+
+
+def refresh_login_shell_env() -> bool:
+    """Capture the login shell's environment again, and swap it in if that worked.
+
+    The memo in `login_shell_env` lasts as long as the process, so an agent
+    installed after the gateway started stays invisible to every probe and every
+    spawn until a restart: its installer appends a PATH line to ``~/.zshrc``
+    (Kimi Code's does, measured 2026-09-24), the user's own terminal runs the
+    agent, and the page's "Check again" kept answering "still not found" from
+    the PATH the gateway read at start. This is what that button calls.
+
+    Swapped in whole, and only on success. The memo is read without a lock by
+    probes and spawns on other threads, so it must never be empty in between: a
+    reader that found it empty would capture again itself, and the MCP grant
+    path does that read on the event loop. A failed refresh keeps what was
+    there rather than trading a working capture for raven's own environment,
+    and a process whose earlier capture failed gets another try: the memo is
+    read before the failure flag, so a landed capture is what every later read
+    returns. Returns whether a capture landed.
+    """
+    global _LOGIN_ENV
+    captured = _capture(consequence="keeping the environment captured earlier")
+    if captured is None:
+        return False
+    _LOGIN_ENV = captured
+    return True
+
+
+def _capture(*, consequence: str) -> dict[str, str] | None:
+    """One run of the login shell, parsed; ``None`` when it did not work, after saying why.
+
+    ``consequence`` is what the caller does about a failure, for the log line:
+    the first capture falls back to raven's own environment, a refresh keeps the
+    one it already had.
+    """
     shell = _login_shell()
     if shell is None:
-        _LOGIN_ENV_FAILED = True
         logger.warning(
-            "SHELL={} is unset or not one this build can drive ({}); subagents inherit raven's "
-            "environment rather than a capture from the wrong shell",
+            "SHELL={} is unset or not one this build can drive ({}); {} rather than a capture from the wrong shell",
             os.environ.get("SHELL", "") or "<unset>",
             ", ".join(sorted(_DRIVABLE_SHELLS)),
+            consequence,
         )
-        return dict(os.environ)
+        return None
     capture_base = {key: os.environ[key] for key in _CAPTURE_BASE_KEYS if key in os.environ}
     capture_base["PATH"] = _BOOTSTRAP_PATH
     try:
@@ -112,16 +156,14 @@ def login_shell_env() -> dict[str, str]:
             start_new_session=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        _LOGIN_ENV_FAILED = True
-        logger.warning("Login shell environment capture failed ({}); subagents inherit raven's", exc)
-        return dict(os.environ)
+        logger.warning("Login shell environment capture failed ({}); {}", exc, consequence)
+        return None
     captured = {
         key: value
         for key, _, value in (entry.partition("=") for entry in proc.stdout.decode("utf-8", "replace").split("\0"))
         if key and _
     }
     if not captured or proc.returncode != 0:
-        _LOGIN_ENV_FAILED = True
         # `-i` on a non-tty always writes the shell's own job-control notices
         # ("cannot set terminal process group", "no job control in this
         # shell") to stderr; those are expected and not diagnostic of the
@@ -131,13 +173,13 @@ def login_shell_env() -> dict[str, str]:
         stderr_lines = proc.stderr.decode("utf-8", "replace").splitlines()
         stderr_tail = "\n".join(line for line in stderr_lines if not line.startswith(noise))[-500:].strip()
         logger.warning(
-            "Login shell environment capture failed (exit {}): {}; subagents inherit raven's",
+            "Login shell environment capture failed (exit {}): {}; {}",
             proc.returncode,
             stderr_tail or "<no stderr beyond expected job-control notices>",
+            consequence,
         )
-        return dict(os.environ)
-    _LOGIN_ENV = captured
-    return dict(captured)
+        return None
+    return captured
 
 
 def host_identity_env() -> dict[str, str]:
@@ -152,4 +194,4 @@ def host_identity_env() -> dict[str, str]:
     return {HOME_ENV_VAR: home} if home else {}
 
 
-__all__ = ["host_identity_env", "login_shell_env"]
+__all__ = ["host_identity_env", "login_shell_env", "refresh_login_shell_env"]

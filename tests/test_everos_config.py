@@ -8,6 +8,8 @@ and wrote configurations that could not work.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from raven_everos.config import (
@@ -909,3 +911,52 @@ class TestTheEdgesThatOnlyShowUpWhenSomethingIsWrong:
 
         with pytest.raises(KeyError, match="unknown everos role"):
             clear_role("not-a-role")
+
+
+class TestAWithheldRole:
+    """A role raven holds but must not hand over: emitted empty, so the spawn
+    and the digest both read it as absent."""
+
+    def _holding(self, monkeypatch, pin: tuple[str, str]) -> None:
+        from raven_everos import config as cfg
+
+        endpoint = SimpleNamespace(model=pin[0], base_url="http://b", api_key="k", dimensions=None)
+        monkeypatch.setattr(cfg, "resolve_role", lambda section: endpoint if section == "embedding" else None)
+        monkeypatch.setattr(cfg, "role_pin", lambda section: pin if section == "embedding" else None)
+        monkeypatch.setattr(cfg, "role_is_env_managed", lambda section: False)
+        monkeypatch.setattr(cfg, "rerank_protocol_for_role", lambda: "")
+
+    def test_it_is_emitted_empty_and_the_digest_moves(self, monkeypatch) -> None:
+        from raven_everos import config as cfg
+
+        self._holding(monkeypatch, ("m", "p"))
+        before = cfg.role_env_digest()
+        assert cfg.everos_env()["EVEROS_EMBEDDING__MODEL"] == "m"
+
+        cfg.withhold_role("embedding", ("m", "p"))
+        try:
+            env = cfg.everos_env()
+            assert (env["EVEROS_EMBEDDING__MODEL"], env["EVEROS_EMBEDDING__API_KEY"]) == ("", "")
+            assert cfg.role_env_digest() != before
+            assert "embedding" in cfg.withheld_roles()
+        finally:
+            cfg.release_role("embedding")
+        assert cfg.everos_env()["EVEROS_EMBEDDING__MODEL"] == "m"
+
+    def test_a_new_pin_ends_the_withholding_by_itself(self, monkeypatch) -> None:
+        """The notice tells the user to pick another model. The settings page
+        then restarts the server without measuring anything, so the spawn has
+        to read the new pin as not withheld with nobody calling release."""
+        from raven_everos import config as cfg
+
+        self._holding(monkeypatch, ("narrow", "p"))
+        cfg.withhold_role("embedding", ("narrow", "p"))
+        try:
+            assert cfg.everos_env()["EVEROS_EMBEDDING__MODEL"] == ""
+
+            self._holding(monkeypatch, ("wide", "p"))
+
+            assert cfg.everos_env()["EVEROS_EMBEDDING__MODEL"] == "wide"
+            assert "embedding" not in cfg.withheld_roles()
+        finally:
+            cfg.release_role("embedding")

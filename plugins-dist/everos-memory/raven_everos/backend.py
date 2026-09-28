@@ -30,6 +30,7 @@ import asyncio
 import logging
 import math
 import re
+import sys
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -184,10 +185,10 @@ class ServiceState(Enum):
 
     Two axes are folded into one enum because callers only ever act on the
     combination: may I send a request, and is it worth probing again. The
-    states that answer "no" to both -- ``UNCONFIGURED``, ``NO_BINARY``,
-    ``BAD_IDENTITY`` and ``UNSUPPORTED`` -- describe the installation, its
-    config and its platform rather than the process, so no amount of probing
-    resolves them and a stray success must not clear them.
+    states that answer "no" to both -- ``UNCONFIGURED``, ``NO_BINARY`` and
+    ``BAD_IDENTITY`` -- describe the installation and its config rather than
+    the process, so no amount of probing resolves them and a stray success
+    must not clear them.
     """
 
     UNKNOWN = "unknown"
@@ -199,19 +200,24 @@ class ServiceState(Enum):
     NO_BINARY = "no_binary"
     BAD_IDENTITY = "bad_identity"
     FOREIGN = "foreign"
-    UNSUPPORTED = "unsupported"
 
 
 # Probing cannot change these: they are facts about the install, not the
 # process. Letting a probe promote out of them would hide a missing binary
 # behind somebody else's server answering on the same port.
-_TERMINAL_STATES = frozenset(
-    {ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY, ServiceState.UNSUPPORTED}
-)
+_TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
 
 # Minimum gap between out-of-band probes. Coarse on purpose: this exists to
 # stop a task per turn from piling up, not to schedule anything.
 _PROBE_MIN_INTERVAL_S: float = 2.0
+# How often a backend that finds nothing listening may start a server itself.
+_RESPAWN_MIN_INTERVAL_S = 30.0
+# How long a Windows shutdown lets the server this process started drain before
+# terminating it: an extraction in flight is around twenty seconds.
+_WINDOWS_SHUTDOWN_DRAIN_S = 60.0
+# The measured width of each embedding pin, once per process: the probe is a
+# real embedding call, and sub-agents build backends of their own.
+_EMBEDDING_WIDTHS: dict[tuple[str, str], int | str | None] = {}
 
 # States where there is no memory subsystem at all, so a write that does not
 # happen loses nothing. Reporting a failure here would make the caller retry a
@@ -219,7 +225,7 @@ _PROBE_MIN_INTERVAL_S: float = 2.0
 # memory LLM that it dropped turns of memory it never had. BAD_IDENTITY is
 # deliberately not one of these: that service works, the config is wrong, and
 # the turns it refuses really are lost.
-_NO_MEMORY_TO_LOSE = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.UNSUPPORTED})
+_NO_MEMORY_TO_LOSE = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY})
 
 
 class _HttpEverosAdapter:
@@ -281,7 +287,12 @@ class _HttpEverosAdapter:
         restart, and the adapter does not outlive one.
         """
         if self._caps is None:
-            self._caps = await self._probe_capabilities()
+            caps = await self._probe_capabilities()
+            if not caps:
+                # Not an answer, so not cached: the next call asks again rather
+                # than sending untuned requests for the life of the adapter.
+                return {}
+            self._caps = caps
         return self._caps
 
     async def _probe_capabilities(self) -> dict[str, bool]:
@@ -315,16 +326,19 @@ class _HttpEverosAdapter:
           recall. This is what makes the embedding role genuinely optional.
         - **No rerank, agent track, HYBRID.** Agent-track HYBRID fuses
           ``agent_case`` / ``agent_skill`` through a cross-encoder; without one
-          the server refuses the request. ``enable_llm_rerank`` is the documented
-          fallback, and it costs one LLM call per recall, so it is only taken
-          when the cross-encoder is genuinely absent. Moot under KEYWORD, whose
-          agent path does not go through rerank at all.
+          the server refuses the request. VECTOR is the dense half of that
+          fusion on its own -- no rerank, no LLM call. The server's other way
+          out, ``enable_llm_rerank``, reranks through the LLM and measured
+          10-12 s a call with or without candidates, against a 4 s recall
+          budget: a fallback that never returns in time is no fallback, and it
+          billed one call per turn for nothing. Moot under KEYWORD, which needs
+          neither.
         """
         caps = await self._capabilities()
         if caps.get("embed") is False:
             return {"method": "keyword"}
         if agent_id is not None and caps.get("rerank") is False:
-            return {"enable_llm_rerank": True}
+            return {"method": "vector"}
         return {}
 
     async def search(
@@ -336,7 +350,9 @@ class _HttpEverosAdapter:
         top_k: int,
     ) -> Any:
         # Wire contract is user_id XOR agent_id (everos v1 search route).
-        body: dict[str, Any] = {"query": query, "top_k": top_k}
+        # The server bounds top_k to 1..100 and refuses the request outside it;
+        # a larger ``memory_top_k`` would otherwise mean no recall at all.
+        body: dict[str, Any] = {"query": query, "top_k": max(1, min(int(top_k), 100))}
         if user_id is not None:
             body["user_id"] = user_id
             # Profiles are opt-in server-side and default off, so without this
@@ -552,6 +568,9 @@ class EverosBackend:
         self._reported: set[ServiceState] = set()
         self._probe_task: asyncio.Task | None = None
         self._last_probe_at: float = 0.0
+        self._last_respawn_at = 0.0
+        # Whether ``start()`` has returned. Until then the spawn is its to make.
+        self._started = False
         self._store_inflight: set[asyncio.Task] = set()
         # Set once `stop` has closed the adapter. A write still on the wire then
         # fails because we shut its transport, which says nothing about the
@@ -652,11 +671,59 @@ class EverosBackend:
             self._probe_task = None
 
     async def _probe_once(self) -> None:
-        from raven_everos.server import probe_health
+        from raven_everos.server import ProbeVerdict, probe_health
 
         base_url = self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL
         result = await asyncio.to_thread(probe_health, base_url)
         self._apply_probe(result)
+        # TIMEOUT as well as REFUSED: on Windows a connection to a port nobody
+        # listens on can take longer to be refused than the probe waits, and
+        # the verdict then reads "slow", not "gone". A server that is merely
+        # slow still holds the lock, which is what ``_respawn`` checks first.
+        if result in (ProbeVerdict.REFUSED, ProbeVerdict.TIMEOUT) and self._may_respawn():
+            await self._respawn(base_url)
+
+    def _may_respawn(self) -> bool:
+        """Whether this backend should start a server itself, now.
+
+        Only for a root raven owns, only from a backend built for the HTTP
+        server, only when no child of ours is still running, and at most once
+        per ``_RESPAWN_MIN_INTERVAL_S``. The server can be gone for reasons
+        raven never sees -- an upgrade's sweep on Windows, a crash, a stop
+        another process sent that finished after it gave up waiting -- and the
+        only other path that starts one is ``start()``, which a running gateway
+        never passes through again -- and which, until it has returned, is the
+        one entitled to spawn.
+        """
+        from raven_everos.config import everos_owned
+
+        if not self._started or self._stopping or not isinstance(self._adapter, _HttpEverosAdapter):
+            return False
+        if self._proc is not None and self._proc.poll() is None:
+            return False
+        if time.monotonic() - self._last_respawn_at < _RESPAWN_MIN_INTERVAL_S:
+            return False
+        return everos_owned()
+
+    async def _respawn(self, base_url: str) -> None:
+        from raven_everos.config import everos_root
+        from raven_everos.server import ensure_everos_server, lock_holder
+
+        self._last_respawn_at = time.monotonic()
+        # A holder that refuses connections is a server still shutting down;
+        # one started beside it would only die on its lock.
+        if await asyncio.to_thread(lock_holder, everos_root(), with_port=False) is not None:
+            return
+        try:
+            self._proc = await ensure_everos_server(base_url, on_proc=self._remember_child)
+        except Exception as e:  # noqa: BLE001 - the state machine keeps probing
+            self._state = self._state_from_child()
+            self._logger.warning(
+                "EverosBackend: could not restart the memory service (%s); state=%s", e, self._state.value
+            )
+            return
+        self._state = ServiceState.READY
+        self._logger.info("EverosBackend: memory service restarted at %s", base_url)
 
     def _demote_from_exception(self, exc: BaseException) -> None:
         """Classify a request failure the same way a probe would.
@@ -731,6 +798,17 @@ class EverosBackend:
         return self._state
 
     async def start(self) -> None:
+        # The self-heal in ``_probe_once`` waits for this to return. A turn
+        # arriving while the roles are still being measured finds nothing
+        # listening; a server it started would leave the one this method then
+        # starts to die on the OME lock -- "exited with code 1" for a service
+        # that was up and serving.
+        try:
+            await self._start()
+        finally:
+            self._started = True
+
+    async def _start(self) -> None:
         try:
             self._validate_identity()
         except ValueError as e:
@@ -770,13 +848,18 @@ class EverosBackend:
         # the plugin contract; idempotent, so every later start pays nothing.
         from raven_everos.config import migrate_roles
 
-        for notice in migrate_roles():
+        for notice in await asyncio.to_thread(migrate_roles):
             self.notify(notice)
         configure_everos_env(root)
         # All four roles, into this process as well as into any child. The
         # in-process half is what `understand_media` reads: multimodal runs here,
         # through EverOS's cached settings, so a role bound only for the spawn
         # was one that tool could not use.
+        if everos_owned():
+            # Measured before the roles are bound anywhere: a pin narrower than
+            # the index would fail every store and search once the server is
+            # up, and here raven can still choose not to hand it over.
+            await asyncio.to_thread(self._withhold_an_embedding_that_cannot_serve)
         bound = bind_roles_here()
         self._logger.info("EverosBackend: bound %d EverOS role variables from raven's config", len(bound))
         # See tools.py: a root the user manages is read-only, template files
@@ -789,22 +872,10 @@ class EverosBackend:
             type(self._adapter).__name__,
         )
         if isinstance(self._adapter, _HttpEverosAdapter):
-            from raven.core.plugin_stack import everos_platform_note
-
-            platform_note = everos_platform_note()
-            if platform_note is not None:
-                # Terminal and nothing to lose: a write here is not a failed
-                # write, or the host retries it for a minute every turn and
-                # then raises the memory banner over a service that was never
-                # going to exist on this platform.
-                self._state = ServiceState.UNSUPPORTED
-                self.notify(platform_note)
-                self._adapter = _NoOpAdapter()
-                return
-
             from raven_everos.server import (
                 EverosBinaryMissingError,
                 EverosNotConfiguredError,
+                EverosStillStartingError,
                 ensure_everos_server,
             )
 
@@ -864,6 +935,18 @@ class EverosBackend:
                 self._state = ServiceState.NO_BINARY
                 self.notify(f"Long-term memory is off: {e}\nInstall the everos CLI, then start a new session.")
                 return
+            except EverosStillStartingError as e:
+                # Up and still booting: a server rebuilding its index over a
+                # large store after an upgrade outruns the start budget every
+                # time. A wait, not an outage -- the probe attaches to it on the
+                # first memory call after it answers.
+                self._state = self._state_from_child()
+                self._logger.warning("EverosBackend: %s", e)
+                self.notify(
+                    f"{e}\nRaven attaches to it as soon as it answers; until then this session runs "
+                    "without long-term memory."
+                )
+                return
             except Exception as e:
                 # Not raised on: the session continues without memory, and the
                 # state machine keeps probing in case the server comes up. The
@@ -883,6 +966,39 @@ class EverosBackend:
             # Off-thread: the probe and the config read below are both blocking
             # IO, and start() runs on the loop every session begins on.
             await asyncio.to_thread(self._warn_if_recall_cannot_work, base_url)
+
+    def _withhold_an_embedding_that_cannot_serve(self) -> None:
+        """Keep an embedding pin that cannot serve the index out of the spawn.
+
+        The write-time check covers a pin written through raven; this covers a
+        pin that reached the file around it -- written before memory was on,
+        unreachable when it was saved, edited by hand. Without the role EverOS
+        runs keyword recall and keeps storing; with it, every store and search
+        answers 500 and nothing on the page says why (a real install ran that
+        way for weeks). Measured once per pin per process, said once.
+        """
+        from raven.config.update import REQUIRED_EMBEDDING_DIMENSIONS, configured_embedding_width
+        from raven_everos.config import release_role, role_pin, withhold_role
+
+        pin = role_pin("embedding")
+        if pin is None:
+            release_role("embedding")
+            return
+        first = pin not in _EMBEDDING_WIDTHS
+        if first:
+            _EMBEDDING_WIDTHS[pin] = configured_embedding_width()
+        width = _EMBEDDING_WIDTHS[pin]
+        if isinstance(width, int) and width < REQUIRED_EMBEDDING_DIMENSIONS:
+            withhold_role("embedding", pin)
+            if first:
+                self.notify(
+                    f"The embedding model in your settings ({pin[0]}) returns {width}-dimension vectors and the "
+                    f"memory index is {REQUIRED_EMBEDDING_DIMENSIONS} wide, so it is not in use: recall falls back "
+                    "to keyword matching and memories are still stored.\n"
+                    f"Pick a model that returns {REQUIRED_EMBEDDING_DIMENSIONS} dimensions under Settings."
+                )
+            return
+        release_role("embedding")
 
     def _warn_unowned_recall(self, base_url: str, report: Any) -> None:
         """Say what a server the user runs cannot do, on its own authority.
@@ -927,8 +1043,11 @@ class EverosBackend:
             # the only move raven has left on this path, never fired at all.
             self._warn_unowned_recall(base_url, report)
             return
-        from raven_everos.config import everos_role_configured
+        from raven_everos.config import everos_role_configured, withheld_roles
 
+        if "embedding" in withheld_roles():
+            # Said already, with the reason, by the check that withheld it.
+            return
         if not (everos_role_configured("embedding") and report.available("embedding") is False):
             return
         from raven_everos.server import server_log_path
@@ -949,6 +1068,21 @@ class EverosBackend:
         # (its ``_store_dropped`` is the only count that survives a retry
         # succeeding) -- this backend only still flushes what it buffered.
         await self._flush_unflushed_sessions()
+        if sys.platform == "win32" and self._proc is not None and self._proc.poll() is None:
+            from raven_everos.config import everos_owned
+
+            if everos_owned():
+                from raven_everos.server import stop_pid
+
+                # On Windows the server lives with the process that started it.
+                # An upgrade replaces this environment's executables the moment
+                # this process exits, and a server left running would either
+                # block that or be terminated mid-write by the helper's sweep.
+                # Ctrl-Break reaches our own child, so it drains first.
+                outcome = await asyncio.to_thread(
+                    stop_pid, self._proc.pid, timeout=_WINDOWS_SHUTDOWN_DRAIN_S, grace=_WINDOWS_SHUTDOWN_DRAIN_S
+                )
+                self._logger.info("EverosBackend: stopped the memory service this process started (%s)", outcome.value)
         aclose = getattr(self._adapter, "aclose", None)
         if aclose is not None:
             try:
@@ -1009,15 +1143,6 @@ class EverosBackend:
         # through the backend contract.
         for note in everos_toml_role_notes():
             checks.append(HealthCheck("everos.toml", "ok", note))
-
-        from raven.core.plugin_stack import everos_platform_note
-
-        platform_note = everos_platform_note()
-        if platform_note is not None:
-            # Nothing to probe: "not running (starts on demand)" would be
-            # false here, and the importer's refusal should say why.
-            checks.append(HealthCheck("server", "missing", platform_note))
-            return BackendHealth(ready=False, checks=checks)
 
         report = await asyncio.to_thread(probe_capabilities, base_url)
         sections = (*REQUIRED_SECTIONS, *DEGRADING_SECTIONS)
@@ -1134,6 +1259,8 @@ class EverosBackend:
         Adapter exceptions are caught and logged so a transient EverOS
         failure doesn't cascade into the AgentLoop turn pipeline.
         """
+        if not query.strip():
+            return []  # the server refuses an empty query; an attachment-only turn has nothing to ask
         if (user_id is None) == (agent_id is None):
             self._logger.warning(
                 "EverosBackend.recall: expected exactly one of user_id / "
@@ -1618,7 +1745,9 @@ def convert_messages(
                 for part in content
                 if isinstance(part, dict) and part.get("type") == "text"
             ).strip()
-        if not isinstance(content, str):
+        if content is None:
+            content = ""  # a tool-call-only turn; "None" would be read by the extraction model as a reply
+        elif not isinstance(content, str):
             content = str(content)
         # An assistant message may carry tool_calls with empty text —
         # keep it (the tool result downstream references its id). The
@@ -1668,6 +1797,7 @@ def _flatten_profile(profile_data: Any) -> str:
 
     The result is capped at ``_PROFILE_MAX_CHARS``; see that constant.
     """
+    profile_data = _plain(profile_data)
     if not isinstance(profile_data, dict):
         return _cap_profile_text(str(profile_data))
     lines: list[str] = []
@@ -1682,6 +1812,21 @@ def _flatten_profile(profile_data: Any) -> str:
         else:
             lines.append(f"{key}: {value}")
     return _cap_profile_text("\n".join(lines))
+
+
+def _plain(obj: Any) -> Any:
+    """The parsed-JSON shape back from ``_jsonify``'s namespaces, recursively.
+
+    The search response arrives as namespaces for attribute access, and the
+    profile renderer below reads dicts; handed a namespace it fell through to
+    ``str()`` and put ``namespace(explicit_info=[namespace(...)])`` -- evidence
+    fields included -- into every prompt.
+    """
+    if isinstance(obj, SimpleNamespace):
+        return {k: _plain(v) for k, v in vars(obj).items()}
+    if isinstance(obj, list):
+        return [_plain(x) for x in obj]
+    return obj
 
 
 def _cap_profile_text(text: str) -> str:

@@ -37,6 +37,7 @@ from loguru import logger
 
 from raven.acp_client import autofill
 from raven.acp_client.asker import attribute, current_ask, current_autofill, question_lock
+from raven.permissions.turn import current_turn, note_unanswered
 
 UPDATE_METHOD = "session/update"
 
@@ -111,8 +112,15 @@ class AskUserResponder:
         # autofill left over from the first turn would answer this turn's
         # question out of a conversation that is not this one.
         self._autofill = current_autofill()
+        # Same capture. `_answer` runs on the connection's read loop, so a
+        # question noted from `current_turn()` there lands on the wrong turn.
+        self._permission_turn = current_turn()
         self._cancelled = False
         self._tasks: set[asyncio.Task] = set()
+
+    def _note_unseen(self, question: str) -> None:
+        """A question that went back empty without anyone being asked."""
+        note_unanswered(attribute(self._agent, self._instance, question), turn=self._permission_turn)
 
     def cancel(self) -> None:
         """Stop asking: the run whose questions these are has ended.
@@ -174,6 +182,7 @@ class AskUserResponder:
                 self._agent,
                 conversation_id,
             )
+            self._note_unseen(question)
             return ""
         auto = self._autofill
         known = ""
@@ -202,6 +211,7 @@ class AskUserResponder:
                 conversation_id,
                 LOCK_WAIT_SECONDS,
             )
+            self._note_unseen(question)
             return ""
         try:
             if self._cancelled:
@@ -216,8 +226,11 @@ class AskUserResponder:
         finally:
             lock.release()
         # `None` is `ask_direct`'s structurally-unavailable, `""` the broker's
-        # own default on timeout or close. Both mean no answer, and the asking
-        # side draws no distinction between them.
+        # own default on timeout or close. Both mean no answer to the asking
+        # side. Only `None` means the question was never put to anyone; `""`
+        # is a sheet the user saw and did not answer.
+        if answer is None:
+            self._note_unseen(question)
         return answer or ""
 
     async def _deliver(self, request_id: str, session_id: str, answer: str) -> None:

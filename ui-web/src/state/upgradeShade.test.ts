@@ -73,3 +73,35 @@ describe('the upgrade shade writer', () => {
     expect(current.isConnected).toBe(false)
   })
 })
+
+/* The bar slides until the helper reports bytes, measures them while it does,
+   and slides again when there is nothing to count -- uv resolving, the new
+   Raven starting. A bar that kept its last width then would be lying. */
+describe('the measured upgrade bar', () => {
+  it('measures what the helper reports', () => {
+    wire()
+    const shade = open()
+    shade.measure('Downloading', 0.5)
+    const bar = document.querySelector('.upshade .upbar') as HTMLElement
+    expect(bar.hasAttribute('data-measured')).toBe(true)
+    expect((bar.querySelector('i') as HTMLElement).style.width).toBe('50.0%')
+    expect(document.querySelector('.upshade .t')!.textContent).toBe('Downloading')
+  })
+
+  it('goes back to sliding when nothing can be measured', () => {
+    wire()
+    const shade = open()
+    shade.measure('Downloading', 0.9)
+    shade.measure('Installing', null)
+    const bar = document.querySelector('.upshade .upbar') as HTMLElement
+    expect(bar.hasAttribute('data-measured')).toBe(false)
+    expect((bar.querySelector('i') as HTMLElement).getAttribute('style')).toBeNull()
+  })
+
+  it('never draws past either end', () => {
+    wire()
+    const shade = open()
+    shade.measure('Downloading', 1.7)
+    expect((document.querySelector('.upshade .upbar i') as HTMLElement).style.width).toBe('100.0%')
+  })
+})

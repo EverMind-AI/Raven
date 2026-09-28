@@ -212,6 +212,13 @@ export function fileKind(p: string): string {
   return 'bin'
 }
 export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1, pptx: 1 }
+/* The kinds with two ways to be read, the rendered form and the text under it,
+   and so the only ones the bar offers the pair on. A picture and a deck draw
+   the same in either position, and a PDF read as text is its bytes as lines.
+   Offering them the pair anyway kept one bar for every rendered kind, at the
+   price of a control that did nothing or showed noise; the three still share
+   one bar without it. */
+export const TWO_VIEWS: Record<string, 1> = { md: 1, svg: 1, html: 1, csv: 1, json: 1 }
 
 /* ── which application gets a file the page cannot render ──────────────
    Per EXTENSION, not one global default, because that is the shape of the

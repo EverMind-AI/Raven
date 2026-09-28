@@ -1,16 +1,12 @@
 // @vitest-environment happy-dom
-/* The transcript source's delegation verbs: opening a graph's task pane and a
- * spawn record.
- *
- * What the spawn opener must NOT do is the point: `wsPick`/`setWs` route to
- * `openDeskTab` in desk mode, whose whole job is to open the little desk, so a
- * spawn record opened from the trail's card popped the palette beside the
- * window the reader had actually asked for.
+/* The transcript source's delegation verbs: opening a graph's or a spawn's
+ * task pane. Both land in the same pane, and neither opens the agents panel's
+ * instance window.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fakeGateway, loadPart } from '../../../scripts/module-harness.mjs'
+import { loadPart } from '../../../scripts/module-harness.mjs'
 
 import type { Sources } from '../../state/sources'
 
@@ -20,6 +16,7 @@ import type { Sources } from '../../state/sources'
    / `one` a case installs here before this function ever ran. */
 async function opener(over: {
   openRun?: (runId: string) => boolean
+  openByNode?: (nodeId: string) => boolean
   one?: (kind: string, id: string) => Promise<unknown>
 } = {}) {
   const deskCalls: unknown[][] = []
@@ -35,10 +32,15 @@ async function opener(over: {
   setSources({
     tasks: {
       openRun: over.openRun ?? (() => false),
+      openByNode: over.openByNode ?? (() => false),
       one: over.one ?? (async () => null),
     },
   } as unknown as Partial<Sources>)
-  return { openDagRun: wiring.openDagRun as (runId: string) => void, deskCalls }
+  return {
+    openDagRun: wiring.openDagRun as (runId: string) => void,
+    openSpawn: wiring.openSpawn as (nodeId: string) => void,
+    deskCalls,
+  }
 }
 
 describe('the live DAG opener', () => {
@@ -93,115 +95,95 @@ describe('the live DAG opener', () => {
   })
 })
 
-/* The class the shell sets while the floating desk owns the workspace. */
-function deskReady(on: boolean) {
-  document.documentElement.classList.toggle('desk-ready', on)
-}
-
-interface SpawnRow { kind: string; agent: string; label: string }
-
-interface TaskRowLike { kind: string; id: string }
-
-async function nodeHarness({
-  rows = [{ kind: 'spawn', agent: 'raven', label: 'qc' }] as SpawnRow[],
-  taskRow = null as TaskRowLike | null,
-} = {}) {
-  const calls: unknown[][] = []
-  const wiring = await loadPart(async () => {
-    await import('./source')
-    return import('../../app/install')
-  }, {
-    fakes: {
-      'src/state/wsPane': {
-        pane: () => ({
-          view: () => ({ tab: 'diff', open: false, picked: false }),
-          setOpen: (open: boolean, tab?: string) => calls.push(['setWs', open, tab ?? null]),
-          pick: (tab: string) => calls.push(['wsPick', tab]),
-          draw: () => calls.push(['drawWs']),
-        }),
-      },
-      'src/lib/session': { current: () => 's1' },
-      'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
-      'src/features/subagents/store': {
-        rows: () => rows,
-        openRow: (row: SpawnRow) => calls.push(['openRow', row.label]),
-        refresh: () => calls.push(['refresh']),
-      },
-      'src/features/tasks/store': {
-        byKey: (kind: string, id: string) => (taskRow && taskRow.kind === kind && taskRow.id === id ? taskRow : null),
-      },
-      'src/features/desk/store': {
-        openDeskTab: (tab: string) => calls.push(['openDeskTab', tab]),
-        openDeskTask: (row: TaskRowLike) => calls.push(['openDeskTask', row.id]),
-      },
-    },
-  })
-  await fakeGateway(() => Promise.resolve({}))
-  const { setSources, sources } = await import('../../state/sources')
-  setSources({ transcript: {}, composer: {} } as unknown as Partial<Sources>)
-  wiring.installSources()
-  return { sources, calls }
-}
-
 afterEach(() => {
   vi.useRealTimers()
-  deskReady(false)
 })
 
-describe('opening a spawn record from the transcript source', () => {
-  it('opens a spawn record without the palette either', async () => {
-    deskReady(true)
-    const { sources, calls } = await nodeHarness()
+describe('the spawn opener', () => {
+  it('opens the task the tasks store already holds, and nothing else', async () => {
+    const asked: string[] = []
+    const { openSpawn, deskCalls } = await opener({ openByNode: (id) => { asked.push(id); return true } })
 
-    sources.transcript!.openSpawn!('raven', 'qc')
+    openSpawn('read_dir')
 
-    expect(calls).toEqual([['openRow', 'qc']])
+    expect(asked).toEqual(['read_dir'])
+    expect(deskCalls).toEqual([])
   })
 
-  it('falls back to the tasks list when no row ever turns up', async () => {
-    /* A click that opens nothing reads as broken, and `refresh` keeps the drawn
-       list on a failed read rather than emptying it -- so a gateway hiccup or a
-       label the registry spells differently lands here. The list is somewhere
-       to look; the window this MR stops opening a palette beside was never
-       raised on this branch. */
-    deskReady(true)
-    const { sources, calls } = await nodeHarness({ rows: [] })
-    vi.useFakeTimers()
+  /* The click the card takes right after dispatch: the pending frame filed the
+     row under the task id, so the store has nothing under the record id yet.
+     This is where the label match used to open the instance window instead. */
+  it('reads the one row from the server when the store has not caught up', async () => {
+    const read: unknown[][] = []
+    const { openSpawn, deskCalls } = await opener({
+      one: async (kind, id) => { read.push([kind, id]); return { kind: 'spawn', id } },
+    })
 
-    sources.transcript!.openSpawn!('raven', 'qc')
-    /* The retries run on a 700ms ladder; four of them exhaust it. */
+    openSpawn('read_dir')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(read).toEqual([['spawn', 'read_dir']])
+    expect(deskCalls).toEqual([['openDeskTask', 'read_dir']])
+  })
+
+  it('keeps asking on a short ladder while the record is still being written', async () => {
+    vi.useFakeTimers()
+    let reads = 0
+    const { openSpawn, deskCalls } = await opener({
+      one: async (_kind, id) => { reads += 1; return reads < 3 ? null : { kind: 'spawn', id } },
+    })
+
+    openSpawn('read_dir')
+    await vi.advanceTimersByTimeAsync(700 * 3)
+
+    expect(reads).toBe(3)
+    expect(deskCalls).toEqual([['openDeskTask', 'read_dir']])
+  })
+
+  it('also takes the row the store gains between two reads', async () => {
+    /* The running frame renames the pending row to the record id; the next rung
+       finds it locally and asks the server nothing more. */
+    vi.useFakeTimers()
+    let renamed = false
+    let reads = 0
+    const { openSpawn, deskCalls } = await opener({
+      openByNode: () => renamed,
+      one: async () => { reads += 1; renamed = true; return null },
+    })
+
+    openSpawn('read_dir')
     await vi.advanceTimersByTimeAsync(700 * 5)
 
-    expect(calls.filter(([verb]) => verb === 'openRow')).toEqual([])
-    expect(calls[calls.length - 1]).toEqual(['openDeskTab', 'tasks'])
+    expect(reads).toBe(1)
+    expect(deskCalls).toEqual([])
   })
 
-  it('keeps the panel view for a spawn record without the desk', async () => {
-    deskReady(false)
-    const { sources, calls } = await nodeHarness()
+  it('lands on the tasks list when no row ever turns up', async () => {
+    vi.useFakeTimers()
+    const { openSpawn, deskCalls } = await opener()
 
-    sources.transcript!.openSpawn!('raven', 'qc')
+    openSpawn('read_dir')
+    await vi.advanceTimersByTimeAsync(700 * 6)
 
-    expect(calls).toEqual([['setWs', true, 'agents'], ['openRow', 'qc']])
+    expect(deskCalls).toEqual([['openDeskTab', 'tasks']])
   })
 
-  it('opens the task pane directly when the node id resolves in the tasks store', async () => {
-    deskReady(true)
-    const { sources, calls } = await nodeHarness({ taskRow: { kind: 'spawn', id: 'node-9' } })
+  it('lands on the tasks list when the read fails', async () => {
+    const { openSpawn, deskCalls } = await opener({ one: async () => { throw new Error('gone') } })
 
-    sources.transcript!.openSpawn!('raven', 'qc', 'node-9')
+    openSpawn('read_dir')
+    await Promise.resolve()
+    await Promise.resolve()
 
-    /* Exact, so the fuzzy label match below never runs -- no fallback pane,
-       no retry ladder. */
-    expect(calls).toEqual([['openDeskTask', 'node-9']])
+    expect(deskCalls).toEqual([['openDeskTab', 'tasks']])
   })
 
-  it('falls back to the fuzzy match when the node id names no row in the tasks store', async () => {
-    deskReady(true)
-    const { sources, calls } = await nodeHarness()
+  it('goes straight to the tasks list for a call that named no record', async () => {
+    const { openSpawn, deskCalls } = await opener()
 
-    sources.transcript!.openSpawn!('raven', 'qc', 'no-such-node')
+    openSpawn('')
 
-    expect(calls).toEqual([['openRow', 'qc']])
+    expect(deskCalls).toEqual([['openDeskTab', 'tasks']])
   })
 })

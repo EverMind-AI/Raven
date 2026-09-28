@@ -207,6 +207,26 @@ async def test_the_prompt_names_the_agent_that_asked() -> None:
     assert "which backend?" in seen[0]
 
 
+async def test_a_form_nobody_can_be_asked_is_recorded_on_the_turn() -> None:
+    from raven.acp_client.asker import start_ask_turn
+    from raven.acp_client.elicitor import Elicitor
+    from raven.permissions.turn import start_permission_turn
+
+    turn = start_permission_turn(None, conversation_id="tui:c1", turn_id="t")
+    start_ask_turn(None, conversation_id="tui:c1")
+    got = await Elicitor("Coder", "h").elicit(
+        {
+            "sessionId": "s",
+            "mode": "form",
+            "message": "which backend?",
+            "requestedSchema": {"type": "object", "properties": {"b": {"type": "string"}}},
+        }
+    )
+
+    assert got == {"action": "decline"}
+    assert [item.question for item in turn.unanswered] == ["Coder(h): which backend?"]
+
+
 async def test_no_asker_declines() -> None:
     from raven.acp_client.asker import start_ask_turn
     from raven.acp_client.elicitor import Elicitor

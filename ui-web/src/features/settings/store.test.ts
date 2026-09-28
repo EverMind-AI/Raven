@@ -151,6 +151,46 @@ describe('settings store, what a reopen drops', () => {
   })
 })
 
+describe('settings store, a reload that brings nothing new', () => {
+  /* The epoch remounts the whole page. A reopen draws the values it has and
+     reloads behind them; when the reload answered the same values it still
+     remounted, and a click landing then was pressed on one button and
+     released on its replacement -- no click at all. */
+  it('keeps the page mounted when the reload answers the same values, and remounts when they changed', async () => {
+    let model = 'm'
+    setSources({ settings: { load: async () => snapOf(model) } as unknown as SettingsSource })
+    await store.refresh()
+    const first = store.get().epoch
+    expect(store.get().loaded).toBe(true)
+
+    await store.refresh()
+    expect(store.get().epoch, 'same values: no remount').toBe(first)
+
+    model = 'n'
+    await store.refresh()
+    expect(store.get().epoch, 'new values: the inputs reseed').toBe(first + 1)
+    expect(store.get().snap.model).toBe('n')
+  })
+
+  it('leaves the page mounted on the last values when the reload fails', async () => {
+    let fail = false
+    setSources({
+      settings: {
+        load: async () => {
+          if (fail) throw new Error('down')
+          return snapOf('m')
+        },
+      } as unknown as SettingsSource,
+    })
+    await store.refresh()
+    const first = store.get().epoch
+    fail = true
+    await store.refresh()
+    expect(store.get().epoch).toBe(first)
+    expect(store.get().snap.model).toBe('m')
+  })
+})
+
 describe('settings store, the inventory push', () => {
   it('refreshSoon reloads once per burst while the dialog is open, and not at all while it is down', async () => {
     vi.useFakeTimers()

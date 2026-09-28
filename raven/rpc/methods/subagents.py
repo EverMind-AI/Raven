@@ -25,6 +25,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
+from raven.agent.subagent.backends.env import refresh_login_shell_env
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
@@ -384,7 +385,21 @@ async def subagents_list(params: dict) -> dict:
     availability check - the overlay does this on the list call it issues right
     after its own mutation, where a fresh probe would only re-measure what it
     already knows it just wrote.
+
+    ``refresh_login_env`` takes the login shell's environment again before the
+    probe, instead of reading the one this process captured when it started. An
+    agent installed since then is otherwise not found until a restart: its
+    installer adds a PATH line to the shell rc, which only a new capture reads.
+    The page's "Check again" sends it and no other listing does, since the
+    capture runs the user's login shell and can take seconds. It replaces the
+    capture every spawn reads too, so the Connect that follows launches with the
+    PATH the probe just found the agent on. A Connect and a Test take one of
+    their own as well (`_read_the_shell_again`). Read as ``is True`` for the
+    reason the ``force`` flags are: a string such as ``"false"`` is truthy in
+    Python.
     """
+    if params.get("refresh_login_env") is True:
+        await asyncio.to_thread(refresh_login_shell_env)
     probe = params.get("probe", True)
     return {"rows": await _rows(probe=bool(probe))}
 
@@ -874,6 +889,26 @@ add lands disabled and is never asked.
 """
 
 
+async def _read_the_shell_again(cfg: Any) -> None:
+    """Take the login shell's environment again before launching ``cfg`` to ask it.
+
+    A Connect or a Test pressed again is what follows a fix made in a terminal,
+    and the fixes that live in the shell's rc -- a newer Node picked with nvm, a
+    proxy, a key the agent reads from the environment -- reach a child only
+    through a new capture: every spawn reads the one taken when this process
+    started, so without this the page would go on reporting a failure its
+    reader had already fixed, until a restart. The same capture the page's
+    "Check again" takes (`subagents_list`), for the rows that press cannot reach.
+
+    Only for the kinds that launch a process: an endpoint is called from this
+    process, whose own environment a capture does not change. The capture runs
+    the user's shell and can take seconds, which a press about to spend a real
+    prompt can afford and a listing cannot.
+    """
+    if getattr(cfg, "kind", None) in ("cli", "acp"):
+        await asyncio.to_thread(refresh_login_shell_env)
+
+
 async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: str) -> None:
     """Layer 2, on the path of every enable it gates: enable only what replies.
 
@@ -909,6 +944,7 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
         return
     if getattr(cfg, "kind", None) not in _PINGED_KINDS:
         return
+    await _read_the_shell_again(cfg)
     result = await ping_agent(cfg)
     if result.ok:
         if getattr(cfg, "kind", None) == "acp" and capabilities_wanted(cfg):
@@ -1160,7 +1196,13 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
 
     cfg = _find(name, source)
 
-    task = asyncio.ensure_future(run_test(cfg, source=source))
+    async def _test() -> Any:
+        # Inside the task, so a cancel reaches the capture too and a second
+        # press is refused by the check above for as long as it runs.
+        await _read_the_shell_again(cfg)
+        return await run_test(cfg, source=source)
+
+    task = asyncio.ensure_future(_test())
     _RUNNING[name] = task
     try:
         result = await task

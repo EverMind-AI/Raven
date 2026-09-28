@@ -227,16 +227,35 @@ export function refreshSoon(): void {
    work on a home with many providers. */
 let loading: Promise<void> | null = null
 
+/* Whether a reload brought anything new. The epoch remounts the whole page,
+   and a reopen draws the values it already has and reloads behind them: a
+   reload that answered the same values still remounted everything about half
+   a second in, so a click landing then pressed on one button and released on
+   its replacement, and the browser fired no click at all -- the first pick of
+   a language after opening the dialog did nothing. A background reload (an
+   MCP push, the open) now remounts only when there is something new to seed
+   the inputs from. Serialised rather than walked: the snapshot is plain JSON
+   off the wire, and a key order that differs only costs the old remount. */
+const sameSnap = (a: SettingsSnapshot, b: SettingsSnapshot): boolean => {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
+
 export async function refresh(): Promise<void> {
   if (loading) return loading
   loading = (async () => {
     try {
       const snap = await source().load()
-      set({ snap, loaded: true, epoch: get().epoch + 1 })
+      const cur = get()
+      if (cur.loaded && sameSnap(cur.snap, snap)) return
+      set({ snap, loaded: true, epoch: cur.epoch + 1 })
     } catch (e) {
       /* Loaded stays what it was: a failed load leaves the pages on the last
-         values rather than on a shell that says nothing. */
-      set({ epoch: get().epoch + 1 })
+         values rather than on a shell that says nothing -- and leaves them
+         mounted, so a reader mid-way through a field keeps what they typed. */
       toast(t('gui.op.load_failed', { detail: (e as Error).message || String(e) }))
     } finally {
       loading = null

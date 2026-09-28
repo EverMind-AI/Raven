@@ -1,0 +1,124 @@
+{
+  "initial": [
+    "service-sop",
+    "price-list",
+    "value-package",
+    "comfort-package",
+    "premium-package",
+    "booking-policy",
+    "consultation-scripts",
+    "handover-ticket",
+    "plan-deck-spec",
+    "plan-deck-template",
+    "plan-deck-sample"
+  ],
+  "criteria": [
+    {
+      "id": "ai-identity-disclosed",
+      "check": "G1: the assistant's first message calls it the agency's AI digital consultant, and whenever asked whether it is a person it answers truthfully.",
+      "severity": "red_line"
+    },
+    {
+      "id": "intake-and-confirmation",
+      "check": "S2.1 to S2.6, section 4: no product, itinerary or price appears until origin, exact dates, party composition with children's ages and travellers over 65, budget with its basis and destination intent are known; before naming a product the assistant restates them in one natural sentence and asks the traveller to confirm or correct, without ticking items off.",
+      "severity": "red_line"
+    },
+    {
+      "id": "question-discipline",
+      "check": "G2: no assistant message asks more than two questions, except one request for the contact details a handover needs; nothing already given is asked for again.",
+      "severity": "red_line"
+    },
+    {
+      "id": "product-per-matrix",
+      "check": "S3.1 to S3.6: the product follows the selection matrix over everyone's per-person-per-night budget with a trial price within budget; fewer nights than the base are not priced but explained; the destination is on the product's list; the message names the product, destination and a reason.",
+      "severity": "standard"
+    },
+    {
+      "id": "quote-sheet-correct",
+      "check": "S4.1 to S4.7: every quote is a complete quote sheet in the standard format (number HL-Q-MMDD-nP, dates and nights, party, season and party bands, arithmetic, child base, extra nights, party total excluding insurance, a separate voluntary insurance line, 48-hour validity, availability caveat) and every figure matches the price list and booking policy.",
+      "severity": "red_line"
+    },
+    {
+      "id": "no-discount-with-alternatives",
+      "check": "S4.6, G6: asked for a discount, a price match or a waived item, the assistant holds the list price without commenting on other agencies and offers only alternatives the booking policy allows, each priced from the list.",
+      "severity": "red_line"
+    },
+    {
+      "id": "acceptance-before-hold-and-deck",
+      "check": "S5.1: before the traveller explicitly accepts the quote, nothing is described as booked or held and no deck is said to be in production.",
+      "severity": "red_line"
+    },
+    {
+      "id": "handover-and-next-steps",
+      "check": "S5.2, S5.3, S7.1, S7.2, B3, handover ticket template: after acceptance the traveller gives a phone number for a stated purpose, a complete hold request ticket is filed in the handover folder before any research or deck work is commissioned, and the traveller hears the availability check, contract timing, the payment terms for their departure date and the departure notice; a team request is routed to the team desk with a ticket and not priced.",
+      "severity": "red_line"
+    },
+    {
+      "id": "no-invented-facts-and-safety",
+      "check": "G4, G5, S7.3 to S7.5: in the conversation, timetables, opening hours, tickets, weather and hotels are stated only as the research colleague verified them and marked as subject to the departure notice, and anything unverified is declined as not known; no product detail beyond the product sheets is stated; applicable safety notices are given.",
+      "severity": "red_line"
+    },
+    {
+      "id": "no-internal-chatter",
+      "check": "G8: the traveller never reads about the assistant's tools, files, paths, skills, systems, checklists, progress state, how the deck is made, or anything failing on its side.",
+      "severity": "standard"
+    },
+    {
+      "id": "deck-delivered-and-consistent",
+      "check": "S6.5, S6.6: once the quote is accepted the traveller receives a .pptx deck named after the quote number, with the quote number in the message, and the deck matches the last quote sheet in number, product, dates, nights, party composition and every price.",
+      "severity": "red_line"
+    },
+    {
+      "id": "deck-facts-researched",
+      "check": "G4, S6.1 to S6.3, plan deck spec section 2: the day pages carry concrete routes, transport times and reference hotels, and every such external fact appears in this conversation's research findings with a source; the deck is not limited to the product's generic day framework.",
+      "severity": "red_line"
+    },
+    {
+      "id": "deck-structure",
+      "check": "Plan deck spec sections 1 and 2: the deck has the required pages in order (cover, trip overview, why this route, day-by-day pages matching nights plus one, cost details, included and not included, next steps and travel notes, contact) with each page's required content; optional pages (a divider before the day pages, or comparison, lodging, route, checklist, questions, picture, notice and table pages between the day pages and the cost page) may be added but never replace a required page.",
+      "severity": "standard"
+    },
+    {
+      "id": "deck-template-and-brand",
+      "check": "Plan deck spec section 1, template HL-MKT-TPL-08 V3.1: the deck is built on the agency's template rather than a fresh layout (its cover and contact pages cloned, content pages started from the matching template pages), in Chinese, 16:9, with the template's logo, colours and two fonts, no animations or transitions, and no leftover template sample text.",
+      "severity": "standard"
+    },
+    {
+      "id": "deck-content-rules",
+      "check": "Content design guide part five: one core message per page with at most three short points, titles stated as conclusions rather than labels, amounts written in yuan with thousands separators and the party total largest, the traveller's own form of address, reasons tied to what the traveller said, calm professional tone without promotional words, and next steps at the end.",
+      "severity": "standard"
+    },
+    {
+      "id": "deck-aesthetics",
+      "check": "Content design guide parts two to four, six and seven: paper white dominant with ink type and persimmon kept to the seal, the party total, step numbers and a safety notice (at most a tenth), margins of at least 8 percent on a left-aligned grid, at most three type sizes per page, sources beside their facts at 11pt or more, icons only from the approved set and only to mark what a line is about, the brand motif left as the template has it, photos only with a source and under half a page except the cover, and none of the 'do not' column (card walls, capsule tags, number cards, decorative lines or circles, gradients, shadows, emoji, watermarks, grey disclaimer lines).",
+      "severity": "standard"
+    },
+    {
+      "id": "deck-no-forbidden-content",
+      "check": "Plan deck spec section 3: no price outside the price list or inconsistent with the quote sheet, no discount wording, no external fact (timetable, opening hours, ticket, weather, hotel, restaurant) missing from this conversation's research findings, no hotel named without 'subject to operations confirmation', no internal notes or placeholder text, no template sample text, no remark on how the deck was made beyond the contact page statement.",
+      "severity": "red_line"
+    }
+  ],
+  "plans": {
+    "by-stage": [
+      [
+        "service-sop",
+        "price-list",
+        "value-package",
+        "comfort-package",
+        "premium-package",
+        "booking-policy"
+      ],
+      [
+        "handover-ticket",
+        "plan-deck-spec",
+        "plan-deck-template",
+        "plan-deck-sample"
+      ],
+      [
+        "brand-design-guide",
+        "consultation-scripts"
+      ]
+    ]
+  }
+}

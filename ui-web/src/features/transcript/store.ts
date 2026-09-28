@@ -1659,7 +1659,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
           open: () => {
             const src = source()
             if (isDag) src.openDagRun?.(String(d.run_id || d.label || ''))
-            else src.openSpawn?.('', String(d.label || ''), d.node_id)
+            else src.openSpawn?.(String(d.node_id || ''))
           },
         })
       } else {
@@ -2032,9 +2032,9 @@ export function openDagRun(runId: string): void {
   try { source().openDagRun?.(runId) } catch { /* no opener wired */ }
 }
 
-export function openSpawn(agent: string, label: string, nodeId?: string): void {
+export function openSpawn(nodeId: string): void {
   const src = source()
-  if (src.openSpawn) { src.openSpawn(agent, label, nodeId); return }
+  if (src.openSpawn) { src.openSpawn(nodeId); return }
   pane().show('agents')
 }
 

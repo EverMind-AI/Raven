@@ -29,6 +29,7 @@
       "timeout": 600,
       "maxTimeout": 1200
     },
+    "connectionAdd": true,
     "web": {
       "search": {
         "maxResults": 5

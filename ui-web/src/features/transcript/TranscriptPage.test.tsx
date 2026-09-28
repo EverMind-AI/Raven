@@ -1495,7 +1495,7 @@ const spawnInjection = (label: string, result: string): string =>
 function wireDelivery(): void {
   opened.length = 0
   wire({
-    openSpawn: (_a, label) => opened.push(`spawn:${label}`),
+    openSpawn: (nodeId) => opened.push(`spawn:${nodeId}`),
     openDagRun: (runId) => opened.push(`dag:${runId}`),
   })
 }
@@ -1640,7 +1640,7 @@ describe('a delegated result coming back', () => {
         { role: 'user', text: 'look it up', timestamp: iso(t0) },
         {
           role: 'user', text: spawnInjection('lookup', 'the answer is 42'), timestamp: iso(t0 + 5000),
-          delegated: { kind: 'spawn', label: 'lookup', status: 'ok' },
+          delegated: { kind: 'spawn', label: 'lookup', status: 'ok', node_id: 'lookup_node' },
         },
         { role: 'assistant', text: 'it is 42', timestamp: iso(t0 + 6000) },
       ])
@@ -1654,7 +1654,7 @@ describe('a delegated result coming back', () => {
     expect(body).not.toContain('Summarize this naturally')
     expect(body).not.toContain('Task: look it up')
     act(() => { (row.querySelector('.nm') as HTMLElement).click() })
-    expect(opened).toEqual(['spawn:lookup'])
+    expect(opened).toEqual(['spawn:lookup_node'])
   })
 
   it('shows a failed delivery as failed', () => {
@@ -2461,7 +2461,7 @@ describe('transcript island, the delegation verbs', () => {
     const went: string[] = []
     wire()
     installWsPane({ show: (tab: string) => { went.push(tab) } })
-    store.openSpawn('researcher', 'read the docs')
+    store.openSpawn('read_docs')
     expect(went).toEqual(['agents'])
   })
 
@@ -2930,8 +2930,8 @@ describe('transcript island, delegated calls', () => {
      the point of one of these tests. */
   let listed: SpawnListRow[] = []
   let rostered = 0
-  /* Where the card's task row sent the reader: (agent, label, record id). */
-  const spawnOpened: [string, string, string | undefined][] = []
+  /* The record ids the card's task row opened. */
+  const spawnOpened: string[] = []
 
   beforeEach(() => {
     listed = []
@@ -2942,7 +2942,7 @@ describe('transcript island, delegated calls', () => {
         rostered += 1
         return listed
       },
-      openSpawn: (agent: string, label: string, nodeId?: string) => { spawnOpened.push([agent, label, nodeId]) },
+      openSpawn: (nodeId: string) => { spawnOpened.push(nodeId) },
     })
   })
 
@@ -3010,7 +3010,7 @@ describe('transcript island, delegated calls', () => {
     expect($('.wkin .wrow')?.textContent).toContain('raven-9bc249@Raven')
     openCard()
     clickTask()
-    expect(spawnOpened.at(-1)?.[2]).toBe('read_dir')
+    expect(spawnOpened.at(-1)).toBe('read_dir')
   })
 
   it('keeps the run\'s own conversation out of the trail, live or settled', async () => {
@@ -3050,7 +3050,7 @@ describe('transcript island, delegated calls', () => {
     })
     openCard()
     clickTask()
-    expect(spawnOpened).toEqual([['Raven', 'read the dir', 'read_dir']])
+    expect(spawnOpened).toEqual(['read_dir'])
   })
 
   /* A conversation as `session.resume` hands it back: the assistant's call, then
@@ -3084,7 +3084,7 @@ describe('transcript island, delegated calls', () => {
       mount.history(RESTORED)
     })
     await settle()
-    /* Nothing asked for a card nobody spawnOpened: a transcript can hold a dozen of
+    /* Nothing asked for a card nobody opened: a transcript can hold a dozen of
        these, and a dozen requests for detail no one is looking at is what the
        dag card's own lazy rule exists to avoid. */
     expect(rostered).toBe(0)
@@ -3099,7 +3099,7 @@ describe('transcript island, delegated calls', () => {
     expect($('.wkin .wrow')?.textContent).toContain('raven-9bc249@Raven')
     expect($('.dlg .dgr')?.textContent).toContain('8s')
     clickTask()
-    expect(spawnOpened.at(-1)?.[2]).toBe('read_dir')
+    expect(spawnOpened.at(-1)).toBe('read_dir')
   })
 
   it('still resolves a record named the old way, by task-id suffix', async () => {

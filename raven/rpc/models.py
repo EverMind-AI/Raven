@@ -2569,6 +2569,14 @@ class SubagentsListParams(_Strict):
         default=True,
         description="False skips the network availability probe; rows report probe_status='unknown'.",
     )
+    refresh_login_env: bool = Field(
+        default=False,
+        description=(
+            "True takes the login shell's environment again before listing, so an agent installed since the "
+            "gateway started (its installer added a PATH line to the shell rc) is found without a restart. It "
+            "also replaces the environment spawns read. Costs one login-shell run; sent by an explicit recheck."
+        ),
+    )
 
 
 class SubagentsListResult(_Strict):
@@ -2795,17 +2803,59 @@ class SubagentsInstanceSetModeResult(_Strict):
 class SubagentRemedy(_Strict):
     """What fixes a refused connect or test, as the page draws it."""
 
-    kind: Literal["sign_in", "setup", "api_key", "download"] = Field(
+    kind: Literal[
+        "sign_in",
+        "setup",
+        "api_key",
+        "download",
+        "model",
+        "billing",
+        "quota",
+        "network",
+        "silent",
+        "upgrade",
+        "exited",
+        "runtime",
+        "plan",
+        "config",
+    ] = Field(
         ...,
         description=(
             "sign_in: sign in through a browser from a terminal. setup: run the agent's own interactive "
             "setup from a terminal. api_key: the row is an endpoint and a key, fixed in the page. download: "
             "npx could not fetch the agent -- fixed in the network, the npm registry or the proxy; `command` is "
             "the preset's launch command, which fetches it from a terminal with no time limit, sent only when the "
-            "row's command is the preset's word for word."
+            "row's command is the preset's word for word. model: the agent's model provider does not serve the "
+            "model it is set to use (HTTP 404 -- withdrawn from a free tier, or not found), or the account's plan "
+            "does not include it. billing: the provider refused for want of credit (402). quota: the provider is "
+            "rate-limiting it or its quota is spent (429, or a plan's usage limit). For these three `command` "
+            "opens the agent and `then` is what to type in it to switch model, "
+            "when known. network: the provider could not be reached; `command`, when sent, prints the cause in a "
+            "terminal. silent: the agent outlasted the wait without a word, which is how it retries a provider "
+            "that keeps refusing it; `command` prints the reason in a terminal. upgrade: the agent is too old to "
+            "know the flag that starts it in ACP mode, or never finishes its handshake; `command` upgrades it. "
+            "exited: the agent quit on starting, and what it said is in the detail. runtime: the agent quit on "
+            "starting because the Node.js it was launched with is older than its package declares; `needs` is "
+            "that floor, `found` the version launched, and `command` upgrades that Node.js when its installer is "
+            "recognisable. plan: the agent is signed in, but the account's plan does not include it or its "
+            "membership cannot be verified; `command`, when sent, is the page that sells one. config: the agent "
+            "cannot read its own config file; `command` says where it is wrong."
         ),
     )
     command: str | None = Field(None, description="The command that makes the fix on this machine, when one is known.")
+    then: str | None = Field(
+        None,
+        description=(
+            "What to type once `command` is running, for an agent whose fix is a step inside it rather than "
+            "the command itself. Sent only beside `command`."
+        ),
+    )
+    needs: str | None = Field(
+        None, description="For runtime: the Node.js version the agent's package declares it needs, e.g. 22."
+    )
+    found: str | None = Field(
+        None, description="For runtime: the Node.js version the agent was launched with, e.g. 18.20.8."
+    )
 
 
 class SubagentModelChoice(_Strict):

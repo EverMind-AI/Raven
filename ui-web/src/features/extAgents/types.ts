@@ -105,15 +105,45 @@ export interface ExtAgentActArgs {
 }
 
 export interface ExtAgentsSource {
-  load(probe?: boolean): Promise<ExtAgentRow[]>
+  /* `rescan` also has the server take the login shell's environment again before
+     it probes: the one answer to an agent installed since the gateway started,
+     whose installer added a PATH line only a new capture reads. Only an explicit
+     re-check sends it -- the capture runs the user's login shell. */
+  load(probe?: boolean, rescan?: boolean): Promise<ExtAgentRow[]>
   act(op: ExtAgentOp, row: ExtAgentRow, args?: ExtAgentActArgs): Promise<ExtAgentRow[]>
 }
 
-/* What fixes a refusal about a credential, as the server classified it: which
-   kind of fix, and the command that makes it on this machine when one is known.
-   The same verdict the server's English sentence spells out, as data, so the
-   sheet can say it in the reader's language. */
+/* What fixes a refusal, as the server classified it: which kind of fix, and
+   the command that makes it on this machine when one is known. The same
+   verdict the server's English sentence spells out, as data, so the sheet can
+   say it in the reader's language. The first four are about the agent itself;
+   `model`, `billing`, `quota` and `network` are its model provider refusing or
+   out of reach; `silent`, `upgrade` and `exited` are how it failed to answer;
+   `plan` is its account's plan not including it, and `config` its own config
+   file it cannot read. */
 export interface Remedy {
-  kind: 'sign_in' | 'setup' | 'api_key' | 'download'
+  kind:
+    | 'sign_in'
+    | 'setup'
+    | 'api_key'
+    | 'download'
+    | 'model'
+    | 'billing'
+    | 'quota'
+    | 'network'
+    | 'silent'
+    | 'upgrade'
+    | 'exited'
+    | 'runtime'
+    | 'plan'
+    | 'config'
   command: string
+  /* What to type once `command` is running, when the fix is a step inside the
+     agent rather than the command itself -- Qwen Code's `/auth`. Only ever
+     beside a command. */
+  then?: string
+  /* For `runtime`: the Node.js the agent's package declares it needs (`22`),
+     and the one this machine launched it with (`18.20.8`). */
+  needs?: string
+  found?: string
 }

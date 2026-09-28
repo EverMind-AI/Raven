@@ -12,6 +12,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Glyph } from '../../components/Ico'
+import { PaneHead, PaneHeadSeg } from '../../components/PaneHead'
 import { t } from '../../i18n/t'
 import { copy } from '../../lib/clipboard'
 import { formatDuration } from '../../lib/duration'
@@ -147,7 +148,7 @@ function Row({ row, now, open, onOpen }: {
     <div className="tklistrow">
       <button
         type="button"
-        className="sarow task tklistopen"
+        className="sarow task"
         data-st={tdotState(row.status)}
         aria-current={open || undefined}
         onClick={() => onOpen(row)}
@@ -162,7 +163,6 @@ function Row({ row, now, open, onOpen }: {
         </div>
         {row.status === 'failed' || row.status === 'interrupted' ? <ErrorTag /> : null}
       </button>
-      {row.status === 'running' ? <StopButton row={row} compact /> : null}
     </div>
   )
 }
@@ -424,13 +424,13 @@ function nodeSubtitleRest(node: TaskNode): string[] {
   return parts
 }
 
-/* The node panel head's subtitle line: the agent in its own `<b>`, the rest
-   of the sentence plain after it. The agent alone, without its handle: a
+/* A node's facts in the pane header: the agent, then the rest of the
+   sentence. The agent alone, without its handle: a
    spawn's handle is a minted id (`TaskRow.handle`), and the work-order tab
    already names the instance for the reader who wants it. */
 function NodeSubtitle({ node }: { node: TaskNode }): JSX.Element {
   const rest = nodeSubtitleRest(node)
-  return <span className="tksub"><b>{node.agent}</b>{rest.length ? ' · ' + rest.join(' · ') : ''}</span>
+  return <>{[node.agent, ...rest].filter(Boolean).join(' \u00b7 ')}</>
 }
 
 /* Why a step nobody dispatched has nothing to read: skipped names the
@@ -908,41 +908,15 @@ function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
   return box
 }
 
-function NodePanel({ row, node, paneId, onClose, roster }: {
-  row: TaskRow; node: TaskNode; paneId: string; onClose: () => void; roster: SubagentRow[]
+function NodePanel({ row, node, paneId, roster }: {
+  row: TaskRow; node: TaskNode; paneId: string; roster: SubagentRow[]
 }): JSX.Element {
   useSyncExternalStore(store.subscribe, store.get)
   const rec = useNodeRecord(row, node)
-  const pinned = store.tabOf(paneId)
-  const body = useTailFollow(`${paneId}:${node.node_id}:${pinned ?? ''}`, rec.record, node.status === 'running')
-  /* A skipped step opens on the context tab too -- it has no order to
-     dispatch, but it does have a reason it never ran, and that reason is
-     what the context tab reads first (`nodeWhyText`). Only a step still
-     ahead of the run (`pending`) opens on the work order by default. */
-  const tab = pinned ?? (node.status === 'pending' ? 'order' : 'context')
+  const body = useTailFollow(`${paneId}:${node.node_id}:${store.tabOf(paneId) ?? ''}`, rec.record, node.status === 'running')
+  const tab = tabOf(paneId, node)
   return (
     <div className="tkcard">
-      <div className="tkch">
-        <button className="tkback" onClick={onClose} aria-label={t('gui.tasks.back')} title={t('gui.tasks.back')}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-            <path d="M15 5l-7 7 7 7" />
-          </svg>
-        </button>
-        <div className="tktt">
-          {/* The id rides on the title: it is what a dependency and the run dir
-              key on, and the summary, where the planner wrote one, takes its
-              place in the text. */}
-          <b title={node.node_id}>{node.node_summary || node.node_id}</b>
-          <NodeSubtitle node={node} />
-        </div>
-        <div className="tktabs" role="tablist">
-          {(['context', 'order'] as const).map((k) => (
-            <button key={k} role="tab" aria-selected={tab === k} onClick={() => store.pickTab(paneId, k)}>
-              {t(k === 'context' ? 'gui.tasks.tab_context' : 'gui.tasks.tab_order')}
-            </button>
-          ))}
-        </div>
-      </div>
       {/* The one scrolling child: the header above stays put rather than
          riding off the top of a long record. */}
       <div className="tkbody" ref={body}>
@@ -956,15 +930,20 @@ function NodePanel({ row, node, paneId, onClose, roster }: {
 
 /* ── the pane ──────────────────────────────────────────────────────────── */
 
-function StopButton({ row, compact = false }: { row: TaskRow; compact?: boolean }): JSX.Element {
+/* Stopping is rare, so it is one quiet square among the header's controls
+   rather than a word that reads as the thing to do -- red only on hover. A
+   graph has no per-node stop: the runtime cancels a run by its id, so on a
+   graph node it stops the whole run, and its tooltip says so. */
+function StopButton({ row }: { row: TaskRow }): JSX.Element {
   const [busy, setBusy] = useState(false)
+  const said = row.kind === 'dag' ? t('gui.tasks.stop_title') : t('gui.stop')
   return (
     <button
       type="button"
-      className={'tkbaract' + (compact ? ' tkliststop' : '')}
+      className="tkhalt"
       disabled={busy}
-      aria-label={compact ? t('gui.stop') : undefined}
-      title={row.kind === 'dag' ? t('gui.tasks.stop_title') : t('gui.stop')}
+      aria-label={said}
+      title={said}
       onClick={() => {
         /* Said the moment the request goes out, not once the reconciled row
            lands: the button greying out is not itself an answer to "did that
@@ -977,8 +956,7 @@ function StopButton({ row, compact = false }: { row: TaskRow; compact?: boolean 
           .finally(() => setBusy(false))
       }}
     >
-      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7.5 7.5h9v9h-9z" /></svg>
-      {compact ? null : t('gui.tasks.stop')}
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6.5" y="6.5" width="11" height="11" rx="2" /></svg>
     </button>
   )
 }
@@ -1038,17 +1016,61 @@ function WhyBanner({ row, onPick }: { row: TaskRow; onPick: (id: string) => void
   )
 }
 
-function StatusBar({ row, now }: { row: TaskRow; now: number }): JSX.Element {
-  const dur = taskDuration(row, now)
-  const line = stepLine(row)
+/* Which tab a node opens on. A skipped step opens on the context tab too --
+   it has no order to dispatch, but it does have a reason it never ran, and
+   that reason is what the context tab reads first (`nodeWhyText`). Only a
+   step still ahead of the run (`pending`) opens on the work order by
+   default. */
+const tabOf = (paneId: string, node: TaskNode): 'context' | 'order' =>
+  store.tabOf(paneId) ?? (node.status === 'pending' ? 'order' : 'context')
+
+/* The pane's header. The task, with how far along it is; or, with a node
+   picked, that node as a step of the task -- the task's name leading it as
+   the way back, its own facts after it, and its two tabs at the end. Stop is
+   there only while the thing on screen is running. */
+function TaskHead({ row, node, now, paneId, onBack }: {
+  row: TaskRow; node: TaskNode | null; now: number; paneId: string; onBack: () => void
+}): JSX.Element {
+  const title = row.task_summary || row.id
+  if (!node) {
+    const dur = taskDuration(row, now)
+    const facts = [taskStatusWord(row.status), dur != null ? formatDuration(dur) : '', stepLine(row)]
+      .filter(Boolean).join(' \u00b7 ')
+    return (
+      <PaneHead
+        title={title}
+        meta={(
+          <span className="tkmeta" data-st={tdotState(row.status)} title={facts}>
+            <span className={'dot ' + dotOf(row.status)} />
+            <span>{facts}</span>
+          </span>
+        )}
+      >
+        {row.status === 'running' ? <StopButton row={row} /> : null}
+      </PaneHead>
+    )
+  }
   return (
-    <div className="tkbar" data-st={tdotState(row.status)}>
-      <span className={'dot ' + dotOf(row.status)} />
-      <span className="st">{taskStatusWord(row.status)}</span>
-      {dur != null ? <span>{'· ' + formatDuration(dur)}</span> : null}
-      {line ? <span>{'· ' + line}</span> : null}
-      {row.status === 'running' ? <StopButton row={row} /> : null}
-    </div>
+    <PaneHead
+      back={{ label: t('gui.tasks.back'), onBack }}
+      parent={title}
+      /* The id rides on the title: it is what a dependency and the run dir key
+         on, and the summary, where the planner wrote one, takes its place in
+         the text. */
+      title={node.node_summary || node.node_id}
+      tip={node.node_id}
+      meta={<NodeSubtitle node={node} />}
+    >
+      <PaneHeadSeg
+        options={[
+          { key: 'context', label: t('gui.tasks.tab_context') },
+          { key: 'order', label: t('gui.tasks.tab_order') },
+        ]}
+        value={tabOf(paneId, node)}
+        onPick={(k) => store.pickTab(paneId, k)}
+      />
+      {row.status === 'running' && node.status === 'running' ? <StopButton row={row} /> : null}
+    </PaneHead>
   )
 }
 
@@ -1238,7 +1260,7 @@ export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean
   const pick = (id: string | null): void => store.pickNode(paneId, id)
   return (
     <div className={'tkview' + (full ? ' full' : '')} data-detail={!!node}>
-      <StatusBar row={row} now={now} />
+      <TaskHead row={row} node={node} now={now} paneId={paneId} onBack={() => pick(null)} />
       <WhyBanner row={row} onPick={pick} />
       <Chips row={row} />
       {/* The board stays mounted either way, and CSS -- not this ternary --
@@ -1251,13 +1273,13 @@ export function TaskPane({ task, full = false }: { task: TaskRow; full?: boolean
         ? (
           <div className="tkwork">
             <Fork row={row} paneId={paneId} />
-            {node ? <NodePanel row={row} node={node} paneId={paneId} onClose={() => pick(null)} roster={roster} /> : null}
+            {node ? <NodePanel row={row} node={node} paneId={paneId} roster={roster} /> : null}
           </div>
         )
         : (
           <>
             <Fork row={row} paneId={paneId} />
-            {node ? <NodePanel row={row} node={node} paneId={paneId} onClose={() => pick(null)} roster={roster} /> : null}
+            {node ? <NodePanel row={row} node={node} paneId={paneId} roster={roster} /> : null}
           </>
         )}
     </div>

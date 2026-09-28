@@ -11,6 +11,8 @@ be blanked by one unreachable endpoint, so every failure is a return value.
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -24,15 +26,21 @@ from typing import Any, Literal
 import aiohttp
 from loguru import logger
 
+from raven.agent.subagent import github_copilot, kimi_code
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
+from raven.agent.subagent.node_runtime import NodeTooOld, node_too_old
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
+    diagnose_hint_for,
     install_hint_for,
+    model_switch_hint_for,
+    runs_on_node,
     shim_requirement_for,
     sign_in_hint_for,
     third_party_subagent_presets,
+    upgrade_hint_for,
 )
 from raven.agent.subagent.probe_state import LastTest, Remedy
 
@@ -262,8 +270,19 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     """
     from raven.acp_client.capabilities import looks_like_auth
 
-    if not looks_like_auth(said if answer is None else answer):
-        return said[:_DETAIL_CAP], None
+    judged = said if answer is None else answer
+    # Copilot writes a provider refusal into the message and ends the turn, and
+    # the same words on a failed call still say "Authentication", which the
+    # credential reading would send to `copilot login`. Read its own sentence
+    # first so a bad API key is not told to sign in.
+    if github_copilot.applies(cfg) and (named := github_copilot.read(judged)) is not None:
+        return named[0][:_DETAIL_CAP], named[1]
+    if not looks_like_auth(judged):
+        # Read off the agent's answer only: a launch that died says nothing
+        # about a provider, and its stderr can name an unreachable host that is
+        # not one -- a bridge's own gateway, say.
+        provider = _provider_refusal(cfg, said, answer) if answer is not None else None
+        return provider or (said[:_DETAIL_CAP], None)
     remedy = _remedy_for(cfg)
     if remedy.kind == "api_key":
         # Nothing was installed and there is nothing to sign in to: this row is
@@ -274,9 +293,18 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
         lead = "it has no usable API key"
         advice = "add one in this agent's settings and connect again"
     else:
-        lead = "it is installed but has no usable credential"
+        low = judged.lower()
+        preset = getattr(cfg, "preset", None)
+        if preset in {"grok", "github_copilot"} and "expired" in low:
+            lead = "its sign-in has expired"
+        elif preset in {"grok", "github_copilot"} and ("api key" in low or "invalid_api_key" in low):
+            lead = "its API key was refused"
+        else:
+            lead = "it is installed but has no usable credential"
         advice = (
-            f"sign in with `{remedy.command}` and connect again"
+            f"run `{remedy.command}` in a terminal and type `{remedy.then}` there, then connect again"
+            if remedy.command and remedy.then
+            else f"sign in with `{remedy.command}` and connect again"
             if remedy.command
             else "sign in to it and connect again"
         )
@@ -297,7 +325,195 @@ def _remedy_for(cfg: Any) -> Remedy:
     # executable against, so the hint and the probe cannot disagree about what
     # this machine has.
     local = shutil.which(hint.exe, path=_login_path()) is not None
-    return Remedy(hint.does, hint.local if local or hint.anywhere is None else hint.anywhere)
+    return Remedy(hint.does, hint.local if local or hint.anywhere is None else hint.anywhere, hint.then)
+
+
+_PROVIDER_STATUS = re.compile(r"\berror:\s*(402|404|429)\s+\S", re.IGNORECASE)
+"""The model provider's own HTTP verdict, as an agent relays it.
+
+Measured on qwen 0.24.4 against a stand-in endpoint answering each status:
+"[-32603] Internal error: 404 This model is unavailable for free. The paid
+version is available now - use this slug instead: <model>", and the same shape
+for 402 and 429. The status is the provider's, not a guess about the
+agent's prose, which is what lets a reader be told which of three different
+things to do. Anchored on the code following ``error:``, so a number inside a
+sentence -- a context window, a port -- is not read as one."""
+
+_PROVIDER_VERDICTS: dict[str, tuple[Literal["model", "billing", "quota"], str, str]] = {
+    "402": ("billing", "its model provider refused the call for want of credit", "add credit with the provider, or"),
+    "404": ("model", "its model provider does not serve the model it is set to use", "pick another model:"),
+    "429": ("quota", "its model provider is rate-limiting it or its quota is spent", "wait and try again, or"),
+}
+
+_UNREACHED = re.compile(
+    r"\bConnection error\b|\bfetch failed\b|\bENOTFOUND\b|\bECONNREFUSED\b|\bEAI_AGAIN\b|\bgetaddrinfo\b", re.IGNORECASE
+)
+"""The provider was never reached. Measured on qwen 0.24.4: a refused port comes
+back as "Internal error: Connection error." within five seconds; an unresolvable
+host is retried long past the connect's wait (see :data:`presets.DIAGNOSE_HINTS`).
+These are the Node and OpenAI-SDK spellings of the same fact."""
+
+
+def _provider_refusal(cfg: Any, said: str, answer: str) -> tuple[str, Remedy] | None:
+    """A refusal the agent's model provider made, when the agent's answer says which.
+
+    ``None`` for anything else, which `_refusal` then passes through as it came.
+    The fix is the model the agent uses, changed inside the agent where the table
+    knows how (`presets.MODEL_SWITCH_HINTS`), or said without a command where it
+    does not -- the verdict is the provider's either way.
+    """
+    status = _PROVIDER_STATUS.search(answer)
+    if status is not None:
+        kind, lead, advice = _PROVIDER_VERDICTS[status.group(1)]
+        hint = model_switch_hint_for(cfg)
+        how = (
+            f" run `{hint.command}` in a terminal and type `{hint.then}` there"
+            if hint and hint.then
+            else f" run `{hint.command}`"
+            if hint
+            else " switch the model it uses"
+        )
+        remedy = Remedy(kind, hint.command, hint.then) if hint else Remedy(kind)
+        return f"{lead}; {advice}{how}, then connect again. It said: {said}"[:_DETAIL_CAP], remedy
+    if _UNREACHED.search(answer):
+        run = diagnose_hint_for(cfg)
+        how = f"; `{run}` in a terminal prints the cause" if run else ""
+        advice = f"check the network, the proxy and the address it is configured with{how}"
+        return f"it could not reach its model provider; {advice}. It said: {said}"[:_DETAIL_CAP], Remedy("network", run)
+    return None
+
+
+_EXITED = re.compile(r"connection ended \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
+"""A launch that quit and said why on its way out. One that quit without a word
+is left unnamed: pointing a reader at what it said would point at nothing."""
+
+_NO_ACP_FLAG = re.compile(
+    r"(?:unknown|no such|unexpected) (?:argument|option|flag|command)s?:?\s*['\"]?-{0,2}acp\b",
+    re.IGNORECASE,
+)
+# `grok agent nosuch` answers "error: unrecognized subcommand 'nosuch'" (clap,
+# Grok Build 1.0.41). A build without `agent` uses that same sentence for it.
+_GROK_NO_AGENT = re.compile(r"unrecognized subcommand ['\"]agent['\"]", re.IGNORECASE)
+"""An agent too old to know the flag or subcommand its preset launches it with.
+yargs, which qwen is built on, answers an unknown option "Unknown argument:
+acp"; commander, which Kimi Code's CLI is built on, answers an unknown
+subcommand "error: unknown command 'acp'", and click "No such command 'acp'"."""
+
+_PROMPT_TIMEOUT = re.compile(r"session/prompt timed out after")
+
+
+def _silent_detail(said: str, run: str) -> str:
+    """The sentence for an agent that outlasted the wait saying nothing -- and how to make it talk."""
+    return (
+        f"{said}: it kept working and said nothing, which is how it waits out a model provider that "
+        f"keeps refusing it (a spent quota, a rate limit, an unreachable host); run `{run}` in a terminal, "
+        f"which prints the reason within a few minutes"
+    )[:_DETAIL_CAP]
+
+
+def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
+    """A launch or a wait that failed without the agent answering, when there is evidence of which.
+
+    An exit carries the agent's own last words on stderr; a flag it does not know
+    means it predates the release its preset launches; a Node.js agent that quit
+    on a Node.js older than its package declares was run on the wrong one
+    (`_stale_node`). A timed-out prompt carries nothing, and is named only for an
+    agent measured to go silent while it retries (`presets.DIAGNOSE_HINTS`), with
+    the command that makes it say why.
+
+    Runs ``node --version`` for a Node.js agent that quit, so its callers keep it
+    off the event loop.
+    """
+    if _EXITED.search(shown):
+        if _NO_ACP_FLAG.search(shown) or (getattr(cfg, "preset", None) == "grok" and _GROK_NO_AGENT.search(shown)):
+            up = upgrade_hint_for(cfg)
+            how = f" with `{up}`" if up else ""
+            return (
+                f"it is too old to be connected: it does not know the flag or command that starts it in ACP mode; "
+                f"upgrade it{how} and connect again. It said: {shown}"
+            )[:_DETAIL_CAP], Remedy("upgrade", up)
+        named = _named_launch_failure(cfg, shown)
+        if named is not None:
+            return named
+        stale = _stale_node(cfg)
+        if stale is not None:
+            how = f" with `{stale.upgrade}`" if stale.upgrade else " from nodejs.org"
+            return (
+                f"its Node.js is too old for it: it needs Node.js {stale.needs} or newer and was launched with "
+                f"{stale.found} ({stale.node}); upgrade Node.js{how} and connect again. It said: {shown}"
+            )[:_DETAIL_CAP], Remedy("runtime", stale.upgrade, needs=stale.needs, found=stale.found)
+        return shown[:_DETAIL_CAP], Remedy("exited")
+    if _PROMPT_TIMEOUT.search(shown):
+        run = diagnose_hint_for(cfg)
+        if run:
+            return _silent_detail(shown, run), Remedy("silent", run)
+    if getattr(cfg, "preset", None) in {"grok", "github_copilot"} and "initialize timed out" in shown:
+        return (f"its ACP server did not start; connect again. It said: {shown}")[:_DETAIL_CAP], None
+    return None
+
+
+def _named_launch_failure(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
+    """A quit whose stderr names a cause these two agents print themselves.
+
+    Read only for their presets. Anything else keeps the generic "it quit".
+    """
+    preset = getattr(cfg, "preset", None)
+    low = shown.lower()
+    if preset == "github_copilot" and "no platform package found" in low:
+        return (
+            "it quit because the platform package its installer fetches is missing; "
+            "reinstall with `npm i -g @github/copilot` and connect again. "
+            f"It said: {shown}"
+        )[:_DETAIL_CAP], Remedy("upgrade", upgrade_hint_for(cfg))
+    if preset == "github_copilot" and "offline mode requires a local model provider" in low:
+        # No command: offline mode does not authenticate, so `copilot login`
+        # leaves the same missing COPILOT_PROVIDER_BASE_URL. `setup` without a
+        # command renders as a sign-in, which is the same miss.
+        return (
+            "it has no model provider configured; set COPILOT_PROVIDER_BASE_URL "
+            "to one and connect again. "
+            f"It said: {shown}"
+        )[:_DETAIL_CAP], None
+    return None
+
+
+def _installed_outside_login_path(
+    exe: str, login_path: str | None, roots: tuple[Path, ...] | None = None
+) -> str | None:
+    """An install of grok or copilot that the login PATH this probe uses does not see.
+
+    ``None`` for every other executable, and when the login PATH already finds
+    it. The directories are the ones their npm installers use on this platform:
+    Homebrew's prefix and ``~/.local/bin``.
+    """
+    if exe not in {"grok", "copilot"}:
+        return None
+    if shutil.which(exe, path=login_path) is not None:
+        return None
+    roots = roots or (Path("/opt/homebrew/bin"), Path("/usr/local/bin"), Path.home() / ".local" / "bin")
+    for directory in roots:
+        candidate = directory / exe
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def _stale_node(cfg: Any) -> NodeTooOld | None:
+    """The too-old Node.js this row's launch resolves, for an agent known to run on one.
+
+    Read from the PATH the launch itself gets -- the row's own, else the login
+    shell's -- since that is the PATH its ``#!/usr/bin/env node`` resolves.
+    """
+    if not runs_on_node(cfg):
+        return None
+    try:
+        argv = shlex.split((getattr(cfg, "command", None) or "").strip())
+    except ValueError:
+        return None
+    if not argv:
+        return None
+    path = (getattr(cfg, "env", None) or {}).get("PATH") or _login_path()
+    return node_too_old(argv[0], path)
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -368,6 +584,14 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
     if resolved is None:
+        off = _installed_outside_login_path(exe, cfg_path or path)
+        if off is not None:
+            return done(
+                "attention",
+                f"{exe} is installed at {off}, but that directory is not on the login shell PATH "
+                "Raven launches it with",
+                off,
+            )
         return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
     requirement = shim_requirement_for(cfg)
     if requirement is not None:
@@ -646,7 +870,10 @@ def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
 
     unfetched = npx_fetch_failure((getattr(cfg, "command", None) or "").strip(), exc)
     if unfetched is None:
-        return _refusal(cfg, *_said(exc))
+        text, remedy = _refusal(cfg, *_said(exc))
+        if remedy is not None:
+            return text, remedy
+        return _process_refusal(cfg, str(exc)) or (text, None)
     shipped = _shipped_command(cfg)
     run = f"`{shipped}`" if shipped else "this agent's launch command"
     advice = f"connect again, or run {run} once in a terminal to fetch it with no time limit"
@@ -690,7 +917,10 @@ async def ping_agent(cfg: Any) -> PingResult:
     on 2026-09-07 did exactly that.
 
     So this spends one call on the agent's own quota, which is why it is reached
-    only from an explicit switch-on and never from a listing.
+    only from an explicit switch-on and never from a listing. A Kimi Code ping
+    that fails without a reason is asked once more in print mode
+    (`kimi_code.explain`), which is a second call only when the failure has
+    passed in between.
 
     It runs on a pool of its own, closed on the way out. The shared pool keys a
     connection on its launch arguments and ``cwd`` falls back to the caller's
@@ -708,6 +938,8 @@ async def ping_agent(cfg: Any) -> PingResult:
 
     ready_ms, answer_s, wait_s = _ping_bounds(cfg)
     pool = acp_pool.AcpConnectionPool()
+    reply: str | None = None
+    failure: Exception | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
             backend = build_third_party_backend(
@@ -724,19 +956,31 @@ async def ping_agent(cfg: Any) -> PingResult:
                 timeout=wait_s,
             )
     except asyncio.TimeoutError:
-        return PingResult(False, f"it did not answer within {wait_s:.0f}s")
+        said = f"it did not answer within {wait_s:.0f}s"
+        run = diagnose_hint_for(cfg)
+        return PingResult(False, _silent_detail(said, run), Remedy("silent", run)) if run else PingResult(False, said)
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
-        return PingResult(False, *_ping_refusal(cfg, exc))
+        failure = exc
     finally:
         # The pool is this call's alone, so nothing else will ever close it, and a
         # pool left open holds the child process it launched for the rest of the
         # gateway's life -- one per press.
         await pool.close_all()
 
-    text = (reply or "").strip()
-    if not text:
-        return PingResult(False, "it started and then answered nothing")
-    return PingResult(True, "it ran and replied")
+    if failure is None and (reply or "").strip():
+        # Copilot reports a refused model call as the assistant message of a
+        # finished turn. A non-empty reply is not, on its own, a success.
+        if github_copilot.applies(cfg) and (named := github_copilot.read(reply)) is not None:
+            return PingResult(False, named[0][:_DETAIL_CAP], named[1])
+        return PingResult(True, "it ran and replied")
+    # An agent whose ACP answer leaves the reason out is asked for it its own way,
+    # once the pool is closed, so the process asked is not racing the one pinged.
+    if (explained := await kimi_code.explain(cfg, failure, prompt=PROBE_PROMPT)) is not None:
+        detail, remedy = explained
+        return PingResult(False, detail[:_DETAIL_CAP], remedy)
+    if failure is not None:
+        return PingResult(False, *(await asyncio.to_thread(_ping_refusal, cfg, failure)))
+    return PingResult(False, "it started and then answered nothing")
 
 
 async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
@@ -783,15 +1027,25 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         # The handshake already classified the refusal (`needs_auth`, from the
         # agent's own answer), so the remedy is read off that verdict rather than
         # off this detail, whose "(auth methods: ...)" suffix names an
-        # advertisement every working agent makes too.
-        remedy = (
-            _remedy_for(cfg)
-            if snapshot.needs_auth
-            else Remedy("download", _shipped_command(cfg))
-            if snapshot.unfetched
-            else None
+        # advertisement every working agent makes too. A launch that quit
+        # before answering is read the way the connect reads it
+        # (`_process_refusal`, off the event loop), so the two buttons name one
+        # crash one way. Kimi Code refuses every session it cannot start with one
+        # bare "Authentication required", signed out and broken config alike, so
+        # it is asked which (`kimi_code.explain_refusal`).
+        explained = await kimi_code.explain_refusal(
+            cfg, snapshot.detail, needs_auth=snapshot.needs_auth, prompt=PROBE_PROMPT
         )
-        return TestResult(cfg.name, source, "acp", False, snapshot.detail, reply, elapsed(), remedy)
+        if explained is not None:
+            detail, remedy = explained[0][:_DETAIL_CAP], explained[1]
+        elif snapshot.needs_auth:
+            detail, remedy = snapshot.detail, _remedy_for(cfg)
+        elif snapshot.unfetched:
+            detail, remedy = snapshot.detail, Remedy("download", _shipped_command(cfg))
+        else:
+            read = await asyncio.to_thread(_process_refusal, cfg, snapshot.detail)
+            detail, remedy = read or (snapshot.detail, None)
+        return TestResult(cfg.name, source, "acp", False, detail, reply, elapsed(), remedy)
     answered = await ping_agent(cfg)
     # Verdict first on a failure, the handshake after it: "it connected and then
     # said nothing" is what went wrong, and the half that succeeded is the

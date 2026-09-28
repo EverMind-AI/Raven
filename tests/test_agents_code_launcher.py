@@ -127,7 +127,17 @@ def _hermetic_build(rendered, tmp_path, monkeypatch):
 #: have not boarded (PENDING_WAVE_TOOLS below), so a guide still teaching them
 #: would promise what the model cannot call. When their wave lands, the
 #: sections come back with the tools.
-GUIDE_MUST_NAME = ("exec", "run_in_background", "read_file", "write_file", "edit_file", "grep", "glob", "todo")
+GUIDE_MUST_NAME = (
+    "exec",
+    "run_in_background",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "grep",
+    "glob",
+    "todo",
+    "ops_connection_add",
+)
 GUIDE_MUST_NOT_NAME = ("exec_write", "exec_read", "job_status", "job_wait", "job_cancel", "cron", "todowrite")
 CARRIED_GUIDE = RUN_PY.parent / "plugins" / "code-flow" / "prompts" / "TOOLS_CODE.md"
 CONDUCTS = {
@@ -871,6 +881,14 @@ SKILL_LANE_TOOLS = {
 #: the fold off would hold it open at exactly the size it exists for.
 TRUNK_RESERVED = {"tool_call", "tool_search"}
 
+#: The machine lane, opened 2026-09-23. This product builds a case where the
+#: solver is and smoke-tests it there, and in the usual chain it runs before
+#: the on-call agent -- so when the owner's registry lists no machine that
+#: fits, or nothing at all, the ask and the write have to happen here. Trunk's
+#: tool, boarded by ``tools.connectionAdd`` in the product config; the guide's
+#: machine section says when to reach for it and when to stay on this box.
+MACHINE_LANE_TOOLS = {"ops_connection_add"}
+
 #: The product's visible tool face, hermetically rebuilt from the render:
 #: the fork's config intent minus the ledgered pending waves, plus the
 #: opened skill lane and the reserved name above. Trunk also grew tools the
@@ -885,6 +903,7 @@ VENDORED_TOOL_FACE = {
     "glob",
     "grep",
     "list_dir",
+    "ops_connection_add",
     "read_file",
     "read_skill",
     "todo",
@@ -928,6 +947,7 @@ def test_the_face_arithmetic_is_the_ledger():
         (FORK_CONFIG_INTENT - PENDING_WAVE_TOOLS - set(RESPELLED))
         | set(RESPELLED.values())
         | SKILL_LANE_TOOLS
+        | MACHINE_LANE_TOOLS
         | TRUNK_RESERVED
     )
     assert VENDORED_TOOL_FACE == expected

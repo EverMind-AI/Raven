@@ -145,6 +145,43 @@ async def test_an_ordinary_turn_carries_no_delegation_mark(workspace):
     for m in _persisted_messages(workspace):
         assert "delegated" not in m, m
         assert "_delegated" not in m, m
+        assert not (isinstance(m.get("notice"), dict) and m["notice"].get("kind") == "question_unanswered")
+
+
+@pytest.mark.asyncio
+async def test_an_unanswered_question_is_stored_as_a_notice(workspace):
+    """The line the model is told is not what a reopened session can draw.
+
+    Noted during the model call, which is after the inbound message is filed,
+    so the notice belongs to the turn's own save and not to a second copy of it.
+    """
+    from raven.permissions.turn import UNANSWERED_KIND, note_unanswered, start_permission_turn
+
+    class Noting(StubProvider):
+        async def chat(self, *args, **kwargs):
+            note_unanswered("Which base branch?")
+            note_unanswered("Which base branch?")
+            return await super().chat(*args, **kwargs)
+
+    start_permission_turn(None, conversation_id="tui:chat1", turn_id="t")
+    agent = AgentLoop(
+        provider=Noting(),
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=2),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    await agent._process_message(_make_msg("hello"))
+
+    notices = [m for m in _persisted_messages(workspace) if isinstance(m.get("notice"), dict)]
+    assert len(notices) == 1, notices
+    assert notices[0]["notice"] == {
+        "kind": UNANSWERED_KIND,
+        "detail": "Which base branch?",
+    }
+    assert "_notice" not in notices[0]
+    assert "Which base branch?" in notices[0]["content"]
+    assert "best judgment" in notices[0]["content"]
 
 
 @pytest.mark.asyncio
