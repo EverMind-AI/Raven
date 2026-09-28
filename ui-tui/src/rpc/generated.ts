@@ -167,6 +167,10 @@ export interface SessionInitInfo {
   usage: SessionUsage;
   version: string;
   cwd: string;
+  /**
+   * Ids of the knowledge bases this session's turns may search, as it was left. Beside `cwd` and for the same reason: a reader reopening a conversation has to see what it is pointed at, or the picker draws it as pointed at nothing.
+   */
+  knowledge_bases?: string[];
   mcp_servers: JsonValue[];
   update_available?: boolean;
   /**

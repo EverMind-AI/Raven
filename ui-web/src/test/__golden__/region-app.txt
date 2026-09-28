@@ -132,6 +132,10 @@ div.app
                     path
                 div#plusPop.pop[data-open=false]
               span.chrome-anch
+                button#atBtn.plus
+                  span
+                div#atPop.pop[data-open=false]
+              span.chrome-anch
                 button#wdChip.chip
                   svg.pico
                     path

@@ -8375,6 +8375,30 @@
       "en": "Continue the conversation; Raven will receive your new instruction directly",
       "zh": "继续对话，Raven 将直接收到你的新指令"
     },
+    "gui.at.point": {
+      "en": "What this is about",
+      "zh": "本次对话的范围"
+    },
+    "gui.at.folder": {
+      "en": "Folder",
+      "zh": "工作目录"
+    },
+    "gui.at.bases": {
+      "en": "Knowledge bases",
+      "zh": "知识库"
+    },
+    "gui.at.documents": {
+      "en": "{n} documents",
+      "zh": "{n} 个文档"
+    },
+    "gui.at.loading": {
+      "en": "Reading the bases...",
+      "zh": "正在读取知识库..."
+    },
+    "gui.at.no_bases": {
+      "en": "No knowledge bases yet",
+      "zh": "尚未创建知识库"
+    },
     "gui.plus.add": {
       "en": "Add",
       "zh": "添加"

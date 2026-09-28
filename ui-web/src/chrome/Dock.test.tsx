@@ -282,12 +282,13 @@ describe('the dock', () => {
      leaves an empty onclick on every element it takes a click of (the trap that
      makes clicks fire on iOS), so a bare .onclick is what says the element is
      still the other writer's, and that trap is what says the buttons are this
-     tree's (src/chrome/PlusMenu.tsx, src/chrome/WorkdirChip.tsx,
-     src/chrome/PermChip.tsx, src/chrome/ModelChip.tsx). */
+     tree's (src/chrome/PlusMenu.tsx, src/chrome/AtMenu.tsx,
+     src/chrome/WorkdirChip.tsx, src/chrome/PermChip.tsx,
+     src/chrome/ModelChip.tsx). */
   it('takes the chips, and leaves the send button to the module that owns it', () => {
     render()
     expect(el('go').onclick).toBe(null)
-    const OWN = ['plusBtn', 'wdChip', 'permChip', 'modelChip']
+    const OWN = ['plusBtn', 'atBtn', 'wdChip', 'permChip', 'modelChip']
     for (const id of OWN) expect(typeof el(id).onclick, id).toBe('function')
     for (const node of dock().querySelectorAll('*')) {
       if (OWN.includes(node.id)) continue

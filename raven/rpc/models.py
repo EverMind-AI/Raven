@@ -3243,6 +3243,11 @@ class SessionInitInfo(_Strict):
     usage: SessionUsage
     version: str
     cwd: str
+    #: Ids of the knowledge bases this session's turns may search, as it was
+    #: left. Beside ``cwd`` and for the same reason: a reader reopening a
+    #: conversation has to see what it is pointed at, or the picker draws it
+    #: as pointed at nothing.
+    knowledge_bases: list[str] = Field(default_factory=list)
     mcp_servers: list[JsonValue]
     update_available: bool | None = None
     update_command: str | None = Field(default=None, description="The command that would install the newer release.")

@@ -228,6 +228,10 @@ async def _default_session_info(
         "usage": usage,
         "version": _RAVEN_VERSION,
         "cwd": _session_cwd(agent_loop, session_key),
+        # What this session may search, as it was left. Empty for a session
+        # that has not been created yet -- the bundle is built before the
+        # create writes one, and the create fills it in below.
+        "knowledge_bases": list(_read_knowledge(agent_loop, config, session_key)),
         "mcp_servers": [],
         # Which of a multi-endpoint provider's endpoints this session is on.
         # None for every single-endpoint provider -- there is one address and it
@@ -464,11 +468,23 @@ async def session_create(
         info["cwd"] = str(resolved)
     picked = params.get("knowledge_bases")
     if picked:
-        _write_knowledge(agent_loop, config, session_id, picked)
+        info["knowledge_bases"] = _write_knowledge(agent_loop, config, session_id, picked)
     return {
         "session_id": session_id,
         "info": info,
     }
+
+
+def _read_knowledge(agent_loop: object, config: object, session_key: str | None) -> tuple[str, ...]:
+    """What one session may search, for the bundle that reports it."""
+    from raven.agent import knowledge_scope
+
+    if not session_key:
+        return ()
+    try:
+        return knowledge_scope.read(manager_for(agent_loop, config), session_key)
+    except Exception:  # noqa: BLE001 - a bundle is not worth failing over a selection
+        return ()
 
 
 def _write_knowledge(agent_loop: object, config: object, session_id: str, picked: object) -> list[str]:

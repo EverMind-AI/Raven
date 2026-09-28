@@ -61,6 +61,7 @@ import { useSyncExternalStore } from 'react'
 import { TaskRuns } from '../features/tasks/TasksPage'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
+import { At } from './AtMenu'
 import { CtxChip } from './CtxChip'
 import { ModelChip } from './ModelChip'
 import { PermChip } from './PermChip'
@@ -88,6 +89,9 @@ function DockIn(): JSX.Element {
             then the folder a draft runs in (src/chrome/WorkdirChip.tsx), which
             a conversation says beside its title instead. */}
         <Plus />
+        {/* What the conversation is pointed at: the folder it runs in and the
+            bases it may search, behind one button (src/chrome/AtMenu.tsx). */}
+        <At />
         <WorkdirChip />
         <span className="chrome-anch">
           <PermChip />

@@ -31,6 +31,7 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { gateway } from '../../rpc/gateway'
 import { draw as drawBanner } from '../banner'
 import { set as setCtx } from '../ctxChip'
+import { adopt as adoptBases, clearStaged as clearStagedBases } from '../mentions'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { clearStaged as clearStagedWorkdir } from '../workdir'
@@ -245,6 +246,10 @@ export function switchToDraft(): void {
      not cross from one conversation to another. */
   draftRt = null
   clearStagedWorkdir()
+  /* And the bases it was pointed at: an invisible choice must not cross from
+     one conversation to another, and what a draft may search is exactly that
+     -- nothing on screen says it once the menu is shut but the count. */
+  clearStagedBases()
   const rt = draft()
   adoptRuntime(rt)
   resetView(rt)
@@ -343,6 +348,10 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
        is a call the page no longer makes. */
     rt.wsRoot = (r.info && r.info.cwd) || null
     wsSetRoot(r.info && r.info.cwd)
+    /* And what it is pointed at, off the same bundle: without this the picker
+       draws a conversation with three bases attached as attached to none, and
+       the reader's next tick would write that emptiness back. */
+    adoptBases((r.info && r.info.knowledge_bases) || [])
     const u = (r.info && r.info.usage) || {}
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.
