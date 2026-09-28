@@ -37,80 +37,6 @@ Built on EverMind’s self-evolving harness engine and powered by [EverOS](https
 
 <p align="center"><em>Raven's Performance on the Multi-Agent Orchestration Benchmark</em></p>
 
-## ❯❯ Built-in Agents
-
-Raven's modular architecture is designed for harness self-evolution and subagent creation. Its four built-in agents deliver **state-of-the-art (SOTA) performance in their respective domains**, combining reusable harness components with domain-specific tools, skills, and agent loops. Raven can delegate a focused task to a single agent or orchestrate multiple agents within a shared workflow. The harness they share is refined by the **Raven Evolver**, a separate tool that consumes Raven as a library and evaluates candidate harness changes against benchmarks; it develops the agents rather than running inside them.
-
-> All four agents are built in and ready for orchestration out of the box.
-
-### ❯ Raven-Research
-
-**Raven-Research** enables **autonomous deep research** for complex questions, literature reviews, and technical analysis. It delivers clear, structured reports with traceable sources, helping users understand unfamiliar domains, compare alternatives, and make informed decisions.
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02"><img src="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
-</p>
-
-<p align="center"><em>Raven-Research's performance on the DeepResearch Mixed benchmark</em></p>
-
-### ❯ Raven-Code
-
-**Raven-Code** enables **agentic software development**, turning requirements into working, tested code. It supports feature implementation, debugging, refactoring, data processing, and data analysis, helping users build new capabilities, resolve issues, and improve code quality while following their project's conventions.
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e"><img src="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Code's performance on coding benchmarks</em></p>
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Code tops on DataAgentBench for data analysis (2026-08-24 Live)</em></p>
-
-### ❯ Raven-Design
-
-**Raven-Design** performs **visual design**, turning ideas and content into polished visual deliverables. It creates PowerPoint slide decks, brand assets, charts, diagrams, and web interfaces, refining layout, typography, and visual consistency to help users communicate clearly and bring their ideas to life.
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Design tops on PresentBench for slide generation</em></p>
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46"><img src="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Design's performance on visual design benchmarks</em></p>
-
-### ❯ Raven-Oncall
-
-**Raven-Oncall** enables **unattended workflow automation** for experimentation, optimization, and continuous monitoring. It autonomously manages workflows from start to completion, sustaining progress over hours or overnight, delivering results, and involving users only when human judgment is needed.
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Oncall significantly outperforms Claude Code on both quality and cost for AI4AI tasks</em></p>
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Oncall significantly outperforms Claude Code on both success rate and cost for AI4S tasks</em></p>
-
-## ❯❯ Runtime Self-Evolution
-
-**Raven is built for this from the ground up.** Its agent loop is split into four decoupled strategy modules — **Memory** for what a turn gets to see, **Planning** for how it approaches the work, **Capability** for which tools an iteration exposes, **Action** for what to do next and for judging it before it runs. A **Curator** keeps rewriting those four seats: a setting, or a small piece of judgement code written for that agent. What it changes belongs to that agent alone, and once installed the agent runs on it.
-
-**A Curator changes more than the prompt** — the tools and outside services it reaches for, the skills and procedures it follows, and its own judgement at each point can all be replaced. It keeps going round after round — you put it to work, you say what was wrong, it reworks — until you are satisfied, until it has nothing left worth changing, or until the round budget runs out. Two things hold the quality: nothing is installed before it is verified, and a failed check sends it back; and a round's signals normally reach it with the reference answer stripped out, which limits how directly the answer is exposed. The Curator is experimental: it ships with the repository rather than the installed package.
-
-**A Persona is the first thing it builds.** Describe the assistant you want and the Curator assembles one: a lead role that talks to you, and specialists drawn from the agents you already have. What you asked for lands in that assistant's **harness** — its division of work, the tools it may reach for, and the checks it must pass before it acts.
-
-> Describe what you need once. Raven assembles the assistant, keeps improving it while you work, and afterwards a sentence is enough to put it to work again.
-
 ## ❯❯ Showcase
 
 These are three complete projects delivered by Raven. In each case, Raven drove a team of specialized agents from the initial brief or objective through execution to a complete set of final deliverables.
@@ -195,6 +121,80 @@ https://github.com/user-attachments/assets/dd186b6d-3752-4c59-89c7-eeea5c6fa962
 </table>
 
 **[More showcases](docs/showcase.md)**
+
+## ❯❯ Built-in Agents
+
+Raven's modular architecture is designed for harness self-evolution and subagent creation. Its four built-in agents deliver **state-of-the-art (SOTA) performance in their respective domains**, combining reusable harness components with domain-specific tools, skills, and agent loops. Raven can delegate a focused task to a single agent or orchestrate multiple agents within a shared workflow. The harness they share is refined by the **Raven Evolver**, a separate tool that consumes Raven as a library and evaluates candidate harness changes against benchmarks; it develops the agents rather than running inside them.
+
+> All four agents are built in and ready for orchestration out of the box.
+
+### ❯ Raven-Research
+
+**Raven-Research** enables **autonomous deep research** for complex questions, literature reviews, and technical analysis. It delivers clear, structured reports with traceable sources, helping users understand unfamiliar domains, compare alternatives, and make informed decisions.
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02"><img src="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Research's performance on the DeepResearch Mixed benchmark</em></p>
+
+### ❯ Raven-Code
+
+**Raven-Code** enables **agentic software development**, turning requirements into working, tested code. It supports feature implementation, debugging, refactoring, data processing, and data analysis, helping users build new capabilities, resolve issues, and improve code quality while following their project's conventions.
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e"><img src="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Code's performance on coding benchmarks</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Code tops on DataAgentBench for data analysis (2026-08-24 Live)</em></p>
+
+### ❯ Raven-Design
+
+**Raven-Design** performs **visual design**, turning ideas and content into polished visual deliverables. It creates PowerPoint slide decks, brand assets, charts, diagrams, and web interfaces, refining layout, typography, and visual consistency to help users communicate clearly and bring their ideas to life.
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Design tops on PresentBench for slide generation</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46"><img src="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Design's performance on visual design benchmarks</em></p>
+
+### ❯ Raven-Oncall
+
+**Raven-Oncall** enables **unattended workflow automation** for experimentation, optimization, and continuous monitoring. It autonomously manages workflows from start to completion, sustaining progress over hours or overnight, delivering results, and involving users only when human judgment is needed.
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Oncall significantly outperforms Claude Code on both quality and cost for AI4AI tasks</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Oncall significantly outperforms Claude Code on both success rate and cost for AI4S tasks</em></p>
+
+## ❯❯ Runtime Self-Evolution
+
+**Raven is built for this from the ground up.** Its agent loop is split into four decoupled strategy modules — **Memory** for what a turn gets to see, **Planning** for how it approaches the work, **Capability** for which tools an iteration exposes, **Action** for what to do next and for judging it before it runs. A **Curator** keeps rewriting those four seats: a setting, or a small piece of judgement code written for that agent. What it changes belongs to that agent alone, and once installed the agent runs on it.
+
+**A Curator changes more than the prompt** — the tools and outside services it reaches for, the skills and procedures it follows, and its own judgement at each point can all be replaced. It keeps going round after round — you put it to work, you say what was wrong, it reworks — until you are satisfied, until it has nothing left worth changing, or until the round budget runs out. Two things hold the quality: nothing is installed before it is verified, and a failed check sends it back; and a round's signals normally reach it with the reference answer stripped out, which limits how directly the answer is exposed. The Curator is experimental: it ships with the repository rather than the installed package.
+
+**A Persona is the first thing it builds.** Describe the assistant you want and the Curator assembles one: a lead role that talks to you, and specialists drawn from the agents you already have. What you asked for lands in that assistant's **harness** — its division of work, the tools it may reach for, and the checks it must pass before it acts.
+
+> Describe what you need once. Raven assembles the assistant, keeps improving it while you work, and afterwards a sentence is enough to put it to work again.
 
 ## ❯❯ Connect Third-Party Agents
 
