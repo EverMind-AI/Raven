@@ -2,6 +2,7 @@ import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 
 import { holdsHost } from '../../state/session/hosts'
+import * as citations from './citations'
 import * as store from './store'
 import { AgentStageView, StageView } from './TranscriptPage'
 
@@ -169,6 +170,11 @@ export function artifacts(turn: number): void {
 
 export function delivery(turn: number, metadata: unknown, callId?: string | null): void {
   store.recordDelivery(mainLane(), turn, metadata, callId)
+  /* The same channel, read for a different key. A search files where its
+     passages sit so the detail card can offer to open one; the deliveries
+     registry above reads the manifest a handover files. Neither sees the
+     other's. */
+  citations.record(callId, metadata)
 }
 
 export function turnKept(): boolean {

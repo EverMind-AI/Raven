@@ -3263,7 +3263,7 @@ class TurnPathMixin:
                 # session, and one loop serves every session on the process, so
                 # a tool that held the list would answer with the session it
                 # was built for.
-                knowledge_scope.bind(knowledge_scope.read(self.sessions, cid)),
+                knowledge_scope.bind(knowledge_scope.read(self.sessions, cid), cid),
                 usage_context.bind(cid, self.sessions.get_or_create(cid).metadata.get("usage_owner", {})),
             ):
                 try:

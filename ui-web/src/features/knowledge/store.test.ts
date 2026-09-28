@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSources, sources } from '../../state/sources'
 import * as store from './store'
 
+/* Which page is on screen is the chrome's, and showing one reaches for markup
+   no store case stands up. What is under test here is the walk, not the
+   switch. */
+vi.mock('../../state/page', () => ({ show: () => undefined }))
+
 import type { KbBase, KbChunk, KbChunkAsk, KbModel, KbPage, KbDoc, KbFolder, KbSettings } from './types'
 
 /* The knowledge page's state, against a source that answers from memory.
@@ -876,5 +881,61 @@ describe('the knowledge store', () => {
 
     /* Not left saying indexing: this list marked it, no answer did. */
     expect(store.get().documents![0]!.status).toBe('ready')
+  })
+
+  it('walks from a citation to the passage it names', async () => {
+    /* What a citation in the transcript presses. It arrives with ids and
+       nothing else, so the store walks the path a reader would: into the base,
+       into the document, then to the piece. */
+    install([base({ id: 'kb-a' }), base({ id: 'kb-b' })])
+    docs = [doc({ id: 'd1' }), doc({ id: 'd2' })]
+    chunks = [chunk({ chunk_index: 0 }), chunk({ chunk_index: 1 }), chunk({ chunk_index: 2 })]
+
+    await store.reveal('kb-a', 'd2', 1)
+
+    expect(store.get().opened?.id).toBe('kb-a')
+    expect(store.get().viewing?.id).toBe('d2')
+    /* And pointed at the piece, which is what takes the preview there. */
+    expect(store.get().aimed).toBe('c1')
+  })
+
+  it('shows the folder a cited document is filed under', async () => {
+    /* Otherwise the list it lands in does not contain what was pressed. */
+    install([base({ id: 'kb-a' })])
+    folders = [{ id: 'f1', name: 'specs', documents: 1 }]
+    docs = [doc({ id: 'd1' }), doc({ id: 'd2', folder_id: 'f1' })]
+    chunks = [chunk({ chunk_index: 0 })]
+
+    await store.reveal('kb-a', 'd2', 0)
+
+    expect(store.get().folder).toBe('f1')
+    expect(store.shownDocs().map((row) => row.id)).toEqual(['d2'])
+  })
+
+  it('leaves the reader where they landed when a citation names what is gone', async () => {
+    /* A base or a document since deleted: nothing is guessed, and they are on
+       the page they would have reached by hand. */
+    install([base({ id: 'kb-a' })])
+    docs = [doc({ id: 'd1' })]
+
+    await store.reveal('kb-gone', 'd1', 0)
+    expect(store.get().opened).toBeNull()
+
+    await store.reveal('kb-a', 'd-gone', 0)
+    expect(store.get().opened?.id).toBe('kb-a')
+    expect(store.get().viewing).toBeNull()
+  })
+
+  it('opens the document even where the piece it named is gone', async () => {
+    /* A rebuild cuts the file again, so a citation from before it addresses a
+       numbering that no longer exists. The document is still the right one. */
+    install([base({ id: 'kb-a' })])
+    docs = [doc({ id: 'd1' })]
+    chunks = [chunk({ chunk_index: 0 })]
+
+    await store.reveal('kb-a', 'd1', 99)
+
+    expect(store.get().viewing?.id).toBe('d1')
+    expect(store.get().aimed).toBe('')
   })
 })

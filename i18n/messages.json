@@ -1999,6 +1999,10 @@
       "en": "output",
       "zh": "输出"
     },
+    "gui.dtl.cite_page": {
+      "en": "p. {n}",
+      "zh": "第 {n} 页"
+    },
     "gui.dtl.plain": {
       "en": "plain text",
       "zh": "纯文本"

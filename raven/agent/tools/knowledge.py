@@ -61,6 +61,22 @@ class KnowledgeSearchTool(Tool):
         # first search opens a connection, neither of which a process that
         # never searches should pay for.
         self._manager = manager
+        # What the last search of each conversation found, for the turn stream
+        # to render. Written where the call runs and popped where the turn
+        # streams, which are not always the same task -- the registry runs a
+        # tool under `asyncio.wait_for`, which copies the context -- so this is
+        # a dict keyed by conversation rather than a ContextVar, the way
+        # `deliver_files` keys its manifest.
+        self._found: dict[str, dict[str, Any]] = {}
+
+    def take_metadata(self) -> "dict[str, Any] | None":
+        """What the last search found, in the shape a reader can be shown.
+
+        Text alone cannot be followed. The model gets prose naming the document
+        and the page; a reader gets the ids, so the passage they are reading
+        about can be opened where it actually sits.
+        """
+        return self._found.pop(knowledge_scope.session(), None)
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -117,16 +133,32 @@ class KnowledgeSearchTool(Tool):
         if not found.hits:
             return f"Nothing in the attached material answers {query!r}."
 
-        named = self._names(found.hits)
+        named = self._records(found.hits)
         lines: list[str] = []
+        cited: list[dict[str, Any]] = []
         for at, hit in enumerate(found.hits[:want], 1):
-            where = named.get(hit.document_id) or hit.document_id
+            record = named.get(hit.document_id)
+            where = getattr(record, "source", "") or hit.document_id
             page = getattr(hit.chunk, "metadata", {}).get("page_number")
             place = f"{where}, page {page}" if isinstance(page, int) else where
             text = (hit.chunk.text or "").strip()
             if len(text) > MAX_CHARS:
                 text = f"{text[:MAX_CHARS]}..."
             lines.append(f"[{at}] {place}\n{text}")
+            cited.append(
+                {
+                    "base_id": getattr(record, "base_id", "") or "",
+                    "document_id": hit.document_id,
+                    "source": where,
+                    "page": page if isinstance(page, int) else None,
+                    "chunk_index": int(getattr(hit.chunk, "chunk_index", 0) or 0),
+                }
+            )
+        # Filed under the conversation that asked, for the turn stream to pop.
+        # Only where there is one: a search run outside a turn -- a subagent on
+        # its own task, a plugin -- has nowhere to file it and no reader.
+        if cited and knowledge_scope.session():
+            self._found[knowledge_scope.session()] = {"knowledge_hits": cited}
 
         # Said once at the end rather than per hit: a base whose vectors could
         # not be reached answered by words, and a reader comparing two sets of
@@ -139,17 +171,20 @@ class KnowledgeSearchTool(Tool):
             )
         return "\n\n".join(lines)
 
-    def _names(self, hits: list[Any]) -> dict[str, str]:
-        """What each hit's document is called, looked up once per document."""
-        out: dict[str, str] = {}
+    def _records(self, hits: list[Any]) -> dict[str, Any]:
+        """Each hit's document, looked up once per document.
+
+        The record and not just its name: the base it belongs to is on it, and
+        a citation that cannot say which base cannot be opened.
+        """
+        out: dict[str, Any] = {}
         for hit in hits:
             if hit.document_id in out:
                 continue
             try:
-                record = self._library().get_document(hit.document_id)
-            except Exception:  # noqa: BLE001 - a hit with no name is still a hit
-                record = None
-            out[hit.document_id] = getattr(record, "source", "") or ""
+                out[hit.document_id] = self._library().get_document(hit.document_id)
+            except Exception:  # noqa: BLE001 - a hit with no record is still a hit
+                out[hit.document_id] = None
         return out
 
 

@@ -23,6 +23,7 @@ import { importSyncSource } from '../features/importSync/source'
 import * as importSyncStore from '../features/importSync/store'
 import { capabilitiesSource, loadExt } from '../features/installed/source'
 import { knowledgeSource } from '../features/knowledge/source'
+import { reveal as revealDocument } from '../features/knowledge/store'
 import { memorySource } from '../features/memory/source'
 import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
@@ -53,6 +54,7 @@ import { refusal as uploadRefusal } from '../lib/upload'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
+import { onDocument } from '../state/reveal'
 import { clarifyRequest, dispatch, installPipeline, replayPendingApprovals } from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
@@ -232,6 +234,11 @@ export function installSources(): void {
   }
   sources.extAgents = extAgentsSource
   sources.knowledge = knowledgeSource
+  /* How a citation in the transcript is followed. Registered by the island
+     that can do it rather than imported by the one that wants it: two domains
+     reaching for each other is what puts every island in every island's
+     closure (scripts/gates/import-direction.test.mjs). */
+  onDocument((at) => void revealDocument(at.baseId, at.documentId, at.chunkIndex))
 
   /* The workspace panel's chrome is still the page's, so the two things its
      source cannot work out for itself are handed over here. */

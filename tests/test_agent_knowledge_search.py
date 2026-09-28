@@ -301,3 +301,96 @@ async def test_the_tool_is_offered_once_a_base_is_attached(tmp_path: Any) -> Non
         assert "knowledge_search" in _offered(loop)
 
     assert "knowledge_search" not in _offered(loop)
+
+
+# ---------------------------------------------------------------------------
+# what the reader is shown: the citations, and whose turn they belong to
+# ---------------------------------------------------------------------------
+
+
+class _Filed(_Library):
+    """A manager whose documents know which base they are in."""
+
+    def get_document(self, document_id: str) -> Any:
+        record = _Record(f"{document_id}.pdf")
+        record.base_id = "kb-a"
+        return record
+
+
+async def test_a_search_files_its_hits_for_the_reader_to_follow() -> None:
+    """Text alone cannot be followed: the model gets prose naming the document,
+    and the reader gets the ids so the passage can be opened where it sits."""
+    tool = KnowledgeSearchTool(_Filed([_Hit("handbook", "backups run nightly", page=12)]))
+
+    with knowledge_scope.bind(("kb-a",), "tui:1"):
+        await tool.execute(query="backups")
+        filed = tool.take_metadata()
+
+    assert filed == {
+        "knowledge_hits": [
+            {
+                "base_id": "kb-a",
+                "document_id": "handbook",
+                "source": "handbook.pdf",
+                "page": 12,
+                "chunk_index": 0,
+            }
+        ]
+    }
+
+
+async def test_a_format_with_no_pages_files_no_page() -> None:
+    """Absent means the format has none, never page zero."""
+    tool = KnowledgeSearchTool(_Filed([_Hit("notes", "a line")]))
+
+    with knowledge_scope.bind(("kb-a",), "tui:1"):
+        await tool.execute(query="q")
+        filed = tool.take_metadata()
+
+    assert filed is not None
+    assert filed["knowledge_hits"][0]["page"] is None
+
+
+async def test_the_citations_are_taken_once() -> None:
+    """The turn stream pops them: a second read is a second turn's, and
+    handing it the first turn's hits would file them under the wrong answer."""
+    tool = KnowledgeSearchTool(_Filed([_Hit("d1", "x")]))
+
+    with knowledge_scope.bind(("kb-a",), "tui:1"):
+        await tool.execute(query="q")
+        assert tool.take_metadata() is not None
+        assert tool.take_metadata() is None
+
+
+async def test_one_conversation_cannot_take_another_s_citations() -> None:
+    """Two turns run at once on one process, and the tool is one object."""
+    tool = KnowledgeSearchTool(_Filed([_Hit("d1", "x")]))
+
+    with knowledge_scope.bind(("kb-a",), "tui:1"):
+        await tool.execute(query="q")
+
+    with knowledge_scope.bind(("kb-a",), "tui:2"):
+        assert tool.take_metadata() is None
+
+    with knowledge_scope.bind(("kb-a",), "tui:1"):
+        assert tool.take_metadata() is not None
+
+
+async def test_a_search_outside_a_turn_files_nothing() -> None:
+    """A subagent on its own task or a plugin has nowhere to file it and no
+    reader waiting for it."""
+    tool = KnowledgeSearchTool(_Filed([_Hit("d1", "x")]))
+
+    with knowledge_scope.bind(("kb-a",)):
+        await tool.execute(query="q")
+
+    assert tool.take_metadata() is None
+
+
+async def test_finding_nothing_files_nothing() -> None:
+    tool = KnowledgeSearchTool(_Filed([]))
+
+    with knowledge_scope.bind(("kb-a",), "tui:1"):
+        await tool.execute(query="q")
+
+    assert tool.take_metadata() is None

@@ -1777,6 +1777,21 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    held to 78% of a number it had just set, which cut it below its own content
    and wrapped a row that had room. The turn's own 70% is the bound that means
    something; what a row may be is its items' business. */
+/* What a knowledge search found, under the query it answered. Each row is a
+   press: a citation a reader cannot follow is a claim they have to take on
+   trust, and the whole point of searching their own material is that they can
+   go and look. */
+.transcript-cites { display: grid; gap: 3px; margin-bottom: 8px; }
+.transcript-cite { display: flex; align-items: baseline; gap: 7px; width: 100%; padding: 4px 7px;
+  border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface); color: var(--text);
+  font-size: 11.5px; text-align: left; cursor: pointer; }
+.transcript-cite:hover { border-color: var(--line); background: var(--hover); }
+/* The number the prose below cites, so a reader reading "[2]" knows which row
+   is the second. */
+.transcript-citen { flex: none; min-width: 13px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.transcript-cited { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transcript-citep { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+
 .transcript-arow {
   display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: flex-end;
   gap: 6px; max-width: 100%;

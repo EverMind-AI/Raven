@@ -29,24 +29,39 @@ if TYPE_CHECKING:
 #: searches them is withheld rather than offered and refused.
 _CURRENT: ContextVar[tuple[str, ...]] = ContextVar("knowledge_bases", default=())
 
+#: Which conversation the running turn belongs to. Carried beside the bases so
+#: a tool can file what it found under the turn that asked for it: a structured
+#: payload is written where the call runs and popped where the turn streams,
+#: and those are not always the same task -- the registry runs a tool under
+#: `asyncio.wait_for`, which copies the context, so the write cannot be a
+#: ContextVar the caller reads back. Keyed by this instead, the way
+#: `deliver_files` keys its manifest.
+_SESSION: ContextVar[str] = ContextVar("knowledge_session", default="")
+
 #: Where the selection is kept on a session. The same metadata dict the
 #: working-directory override lives in, so one session record answers both.
 METADATA_KEY = "knowledge_bases"
 
 
 @contextmanager
-def bind(base_ids: "tuple[str, ...]") -> "Iterator[None]":
-    """Bind ``base_ids`` as this turn's searchable bases."""
-    token = _CURRENT.set(tuple(base_ids))
+def bind(base_ids: "tuple[str, ...]", session: str = "") -> "Iterator[None]":
+    """Bind ``base_ids`` as this turn's searchable bases, and whose turn it is."""
+    tokens = (_CURRENT.set(tuple(base_ids)), _SESSION.set(session))
     try:
         yield
     finally:
-        _CURRENT.reset(token)
+        _SESSION.reset(tokens[1])
+        _CURRENT.reset(tokens[0])
 
 
 def selected() -> tuple[str, ...]:
     """The bases the running turn may search, in the order they were picked."""
     return _CURRENT.get()
+
+
+def session() -> str:
+    """Which conversation the running turn belongs to, or '' outside one."""
+    return _SESSION.get()
 
 
 def read(sessions: Any, session_key: str) -> tuple[str, ...]:
@@ -83,4 +98,4 @@ def write(sessions: Any, session_key: str, base_ids: "list[str] | tuple[str, ...
     return tuple(seen)
 
 
-__all__ = ["METADATA_KEY", "bind", "read", "selected", "write"]
+__all__ = ["METADATA_KEY", "bind", "read", "selected", "session", "write"]

@@ -218,6 +218,46 @@ export function closeBase(): void {
 
    The widest thing on the screen should be the thing being read, and picking
    another folder is not a move anyone makes mid-document. */
+/* Open one document at one of its pieces, from outside this page.
+
+   What a citation in the transcript presses. It arrives with ids and nothing
+   else -- the base, the document, which piece -- so this walks the same path a
+   reader would: into the base, into the document, and then to the piece once
+   the pieces have been read. It has to wait for that read, because the piece
+   is named by its number and the numbering is what the read answers with.
+
+   Nothing is guessed when a step is not there: a base or a document since
+   deleted leaves the reader on the page they landed on, which is where they
+   would have got to by hand. */
+export async function reveal(baseId: string, documentId: string, chunkIndex: number): Promise<void> {
+  page.show('knowledgePage')
+  if (get().bases === null) await load()
+  const base = (get().bases ?? []).find((row) => row.id === baseId)
+  if (!base) return
+  if (get().opened?.id !== baseId) {
+    openBase(base)
+    await waitFor(() => get().documents !== null)
+  }
+  const doc = (get().documents ?? []).find((row) => row.id === documentId)
+  if (!doc) return
+  /* The folder it is filed under, or the list it is in does not contain it and
+     the reader lands on a page that does not show what they pressed. */
+  if (get().folder !== doc.folder_id) setFolder(doc.folder_id)
+  openDoc(doc)
+  await waitFor(() => get().chunks !== null)
+  const piece = (get().chunks ?? []).find((row) => row.chunk_index === chunkIndex)
+  if (piece) aimAt(piece)
+}
+
+/* Until a read lands, or until it plainly is not going to. The store has no
+   event for "this read finished", and adding one for a caller that arrives
+   once a session would be a channel with one listener. */
+async function waitFor(done: () => boolean, tries = 60): Promise<void> {
+  for (let at = 0; at < tries && !done(); at += 1) {
+    await new Promise((go) => setTimeout(go, 50))
+  }
+}
+
 export function openDoc(doc: KbDoc): void {
   /* Every filter back to its default on the way in: a query typed against one
      document says nothing about the next, and a list filtered by a search a
