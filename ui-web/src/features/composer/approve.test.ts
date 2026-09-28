@@ -410,6 +410,38 @@ describe('the permission approval sheet', () => {
     expect(said).toEqual([['allow_session', '', undefined]])
   })
 
+  /* The gate grants no session key for a change to Raven's own configuration,
+     so a "for this conversation" answer would promise to stop asking and then
+     ask again. The card shows the change itself, not the tool's arguments. */
+  it('asks about a configuration change once, as the old and new value', () => {
+    const cfg = {
+      ...base, approvalId: 'ap-cfg', command: "raven_config action='set'", kind: 'config.change', family: '',
+      evidence: { action: 'set', setting: 'tools.exec.timeout', was: '60', value: '300', effect: 'next_turn' },
+    }
+    openApproval(cfg, handlers())
+    expect(opts().map((b) => b.textContent)).toEqual(['1gui.confirm.deny', '2gui.confirm.allow'])
+    expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.config_change')
+    expect(document.querySelector('.cp-ev-path')!.textContent).toBe('tools.exec.timeout')
+    expect(document.querySelector('.cp-del')!.textContent).toBe('- 60\n')
+    expect(document.querySelector('.cp-add')!.textContent).toBe('+ 300')
+    expect(document.querySelector('.cp-cfg-note')!.textContent).toBe('gui.confirm.cfg.effect.next_turn')
+    expect(document.querySelector('.cp-cfg-warn')).toBeNull()
+    opts()[1]!.click()
+    expect(said).toEqual([['allow', '', undefined]])
+
+    openApproval(fresh({ ...cfg, evidence: { action: 'set', setting: 'x', was: '60', was_default: true, value: '1' } }), handlers())
+    expect(document.querySelector('.cp-del')!.textContent).toBe('- 60 gui.confirm.cfg.reset\n')
+
+    openApproval(fresh({ ...cfg, evidence: { action: 'restart', target: 'reload' } }), handlers())
+    expect(document.querySelector('.cp-ev')!.textContent).toContain('gui.confirm.cfg.reload')
+    openApproval(fresh({ ...cfg, evidence: { action: 'restart', target: 'restart' } }), handlers())
+    expect(document.querySelector('.cp-ev')!.textContent).toContain('gui.confirm.cfg.restart')
+
+    openApproval(fresh({ ...cfg, evidence: { action: 'unset', setting: 'x', was: '1', sensitive: 'loosens' } }), handlers())
+    expect(document.querySelector('.cp-add')!.textContent).toBe('+ gui.confirm.cfg.reset')
+    expect(document.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive')
+  })
+
   /* The one sweep that could still strand a turn. A confirm request arriving on
      the same conversation used to take the gate's pending ask down with it, and
      nothing under that ask retires it but an answer: the call would then wait
@@ -441,6 +473,7 @@ describe('the permission approval sheet', () => {
       { kind: 'mcp.call', evidence: { server: 's', tool: 't', input: 'x'.repeat(40), truncated: true } },
       { kind: 'shell.exec', evidence: { command: 'rm -rf x', cwd: '/w', truncated: true } },
       { kind: 'unknown', evidence: { input: 'y'.repeat(40), truncated: true } },
+      { kind: 'config.change', evidence: { action: 'set', setting: 'a.b', value: 'z'.repeat(40), truncated: true } },
     ]
     for (const c of cases) {
       openApproval(fresh({ ...base, ...c, family: '' }), handlers())

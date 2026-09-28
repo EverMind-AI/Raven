@@ -41,6 +41,23 @@ class PageMount:
     submit: Callable[[Any], Any] | None = None
 
 
+# The credentials the last mount in this process held. A generation swap tears
+# the page down -- serve.json with it -- before the next generation mounts it,
+# so without this every reload minted a fresh cookie and signed every open tab
+# out. In memory only: a full restart re-reads the cookie from serve.json.
+_last_credentials: tuple[str, str] | None = None
+
+
+def _adopt_credentials(ws_gateway: Any, adopt_stored_cookie: Callable[[Any], None]) -> None:
+    """The previous generation's token and cookie when this process has one, else the stored cookie."""
+    import os
+
+    if _last_credentials is not None and not os.environ.get("RAVEN_SERVE_COOKIE"):
+        ws_gateway.session_token, ws_gateway.session_cookie = _last_credentials
+        return
+    adopt_stored_cookie(ws_gateway)
+
+
 async def _standalone_serve_owner() -> tuple[int, int] | None:
     """(pid, port) of a live standalone `raven serve` recorded in serve.json.
 
@@ -124,7 +141,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         return None
 
     ws_gateway = WsGateway()
-    adopt_stored_cookie(ws_gateway)
+    _adopt_credentials(ws_gateway, adopt_stored_cookie)
     # Same port policy as standalone serve, strict flag included: a relaunch
     # under an open tab (the web supervisor's retry, `system.upgrade`) has to
     # come back on the port that tab is pointed at, and this mount is now what
@@ -175,6 +192,8 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     outlet = RpcOutlet("tui", stack.emitter, stack.direct_targets)
 
     async def teardown() -> None:
+        global _last_credentials
+        _last_credentials = (ws_gateway.session_token, ws_gateway.session_cookie)
         stop.set()
         announcer.cancel()
         SERVE.disarm()

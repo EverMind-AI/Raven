@@ -6011,6 +6011,54 @@
       "en": "{who} wants to do this; you have not allowed it yet.",
       "zh": "{who} 要执行这个操作，你还没授权过。"
     },
+    "gui.confirm.title.config_change": {
+      "en": "Allow {who} to change its own settings?",
+      "zh": "允许 {who} 修改自己的配置吗？"
+    },
+    "gui.confirm.why.config_change": {
+      "en": "{who} wants to change its own configuration. A change like this asks you every time.",
+      "zh": "{who} 要修改自己的配置。这类改动每次都会问你，不会记住授权。"
+    },
+    "gui.confirm.cfg.reset": {
+      "en": "(default)",
+      "zh": "（默认值）"
+    },
+    "gui.confirm.cfg.reload": {
+      "en": "Reload Raven so the pending changes take effect. The process stays up; running work finishes first.",
+      "zh": "重新加载 Raven，让待生效的改动生效。进程不中断，正在跑的任务会先跑完。"
+    },
+    "gui.confirm.cfg.restart": {
+      "en": "Restart the whole Raven process so the pending changes take effect. Channels reconnect after a few seconds.",
+      "zh": "重启整个 Raven 进程，让待生效的改动生效。渠道会断开几秒后重连。"
+    },
+    "gui.confirm.cfg.sensitive": {
+      "en": "Security: {note}",
+      "zh": "涉及安全：{note}"
+    },
+    "gui.confirm.cfg.effect.next_turn": {
+      "en": "Takes effect from the next message, no restart",
+      "zh": "下一条消息起生效，不用重启"
+    },
+    "gui.confirm.cfg.effect.immediate": {
+      "en": "Takes effect at once",
+      "zh": "立即生效"
+    },
+    "gui.confirm.cfg.effect.reload": {
+      "en": "Takes effect after a reload",
+      "zh": "需要重新加载（reload）后生效"
+    },
+    "gui.confirm.cfg.effect.restart": {
+      "en": "Takes effect after Raven restarts",
+      "zh": "需要重启 Raven 后生效"
+    },
+    "gui.confirm.cfg.effect.memory_server": {
+      "en": "Restarts the memory server to take effect",
+      "zh": "会重启记忆服务使其生效"
+    },
+    "gui.confirm.cfg.effect.inert": {
+      "en": "Nothing reads this setting yet",
+      "zh": "目前没有代码读取这个设置"
+    },
     "gui.confirm.ev.created": {
       "en": "new file",
       "zh": "新建文件"

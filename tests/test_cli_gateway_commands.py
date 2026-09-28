@@ -228,6 +228,20 @@ class TestWorkInFlight:
         scheduler = SimpleNamespace(has_running=lambda: True)
         assert _work_in_flight(self._agent(), [], scheduler) is not None
 
+    def test_a_page_turn_counts_though_it_holds_neither_the_lock_nor_the_scheduler(self) -> None:
+        """Seen live: a reload asked from a page turn swapped two seconds later,
+        mid-answer, because the page's turn ran on the page's own spine."""
+        from raven.cli.gateway_commands import _work_in_flight
+        from raven.rpc.methods import turn
+
+        assert _work_in_flight(self._agent(), [], None, lambda: True) is not None
+        assert _work_in_flight(self._agent(), [], None, lambda: False) is None
+        turn._active_turns["tui:x"] = object()  # type: ignore[assignment]
+        try:
+            assert turn.any_turn_in_flight()
+        finally:
+            turn._active_turns.pop("tui:x")
+
 
 def test_the_swap_and_the_upgrade_refuse_on_one_busy_answer() -> None:
     """Both cut off in-flight turns, sub-agents and pending questions. Two

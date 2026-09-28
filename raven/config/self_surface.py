@@ -722,10 +722,11 @@ def change_line(params: dict[str, Any]) -> str:
     action = str(params.get("action") or "")
     path = str(params.get("path") or "")
     if action == "restart":
-        target = str(params.get("value") or "reload")
-        return f"Restart Raven ({target}) so pending configuration changes take effect"
+        if restart_target(params) == "restart":
+            return "Restart the whole Raven process so pending configuration changes take effect"
+        return "Reload Raven (the process stays up) so pending configuration changes take effect"
     if action == "add":
-        return f"Add to Raven's configuration at {path}: {_short(params.get('value'))}"
+        return f"Add to Raven's configuration at {path}: {_shown(path, params.get('value'))}"
     found = find(path)
     tail = ""
     if found is not None:
@@ -735,7 +736,57 @@ def change_line(params: dict[str, Any]) -> str:
             tail += f". Note: {setting.sensitive}"
     if action == "unset":
         return f"Reset {path} to its default{tail}"
-    return f"Change {path} to {_short(params.get('value'))}{tail}"
+    return f"Change {path} to {_shown(path, params.get('value'))}{tail}"
+
+
+def _shown(path: str, value: Any) -> str:
+    """``value`` as a prompt may print it: decoded, credentials masked, a secret setting hidden whole."""
+    found = find(path)
+    if (found is not None and found[0].secret) or _credential_key(path.rsplit(".", 1)[-1]):
+        return "(hidden)"
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    return _short(redacted(value))
+
+
+def restart_target(params: dict[str, Any]) -> str:
+    """``reload`` or ``restart``: what a ``restart`` call asks for, its value decoded."""
+    value = params.get("value")
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    return "restart" if value == "restart" else "reload"
+
+
+def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    """The same change as ``change_line``, in fields a confirmation card lays out itself."""
+    action = str(params.get("action") or "")
+    path = str(params.get("path") or "")
+    view: dict[str, Any] = {"action": action, "setting": path, "change": change_line(params)}
+    if action == "restart":
+        view["target"] = restart_target(params)
+        return view
+    if action != "unset":
+        view["value"] = _shown(path, params.get("value"))
+    present, was = lookup(data, path)
+    if present:
+        view["was"] = _shown(path, was)
+    found = find(path)
+    if not present and found is not None and "*" not in found[0].path:
+        default = default_of(path)
+        if default is not None:
+            view["was"] = _shown(path, default)
+            view["was_default"] = True
+    if found is not None:
+        view["effect"] = found[0].effect.value
+        if found[0].sensitive:
+            view["sensitive"] = found[0].sensitive
+    return view
 
 
 def _short(value: Any) -> str:
@@ -783,7 +834,12 @@ def lookup(data: dict[str, Any], path: str) -> tuple[bool, Any]:
     return True, node
 
 
-_SECRET_MARKERS = ("apikey", "api_key", "token", "secret", "password", "credential")
+_SECRET_MARKERS = ("apikey", "api_key", "token", "secret", "password", "credential", "credentials")
+
+
+def _credential_key(key: str) -> bool:
+    """A key that names a credential (``apiKey``, ``botToken``); ``maxTokens`` is a number, not one."""
+    return str(key).lower().replace("-", "_").endswith(_SECRET_MARKERS)
 
 
 def redacted(value: Any) -> Any:
@@ -791,7 +847,7 @@ def redacted(value: Any) -> Any:
     if isinstance(value, dict):
         out: dict[str, Any] = {}
         for key, item in value.items():
-            if any(marker in str(key).lower().replace("-", "_") for marker in _SECRET_MARKERS):
+            if _credential_key(key):
                 out[key] = "set" if item else "not set"
             else:
                 out[key] = redacted(item)

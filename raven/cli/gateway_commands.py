@@ -309,16 +309,22 @@ def _retire_generation_watchers(swaps: "SwapCoordinator", agent) -> None:
             logger.exception("skill watcher stop failed during shutdown; continuing")
 
 
-def _work_in_flight(agent, brokers, scheduler) -> dict | None:
+def _work_in_flight(agent, brokers, scheduler, page_turns=None) -> dict | None:
     """What a config swap or an upgrade restart would cut off, or None when idle.
 
     Both refuse on this one answer rather than each keeping a copy: turns in
     flight, sub-agents still running, and questions waiting on any surface --
-    the IM round-trip's broker and the page's.
+    the IM round-trip's broker and the page's. ``page_turns`` answers for the
+    page's turns, which run on the page's own spine and hold neither the
+    agent's lock nor the gateway's scheduler.
     """
     questions = sum(broker.pending_count() for broker in brokers if broker is not None)
     subagents = agent.subagents.get_running_count()
-    in_flight = agent.is_processing or (scheduler is not None and scheduler.has_running())
+    in_flight = (
+        agent.is_processing
+        or (scheduler is not None and scheduler.has_running())
+        or (page_turns is not None and page_turns())
+    )
     if in_flight or questions or subagents:
         return {"subagents": subagents, "questions": questions}
     return None
@@ -1149,7 +1155,14 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
             def _busy() -> dict | None:  # pragma: no cover - closure over run(); logic in _work_in_flight
                 page_questions = page_mount.question_broker if page_mount is not None else None
-                return _work_in_flight(agent, [question_broker, page_questions], gw_scheduler)
+                from raven.rpc.methods.turn import any_turn_in_flight
+
+                return _work_in_flight(
+                    agent,
+                    [question_broker, page_questions],
+                    gw_scheduler,
+                    any_turn_in_flight if page_mount is not None else None,
+                )
 
             async def _reload(force: bool) -> dict:
                 if not force:

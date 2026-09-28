@@ -28,6 +28,16 @@ export interface GateWords {
   readonly created: string
   readonly nodiff: string
   readonly cut: string
+  /* A configuration change's own words, present only for `config.change`. */
+  readonly cfg?: ConfigWords
+}
+
+export interface ConfigWords {
+  readonly reset: string
+  readonly reload: string
+  readonly restart: string
+  readonly effect: string
+  readonly sensitive: string
 }
 
 export interface GateProps {
@@ -83,6 +93,32 @@ function EvidenceBlock(
       <div className="what cp-ev">
         <div className="cp-ev-path">{str(evidence.server)}.{str(evidence.tool)}</div>
         <pre className="cp-json">{JSON.stringify(evidence.input ?? {}, null, 2)}</pre>
+      </div>
+      {cut}
+    </>
+    )
+  }
+  if (kind === 'config.change' && words.cfg) {
+    /* Old and new value as the two sides of a diff, so the reader answers
+       about the change rather than about the arguments that spell it. */
+    const cfg = words.cfg
+    const action = str(evidence.action)
+    const was = str(evidence.was) + (evidence.was_default === true ? ' ' + cfg.reset : '')
+    const now = action === 'unset' ? cfg.reset : str(evidence.value)
+    return (
+    <>
+      <div className="what cp-ev">
+        {str(evidence.setting) ? <div className="cp-ev-path">{str(evidence.setting)}</div> : null}
+        {action === 'restart'
+          ? <div>{str(evidence.target) === 'restart' ? cfg.restart : cfg.reload}</div>
+          : (
+            <pre className="cp-diff">
+              {was ? <span className="cp-del">{'- ' + was + '\n'}</span> : null}
+              <span className="cp-add">{'+ ' + now}</span>
+            </pre>
+          )}
+        {cfg.effect ? <div className="cp-cfg-note">{cfg.effect}</div> : null}
+        {cfg.sensitive ? <div className="cp-cfg-warn">{cfg.sensitive}</div> : null}
       </div>
       {cut}
     </>

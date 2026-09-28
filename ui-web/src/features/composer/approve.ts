@@ -158,7 +158,7 @@ export interface ApprovalReq {
      when there is none, and then the sheet offers no such choice. */
   suggestedPattern?: string
   /* The prompt's view, as the engine sent it: the layout (`shell.exec`,
-     `file.write`, `mcp.call`, `unknown`), the shell command family that words
+     `file.write`, `mcp.call`, `config.change`, `unknown`), the shell command family that words
      it, who is asking, and the tool's own account of the call. */
   kind?: string
   family?: string
@@ -236,7 +236,18 @@ function wordsFor(req: ApprovalReq): GateWords {
   }
   const slot = kind === 'shell.exec' ? (req.family || 'shell')
     : kind === 'file.write' ? 'file_write'
-      : kind === 'mcp.call' ? 'mcp_call' : 'unknown'
+      : kind === 'mcp.call' ? 'mcp_call'
+        : kind === 'config.change' ? 'config_change' : 'unknown'
+  const effect = str(ev.effect)
+  const cfg = kind === 'config.change'
+    ? {
+      reset: t('gui.confirm.cfg.reset'),
+      reload: t('gui.confirm.cfg.reload'),
+      restart: t('gui.confirm.cfg.restart'),
+      effect: effect ? t('gui.confirm.cfg.effect.' + effect, {}, '') : '',
+      sensitive: str(ev.sensitive) ? t('gui.confirm.cfg.sensitive', { note: str(ev.sensitive) }) : '',
+    }
+    : undefined
   return {
     title: t('gui.confirm.title.' + slot, vars, t('gui.confirm.title.unknown', vars)),
     why: t('gui.confirm.why.' + slot, vars, t('gui.confirm.why.unknown', vars)),
@@ -244,6 +255,7 @@ function wordsFor(req: ApprovalReq): GateWords {
     created: t('gui.confirm.ev.created'),
     nodiff: t('gui.confirm.ev.nodiff'),
     cut: t('gui.confirm.ev.cut'),
+    cfg,
   }
 }
 
@@ -293,9 +305,12 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
   }
   openApprovals.set(req.approvalId, withdraw)
 
+  /* A change to Raven's own configuration asks every time (the gate grants no
+     session key for it), so offering to stop asking would promise nothing. */
+  const once = req.kind === 'config.change'
   const opts: SheetOptionRow[] = [
     { label: t('gui.confirm.deny'), run: () => answer('deny'), go: true },
-    ...(req.suggestedPattern
+    ...(once ? [] : req.suggestedPattern
       ? [{
         label: t('gui.confirm.always', { pattern: req.suggestedPattern }),
         run: () => answer('allow_always', req.suggestedPattern),

@@ -254,7 +254,7 @@ class Tool(ABC):
     channels: frozenset[str] | None = None
 
     # What an approval prompt shows for a call to this tool. ``approval_kind``
-    # picks the layout ("shell.exec", "file.write", "mcp.call"; empty reads as
+    # picks the layout ("shell.exec", "file.write", "mcp.call", "config.change"; empty reads as
     # unknown) and ``approval_evidence`` fills it -- None means the arguments
     # themselves are the evidence. The permission gate reads both only once a
     # call has landed on a prompt, so a tool may do a little work here (read

@@ -159,6 +159,16 @@ def is_session_answering(session_key: str) -> bool:
     return _scheduler is not None and _lane_in_flight(_scheduler, session_key)
 
 
+def any_turn_in_flight() -> bool:
+    """True while this surface runs any turn: one ``turn.send`` submitted, or anything on the spine's lanes.
+
+    The gateway's own busy check reads its agent's lock and its own scheduler;
+    a page turn holds neither, so a swap or restart asked for from a page turn
+    would otherwise cut that turn off before it answered.
+    """
+    return bool(_active_turns) or (_scheduler is not None and _scheduler.has_running())
+
+
 def clear_active(session_key: str) -> None:
     """Drop a session's active-turn slot. Wired into build_rpc_spine as ``on_turn_end``
     so the slot clears at the end of the turn that owns it (alongside turn_ids)."""

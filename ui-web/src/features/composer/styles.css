@@ -109,6 +109,8 @@
    there is more than is shown, and the reader is about to answer about it. */
 .cp-ev-cut { color: var(--amber); font-size: 12px; }
 .cp-diff, .cp-json { margin: 0; font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cp-cfg-note { color: var(--muted); font-size: 12px; }
+.cp-cfg-warn { color: var(--amber); font-size: 12px; }
 .cp-add { color: var(--moss); }
 .cp-del { color: var(--clay); }
 .cp-hunk { color: var(--faint); }

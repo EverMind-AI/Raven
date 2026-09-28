@@ -139,7 +139,8 @@ def test_change_line_states_the_effect_and_the_risk():
     assert "permissions.mode" in line and "full" in line
     assert "next turn" in line
     assert "without asking" in line
-    assert "reload" in surface.change_line({"action": "restart", "value": "reload"})
+    assert "Reload" in surface.change_line({"action": "restart", "value": "reload"})
+    assert "whole Raven process" in surface.change_line({"action": "restart", "value": '"restart"'})
 
 
 def _home(tmp_path: Path, monkeypatch, data: dict) -> Path:

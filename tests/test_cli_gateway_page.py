@@ -21,7 +21,30 @@ from tests.test_rpc_bootstrap import _FakeCron, _FakeLoop
 def home(tmp_path: Path, monkeypatch) -> Path:
     """An agent home of our own, so nothing here touches the developer's."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("raven.cli._gateway_page._last_credentials", None)
     return tmp_path / "home"
+
+
+async def test_a_swap_keeps_an_open_tab_signed_in(home: Path) -> None:
+    """Seen live: a reload asked from the page signed the page out. The old
+    generation's teardown removes serve.json before the next one mounts, so
+    the cookie the tab holds has to cross the swap in memory."""
+    from raven.cli._gateway_page import mount_page
+
+    loop = _FakeLoop(_FakeCron())
+    first = await mount_page(loop, 18937)
+    assert first is not None
+    before = json.loads((home / "serve.json").read_text(encoding="utf-8"))
+    await first.teardown()
+    assert not (home / "serve.json").exists()
+
+    second = await mount_page(loop, 18937)
+    assert second is not None
+    try:
+        after = json.loads((home / "serve.json").read_text(encoding="utf-8"))
+        assert (after["token"], after["cookie"]) == (before["token"], before["cookie"])
+    finally:
+        await second.teardown()
 
 
 async def test_the_mounted_page_answers_like_raven_serve(home: Path) -> None:

@@ -10,6 +10,7 @@ import pytest
 
 from raven.agent.tools.raven_config import RavenConfigTool
 from raven.config.schema import PermissionsConfig
+from raven.config.self_surface import Effect
 from raven.contracts.permissions import Allow, ApprovalChoice, ApprovalOutcome, NeedsApproval
 from raven.permissions.builtin import BuiltinRulings
 from raven.permissions.gate import PermissionGate
@@ -436,3 +437,58 @@ def test_redaction_reaches_nested_credentials():
         "a": {"apiKey": "set", "botToken": "not set", "n": 1},
         "l": [{"password": "set"}],
     }
+
+
+def test_the_approval_card_gets_the_change_laid_out(config_file):
+    tool = RavenConfigTool()
+    assert tool.approval_kind == "config.change"
+    view = tool.approval_evidence({"action": "set", "path": "tools.exec.timeout", "value": "300"})
+    assert view["setting"] == "tools.exec.timeout"
+    assert (view["was"], view["value"], view["effect"]) == ("60", "300", "next_turn")
+    assert "tools.exec.timeout" in view["change"]
+    reset = tool.approval_evidence({"action": "unset", "path": "tools.exec.timeout"})
+    assert "value" not in reset and reset["was"] == "60"
+    restart = tool.approval_evidence({"action": "restart", "value": "restart"})
+    assert restart["target"] == "restart"
+    assert tool.approval_evidence({"action": "restart", "value": '"restart"'})["target"] == "restart"
+    tool._pending["gateway.port"] = Effect.RESTART
+    assert tool.approval_evidence({"action": "restart"})["target"] == "restart"
+    tool._pending.clear()
+    reload = tool.approval_evidence({"action": "restart", "value": '"reload"'})
+    assert reload["target"] == "reload" and '"' not in reload["change"]
+    unwritten = tool.approval_evidence({"action": "set", "path": "agents.defaults.temperature", "value": "0.3"})
+    assert (unwritten["was"], unwritten["was_default"]) == ("0.1", True)
+    sensitive = tool.approval_evidence({"action": "set", "path": "permissions.mode", "value": '"full"'})
+    assert sensitive["sensitive"]
+
+
+def test_a_prompt_never_prints_a_credential(config_file):
+    """The gate asks before the tool refuses a secret, so the card must not carry one."""
+    from raven.config.self_surface import change_line
+
+    tool = RavenConfigTool()
+    params = {"action": "set", "path": "providers.openrouter.apiKey", "value": '"sk-live-123"'}
+    view = tool.approval_evidence(params)
+    assert "sk-live-123" not in json.dumps(view) and "sk-live-123" not in change_line(params)
+    assert "sk-x" not in json.dumps(view)
+    nested = {"action": "add", "path": "subagents", "value": '{"name": "x", "botToken": "t-1"}'}
+    assert "t-1" not in json.dumps(tool.approval_evidence(nested))
+
+
+def test_a_count_of_tokens_is_not_taken_for_a_token(config_file):
+    from raven.config.self_surface import redacted
+
+    assert redacted({"maxTokens": 4096, "botToken": "t"}) == {"maxTokens": 4096, "botToken": "set"}
+    view = RavenConfigTool().approval_evidence(
+        {"action": "set", "path": "agents.defaults.contextWindowTokens", "value": "65536"}
+    )
+    assert view["value"] == "65536"
+
+
+@pytest.mark.asyncio
+async def test_describe_answers_a_prefix_with_what_sits_under_it(config_file):
+    tool = RavenConfigTool()
+    below = json.loads(await _run(tool, action="describe", path="tools.exec"))
+    assert below["prefix"] == "tools.exec"
+    assert "tools.exec.timeout" in [s["path"] for s in below["settings"]]
+    assert "not in the catalog" in await _run(tool, action="describe", path="tools.nothing")

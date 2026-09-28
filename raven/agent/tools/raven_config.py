@@ -70,6 +70,7 @@ class RavenConfigTool(Tool):
     """Read and change Raven's own configuration through the catalog."""
 
     timeout_seconds = 120.0
+    approval_kind = "config.change"
 
     def __init__(self, *, guide_skill_id: str | None = GUIDE_SKILL_ID) -> None:
         self._guide = guide_skill_id
@@ -84,6 +85,11 @@ class RavenConfigTool(Tool):
     def set_restarter(self, restart: Restarter | None) -> None:
         """Lend the gateway's reload and restart; absent everywhere else."""
         self._restart = restart
+
+    def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
+        if params.get("action") == "restart" and not params.get("value"):
+            params = {**params, "value": self._needed_restart()}
+        return surface.change_view(params, surface.read_raw())
 
     @property
     def name(self) -> str:
@@ -169,6 +175,9 @@ class RavenConfigTool(Tool):
             return _dump(await self._describe_subagent(path.split(".", 1)[1]))
         found = surface.find(path)
         if found is None:
+            below = [s.describe() for s in surface.all_settings() if s.path.startswith(path + ".")]
+            if below:
+                return _dump({"prefix": path, "settings": below})
             raise LookupError(f"{path} is not in the catalog; describe with no path lists the sections")
         return _dump(found[0].describe() | {"path": path})
 
