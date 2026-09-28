@@ -1728,9 +1728,7 @@ async def test_deleting_a_document_drops_the_pages_drawn_from_it(monkeypatch, tm
 
 
 @pytest.mark.parametrize("document_id", ["", "..", "a/b", "a\\b"], ids=["nothing", "parent", "slash", "backslash"])
-async def test_forgetting_pages_never_walks_out_of_its_own_directory(
-    monkeypatch, tmp_path, document_id: str
-) -> None:
+async def test_forgetting_pages_never_walks_out_of_its_own_directory(monkeypatch, tmp_path, document_id: str) -> None:
     from raven.rpc import knowledge_pages
 
     monkeypatch.setattr("raven.config.paths.get_cache_dir", lambda: tmp_path)

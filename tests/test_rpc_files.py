@@ -1566,9 +1566,7 @@ async def _paged(kb, monkeypatch, tmp_path) -> str:
     return kb.add_document(base.id, filename="report.pdf", content=_pdf_bytes()).id
 
 
-async def test_knowledge_page_draws_one_page_of_a_document(
-    client: TestClient, kb, monkeypatch, tmp_path
-) -> None:
+async def test_knowledge_page_draws_one_page_of_a_document(client: TestClient, kb, monkeypatch, tmp_path) -> None:
     document = await _paged(kb, monkeypatch, tmp_path)
 
     r = await client.get("/knowledge/page", params={"document": document, "page": "2"}, headers=auth())
@@ -1578,9 +1576,7 @@ async def test_knowledge_page_draws_one_page_of_a_document(
     assert len(await r.read()) > 0
 
 
-async def test_knowledge_page_is_cached_and_drawn_once(
-    client: TestClient, kb, monkeypatch, tmp_path
-) -> None:
+async def test_knowledge_page_is_cached_and_drawn_once(client: TestClient, kb, monkeypatch, tmp_path) -> None:
     """A page is immutable for the life of its document id: the bytes behind an
     id never change, because re-uploading a file makes a new document."""
     from raven.rpc import knowledge_pages
