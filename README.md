@@ -23,9 +23,7 @@
 
 <p align="center"><em>One Surface, All Agents: Raven generates DAGs and orchestrates multiple specialized agents for complex tasks.</em></p>
 
-Raven is **The Harness of Harnesses**—a self-evolving multi-agent orchestration ecosystem. As a **Host Agent**, it brings specialized agents together through one unified surface to delegate tasks, coordinate execution, and integrate results. Its long-term vision is to extend this orchestration across devices, environments, and domains.
-
-Built on EverMind’s self-evolving harness engine and powered by [EverOS](https://github.com/EverMind-AI/EverOS), Raven preserves context across sessions and continuously improves agent harnesses and collaborative workflows.
+Raven is **the harness of harnesses, built for recursive self-improvement (RSI).** As a **Host Agent**, it brings built-in and third-party agents together to carry out complex tasks. Its modular architecture supports iterative improvement of Raven's own harness: proposing changes to how agents plan and act, evaluating those changes, and adopting improvements that pass validation. Powered by [EverOS](https://github.com/EverMind-AI/EverOS), Raven carries memory and context across sessions to support this process.
 
 **Built-in Agents: Raven-Research**, **Raven-Code**, **Raven-Design**, and **Raven-Oncall** support research, coding, visual design, and unattended workflow automation.
 
@@ -68,7 +66,7 @@ https://github.com/user-attachments/assets/44724e3e-6564-467a-b422-473aa8f474bd
 </tr>
 </table>
 
-### ❯ Raven RSI: a complete recursive self-improvement project
+### ❯ Raven RSI: recursive self-improvement in practice
 
 **AI that improves AI, with the entire project completed by Raven.** Given a task and evaluation criteria it cannot modify, Raven RSI independently plans each round, writes code, runs experiments, and evaluates the results. In nanochat pre-training experiments, it completed 172 training runs across 7 rounds without a single crash, reducing `val_bpb` by 5.8% within the same 20-minute, single-GPU budget. The same process reduced overshoot in a dam-break simulation by three orders of magnitude and completed an FEA limit-load search in 8 rounds of bisection. The complete deliverable includes the experimental results, visualizations, poster, presentation, and project website, all produced by Raven.
 
