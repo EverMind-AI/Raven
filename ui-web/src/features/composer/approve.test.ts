@@ -412,6 +412,23 @@ describe('the permission approval sheet', () => {
       [`gui.confirm.deny${ESC_LABEL}`, `gui.confirm.always${chordLabel(true)}`, `gui.confirm.allow${chordLabel()}`])
   })
 
+  /* The broader grant's button is one word, so the rule it would save is said
+     on its own line before it is pressed -- with the pattern set as code, in
+     the place the catalogue's sentence puts it. */
+  it('names the rule a saved grant writes on a line of its own', () => {
+    setTranslator((k, vars) => (k === 'gui.confirm.always_rule' ? `saves ${String(vars?.pattern)} everywhere` : k))
+    openApproval(suggested, handlers())
+    const rule = rack().querySelector('.cp-rule')!
+    expect(rule.textContent).toBe('saves git push * everywhere')
+    expect(rule.querySelector('code')!.textContent).toBe('git push *')
+    expect(opts()[1]!.firstElementChild!.textContent).toBe('gui.confirm.always')
+  })
+
+  it('says no rule when the grant saves none', () => {
+    openApproval(base, handlers())
+    expect(rack().querySelector('.cp-rule')).toBeNull()
+  })
+
   it('sends the session grant the engine knows by name', () => {
     openApproval(base, handlers())
     opts()[1]!.click()

@@ -215,6 +215,17 @@ const shortened = (p: string): string => {
   }
 }
 
+/* The rule sentence around its pattern. The catalogue places the pattern, so
+   the sentence is asked for with a mark in the pattern's place and cut there;
+   a sentence that lost its mark still shows, with the pattern after it. */
+function ruleWords(pattern: string | undefined): [string, string, string] | undefined {
+  if (!pattern) return undefined
+  const MARK = '\u0000'
+  const said = t('gui.confirm.always_rule', { pattern: MARK })
+  const at = said.indexOf(MARK)
+  return at < 0 ? [`${said} `, pattern, ''] : [said.slice(0, at), pattern, said.slice(at + MARK.length)]
+}
+
 /* The words a request is asked in. The family names the sentence when the
    engine sent one; a bare shell command, a file write, an MCP call and a tool
    the page has no layout for each have a sentence of their own. */
@@ -242,6 +253,7 @@ function wordsFor(req: ApprovalReq): GateWords {
     : kind === 'file.write' ? 'file_write'
       : kind === 'mcp.call' ? 'mcp_call' : 'unknown'
   return {
+    rule: ruleWords(req.suggestedPattern),
     title: t('gui.confirm.title.' + slot, vars, t('gui.confirm.title.unknown', vars)),
     why: t('gui.confirm.why.' + slot, vars, t('gui.confirm.why.unknown', vars)),
     deny: t('gui.confirm.deny'),
@@ -306,7 +318,7 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
     { label: t('gui.confirm.deny'), run: () => answer('deny'), go: true, keys: ESC_LABEL },
     ...(req.suggestedPattern
       ? [{
-        label: t('gui.confirm.always', { pattern: req.suggestedPattern }),
+        label: t('gui.confirm.always'),
         run: broader,
         keys: chordLabel(true),
       }]

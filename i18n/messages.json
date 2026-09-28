@@ -5932,8 +5932,12 @@
       "zh": "一个操作等待批准超时未回应 · 该操作没有执行"
     },
     "gui.confirm.always": {
-      "en": "Always allow: {pattern} (every directory)",
-      "zh": "始终允许：{pattern}（所有工作目录）"
+      "en": "Always allow",
+      "zh": "始终允许"
+    },
+    "gui.confirm.always_rule": {
+      "en": "Always allow saves the rule {pattern}, for every working directory",
+      "zh": "始终允许会保存规则 {pattern}，在所有工作目录生效"
     },
     "gui.confirm.title.shell": {
       "en": "Allow {who} to run this command?",

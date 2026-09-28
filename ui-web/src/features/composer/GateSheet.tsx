@@ -24,6 +24,9 @@ export type Evidence = Record<string, unknown>
 export interface GateWords {
   readonly title: string
   readonly why: string
+  /** The sentence naming the rule the broader grant saves, split around the
+      pattern so the pattern can be set as code. Absent when there is no rule. */
+  readonly rule?: readonly [string, string, string]
   readonly deny: string
   readonly created: string
   readonly nodiff: string
@@ -111,6 +114,11 @@ export function GateSheet({ kind, evidence, command, words, opts, onDeny }: Gate
       <div className="body">
         <div className="cp-why">{words.why}</div>
         <EvidenceBlock kind={kind} evidence={evidence} command={command} words={words} />
+        {/* What "Always allow" writes, said before it is pressed: the button is
+            one word, and a rule outlives the conversation. */}
+        {words.rule ? (
+          <div className="cp-rule">{words.rule[0]}<code>{words.rule[1]}</code>{words.rule[2]}</div>
+        ) : null}
         <div className="cp-acts">
           {opts.map((row, i) => <SheetOption key={i} row={row} />)}
         </div>
