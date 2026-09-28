@@ -609,8 +609,7 @@ async def test_the_conversation_model_moves_only_this_conversation(config_file):
             "session_id": "tui:abc",
         },
     )
-    assert tool.approval_evidence({"action": "set", "path": "session.model", "value": value})["was"].endswith(
-        "(the default)"
-    )
+    view = tool.approval_evidence({"action": "set", "path": "session.model", "value": value})
+    assert view["was"].endswith("(the default)") and view["value"] == "openrouter/z-ai/glm-5.3"
     assert set(seen) == {"tui:abc"}
     assert "session" not in json.loads(config_file.read_text())

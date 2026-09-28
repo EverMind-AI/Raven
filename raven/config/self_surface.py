@@ -819,7 +819,13 @@ def _shown(path: str, value: Any) -> str:
     """``value`` as a prompt may print it: decoded, credentials masked, a secret setting hidden whole."""
     if is_secret_path(path):
         return "(hidden)"
-    return _short(redacted(_decoded(value)))
+    value = _decoded(value)
+    found = find(path)
+    if found is not None and found[0].kind == "model_ref" and isinstance(value, dict) and value.get("model"):
+        # Spelled the way a configured model is stored and shown, so the card's
+        # two sides of a switch read alike.
+        return f"{value['provider']}/{value['model']}" if value.get("provider") else str(value["model"])
+    return _short(redacted(value))
 
 
 def _decoded(value: Any) -> Any:
