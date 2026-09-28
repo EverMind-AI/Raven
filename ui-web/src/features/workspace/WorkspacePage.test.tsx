@@ -468,6 +468,19 @@ describe('workspace island', () => {
     expect(screen.queryByText('gui.ws.file_rendering')).toBeNull()
   })
 
+  /* A deck that is no longer on disk is gone, the way a gone file of any other
+     kind reads -- not a render that failed with a 404 quoted under it. */
+  it('says an Office file is gone rather than that its render failed', async () => {
+    install(emptyWs({ file: { ...deckFile, path: '/repo/brief.docx' } }), { canBrowse: true },
+      { tab: 'file', open: true, picked: true })
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: false, status: 404, statusText: 'Not Found', text: async () => '404: /repo/brief.docx',
+    }))
+    await mount()
+    expect(await screen.findByText('gui.ws.file_gone')).toBeTruthy()
+    expect(screen.queryByText('gui.ws.render_failed')).toBeNull()
+  })
+
   /* A kind the page cannot render: the note offers the host's own application
      for it. Both actions run where the GATEWAY runs, which is why the offer is
      conditional -- see the withheld case below. */

@@ -616,6 +616,7 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
 function DeckBody({ f }: { f: WsFile }): JSX.Element {
   const [pages, setPages] = useState<number | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
+  const [gone, setGone] = useState(false)
   /* A deck the agent rebuilt and delivered again keeps its path; the delivery's
      own stamp is what tells this view the bytes behind the path moved. */
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
@@ -624,6 +625,7 @@ function DeckBody({ f }: { f: WsFile }): JSX.Element {
   useEffect(() => {
     setPages(null)
     setFailed(null)
+    setGone(false)
     let alive = true
     const said = (e: unknown): string => ((e as Error) && (e as Error).message) || String(e)
     /* The first page is asked for before any of them are drawn, and it answers
@@ -640,6 +642,13 @@ function DeckBody({ f }: { f: WsFile }): JSX.Element {
         setPages(Number.isFinite(said_) && said_ > 0 ? said_ : 1)
         return
       }
+      /* The file itself is gone, which is not a render that failed: it reads
+         the way a gone file of any other kind does. */
+      if (r.status === 404) {
+        deliveries.markMissing(f.path)
+        setGone(true)
+        return
+      }
       let text = ''
       try {
         text = (await r.text()).trim()
@@ -649,7 +658,8 @@ function DeckBody({ f }: { f: WsFile }): JSX.Element {
       if (alive) setFailed(text || `${r.status} ${r.statusText}`.trim())
     }, (e: unknown) => { if (alive) setFailed(said(e)) })
     return () => { alive = false }
-  }, [first])
+  }, [first, f.path])
+  if (gone) return <div className="verr">{t('gui.ws.file_gone')}</div>
   if (failed != null) {
     return <BinNote f={f} title={t('gui.ws.render_failed')} detail={failed} />
   }
