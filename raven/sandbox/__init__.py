@@ -12,6 +12,10 @@ Public API (import everything from here, not from sub-modules):
 
 from __future__ import annotations
 
+import importlib.metadata
+import re
+import shlex
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -33,6 +37,27 @@ __all__ = [
     "DirectExecutor",
     "build_executor",
 ]
+
+
+def boxlite_install_hint() -> str:
+    """A copy-pasteable command that installs boxlite into this raven's environment.
+
+    raven is not distributed under this name on package indexes, so naming the
+    ``raven[sandbox]`` extra in a command would fetch an unrelated project.
+    The hint therefore installs the pinned boxlite requirement itself, into the
+    interpreter raven is running under (a uv tool venv or a project venv).
+    """
+
+    spec = "boxlite"
+    try:
+        for requirement in importlib.metadata.requires("raven") or []:
+            candidate = requirement.split(";", 1)[0].strip()
+            if re.match(r"boxlite\b", candidate):
+                spec = candidate
+                break
+    except importlib.metadata.PackageNotFoundError:
+        pass
+    return f"uv pip install --python {shlex.quote(sys.executable)} {spec}"
 
 
 def build_executor(
@@ -85,7 +110,8 @@ def build_executor(
             from raven.sandbox.boxlite_executor import BoxliteExecutor
         except ImportError as exc:
             raise SandboxInitError(
-                f"No sandbox backend available: {exc}\n  • Install: pip install raven[sandbox]"
+                f"No sandbox backend available: {exc}\n"
+                f"  • Install into this raven's environment: {boxlite_install_hint()}"
             ) from exc
         return BoxliteExecutor(
             image=sandbox_cfg.image,
