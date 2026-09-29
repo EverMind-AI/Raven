@@ -141,27 +141,32 @@ describe('the approval sheet', () => {
     expect(said).toEqual(['A-allow'])
   })
 
-  it('offers allow first, with the key that answers it, and marks it as the default', () => {
+  /* The same card as the gate's: deny first, focused and marked, allow last,
+     and no corner cross. */
+  it('offers deny first and focused, allow last, each with its key', () => {
     open('do it')
-    expect(opts().map((b) => b.textContent)).toEqual([`gui.confirm.allow${chordLabel()}`, `gui.confirm.deny${ESC_LABEL}`])
+    expect(opts().map((b) => b.textContent)).toEqual([`gui.confirm.deny${ESC_LABEL}`, `gui.confirm.allow${chordLabel()}`])
     expect(opts()[0]!.className).toContain('go')
     expect(opts()[1]!.className).not.toContain('go')
+    expect(document.activeElement).toBe(opts()[0])
+    expect(rack().querySelector('.csheet .ic')).toBeNull()
+    expect(rack().querySelector('.cp-acts')!.closest('.body')).toBeNull()
   })
 
-  it('answers allow on the first option and takes the sheet down', () => {
+  it('answers allow on the last option and takes the sheet down', () => {
     const said: string[] = []
     open('do it', () => said.push('allow'), () => said.push('deny'))
-    opts()[0]!.click()
+    opts()[1]!.click()
     expect(said).toEqual(['allow'])
     expect(sheets().length).toBe(0)
   })
 
-  it('answers deny on the second, and on the close button', () => {
+  it('answers deny on the first option, and on Escape', () => {
     const said: string[] = []
     open('a', () => said.push('allow'), () => said.push('deny'))
-    opts()[1]!.click()
+    opts()[0]!.click()
     open('b', () => said.push('allow'), () => said.push('deny'))
-    rack().querySelector<HTMLElement>('.ic')!.click()
+    key('Escape')
     expect(said).toEqual(['deny', 'deny'])
   })
 
@@ -187,8 +192,8 @@ describe('the approval sheet', () => {
   it('answers once, whichever door is used twice', () => {
     const said: string[] = []
     open('a', () => said.push('allow'), () => said.push('deny'))
-    const allow = opts()[0]!
-    const deny = opts()[1]!
+    const deny = opts()[0]!
+    const allow = opts()[1]!
     allow.click()
     deny.click()
     key('Escape')
@@ -430,6 +435,16 @@ describe('the permission approval sheet', () => {
     openApproval(base, handlers())
     expect(rack().querySelector('.csheet .ic')).toBeNull()
     expect(rack().querySelector('.hd .q')!.textContent).toBe('gui.confirm.title.delete_command')
+  })
+
+  /* The body scrolls when the text runs long; the answers are its sibling, so
+     no amount of text can push them out of the card (the layout half is
+     scripts/gates/approval-card-css.test.mjs). */
+  it('keeps the answers outside the part that scrolls', () => {
+    openApproval(suggested, handlers())
+    const acts = rack().querySelector('.cp-acts')!
+    expect(acts.closest('.body')).toBeNull()
+    expect(acts.parentElement!.classList.contains('csheet')).toBe(true)
   })
 
   it('says no rule when the grant saves none', () => {

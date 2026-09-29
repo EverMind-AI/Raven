@@ -114,9 +114,12 @@ export function open(
      mattering, so neither side is told. */
   const withdraw = (): void => close()
 
+  /* Deny first and focused, allow last, as on the permission gate's card: the
+     sheet arrives unasked, and a bare Enter pressed at that moment must not
+     grant. */
   const opts: SheetOptionRow[] = [
-    { label: t('gui.confirm.allow'), run: () => close(onAllow), go: true, keys: chordLabel() },
-    { label: t('gui.confirm.deny'), run: () => close(onDeny), keys: ESC_LABEL },
+    { label: t('gui.confirm.deny'), run: () => close(onDeny), go: true, keys: ESC_LABEL },
+    { label: t('gui.confirm.allow'), run: () => close(onAllow), keys: chordLabel() },
   ]
 
   function onKey(e: KeyboardEvent): void {
@@ -137,10 +140,8 @@ export function open(
      module -- and a second copy of who-owns-what could only disagree with it. */
   sheetAdd(sheet, key, withdraw, createElement(AskApproveSheet, {
     title: t('gui.confirm.title'),
-    deny: t('gui.confirm.deny'),
     prompt: prompt || '',
     opts,
-    onDeny: () => close(onDeny),
   }))
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()

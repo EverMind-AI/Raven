@@ -120,9 +120,10 @@ export function GateSheet({ kind, evidence, command, words, opts }: GateProps): 
         {words.rule ? (
           <div className="cp-rule">{words.rule[0]}<code>{words.rule[1]}</code>{words.rule[2]}</div>
         ) : null}
-        <div className="cp-acts">
-          {opts.map((row, i) => <SheetOption key={i} row={row} />)}
-        </div>
+      </div>
+      {/* Outside the body, which scrolls: see `.csheet.perm .body`. */}
+      <div className="cp-acts">
+        {opts.map((row, i) => <SheetOption key={i} row={row} />)}
       </div>
     </>
   )

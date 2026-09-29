@@ -4938,9 +4938,15 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   box-shadow: 0 2px 14px var(--sh-soft), 0 0 0 1px var(--ring-2);
 }
 .csheet.perm .q { font-size: 15px; }
-.csheet.perm .body { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 0; margin-top: 4px; }
+/* Everything between the question and the answers scrolls as one when it has
+   to -- a long why and a long rule on a narrow window -- and the answers are a
+   sibling of it, not a child, so no amount of text can push them out of the
+   card: a blocking prompt whose buttons were clipped would leave Esc as the
+   only way out. The evidence keeps a cap of its own and scrolls inside it, so
+   in the ordinary case the outer area never needs to. */
+.csheet.perm .body { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; gap: 0; margin-top: 4px; }
 .csheet.perm .what {
-  flex: 0 1 auto; min-height: 0; overflow: auto; margin-top: 11px;
+  flex: none; max-height: 140px; overflow: auto; margin-top: 11px;
   font-family: var(--mono); font-size: 12px; line-height: 1.75; color: var(--text);
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px;
   overflow-wrap: anywhere;
@@ -4948,7 +4954,7 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 /* The answers in one row: deny on the left, allow once as the solid one on
    the right. The row's own name is the composer's; what it lays out is the
    rack's `.opt`, so the rule lives with the rack's. */
-.csheet.perm .cp-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: auto; padding-top: 12px; }
+.csheet.perm .cp-acts { flex: none; display: flex; gap: 8px; justify-content: flex-end; padding-top: 12px; }
 .csheet.perm .cp-acts .opt {
   width: auto; flex: none; gap: 6px; height: 30px; padding: 0 12px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--ink); font-size: 13px;
