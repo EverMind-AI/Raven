@@ -152,6 +152,41 @@ async def test_starts_that_race_the_vendor_share_one_code() -> None:
     assert runs == 1
 
 
+async def test_a_cancelled_start_leaves_the_code_to_the_others() -> None:
+    """Closing a tab cancels its request, since the WebSocket transport cancels
+    every request still running on a connection it loses, and two tabs signing
+    in to one vendor are two waits on one answer. The wait that is left still
+    gets the code, and a later start is handed that code rather than a new one."""
+    runs = 0
+    answer = threading.Event()
+    released = threading.Event()
+
+    def fake(resolve: oauth_login.Resolve) -> None:
+        nonlocal runs
+        runs += 1
+        answer.wait(5)
+        resolve("https://vendor.test/device", f"SLOW-{runs}", 600)
+        released.wait(5)
+
+    oauth_login._STARTERS["fake_vendor"] = fake
+    closed = asyncio.create_task(oauth_login.start("fake_vendor"))
+    left = asyncio.create_task(oauth_login.start("fake_vendor"))
+    await asyncio.sleep(0.05)
+    closed.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closed
+    answer.set()
+    await asyncio.wait({left}, timeout=5)
+    later = await asyncio.wait_for(oauth_login.start("fake_vendor"), 5)
+    task = oauth_login.pending()["fake_vendor"]
+    released.set()
+    await asyncio.wait_for(task, 5)
+
+    assert left.done() and not left.cancelled()
+    assert [left.result()["user_code"], later["user_code"]] == ["SLOW-1", "SLOW-1"]
+    assert runs == 1
+
+
 async def test_start_raises_what_the_vendor_raised_before_the_code_existed() -> None:
     def fake(_resolve: oauth_login.Resolve) -> None:
         raise ConnectionError("vendor down")
