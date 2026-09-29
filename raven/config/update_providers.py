@@ -1359,6 +1359,7 @@ def test_provider(
     endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
     api_key = endpoint.api_key if endpoint else ""
     api_base = (endpoint.api_base if endpoint else None) or (spec.default_api_base if spec else "") or ""
+    extra_headers = endpoint.extra_headers if endpoint else None
     derived_api_base = False
 
     # Before the token fetch below, which asks a question this backend does not
@@ -1451,6 +1452,7 @@ def test_provider(
         # shape the generic path sends. Answering that with Google's header
         # would break a probe that works today.
         url, headers = shape(api_key)
+        headers = _probe_headers(headers, extra_headers)
         return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
 
     if not api_base:
@@ -1497,6 +1499,7 @@ def test_provider(
         # generic path below sends -- answering it with Google's header would
         # break a probe that works today.
         url, headers = shape(api_key)
+        headers = _probe_headers(headers, extra_headers)
         return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
 
     url = api_base.rstrip("/") + "/models"
@@ -1506,6 +1509,7 @@ def test_provider(
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers["x-api-key"] = api_key
+    headers = _probe_headers(headers, extra_headers)
 
     result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
     if check_credential and api_key and result.get("status") == "valid":
@@ -1522,6 +1526,13 @@ def test_provider(
             "error": "credential present; this vendor publishes no models endpoint to ping",
         }
     return result
+
+
+def _probe_headers(defaults: dict[str, str], extra_headers: dict[str, str] | None) -> dict[str, str]:
+    """Apply configured overrides without duplicating case-insensitive header names."""
+    return {key.lower(): value for key, value in defaults.items()} | {
+        key.lower(): value for key, value in (extra_headers or {}).items()
+    }
 
 
 def _litellm_api_base(spec: Any) -> str:
@@ -1634,7 +1645,14 @@ def _confirm_credential(
     check keys is asked there instead; any other is reported as unchecked
     rather than as verified.
     """
-    decoy = {name: (f"Bearer {_DECOY_KEY}" if name.lower() == "authorization" else _DECOY_KEY) for name in headers}
+    # Keep routing and protocol headers intact: their rejection cannot prove
+    # that the endpoint checked the API key.
+    decoy = dict(headers)
+    for name in decoy:
+        if name.lower() == "authorization":
+            decoy[name] = f"Bearer {_DECOY_KEY}"
+        elif name.lower() in {"x-api-key", "x-goog-api-key"}:
+            decoy[name] = _DECOY_KEY
     control = _probe_models_endpoint(url, decoy, timeout_s=timeout_s, transport=transport)
     if control.get("status") != "valid":
         return result

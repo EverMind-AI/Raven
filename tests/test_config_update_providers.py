@@ -571,6 +571,102 @@ def test_test_provider_200_returns_ok_with_models_count(cfg_path: Path) -> None:
     assert result["http_status"] == 200
 
 
+@pytest.mark.parametrize("storage", ["flat", "endpoint", "inherited"])
+@pytest.mark.parametrize("check_credential", [False, True])
+def test_provider_probe_forwards_resolved_extra_headers(cfg_path: Path, storage: str, check_credential: bool) -> None:
+    section: dict[str, Any] = {"apiKey": "sk-test", "apiBase": "https://relay.test/v1"}
+    headers = {"X-Tenant": "tenant-a"}
+    if storage == "flat":
+        section["extraHeaders"] = headers
+    else:
+        endpoint = {"label": "primary", "apiKey": section.pop("apiKey")}
+        if storage == "endpoint":
+            endpoint["extraHeaders"] = headers
+            section["extraHeaders"] = {"X-Tenant": "wrong-tenant"}
+        else:
+            section["extraHeaders"] = headers
+        section["endpoints"] = [endpoint]
+    cfg_path.write_text(json.dumps({"providers": {"custom": section}}), encoding="utf-8")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.headers.get("X-Tenant") != "tenant-a":
+            return httpx.Response(401)
+        if request.headers.get("Authorization") != "Bearer sk-test":
+            return httpx.Response(401)
+        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+
+    result = probe_provider(
+        "custom", config_path=cfg_path, transport=_mock_transport(handler), check_credential=check_credential
+    )
+    assert result["status"] == "valid"
+    assert result["model_ids"] == ["m1"]
+    assert len(seen) == (2 if check_credential else 1)
+    assert all(request.headers["X-Tenant"] == "tenant-a" for request in seen)
+
+
+@pytest.mark.parametrize("provider", ["custom", "openrouter"])
+def test_provider_probe_keeps_routing_headers_during_credential_check(cfg_path: Path, provider: str) -> None:
+    set_provider_fields(
+        provider,
+        {
+            "api_key": "wrong-key",
+            "api_base": "https://relay.test/v1",
+            "extra_headers": {"X-Tenant": "tenant-a", "X-Api-Key": "wrong-secondary-key"},
+        },
+        config_path=cfg_path,
+    )
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.headers.get("X-Tenant") != "tenant-a":
+            return httpx.Response(401)
+        if request.url.path.endswith("/key"):
+            return httpx.Response(401)
+        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+
+    result = probe_provider(provider, config_path=cfg_path, transport=_mock_transport(handler), check_credential=True)
+    assert result["status"] == ("key_unchecked" if provider == "custom" else "invalid_key")
+    assert len(seen) == (2 if provider == "custom" else 3)
+    assert all(request.headers["X-Tenant"] == "tenant-a" for request in seen)
+    assert seen[1].headers["Authorization"] != seen[0].headers["Authorization"]
+    assert seen[0].headers["X-Api-Key"] == "wrong-secondary-key"
+    assert seen[1].headers["X-Api-Key"] != seen[0].headers["X-Api-Key"]
+
+
+@pytest.mark.parametrize("header_name", ["Authorization", "authorization", "AUTHORIZATION"])
+def test_provider_probe_extra_headers_override_auth_case_insensitively(cfg_path: Path, header_name: str) -> None:
+    set_provider_fields(
+        "custom",
+        {"api_key": "unused", "api_base": "https://relay.test/v1", "extra_headers": {header_name: "Bearer override"}},
+        config_path=cfg_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get_list("Authorization") == ["Bearer override"]
+        return httpx.Response(200, json={"data": []})
+
+    assert probe_provider("custom", config_path=cfg_path, transport=_mock_transport(handler))["ok"] is True
+
+
+@pytest.mark.parametrize("provider,auth_header", [("gemini", "x-goog-api-key"), ("anthropic", "x-api-key")])
+def test_provider_probe_native_catalogue_forwards_extra_headers(
+    cfg_path: Path, provider: str, auth_header: str
+) -> None:
+    set_provider_fields(
+        provider, {"api_key": "sk-test", "extra_headers": {"X-Tenant": "tenant-a"}}, config_path=cfg_path
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers[auth_header] == "sk-test"
+        assert request.headers.get("X-Tenant") == "tenant-a"
+        return httpx.Response(200, json={"data": []})
+
+    assert probe_provider(provider, config_path=cfg_path, transport=_mock_transport(handler))["ok"] is True
+
+
 def test_test_provider_names_an_environment_proxy_that_is_not_listening(
     cfg_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1790,8 +1886,10 @@ def test_a_full_catalogue_asks_the_sibling_endpoints_a_probe_does_not(cfg_path: 
     """
     _seed_key(cfg_path, "openrouter", "sk-or-test")
     asked: list[str] = []
+    set_provider_fields("openrouter", {"extra_headers": {"X-Tenant": "tenant-a"}}, config_path=cfg_path)
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers.get("X-Tenant") == "tenant-a"
         asked.append(request.url.path)
         if request.url.path.endswith("/embeddings/models"):
             return httpx.Response(200, json={"data": [{"id": "voyageai/voyage-code-4"}]})
