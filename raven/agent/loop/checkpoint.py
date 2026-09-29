@@ -30,7 +30,15 @@ no-op (return ``None``) so the checkpoint layer can never break a turn.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextlib
+import os
+import shutil
+import subprocess
+import threading
+import time
 from pathlib import Path
+from typing import Collection
 
 from loguru import logger
 
@@ -136,6 +144,50 @@ _GC_EVERY_N_COMMITS = 50
 # fits comfortably; tight enough to detect a real hang within one turn.
 _GIT_TIMEOUT_SECONDS = 30.0
 
+# How long a command waits for the tree staged in front of it. Staging a tree
+# git has seen before is a stat walk (tens of milliseconds on a repo of a few
+# thousand files); the first one in a directory hashes and writes every file and
+# can take seconds. Past this the command is held back and the staging carries
+# on behind it, so the retry finds the index warm.
+_STAGE_WAIT_SECONDS = 6.0
+
+# The ceiling on a staging's ``git add``. Not ``_GIT_TIMEOUT_SECONDS``: that one
+# bounds a call something waits behind, and a staging runs on a thread nothing
+# waits behind past ``_STAGE_WAIT_SECONDS``. Killed at 30s, the first staging of
+# a large directory (tens of seconds while a turn's commit hashes the same tree)
+# was started over and killed again, and every command was held back for good.
+_STAGE_ADD_TIMEOUT_SECONDS = 600.0
+
+# A command's staging index left behind by a process that is gone. Age rather
+# than a liveness probe: asking whether a pid is alive terminates it on Windows.
+_STAGE_INDEX_STALE_SECONDS = 7 * 24 * 3600
+
+
+# The staging running on each index, across every service in this process: two
+# services for one directory share the index file, so they share its one run.
+_STAGING: dict[Path, "concurrent.futures.Future[str | None]"] = {}
+_STAGE_LOCKS: dict[Path, threading.Lock] = {}
+
+
+class StagingTimeoutError(Exception):
+    """The tree a command is to be measured against is still being staged."""
+
+
+async def _within(staging: "concurrent.futures.Future[str | None]", deadline: float) -> bool:
+    """Whether ``staging`` finished by ``deadline``, waited for without owning it.
+
+    Detached rather than awaited: a staging still running when the loop closes
+    must not hold the close up, and a cancelled waiter is what lets its late
+    result be dropped once the loop is gone.
+    """
+    waiter = asyncio.wrap_future(staging)
+    try:
+        done, _ = await asyncio.wait({waiter}, timeout=max(0.0, deadline - time.monotonic()))
+    finally:
+        if not waiter.done():
+            waiter.cancel()
+    return bool(done)
+
 
 class CheckpointService:
     """Shadow-git working-tree snapshots, one commit per turn."""
@@ -174,6 +226,15 @@ class CheckpointService:
         self._shadow_rel = shadow_dir
         self._ready = False
         self._commit_count = 0
+        self._stage_pruned = False
+        self._warmed = False
+
+    def covers(self, path: Path | str) -> bool:
+        """Whether ``path`` lies in the work-tree this repo snapshots."""
+        try:
+            return Path(path).expanduser().resolve().is_relative_to(self._workspace)
+        except OSError:
+            return False
 
     async def _git(self, *args: str) -> tuple[int, str, str]:
         """Run a git command against the shadow repo. Returns (rc, out, err).
@@ -183,6 +244,10 @@ class CheckpointService:
         without this, ``edited_files`` would land in the recovery prompt as
         ``"\\346\\265\\213"`` gibberish.
         """
+        rc, out, err = await self._run(args)
+        return rc, out.decode(errors="replace"), err.decode(errors="replace")
+
+    def _command(self, args: tuple[str, ...], index: Path | None) -> tuple[tuple[str, ...], dict[str, str] | None]:
         cmd = (
             "git",
             f"--git-dir={self._git_dir}",
@@ -191,16 +256,32 @@ class CheckpointService:
             "core.quotePath=false",
             *args,
         )
+        return cmd, None if index is None else {**os.environ, "GIT_INDEX_FILE": str(index)}
+
+    async def _run(
+        self,
+        args: tuple[str, ...],
+        *,
+        index: Path | None = None,
+        stdin: bytes | None = None,
+        timeout: float | None = None,
+    ) -> tuple[int, bytes, bytes]:
+        """``_git`` with the raw bytes, and optionally against another index."""
+        if timeout is None:
+            timeout = _GIT_TIMEOUT_SECONDS
+        cmd, env = self._command(args, index)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self._workspace),
+            env=env,
         )
         try:
             out, err = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=_GIT_TIMEOUT_SECONDS,
+                proc.communicate() if stdin is None else proc.communicate(stdin),
+                timeout=timeout,
             )
         except asyncio.TimeoutError:
             # NFS / index-lock / disk-full pathology: don't leak a zombie,
@@ -213,11 +294,11 @@ class CheckpointService:
                 pass
             logger.debug(
                 "checkpoint git timed out after {}s: {}",
-                _GIT_TIMEOUT_SECONDS,
+                timeout,
                 " ".join(args[:2]),
             )
-            return -1, "", "timeout"
-        return proc.returncode or 0, out.decode(errors="replace"), err.decode(errors="replace")
+            return -1, b"", b"timeout"
+        return proc.returncode or 0, out, err
 
     async def _ensure_init(self) -> bool:
         """Lazily initialize the shadow repo. Idempotent; returns readiness."""
@@ -305,6 +386,218 @@ class CheckpointService:
             logger.debug("checkpoint commit error: {}", exc)
             return None, []
 
+    async def stage_tree(self) -> str | None:
+        """The work-tree as it stands, as a tree id in the shadow repo.
+
+        Taken just before a command runs, so what the command changed can be
+        diffed afterwards against the contents it replaced -- a command names no
+        file it writes, and by the time it returns the old text is gone. Staged
+        into an index of its own: the per-turn commit reads the shared index as
+        "what the last turn left", and moving it here would make that commit miss
+        everything this turn did before the command. Nothing is committed; the
+        tree is only read back within the same call.
+
+        ``None`` when the tree cannot be staged at all (git failed), which costs
+        the call its diff and nothing else. :class:`StagingTimeoutError` when it is
+        still being staged after :data:`_STAGE_WAIT_SECONDS`: the caller is to
+        hold the command back rather than run it unmeasured, because a retry a
+        moment later finds it done. A staging already running -- the warm-up
+        :meth:`warm` started, or an earlier call's -- is waited for inside the
+        same budget and then followed by a fresh one, which is then a stat walk.
+        One that runs out of budget is left running rather than killed, because
+        what it has hashed is what makes the next one fast.
+        """
+        index = self._stage_path()
+        deadline = time.monotonic() + _STAGE_WAIT_SECONDS
+        # Started before this call, so its tree may predate what the calls in
+        # between wrote: waited out, never used. Waited for before the repo
+        # setup below, because a warm-up runs that same setup on its thread and
+        # two ``git config`` writes at once fail on the config lock.
+        earlier = _STAGING.get(index)
+        if earlier is not None and not earlier.done() and not await _within(earlier, deadline):
+            raise StagingTimeoutError
+        if not await self._ensure_init():
+            return None
+        self._prepare_index(index)
+        # One another caller started while this one waited is as fresh as a new
+        # one would be, and a second ``git add`` on the same index would only
+        # fail on its lock.
+        staging = _STAGING.get(index)
+        if staging is None or staging is earlier:
+            staging = self._start_stage(index)
+        if not await _within(staging, deadline):
+            raise StagingTimeoutError
+        return staging.result()
+
+    async def warm(self) -> None:
+        """Start a staging in the background, so the first command finds the index warm.
+
+        The first staging in a directory the shadow repo has never indexed hashes
+        every file in it, which on a large tree is seconds. Started when the turn
+        starts, it runs while the model writes its first reply instead of in front
+        of the command. Returns at once: the repo's own setup (``git init``, its
+        config, seeding the index) runs on the staging's thread too, so the turn
+        waits for none of it. Once per service, which is once per directory per
+        process: after that every command's own staging keeps the index warm, and
+        a warm-up would only repeat the stat walk the next command does.
+        """
+        if self._warmed:
+            return
+        self._warmed = True
+        index = self._stage_path()
+        running = _STAGING.get(index)
+        if running is not None and not running.done():
+            return
+        staging: concurrent.futures.Future[str | None] = concurrent.futures.Future()
+        _STAGING[index] = staging
+        threading.Thread(target=self._warm_up, args=(index, staging), name="raven-stage", daemon=True).start()
+
+    def _warm_up(self, index: Path, staging: "concurrent.futures.Future[str | None]") -> None:
+        # A loop of the thread's own for the repo setup: the turn's loop is not
+        # to wait on it, and one that closes while the setup is still starting a
+        # git process would hold its close up.
+        try:
+            ready = asyncio.run(self._ensure_init())
+        except Exception as exc:  # noqa: BLE001 -- a warm-up never breaks anything
+            logger.debug("checkpoint warm-up init error: {}", exc)
+            ready = False
+        if not ready:
+            staging.set_running_or_notify_cancel()
+            staging.set_result(None)
+            return
+        self._prepare_index(index)
+        self._stage(index, staging)
+
+    def _start_stage(self, index: Path) -> "concurrent.futures.Future[str | None]":
+        staging: concurrent.futures.Future[str | None] = concurrent.futures.Future()
+        _STAGING[index] = staging
+        threading.Thread(target=self._stage, args=(index, staging), name="raven-stage", daemon=True).start()
+        return staging
+
+    def _stage(self, index: Path, result: "concurrent.futures.Future[str | None]") -> None:
+        """``git add -A`` then ``git write-tree`` on the staging index, on a thread of its own.
+
+        A thread and blocking runs rather than asyncio subprocesses: a staging
+        outlives the call that started it whenever it is slow, and an asyncio
+        subprocess still starting when its loop closes holds the close up for
+        good (CPython 3.12, macOS). Both steps under one lock per index, because
+        ``write-tree`` writes the index back too and a second staging's ``add``
+        beside it fails on the index lock.
+        """
+        result.set_running_or_notify_cancel()
+        with _STAGE_LOCKS.setdefault(index, threading.Lock()):
+            if self._stage_step(("add", "-A"), index, timeout=_STAGE_ADD_TIMEOUT_SECONDS) is None:
+                result.set_result(None)
+                return
+            tree = self._stage_step(("write-tree",), index)
+        result.set_result(tree or None)
+
+    def _stage_step(self, args: tuple[str, ...], index: Path, *, timeout: float | None = None) -> str | None:
+        """One git step of a staging: its output, or ``None`` when it failed."""
+        if timeout is None:
+            timeout = _GIT_TIMEOUT_SECONDS
+        cmd, env = self._command(args, index)
+        try:
+            done = subprocess.run(
+                cmd,
+                cwd=str(self._workspace),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            logger.debug("checkpoint stage timed out after {}s: {}", timeout, " ".join(args))
+            # A killed git leaves the index lock behind, and every later stage
+            # would then fail on it. The index is this process's own and the
+            # stage lock is held, so no live git owns the lock.
+            with contextlib.suppress(OSError):
+                Path(f"{index}.lock").unlink()
+            return None
+        except OSError as exc:
+            logger.debug("checkpoint stage error: {}", exc)
+            return None
+        if done.returncode != 0:
+            logger.debug("checkpoint stage failed: {}", done.stderr.decode(errors="replace").strip())
+            return None
+        return done.stdout.decode(errors="replace").strip()
+
+    async def read_blobs(self, tree: str, paths: Collection[str], *, max_bytes: int) -> dict[str, bytes]:
+        """What each of ``paths`` held in ``tree``, keyed by the path as given.
+
+        A path is left out when the tree never had it (new, ignored, excluded),
+        when it lies outside the work-tree, or when it held more than
+        ``max_bytes`` -- a caller reads a missing key as "not known", never as
+        "empty".
+        """
+        rel_of: dict[str, str] = {}
+        for path in paths:
+            try:
+                rel = Path(path).resolve().relative_to(self._workspace).as_posix()
+            except (OSError, ValueError):
+                continue
+            if "\n" not in rel:
+                rel_of[path] = rel
+        if not rel_of:
+            return {}
+        wanted = list(rel_of.items())
+        query = "".join(f"{tree}:{rel}\n" for _, rel in wanted).encode()
+        rc, out, _ = await self._run(("cat-file", "--batch-check"), stdin=query)
+        lines = out.decode(errors="replace").splitlines()
+        if rc != 0 or len(lines) != len(wanted):
+            return {}
+        small: list[tuple[str, str]] = []
+        for (path, _), line in zip(wanted, lines):
+            parts = line.split()
+            if len(parts) == 3 and parts[1] == "blob" and parts[2].isdigit() and int(parts[2]) <= max_bytes:
+                small.append((path, parts[0]))
+        if not small:
+            return {}
+        rc, out, _ = await self._run(("cat-file", "--batch"), stdin="".join(f"{sha}\n" for _, sha in small).encode())
+        if rc != 0:
+            return {}
+        found: dict[str, bytes] = {}
+        at = 0
+        for path, _ in small:
+            end = out.find(b"\n", at)
+            if end < 0:
+                break
+            header = out[at:end].split()
+            if len(header) != 3 or not header[2].isdigit():
+                break
+            size = int(header[2])
+            found[path] = out[end + 1 : end + 1 + size]
+            at = end + 1 + size + 1
+        return found
+
+    def _stage_index(self) -> Path:
+        """This process's staging index, seeded from the shared one.
+
+        Per process because two processes can run commands in one directory and
+        an index is a single file. Seeded so a first staging finds git's stat
+        cache already warm from the last turn's commit instead of hashing the
+        whole tree again.
+        """
+        index = self._stage_path()
+        self._prepare_index(index)
+        return index
+
+    def _stage_path(self) -> Path:
+        return self._git_dir / f"exec-{os.getpid()}.index"
+
+    def _prepare_index(self, index: Path) -> None:
+        if not self._stage_pruned:
+            self._stage_pruned = True
+            now = time.time()
+            for other in self._git_dir.glob("exec-*.index"):
+                with contextlib.suppress(OSError):
+                    if now - other.stat().st_mtime > _STAGE_INDEX_STALE_SECONDS:
+                        other.unlink()
+        shared = self._git_dir / "index"
+        if not index.exists() and shared.exists():
+            with contextlib.suppress(OSError):
+                shutil.copyfile(shared, index)
+
     async def _maybe_gc(self) -> None:
         """Periodic ``git gc --auto`` so long-lived sessions don't accumulate
         loose objects forever. ``--auto`` is a no-op below ``gc.auto`` (256
@@ -326,4 +619,4 @@ class CheckpointService:
             logger.debug("checkpoint gc failed: {}", err.strip())
 
 
-__all__ = ["CheckpointService"]
+__all__ = ["CheckpointService", "StagingTimeoutError"]

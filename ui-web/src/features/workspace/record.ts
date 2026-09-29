@@ -132,33 +132,57 @@ function wsRecordRemoval(path: string, before?: string, lines?: number | null): 
    desk would list one file twice. The tool's account is the one that can say
    what changed, so the listing's row carries on under the tool's spelling
    instead -- keeping the verdict the listing is better placed to know, that
-   the file was new. Only a row the listing made is taken this way, which is
-   what carrying no hunk means; a removal's bare row is its own answer. */
+   the file was new. Only a row the listing made is taken this way; a
+   removal's bare row is its own answer. */
 function adoptListing(key: string): void {
   const WS = record()
   const row = WS.changes.find((x) => x.turn === WS.turn && x.key !== key
-    && !x.hunks.length && x.kind !== 'delete' && sameFile(x.key, key))
+    && x.listed && x.kind !== 'delete' && sameFile(x.key, key))
   if (!row) return
   const { dir, name } = labelFor(key)
   row.key = key
   row.dir = dir
   row.name = name
+  row.listed = false
 }
 
 /* What a command left behind, which no tool result names: the runtime lists the
    directory the turn's tools run in before and after an `exec` and reports the
-   difference. A listing knows a file is there, how big it is and whether it was
-   there before -- never how it changed -- so the row carries a count and no
-   hunk, and the desk sends a reader who opens it to the file itself.
+   difference. Where it also held the file's previous contents (the working
+   directory's shadow repo, staged just before the command) or the file is new,
+   it measured the change and sends the diff, and the row is drawn like any
+   other. Otherwise the row carries what it can -- the counts, or for a created
+   file its lines -- and no hunk, and the desk sends a reader who opens it to
+   the file itself.
 
-   A row this turn already holds for the path is left alone: it came from a file
-   tool, whose arguments say everything a listing cannot. */
+   A row this turn already holds for the path takes a measured change as one
+   more hunk, the way a second edit does: the diff was read against the file as
+   the earlier calls left it, so it is only what the command did. An unmeasured
+   one is dropped there -- it says nothing the row does not, and a row whose
+   change so far is unmeasured would read a partial count as the whole. */
 function wsRecordWritten(w: FileWritten): void {
   const WS = record()
   const key = String(w.path)
-  if (WS.changes.some((x) => x.turn === WS.turn && sameFile(x.key, key))) return
+  const hunk = w.diff ? hunks.fromUnified(w.diff) : null
+  const had = WS.changes.find((x) => x.turn === WS.turn && sameFile(x.key, key))
+  if (had) {
+    if (hunk && had.hunks.length && had.kind !== 'delete') {
+      had.hunks.push(hunk)
+      had.add += hunk.add
+      had.del += hunk.del
+    }
+    return
+  }
   const c = rowFor(key, w.created ? 'add' : 'write')
-  if (w.created) c.add = w.lines == null ? 0 : w.lines
+  c.listed = true
+  if (hunk) {
+    c.hunks.push(hunk)
+    c.add = hunk.add
+    c.del = hunk.del
+  } else if (w.added != null) {
+    c.add = w.added
+    c.del = w.removed == null ? 0 : w.removed
+  } else if (w.created) c.add = w.lines == null ? 0 : w.lines
 }
 
 /* ── tool-event hooks ──────────────────────────────────────────────────

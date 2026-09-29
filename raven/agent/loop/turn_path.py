@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
     _DELEGATED_KEY,
+    _EXEC_NOT_STAGED_REPLY,
+    _FILE_WRITTEN_TEXT_MAX_BYTES,
     _HOOK_INJECTED_KEY,
     _MAX_ITER_STATIC_FALLBACK,
     _MAX_ITER_SYNTHESIS_PROMPT,
@@ -82,6 +84,7 @@ from raven.agent.loop._shared import (
     uuid4,
     workdir,
 )
+from raven.agent.loop.checkpoint import StagingTimeoutError
 from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
@@ -103,6 +106,8 @@ from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.contracts.token_strategy import UsageSnapshot
     from raven.providers.base import ErrorClassification
@@ -305,6 +310,19 @@ class TurnPathMixin:
                 logger.warning("runtime.checkpoint disabled for {} -- {}", target, exc)
                 self._checkpoints[target] = None
         return self._checkpoints[target]
+
+    async def _exec_baseline(self, root: Path) -> "tuple[CheckpointService, str] | None":
+        """The tree a command's changes are read against, staged just before it runs.
+
+        Only where the turn's shadow repo covers the directory the command runs
+        in: a ``working_dir`` outside it has no copy of what its files held, and
+        a rewrite there is reported without a diff, as it always was.
+        """
+        repo = self._turn_checkpoint()
+        if repo is None or not repo.covers(root):
+            return None
+        tree = await repo.stage_tree()
+        return None if tree is None else (repo, tree)
 
     def _stash_recovery(self, session_key: str, outcome: "LoopOutcome") -> None:
         """Remember an interrupted turn's snapshot so the next turn in this
@@ -725,6 +743,10 @@ class TurnPathMixin:
         # files is seen. Per turn for the reason the counters above are: the loop
         # is a singleton and another session's turn is running beside this one.
         removal_watch = RemovalWatch()
+        # Behind the model's first reply rather than in front of the first
+        # command, and only on a directory's first turn: see CheckpointService.warm.
+        if self.tools.get("exec") is not None and (repo := self._turn_checkpoint()) is not None:
+            await repo.warm()
         # Empty-response recovery state, local to the turn — the AgentLoop is a
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
@@ -1301,6 +1323,7 @@ class TurnPathMixin:
                     # other call, which is what the empty diff of two Nones means.
                     exec_before: workdir_snapshot.Snapshot | None = None
                     exec_after: workdir_snapshot.Snapshot | None = None
+                    exec_baseline: tuple[CheckpointService, str] | None = None
                     tracker = self.strategies.get("usage_tracker")
                     if tracker is not None:
                         await tracker.record_tool_call(tool_call.name, tool_call.id)
@@ -1357,9 +1380,19 @@ class TurnPathMixin:
                         )
                         if exec_root is not None:
                             exec_before = await asyncio.to_thread(workdir_snapshot.take, exec_root)
-                        result = await self.tools.execute(
-                            tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
-                        )
+                        held_back = False
+                        if exec_before is not None:
+                            try:
+                                exec_baseline = await self._exec_baseline(exec_root)
+                            except StagingTimeoutError:
+                                held_back = True
+                                exec_before = None
+                        if held_back:
+                            result = _EXEC_NOT_STAGED_REPLY
+                        else:
+                            result = await self.tools.execute(
+                                tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
+                            )
                         duration_ms = int((time.monotonic() - tool_t0) * 1000)
                         if exec_before is not None:
                             exec_after = await asyncio.to_thread(workdir_snapshot.take, exec_root)
@@ -1411,15 +1444,26 @@ class TurnPathMixin:
                     if isinstance(getattr(tool_change, "path", None), str):
                         accounted.append(tool_change.path)
                     created, modified, deleted = workdir_snapshot.diff(exec_before, exec_after)
+                    # What the rewritten and removed files held when the command
+                    # started, from the tree staged in front of it: the listing
+                    # knows they changed, and this is what they changed from.
+                    exec_held: dict[str, bytes] = {}
+                    if exec_baseline is not None and (modified or deleted):
+                        baseline_repo, baseline_tree = exec_baseline
+                        exec_held = await baseline_repo.read_blobs(
+                            baseline_tree, [*modified, *deleted], max_bytes=_FILE_WRITTEN_TEXT_MAX_BYTES
+                        )
                     # Off the loop for the reason the walks above are: this reads
                     # every created file to number its lines, and one command can
                     # create hundreds. The removals stay here -- they read nothing.
                     tool_written = (
-                        await asyncio.to_thread(_file_written_payload, created, modified, exec_after, already=accounted)
+                        await asyncio.to_thread(
+                            _file_written_payload, created, modified, exec_after, already=accounted, before=exec_held
+                        )
                         if created or modified
                         else None
                     )
-                    tool_removed.extend(_listing_removals(deleted, already=accounted))
+                    tool_removed.extend(_listing_removals(deleted, already=accounted, before=exec_held))
                     if emit_tool_event:
                         await on_tool_event(
                             "complete",
