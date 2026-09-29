@@ -604,6 +604,7 @@ def _file_written_payload(
     *,
     already: Collection[str] = (),
     before: Mapping[str, bytes] | None = None,
+    shown: Collection[str] = (),
 ) -> list[dict[str, Any]] | None:
     """The files a command left behind, as plain mappings, or ``None`` for none.
 
@@ -615,18 +616,27 @@ def _file_written_payload(
     too large to read, or not text.
 
     ``before`` is what a rewritten file held when the command started, when the
-    shadow repo could say (see ``CheckpointService.stage_tree``). With it, and
-    for every created file, the entry also carries the change itself: ``added``
-    and ``removed`` line counts and a unified ``diff``. Without it a rewrite has
-    neither -- a number against contents nobody held would read as a change
-    somebody measured. The diffs share one budget per event, the way removals'
-    bodies do; past it the counts still go and the diff is dropped whole.
+    shadow repo could say (see ``CheckpointService.stage_tree``). With it the
+    entry also carries the change itself: ``added`` and ``removed`` line counts
+    and a unified ``diff``. Without it a rewrite has neither -- a number against
+    contents nobody held would read as a change somebody measured. The diffs
+    share one budget per event, the way removals' bodies do; past it the counts
+    still go and the diff is dropped whole.
+
+    A created file carries its counts, and its text as a diff only when it is in
+    ``shown``: the created paths the shadow repo would store
+    (``CheckpointService.trackable``). The rest -- a ``.env``, a key, anything
+    the user's ``.gitignore`` keeps out -- is exactly what the checkpoint keeps
+    out of storage, and a diff is stored with the conversation. A rewritten or
+    removed file needs no such check, because ``before`` only ever holds files
+    the repo stored.
 
     ``already`` are the paths this same call accounted for by name. The listing
     sees those too, and reporting one again would draw a single write twice.
     """
     accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
     held = before or {}
+    visible = set(shown)
     budget = _FILE_CHANGE_MAX_CHARS
     out: list[dict[str, Any]] = []
     for path, was_created in [*((path, True) for path in created), *((path, False) for path in modified)]:
@@ -644,6 +654,8 @@ def _file_written_payload(
         if text is not None and old is not None:
             diff, added, removed = _line_diff(old, text, os.path.basename(path))
             entry["added"], entry["removed"] = added, removed
+            if was_created and path not in visible:
+                diff = None
             if diff and len(diff) <= budget:
                 entry["diff"] = diff
                 budget -= len(diff)

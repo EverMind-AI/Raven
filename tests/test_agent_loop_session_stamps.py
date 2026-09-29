@@ -715,12 +715,59 @@ async def test_a_file_a_command_created_carries_its_diff(workspace):
     made = work / "made.txt"
 
     completes = await _run_command_turn(
-        workspace, work, _command_script(), _CommandTool(lambda: made.write_text("one\ntwo\n", encoding="utf-8"))
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: made.write_text("one\ntwo\n", encoding="utf-8")),
+        checkpoint=True,
     )
 
     written = completes[0]["file_written"]
     assert (written[0]["added"], written[0]["removed"], written[0]["lines"]) == (2, 0, 2)
     assert written[0]["diff"].splitlines()[2:] == ["@@ -0,0 +1,2 @@", "+one", "+two"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", [".env", "local.secret"])
+async def test_a_created_file_the_shadow_repo_would_not_store_carries_no_text(workspace, name):
+    """The checkpoint keeps credentials and whatever the user's .gitignore names
+    out of storage, and a diff is stored with the conversation. A command that
+    creates one of those files is reported with its counts and none of its text."""
+    work = workspace / "work"
+    work.mkdir()
+    (work / ".gitignore").write_text("*.secret\n", encoding="utf-8")
+    made = work / name
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: made.write_text("API_KEY=top-secret\n", encoding="utf-8")),
+        checkpoint=True,
+    )
+
+    written = completes[0]["file_written"]
+    assert len(written) == 1, written
+    assert "diff" not in written[0]
+    assert (written[0]["added"], written[0]["removed"]) == (1, 0)
+    assert "top-secret" not in json.dumps(_persisted_messages(workspace))
+
+
+@pytest.mark.asyncio
+async def test_a_created_file_carries_no_text_where_no_shadow_repo_can_vouch_for_it(workspace):
+    """Without the checkpoint there are no rules to say which files may be
+    stored, so a created file goes out with its counts only."""
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "made.txt"
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script(), _CommandTool(lambda: made.write_text("one\n", encoding="utf-8"))
+    )
+
+    written = completes[0]["file_written"]
+    assert "diff" not in written[0]
+    assert (written[0]["added"], written[0]["lines"]) == (1, 1)
 
 
 @pytest.mark.asyncio
@@ -1392,7 +1439,7 @@ def test_past_the_events_diff_budget_the_counts_still_go_and_the_diff_does_not(t
     second.write_text("three\nfour\n", encoding="utf-8")
     after = {str(p): (p.stat().st_size, 0) for p in (first, second)}
 
-    out = _shared._file_written_payload([str(first), str(second)], [], after)
+    out = _shared._file_written_payload([str(first), str(second)], [], after, shown=[str(first), str(second)])
 
     assert out is not None
     assert "diff" in out[0] and "diff" not in out[1]

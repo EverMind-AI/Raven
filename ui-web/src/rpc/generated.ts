@@ -246,7 +246,7 @@ export interface TranscriptFileRemoval {
   del: number;
 }
 /**
- * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before. What it changed from is known only when the working directory's shadow repo held a copy from just before the command; then, and for any created text file, the change rides along as counts and a unified diff.
+ * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before. What it changed from is known only when the working directory's shadow repo held a copy from just before the command; then the change rides along as counts and a unified diff. A created file carries its counts, and its text only when the shadow repo would store it: never for a file its excludes or the user's .gitignore keep out.
  */
 export interface FileWritten {
   /**

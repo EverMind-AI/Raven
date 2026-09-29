@@ -602,6 +602,35 @@ class CheckpointService:
             at = end + 1 + size + 1
         return found
 
+    async def trackable(self, paths: Collection[str]) -> set[str]:
+        """The subset of ``paths`` this repo would store, keyed by the path as given.
+
+        By the repo's own rules -- the default excludes (credentials, ``.env``,
+        keys) and the work-tree's ``.gitignore`` files -- judged on the rules
+        alone, not on what an index happens to hold. The boundary a command's
+        created files must respect before their contents go anywhere: the
+        checkpoint keeps an ignored file out of storage, so its text must not
+        reach a diff either. A path outside the work-tree is never trackable,
+        and when git cannot answer nothing is.
+        """
+        if not await self._ensure_init():
+            return set()
+        rel_of: dict[str, str] = {}
+        for path in paths:
+            try:
+                rel_of[path] = Path(path).resolve().relative_to(self._workspace).as_posix()
+            except (OSError, ValueError):
+                continue
+        if not rel_of:
+            return set()
+        query = "".join(f"{rel}\0" for rel in rel_of.values()).encode()
+        rc, out, _ = await self._run(("check-ignore", "--no-index", "-z", "--stdin"), stdin=query)
+        # 0: some are ignored, 1: none are; anything else is git failing to say.
+        if rc not in (0, 1):
+            return set()
+        ignored = set(out.decode(errors="replace").split("\0")) - {""}
+        return {path for path, rel in rel_of.items() if rel not in ignored}
+
     def _stage_path(self) -> Path:
         """This process's staging index.
 

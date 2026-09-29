@@ -1478,17 +1478,29 @@ class TurnPathMixin:
                     # started, from the tree staged in front of it: the listing
                     # knows they changed, and this is what they changed from.
                     exec_held: dict[str, bytes] = {}
-                    if exec_baseline is not None and (modified or deleted):
+                    exec_shown: set[str] = set()
+                    if exec_baseline is not None:
                         baseline_repo, baseline_tree = exec_baseline
-                        exec_held = await baseline_repo.read_blobs(
-                            baseline_tree, [*modified, *deleted], max_bytes=_FILE_WRITTEN_TEXT_MAX_BYTES
-                        )
+                        if modified or deleted:
+                            exec_held = await baseline_repo.read_blobs(
+                                baseline_tree, [*modified, *deleted], max_bytes=_FILE_WRITTEN_TEXT_MAX_BYTES
+                            )
+                        # A created file's text goes out only where the repo
+                        # would have stored it: see _file_written_payload.
+                        if created:
+                            exec_shown = await baseline_repo.trackable(created)
                     # Off the loop for the reason the walks above are: this reads
                     # every created file to number its lines, and one command can
                     # create hundreds. The removals stay here -- they read nothing.
                     tool_written = (
                         await asyncio.to_thread(
-                            _file_written_payload, created, modified, exec_after, already=accounted, before=exec_held
+                            _file_written_payload,
+                            created,
+                            modified,
+                            exec_after,
+                            already=accounted,
+                            before=exec_held,
+                            shown=exec_shown,
                         )
                         if created or modified
                         else None

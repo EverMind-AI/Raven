@@ -496,6 +496,41 @@ async def test_a_slow_first_staging_is_waited_out_inside_the_command(workspace, 
     assert time.monotonic() - started >= 0.5, "the command did not wait for the warm-up"
 
 
+async def test_trackable_follows_the_repos_own_exclusion_rules(workspace, tmp_path_factory):
+    """What a command's created files are checked against before their text
+    goes anywhere: the default excludes, the work-tree's .gitignore, and
+    nothing outside the work-tree."""
+    svc = CheckpointService(workspace)
+    (workspace / ".gitignore").write_text("build/\n", encoding="utf-8")
+    (workspace / "build").mkdir()
+    outside = tmp_path_factory.mktemp("outside") / "o.txt"
+    names = {
+        "plain": workspace / "notes.md",
+        "default exclude": workspace / ".env",
+        "key": workspace / "id_ed25519",
+        "user ignore": workspace / "build" / "out.js",
+        "outside": outside,
+    }
+    for path in names.values():
+        path.write_text("x\n", encoding="utf-8")
+
+    kept = await svc.trackable([str(path) for path in names.values()])
+
+    assert kept == {str(names["plain"])}
+
+
+async def test_trackable_vouches_for_nothing_when_git_cannot_answer(workspace, monkeypatch):
+    svc = CheckpointService(workspace)
+    (workspace / "notes.md").write_text("x\n", encoding="utf-8")
+    assert await svc.trackable([str(workspace / "notes.md")]) == {str(workspace / "notes.md")}
+
+    async def _broken(*_args, **_kwargs):
+        return 128, b"", b"fatal"
+
+    monkeypatch.setattr(svc, "_run", _broken)
+    assert await svc.trackable([str(workspace / "notes.md")]) == set()
+
+
 async def test_a_first_stage_starts_from_the_last_turns_index(workspace, monkeypatch):
     """The turn's commit has already hashed the tree into the shared index, and a
     staging index copied from it only has to stat what changed since. Started
