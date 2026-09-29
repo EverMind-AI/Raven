@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import tempfile
-import threading
 import time
 from pathlib import Path
 
@@ -32,11 +31,6 @@ from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 def workspace():
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
-        # A turn's warm-up stages the tree on a thread of its own; removing the
-        # directory under a git still writing into it fails the cleanup.
-        for thread in threading.enumerate():
-            if thread.name == "raven-stage":
-                thread.join(30)
 
 
 async def _run_turn_body(agent: AgentLoop, workspace: Path):
@@ -303,6 +297,40 @@ async def test_a_warm_up_returns_before_the_repo_is_even_set_up(workspace, monke
     assert time.monotonic() - started < 0.2
 
     assert await asyncio.wrap_future(cp_module._STAGING[svc._stage_path()]) is not None
+
+
+async def test_a_turn_that_ends_during_the_warm_up_still_commits(workspace, monkeypatch):
+    """A turn can end before its warm-up has set the repo up. Two setups at once
+    fail on the config lock, and the one that lost was the turn's commit -- so
+    the commit waits for the warm-up's setup instead of racing it."""
+    import threading
+
+    import raven.agent.loop.checkpoint as cp_module
+
+    real = CheckpointService._init_repo
+    active = [0]
+    overlap = [0]
+
+    async def _tracked(self) -> bool:
+        active[0] += 1
+        overlap[0] = max(overlap[0], active[0])
+        try:
+            if threading.current_thread().name == "raven-stage":
+                await asyncio.sleep(0.3)
+            return await real(self)
+        finally:
+            active[0] -= 1
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    monkeypatch.setattr(CheckpointService, "_init_repo", _tracked)
+    (workspace / "a.py").write_text("print(1)\n", encoding="utf-8")
+    svc = CheckpointService(workspace)
+
+    await svc.warm()
+    cid, changed = await svc.commit_turn("turn 1")
+
+    assert cid is not None and changed == ["a.py"]
+    assert overlap[0] == 1, "the commit's setup ran beside the warm-up's"
 
 
 async def test_a_directory_is_warmed_once_and_not_every_turn(workspace, monkeypatch):

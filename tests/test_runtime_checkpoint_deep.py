@@ -17,7 +17,6 @@ import asyncio
 import os
 import shutil
 import tempfile
-import threading
 from pathlib import Path
 
 import pytest
@@ -35,11 +34,6 @@ from raven.providers.base import LLMProvider, LLMResponse
 def workspace():
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
-        # A turn's warm-up stages the tree on a thread of its own; removing the
-        # directory under a git still writing into it fails the cleanup.
-        for thread in threading.enumerate():
-            if thread.name == "raven-stage":
-                thread.join(30)
 
 
 async def _run_turn_body(agent: AgentLoop, workspace: Path):

@@ -228,6 +228,7 @@ class CheckpointService:
         self._commit_count = 0
         self._stage_pruned = False
         self._warmed = False
+        self._initializing: concurrent.futures.Future[bool] | None = None
 
     def covers(self, path: Path | str) -> bool:
         """Whether ``path`` lies in the work-tree this repo snapshots."""
@@ -301,7 +302,28 @@ class CheckpointService:
         return proc.returncode or 0, out, err
 
     async def _ensure_init(self) -> bool:
-        """Lazily initialize the shadow repo. Idempotent; returns readiness."""
+        """Lazily initialize the shadow repo. Idempotent; returns readiness.
+
+        A warm-up runs this same setup on its own thread (:meth:`warm`), and two
+        at once fail on the repo's config lock -- which costs the turn its
+        commit when the turn ends before the warm-up's setup does. So a setup
+        already running is waited for, and repeated only if it did not succeed.
+        """
+        if self._ready:
+            return True
+        running = self._initializing
+        if running is not None and not running.done():
+            waiter = asyncio.wrap_future(running)
+            try:
+                await waiter
+            finally:
+                if not waiter.done():
+                    waiter.cancel()
+            if self._ready:
+                return True
+        return await self._init_repo()
+
+    async def _init_repo(self) -> bool:
         if self._ready:
             return True
         try:
@@ -450,17 +472,22 @@ class CheckpointService:
             return
         staging: concurrent.futures.Future[str | None] = concurrent.futures.Future()
         _STAGING[index] = staging
+        if not self._ready:
+            self._initializing = concurrent.futures.Future()
         threading.Thread(target=self._warm_up, args=(index, staging), name="raven-stage", daemon=True).start()
 
     def _warm_up(self, index: Path, staging: "concurrent.futures.Future[str | None]") -> None:
         # A loop of the thread's own for the repo setup: the turn's loop is not
         # to wait on it, and one that closes while the setup is still starting a
         # git process would hold its close up.
+        initializing = self._initializing
         try:
-            ready = asyncio.run(self._ensure_init())
+            ready = asyncio.run(self._init_repo())
         except Exception as exc:  # noqa: BLE001 -- a warm-up never breaks anything
             logger.debug("checkpoint warm-up init error: {}", exc)
             ready = False
+        if initializing is not None:
+            initializing.set_result(ready)
         if not ready:
             staging.set_running_or_notify_cancel()
             staging.set_result(None)

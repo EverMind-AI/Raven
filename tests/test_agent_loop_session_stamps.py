@@ -59,11 +59,6 @@ class StubProvider(LLMProvider):
 def workspace():
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
-        # A turn's warm-up stages the tree on a thread of its own; removing the
-        # directory under a git still writing into it fails the cleanup.
-        for thread in threading.enumerate():
-            if thread.name == "raven-stage":
-                thread.join(30)
 
 
 def _make_agent(workspace: Path) -> AgentLoop:
