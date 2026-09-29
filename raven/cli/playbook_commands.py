@@ -492,6 +492,8 @@ def playbook_run(
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
         exec_config=config.tools.exec,
+        restrict_to_workspace=config.tools.restrict_to_workspace,
+        sandbox_config=config.tools.sandbox,
         agents=config.subagents.agents,
         provider_pool=ProviderPool(config),
     )
@@ -876,13 +878,17 @@ def _stint_driver(config, home: Path):
     from raven.agent.subagent.manager import SubagentManager
     from raven.playbook.executor import PlaybookExecutor
     from raven.providers.factory import make_provider
+    from raven.providers.pool import ProviderPool
 
     manager = SubagentManager(
         provider=make_provider(config),
         workspace=config.workspace_path,
         model=config.agents.defaults.model,
         exec_config=config.tools.exec,
+        restrict_to_workspace=config.tools.restrict_to_workspace,
+        sandbox_config=config.tools.sandbox,
         agents=config.subagents.agents,
+        provider_pool=ProviderPool(config),
     )
     dag_tool = SubAgentDagTool(
         workspace=config.workspace_path,
