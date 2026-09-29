@@ -25,8 +25,10 @@ Resolve = Callable[[str, str, int], None]
 #: do not say how long theirs last get this.
 DEFAULT_TTL_S = 900
 
-#: The one attempt per provider that may be in flight. A second start while the
-#: first is polling would hand out a second code the first poller never sees.
+#: The newest attempt per provider. While its code is live, a second start
+#: answers with that code rather than minting one the first poller never sees.
+#: Once the code has expired a start mints another, and the attempt it replaces
+#: can still be winding down its poll.
 _PENDING: dict[str, asyncio.Task[Any]] = {}
 
 #: What each attempt in ``_PENDING`` answered, or will: its pair, and the
