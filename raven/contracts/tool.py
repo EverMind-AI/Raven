@@ -66,6 +66,31 @@ class FileRemoval:
     before: str | None = None
 
 
+@dataclass(frozen=True)
+class FileWrite:
+    """One file a command left behind, found by listing its directory either side.
+
+    A command reports its output and nothing else, so unlike a :class:`FileChange`
+    this is read off the disk rather than handed over by the call, and carries
+    no whole contents: one command can write a hundred files.
+
+    ``lines`` belongs to a created file alone; ``None`` there means unknown (too
+    large to read, or not text). ``added`` / ``removed`` and ``diff`` are the
+    change itself, present only when what the file held before is known -- a
+    count against contents nobody held would read as a change somebody measured.
+    ``diff`` can be absent beside the counts: a created file whose text must not
+    leave the machine, or a diff past the call's budget.
+    """
+
+    path: str
+    created: bool
+    size: int
+    lines: int | None = None
+    added: int | None = None
+    removed: int | None = None
+    diff: str | None = None
+
+
 #: What a call the model wrote beside a blocked one is told. Every loop that
 #: cancels siblings says this, and it has to be one string: it reaches the model,
 #: so two versions of it are two different instructions.
@@ -153,6 +178,9 @@ class ToolResult:
     vanish. No tool deletes as its purpose, so it is the shell tool that reports
     it, from what it saw on disk either side of the command; empty means nothing
     vanished, which is what every other tool reports.
+
+    ``written`` is what that same command created or rewrote, read the same way:
+    the files a command leaves behind, which its output never names.
     """
 
     model_text: str
@@ -172,6 +200,7 @@ class ToolResult:
     diff: str | None = None
     file_change: "FileChange | None" = None
     removed: tuple["FileRemoval", ...] = ()
+    written: tuple["FileWrite", ...] = ()
 
 
 class ToolOutput(str):
@@ -197,6 +226,7 @@ class ToolOutput(str):
     diff: str | None
     file_change: "FileChange | None"
     removed: tuple["FileRemoval", ...]
+    written: tuple["FileWrite", ...]
 
     def __new__(
         cls,
@@ -211,6 +241,7 @@ class ToolOutput(str):
         diff: str | None = None,
         file_change: "FileChange | None" = None,
         removed: tuple["FileRemoval", ...] = (),
+        written: tuple["FileWrite", ...] = (),
     ) -> "ToolOutput":
         out = super().__new__(cls, model_text)
         out.display_text = display_text
@@ -222,6 +253,7 @@ class ToolOutput(str):
         out.diff = diff
         out.file_change = file_change
         out.removed = removed
+        out.written = written
         return out
 
 
@@ -404,6 +436,7 @@ __all__ = [
     "Continuation",
     "FileChange",
     "FileRemoval",
+    "FileWrite",
     "ImagePart",
     "ImageURL",
     "RAW_ARGUMENTS_KEY",

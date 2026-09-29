@@ -77,6 +77,7 @@ LEDGER = {
         "ErrorClassification",
         "FileChange",
         "FileRemoval",
+        "FileWrite",
         "GenerationSettings",
         "ImagePart",
         "ImageURL",
@@ -284,7 +285,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("32", "fb1e11f70125b48da8751a0bdaf3bbba788075680a2d2366af6f95f76a76ded5")
+PINNED_CONTRACT_SURFACE = ("33", "a618f2a0a7c3c26949f982bae37a0a52583caff5bcaba28def32cc97a2c8e5ba")
 
 
 def _render(node) -> str:

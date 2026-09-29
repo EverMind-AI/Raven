@@ -145,8 +145,18 @@ export function fromUnified(lines: string | string[]): WsHunk {
   let del = 0
   let oldLine: number | null = null
   let newLine: number | null = null
-  const source = typeof lines === 'string' ? lines.split('\n') : lines
-  source.filter((line) => !/^(---|\+\+\+)( |$)/.test(String(line))).forEach((raw) => {
+  const source = (typeof lines === 'string' ? lines.split('\n') : lines).map(String)
+  /* A file header is the `---`/`+++` pair in front of a hunk, not any line that
+     starts that way: a removed line reading `-- note` is written `--- note`,
+     and matching on the prefix alone dropped it, row and count both. */
+  const header = new Set<number>()
+  source.forEach((line, i) => {
+    const next = source[i + 2]
+    if (/^--- /.test(line) && /^\+\+\+ /.test(source[i + 1] ?? '') && (next === undefined || next.startsWith('@@'))) {
+      header.add(i).add(i + 1)
+    }
+  })
+  source.filter((_, i) => !header.has(i)).forEach((raw) => {
     const line = String(raw)
     const header = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
     if (header) {

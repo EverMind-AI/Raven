@@ -298,7 +298,7 @@ export interface TranscriptFileRemoval {
   del: number;
 }
 /**
- * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before.
+ * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before. What it changed from is known only when the working directory's shadow repo held a copy from just before the command; then the change rides along as counts and a unified diff. A created file carries its counts, and its text only when the shadow repo would store it: never for a file its excludes or the user's .gitignore keep out.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FileWritten".
@@ -320,6 +320,18 @@ export interface FileWritten {
    * Lines in a created file, when it could be counted. Null, not absent: the key is always sent, and null says the count is unknown. Too large to read, not text, or a file that already existed, whose change therefore has no number.
    */
   lines?: number | null;
+  /**
+   * Lines the command added to the file. Absent when the change could not be measured: not text, too large, or a rewrite whose previous contents were never captured.
+   */
+  added?: number | null;
+  /**
+   * Lines the command removed from the file. Absent exactly when added is.
+   */
+  removed?: number | null;
+  /**
+   * Unified diff of the change, when it was measured and small enough to carry. Absent past the event's budget even when the counts are present: a partial diff reads as a smaller change than the one that happened.
+   */
+  diff?: string | null;
 }
 /**
  * Why a turn's transcript stops where it does.

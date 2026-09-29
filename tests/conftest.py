@@ -323,6 +323,20 @@ def _spent(started: _Clocks, now: _Clocks) -> tuple[float, float, float]:
     return wall, wall - cpu - queued_s, queued_s
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
+    """Let a checkpoint warm-up the test started finish before its fixtures go.
+
+    A turn stages its working directory into the shadow repo on a thread of its
+    own (``CheckpointService.warm``), and a fixture removing that directory
+    under a git still writing into it fails the cleanup. Ahead of the fixture
+    finalizers, which run in the default teardown after this one.
+    """
+    for thread in threading.enumerate():
+        if thread.name == "raven-stage":
+            thread.join(30)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
     item.stash[_CLOCKS] = _clocks()

@@ -934,6 +934,8 @@ class WiringMixin:
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
                 extra_allowed_dirs=(self.workspace,),
+                record_writes=True,
+                shadow=self._command_shadow,
             )
         )
         # The registry writer beside exec's machine channel, for the products

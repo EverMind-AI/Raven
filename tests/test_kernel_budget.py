@@ -251,6 +251,19 @@ lines of dataclass, two fields and their prose.
 
 Measured at 3,593.
 
+
+And once more, 3,620 -> 3,660 (2026-09-29), for ``FileWrite`` on the tool
+paper: the files a command created or rewrote, the other half of the record
+``FileRemoval`` started. The shell tool lists its directory either side of the
+command and, where the checkpoint's shadow repo covers it, reads what each file
+held from a tree staged just before; the paper only names what travels back --
+a path, whether it is new, its size, and the line counts and diff when the
+change could be measured -- and gives ``ToolResult`` and ``ToolOutput`` one
+``written`` tuple each, empty for every other call. 34 lines, a dataclass and
+its prose.
+
+Measured at 3,627.
+
 """
 
 from __future__ import annotations
@@ -261,7 +274,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_620
+CONTRACTS_LINE_CEILING = 3_660
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

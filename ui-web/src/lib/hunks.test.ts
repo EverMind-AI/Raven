@@ -57,6 +57,19 @@ describe('diff hunk builders', () => {
     expect(hunk.rows[40]).toEqual(['gap', ['line 41']])
   })
 
+  it('keeps a removed line that reads like a file header', () => {
+    const hunk = fromUnified([
+      '--- a/q.sql', '+++ b/q.sql', '@@ -1,2 +1,2 @@',
+      '--- old comment', '+++ new comment', ' select 1',
+    ])
+    expect([hunk.add, hunk.del]).toEqual([1, 1])
+    expect(hunk.rows.slice(1)).toEqual([
+      ['del', '-- old comment', 1, null],
+      ['add', '++ new comment', null, 1],
+      ['ctx', 'select 1', 2, 2],
+    ])
+  })
+
   it('drops file headers and numbers unified diff rows from the hunk header', () => {
     const hunk = fromUnified([
       '--- a/file', '+++ b/file', '@@ -2,2 +2,3 @@',

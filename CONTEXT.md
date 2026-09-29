@@ -566,7 +566,15 @@ _Avoid_: a fourth door -- a tool reaching the table any other way skips admissio
 A once-per-turn commit of the session workspace into a shadow git repo (separate from the
 user's `.git`), so an interrupted or failed turn can be rolled back. One `CheckpointService`
 per working directory, cached by `AgentLoop._turn_checkpoint()` and keyed on the directory
-the running turn is bound to.
+the running turn is bound to. The same repo also answers what a file an `exec` command
+rewrote or removed held before it. `ExecTool` holds it through `command_writes.ShadowTree`,
+handed in by the loop, and does the measuring itself: `ExecTool.warm` starts staging the tree
+in the background when a session opens on the directory (`session.create` /
+`session.resume`, or the first turn where a session opens without either), and every
+command stages it afresh inside its own call with `stage_tree`, into a per-process index of
+its own (never the index the turn commit reads), waiting up to 120s before the command is
+failed rather than run unmeasured. `read_blobs` reads the old contents back for the
+command's `file_written` diff and `file_removed` body.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
 **Empty-Response Recovery** (`agent/loop/recovery.py`):

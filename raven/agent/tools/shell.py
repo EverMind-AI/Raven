@@ -14,8 +14,19 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from raven.agent import workdir
-from raven.contracts.tool import STOP_RETRY_INSTRUCTION, Continuation, FileRemoval, Tool, ToolOutput, ToolResult
+from raven.agent.tools import command_writes
+from raven.contracts.tool import (
+    STOP_RETRY_INSTRUCTION,
+    Continuation,
+    FileRemoval,
+    FileWrite,
+    Tool,
+    ToolOutput,
+    ToolResult,
+)
 from raven.permissions.shell_policy import (
     _MAX_EMBEDDED_SHELL_DEPTH,
     _command_segments_with_separators,
@@ -46,9 +57,10 @@ class _UnmodelledExpansionError(Exception):
 class ExecTool(Tool):
     """Tool to execute shell commands."""
 
-    # Backstop above the 600s internal exec cap (``_MAX_TIMEOUT``); the
+    # Backstop above the 600s internal exec cap (``_MAX_TIMEOUT``) plus the
+    # 120s a command may wait for the tree it is measured against; the
     # executor's own timeout fires first, this only catches a wedged executor.
-    timeout_seconds = 660.0
+    timeout_seconds = 780.0
     approval_kind = "shell.exec"
 
     def __init__(
@@ -62,6 +74,8 @@ class ExecTool(Tool):
         extra_allowed_dirs: tuple[Path, ...] = (),
         *,
         follow_binding: bool = True,
+        record_writes: bool = False,
+        shadow: command_writes.ShadowFor | None = None,
     ):
         self._timeout = timeout
         self.working_dir = working_dir
@@ -76,6 +90,12 @@ class ExecTool(Tool):
         # convention as the filesystem tools). The main loop's ExecTool keeps
         # following the live binding as normal.
         self.follow_binding = follow_binding
+        # Whether a command's result says which files it created, rewrote and
+        # removed, read off its directory either side (``command_writes``); and
+        # the shadow repo that says what those files held, for their diffs.
+        # Off for a lane whose runner lists every call itself.
+        self.record_writes = record_writes
+        self._shadow = shadow
         self.path_append = path_append
         self._executor: SandboxExecutor = executor if executor is not None else DirectExecutor()
         if not self._executor.is_sandboxed:
@@ -103,6 +123,20 @@ class ExecTool(Tool):
     @property
     def name(self) -> str:
         return "exec"
+
+    async def warm(self, root: Path) -> None:
+        """Start staging ``root`` into the shadow repo, ahead of its first command.
+
+        The first staging of a directory hashes every file in it, which in a
+        large tree takes long enough to hold a command up; started as a session
+        opens, it runs while the user types and the model replies. Returns at
+        once, and does nothing where no shadow repo covers ``root``.
+        """
+        if not self.record_writes or self._shadow is None:
+            return
+        shadow = self._shadow(root)
+        if shadow is not None:
+            await shadow.warm()
 
     _MAX_TIMEOUT = 600
     _MAX_OUTPUT = 10_000
@@ -317,6 +351,13 @@ class ExecTool(Tool):
         # the result is gone, and one on another machine names paths that are
         # not this filesystem's.
         watched = self._removal_watch(command, cwd)
+        start: command_writes.Before | None = None
+        if self.record_writes:
+            try:
+                start = await command_writes.before(Path(cwd), self._shadow)
+            except TimeoutError:
+                logger.warning("exec not run: staging {} did not finish in time", cwd)
+                return ToolResult(model_text=command_writes.NOT_STAGED_REPLY, retryable=False, ok=False)
 
         env: dict[str, str] | None = None
         if self.path_append:
@@ -336,16 +377,17 @@ class ExecTool(Tool):
         except Exception as e:
             return f"Error executing command: {str(e)}"
         text = result.as_text(self._MAX_OUTPUT)
+        removed = tuple(
+            FileRemoval(path=path, before=before) for path, before in watched.items() if not os.path.exists(path)
+        )
+        written: tuple[FileWrite, ...] = ()
+        if start is not None:
+            written, listed = await command_writes.after(start, already=[removal.path for removal in removed])
+            removed += listed
         # The exit code is the verdict a config change, a security call or a
         # syntax error share, and the text a failing command produced is not
         # token-safe to classify from -- so the caller gets it structurally.
-        return ToolOutput(
-            text,
-            ok=result.exit_code == 0,
-            removed=tuple(
-                FileRemoval(path=path, before=before) for path, before in watched.items() if not os.path.exists(path)
-            ),
-        )
+        return ToolOutput(text, ok=result.exit_code == 0, removed=removed, written=written)
 
     def _removal_watch(self, command: str, cwd: str) -> dict[str, str | None]:
         """The files this command could remove, with the text they hold now.

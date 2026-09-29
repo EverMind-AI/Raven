@@ -1016,6 +1016,7 @@ class ToolRegistry:
                 diff = result.diff
                 file_change = result.file_change
                 removed = result.removed
+                written = result.written
             else:
                 model_text, display_text = str(result), None
                 retryable, blocks_call = True, False
@@ -1028,6 +1029,7 @@ class ToolRegistry:
                 # return is already a ToolOutput (exec) misses the unwrap above,
                 # and its removals would be dropped at this boundary.
                 removed = tuple(getattr(result, "removed", ()) or ())
+                written = tuple(getattr(result, "written", ()) or ())
             # Remembered once the verdict is in, and only when it is good. A
             # rule that asks for a prior ``read_file`` is asking whether the
             # file was read; a read that errored read nothing, and letting it
@@ -1052,6 +1054,9 @@ class ToolRegistry:
                 #
                 # An error also replaces the result, so any blocks it came with
                 # are no longer what the model should be looking at.
+                #
+                # What the call did to the disk is kept: a command whose output
+                # happens to begin with the word still removed and wrote what it did.
                 suffix = _hint if retryable else ""
                 return ToolOutput(
                     model_text + suffix,
@@ -1060,6 +1065,8 @@ class ToolRegistry:
                     blocks_call=blocks_call,
                     continuation=continuation,
                     ok=False,
+                    removed=removed,
+                    written=written,
                 )
             return ToolOutput(
                 model_text,
@@ -1072,6 +1079,7 @@ class ToolRegistry:
                 diff=diff,
                 file_change=file_change,
                 removed=removed,
+                written=written,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint

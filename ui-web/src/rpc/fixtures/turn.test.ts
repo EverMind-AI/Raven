@@ -41,7 +41,10 @@ describe('the frames a scripted turn pushes', () => {
       .filter((e) => e?.type === 'tool.complete' && e.payload?.file_written)
       .map((e) => (e!.payload as unknown as ToolCompleteEvent['payload']).file_written)
     expect(written).toEqual([[
-      { path: '~/work/raven/research/tally.txt', created: true, size: 96, lines: 4 },
+      {
+        path: '~/work/raven/research/tally.txt', created: true, size: 89, lines: 4, added: 4, removed: 0,
+        diff: '--- tally.txt\n+++ tally.txt\n@@ -0,0 +1,4 @@\n+vendor     leads  replies\n+Clay       1240   88\n+Apollo     980    61\n+Unify      410    37',
+      },
       { path: '~/work/raven/research/run.log', created: false, size: 412, lines: null },
     ]])
   })

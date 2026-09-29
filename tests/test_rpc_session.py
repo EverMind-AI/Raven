@@ -351,6 +351,88 @@ async def test_session_create_reports_where_the_new_session_will_run(
     assert result["info"]["cwd"] == str(expected)
 
 
+def _warming_loop(tmp_path: Path, warmed: list[Path], *, fail: bool = False, exec_tool: bool = True) -> SimpleNamespace:
+    """The resolver stand-in with a command tool whose warm-up a session open calls.
+
+    Each warm-up records the directory it was handed, so a test can tell it
+    covered the directory the session will actually work in."""
+    loop = _loop_with_resolver(tmp_path)
+    loop.sessions = SessionManager(tmp_path)
+    # Resolved through the manager the open writes the override into, as the real loop is.
+    resolver = WorkdirResolver(WorkdirPolicy.PER_CHANNEL, agent_home=tmp_path / "home", sessions=loop.sessions)
+    loop.peek_session_workdir = lambda key: resolver.resolve(key, create=False)
+
+    async def warm(target: Path) -> None:
+        warmed.append(target)
+        if fail:
+            raise RuntimeError("git is gone")
+
+    command = SimpleNamespace(warm=warm)
+    loop.tools = SimpleNamespace(tool_names=[], get=lambda name: command if exec_tool and name == "exec" else None)
+    return loop
+
+
+async def test_opening_a_session_warms_the_directory_it_will_work_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first command of a session would otherwise hash a large tree inside
+    its own call. A new session warms its directory as it opens, after a
+    requested workdir has become the session's, so the warm-up covers it."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    pinned = tmp_path / "project"
+    pinned.mkdir()
+    warmed: list[Path] = []
+    loop = _warming_loop(tmp_path, warmed)
+    monkeypatch.setattr(session_module, "manager_for", lambda *_: loop.sessions)
+
+    await session_create({"workdir": str(pinned)}, agent_loop_factory=lambda: loop)
+
+    assert warmed == [pinned.resolve()]
+
+
+async def test_resuming_a_session_warms_its_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    warmed: list[Path] = []
+    loop = _warming_loop(tmp_path, warmed)
+    session_key = "tui:20260929_120000_warm"
+    stored = loop.sessions.get_or_create(session_key)
+    stored.add_message("user", "hello")
+    loop.sessions.save(stored)
+    expected = loop.peek_session_workdir(session_key)
+    expected.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(session_module, "manager_for", lambda *_: loop.sessions)
+
+    await session_resume({"session_id": session_key}, agent_loop_factory=lambda: loop)
+
+    assert warmed == [expected]
+
+
+@pytest.mark.parametrize("fail", [True, False], ids=["warm-up raises", "no command tool"])
+async def test_a_warm_up_that_cannot_run_does_not_fail_the_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    """A warm-up is best-effort: without it the first command stages the tree
+    itself, so a broken one -- or a loop with no command to warm for -- must
+    not cost the user the session."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    pinned = tmp_path / "project"
+    pinned.mkdir()
+    warmed: list[Path] = []
+    loop = _warming_loop(tmp_path, warmed, fail=fail, exec_tool=fail)
+    monkeypatch.setattr(session_module, "manager_for", lambda *_: loop.sessions)
+
+    result = await session_create({"workdir": str(pinned)}, agent_loop_factory=lambda: loop)
+
+    assert result["session_id"].startswith("tui:")
+    assert warmed == ([pinned.resolve()] if fail else [])
+
+
 async def test_session_resume_keeps_the_launch_dir_with_no_loop_to_ask(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
