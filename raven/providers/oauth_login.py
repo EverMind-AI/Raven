@@ -25,14 +25,15 @@ Resolve = Callable[[str, str, int], None]
 #: do not say how long theirs last get this.
 DEFAULT_TTL_S = 900
 
-#: The newest attempt per provider. While its code is live, a second start
-#: answers with that code rather than minting one the first poller never sees.
-#: Once the code has expired a start mints another, and the attempt it replaces
-#: can still be winding down its poll.
+#: The newest attempt per provider, until it ends. While it runs and its code
+#: is still valid, a second start answers with that code rather than minting
+#: one the first poller never sees. Once the code has expired a start mints
+#: another, and the attempt it replaces can still be winding down its poll.
 _PENDING: dict[str, asyncio.Task[Any]] = {}
 
 #: What each attempt in ``_PENDING`` answered, or will: its pair, and the
-#: monotonic instant its code stops being valid. A second start answers with it.
+#: monotonic instant its code stops being valid. A second start that reuses
+#: the attempt answers with it.
 _HANDOFFS: dict[str, asyncio.Future[tuple[dict[str, str], float]]] = {}
 
 #: The handoff wait: how long the vendor gets to answer the device-code request
@@ -124,9 +125,10 @@ def pending() -> dict[str, asyncio.Task[Any]]:
 async def start(slug: str) -> dict[str, Any]:
     """Begin ``slug``'s device flow; answer with the pair once the vendor has it.
 
-    A start while one is already polling answers with that one's pair and the
-    time its code has left: a second click is a reader who lost the vendor's
-    tab, and a refusal left the page showing a code it had stopped watching.
+    A start while one is already polling and its code is still valid answers
+    with that one's pair and the time the code has left: a second click is a
+    reader who lost the vendor's tab, and a refusal left the page showing a
+    code it had stopped watching.
 
     Raises ``LookupError`` for a provider with no device flow, and whatever the
     vendor raised when the code could not be requested.
