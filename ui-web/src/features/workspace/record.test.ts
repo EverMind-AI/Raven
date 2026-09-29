@@ -506,6 +506,19 @@ describe('recording the files a command left behind', () => {
 
   /* Past the event's budget the diff is dropped and the counts still arrive:
      the row says how big the change was even with no patch to open. */
+  /* The runtime measured the change; the patch is for drawing. Where the two
+     disagree the runtime's numbers are the ones shown. */
+  it('shows the runtime\'s counts over ones re-read from the patch', () => {
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined, [{
+      path: '/w/log.json', created: false, size: 12, lines: null, added: 5, removed: 4,
+      diff: '--- log.json\n+++ log.json\n@@ -1,2 +1,2 @@\n a\n-b\n+B',
+    }])
+
+    const row = rowFor('/w/log.json')
+    expect(row?.hunks).toHaveLength(1)
+    expect([row?.add, row?.del]).toEqual([5, 4])
+  })
+
   it('carries the counts of a measured change that came without its diff', () => {
     wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined,
       [{ path: '/w/log.json', created: false, size: 12, lines: null, added: 40, removed: 7 }])

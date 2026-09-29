@@ -745,8 +745,10 @@ class TurnPathMixin:
         removal_watch = RemovalWatch()
         # Behind the model's first reply rather than in front of the first
         # command, and only on a directory's first turn: see CheckpointService.warm.
-        if self.tools.get("exec") is not None and (repo := self._turn_checkpoint()) is not None:
-            await repo.warm()
+        if (repo := self._turn_checkpoint()) is not None:
+            repo.note_write()
+            if self.tools.get("exec") is not None:
+                await repo.warm()
         # Empty-response recovery state, local to the turn — the AgentLoop is a
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
@@ -1387,12 +1389,18 @@ class TurnPathMixin:
                             except StagingTimeoutError:
                                 held_back = True
                                 exec_before = None
+                                logger.info("exec held back: {} is still being snapshotted", exec_root)
                         if held_back:
                             result = _EXEC_NOT_STAGED_REPLY
                         else:
                             result = await self.tools.execute(
                                 tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
                             )
+                            # Any tool may have written into the working
+                            # directory, so no staging from before it is a later
+                            # command's baseline.
+                            if (repo := self._turn_checkpoint()) is not None:
+                                repo.note_write()
                         duration_ms = int((time.monotonic() - tool_t0) * 1000)
                         if exec_before is not None:
                             exec_after = await asyncio.to_thread(workdir_snapshot.take, exec_root)

@@ -164,24 +164,25 @@ function wsRecordWritten(w: FileWritten): void {
   const WS = record()
   const key = String(w.path)
   const hunk = w.diff ? hunks.fromUnified(w.diff) : null
+  /* The runtime's own counts when it sent them: it measured the change, and a
+     number re-read off the patch text is a second source for the same fact. */
+  const add = w.added ?? hunk?.add ?? null
+  const del = w.removed ?? hunk?.del ?? null
   const had = WS.changes.find((x) => x.turn === WS.turn && sameFile(x.key, key))
   if (had) {
     if (hunk && had.hunks.length && had.kind !== 'delete') {
       had.hunks.push(hunk)
-      had.add += hunk.add
-      had.del += hunk.del
+      had.add += add ?? 0
+      had.del += del ?? 0
     }
     return
   }
   const c = rowFor(key, w.created ? 'add' : 'write')
   c.listed = true
-  if (hunk) {
-    c.hunks.push(hunk)
-    c.add = hunk.add
-    c.del = hunk.del
-  } else if (w.added != null) {
-    c.add = w.added
-    c.del = w.removed == null ? 0 : w.removed
+  if (hunk) c.hunks.push(hunk)
+  if (add != null) {
+    c.add = add
+    c.del = del ?? 0
   } else if (w.created) c.add = w.lines == null ? 0 : w.lines
 }
 

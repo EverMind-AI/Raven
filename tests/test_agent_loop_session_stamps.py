@@ -930,6 +930,78 @@ async def test_a_command_is_held_back_until_the_snapshot_is_ready(workspace, mon
 
 
 @pytest.mark.asyncio
+async def test_a_file_saved_between_turns_is_not_counted_as_the_commands_change(workspace):
+    """A staging from an earlier turn is reused only while nothing has written
+    since; a new turn counts as a write, because the user may have saved files
+    in between. Reused across the gap, the command would be shown the user's
+    edit as its own."""
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+
+    await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: kept.write_text("one\ntwo\n", encoding="utf-8")),
+        checkpoint=True,
+    )
+    kept.write_text("one\ntwo\nsaved by the user\n", encoding="utf-8")
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: kept.write_text("one\ntwo\nsaved by the user\ncmd\n", encoding="utf-8")),
+        checkpoint=True,
+    )
+
+    written = completes[0]["file_written"]
+    assert (written[0]["added"], written[0]["removed"]) == (1, 0), written
+
+
+@pytest.mark.asyncio
+async def test_a_warm_up_from_a_turn_that_ran_nothing_is_not_reused_after_the_user_saves(workspace):
+    """One loop, two turns. The first only answers, so its warm-up is the latest
+    staging and no tool call has marked a write since. The user then saves a
+    file. Without the new turn counting as a write, the second turn's command
+    would be measured against the warm-up and shown the user's edit as its own."""
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+    script = [
+        LLMResponse(content="nothing to run", finish_reason="stop"),
+        *_command_script(),
+    ]
+    agent = AgentLoop(
+        provider=ScriptedProvider(script),
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4, interactive=False),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always"))),
+    )
+    agent.tools.register(_CommandTool(lambda: kept.write_text("one\nsaved by the user\ncmd\n", encoding="utf-8")))
+    completes: list[dict[str, Any]] = []
+
+    async def on_tool_event(phase: str, info: dict[str, Any]) -> None:
+        if phase == "complete":
+            completes.append(info)
+
+    with workdir.bind(work):
+        await agent._process_message(_make_msg("just answer"), on_tool_event=on_tool_event)
+        for thread in threading.enumerate():
+            if thread.name == "raven-stage":
+                thread.join(30)
+        kept.write_text("one\nsaved by the user\n", encoding="utf-8")
+        await agent._process_message(_make_msg("run it"), on_tool_event=on_tool_event)
+
+    written = completes[0]["file_written"]
+    assert (written[0]["added"], written[0]["removed"]) == (1, 0), written
+
+
+@pytest.mark.asyncio
 async def test_a_command_outside_the_shadow_repo_is_reported_without_a_diff(workspace):
     """``working_dir`` can point anywhere, and the turn's shadow repo only holds
     its own directory. Out there a rewrite is reported bare, as it always was,

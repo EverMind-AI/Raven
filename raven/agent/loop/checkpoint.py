@@ -137,11 +137,12 @@ Thumbs.db
 _GC_EVERY_N_COMMITS = 50
 
 
-# Upper bound on any single git subprocess. Without this, an NFS lock, a
-# held ``.git/index.lock``, or a full disk could hang ``communicate()``
-# indefinitely and brick the agent loop — violating this service's
-# "never break a turn" contract. Generous enough that normal cold-init
-# fits comfortably; tight enough to detect a real hang within one turn.
+# Upper bound on a git subprocess the turn waits behind (a staging's ``git add``
+# runs on a thread nothing waits behind and has its own, below). Without this,
+# an NFS lock, a held ``.git/index.lock``, or a full disk could hang
+# ``communicate()`` indefinitely and brick the agent loop — violating this
+# service's "never break a turn" contract. Generous enough that normal
+# cold-init fits comfortably; tight enough to detect a real hang within one turn.
 _GIT_TIMEOUT_SECONDS = 30.0
 
 # How long a command waits for the tree staged in front of it. Staging a tree
@@ -166,6 +167,12 @@ _STAGE_INDEX_STALE_SECONDS = 7 * 24 * 3600
 # The staging running on each index, across every service in this process: two
 # services for one directory share the index file, so they share its one run.
 _STAGING: dict[Path, "concurrent.futures.Future[str | None]"] = {}
+# When that staging started, and when anything was last known to write into the
+# directory an index covers (``note_write``), on the same monotonic clock. A
+# staging that started after the last write holds what a command about to run
+# would change, whether it is still running or long done.
+_STAGE_STARTED: dict[Path, float] = {}
+_WRITTEN_AT: dict[Path, float] = {}
 _STAGE_LOCKS: dict[Path, threading.Lock] = {}
 
 
@@ -420,36 +427,52 @@ class CheckpointService:
         tree is only read back within the same call.
 
         ``None`` when the tree cannot be staged at all (git failed), which costs
-        the call its diff and nothing else. :class:`StagingTimeoutError` when it is
-        still being staged after :data:`_STAGE_WAIT_SECONDS`: the caller is to
-        hold the command back rather than run it unmeasured, because a retry a
-        moment later finds it done. A staging already running -- the warm-up
-        :meth:`warm` started, or an earlier call's -- is waited for inside the
-        same budget and then followed by a fresh one, which is then a stat walk.
-        One that runs out of budget is left running rather than killed, because
-        what it has hashed is what makes the next one fast.
+        the call its diff and nothing else. :class:`StagingTimeoutError` when it
+        is still being staged after :data:`_STAGE_WAIT_SECONDS`: the caller is
+        to hold the command back rather than run it unmeasured. The staging is
+        left running rather than killed, and the retry waits for that same one
+        -- nothing has written since it began -- so a staging of any length is
+        waited out by retries instead of being started over by each of them.
+
+        The latest staging is reused whenever it started after the last write
+        (:meth:`note_write`): the warm-up for the turn's first command, the one
+        a held-back command left running for its retry. Only a staging that may
+        predate a write is replaced, and then the one running is waited out
+        first, because a warm-up runs the repo setup on its thread and two
+        ``git config`` writes at once fail on the config lock.
         """
         index = self._stage_path()
         deadline = time.monotonic() + _STAGE_WAIT_SECONDS
-        # Started before this call, so its tree may predate what the calls in
-        # between wrote: waited out, never used. Waited for before the repo
-        # setup below, because a warm-up runs that same setup on its thread and
-        # two ``git config`` writes at once fail on the config lock.
-        earlier = _STAGING.get(index)
-        if earlier is not None and not earlier.done() and not await _within(earlier, deadline):
-            raise StagingTimeoutError
-        if not await self._ensure_init():
-            return None
-        self._prepare_index(index)
-        # One another caller started while this one waited is as fresh as a new
-        # one would be, and a second ``git add`` on the same index would only
-        # fail on its lock.
-        staging = _STAGING.get(index)
-        if staging is None or staging is earlier:
-            staging = self._start_stage(index)
+        staging = self._current_staging(index)
+        if staging is None:
+            earlier = _STAGING.get(index)
+            if earlier is not None and not earlier.done() and not await _within(earlier, deadline):
+                raise StagingTimeoutError
+            if not await self._ensure_init():
+                return None
+            self._prepare_index(index)
+            # One another caller started while this one waited is as fresh as
+            # a new one would be, and a second ``git add`` on the same index
+            # would only queue behind it.
+            staging = self._current_staging(index) or self._start_stage(index)
         if not await _within(staging, deadline):
             raise StagingTimeoutError
         return staging.result()
+
+    def note_write(self) -> None:
+        """Say that something may just have written into the work-tree.
+
+        Called after every tool call and at the start of every turn -- a file
+        the user saved between two messages is as much a write as a command's.
+        A staging older than the last write is no command's baseline.
+        """
+        _WRITTEN_AT[self._stage_path()] = time.monotonic()
+
+    def _current_staging(self, index: Path) -> "concurrent.futures.Future[str | None] | None":
+        staging = _STAGING.get(index)
+        if staging is None or _STAGE_STARTED.get(index, 0.0) < _WRITTEN_AT.get(index, 0.0):
+            return None
+        return staging
 
     async def warm(self) -> None:
         """Start a staging in the background, so the first command finds the index warm.
@@ -470,8 +493,7 @@ class CheckpointService:
         running = _STAGING.get(index)
         if running is not None and not running.done():
             return
-        staging: concurrent.futures.Future[str | None] = concurrent.futures.Future()
-        _STAGING[index] = staging
+        staging = self._register_stage(index)
         if not self._ready:
             self._initializing = concurrent.futures.Future()
         threading.Thread(target=self._warm_up, args=(index, staging), name="raven-stage", daemon=True).start()
@@ -489,16 +511,26 @@ class CheckpointService:
         if initializing is not None:
             initializing.set_result(ready)
         if not ready:
-            staging.set_running_or_notify_cancel()
             staging.set_result(None)
             return
         self._prepare_index(index)
         self._stage(index, staging)
 
     def _start_stage(self, index: Path) -> "concurrent.futures.Future[str | None]":
-        staging: concurrent.futures.Future[str | None] = concurrent.futures.Future()
-        _STAGING[index] = staging
+        staging = self._register_stage(index)
         threading.Thread(target=self._stage, args=(index, staging), name="raven-stage", daemon=True).start()
+        return staging
+
+    @staticmethod
+    def _register_stage(index: Path) -> "concurrent.futures.Future[str | None]":
+        staging: concurrent.futures.Future[str | None] = concurrent.futures.Future()
+        # Running from the start, so a waiter that gives up and cancels its
+        # wrapper cannot cancel the staging itself: the warm-up sets its repo up
+        # before it stages, and a staging cancelled in that window lost its
+        # result and handed every later reuser a CancelledError.
+        staging.set_running_or_notify_cancel()
+        _STAGING[index] = staging
+        _STAGE_STARTED[index] = time.monotonic()
         return staging
 
     def _stage(self, index: Path, result: "concurrent.futures.Future[str | None]") -> None:
@@ -511,7 +543,6 @@ class CheckpointService:
         ``write-tree`` writes the index back too and a second staging's ``add``
         beside it fails on the index lock.
         """
-        result.set_running_or_notify_cancel()
         with _STAGE_LOCKS.setdefault(index, threading.Lock()):
             if self._stage_step(("add", "-A"), index, timeout=_STAGE_ADD_TIMEOUT_SECONDS) is None:
                 result.set_result(None)
@@ -597,19 +628,14 @@ class CheckpointService:
             at = end + 1 + size + 1
         return found
 
-    def _stage_index(self) -> Path:
-        """This process's staging index, seeded from the shared one.
+    def _stage_path(self) -> Path:
+        """This process's staging index.
 
         Per process because two processes can run commands in one directory and
-        an index is a single file. Seeded so a first staging finds git's stat
-        cache already warm from the last turn's commit instead of hashing the
-        whole tree again.
+        an index is a single file. Seeded from the shared one (``_prepare_index``)
+        so a first staging finds git's stat cache already warm from the last
+        turn's commit instead of hashing the whole tree again.
         """
-        index = self._stage_path()
-        self._prepare_index(index)
-        return index
-
-    def _stage_path(self) -> Path:
         return self._git_dir / f"exec-{os.getpid()}.index"
 
     def _prepare_index(self, index: Path) -> None:

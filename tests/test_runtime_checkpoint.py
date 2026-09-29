@@ -143,6 +143,7 @@ async def test_a_stale_staging_index_is_pruned_and_a_fresh_one_kept(workspace):
     os.utime(stale, (old, old))
 
     again = CheckpointService(workspace)
+    again.note_write()
     assert await again.stage_tree() is not None
 
     assert not stale.exists()
@@ -169,10 +170,12 @@ async def test_a_stage_that_timed_out_leaves_no_lock_behind(workspace, monkeypat
         raise subprocess.TimeoutExpired(cmd, 0.05)
 
     monkeypatch.setattr(cp_module.subprocess, "run", _killed)
+    svc.note_write()
     assert await svc.stage_tree() is None
     assert not lock.exists()
 
     monkeypatch.setattr(cp_module.subprocess, "run", real)
+    svc.note_write()
     assert await svc.stage_tree() is not None
 
 
@@ -217,8 +220,9 @@ async def test_a_slow_first_stage_is_left_to_warm_the_index_behind_the_command(w
 
 async def test_a_stage_waits_out_the_warm_up_and_stages_again(workspace, monkeypatch):
     """The warm-up started with the turn may still be running when the first
-    command arrives. Its tree was taken before whatever the turn has done since,
-    so it is waited for and never used; the staging after it is the one read."""
+    command arrives. When a tool call has written since it began, its tree may
+    miss that write, so it is waited for and never used; the staging after it
+    is the one read."""
     import subprocess
 
     import raven.agent.loop.checkpoint as cp_module
@@ -240,6 +244,7 @@ async def test_a_stage_waits_out_the_warm_up_and_stages_again(workspace, monkeyp
 
     await svc.warm()
     (workspace / "a.txt").write_text("changed while warming\n", encoding="utf-8")
+    svc.note_write()
     tree = await svc.stage_tree()
 
     assert tree is not None
@@ -362,9 +367,9 @@ async def test_a_directory_is_warmed_once_and_not_every_turn(workspace, monkeypa
 
 
 async def test_two_commands_waiting_on_one_warm_up_share_the_staging_after_it(workspace, monkeypatch):
-    """Two sessions in one directory both find the warm-up running. The first to
-    wake starts the next staging; the second takes that one rather than starting
-    a third ``git add`` on the same index, which would fail on its lock."""
+    """Two sessions in one directory both find a warm-up running that a write has
+    made stale. The first to wake starts the next staging; the second takes that
+    one rather than starting a third ``git add`` on the same index."""
     import asyncio
     import subprocess
 
@@ -386,6 +391,7 @@ async def test_two_commands_waiting_on_one_warm_up_share_the_staging_after_it(wo
     monkeypatch.setattr(cp_module.subprocess, "run", _count)
 
     await svc.warm()
+    svc.note_write()
     first, second = await asyncio.gather(svc.stage_tree(), CheckpointService(workspace).stage_tree())
 
     assert first is not None and second is not None
@@ -414,6 +420,131 @@ async def test_a_slow_first_staging_is_not_cut_off_at_the_git_call_ceiling(works
 
     assert ceilings == [cp_module._STAGE_ADD_TIMEOUT_SECONDS]
     assert ceilings[0] > cp_module._GIT_TIMEOUT_SECONDS * 10
+
+
+async def test_retries_wait_out_a_staging_slower_than_the_budget(workspace, monkeypatch):
+    """A tree whose every staging takes longer than a command waits. Each retry
+    waits for the staging the refused call left running -- nothing has written
+    since it began -- instead of starting an equally slow one, so every command
+    runs within a retry or two however slow the tree, rather than being refused
+    for good."""
+    import subprocess
+
+    import raven.agent.loop.checkpoint as cp_module
+
+    real = subprocess.run
+    adds: list[object] = []
+
+    def _slow(cmd, **kwargs):
+        if "add" in cmd:
+            adds.append(cmd)
+            time.sleep(0.5)
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    monkeypatch.setattr(cp_module, "_STAGE_STARTED", {})
+    monkeypatch.setattr(cp_module, "_WRITTEN_AT", {})
+    monkeypatch.setattr(cp_module, "_STAGE_WAIT_SECONDS", 0.3)
+    monkeypatch.setattr(cp_module.subprocess, "run", _slow)
+    svc = CheckpointService(workspace)
+    attempts: list[int] = []
+
+    for command in range(3):
+        for attempt in range(1, 11):
+            try:
+                tree = await svc.stage_tree()
+            except cp_module.StagingTimeoutError:
+                continue
+            assert tree is not None
+            attempts.append(attempt)
+            break
+        svc.note_write()
+
+    assert len(attempts) == 3, "a command was refused on every retry"
+    assert all(n > 1 for n in attempts), "the staging was faster than the budget"
+    assert len(adds) == 3, "a retry must not start a staging of its own"
+
+
+async def test_a_staging_under_the_budget_is_never_refused(workspace, monkeypatch):
+    """Under the budget no command is held back, even when a staging is already
+    running as it arrives: one the command can use is waited for inside the
+    budget, not waited out and then followed by a second."""
+    import subprocess
+
+    import raven.agent.loop.checkpoint as cp_module
+
+    real = subprocess.run
+
+    def _slow(cmd, **kwargs):
+        if "add" in cmd:
+            time.sleep(0.8)
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    monkeypatch.setattr(cp_module, "_STAGE_STARTED", {})
+    monkeypatch.setattr(cp_module, "_WRITTEN_AT", {})
+    monkeypatch.setattr(cp_module, "_STAGE_WAIT_SECONDS", 1.2)
+    monkeypatch.setattr(cp_module.subprocess, "run", _slow)
+    svc = CheckpointService(workspace)
+
+    # The rest of the warm-up plus a fresh staging is past the budget; the
+    # warm-up alone and a fresh one alone are each inside it.
+    svc.note_write()
+    await svc.warm()
+    await asyncio.sleep(0.1)
+    for _ in range(4):
+        assert await svc.stage_tree() is not None
+        svc.note_write()
+
+
+async def test_a_command_behind_a_stale_staging_past_the_budget_is_held_back(workspace, monkeypatch):
+    """A write made the running staging stale, and it has not finished within
+    the budget. The command is held back like any other that cannot be
+    measured yet -- not run unmeasured because the staging in its way was not
+    its own."""
+    import subprocess
+
+    import raven.agent.loop.checkpoint as cp_module
+
+    real = subprocess.run
+
+    def _slow(cmd, **kwargs):
+        if "add" in cmd:
+            time.sleep(0.5)
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    monkeypatch.setattr(cp_module, "_STAGE_WAIT_SECONDS", 0.1)
+    monkeypatch.setattr(cp_module.subprocess, "run", _slow)
+    svc = CheckpointService(workspace)
+
+    await svc.warm()
+    warm_up = cp_module._STAGING[svc._stage_path()]
+    svc.note_write()
+    with pytest.raises(cp_module.StagingTimeoutError):
+        await svc.stage_tree()
+
+    # Giving up on it must not have cancelled it: a later command reuses it.
+    assert await asyncio.wrap_future(warm_up) is not None
+    assert not warm_up.cancelled()
+
+
+async def test_a_staging_from_before_a_write_is_not_reused(workspace):
+    """Reuse is what lets a retry succeed, and what must not hand a command a
+    tree from before a write: the old text of a file a tool changed since then
+    is not what the command changed."""
+    svc = CheckpointService(workspace)
+    kept = workspace / "a.txt"
+    kept.write_text("one\n", encoding="utf-8")
+    first = await svc.stage_tree()
+    assert await svc.stage_tree() == first, "nothing written: the same tree"
+
+    kept.write_text("two\n", encoding="utf-8")
+    svc.note_write()
+    second = await svc.stage_tree()
+
+    assert second != first
+    assert await svc.read_blobs(second, [str(kept)], max_bytes=64) == {str(kept): b"two\n"}
 
 
 async def test_a_first_stage_starts_from_the_last_turns_index(workspace, monkeypatch):
@@ -470,8 +601,14 @@ def test_a_staging_still_running_does_not_hold_the_loop_open(workspace, monkeypa
             return True
         return False
 
+    # On a thread of its own: asyncio.run on the main thread clears the default
+    # loop, and pytest-asyncio then makes one it never closes.
+    outcome: list[bool] = []
     started = time.monotonic()
-    assert asyncio.run(one_call()) is True
+    runner = threading.Thread(target=lambda: outcome.append(asyncio.run(one_call())))
+    runner.start()
+    runner.join(10)
+    assert outcome == [True]
     assert time.monotonic() - started < 5
     release.set()
 

@@ -584,8 +584,8 @@ def _file_removed_payload(removals: Any) -> list[dict[str, Any]] | None:
 #: unmeasured: the staging carries on, and the same command a moment later is.
 _EXEC_NOT_STAGED_REPLY = (
     "Error: the command was not run. Raven is still snapshotting the working directory, "
-    "which it needs to record what this command changes (the first snapshot of a large "
-    "directory takes a few seconds). Run the same command again."
+    "which it needs to record what this command changes. Run the same command again: "
+    "it waits for the snapshot already under way rather than starting another."
 )
 
 
