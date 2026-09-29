@@ -278,8 +278,10 @@ async def test_a_failed_transport_does_not_cancel_the_following_server(monkeypat
                 await asyncio.Event().wait()
             return SimpleNamespace(capabilities=SimpleNamespace(tools=True))
 
-        async def list_tools(self):
-            return SimpleNamespace(tools=[SimpleNamespace(name="ping", description="", inputSchema={})])
+        async def list_tools(self, cursor=None):
+            return SimpleNamespace(
+                tools=[SimpleNamespace(name="ping", description="", inputSchema={})], nextCursor=None
+            )
 
     monkeypatch.setattr(mcp, "ClientSession", FakeSession)
     monkeypatch.setattr(mcp.client.streamable_http, "streamable_http_client", fake_streamable_http_client)
