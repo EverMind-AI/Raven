@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import os
 import time
@@ -15,7 +16,7 @@ from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Mapping
 from uuid import uuid4
 
 from loguru import logger
@@ -578,6 +579,18 @@ def _file_removed_payload(removals: Any) -> list[dict[str, Any]] | None:
     return out or None
 
 
+#: What the model reads for a command that was not run because the snapshot its
+#: file changes are measured against did not finish within the wait: not run
+#: rather than run unmeasured. Only a filesystem that has stopped answering
+#: takes that long, so the reply says so instead of inviting a retry loop.
+_EXEC_NOT_STAGED_REPLY = (
+    "Error: the command was not run. Raven snapshots the working directory before a "
+    "command so it can record what the command changes, and the snapshot did not finish "
+    "within 2 minutes; the filesystem may be very slow or unresponsive. Tell the user "
+    "rather than retrying repeatedly."
+)
+
+
 #: A file the listing found is counted in lines only when it is text this size
 #: or under. Past it the count is unknown rather than wrong: reading a gigabyte
 #: to number it would cost the turn more than the row it draws is worth.
@@ -590,56 +603,100 @@ def _file_written_payload(
     after: dict[str, tuple[int, int]] | None,
     *,
     already: Collection[str] = (),
+    before: Mapping[str, bytes] | None = None,
 ) -> list[dict[str, Any]] | None:
     """The files a command left behind, as plain mappings, or ``None`` for none.
 
     The other half of ``_file_change_payload``: a file tool reports what it
     wrote, a command reports its output and nothing else, so this is read off
-    two listings of the working directory instead of off a result. Sizes and a
-    line count rather than contents -- one command can write a hundred files,
-    and what a row draws is that they were written and how big they are.
+    two listings of the working directory instead of off a result.
 
     ``lines`` belongs to a created file alone, and ``None`` there means unknown:
-    too large to read, or not text. A rewritten file has no count at all, since
-    the listing never held the old content and a number against nothing would
-    read as a change nobody measured.
+    too large to read, or not text.
+
+    ``before`` is what a rewritten file held when the command started, when the
+    shadow repo could say (see ``CheckpointService.stage_tree``). With it, and
+    for every created file, the entry also carries the change itself: ``added``
+    and ``removed`` line counts and a unified ``diff``. Without it a rewrite has
+    neither -- a number against contents nobody held would read as a change
+    somebody measured. The diffs share one budget per event, the way removals'
+    bodies do; past it the counts still go and the diff is dropped whole.
 
     ``already`` are the paths this same call accounted for by name. The listing
     sees those too, and reporting one again would draw a single write twice.
     """
     accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
+    held = before or {}
+    budget = _FILE_CHANGE_MAX_CHARS
     out: list[dict[str, Any]] = []
-    for path in created:
+    for path, was_created in [*((path, True) for path in created), *((path, False) for path in modified)]:
         if os.path.realpath(path) in accounted:
             continue
         size = (after or {}).get(path, (0, 0))[0]
-        out.append({"path": path, "created": True, "size": size, "lines": _text_line_count(path, size)})
-    for path in modified:
-        if os.path.realpath(path) in accounted:
-            continue
-        out.append({"path": path, "created": False, "size": (after or {}).get(path, (0, 0))[0], "lines": None})
+        old = "" if was_created else _decoded(held.get(path))
+        text = None if old is None else _small_text(path, size)
+        entry: dict[str, Any] = {
+            "path": path,
+            "created": was_created,
+            "size": size,
+            "lines": len(text.splitlines()) if was_created and text is not None else None,
+        }
+        if text is not None and old is not None:
+            diff, added, removed = _line_diff(old, text, os.path.basename(path))
+            entry["added"], entry["removed"] = added, removed
+            if diff and len(diff) <= budget:
+                entry["diff"] = diff
+                budget -= len(diff)
+        out.append(entry)
     return out or None
 
 
-def _text_line_count(path: str, size: int) -> int | None:
-    """Lines in a file the listing found, or ``None`` when it cannot be counted."""
+def _small_text(path: str, size: int) -> str | None:
+    """A file the listing found, as text, or ``None`` when it is not worth reading."""
     if size > _FILE_WRITTEN_TEXT_MAX_BYTES:
         return None
     try:
-        return len(Path(path).read_text(encoding="utf-8").splitlines())
+        return Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
 
 
-def _listing_removals(deleted: Collection[str], *, already: Collection[str] = ()) -> list[FileRemoval]:
+def _decoded(raw: bytes | None) -> str | None:
+    if raw is None or len(raw) > _FILE_WRITTEN_TEXT_MAX_BYTES:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _line_diff(old: str, new: str, name: str) -> tuple[str | None, int, int]:
+    """A unified diff of ``old`` to ``new`` with its added and removed line counts."""
+    rows = list(difflib.unified_diff(old.splitlines(), new.splitlines(), fromfile=name, tofile=name, lineterm=""))
+    body = rows[2:]
+    added = sum(1 for row in body if row.startswith("+"))
+    removed = sum(1 for row in body if row.startswith("-"))
+    return ("\n".join(rows) if rows else None), added, removed
+
+
+def _listing_removals(
+    deleted: Collection[str], *, already: Collection[str] = (), before: Mapping[str, bytes] | None = None
+) -> list[FileRemoval]:
     """Files a listing says went, for the deletions no tool reported itself.
 
-    Without a body: the file was gone before anything read it, and the turn only
-    knows it was there when the command started. ``already`` are the removals
-    the call reported by name, which the listing sees as well.
+    With a body only when ``before`` holds one -- the shadow repo's copy from
+    just before the command. Otherwise the file was gone before anything read
+    it, and the turn only knows it was there when the command started.
+    ``already`` are the removals the call reported by name, which the listing
+    sees as well.
     """
     accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
-    return [FileRemoval(path=path) for path in deleted if os.path.realpath(path) not in accounted]
+    held = before or {}
+    return [
+        FileRemoval(path=path, before=_decoded(held.get(path)))
+        for path in deleted
+        if os.path.realpath(path) not in accounted
+    ]
 
 
 def monotonic() -> float:

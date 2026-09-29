@@ -10,9 +10,11 @@ reproduces a real TUI/CLI turn.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +23,8 @@ import pytest
 from raven.agent import workdir
 from raven.agent.loop import AgentLoop
 from raven.agent.loop._shared import _FILE_WRITTEN_TEXT_MAX_BYTES
-from raven.agent.loop.bundles import ToolWiring, TurnPolicy
+from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
+from raven.config.raven import CheckpointConfig, RuntimeConfig
 from raven.contracts.tool import FileChange, FileRemoval, Tool, ToolResult
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.spine.events import ToolEvent, ToolPhase
@@ -574,20 +577,30 @@ class _CommandTool(Tool):
         return "ran"
 
 
-async def _run_command_turn(workspace: Path, work: Path, script: list[LLMResponse], *extra_tools: Tool):
+async def _run_command_turn(
+    workspace: Path,
+    work: Path,
+    script: list[LLMResponse],
+    *extra_tools: Tool,
+    checkpoint: bool = False,
+    provider: LLMProvider | None = None,
+):
     """One real turn whose working directory is ``work``, as a served turn has.
 
     Bound rather than defaulted so the listing covers the directory the command
-    ran in and not the session store beside it. The checkpoint is off because
-    its shadow repo is a second tree inside that same directory, built for a
-    recovery nothing here tests.
+    ran in and not the session store beside it. The checkpoint is off unless a
+    test asks for it: its shadow repo is what a command's diff is read against,
+    and without it a rewrite is reported with no measure of what changed.
     """
     agent = AgentLoop(
-        provider=ScriptedProvider(script),
+        provider=provider or ScriptedProvider(script),
         workspace=workspace,
         model="stub",
         policy=TurnPolicy(max_iterations=4, interactive=False),
         tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(
+            runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always" if checkpoint else "never"))
+        ),
     )
     for tool in extra_tools:
         agent.tools.register(tool)
@@ -638,9 +651,10 @@ async def test_a_file_a_command_created_reaches_the_event_and_the_stored_entry(w
 
 @pytest.mark.asyncio
 async def test_a_file_a_command_rewrote_is_not_reported_as_a_new_one(workspace):
-    """A rewrite carries no count. The listing holds sizes, never contents, so
-    the old text was never known and a number against it would be invented --
-    and a client that drew this as a creation would claim the whole file is new."""
+    """Without a shadow repo a rewrite carries no count. The listing holds sizes,
+    never contents, so the old text was never known and a number against it
+    would be invented -- and a client that drew this as a creation would claim
+    the whole file is new."""
     work = workspace / "work"
     work.mkdir()
     kept = work / "kept.txt"
@@ -659,6 +673,422 @@ async def test_a_file_a_command_rewrote_is_not_reported_as_a_new_one(workspace):
     assert written[0]["created"] is False
     assert written[0]["lines"] is None
     assert written[0]["size"] == len("three\nfour\nfive\n")
+    assert "added" not in written[0] and "removed" not in written[0] and "diff" not in written[0]
+
+
+@pytest.mark.asyncio
+async def test_a_file_a_command_rewrote_carries_its_diff_when_the_shadow_repo_held_it(workspace):
+    """The tree staged in front of the command holds what the file said, so the
+    change is measured the way a file tool's is: counts and a unified diff of
+    only what the command did, not the whole file again. And it is stored with
+    the entry, so a reload draws what the live page drew."""
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: kept.write_text("one\n2\nthree\nfour\n", encoding="utf-8")),
+        checkpoint=True,
+    )
+
+    written = completes[0]["file_written"]
+    assert len(written) == 1, written
+    assert written[0]["created"] is False
+    assert (written[0]["added"], written[0]["removed"]) == (2, 1)
+    body = written[0]["diff"].splitlines()
+    assert "-two" in body and "+2" in body and "+four" in body
+    assert " one" in body, "unchanged lines are context, not a rewrite"
+    tool_entry = next(m for m in _persisted_messages(workspace) if m.get("role") == "tool")
+    assert tool_entry["file_written"] == written
+
+
+@pytest.mark.asyncio
+async def test_a_file_a_command_created_carries_its_diff(workspace):
+    """A new file needs no earlier copy: everything in it was added. The same
+    shape as a rewrite's, so a client draws both the one way."""
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "made.txt"
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script(), _CommandTool(lambda: made.write_text("one\ntwo\n", encoding="utf-8"))
+    )
+
+    written = completes[0]["file_written"]
+    assert (written[0]["added"], written[0]["removed"], written[0]["lines"]) == (2, 0, 2)
+    assert written[0]["diff"].splitlines()[2:] == ["@@ -0,0 +1,2 @@", "+one", "+two"]
+
+
+@pytest.mark.asyncio
+async def test_a_command_that_ran_before_this_one_is_not_part_of_its_diff(workspace):
+    """The tree is staged in front of each command, not once per turn: a second
+    command's diff is what the second command did, against the file as the
+    first one left it."""
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+    steps = iter(["one\ntwo\n", "one\ntwo\nthree\n"])
+    script = [
+        _tool_call("c1", "exec", {"command": "first"}),
+        _tool_call("c2", "exec", {"command": "second"}),
+        LLMResponse(content="done", finish_reason="stop"),
+    ]
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        script,
+        _CommandTool(lambda: kept.write_text(next(steps), encoding="utf-8")),
+        checkpoint=True,
+    )
+
+    assert [(c["file_written"][0]["added"], c["file_written"][0]["removed"]) for c in completes] == [(1, 0), (1, 0)]
+    assert "+three" in completes[1]["file_written"][0]["diff"].splitlines()
+    assert "+two" not in completes[1]["file_written"][0]["diff"].splitlines()
+
+
+@pytest.mark.asyncio
+async def test_a_rewrite_the_shadow_repo_does_not_hold_is_reported_without_a_diff(workspace):
+    """A file the shadow repo excludes (here a ``.env``, kept out as a likely
+    credential) has no earlier copy, so its rewrite is reported bare rather
+    than measured against nothing."""
+    work = workspace / "work"
+    work.mkdir()
+    secret = work / ".env"
+    secret.write_text("A=1\n", encoding="utf-8")
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: secret.write_text("A=2\n", encoding="utf-8")),
+        checkpoint=True,
+    )
+
+    written = completes[0]["file_written"]
+    assert len(written) == 1, written
+    assert "added" not in written[0] and "diff" not in written[0]
+
+
+@pytest.mark.asyncio
+async def test_a_file_a_command_removed_carries_what_it_held_when_the_shadow_repo_had_it(workspace):
+    """The listing sees the file go after it is gone; the staged tree still has
+    it, which is the body a deletion row draws."""
+    work = workspace / "work"
+    work.mkdir()
+    doomed = work / "doomed.txt"
+    doomed.write_text("one\ntwo\n", encoding="utf-8")
+
+    completes = await _run_command_turn(
+        workspace, work, _command_script("rm doomed.txt"), _CommandTool(doomed.unlink), checkpoint=True
+    )
+
+    removed = completes[0]["file_removed"]
+    assert len(removed) == 1, removed
+    assert removed[0]["before"] == "one\ntwo\n"
+    tool_entry = next(m for m in _persisted_messages(workspace) if m.get("role") == "tool")
+    assert tool_entry["file_removed"] == [{"path": removed[0]["path"], "del": 2}]
+
+
+@pytest.mark.asyncio
+async def test_the_real_command_tool_rewrite_is_measured_against_the_staged_tree(workspace):
+    """The stub above changes files in Python. A real shell writes through its
+    own cwd, which is the tree the stage covers -- the one agreement between the
+    shell and the shadow repo only the real tool can show."""
+    work = workspace / "work"
+    work.mkdir()
+    (work / "keep.md").write_text("one\n", encoding="utf-8")
+
+    completes = await _run_command_turn(workspace, work, _command_script("echo two >> keep.md"), checkpoint=True)
+
+    written = completes[0]["file_written"]
+    assert [Path(w["path"]).resolve() for w in written] == [(work / "keep.md").resolve()]
+    assert (written[0]["added"], written[0]["removed"]) == (1, 0)
+    assert "+two" in written[0]["diff"].splitlines()
+
+
+class _SlowFirstReply(ScriptedProvider):
+    """A model that takes its time over the first reply, the way a real one does."""
+
+    def __init__(self, script, delay: float) -> None:
+        super().__init__(script)
+        self._delay = delay
+
+    async def chat(self, *args: Any, **kwargs: Any) -> Any:
+        if self._delay:
+            await asyncio.sleep(self._delay)
+            self._delay = 0
+        return await super().chat(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.production_timing  # a slow first reply against a slow first staging is the property
+async def test_the_first_command_in_a_cold_directory_is_measured_when_the_model_took_its_time(workspace, monkeypatch):
+    """The first staging in a directory the shadow repo has never indexed hashes
+    the whole tree -- seconds on a large one, far past what a command waits. It
+    is started when the turn starts, so it runs while the model writes its first
+    reply, and the command that follows finds the index warm."""
+    import subprocess
+
+    import raven.agent.loop.checkpoint as cp_module
+
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+    real = subprocess.run
+    cold = [True]
+
+    def _cold_first(cmd, **kwargs):
+        if "add" in cmd and cold[0]:
+            cold[0] = False
+            time.sleep(1.0)
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    monkeypatch.setattr(cp_module, "_STAGE_WAIT_SECONDS", 0.6)
+    monkeypatch.setattr(cp_module.subprocess, "run", _cold_first)
+    script = _command_script()
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        script,
+        _CommandTool(lambda: kept.write_text("one\ntwo\n", encoding="utf-8")),
+        checkpoint=True,
+        provider=_SlowFirstReply(script, delay=2.5),
+    )
+
+    written = completes[0]["file_written"]
+    assert (written[0]["added"], written[0]["removed"]) == (1, 0), written
+
+
+@pytest.mark.asyncio
+@pytest.mark.production_timing  # a staging slower than the wait budget is the property
+async def test_a_command_is_held_back_until_the_snapshot_is_ready(workspace, monkeypatch):
+    """Run unmeasured, a command in a directory still being snapshotted leaves a
+    change nobody can show. It is not run instead: the call fails with a reply
+    that says why and to run it again, the snapshot carries on, and the retry
+    runs and is measured."""
+    import subprocess
+
+    import raven.agent.loop.checkpoint as cp_module
+    from raven.agent.loop._shared import _EXEC_NOT_STAGED_REPLY
+
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+    real = subprocess.run
+    cold = [True]
+
+    def _cold_first(cmd, **kwargs):
+        if "add" in cmd and cold[0]:
+            cold[0] = False
+            time.sleep(0.5)
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    monkeypatch.setattr(cp_module, "_STAGE_WAIT_SECONDS", 0.1)
+    monkeypatch.setattr(cp_module.subprocess, "run", _cold_first)
+    runs: list[int] = []
+
+    def _append() -> None:
+        runs.append(1)
+        kept.write_text("one\ntwo\n", encoding="utf-8")
+
+    script = [
+        _tool_call("c1", "exec", {"command": "echo two >> kept.txt"}),
+        _tool_call("c2", "exec", {"command": "echo two >> kept.txt"}),
+        LLMResponse(content="done", finish_reason="stop"),
+    ]
+
+    class _Retrying(ScriptedProvider):
+        async def chat(self, *args: Any, **kwargs: Any) -> Any:
+            if len(self._script) == 2:
+                # The retry comes after the model has read the refusal; by then
+                # the budget only has to cover a warm staging, however loaded
+                # the machine running this is.
+                await asyncio.sleep(0.6)
+                monkeypatch.setattr(cp_module, "_STAGE_WAIT_SECONDS", 30.0)
+            return await super().chat(*args, **kwargs)
+
+    completes = await _run_command_turn(
+        workspace, work, script, _CommandTool(_append), checkpoint=True, provider=_Retrying(script)
+    )
+
+    held, retried = completes
+    assert held["ok"] is False
+    assert held["result_preview"] == _EXEC_NOT_STAGED_REPLY
+    assert held["file_written"] is None
+    assert retried["ok"] is True
+    assert (retried["file_written"][0]["added"], retried["file_written"][0]["removed"]) == (1, 0)
+    assert runs == [1], "the held-back call must not have run the command"
+
+
+@pytest.mark.asyncio
+async def test_a_file_saved_between_turns_is_not_counted_as_the_commands_change(workspace):
+    """A staging from an earlier turn is reused only while nothing has written
+    since; a new turn counts as a write, because the user may have saved files
+    in between. Reused across the gap, the command would be shown the user's
+    edit as its own."""
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+
+    await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: kept.write_text("one\ntwo\n", encoding="utf-8")),
+        checkpoint=True,
+    )
+    kept.write_text("one\ntwo\nsaved by the user\n", encoding="utf-8")
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script(),
+        _CommandTool(lambda: kept.write_text("one\ntwo\nsaved by the user\ncmd\n", encoding="utf-8")),
+        checkpoint=True,
+    )
+
+    written = completes[0]["file_written"]
+    assert (written[0]["added"], written[0]["removed"]) == (1, 0), written
+
+
+@pytest.mark.asyncio
+async def test_a_warm_up_from_a_turn_that_ran_nothing_is_not_reused_after_the_user_saves(workspace):
+    """One loop, two turns. The first only answers, so its warm-up is the latest
+    staging and no tool call has marked a write since. The user then saves a
+    file. Without the new turn counting as a write, the second turn's command
+    would be measured against the warm-up and shown the user's edit as its own."""
+    work = workspace / "work"
+    work.mkdir()
+    kept = work / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+    script = [
+        LLMResponse(content="nothing to run", finish_reason="stop"),
+        *_command_script(),
+    ]
+    agent = AgentLoop(
+        provider=ScriptedProvider(script),
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4, interactive=False),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always"))),
+    )
+    agent.tools.register(_CommandTool(lambda: kept.write_text("one\nsaved by the user\ncmd\n", encoding="utf-8")))
+    completes: list[dict[str, Any]] = []
+
+    async def on_tool_event(phase: str, info: dict[str, Any]) -> None:
+        if phase == "complete":
+            completes.append(info)
+
+    with workdir.bind(work):
+        await agent._process_message(_make_msg("just answer"), on_tool_event=on_tool_event)
+        for thread in threading.enumerate():
+            if thread.name == "raven-stage":
+                thread.join(30)
+        kept.write_text("one\nsaved by the user\n", encoding="utf-8")
+        await agent._process_message(_make_msg("run it"), on_tool_event=on_tool_event)
+
+    written = completes[0]["file_written"]
+    assert (written[0]["added"], written[0]["removed"]) == (1, 0), written
+
+
+def _checkpointed_loop(workspace: Path) -> AgentLoop:
+    return AgentLoop(
+        provider=ScriptedProvider([]),
+        workspace=workspace,
+        model="stub",
+        policy=TurnPolicy(max_iterations=4, interactive=False),
+        tools=ToolWiring(restrict_to_workspace=True),
+        engine=EngineWiring(runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always"))),
+    )
+
+
+@pytest.mark.asyncio
+async def test_opening_a_session_starts_staging_the_directory_it_works_in(workspace, monkeypatch):
+    """The loop's half of warming a session as it opens: the directory the
+    session resolves to is staged in the background, before any turn has
+    bound it, and the call returns without waiting for the staging."""
+    import raven.agent.loop.checkpoint as cp_module
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    work = workspace / "project"
+    work.mkdir()
+    (work / "a.txt").write_text("a\n", encoding="utf-8")
+    agent = _checkpointed_loop(workspace)
+    monkeypatch.setattr(agent, "peek_session_workdir", lambda _key: work)
+
+    await agent.warm_session_workdir("tui:opened")
+
+    staged = [index for index in cp_module._STAGING if index.is_relative_to(work.resolve())]
+    assert len(staged) == 1
+    assert await asyncio.wrap_future(cp_module._STAGING[staged[0]]) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_session_whose_directory_cannot_be_resolved_opens_without_a_warm_up(workspace, monkeypatch):
+    import raven.agent.loop.checkpoint as cp_module
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    agent = _checkpointed_loop(workspace)
+
+    def _refuse(_key: str) -> Path:
+        raise ValueError("outside the sandbox mount")
+
+    monkeypatch.setattr(agent, "peek_session_workdir", _refuse)
+    await agent.warm_session_workdir("tui:refused")
+
+    assert cp_module._STAGING == {}
+
+
+@pytest.mark.asyncio
+async def test_a_loop_without_a_command_tool_warms_nothing(workspace, monkeypatch):
+    """Only a command's diff is read against the staged tree; a loop that
+    cannot run one has nothing to warm for."""
+    import raven.agent.loop.checkpoint as cp_module
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    agent = _checkpointed_loop(workspace)
+    agent.tools.unregister("exec")
+    monkeypatch.setattr(agent, "peek_session_workdir", lambda _key: workspace)
+
+    await agent.warm_session_workdir("tui:no-exec")
+
+    assert cp_module._STAGING == {}
+
+
+@pytest.mark.asyncio
+async def test_a_command_outside_the_shadow_repo_is_reported_without_a_diff(workspace):
+    """``working_dir`` can point anywhere, and the turn's shadow repo only holds
+    its own directory. Out there a rewrite is reported bare, as it always was,
+    rather than read against a tree that never held the file."""
+    work = workspace / "work"
+    work.mkdir()
+    other = workspace / "other"
+    other.mkdir()
+    kept = other / "kept.txt"
+    kept.write_text("one\n", encoding="utf-8")
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script("printf 'two\\n' >> kept.txt", working_dir=str(other)),
+        checkpoint=True,
+    )
+
+    written = completes[0]["file_written"]
+    assert [Path(w["path"]).resolve() for w in written] == [kept.resolve()]
+    assert "added" not in written[0] and "diff" not in written[0]
 
 
 @pytest.mark.asyncio
@@ -947,3 +1377,23 @@ async def test_a_command_run_on_another_machine_takes_no_listing(workspace, monk
 
     assert roots == []
     assert completes[0]["file_written"] is None
+
+
+def test_past_the_events_diff_budget_the_counts_still_go_and_the_diff_does_not(tmp_path, monkeypatch):
+    """One command can rewrite a hundred files. The diffs share the event's
+    budget, and one past it is dropped whole -- half a diff reads as a smaller
+    change -- while its counts, which cost nothing, still say how big it was."""
+    from raven.agent.loop import _shared
+
+    monkeypatch.setattr(_shared, "_FILE_CHANGE_MAX_CHARS", 60)
+    first = tmp_path / "a.txt"
+    second = tmp_path / "b.txt"
+    first.write_text("one\ntwo\n", encoding="utf-8")
+    second.write_text("three\nfour\n", encoding="utf-8")
+    after = {str(p): (p.stat().st_size, 0) for p in (first, second)}
+
+    out = _shared._file_written_payload([str(first), str(second)], [], after)
+
+    assert out is not None
+    assert "diff" in out[0] and "diff" not in out[1]
+    assert (out[1]["added"], out[1]["removed"]) == (2, 0)
