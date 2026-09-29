@@ -986,6 +986,28 @@ def _unbind_the_acp_turn() -> Iterator[None]:
         asker._AUTOFILL.reset(autofill_token)
 
 
+@pytest.fixture(autouse=True)
+def _unbind_the_permission_turn() -> Iterator[None]:
+    """Put the permission turn's ContextVars back where the test found them.
+
+    The same leak as ``_unbind_the_acp_turn``, one module over: a sync test
+    that calls ``start_permission_turn`` binds a ``PermissionTurn`` into the
+    context every later test in the worker inherits. Later async tests then
+    append to that one shared object -- an unanswered ACP question among
+    them -- and a turn test further down files it as the last message of its
+    own request.
+    """
+    from raven.permissions import turn
+
+    turn_token = turn._TURN.set(turn._TURN.get())
+    call_token = turn._TOOL_CALL_ID.set(turn._TOOL_CALL_ID.get())
+    try:
+        yield
+    finally:
+        turn._TURN.reset(turn_token)
+        turn._TOOL_CALL_ID.reset(call_token)
+
+
 def wired_kwarg(kwargs: dict, name: str):
     """Resolve a wiring value from captured AgentLoop kwargs, bundle-aware.
 
