@@ -538,7 +538,7 @@ def oauth_credentials_present(provider_name: str) -> bool:
 def oauth_credential_files(provider_name: str) -> list[Path]:
     """Every file a sign-in for this provider can leave behind.
 
-    Two callers, one list. Disconnect has to clear all of them -- Copilot's API key
+    Every caller, one list. Disconnect has to clear all of them -- Copilot's API key
     outlives the access token it came from, so deleting the token alone leaves a
     working credential -- and a sign-in has to restrict all of them, for the same
     reason in the other direction.
