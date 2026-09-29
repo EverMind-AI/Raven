@@ -211,12 +211,18 @@ class LanceDBVectorStore(VectorStoreBase):
         metadata_filter: dict[str, Any] | None = None,
         document_id: str | None = None,
     ) -> list[VectorSearchResult]:
-        table = await self._table(collection)
+        # Widened first, the way `keyword_search` widens: the filter below
+        # names `enabled`, and a collection an earlier build wrote has no such
+        # column -- the scan does not read it as null, it refuses the query
+        # with "No field named enabled". A base indexed before this build and
+        # searched after it would have been unsearchable until something
+        # happened to write to it.
+        table = await self._writable(collection)
         query = table.vector_search(query_vector).distance_type("cosine").limit(top_k)
         # Disabled means not retrieved, which has to be enforced where the
         # retrieval happens -- a filter applied by any one caller is a filter
-        # the next caller forgets. `enabled IS NULL` covers the rows a build
-        # before this column wrote, which are enabled by construction.
+        # the next caller forgets. `enabled IS NULL` covers the rows already in
+        # a widened collection, which are enabled by construction.
         clauses = ["(enabled IS NULL OR enabled = true)"]
         if document_id:
             clauses.append(f"document_id = {_sql_quote(document_id)}")
