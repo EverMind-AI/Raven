@@ -424,6 +424,14 @@ describe('the permission approval sheet', () => {
     expect(opts()[1]!.firstElementChild!.textContent).toBe('gui.confirm.always')
   })
 
+  /* Refusing is the Deny button and Esc; a cross in the corner read as "not
+     now" rather than as the refusal it sends. */
+  it('draws no close cross, the refusal being on the foot', () => {
+    openApproval(base, handlers())
+    expect(rack().querySelector('.csheet .ic')).toBeNull()
+    expect(rack().querySelector('.hd .q')!.textContent).toBe('gui.confirm.title.delete_command')
+  })
+
   it('says no rule when the grant saves none', () => {
     openApproval(base, handlers())
     expect(rack().querySelector('.cp-rule')).toBeNull()

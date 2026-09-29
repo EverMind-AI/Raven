@@ -13,7 +13,6 @@
  */
 
 import { SheetOption } from '../../chrome/SheetRack'
-import { SheetHead } from './AskApproveSheet'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
 import type { JSX } from 'react'
@@ -39,7 +38,6 @@ export interface GateProps {
   readonly command: string
   readonly words: GateWords
   readonly opts: readonly SheetOptionRow[]
-  readonly onDeny: () => void
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
@@ -107,10 +105,13 @@ function EvidenceBlock(
   )
 }
 
-export function GateSheet({ kind, evidence, command, words, opts, onDeny }: GateProps): JSX.Element {
+/* No close cross in the corner: refusing is the Deny button and Esc, both on
+   the card's foot, and a second way to say no that looks like dismissing the
+   card read as "not now" rather than as the refusal it sends. */
+export function GateSheet({ kind, evidence, command, words, opts }: GateProps): JSX.Element {
   return (
     <>
-      <SheetHead title={words.title} deny={words.deny} onDeny={onDeny} />
+      <div className="hd"><div className="q">{words.title}</div></div>
       <div className="body">
         <div className="cp-why">{words.why}</div>
         <EvidenceBlock kind={kind} evidence={evidence} command={command} words={words} />

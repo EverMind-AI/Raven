@@ -351,7 +351,6 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
     command: req.command || '',
     words,
     opts,
-    onDeny: () => answer('deny'),
   }))
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()

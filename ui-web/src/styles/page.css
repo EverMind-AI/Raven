@@ -4913,35 +4913,53 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   font: inherit; font-size: 13px; color: var(--text); outline: 0; }
 .csheet .foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
 .csheet .foot .btn { padding: 5px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 8px; }
-/* The key that answers a control, after its label: quiet on a plain button,
-   and on a filled one the ground colour at a quarter, as the number badge on
-   that button used to be. */
+/* The key that answers a control, drawn on it so nobody has to remember it:
+   an outlined cap after the label, and on a filled button the ground colour
+   standing in for the line and the ink. */
 .chrome-keycap {
-  flex: none; padding: 2px 5px; border-radius: 5px; background: var(--raised);
-  font-family: var(--mono); font-size: 10.5px; line-height: 1.3; color: var(--faint);
+  flex: none; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px;
+  font-family: var(--mono); font-size: 10px; line-height: 15px; color: var(--faint);
 }
 .csheet.perm .cp-acts .opt:last-child .chrome-keycap,
 .csheet .foot .btn.key .chrome-keycap {
-  background: color-mix(in oklab, var(--surface) 25%, transparent); color: var(--surface);
+  border-color: color-mix(in oklab, var(--ink) 28%, transparent);
+  color: color-mix(in oklab, var(--ink) 72%, transparent);
 }
-.csheet .foot .btn.key:disabled .chrome-keycap { background: none; color: inherit; }
-/* An approval request is the same sheet with the agent's own sentence quoted
-   above the two answers -- what it wants to do is the thing being judged. */
+.csheet .foot .btn.key:disabled .chrome-keycap { border-color: currentColor; color: inherit; }
+/* An approval request, drawn as a tool-approval card: the question, one line
+   of why, the evidence in a box of its own, and the answers along the foot.
+   Solid rather than the rack's frosted glass -- the reader is judging what is
+   in it -- and capped, so a long diff scrolls inside the evidence box and the
+   card does not grow; the answers stay pinned to its foot. */
+.csheet.perm {
+  display: flex; flex-direction: column; max-height: 300px; overflow: hidden;
+  border-radius: 16px; padding: 15px 16px 13px;
+  background: var(--ink); -webkit-backdrop-filter: none; backdrop-filter: none; border: 0;
+  box-shadow: 0 2px 14px var(--sh-soft), 0 0 0 1px var(--ring-2);
+}
+.csheet.perm .q { font-size: 15px; }
+.csheet.perm .body { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 0; margin-top: 4px; }
 .csheet.perm .what {
-  font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--text);
-  background: var(--surface); border-left: 2px solid var(--amber);
-  border-radius: 0 7px 7px 0; padding: 8px 10px; margin-bottom: 8px;
-  overflow-wrap: anywhere; max-height: 168px; overflow-y: auto;
+  flex: 0 1 auto; min-height: 0; overflow: auto; margin-top: 11px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.75; color: var(--text);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px;
+  overflow-wrap: anywhere;
 }
-/* The permission sheet's answers in one row: deny on the left, allow once as
-   the primary on the right. The row's own name is the composer's; what it lays
-   out is the rack's `.opt`, so the rule lives with the rack's. */
-.csheet.perm .cp-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; }
-.csheet.perm .cp-acts .opt { width: auto; flex: none; }
+/* The answers in one row: deny on the left, allow once as the solid one on
+   the right. The row's own name is the composer's; what it lays out is the
+   rack's `.opt`, so the rule lives with the rack's. */
+.csheet.perm .cp-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: auto; padding-top: 12px; }
+.csheet.perm .cp-acts .opt {
+  width: auto; flex: none; gap: 6px; height: 30px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--ink); font-size: 13px;
+}
+.csheet.perm .cp-acts .opt:hover, .csheet.perm .cp-acts .opt:focus-visible {
+  border-color: var(--muted); background: var(--surface);
+}
 .csheet.perm .cp-acts .opt:first-child { margin-right: auto; }
-.csheet.perm .cp-acts .opt:last-child { background: var(--text); color: var(--surface); }
+.csheet.perm .cp-acts .opt:last-child { background: var(--black); border-color: var(--black); color: var(--ink); }
 .csheet.perm .cp-acts .opt:last-child:hover, .csheet.perm .cp-acts .opt:last-child:focus-visible {
-  background: var(--text); opacity: .88;
+  background: var(--black); filter: brightness(1.18);
 }
 
 /* The page behind is dimmed and blurred the way the settings dialog's is
