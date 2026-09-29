@@ -519,6 +519,25 @@ describe('recording the files a command left behind', () => {
     expect([row?.add, row?.del]).toEqual([5, 4])
   })
 
+  /* The same preference where a second change is added to a row the turn
+     already has: this is where a command writing one file several times sums
+     its counts, and where a wrong number is least likely to be noticed. */
+  it('adds the runtime\'s counts, not the patch\'s, to a row it already has', () => {
+    const args = { path: '/w/notes.md', content: 'a\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/notes.md\n+++ b/w/notes.md\n@@ -0,0 +1,1 @@\n+a', { path: '/w/notes.md', after: 'a\n' })
+
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined, [{
+      path: '/w/notes.md', created: false, size: 4, lines: null, added: 5, removed: 3,
+      diff: '--- notes.md\n+++ notes.md\n@@ -1,1 +1,2 @@\n a\n+b',
+    }])
+
+    const row = rowFor('/w/notes.md')
+    expect(row?.hunks).toHaveLength(2)
+    expect([row?.add, row?.del]).toEqual([1 + 5, 0 + 3])
+  })
+
   it('carries the counts of a measured change that came without its diff', () => {
     wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined,
       [{ path: '/w/log.json', created: false, size: 12, lines: null, added: 40, removed: 7 }])

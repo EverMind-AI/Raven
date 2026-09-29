@@ -568,10 +568,11 @@ user's `.git`), so an interrupted or failed turn can be rolled back. One `Checkp
 per working directory, cached by `AgentLoop._turn_checkpoint()` and keyed on the directory
 the running turn is bound to. The same repo also answers what a file an `exec` command
 rewrote or removed held before it: `CheckpointService.warm` starts staging the tree when
-a directory's first turn in this process starts, `stage_tree` stages it again just before
-each command into a per-process index of its own (never the index the turn commit reads),
-and `read_blobs` reads the old contents back for the command's `file_written` diff and
-`file_removed` body.
+a directory's first turn in this process starts, and a command's `stage_tree` takes the
+latest staging if it began after the last `note_write` (every tool call and every turn
+start) or stages the tree afresh otherwise, into a per-process index of its own (never the
+index the turn commit reads). `read_blobs` reads the old contents back for the command's
+`file_written` diff and `file_removed` body.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
