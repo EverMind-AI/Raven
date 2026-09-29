@@ -827,6 +827,7 @@ class _SlowFirstReply(ScriptedProvider):
 
 
 @pytest.mark.asyncio
+@pytest.mark.production_timing  # a slow first reply against a slow first staging is the property
 async def test_the_first_command_in_a_cold_directory_is_measured_when_the_model_took_its_time(workspace, monkeypatch):
     """The first staging in a directory the shadow repo has never indexed hashes
     the whole tree -- seconds on a large one, far past what a command waits. It
@@ -868,6 +869,7 @@ async def test_the_first_command_in_a_cold_directory_is_measured_when_the_model_
 
 
 @pytest.mark.asyncio
+@pytest.mark.production_timing  # a staging slower than the wait budget is the property
 async def test_a_command_is_held_back_until_the_snapshot_is_ready(workspace, monkeypatch):
     """Run unmeasured, a command in a directory still being snapshotted leaves a
     change nobody can show. It is not run instead: the call fails with a reply

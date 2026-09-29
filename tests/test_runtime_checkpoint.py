@@ -422,6 +422,7 @@ async def test_a_slow_first_staging_is_not_cut_off_at_the_git_call_ceiling(works
     assert ceilings[0] > cp_module._GIT_TIMEOUT_SECONDS * 10
 
 
+@pytest.mark.production_timing  # the stagings are slowed past the wait budget, which is the property
 async def test_retries_wait_out_a_staging_slower_than_the_budget(workspace, monkeypatch):
     """A tree whose every staging takes longer than a command waits. Each retry
     waits for the staging the refused call left running -- nothing has written
@@ -465,6 +466,7 @@ async def test_retries_wait_out_a_staging_slower_than_the_budget(workspace, monk
     assert len(adds) == 3, "a retry must not start a staging of its own"
 
 
+@pytest.mark.production_timing  # the stagings are slowed to sit either side of the wait budget, which is the property
 async def test_a_staging_under_the_budget_is_never_refused(workspace, monkeypatch):
     """Under the budget no command is held back, even when a staging is already
     running as it arrives: one the command can use is waited for inside the
