@@ -156,7 +156,11 @@ def test_a_table_is_one_element_holding_the_whole_grid() -> None:
     assert len(tables) == 1
     body = sections[0].content.text
     assert "<table>" in body and "</table>" in body
-    assert "<tr><td>Region</td><td>Revenue</td></tr>" in body
+    # The column names as a header row, and the same row whichever reader ran:
+    # the models are optional, and a document that indexed one way with them
+    # and another way without would make a base depend on the machine that
+    # built it.
+    assert "<tr><th>Region</th><th>Revenue</th></tr>" in body
     assert "<tr><td>EU</td><td>1.2M</td></tr>" in body
 
 

@@ -314,6 +314,20 @@ class TableStructureRecognizer(Recognizer):
                     h += 1
             if h / cnt > 0.5:
                 hdset.add(i)
+        # The first row, always, whatever the rule above made of it. The rule
+        # is upstream's and it is about finding headers REPEATED down a long
+        # table, which it does by looking for a row that breaks the body's
+        # dominant cell type -- so it finds nothing at all in a table whose
+        # body is words, and the column names come back as body.
+        #
+        # The geometric reader next door has always taken the first row as the
+        # header (`_tables._header_rows`). Two readers of the same table
+        # disagreeing is worse than either rule being wrong: which one runs
+        # depends on whether the optional models are installed, so one machine
+        # indexed `<th>Region</th>` and another `<td>Region</td>` for the same
+        # document, and a base built on one read differently on the other.
+        if tbl:
+            hdset.add(0)
 
         if html:
             return TableStructureRecognizer.__html_table(

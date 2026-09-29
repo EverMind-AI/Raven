@@ -86,7 +86,9 @@ def test_a_table_is_rebuilt_as_a_grid() -> None:
     sections = asyncio.run(PdfParser().parse(_document(_ruled).tobytes(), "revenue.pdf"))
 
     text = " ".join(section.content.text for section in sections)
-    assert "<tr><td>Region</td><td>Q1</td><td>Q2</td></tr>" in text
+    # The column names as a header row: the reader that follows the ruled lines
+    # has always said so, and this one says it too.
+    assert "<tr><th>Region</th><th>Q1</th><th>Q2</th></tr>" in text
     assert "<tr><td>EU</td><td>1.2M</td><td>1.4M</td></tr>" in text
     kinds = {span[LAYOUT_TYPE] for section in sections for span in section.metadata[ELEMENTS]}
     assert LayoutType.TABLE in kinds
@@ -150,3 +152,29 @@ def test_an_absent_model_leaves_the_rest_of_the_layout_working(monkeypatch) -> N
     sections = asyncio.run(PdfParser().parse(_document(_ruled).tobytes(), "revenue.pdf"))
 
     assert [s.metadata.get("heading_path") for s in sections] == [["Revenue by region"]]
+
+
+def test_both_readers_render_one_table_the_same_way(monkeypatch) -> None:
+    """The models are optional, so the same document must not index one way on
+    a machine that has them and another way on a machine that does not.
+
+    The two readers find a table's grid by different means -- one asks the
+    structure model, the other follows the ruled lines -- and they used to
+    disagree about the header row: upstream's rule looks for a header REPEATED
+    down a long table by spotting a row that breaks the body's dominant cell
+    type, which finds nothing at all when the body is words, so the column
+    names came back as body cells. A base built on one machine then read
+    differently on the other.
+    """
+    raw = _document(_ruled).tobytes()
+
+    with_models = asyncio.run(PdfParser().parse(raw, "revenue.pdf"))
+    monkeypatch.setattr(_pipeline, "available", lambda *names: False)
+    without = asyncio.run(PdfParser().parse(raw, "revenue.pdf"))
+
+    def table_of(sections) -> str:
+        text = "\n".join(section.content.text for section in sections)
+        return text[text.index("<table>") : text.index("</table>") + len("</table>")]
+
+    assert table_of(with_models) == table_of(without)
+    assert "<th>" in table_of(without), "the column names are a header row, not body"
