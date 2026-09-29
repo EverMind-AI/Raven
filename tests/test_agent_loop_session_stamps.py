@@ -761,6 +761,36 @@ async def test_a_created_file_the_shadow_repo_would_not_store_carries_no_text(wo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["rewrite", "remove"])
+async def test_a_file_the_repo_already_held_shows_no_text_once_a_rule_ignores_it(workspace, change):
+    """The index keeps updating a path it already tracks after an ignore rule
+    names it, so the staged tree still holds the file's old text. What may be
+    shown is judged by the rules, not by what the tree happens to hold: the
+    rewrite goes out bare and the removal without its body."""
+    work = workspace / "work"
+    work.mkdir()
+    keys = work / "keys.txt"
+    keys.write_text("OLD_SECRET=aaa\n", encoding="utf-8")
+
+    def _act() -> None:
+        (work / ".gitignore").write_text("keys.txt\n", encoding="utf-8")
+        if change == "rewrite":
+            keys.write_text("NEW_SECRET=bbb\n", encoding="utf-8")
+        else:
+            keys.unlink()
+
+    completes = await _run_command_turn(workspace, work, _command_script(), _act, checkpoint=True)
+
+    written = {Path(w["path"]).name: w for w in completes[0]["file_written"]}
+    assert "+keys.txt" in written[".gitignore"]["diff"].splitlines()
+    if change == "rewrite":
+        assert "diff" not in written["keys.txt"] and "added" not in written["keys.txt"]
+    else:
+        assert [r.get("before") for r in completes[0]["file_removed"]] == [None]
+    assert "SECRET" not in json.dumps(completes) + json.dumps(_persisted_messages(workspace))
+
+
+@pytest.mark.asyncio
 async def test_a_command_that_ran_before_this_one_is_not_part_of_its_diff(workspace):
     """The tree is staged in front of each command, not once per turn: a second
     command's diff is what the second command did, against the file as the

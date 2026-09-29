@@ -98,21 +98,26 @@ async def before(root: Path, shadow_for: ShadowFor | None) -> Before:
 
 
 async def after(
-    start: Before, *, already: Collection[str] = ()
+    start: Before, *, named: tuple[FileRemoval, ...] = ()
 ) -> tuple[tuple[FileWrite, ...], tuple[FileRemoval, ...]]:
     """What the command changed under ``start.root``: files written, files removed.
 
-    ``already`` are the removals the command reported by name, which the listing
-    sees as well; reporting one again would draw a single deletion twice.
+    ``named`` are the removals the command's own watch caught by name, with the
+    text it read before the command ran. The listing sees them as well, and
+    reporting one again would draw a single deletion twice, so they come back
+    first and the listing adds only what they miss.
 
-    A created file carries its text as a diff only where the shadow repo would
-    store it (``trackable``): a ``.env``, a key, anything the user's ``.gitignore``
-    keeps out is exactly what the checkpoint keeps out of storage, and a diff is
-    stored with the conversation. A rewritten or removed file needs no such
-    check, since the tree only ever holds files the repo stores.
+    One rule decides whether a file's contents may be shown, whichever way it
+    changed: the shadow repo's (``trackable``), the rules it stores by. A
+    ``.env``, a key, anything the user's ``.gitignore`` keeps out is what the
+    checkpoint keeps out of storage, and a diff is stored with the conversation.
+    The rules rather than the tree: a file staged before an ignore rule named it
+    stays in the index, and its text must not be shown for that. Where there is
+    no shadow repo to ask, a created file keeps its counts only, and a rewrite
+    or listed removal has no earlier text to show.
     """
     listing = await asyncio.to_thread(snapshot.take, start.root)
-    accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
+    accounted = {os.path.realpath(removal.path) for removal in named}
     created, modified, deleted = (
         [path for path in paths if os.path.realpath(path) not in accounted]
         for paths in snapshot.diff(start.listing, listing)
@@ -120,15 +125,18 @@ async def after(
     held: dict[str, bytes] = {}
     shown: set[str] = set()
     if start.shadow is not None and start.tree is not None:
-        if modified or deleted:
-            held = await start.shadow.read_blobs(start.tree, [*modified, *deleted], max_bytes=TEXT_MAX_BYTES)
-        if created:
-            shown = await start.shadow.trackable(created)
+        subjects = [*created, *modified, *deleted, *(removal.path for removal in named if removal.before is not None)]
+        if subjects:
+            shown = await start.shadow.trackable(subjects)
+        readable = [path for path in [*modified, *deleted] if path in shown]
+        if readable:
+            held = await start.shadow.read_blobs(start.tree, readable, max_bytes=TEXT_MAX_BYTES)
+        named = tuple(removal if removal.path in shown else FileRemoval(path=removal.path) for removal in named)
     # Off the loop too: this reads every written file, and one command can write hundreds.
     written = (
         await asyncio.to_thread(_writes, created, modified, listing or {}, held, shown) if created or modified else ()
     )
-    removed = tuple(FileRemoval(path=path, before=_decoded(held.get(path))) for path in deleted)
+    removed = named + tuple(FileRemoval(path=path, before=_decoded(held.get(path))) for path in deleted)
     return written, removed
 
 

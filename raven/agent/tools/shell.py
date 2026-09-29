@@ -382,8 +382,7 @@ class ExecTool(Tool):
         )
         written: tuple[FileWrite, ...] = ()
         if start is not None:
-            written, listed = await command_writes.after(start, already=[removal.path for removal in removed])
-            removed += listed
+            written, removed = await command_writes.after(start, named=removed)
         # The exit code is the verdict a config change, a security call or a
         # syntax error share, and the text a failing command produced is not
         # token-safe to classify from -- so the caller gets it structurally.

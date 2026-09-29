@@ -38,7 +38,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Collection
+from typing import Any, Collection
 
 from loguru import logger
 
@@ -176,6 +176,12 @@ class StagingTimeoutError(TimeoutError):
 
     A :class:`TimeoutError`, which is what ``ExecTool`` catches: the tool holds
     this repo through a protocol and does not import the loop shell."""
+
+
+def _settle(future: "concurrent.futures.Future[Any] | None", value: Any) -> None:
+    """Give ``future`` its result unless it already has one."""
+    if future is not None and not future.done():
+        future.set_result(value)
 
 
 async def _within(staging: "concurrent.futures.Future[str | None]", deadline: float) -> bool:
@@ -473,26 +479,37 @@ class CheckpointService:
             return
         staging = self._register_stage(index)
         if not self._ready:
+            # Running from the start for the reason the staging is: a turn
+            # cancelled while waiting on the setup (``_ensure_init``) must not
+            # cancel the setup itself.
             self._initializing = concurrent.futures.Future()
+            self._initializing.set_running_or_notify_cancel()
         threading.Thread(target=self._warm_up, args=(index, staging), name="raven-stage", daemon=True).start()
 
     def _warm_up(self, index: Path, staging: "concurrent.futures.Future[str | None]") -> None:
         # A loop of the thread's own for the repo setup: the turn's loop is not
         # to wait on it, and one that closes while the setup is still starting a
         # git process would hold its close up.
+        #
+        # Both futures are settled whatever happens here: the staging is
+        # published in ``_STAGING``, and one nobody settles would hold every
+        # later command in the directory to the full wait and then refuse it.
         initializing = self._initializing
         try:
-            ready = asyncio.run(self._init_repo())
-        except Exception as exc:  # noqa: BLE001 -- a warm-up never breaks anything
-            logger.debug("checkpoint warm-up init error: {}", exc)
-            ready = False
-        if initializing is not None:
-            initializing.set_result(ready)
-        if not ready:
-            staging.set_result(None)
-            return
-        self._prepare_index(index)
-        self._stage(index, staging)
+            try:
+                ready = asyncio.run(self._init_repo())
+            except Exception as exc:  # noqa: BLE001 -- a warm-up never breaks anything
+                logger.debug("checkpoint warm-up init error: {}", exc)
+                ready = False
+            _settle(initializing, ready)
+            if ready:
+                self._prepare_index(index)
+                self._stage(index, staging)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("checkpoint warm-up error: {}", exc)
+        finally:
+            _settle(initializing, False)
+            _settle(staging, None)
 
     def _start_stage(self, index: Path) -> "concurrent.futures.Future[str | None]":
         staging = self._register_stage(index)
@@ -520,12 +537,16 @@ class CheckpointService:
         ``write-tree`` writes the index back too and a second staging's ``add``
         beside it fails on the index lock.
         """
-        with _STAGE_LOCKS.setdefault(index, threading.Lock()):
-            if self._stage_step(("add", "-A"), index, timeout=_STAGE_ADD_TIMEOUT_SECONDS) is None:
-                result.set_result(None)
-                return
-            tree = self._stage_step(("write-tree",), index)
-        result.set_result(tree or None)
+        try:
+            with _STAGE_LOCKS.setdefault(index, threading.Lock()):
+                if self._stage_step(("add", "-A"), index, timeout=_STAGE_ADD_TIMEOUT_SECONDS) is None:
+                    return
+                tree = self._stage_step(("write-tree",), index)
+            _settle(result, tree or None)
+        except Exception as exc:  # noqa: BLE001 -- a staging degrades to no tree, never to no answer
+            logger.debug("checkpoint stage error: {}", exc)
+        finally:
+            _settle(result, None)
 
     def _stage_step(self, args: tuple[str, ...], index: Path, *, timeout: float | None = None) -> str | None:
         """One git step of a staging: its output, or ``None`` when it failed."""

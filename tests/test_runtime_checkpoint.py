@@ -1049,3 +1049,71 @@ async def test_loop_runs_the_turn_when_the_root_is_refused(tmp_path, monkeypatch
     assert outcome.status == "interrupted"  # max-iter, as in the sibling tests
     assert outcome.checkpoint_id is None  # refused, so nothing was snapshotted
     assert (home / "a.py").exists()  # the turn's edit still landed
+
+
+async def test_a_turn_cancelled_while_the_warm_up_sets_the_repo_up_does_not_orphan_its_staging(workspace, monkeypatch):
+    """A turn that ends inside the warm-up's repo setup waits on it from its
+    commit, and a cancelled turn cancels that wait. Were the setup's own future
+    cancelled with it, the warm-up thread would fail on it before settling the
+    staging it had already published, and every later command in the directory
+    would wait out the full budget and be refused."""
+    import raven.agent.loop.checkpoint as cp_module
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+    real_init = CheckpointService._init_repo
+
+    async def _slow_init(self: CheckpointService) -> bool:
+        await asyncio.sleep(0.3)
+        return await real_init(self)
+
+    monkeypatch.setattr(CheckpointService, "_init_repo", _slow_init)
+    (workspace / "a.txt").write_text("a\n", encoding="utf-8")
+    svc = CheckpointService(workspace)
+
+    await svc.warm()
+    waiter = asyncio.ensure_future(svc._ensure_init())
+    while not svc._initializing._done_callbacks:
+        await asyncio.sleep(0.01)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    assert not svc._initializing.cancelled()
+    started = time.monotonic()
+    assert await svc.stage_tree() is not None
+    assert time.monotonic() - started < 30, "the staging was left for nobody to settle"
+
+
+@pytest.mark.parametrize("broken", ["_stage_step", "_prepare_index"])
+async def test_a_staging_that_fails_unexpectedly_still_answers(workspace, monkeypatch, broken):
+    """A staging degrades to no tree, never to no answer: an unsettled one is
+    waited for until the budget runs out, and the command is refused for it."""
+    import raven.agent.loop.checkpoint as cp_module
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("unexpected")
+
+    svc = CheckpointService(workspace)
+    monkeypatch.setattr(svc, broken, _raise)
+    await svc.warm()
+
+    staging = cp_module._STAGING[svc._stage_path()]
+    assert await asyncio.wait_for(asyncio.wrap_future(staging), 30) is None
+
+
+async def test_a_commands_own_staging_that_fails_unexpectedly_still_answers(workspace, monkeypatch):
+    """The same guarantee on the path a command takes when nothing was warming."""
+    import raven.agent.loop.checkpoint as cp_module
+
+    monkeypatch.setattr(cp_module, "_STAGING", {})
+
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("unexpected")
+
+    svc = CheckpointService(workspace)
+    assert await svc.stage_tree() is not None
+    monkeypatch.setattr(svc, "_stage_step", _raise)
+
+    assert await asyncio.wait_for(svc.stage_tree(), 30) is None

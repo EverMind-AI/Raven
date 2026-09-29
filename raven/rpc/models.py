@@ -658,9 +658,11 @@ class FileWritten(_Strict):
     listings of the directory said about it -- that it is there, how big it is,
     and whether it was there before. What it changed from is known only when the
     working directory's shadow repo held a copy from just before the command;
-    then the change itself rides along as counts and a unified diff. A created
-    file carries its counts, and its text only when the shadow repo would store
-    it: never for a file its excludes or the user's .gitignore keep out.
+    then the change itself rides along as counts and a unified diff. A file's
+    text goes out only when the shadow repo's rules would store it: never for a
+    file its excludes or the user's .gitignore keep out, even one the repo held a
+    copy of before the rule named it. Such a created file carries its counts
+    only, and such a rewrite neither.
     """
 
     path: str = Field(description="Absolute path of the file the command wrote.")

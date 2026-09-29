@@ -117,6 +117,18 @@ async def test_a_removed_file_carries_what_the_staged_tree_held(tmp_path):
     assert [(r.path, r.before) for r in result.removed] == [(str(tmp_path / "doomed.txt"), "one\ntwo\n")]
 
 
+async def test_a_file_the_command_named_keeps_its_text_only_where_the_repo_would_store_it(tmp_path):
+    """The command's own watch reads a named file before it goes. That text is
+    held to the same rule as every other file's: a ``.env`` removed by name goes
+    out without its body, an ordinary file with it."""
+    (tmp_path / ".env").write_text("API_KEY=top-secret\n")
+    (tmp_path / "notes.md").write_text("one\n")
+
+    result = await _tool(tmp_path, _Shadow(tmp_path, ignored={".env"})).execute(command="rm .env notes.md")
+
+    assert {Path(r.path).name: r.before for r in result.removed} == {".env": None, "notes.md": "one\n"}
+
+
 async def test_a_tool_not_asked_to_record_writes_does_not_list_or_stage(tmp_path, monkeypatch):
     """A sub-agent's runner lists every call itself, so its ``exec`` does not
     walk the directory a second time around each command."""
