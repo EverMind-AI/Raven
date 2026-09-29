@@ -171,6 +171,24 @@ describe('settings store', () => {
     vi.useRealTimers()
   })
 
+  it('a code answered with seconds left is watched only that long', async () => {
+    /* A second start is answered with the time the pending code has left. A
+       floor under it kept a dead code drawn as live, and polled, for half a
+       minute. */
+    vi.useFakeTimers()
+    setSources({ settings: {
+      load: async () => snapOf('m'),
+      reloadProviders: async () => snapOf('m'),
+      oauthLogin: async () => ({ verification_uri: 'https://v.example/device', user_code: 'ABCD', expires_in: 2 }),
+    } as unknown as SettingsSource })
+    await store.oauthStart('openai_codex')
+    expect(store.get().oauth?.expired).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
+    expect(store.get().oauth?.expired).toBe(true)
+    vi.useRealTimers()
+  })
+
   it('lastDays spans today and the days before it, inclusive', () => {
     const r = store.lastDays(7)
     const from = new Date(`${r.from}T00:00:00`)

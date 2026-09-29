@@ -487,7 +487,9 @@ export async function oauthStart(slug: string): Promise<void> {
     return
   }
   oauthStop()
-  const until = Date.now() + Math.max(30, r.expires_in) * 1000
+  /* `expires_in` is the time the code has left, and a second start can be
+     answered with seconds: watching any longer draws a dead code as live. */
+  const until = Date.now() + r.expires_in * 1000
   set({ oauth: { slug, uri: r.verification_uri, code: r.user_code, until, expired: false } })
   oauthTimer = setInterval(() => { void oauthPoll() }, OAUTH_POLL_MS)
 }
