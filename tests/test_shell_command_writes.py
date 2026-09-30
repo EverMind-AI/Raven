@@ -72,19 +72,23 @@ async def test_a_rewrite_is_measured_against_the_tree_staged_just_before_it(tmp_
     assert "+two" in write.diff.splitlines()
 
 
-async def test_a_command_whose_tree_is_not_staged_in_time_is_not_run(tmp_path):
-    """Run unmeasured, the command would leave a change nobody can show. The
-    call fails instead, with no hint to find another way: the reply itself
-    says what to do."""
+@pytest.mark.parametrize("error", [TimeoutError, StagingTimeoutError])
+async def test_a_command_whose_tree_is_not_staged_in_time_still_runs_without_a_diff(tmp_path, error):
+    """The command matters more than its diff. Past the wait it runs all the
+    same and is still listed, so the file it rewrote is reported -- only not
+    what that file held. The checkpoint's own timeout must be a ``TimeoutError``
+    for this: the tool holds the repo through a protocol and cannot import it."""
+    (tmp_path / "notes.md").write_text("one\n")
 
     def _too_slow() -> str:
-        raise TimeoutError
+        raise error
 
-    result = await _tool(tmp_path, _Shadow(tmp_path, stage=_too_slow)).execute(command="echo x > made.txt")
+    result = await _tool(tmp_path, _Shadow(tmp_path, stage=_too_slow)).execute(command="echo two >> notes.md")
 
-    assert not (tmp_path / "made.txt").exists(), "the command must not have run"
-    assert result.model_text == command_writes.NOT_STAGED_REPLY
-    assert result.ok is False and result.retryable is False
+    assert (tmp_path / "notes.md").read_text() == "one\ntwo\n", "the command must have run"
+    assert result.ok is True
+    [write] = result.written
+    assert (write.created, write.added, write.diff) == (False, None, None)
 
 
 async def test_a_tree_that_cannot_be_staged_leaves_the_command_to_run_unmeasured(tmp_path):
@@ -214,16 +218,3 @@ def test_the_tools_ceiling_covers_the_longest_command_and_the_longest_wait():
     from raven.agent.loop import checkpoint
 
     assert ExecTool.timeout_seconds > ExecTool._MAX_TIMEOUT + checkpoint._STAGE_WAIT_SECONDS
-
-
-@pytest.mark.parametrize("error", [TimeoutError, StagingTimeoutError])
-async def test_the_checkpoints_own_timeout_is_one_the_tool_catches(tmp_path, error):
-    """The tool holds the repo through a protocol and cannot import its error;
-    what it catches is ``TimeoutError``, so the repo's must be one."""
-
-    def _raise() -> str:
-        raise error
-
-    result = await _tool(tmp_path, _Shadow(tmp_path, stage=_raise)).execute(command="true")
-
-    assert result.model_text == command_writes.NOT_STAGED_REPLY

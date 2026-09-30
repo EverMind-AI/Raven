@@ -572,8 +572,8 @@ handed in by the loop, and does the measuring itself: `ExecTool.warm` starts sta
 in the background when a session opens on the directory (`session.create` /
 `session.resume`, or the first turn where a session opens without either), and every
 command stages it afresh inside its own call with `stage_tree`, into a per-process index of
-its own (never the index the turn commit reads), waiting up to 120s before the command is
-failed rather than run unmeasured. `read_blobs` reads the old contents back for the
+its own (never the index the turn commit reads), waiting up to 120s; a tree it cannot stage,
+or not within that wait, leaves the command to run without a diff. `read_blobs` reads the old contents back for the
 command's `file_written` diff and `file_removed` body.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 

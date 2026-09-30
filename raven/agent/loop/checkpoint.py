@@ -440,8 +440,8 @@ class CheckpointService:
 
         ``None`` when the tree cannot be staged at all (git failed), which costs
         the call its diff and nothing else. :class:`StagingTimeoutError` when it
-        has not finished after :data:`_STAGE_WAIT_SECONDS`: the caller fails the
-        command rather than run it unmeasured. The staging is left running
+        has not finished after :data:`_STAGE_WAIT_SECONDS`: the caller runs the
+        command without a diff all the same. The staging is left running
         rather than killed, because what it has hashed is what makes the next
         one fast.
         """

@@ -1235,10 +1235,10 @@ async def test_the_first_command_in_a_cold_directory_is_measured_when_the_model_
 
 @pytest.mark.asyncio
 @pytest.mark.production_timing  # a staging slower than the wait budget is the property
-async def test_a_command_whose_snapshot_is_not_ready_in_time_is_not_run(workspace, monkeypatch):
-    """Run unmeasured, a command leaves a change nobody can show. Past the wait
-    it is not run instead: the call fails with a reply that says why, and the
-    staging carries on, so a later command runs and is measured."""
+async def test_a_command_whose_snapshot_is_not_ready_in_time_runs_without_a_diff(workspace, monkeypatch):
+    """The command matters more than its diff. Past the wait it runs all the
+    same, reported as a bare rewrite, and the staging carries on, so a later
+    command finds it done and is measured."""
     import subprocess
 
     import raven.agent.loop.checkpoint as cp_module
@@ -1259,39 +1259,38 @@ async def test_a_command_whose_snapshot_is_not_ready_in_time_is_not_run(workspac
     monkeypatch.setattr(cp_module, "_STAGING", {})
     monkeypatch.setattr(cp_module, "_STAGE_WAIT_SECONDS", 0.1)
     monkeypatch.setattr(cp_module.subprocess, "run", _cold_first)
-    runs: list[int] = []
-
-    def _append() -> None:
-        runs.append(1)
-        kept.write_text("one\ntwo\n", encoding="utf-8")
-
+    steps = iter(["one\ntwo\n", "one\ntwo\nthree\n"])
     script = [
         _tool_call("c1", "exec", {"command": "echo two >> kept.txt"}),
-        _tool_call("c2", "exec", {"command": "echo two >> kept.txt"}),
+        _tool_call("c2", "exec", {"command": "echo three >> kept.txt"}),
         LLMResponse(content="done", finish_reason="stop"),
     ]
 
     class _ThenPatient(ScriptedProvider):
         async def chat(self, *args: Any, **kwargs: Any) -> Any:
             if len(self._script) == 2:
-                # The second command comes after the model has read the
-                # refusal; by then the wait only has to cover a warm staging,
-                # however loaded the machine running this is.
+                # By the second command the cold staging has finished, and the
+                # wait only has to cover a warm one, however loaded the machine.
                 await asyncio.sleep(0.6)
                 monkeypatch.setattr(cp_module, "_STAGE_WAIT_SECONDS", 30.0)
             return await super().chat(*args, **kwargs)
 
     completes = await _run_command_turn(
-        workspace, work, script, _append, checkpoint=True, provider=_ThenPatient(script)
+        workspace,
+        work,
+        script,
+        lambda: kept.write_text(next(steps), encoding="utf-8"),
+        checkpoint=True,
+        provider=_ThenPatient(script),
     )
 
-    held, later = completes
-    assert held["ok"] is False
-    assert held["result_preview"] == command_writes.NOT_STAGED_REPLY
-    assert held["file_written"] is None
+    first, later = completes
+    assert first["ok"] is True
+    assert [Path(w["path"]).resolve() for w in first["file_written"]] == [kept.resolve()]
+    assert "added" not in first["file_written"][0] and "diff" not in first["file_written"][0]
     assert later["ok"] is True
     assert (later["file_written"][0]["added"], later["file_written"][0]["removed"]) == (1, 0)
-    assert runs == [1], "the call that was not ready must not have run the command"
+    assert kept.read_text(encoding="utf-8") == "one\ntwo\nthree\n"
 
 
 @pytest.mark.asyncio

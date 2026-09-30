@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Collection, Mapping, Protocol
 
+from loguru import logger
+
 from raven.agent.tools import snapshot
 from raven.contracts.tool import FileRemoval, FileWrite
 
@@ -35,17 +37,6 @@ TEXT_MAX_BYTES = 256 * 1024
 #: and whole-file changes already share. Past it the counts still go and the
 #: diff is dropped whole: half a diff reads as a smaller change than happened.
 DIFF_BUDGET_CHARS = 512 * 1024
-
-#: What the model reads for a command that was not run because the tree its
-#: changes are measured against did not finish staging in time: not run rather
-#: than run unmeasured. Only a filesystem that has stopped answering takes that
-#: long, so the reply says so instead of inviting a retry loop.
-NOT_STAGED_REPLY = (
-    "Error: the command was not run. Raven snapshots the working directory before a "
-    "command so it can record what the command changes, and the snapshot did not finish "
-    "within 2 minutes; the filesystem may be very slow or unresponsive. Tell the user "
-    "rather than retrying repeatedly."
-)
 
 
 class ShadowTree(Protocol):
@@ -81,9 +72,10 @@ class Before:
 async def before(root: Path, shadow_for: ShadowFor | None) -> Before:
     """Look at ``root`` just before a command runs in it.
 
-    Raises :class:`TimeoutError` when the shadow tree did not finish staging:
-    the command must then not run, since whatever it changed could no longer be
-    measured. A directory too large to list is not staged at all -- no listing
+    A tree that could not be staged, or did not finish staging within its wait,
+    leaves the command to run without one: it is still listed, so what it wrote
+    is reported, only not what those files held. The command matters more than
+    its diff. A directory too large to list is not staged at all -- no listing
     means nothing is reported, and a staging would be paid for nothing.
 
     Off the event loop: the walk is tens of milliseconds of a turn, and every
@@ -91,7 +83,13 @@ async def before(root: Path, shadow_for: ShadowFor | None) -> Before:
     """
     listing = await asyncio.to_thread(snapshot.take, root)
     shadow = shadow_for(root) if listing is not None and shadow_for is not None else None
-    tree = await shadow.stage_tree() if shadow is not None else None
+    try:
+        tree = await shadow.stage_tree() if shadow is not None else None
+    except TimeoutError:
+        # Left running rather than abandoned: what it has hashed is what makes
+        # the next command's staging fast.
+        logger.warning("exec measured without a diff: staging {} did not finish in time", root)
+        tree = None
     if tree is None:
         return Before(root, listing)
     return Before(root, listing, shadow, tree)
@@ -200,7 +198,6 @@ def _line_diff(old: str, new: str, name: str) -> tuple[str | None, int, int]:
 
 __all__ = [
     "DIFF_BUDGET_CHARS",
-    "NOT_STAGED_REPLY",
     "TEXT_MAX_BYTES",
     "Before",
     "ShadowFor",

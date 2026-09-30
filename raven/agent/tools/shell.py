@@ -14,8 +14,6 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from raven.agent import workdir
 from raven.agent.tools import command_writes
 from raven.contracts.tool import (
@@ -353,11 +351,7 @@ class ExecTool(Tool):
         watched = self._removal_watch(command, cwd)
         start: command_writes.Before | None = None
         if self.record_writes:
-            try:
-                start = await command_writes.before(Path(cwd), self._shadow)
-            except TimeoutError:
-                logger.warning("exec not run: staging {} did not finish in time", cwd)
-                return ToolResult(model_text=command_writes.NOT_STAGED_REPLY, retryable=False, ok=False)
+            start = await command_writes.before(Path(cwd), self._shadow)
 
         env: dict[str, str] | None = None
         if self.path_append:
