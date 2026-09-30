@@ -574,6 +574,7 @@ def _command_agent(
     *,
     checkpoint: bool = False,
     provider: LLMProvider | None = None,
+    plugin_tools: list[Tool] | None = None,
 ) -> AgentLoop:
     """A loop with its own ``exec``, running ``action`` in place of the shell when given.
 
@@ -586,7 +587,7 @@ def _command_agent(
         workspace=workspace,
         model="stub",
         policy=TurnPolicy(max_iterations=4, interactive=False),
-        tools=ToolWiring(restrict_to_workspace=True),
+        tools=ToolWiring(restrict_to_workspace=True, plugin_tools=plugin_tools),
         engine=EngineWiring(
             runtime_config=RuntimeConfig(checkpoint=CheckpointConfig(policy="always" if checkpoint else "never"))
         ),
@@ -604,13 +605,16 @@ async def _run_command_turn(
     *,
     checkpoint: bool = False,
     provider: LLMProvider | None = None,
+    plugin_tools: list[Tool] | None = None,
 ):
     """One real turn whose working directory is ``work``, as a served turn has.
 
     Bound rather than defaulted so the command runs in, and is measured in, the
     directory the test prepared and not the session store beside it.
     """
-    agent = _command_agent(workspace, script, action, checkpoint=checkpoint, provider=provider)
+    agent = _command_agent(
+        workspace, script, action, checkpoint=checkpoint, provider=provider, plugin_tools=plugin_tools
+    )
     completes: list[dict[str, Any]] = []
 
     async def on_tool_event(phase: str, info: dict[str, Any]) -> None:
@@ -895,24 +899,27 @@ async def test_a_removal_the_command_named_is_not_reported_twice(workspace):
 
 
 @pytest.mark.asyncio
-async def test_a_file_this_turn_wrote_keeps_its_text_when_a_command_removes_it_unseen(workspace):
-    """The listing reports the deletion without a body when no shadow repo held
-    the file. The turn itself wrote it, though, so what it wrote is still the
-    last thing anyone knew the file to hold."""
+@pytest.mark.parametrize("name", ["made.txt", "local.secret"])
+async def test_a_file_this_turn_wrote_is_removed_with_the_text_the_command_reported(workspace, name):
+    """The turn's own watch also holds what the turn wrote to a path, and a
+    command that removes it reports that removal itself. The command's report
+    stands: where the repo's rules keep the file's text back, a body the watch
+    still holds must not put it on the wire."""
     work = workspace / "work"
     work.mkdir()
-    made = work / "made.txt"
+    (work / ".gitignore").write_text("*.secret\n", encoding="utf-8")
+    made = work / name
     script = [
-        _tool_call("c1", "write_file", {"path": str(made), "content": "x\ny\n"}),
-        _tool_call("c2", "exec", {"command": "find . -name '*.txt' -delete"}),
+        _tool_call("c1", "write_file", {"path": str(made), "content": "TOKEN=x\n"}),
+        _tool_call("c2", "exec", {"command": "find . -name 'made.txt' -delete -o -name '*.secret' -delete"}),
         LLMResponse(content="done", finish_reason="stop"),
     ]
 
-    completes = await _run_command_turn(workspace, work, script, made.unlink)
+    completes = await _run_command_turn(workspace, work, script, made.unlink, checkpoint=True)
 
     removed = completes[1]["file_removed"]
-    assert len(removed) == 1, removed
-    assert removed[0]["before"] == "x\ny\n"
+    assert [Path(r["path"]).name for r in removed] == [name]
+    assert removed[0].get("before") == ("TOKEN=x\n" if name == "made.txt" else None)
 
 
 @pytest.mark.asyncio
@@ -1000,6 +1007,41 @@ async def test_the_real_command_tool_lists_the_directory_it_was_bound_to(workspa
     assert written[(work / "made.txt").resolve()]["created"] is True
     assert written[(work / "made.txt").resolve()]["lines"] == 2
     assert written[(work / "keep.md").resolve()]["created"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_plugin_exec_that_replaces_the_built_in_reports_its_files_as_the_built_in_does(workspace, monkeypatch):
+    """A plugin may replace a built-in by contributing its name, and raven-code
+    ships an ``exec`` that does. Whatever answers to ``exec`` once the tools are
+    registered is the one asked to measure, so a command run through the
+    replacement reports what it created and what it removed without naming."""
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent.parent / "agents/raven-code/plugins/code-flow"))
+    from code_flow.tools.exec import CodeExecTool, CodeExecutor
+
+    work = workspace / "work"
+    work.mkdir()
+    (work / "gone.txt").write_text("x\n", encoding="utf-8")
+    replacement = CodeExecTool(
+        working_dir=str(workspace),
+        restrict_to_workspace=True,
+        executor=CodeExecutor(max_timeout=1200, spill_dir=workspace / "spill"),
+        extra_allowed_dirs=(workspace,),
+        max_timeout=1200,
+    )
+
+    completes = await _run_command_turn(
+        workspace,
+        work,
+        _command_script("printf 'a\\nb\\n' > made.txt && find . -name 'gone.txt' -delete"),
+        checkpoint=True,
+        plugin_tools=[replacement],
+    )
+
+    assert not (work / "gone.txt").exists() and (work / "made.txt").exists(), "the command must have run"
+    [write] = completes[0]["file_written"]
+    assert (Path(write["path"]).name, write["created"], write["added"]) == ("made.txt", True, 2)
+    assert [(Path(r["path"]).name, r.get("before")) for r in completes[0]["file_removed"]] == [("gone.txt", "x\n")]
+    assert replacement.timeout_seconds == 1200 + 60 + command_writes.MEASURE_SECONDS
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from raven.agent.tools.removals import WATCHED_TEXT_MAX_CHARS, WATCHED_TOTAL_MAX_CHARS, RemovalWatch
-from raven.contracts.tool import FileChange
+from raven.contracts.tool import FileChange, FileRemoval
 
 
 def test_a_written_file_that_vanished_is_reported_with_what_it_held(tmp_path: Path) -> None:
@@ -79,3 +79,17 @@ def test_rewriting_a_path_gives_its_room_back(tmp_path: Path) -> None:
     gone.unlink()
 
     assert [(r.path, r.before) for r in watch.settle()] == [(str(gone), body)]
+
+
+def test_a_removal_the_tool_reported_keeps_the_body_it_was_reported_with(tmp_path: Path) -> None:
+    """A tool that reports a removal without its body may have withheld it on
+    purpose -- the command tool does, for a file the checkpoint would not store.
+    What the watch holds for that path must not put the body back."""
+    gone = tmp_path / "creds.env"
+    gone.write_text("SECRET")
+    watch = RemovalWatch()
+    watch.note_write(FileChange(path=str(gone), after="SECRET"))
+    gone.unlink()
+
+    assert [(r.path, r.before) for r in watch.settle((FileRemoval(path=str(gone)),))] == [(str(gone), None)]
+    assert watch.settle() == []

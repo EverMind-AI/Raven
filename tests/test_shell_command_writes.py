@@ -48,6 +48,7 @@ class _Shadow:
         return tree
 
     async def read_blobs(self, tree: str, paths: Collection[str], *, max_bytes: int) -> dict[str, bytes]:
+        assert tree is not None, "no tree was staged, so there is none to read"
         held = self._trees.get(tree, {})
         return {path: held[path] for path in paths if path in held and len(held[path]) <= max_bytes}
 
@@ -96,16 +97,47 @@ async def test_a_command_whose_tree_is_not_staged_in_time_still_runs_without_a_d
     assert (write.created, write.added, write.diff) == (False, None, None)
 
 
-async def test_a_tree_that_cannot_be_staged_leaves_the_command_to_run_unmeasured(tmp_path):
+async def test_a_tree_that_cannot_be_staged_leaves_the_command_to_run_without_what_its_files_held(tmp_path):
     """A git that failed, a directory the repo cannot hold: nothing about the
-    filesystem says the command should not run, so it does, reported without
-    the text no repo vouched for."""
-    result = await _tool(tmp_path, _Shadow(tmp_path, stage=lambda: None)).execute(command="printf 'x\\n' > made.txt")
+    filesystem says the command should not run, so it does. A rewrite has no
+    earlier text to be shown against; a created file needs none."""
+    (tmp_path / "notes.md").write_text("one\n")
+
+    result = await _tool(tmp_path, _Shadow(tmp_path, stage=lambda: None)).execute(
+        command="printf 'x\\n' > made.txt && echo two >> notes.md"
+    )
 
     assert (tmp_path / "made.txt").read_text() == "x\n"
+    written = {Path(w.path).name: w for w in result.written}
+    assert (written["made.txt"].created, written["made.txt"].lines, written["made.txt"].added) == (True, 1, 1)
+    assert "+x" in written["made.txt"].diff.splitlines()
+    assert (written["notes.md"].added, written["notes.md"].diff) == (None, None)
+
+
+def _no_tree() -> None:
+    return None
+
+
+def _late_tree() -> str:
+    raise TimeoutError
+
+
+@pytest.mark.parametrize("stage", [_no_tree, _late_tree], ids=["not-staged", "staged-too-late"])
+async def test_a_tree_that_was_not_staged_still_leaves_the_repo_to_rule_on_what_may_be_shown(tmp_path, stage):
+    """Whether a file's text may be shown is the repo's rules, which need no
+    tree. A staging that failed or ran late costs the diffs a tree would give;
+    it must not also let a ``.env`` the command removed by name, or created,
+    go out with its text, while an ordinary file keeps its own."""
+    (tmp_path / ".env").write_text("API_KEY=top-secret\n")
+    (tmp_path / "notes.md").write_text("one\n")
+
+    result = await _tool(tmp_path, _Shadow(tmp_path, stage=stage, ignored={".env", "made.env"})).execute(
+        command="rm .env notes.md && printf 'TOKEN=x\\n' > made.env"
+    )
+
+    assert {Path(r.path).name: r.before for r in result.removed} == {".env": None, "notes.md": "one\n"}
     [write] = result.written
-    assert (write.created, write.lines, write.added) == (True, 1, 1)
-    assert write.diff is None
+    assert (Path(write.path).name, write.added, write.diff) == ("made.env", 1, None)
 
 
 async def test_a_created_file_the_repo_would_not_store_keeps_its_counts_and_loses_its_text(tmp_path):
@@ -216,14 +248,21 @@ async def test_warming_stages_through_the_shadow_repo_and_is_a_no_op_without_one
     assert shadow.warmed == 1, "only the tool that records writes warms for them"
 
 
-def test_the_tools_ceiling_covers_the_longest_command_and_the_longest_wait():
-    """The registry kills a call past the tool's ceiling. A command may wait out
-    its staging and then run to the executor's own cap, and a ceiling under the
-    two together would kill a command the executor was still allowed to run."""
+def test_a_measuring_tools_ceiling_covers_the_longest_command_and_the_longest_waits():
+    """The registry kills a call past the tool's ceiling. A measured command may
+    wait out its staging, run to the executor's own cap and then have its files
+    measured, and a ceiling under the three together would kill a command the
+    executor was still allowed to run -- losing its output. Asked twice, the
+    tool raises its ceiling once."""
     from raven.agent.loop import checkpoint
 
+    tool = ExecTool(record_writes=True)
     spent = checkpoint._STAGE_WAIT_SECONDS + ExecTool._MAX_TIMEOUT + command_writes.AFTER_WAIT_SECONDS
-    assert ExecTool.timeout_seconds > spent
+    assert tool.timeout_seconds > spent
+    assert command_writes.MEASURE_SECONDS == checkpoint._STAGE_WAIT_SECONDS + command_writes.AFTER_WAIT_SECONDS
+    tool.measure_writes(None)
+    assert tool.timeout_seconds == ExecTool.timeout_seconds + command_writes.MEASURE_SECONDS
+    assert ExecTool().timeout_seconds == ExecTool.timeout_seconds > ExecTool._MAX_TIMEOUT
     assert command_writes.AFTER_WAIT_SECONDS > command_writes.READ_WAIT_SECONDS
 
 

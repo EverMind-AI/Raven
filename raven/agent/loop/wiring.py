@@ -934,8 +934,6 @@ class WiringMixin:
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
                 extra_allowed_dirs=(self.workspace,),
-                record_writes=True,
-                shadow=self._command_shadow,
             )
         )
         # The registry writer beside exec's machine channel, for the products
@@ -1056,6 +1054,11 @@ class WiringMixin:
         # playbook funnel) assembled after even this registry is populated.
         for tool in self.plugin_tools:
             self.tools.register(tool)
+        # Whatever answers to ``exec`` now, the built-in or a plugin's same-name
+        # replacement, reports the files its commands wrote and removed.
+        measure_writes = getattr(self.tools.get("exec"), "measure_writes", None)
+        if callable(measure_writes):
+            measure_writes(self._command_shadow)
 
         # Skill retrieval tools (body -> scripts). Both are source-agnostic and
         # both serve local/everos straight from the registry, so both register

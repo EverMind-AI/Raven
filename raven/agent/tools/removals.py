@@ -58,14 +58,12 @@ class RemovalWatch:
         removals = [
             removal for removal in (reported or ()) if isinstance(getattr(removal, "path", None), str) and removal.path
         ]
-        already = {removal.path: index for index, removal in enumerate(removals)}
+        already = {removal.path for removal in removals}
         for path in list(self._touched):
             if path in already:
-                # What this run wrote there is the file's last known text, which
-                # a report read off the disk after the fact may not have.
-                text = self._forget(path)
-                if removals[already[path]].before is None and text is not None:
-                    removals[already[path]] = FileRemoval(path=path, before=text)
+                # The report stands as given, a blank body included: a tool that
+                # withheld a file's text (``command_writes``) did so on purpose.
+                self._forget(path)
                 continue
             if not os.path.exists(path):
                 removals.append(FileRemoval(path=path, before=self._forget(path)))

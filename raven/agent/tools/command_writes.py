@@ -45,8 +45,13 @@ READ_WAIT_SECONDS = 60.0
 #: How long everything after a command may take: the second walk, those reads,
 #: and reading the written files. Past it the call returns with the command's
 #: output and no record of its files, rather than be cut off by the registry's
-#: ceiling with neither. ``ExecTool.timeout_seconds`` budgets for it.
+#: ceiling with neither.
 AFTER_WAIT_SECONDS = 120.0
+
+#: The most measuring adds to a call: the shadow repo's wait for a staging (the
+#: checkpoint's ``_STAGE_WAIT_SECONDS``) and :data:`AFTER_WAIT_SECONDS`. A tool
+#: that measures raises its registry ceiling by it.
+MEASURE_SECONDS = 120.0 + AFTER_WAIT_SECONDS
 
 
 class ShadowTree(Protocol):
@@ -75,7 +80,9 @@ class Before:
 
     root: Path
     listing: snapshot.Snapshot | None
+    #: The repo that rules on what may be shown, wherever one covers ``root``.
     shadow: ShadowTree | None = None
+    #: What it staged just before the command, or ``None`` where that failed.
     tree: str | None = None
 
 
@@ -100,8 +107,8 @@ async def before(root: Path, shadow_for: ShadowFor | None) -> Before:
         # the next command's staging fast.
         logger.warning("exec measured without a diff: staging {} did not finish in time", root)
         tree = None
-    if tree is None:
-        return Before(root, listing)
+    # The repo is kept without a tree: what a file held needs the tree, but
+    # whether its text may be shown is the repo's rules, which need none.
     return Before(root, listing, shadow, tree)
 
 
@@ -149,7 +156,7 @@ async def _after(
     )
     held: dict[str, bytes] = {}
     shown: set[str] = set()
-    if start.shadow is not None and start.tree is not None:
+    if start.shadow is not None:
         subjects = [*created, *modified, *deleted, *(removal.path for removal in named if removal.before is not None)]
         try:
             shown, held = await asyncio.wait_for(
@@ -169,12 +176,12 @@ async def _after(
 
 
 async def _shown_and_held(
-    shadow: ShadowTree, tree: str, subjects: list[str], changed: list[str]
+    shadow: ShadowTree, tree: str | None, subjects: list[str], changed: list[str]
 ) -> tuple[set[str], dict[str, bytes]]:
     """The subjects the repo's rules would store, and what those of ``changed`` held."""
     shown = await shadow.trackable(subjects) if subjects else set()
     readable = [path for path in changed if path in shown]
-    held = await shadow.read_blobs(tree, readable, max_bytes=TEXT_MAX_BYTES) if readable else {}
+    held = await shadow.read_blobs(tree, readable, max_bytes=TEXT_MAX_BYTES) if tree is not None and readable else {}
     return shown, held
 
 
@@ -239,6 +246,7 @@ def _line_diff(old: str, new: str, name: str) -> tuple[str | None, int, int]:
 __all__ = [
     "AFTER_WAIT_SECONDS",
     "DIFF_BUDGET_CHARS",
+    "MEASURE_SECONDS",
     "READ_WAIT_SECONDS",
     "TEXT_MAX_BYTES",
     "Before",
