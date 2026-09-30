@@ -145,3 +145,79 @@ async def test_the_methods_answer_only_for_the_conversation_the_card_belongs_to(
     assert await credential_skip({"request_id": rid, "conversation_id": "c-1"}, credential_broker=broker) == {
         "ok": False
     }
+
+
+async def test_an_undeliverable_card_is_a_skip_and_a_close_that_fails_too_is_no_error() -> None:
+    """A page that went away mid-turn: the tool is told the key was skipped,
+    and the turn goes on rather than failing on a card nobody can see."""
+    sent: list[str] = []
+
+    async def send(frame: dict[str, Any]) -> None:
+        sent.append(frame["method"])
+        raise ConnectionError("the page went away")
+
+    async def sink(reference: str, value: str) -> None:
+        raise AssertionError("nothing is written for a card that was never shown")
+
+    broker = CredentialBroker(send, sinks={"config": sink})
+    outcome = await broker.request_credential(conversation_id="c-1", turn_id="t-1", request=REQUEST)
+    assert outcome is CredentialOutcome.SKIPPED
+    assert sent == ["credential.request", "credential.closed"]
+    assert broker.pending_count() == 0
+
+
+async def test_a_sink_that_breaks_keeps_the_card_open_and_never_repeats_the_value() -> None:
+    from loguru import logger
+
+    page = Page()
+
+    async def sink(reference: str, value: str) -> None:
+        raise RuntimeError(f"disk full while writing {value}")
+
+    broker = CredentialBroker(page.send, sinks={"config": sink})
+    task = asyncio.create_task(broker.request_credential(conversation_id="c-1", turn_id="t-1", request=REQUEST))
+    await page.opened.wait()
+    rid = page.request()["request_id"]
+    logged: list[str] = []
+    handle = logger.add(lambda message: logged.append(str(message)), level="DEBUG")
+    try:
+        reply = await broker.submit(rid, "c-1", "tvly-typed-secret")
+    finally:
+        logger.remove(handle)
+
+    assert reply == {"ok": False, "error": "It could not be saved; try again, or enter it in Settings."}
+    assert not any("tvly-typed-secret" in line for line in logged)
+    assert broker.pending_count() == 1 and not task.done(), "the reader can try again"
+    assert broker.skip(rid, "c-1")
+    assert await task is CredentialOutcome.SKIPPED
+
+
+async def test_the_methods_are_served_through_the_dispatcher_and_refuse_a_malformed_answer() -> None:
+    from raven.rpc.dispatcher import Dispatcher
+    from raven.rpc.methods.credential import register_credential_methods
+
+    page, written = Page(), []
+    broker = _broker(page, written)
+    dispatcher = Dispatcher()
+    register_credential_methods(dispatcher, credential_broker=broker)
+
+    async def call(method: str, params: dict[str, Any]) -> Any:
+        reply = await dispatcher.dispatch({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+        return reply["result"]
+
+    task = asyncio.create_task(broker.request_credential(conversation_id="c-1", turn_id="t-1", request=REQUEST))
+    await page.opened.wait()
+    rid = page.request()["request_id"]
+
+    assert [r["request_id"] for r in (await call("credential.pending", {"session_id": "c-1"}))["requests"]] == [rid]
+    assert await call("credential.submit", {"request_id": rid, "session_id": "c-1"}) == {
+        "ok": False,
+        "error": "This request is no longer open.",
+    }, "no value"
+    assert await call("credential.skip", {"session_id": "c-1"}) == {"ok": False}, "no request id"
+    assert not task.done()
+    assert await call("credential.submit", {"request_id": rid, "session_id": "c-1", "value": "tvly-real"}) == {
+        "ok": True
+    }
+    assert await task is CredentialOutcome.SAVED
+    assert written == [("tools.web.providers.tavily.apiKey", "tvly-real")]

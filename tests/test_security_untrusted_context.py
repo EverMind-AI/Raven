@@ -173,3 +173,40 @@ def test_another_programs_settings_are_redacted_when_a_call_reads_them() -> None
     source = 'API_KEY = "sk-test-placeholder-for-tests-000"'
     assert redact_home_config_read({"path": "tests/test_keys.py"}, source) == source
     assert redact_home_config_read({"command": "grep -r token src/"}, source) == source
+
+
+def test_no_config_or_an_unreadable_one_holds_nothing_to_scrub(tmp_path, monkeypatch):
+    """Scrubbing is a courtesy on the way to the model; a missing or broken
+    config must leave the text as it is, not fail the tool result."""
+    from raven.config import held_secrets as module
+
+    path = tmp_path / "config.json"
+    monkeypatch.setattr(module, "get_config_path", lambda: path)
+    monkeypatch.setattr(module, "_cache", None)
+    assert module.held_secrets() == ()
+    path.write_text("{ not json", encoding="utf-8")
+    assert module.held_secrets() == ()
+    assert module.scrub_held_secrets("sk-anything-at-all") == "sk-anything-at-all"
+
+
+def test_a_home_dotfile_read_is_recognised_even_from_arguments_json_cannot_spell():
+    from raven.security.redact import redact_home_config_read
+
+    settings = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
+    odd = {"path": "~/.qwen/settings.json", "handle": object()}
+    assert "0123456789abcdef0123456789abcdef" not in redact_home_config_read(odd, settings)
+    assert redact_home_config_read({"path": "~/.qwen/settings.json"}, "") == ""
+
+
+def test_an_unreadable_config_lends_no_key_and_does_not_stop_the_start(monkeypatch):
+    from raven.agent.subagent.backends import lent_key_env
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    def _broken(*args, **kwargs):
+        raise ValueError("config.json is not valid JSON")
+
+    monkeypatch.setattr("raven.config.self_surface.read_raw", _broken)
+    cfg = ThirdPartyAcpSubagentConfig.model_validate(
+        {"name": "Pi", "kind": "acp", "preset": "pi", "command": "x", "lendKeys": ["openrouter"]}
+    )
+    assert lent_key_env(cfg) == {}

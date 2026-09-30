@@ -2972,6 +2972,45 @@ async def test_a_refusal_about_the_model_names_the_models_the_agent_offers(
     assert not any(e.get("name") == "OpenCode" for e in _stored(config_path))
 
 
+async def test_a_model_refusal_stands_when_the_menu_cannot_be_read(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The menu is a help to the refusal, not a condition of it."""
+    from raven.agent.subagent.probe import PingResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    async def _refused(cfg: object) -> PingResult:
+        return PingResult(False, "404 model 'm-free' is no longer available", Remedy("model"))
+
+    async def _no_handshake(cfg: object) -> object:
+        raise ConnectionError("the agent went away before its menu was read")
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _refused)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_handshake)
+    with pytest.raises(SubagentNotReadyError) as refused:
+        await subagents_add({"preset": "opencode"})
+    assert "no longer available" in str(refused.value)
+    assert refused.value.data["remedy"]["kind"] == "model"
+    assert not refused.value.data.get("models")
+
+
+async def test_a_model_pick_is_judged_on_what_is_recorded_when_the_handshake_fails(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _unmeasured(cfg: object) -> None:
+        return None
+
+    async def _no_handshake(cfg: object) -> object:
+        raise ConnectionError("the agent did not start")
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _unmeasured)
+    await subagents_add({"preset": "opencode"})
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_handshake)
+    with pytest.raises(ConfigValidationError, match="offers none"):
+        await subagents_update({"name": "OpenCode", "model": "openai/gpt-5.5"})
+
+
 async def test_add_takes_a_preset_by_the_name_it_is_shown_under(
     config_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
