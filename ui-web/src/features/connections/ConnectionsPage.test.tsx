@@ -708,19 +708,21 @@ describe('connections island', () => {
   })
 
   /* A Latin name inside a Chinese sentence takes a space either side; a
-     Chinese name takes none. */
+     Chinese name takes none. The Chinese name is escaped: source added in a PR stays
+     ASCII (scripts/check_source_language.py). */
   it('spaces a Latin name inside a Chinese sentence, and only there', async () => {
+    const FEISHU = '\u98de\u4e66'
     install([
       chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] }),
-      chan({ id: 'feishu', key: '飞书', fields: [{ key: 'app_id', required: true }], missing: ['app_id'] }),
+      chan({ id: 'feishu', key: FEISHU, fields: [{ key: 'app_id', required: true }], missing: ['app_id'] }),
     ])
     act(() => lang.set('zh'))
     try {
       await mount()
       await act(async () => { openRow('Telegram') })
       expect(main().querySelector('.su-guide-t')!.textContent).toBe('gui.conn.guide {"name":" Telegram "}')
-      await act(async () => { openRow('飞书') })
-      expect(main().querySelector('.su-guide-t')!.textContent).toBe('gui.conn.guide {"name":"飞书"}')
+      await act(async () => { openRow(FEISHU) })
+      expect(main().querySelector('.su-guide-t')!.textContent).toBe(`gui.conn.guide {"name":"${FEISHU}"}`)
     } finally {
       act(() => lang._resetForTests())
     }
