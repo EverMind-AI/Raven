@@ -2042,3 +2042,25 @@ class TestEverosFollowsACredentialChange:
         monkeypatch.setattr(builtins, "__import__", no_everos)
         result = await model_save_key({"slug": "deepseek", "api_key": "new-key"})
         assert result["provider"]["slug"] == "deepseek"
+
+
+async def test_add_model_preserves_metadata_under_a_bare_id(fake_home: Path) -> None:
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "hosted_vllm": {
+                    "apiBase": "http://localhost:9999/v1",
+                    "models": ["team-model"],
+                    "modelOverlay": {"team-model": {"label": "Team model", "description": "Keep this description"}},
+                }
+            }
+        },
+    )
+
+    result = await model_add_model({"slug": "hosted_vllm", "model": "team-model", "capabilities": ["reasoning"]})
+
+    row = result["provider"]["model_labels"]["team-model"]
+    assert row["label"] == "Team model"
+    assert row["description"] == "Keep this description"
+    assert row["capabilities"] == ["reasoning"]

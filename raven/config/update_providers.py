@@ -967,7 +967,13 @@ def add_provider_model(
             # has no parameter to be restated with at all, so a wholesale write
             # loses it every time. Re-adding corrects the tags it names and
             # leaves the rest of the row alone.
-            merged = {**(overlays.get(model) or {}), **overlay}
+            previous = {}
+            target = merge_key(name, model)
+            for stored in list(overlays):
+                if merge_key(name, stored) == target:
+                    # Match the reader's last-row precedence for existing aliases.
+                    previous = overlays.pop(stored) or {}
+            merged = {**previous, **overlay}
             # An empty string is how a caller clears a field it can otherwise
             # only restate; None would be "unstated" and leave it alone.
             merged = {k: v for k, v in merged.items() if v != ""}

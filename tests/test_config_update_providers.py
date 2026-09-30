@@ -1074,6 +1074,60 @@ def test_an_overlay_merges_into_the_row_it_already_had(cfg_path: Path) -> None:
     assert row["capabilities"] == ["reasoning"]
 
 
+@pytest.mark.parametrize(
+    ("existing", "incoming"),
+    [("team-model", "hosted-vllm/team-model"), ("hosted-vllm/team-model", "team-model")],
+)
+@pytest.mark.parametrize(
+    "patch",
+    [{"capabilities": ["reasoning"]}, {"label": ""}, {"capabilities": []}],
+)
+def test_overlay_updates_match_model_identity(cfg_path: Path, existing: str, incoming: str, patch: dict) -> None:
+    original = {"label": "Team model", "description": "Keep this description", "capabilities": ["function-call"]}
+    add_provider_model("hosted_vllm", existing, overlay=original, config_path=cfg_path)
+    add_provider_model("hosted_vllm", "other-model", overlay={"label": "Other model"}, config_path=cfg_path)
+
+    models = add_provider_model("hosted_vllm", incoming, overlay=patch, config_path=cfg_path)
+
+    overlays = _read(cfg_path)["providers"]["hosted_vllm"]["modelOverlay"]
+    assert models == [existing, "other-model"]
+    assert set(overlays) == {incoming, "other-model"}
+    for field, value in (original | patch).items():
+        assert overlays[incoming][field] == value
+    assert overlays["other-model"]["label"] == "Other model"
+
+
+@pytest.mark.parametrize("clear", [False, True])
+def test_overlay_alias_cleanup_preserves_effective_row(cfg_path: Path, clear: bool) -> None:
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "hosted_vllm": {
+                        "models": ["team-model"],
+                        "modelOverlay": {
+                            "hosted-vllm/team-model": {"label": "Stale name", "description": "Stale description"},
+                            "team-model": {"label": "Current name", "description": ""},
+                        },
+                    }
+                }
+            }
+        )
+    )
+
+    patch = {"label": ""} if clear else {"capabilities": ["reasoning"]}
+    add_provider_model("hosted_vllm", "hosted-vllm/team-model", overlay=patch, config_path=cfg_path)
+
+    overlays = _read(cfg_path)["providers"]["hosted_vllm"]["modelOverlay"]
+    if clear:
+        assert overlays == {}
+    else:
+        assert list(overlays) == ["hosted-vllm/team-model"]
+        assert overlays["hosted-vllm/team-model"]["label"] == "Current name"
+        assert overlays["hosted-vllm/team-model"]["description"] == ""
+        assert overlays["hosted-vllm/team-model"]["capabilities"] == ["reasoning"]
+
+
 def test_re_adding_corrects_the_field_it_names(cfg_path: Path) -> None:
     """Merging must not turn a correction into an append: re-adding is how a
     person fixes a tag they got wrong, so a restated field replaces."""
