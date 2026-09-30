@@ -1359,6 +1359,12 @@ def test_provider(
     endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
     api_key = endpoint.api_key if endpoint else ""
     api_base = (endpoint.api_base if endpoint else None) or (spec.default_api_base if spec else "") or ""
+    # From the same resolved endpoint as the key and the address, because a
+    # relay that needs a header of its own refuses a request without it -- and
+    # the request path already sends them (`providers/factory.py` hands each
+    # endpoint's headers to its provider). A probe that dropped them reported a
+    # working section as `invalid_key`.
+    extra_headers = dict(endpoint.extra_headers or {}) if endpoint else {}
     derived_api_base = False
 
     # Before the token fetch below, which asks a question this backend does not
@@ -1450,8 +1456,13 @@ def test_provider(
         # api_base is pointed at somebody's proxy, and a proxy speaks the OpenAI
         # shape the generic path sends. Answering that with Google's header
         # would break a probe that works today.
-        url, headers = shape(api_key)
-        return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+        url, shaped = shape(api_key)
+        # The vendor's own auth header wins over a configured one, for the same
+        # reason `Authorization` does below: this probe reports on the credential
+        # it resolved, not on one the section names beside it.
+        return _probe_models_endpoint(
+            url, {**extra_headers, **shaped}, timeout_s=timeout_s, transport=transport, extras=extras
+        )
 
     if not api_base:
         # Asked here and not above: the branches in between return for the
@@ -1503,7 +1514,12 @@ def test_provider(
     if "/v1" not in api_base:
         url = api_base.rstrip("/") + "/v1/models"
 
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    # The configured headers first, so the credential this probe is reporting on
+    # is the one it resolved: a section naming `Authorization` itself would
+    # otherwise answer the question about its key with a different key.
+    headers = dict(extra_headers)
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
         headers["x-api-key"] = api_key
 
