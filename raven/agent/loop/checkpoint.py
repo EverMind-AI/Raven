@@ -310,6 +310,12 @@ class CheckpointService:
                 " ".join(args[:2]),
             )
             return -1, b"", b"timeout"
+        except asyncio.CancelledError:
+            # A caller that stopped waiting (a bounded measurement, a
+            # cancelled turn) must not leave its git running.
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            raise
         return proc.returncode or 0, out, err
 
     async def _ensure_init(self) -> bool:

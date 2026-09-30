@@ -10,6 +10,7 @@ own tests in ``test_runtime_checkpoint.py``.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 from pathlib import Path
 from typing import Any, Collection
@@ -24,9 +25,12 @@ from raven.agent.tools.shell import ExecTool
 class _Shadow:
     """A shadow repo whose tree is whatever the directory held at staging."""
 
-    def __init__(self, root: Path, *, stage: Any = None, ignored: Collection[str] = ()) -> None:
+    def __init__(
+        self, root: Path, *, stage: Any = None, ignored: Collection[str] = (), answer_after: float = 0.0
+    ) -> None:
         self._root = root
         self._stage = stage
+        self._answer_after = answer_after
         self._ignored = set(ignored)
         self._trees: dict[str, dict[str, bytes]] = {}
         self.staged = 0
@@ -48,6 +52,7 @@ class _Shadow:
         return {path: held[path] for path in paths if path in held and len(held[path]) <= max_bytes}
 
     async def trackable(self, paths: Collection[str]) -> set[str]:
+        await asyncio.sleep(self._answer_after)
         return {path for path in paths if Path(path).name not in self._ignored}
 
 
@@ -217,4 +222,47 @@ def test_the_tools_ceiling_covers_the_longest_command_and_the_longest_wait():
     two together would kill a command the executor was still allowed to run."""
     from raven.agent.loop import checkpoint
 
-    assert ExecTool.timeout_seconds > ExecTool._MAX_TIMEOUT + checkpoint._STAGE_WAIT_SECONDS
+    spent = checkpoint._STAGE_WAIT_SECONDS + ExecTool._MAX_TIMEOUT + command_writes.AFTER_WAIT_SECONDS
+    assert ExecTool.timeout_seconds > spent
+    assert command_writes.AFTER_WAIT_SECONDS > command_writes.READ_WAIT_SECONDS
+
+
+async def test_a_shadow_repo_too_slow_to_answer_after_the_command_leaves_every_file_bare(tmp_path, monkeypatch):
+    """The command has run; what the repo would have said about its files is
+    worth less than its output. Past the wait the files go out without text --
+    including a named removal's, which the repo never got to rule on."""
+    monkeypatch.setattr(command_writes, "READ_WAIT_SECONDS", 0.05)
+    (tmp_path / "notes.md").write_text("one\n")
+    (tmp_path / "gone.txt").write_text("secret\n")
+
+    result = await _tool(tmp_path, _Shadow(tmp_path, answer_after=5.0)).execute(
+        command="echo two >> notes.md && rm gone.txt"
+    )
+
+    assert "Exit code: 0" in result
+    [write] = result.written
+    assert (write.added, write.diff) == (None, None)
+    assert [(Path(r.path).name, r.before) for r in result.removed] == [("gone.txt", None)]
+
+
+async def test_measuring_that_runs_past_its_bound_still_returns_the_commands_output(tmp_path, monkeypatch):
+    """Everything after the command is bounded short of the registry's ceiling,
+    so a slow walk costs the record of the files and never the output."""
+    monkeypatch.setattr(command_writes, "AFTER_WAIT_SECONDS", 0.2)
+    real_take = snapshot.take
+    walks: list[int] = []
+
+    def _slow_second_walk(root: Any) -> Any:
+        walks.append(1)
+        if len(walks) == 2:
+            import time
+
+            time.sleep(1.0)
+        return real_take(root)
+
+    monkeypatch.setattr(snapshot, "take", _slow_second_walk)
+
+    result = await _tool(tmp_path, _Shadow(tmp_path)).execute(command="echo done && echo x > made.txt")
+
+    assert "done" in result and result.ok is True
+    assert result.written == ()

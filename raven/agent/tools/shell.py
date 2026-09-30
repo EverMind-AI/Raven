@@ -55,10 +55,13 @@ class _UnmodelledExpansionError(Exception):
 class ExecTool(Tool):
     """Tool to execute shell commands."""
 
-    # Backstop above the 600s internal exec cap (``_MAX_TIMEOUT``) plus the
-    # 120s a command may wait for the tree it is measured against; the
-    # executor's own timeout fires first, this only catches a wedged executor.
-    timeout_seconds = 780.0
+    # Backstop above everything a call may legitimately spend: the 120s a
+    # command may wait for the tree it is measured against, the 600s internal
+    # exec cap (``_MAX_TIMEOUT``) and the 120s its files may take to measure
+    # afterwards (``command_writes.AFTER_WAIT_SECONDS``), plus a margin. Each
+    # of those has its own bound that fires first; this only catches a wedged
+    # executor, and cutting a call off here loses the command's output.
+    timeout_seconds = 900.0
     approval_kind = "shell.exec"
 
     def __init__(

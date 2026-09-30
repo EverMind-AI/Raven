@@ -1117,3 +1117,32 @@ async def test_a_commands_own_staging_that_fails_unexpectedly_still_answers(work
     monkeypatch.setattr(svc, "_stage_step", _raise)
 
     assert await asyncio.wait_for(svc.stage_tree(), 30) is None
+
+
+async def test_a_git_call_whose_caller_stops_waiting_is_killed(workspace, monkeypatch):
+    """A bounded measurement or a cancelled turn stops waiting on a git read;
+    the git itself must not be left running behind it."""
+    import os
+
+    svc = CheckpointService(workspace)
+    pid_file = workspace / "pid"
+    monkeypatch.setattr(
+        svc, "_command", lambda _args, _index: (["sh", "-c", f"echo $$ > {pid_file}; exec sleep 30"], None)
+    )
+
+    call = asyncio.ensure_future(svc._run(("cat-file", "--batch"), stdin=b""))
+    while not pid_file.exists() or not pid_file.read_text().strip():
+        await asyncio.sleep(0.01)
+    pid = int(pid_file.read_text())
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+
+    for _ in range(200):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        pytest.fail("the git process outlived the call that stopped waiting on it")

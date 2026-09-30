@@ -38,6 +38,16 @@ TEXT_MAX_BYTES = 256 * 1024
 #: diff is dropped whole: half a diff reads as a smaller change than happened.
 DIFF_BUDGET_CHARS = 512 * 1024
 
+#: How long the shadow repo may take to say, after a command, which files may
+#: be shown and what they held. Past it the files go out without their text.
+READ_WAIT_SECONDS = 60.0
+
+#: How long everything after a command may take: the second walk, those reads,
+#: and reading the written files. Past it the call returns with the command's
+#: output and no record of its files, rather than be cut off by the registry's
+#: ceiling with neither. ``ExecTool.timeout_seconds`` budgets for it.
+AFTER_WAIT_SECONDS = 120.0
+
 
 class ShadowTree(Protocol):
     """The part of the checkpoint's shadow repo a command is measured against.
@@ -113,7 +123,24 @@ async def after(
     stays in the index, and its text must not be shown for that. Where there is
     no shadow repo to ask, a created file keeps its counts only, and a rewrite
     or listed removal has no earlier text to show.
+
+    Bounded (:data:`AFTER_WAIT_SECONDS`): the command has already run, and its
+    output must reach the model whatever the measuring costs. Past the bound
+    nothing is reported, and a named removal keeps its text only where no
+    shadow repo could have ruled on it.
     """
+    try:
+        return await asyncio.wait_for(_after(start, named), AFTER_WAIT_SECONDS)
+    except TimeoutError:
+        logger.warning("exec files not recorded: measuring {} did not finish in time", start.root)
+        if start.shadow is None:
+            return (), named
+        return (), tuple(FileRemoval(path=removal.path) for removal in named)
+
+
+async def _after(
+    start: Before, named: tuple[FileRemoval, ...]
+) -> tuple[tuple[FileWrite, ...], tuple[FileRemoval, ...]]:
     listing = await asyncio.to_thread(snapshot.take, start.root)
     accounted = {os.path.realpath(removal.path) for removal in named}
     created, modified, deleted = (
@@ -124,11 +151,14 @@ async def after(
     shown: set[str] = set()
     if start.shadow is not None and start.tree is not None:
         subjects = [*created, *modified, *deleted, *(removal.path for removal in named if removal.before is not None)]
-        if subjects:
-            shown = await start.shadow.trackable(subjects)
-        readable = [path for path in [*modified, *deleted] if path in shown]
-        if readable:
-            held = await start.shadow.read_blobs(start.tree, readable, max_bytes=TEXT_MAX_BYTES)
+        try:
+            shown, held = await asyncio.wait_for(
+                _shown_and_held(start.shadow, start.tree, subjects, [*modified, *deleted]), READ_WAIT_SECONDS
+            )
+        except TimeoutError:
+            # Nothing the repo did not rule on goes out: every file stays bare.
+            logger.warning("exec diffs dropped: the shadow repo for {} did not answer in time", start.root)
+            shown, held = set(), {}
         named = tuple(removal if removal.path in shown else FileRemoval(path=removal.path) for removal in named)
     # Off the loop too: this reads every written file, and one command can write hundreds.
     written = (
@@ -136,6 +166,16 @@ async def after(
     )
     removed = named + tuple(FileRemoval(path=path, before=_decoded(held.get(path))) for path in deleted)
     return written, removed
+
+
+async def _shown_and_held(
+    shadow: ShadowTree, tree: str, subjects: list[str], changed: list[str]
+) -> tuple[set[str], dict[str, bytes]]:
+    """The subjects the repo's rules would store, and what those of ``changed`` held."""
+    shown = await shadow.trackable(subjects) if subjects else set()
+    readable = [path for path in changed if path in shown]
+    held = await shadow.read_blobs(tree, readable, max_bytes=TEXT_MAX_BYTES) if readable else {}
+    return shown, held
 
 
 def _writes(
@@ -197,7 +237,9 @@ def _line_diff(old: str, new: str, name: str) -> tuple[str | None, int, int]:
 
 
 __all__ = [
+    "AFTER_WAIT_SECONDS",
     "DIFF_BUDGET_CHARS",
+    "READ_WAIT_SECONDS",
     "TEXT_MAX_BYTES",
     "Before",
     "ShadowFor",
