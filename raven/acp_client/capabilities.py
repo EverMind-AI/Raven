@@ -785,8 +785,12 @@ def npx_fetch_lead(verdict: str) -> str:
     return f"npx could not download it ({verdict}); check the network, the npm registry or the proxy"
 
 
-async def verify_agent(cfg: Any) -> CapabilitySnapshot:
+async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> CapabilitySnapshot:
     """Connect once, read what the agent reports, and disconnect. Never raises.
+
+    ``env`` is the environment the agent is started with, when the caller's is
+    more than the row's own ``env`` -- the keys a row borrows from Raven, which
+    the spawn path adds and this transport has no business resolving.
 
     Two round trips, both needed: ``initialize`` carries the capabilities and auth
     methods, and ``session/new`` is the only place the model list appears. Doing
@@ -845,7 +849,7 @@ async def verify_agent(cfg: Any) -> CapabilitySnapshot:
             name=name,
             command=getattr(cfg, "command", "") or "",
             cwd=getattr(cfg, "cwd", None),
-            env=dict(getattr(cfg, "env", None) or {}),
+            env=dict(env if env is not None else (getattr(cfg, "env", None) or {})),
             # Nothing here is prompted, so no permission request is expected.
             # One that arrives anyway still has to be answered, or the agent
             # waits for a reply that never comes and the handshake stalls behind

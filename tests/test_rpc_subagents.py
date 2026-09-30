@@ -3065,3 +3065,25 @@ def test_a_row_that_lends_nothing_keeps_its_recorded_verdicts() -> None:
     for digest in (fingerprint, snapshot_fingerprint):
         assert digest(before) == digest(empty)
         assert digest(lent) != digest(before)
+
+
+async def test_the_capability_probe_starts_the_agent_with_its_lent_key(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: Pi was added on Raven's OpenRouter key -- its ping answered --
+    and the probe right after measured it without the key, so the row read
+    "connected, but no session could be opened: Authentication required"."""
+    from raven.acp_client import capabilities
+    from raven.agent.subagent import probe
+
+    _holding_keys(config_path, monkeypatch, openrouter="sk-or-raven")
+    launched: list[dict[str, str]] = []
+
+    async def _launch(**kwargs: object) -> object:
+        launched.append(dict(kwargs["env"]))  # type: ignore[arg-type]
+        raise OSError("not started in this test")
+
+    monkeypatch.setattr(capabilities.AcpClient, "launch", _launch)
+    (cfg,) = _as_configs([{"name": "Pi", "kind": "acp", "preset": "pi", "command": "x", "lendKeys": ["openrouter"]}])
+    await probe.record_capabilities(cfg)
+    assert launched and launched[0]["OPENROUTER_API_KEY"] == "sk-or-raven"

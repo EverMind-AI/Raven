@@ -366,6 +366,9 @@ interface NoteSpec {
      is to go on. */
   raw: string
   folded: boolean
+  /* A caveat on a connected row rather than a failure: drawn in the warning
+     colour, with the check's own words folded under "what the check found". */
+  warn?: boolean
   /* Handing the failure to Raven: a new conversation whose composer opens with
      this prompt, naming the agent and the reason, for the reader to send. */
   ask?: { key: string; agent: string; reason: string }
@@ -432,19 +435,38 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
     }
     return { ...plain, ask: askFor(key, agent, plain, false) }
   }
-  if (row.last_test_ok !== false) return null
   const button = testPress(row, shown)
-  if (!button) return null
-  const when = ago(row.last_test_at_ms)
-  const spec = remedied(agent, row.last_test_remedy || null, button, row.last_test_detail || '')
-  if (spec) return { ...spec, when, ask: askFor('gui.agent.ask_test', agent, spec, true) }
-  const plain: NoteSpec = { title: t('gui.agent.st_test_bad'), when, lead: t('gui.agent.said_test', { button }), raw: row.last_test_detail || '', folded: false }
-  return { ...plain, ask: askFor('gui.agent.ask_test', agent, plain, false) }
+  if (row.last_test_ok === false) {
+    if (!button) return null
+    const when = ago(row.last_test_at_ms)
+    const spec = remedied(agent, row.last_test_remedy || null, button, row.last_test_detail || '')
+    if (spec) return { ...spec, when, ask: askFor('gui.agent.ask_test', agent, spec, true) }
+    const plain: NoteSpec = { title: t('gui.agent.st_test_bad'), when, lead: t('gui.agent.said_test', { button }), raw: row.last_test_detail || '', folded: false }
+    return { ...plain, ask: askFor('gui.agent.ask_test', agent, plain, false) }
+  }
+  /* Connected, but the last check found something: the same block as a
+     failure, in the warning colour. A check that says it needs a sign-in
+     reads as one; anything else names the check and folds its words. */
+  if (shown !== 'on' || row.builtin || row.probe_status !== 'attention') return null
+  const signIn = !!row.needs_auth
+  /* The bar's own label: with no failed test behind it the press is Test, not
+     Test again (testPress names the press after a failure). */
+  const testLabel = canTest(row) ? t('gui.agent.test_label') : ''
+  const warn: NoteSpec = {
+    title: signIn ? t('gui.agent.bad_sign_in', { agent }) : t('gui.agent.warn_title', { agent }),
+    lead: testLabel
+      ? t(signIn ? 'gui.agent.fix_sign_in_bare' : 'gui.agent.warn_lead', { agent, button: testLabel })
+      : t('gui.agent.warn_lead_bare'),
+    raw: row.probe_detail || '',
+    folded: true,
+    warn: true,
+  }
+  return { ...warn, ask: askFor('gui.agent.ask_check', agent, warn, signIn) }
 }
 
-function Note({ title, when, lead, command, then, raw, folded, ask }: NoteSpec): JSX.Element {
+function Note({ title, when, lead, command, then, raw, folded, warn, ask }: NoteSpec): JSX.Element {
   return (
-    <div className="extAgents-note">
+    <div className={warn ? 'extAgents-note extAgents-note-warn' : 'extAgents-note'}>
       <div className="extAgents-note-h">
         <div className="extAgents-note-t">
           {title}
@@ -473,7 +495,7 @@ function Note({ title, when, lead, command, then, raw, folded, ask }: NoteSpec):
       ) : null}
       {!raw ? null : folded ? (
         <details className="extAgents-note-raw">
-          <summary>{t('gui.agent.fix_raw')}</summary>
+          <summary>{t(warn ? 'gui.agent.probe_raw' : 'gui.agent.fix_raw')}</summary>
           <pre>{raw}</pre>
         </details>
       ) : (
@@ -518,25 +540,9 @@ function StatusLine({ row, shown, s }: { row: ExtAgentRow; shown: Shown; s: ExtA
       </div>
     )
   }
-  /* The probe's sentence is English and written for a log, so it is folded
-     under the line the way a refusal's is, not put in it. */
-  if (health.tone === 'warn') {
-    return (
-      <div className="extAgents-by extAgents-by-fix">
-        {led}
-        <div className="extAgents-fix">
-          <div>{health.label}</div>
-          {row.probe_detail ? (
-            <details className="extAgents-raw">
-              <summary>{t('gui.agent.probe_raw')}</summary>
-              {row.probe_detail}
-            </details>
-          ) : null}
-        </div>
-      </div>
-    )
-  }
-  if (health.tone === 'good') {
+  /* A caveat reads as one line here, like every other state; what the check
+     found, and its own words, are the note at the top of the body. */
+  if (health.tone === 'warn' || health.tone === 'good') {
     return (
       <div className="extAgents-by">
         {led}

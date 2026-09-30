@@ -27,7 +27,7 @@ import aiohttp
 from loguru import logger
 
 from raven.agent.subagent import github_copilot, kimi_code
-from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
+from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, lent_key_env
 from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
@@ -1073,6 +1073,17 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     return TestResult(cfg.name, source, "acp", answered.ok, detail, reply, elapsed(), answered.remedy)
 
 
+def _launch_kw(cfg: Any) -> dict[str, Any]:
+    """What a capability probe adds to start ``cfg`` the way the spawn path does.
+
+    Measured without the keys a row borrows from Raven, an agent that answers a
+    real task on Raven's key reports "Authentication required" and its row reads
+    as broken. Nothing for a row that borrows none, so that call is unchanged.
+    """
+    lent = lent_key_env(cfg)
+    return {"env": {**lent, **(getattr(cfg, "env", None) or {})}} if lent else {}
+
+
 async def record_capabilities(cfg: Any) -> Any:
     """Measure an acp entry's capabilities live and write them down; the snapshot.
 
@@ -1086,7 +1097,7 @@ async def record_capabilities(cfg: Any) -> Any:
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
-    snapshot = await verify_agent(cfg)
+    snapshot = await verify_agent(cfg, **_launch_kw(cfg))
     _note_menu_re_measured(snapshot, getattr(cfg, "name", "") or "")
     store = SnapshotStore()
     store.record(_test_record(snapshot, store.load([cfg], allow_stale=True).get(cfg.name)))
@@ -1356,7 +1367,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             menuless_own = _own_row_missing_its_menu(snapshot, name)
             if snapshot is not None and not snapshot.stale and not outdated_menu and not refused and not menuless_own:
                 continue
-            result = await verify_agent(cfg)
+            result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)
             # A pass, or a refusal the agent explained. Every other failure stays
             # unrecorded on purpose: a timeout or a crashed adapter is a fact

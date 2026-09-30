@@ -5253,19 +5253,35 @@
     },
     "gui.agent.ask_raven": {
       "en": "Hand it to Raven →",
-      "zh": "交给 Raven 排查 →"
+      "zh": "交给 Raven →"
     },
     "gui.agent.ask_connect": {
-      "en": "Connect {name} for me. The last try failed: {reason}. Fix what you can yourself, and tell me only when something needs me.",
-      "zh": "帮我把 {name} 接进来。刚才接入失败：{reason}。能自己排查和修的先修好，确实需要我操作的时候再告诉我。"
+      "en": "Connect the agent {name} for me. The last try failed: {reason}. Fix what you can yourself, and tell me only when something needs me.",
+      "zh": "帮我把智能体 {name} 接进来。刚才接入失败：{reason}。能自己排查和修的先修好，确实需要我操作的时候再告诉我。"
     },
     "gui.agent.ask_test": {
-      "en": "{name}'s last test failed: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
-      "zh": "{name} 最近一次测试没通过：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+      "en": "The agent {name} failed its last test: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+      "zh": "智能体 {name} 最近一次测试没通过：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
     },
     "gui.agent.ask_fix": {
-      "en": "A change to {name} did not go through: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
-      "zh": "{name} 刚才的操作没成功：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+      "en": "A change to the agent {name} did not go through: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+      "zh": "智能体 {name} 刚才的操作没成功：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+    },
+    "gui.agent.ask_check": {
+      "en": "The agent {name} is connected, but its check found a problem: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+      "zh": "智能体 {name} 已接入，但检查发现了问题：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+    },
+    "gui.agent.warn_title": {
+      "en": "{agent} is connected, but its check found a problem",
+      "zh": "{agent} 连上了，但检查发现了问题"
+    },
+    "gui.agent.warn_lead": {
+      "en": "What the check found is below; once that is fixed, press {button}.",
+      "zh": "检查结果在下面，处理好后点「{button}」。"
+    },
+    "gui.agent.warn_lead_bare": {
+      "en": "What the check found is below.",
+      "zh": "检查结果在下面。"
     },
     "gui.agent.fix_download": {
       "en": "{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this command in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}:",
