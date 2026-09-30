@@ -565,16 +565,23 @@ _Avoid_: a fourth door -- a tool reaching the table any other way skips admissio
 **Checkpoint** (`agent/loop/checkpoint.py`):
 A once-per-turn commit of the session workspace into a shadow git repo (separate from the
 user's `.git`), so an interrupted or failed turn can be rolled back. One `CheckpointService`
-per working directory, cached by `AgentLoop._turn_checkpoint()` and keyed on the directory
-the running turn is bound to. The same repo also answers what a file an `exec` command
-rewrote or removed held before it. `ExecTool` holds it through `command_writes.ShadowTree`,
+per working directory, cached by `AgentLoop._checkpoint_for()` and keyed on the directory
+it covers: the running turn's (`_turn_checkpoint()`), or for an `exec` command and the
+session-open warm-up (`_command_shadow()`) the directory a turn is bound to or, with none
+bound, the one the command runs in. The same repo also answers what a file an `exec` command rewrote or removed held
+before it. `ExecTool` holds it through `command_writes.ShadowTree`,
 handed in by the loop, and does the measuring itself: `ExecTool.warm` starts staging the tree
 in the background when a session opens on the directory (`session.create` /
 `session.resume`, or the first turn where a session opens without either), and every
 command stages it afresh inside its own call with `stage_tree`, into a per-process index of
-its own (never the index the turn commit reads), waiting up to 120s; a tree it cannot stage,
-or not within that wait, leaves the command to run without a diff. `read_blobs` reads the old contents back for the
-command's `file_written` diff and `file_removed` body.
+its own (never the index the turn commit reads), waiting up to 120s for the staging itself
+(a first use also sets the repo up, before that wait starts); a tree it cannot stage, or not
+within that wait, leaves the command to run without a diff. `read_blobs` reads the old
+contents back for the command's `file_written` diff and `file_removed` body.
+A file's text leaves only where it is *trackable*: `CheckpointService.trackable`, the repo's
+own rules (its default excludes and the user's `.gitignore`, `git check-ignore --no-index`),
+judged without a tree, so a file the checkpoint would not store has no diff and a removal of
+it goes out `withheld`, which nothing else may fill in.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
 **Empty-Response Recovery** (`agent/loop/recovery.py`):

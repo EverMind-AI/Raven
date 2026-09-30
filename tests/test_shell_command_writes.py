@@ -283,6 +283,32 @@ def test_a_measuring_tools_ceiling_covers_the_longest_command_and_the_longest_wa
     assert command_writes.AFTER_WAIT_SECONDS > command_writes.READ_WAIT_SECONDS
 
 
+def test_a_calls_diffs_share_the_budget_its_file_changes_and_removed_bodies_do():
+    """One event budget, written in two places: the tool cannot import the
+    loop's constant, so this holds them equal."""
+    from raven.agent.loop import _shared
+
+    assert command_writes.DIFF_BUDGET_CHARS == _shared._FILE_CHANGE_MAX_CHARS
+
+
+async def test_a_shadow_repo_that_cannot_stage_says_so_once_per_directory(tmp_path, monkeypatch):
+    """A broken repo measures every command without diffs, and the reason
+    must reach the log above debug -- once, not on every command."""
+    from loguru import logger
+
+    monkeypatch.setattr(command_writes, "_UNSTAGED", set())
+    seen: list[str] = []
+    sink = logger.add(lambda message: seen.append(str(message)), level="WARNING")
+    try:
+        tool = _tool(tmp_path, _Shadow(tmp_path, stage=lambda: None))
+        await tool.execute(command="echo one > a.txt")
+        await tool.execute(command="echo two > b.txt")
+    finally:
+        logger.remove(sink)
+
+    assert sum("could not stage" in line for line in seen) == 1
+
+
 async def test_a_shadow_repo_too_slow_to_answer_after_the_command_leaves_every_file_bare(tmp_path, monkeypatch):
     """The command has run; what the repo would have said about its files is
     worth less than its output. Past the wait the files go out without text --

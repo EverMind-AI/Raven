@@ -1042,13 +1042,17 @@ async def test_a_plugin_exec_that_replaces_the_built_in_reports_its_files_as_the
     work = workspace / "work"
     work.mkdir()
     (work / "gone.txt").write_text("x\n", encoding="utf-8")
-    replacement = CodeExecTool(
-        working_dir=str(workspace),
-        restrict_to_workspace=True,
-        executor=CodeExecutor(max_timeout=1200, spill_dir=workspace / "spill"),
-        extra_allowed_dirs=(workspace,),
-        max_timeout=1200,
-    )
+
+    def _replacement() -> CodeExecTool:
+        return CodeExecTool(
+            working_dir=str(workspace),
+            restrict_to_workspace=True,
+            executor=CodeExecutor(max_timeout=1200, spill_dir=workspace / "spill"),
+            extra_allowed_dirs=(workspace,),
+            max_timeout=1200,
+        )
+
+    replacement = _replacement()
 
     completes = await _run_command_turn(
         workspace,
@@ -1062,7 +1066,21 @@ async def test_a_plugin_exec_that_replaces_the_built_in_reports_its_files_as_the
     [write] = completes[0]["file_written"]
     assert (Path(write["path"]).name, write["created"], write["added"]) == ("made.txt", True, 2)
     assert [(Path(r["path"]).name, r.get("before")) for r in completes[0]["file_removed"]] == [("gone.txt", "x\n")]
+    # The registry reads the ceiling off the spec it admitted, not the tool.
     assert replacement.timeout_seconds == 1200 + 60 + command_writes.MEASURE_SECONDS
+    spec = _command_agent(workspace, [], plugin_tools=[_replacement()]).tools.spec_of("exec")
+    assert spec is not None and spec.timeout_seconds == 1200 + 60 + command_writes.MEASURE_SECONDS
+
+
+def test_the_built_in_exec_is_admitted_with_the_ceiling_its_measuring_needs(workspace):
+    """A measured command may wait out its staging, run to its cap and then
+    have its files measured; the registry kills it at the ceiling it admitted,
+    so the raise must be on the spec, not only on the tool."""
+    from raven.agent.tools.shell import ExecTool
+
+    spec = _command_agent(workspace, []).tools.spec_of("exec")
+
+    assert spec is not None and spec.timeout_seconds == ExecTool.timeout_seconds + command_writes.MEASURE_SECONDS
 
 
 @pytest.mark.asyncio

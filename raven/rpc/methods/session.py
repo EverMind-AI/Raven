@@ -329,7 +329,8 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
       Nothing else records a deletion: the arguments of the command that did it
       are a string, and the file it names is gone by the time anyone looks.
     * ``file_written`` — the files a command left behind, as
-      ``{path, created, size, lines}``. The other half of the same silence: a
+      ``{path, created, size, lines}``, with ``added`` / ``removed`` / ``diff``
+      where the change could be measured. The other half of the same silence: a
       command reports its output, never the files it wrote.
     * ``reasoning_ms`` / ``duration_ms`` — how long the thought on that
       assistant entry took, and how long the call that ``role="tool"`` entry

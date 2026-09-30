@@ -54,6 +54,10 @@ AFTER_WAIT_SECONDS = 120.0
 MEASURE_SECONDS = 120.0 + AFTER_WAIT_SECONDS
 
 
+#: Directories a staging has failed in, warned about once each.
+_UNSTAGED: set[Path] = set()
+
+
 class ShadowTree(Protocol):
     """The part of the checkpoint's shadow repo a command is measured against.
 
@@ -107,6 +111,11 @@ async def before(root: Path, shadow_for: ShadowFor | None) -> Before:
         # the next command's staging fast.
         logger.warning("exec measured without a diff: staging {} did not finish in time", root)
         tree = None
+    else:
+        if shadow is not None and tree is None and root not in _UNSTAGED:
+            # Once per directory: a broken repo fails every command the same way.
+            _UNSTAGED.add(root)
+            logger.warning("exec measured without a diff: the shadow repo could not stage {}", root)
     # The repo is kept without a tree: what a file held needs the tree, but
     # whether its text may be shown is the repo's rules, which need none.
     return Before(root, listing, shadow, tree)

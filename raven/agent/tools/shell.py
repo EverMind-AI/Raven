@@ -126,9 +126,10 @@ class ExecTool(Tool):
 
         Read off its directory either side (``command_writes``), with ``shadow``
         saying what those files held, for their diffs, and which of them may be
-        shown. Asked of whatever tool answers to ``exec`` once the loop's tools
-        are all registered, so a same-name replacement measures as the built-in
-        does. Left off for a lane whose runner lists every call itself.
+        shown. Asked of the built-in and of a plugin's same-name replacement
+        alike, and before either is registered: the ceiling it raises is read
+        off the spec the registry admits. Left off for a lane whose runner lists
+        every call itself.
         """
         if not self.record_writes:
             self.timeout_seconds += command_writes.MEASURE_SECONDS
