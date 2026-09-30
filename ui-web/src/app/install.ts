@@ -350,13 +350,13 @@ export function installActions(): void {
      Registered here because state/page.ts does not import features/ -- it
      declares the slot and when it runs (state/page.ts's `show`). */
   page.onShow('markNav', markNew)
-  /* What raises the settings dialog for the three domains that are sections of
-     it (schedules, channels, memory). Registered here for the same reason the
-     slot above is: state/settings.ts declares it and does not import the island
-     that fills it. What arriving at one of those three sections costs, and what
+  /* What raises the settings dialog for the two domains that are sections of
+     it (schedules, memory). Registered here for the same reason the slot above
+     is: state/settings.ts declares it and does not import the island that
+     fills it. What arriving at one of those two sections costs, and what
      leaving it costs, each domain registers at its own module evaluation --
-     three island stores in the page's wiring for three lines is three island
-     graphs it does not otherwise carry. */
+     two island stores in the page's wiring for two lines is two island graphs
+     it does not otherwise carry. */
   settingsDialog.onOpen(() => { void settingsStore.open() })
   /* A different conversation is a different set of tasks: carrying them across
      would attribute one conversation's background work to another, and the

@@ -75,7 +75,7 @@ export function leaveSection(): void {
   for (const name of SLOTS) slots.get(name)?.()
 }
 
-/* What arriving at a section asks of the domain that fills it. Three sections
+/* What arriving at a section asks of the domain that fills it. Two sections
    are another domain's island (features/settings/store.ts's HOSTED), and each
    holds rows it has to fetch: nothing else on this page would ask for them,
    because the nav row that used to is a section pick now. Keyed by section id

@@ -3928,7 +3928,7 @@ details[open] summary { margin-bottom: 8px; }
    cards is not a form.
 
    Keyed on the dialog rather than on the settings island's own root, because
-   channels, schedules and memory are three other domains' islands, rooted in
+   schedules and memory are two other domains' islands, rooted in
    boxes of their own beside #spanels: a rule hung on .settings-panel never
    reached them, and their buttons stayed 28px next to 32px fields. The setup
    step bodies, which render in the onboarding wizard instead, take the same
