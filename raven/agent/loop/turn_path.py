@@ -112,6 +112,19 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
 
 
+def _scrubbed_result(arguments: Any, text: str) -> str:
+    """A tool result with the credentials it could carry taken out.
+
+    A read of a dotfile config under home loses its key values, and any value
+    Raven itself holds is replaced by where it is kept. Applied where the result
+    is first read, so the preview logged and sent to the page is the same text
+    the model gets.
+    """
+    from raven.config.held_secrets import scrub_held_secrets
+
+    return scrub_held_secrets(redact_home_config_read(arguments, text))
+
+
 def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None) -> str:
     """The one line a model call the loop gave up on is reported by.
 
@@ -1372,7 +1385,7 @@ class TurnPathMixin:
                             watch_state,
                             tool_call.name,
                             tool_call.arguments,
-                            str(result),
+                            _scrubbed_result(tool_call.arguments, str(result)),
                             watch_request,
                             reasoning_effort=policy.reasoning_effort,
                         )
@@ -1380,8 +1393,12 @@ class TurnPathMixin:
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
                     # model text; the UI preview prefers the display string.
-                    model_text = str(result)
-                    display_src = getattr(result, "display_text", None) or model_text
+                    # Scrubbed before anything reads it -- the log line, the UI
+                    # event and the model message alike -- so a key a command
+                    # printed reaches none of them.
+                    model_text = _scrubbed_result(tool_call.arguments, str(result))
+                    display_text = getattr(result, "display_text", None)
+                    display_src = _scrubbed_result(tool_call.arguments, display_text) if display_text else model_text
                     # The log stays one line; the UI event keeps newlines so a
                     # tool that reports several items (e.g. ask_user's
                     # question -> answer pairs) renders one row each.
@@ -1454,7 +1471,6 @@ class TurnPathMixin:
                     if tool_call.name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
                         await self._report_skill_read(session_key or "", tool_call.name, tool_call.arguments)
                     result_blocks = getattr(result, "blocks", None)
-                    model_text = redact_home_config_read(tool_call.arguments, model_text)
                     model_text, blocks, attach_blocks = self._route_result_images(
                         model_text, result_blocks, call_model or effective_model
                     )

@@ -37,16 +37,21 @@ def test_a_host_timeout_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize(
-    ("command", "code"),
+    ("args", "code"),
     [
-        ("timeout 5 sh -c 'exit 7'", "7"),
-        ("timeout 0.2 sleep 3", "124"),
-        ("timeout -s KILL 0.2s sleep 3", "124"),
-        ("timeout --preserve-status 0.2 sleep 3", "143"),
-        ("timeout 2 no-such-command-here", "127"),
-        ("timeout nonsense true", "125"),
+        ("5 sh -c 'exit 7'", "7"),
+        ("0.2 sleep 3", "124"),
+        # GNU reports a child it had to KILL as 128+9, not 124.
+        ("-s KILL 0.2s sleep 3", "137"),
+        ("--preserve-status 0.2 sleep 3", "143"),
+        ("2 no-such-command-here", "127"),
+        ("nonsense true", "125"),
     ],
 )
-def test_the_supplied_timeout_answers_the_way_gnu_timeout_does(no_host_timeout: Path, command: str, code: str) -> None:
-    result = asyncio.run(DirectExecutor().exec(f"{command}; echo code=$?", cwd=str(no_host_timeout), timeout=20))
+def test_the_supplied_timeout_answers_the_way_gnu_timeout_does(no_host_timeout: Path, args: str, code: str) -> None:
+    """Called by its own path: a Linux host's real `timeout` sits earlier on the
+    PATH, and the shim is what these codes are about."""
+    shim = Path(compat_bin.compat_bin_dir() or "") / "timeout"
+    assert shim.is_file()
+    result = asyncio.run(DirectExecutor().exec(f"'{shim}' {args}; echo code=$?", cwd=str(no_host_timeout), timeout=20))
     assert f"code={code}" in result.as_text(2000)

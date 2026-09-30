@@ -376,6 +376,13 @@ async def test_smart_mode_asks_the_user_when_the_reviewer_escalates(monkeypatch)
         {"action": "set", "path": "permissions.mode", "value": '"full"'},
         {"action": "set", "path": "channels.telegram.allowFrom", "value": '["*"]'},
         {"action": "set", "value": json.dumps({"tools.exec.timeout": 30, "tools.restrictToWorkspace": False})},
+        # The key lent on an add rides in its value, not on a path.
+        {"action": "add", "path": "subagents", "value": json.dumps({"preset": "pi", "lend_key": "openrouter"})},
+        {
+            "action": "add",
+            "path": "subagents",
+            "value": json.dumps([{"preset": "qwen_code"}, {"preset": "pi", "lend_key": "openrouter"}]),
+        },
     ],
 )
 async def test_smart_mode_never_lets_its_reviewer_approve_a_sensitive_change(monkeypatch, params):
@@ -892,7 +899,7 @@ async def test_a_wrong_path_answers_with_the_closest_ones_and_says_where_to_stop
     assert "Do not look for it in Raven's source code" in reply
     searched = await _run(tool, action="describe", path="image generation")
     assert "tools.media.image.model = not set (there is no image generation tool" in searched
-    assert "search matches the English words" in await _run(tool, action="describe", path="生图")
+    assert "search matches the English words" in await _run(tool, action="describe", path="\u751f\u56fe")
 
 
 @pytest.mark.asyncio

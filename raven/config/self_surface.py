@@ -842,7 +842,17 @@ def only_asks_for_secrets(params: dict[str, Any]) -> bool:
 
 
 def touches_sensitive(params: dict[str, Any]) -> bool:
-    """Whether a call changes a setting the catalog marks ``sensitive`` (it widens or narrows what Raven may do)."""
+    """Whether a call changes a setting the catalog marks ``sensitive`` (it widens or narrows what Raven may do).
+
+    An add that lends a key is one: ``lend_key`` rides inside the add's value,
+    not on a path, and it hands Raven's credential to another program the way
+    ``subagents.*.lendKeys`` does.
+    """
+    if params.get("action") == "add":
+        added = _decoded(params.get("value"))
+        items = added if isinstance(added, list) else [added]
+        if any(isinstance(item, dict) and item.get("lend_key") for item in items):
+            return True
     changes = batch_of(params)
     if changes is None:
         changes = [(str(params.get("path") or ""), None)]

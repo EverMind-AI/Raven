@@ -79,7 +79,11 @@ def main(argv):
         except subprocess.TimeoutExpired:
             child.kill()
             code = child.wait()
-        return (code if code >= 0 else 128 - code) if preserve else 124
+        # GNU reports a child it had to KILL as 137 either way, so a caller can
+        # tell a forced kill from a polite timeout.
+        if preserve or code == -signal.SIGKILL:
+            return code if code >= 0 else 128 - code
+        return 124
     except KeyboardInterrupt:
         child.send_signal(signal.SIGINT)
         return child.wait()
