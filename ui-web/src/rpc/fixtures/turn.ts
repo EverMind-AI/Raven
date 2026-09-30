@@ -60,7 +60,8 @@ export type ScriptEvent = { d?: number } & (
   | { t: 't+'; id: number; n: string; a?: string | ToolArgs }
   | { t: 't-'; id: number; r: string; ok?: boolean; ms?: number; diff?: string[]; meta?: DeliveryMeta;
       removed?: Array<{ path: string; before: string }>;
-      wrote?: Array<{ path: string; created: boolean; size: number; lines: number | null }> }
+      wrote?: Array<{ path: string; created: boolean; size: number; lines: number | null;
+        added?: number; removed?: number; diff?: string }> }
   | DagEntry
   | { t: 'end' }
 )
@@ -153,11 +154,13 @@ const GTM_FILE_EVENTS: ScriptEvent[] = [
   { t:'t-', d:110, id:11, ok:true, r:'', ms:110,
     removed:[{ path:'~/work/raven/research/gtm-notes.md', before: GTM_SUPERSEDED }] },
   /* A command the runtime has no result to read: what it left on disk is known
-     only from listing the directory before and after it, which is where a
-     created file's line count comes from and why the rewritten one has none. */
+     only from listing the directory before and after it. The created file is
+     measured against nothing and carries its diff; the log is one the shadow
+     repo excludes, so its rewrite has no earlier copy and no measure. */
   { t:'t+', d:150, id:12, n:'exec', a:'python3 scripts/tally.py > research/tally.txt && date >> research/run.log' },
   { t:'t-', d:260, id:12, ok:true, r:'', ms:260,
-    wrote:[{ path:'~/work/raven/research/tally.txt', created:true, size:96, lines:4 },
+    wrote:[{ path:'~/work/raven/research/tally.txt', created:true, size:89, lines:4, added:4, removed:0,
+      diff:'--- tally.txt\n+++ tally.txt\n@@ -0,0 +1,4 @@\n+vendor     leads  replies\n+Clay       1240   88\n+Apollo     980    61\n+Unify      410    37' },
       { path:'~/work/raven/research/run.log', created:false, size:412, lines:null }] },
 ];
 

@@ -656,8 +656,13 @@ class FileWritten(_Strict):
     Neither a :class:`FileChange` nor a :class:`FileRemoval`: a command reports
     its output and nothing else, so what is known of the file is what two
     listings of the directory said about it -- that it is there, how big it is,
-    and whether it was there before. No contents either way, because one command
-    can write a hundred files and a row draws none of their text.
+    and whether it was there before. What it changed from is known only when the
+    working directory's shadow repo held a copy from just before the command;
+    then the change itself rides along as counts and a unified diff. A file's
+    text goes out only when the shadow repo's rules would store it: never for a
+    file its excludes or the user's .gitignore keep out, even one the repo held a
+    copy of before the rule named it. Such a created file carries its counts
+    only, and such a rewrite neither.
     """
 
     path: str = Field(description="Absolute path of the file the command wrote.")
@@ -675,6 +680,25 @@ class FileWritten(_Strict):
             "always sent, and null says the count is unknown -- too large to read, not text, or "
             "a file that already existed, whose old contents the listing never held and whose "
             "change therefore has no number."
+        ),
+    )
+    added: int | None = Field(
+        default=None,
+        description=(
+            "Lines the command added to the file. Absent when the change could not be measured: "
+            "not text, too large, or a rewrite whose previous contents were never captured."
+        ),
+    )
+    removed: int | None = Field(
+        default=None,
+        description="Lines the command removed from the file. Absent exactly when added is.",
+    )
+    diff: str | None = Field(
+        default=None,
+        description=(
+            "Unified diff of the change, when it was measured and small enough to carry. "
+            "Absent past the event's budget even when the counts are present: a partial "
+            "diff reads as a smaller change than the one that happened."
         ),
     )
 

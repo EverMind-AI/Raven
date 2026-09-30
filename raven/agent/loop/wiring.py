@@ -934,6 +934,8 @@ class WiringMixin:
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
                 extra_allowed_dirs=(self.workspace,),
+                record_writes=True,
+                shadow=self._command_shadow,
             )
         )
         # The registry writer beside exec's machine channel, for the products
@@ -1067,6 +1069,13 @@ class WiringMixin:
         # ``_bind_plugin_runtime``, not here: the handles carry organs (the
         # playbook funnel) assembled after even this registry is populated.
         for tool in self.plugin_tools:
+            # A same-name replacement of ``exec`` reports the files its commands
+            # wrote and removed, as the built-in does. Asked before the door:
+            # measuring raises the tool's ceiling, and the registry reads the
+            # ceiling off the spec it admits, never off the tool afterwards.
+            measure_writes = getattr(tool, "measure_writes", None)
+            if tool.name == "exec" and callable(measure_writes):
+                measure_writes(self._command_shadow)
             self.tools.register(tool)
 
         # Skill retrieval tools (body -> scripts). Both are source-agnostic and

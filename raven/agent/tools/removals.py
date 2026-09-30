@@ -58,10 +58,16 @@ class RemovalWatch:
         removals = [
             removal for removal in (reported or ()) if isinstance(getattr(removal, "path", None), str) and removal.path
         ]
-        already = {removal.path for removal in removals}
+        already = {removal.path: index for index, removal in enumerate(removals)}
         for path in list(self._touched):
             if path in already:
-                self._forget(path)
+                # What this run wrote there is the file's last known text, which
+                # a report read off the disk after the fact may not have -- unless
+                # the tool kept that text back on purpose.
+                text = self._forget(path)
+                report = removals[already[path]]
+                if getattr(report, "before", None) is None and not getattr(report, "withheld", False) and text:
+                    removals[already[path]] = FileRemoval(path=path, before=text)
                 continue
             if not os.path.exists(path):
                 removals.append(FileRemoval(path=path, before=self._forget(path)))
