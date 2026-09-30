@@ -204,6 +204,100 @@ def test_chat_classifies_a_wire_404_from_the_live_status(monkeypatch):
     assert "404" in (resp.content or "")
 
 
+def _stream_codex_events(monkeypatch, events: list[dict]) -> None:
+    """Serve ``events`` as the account's SSE stream, credential stubbed out."""
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("tok", "acct"))
+    lines: list[str] = []
+    for event in events:
+        lines += [f"data: {json.dumps(event)}", ""]
+
+    class _Resp:
+        status_code = 200
+
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
+
+    class _StreamCM:
+        async def __aenter__(self):
+            return _Resp()
+
+        async def __aexit__(self, *args):
+            return False
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return _StreamCM()
+
+    monkeypatch.setattr("raven.providers.openai_codex_provider.httpx.AsyncClient", _Client)
+
+
+_COMPLETED_USAGE = {
+    "input_tokens": 1200,
+    "input_tokens_details": {"cached_tokens": 1024},
+    "output_tokens": 9,
+    "output_tokens_details": {"reasoning_tokens": 4},
+    "total_tokens": 1209,
+}
+
+
+def test_chat_reports_the_usage_the_stream_ends_with(monkeypatch):
+    """The account sends its counters on ``response.completed``. Dropped, every
+    Codex call was recorded as zero tokens, and the usage section showed none."""
+    _stream_codex_events(
+        monkeypatch,
+        [
+            {"type": "response.created", "response": {"status": "in_progress", "usage": None}},
+            {"type": "response.output_text.delta", "delta": "391"},
+            {"type": "response.completed", "response": {"status": "completed", "usage": _COMPLETED_USAGE}},
+        ],
+    )
+
+    resp = asyncio.run(
+        OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol").chat([{"role": "user", "content": "17*23"}])
+    )
+
+    assert (resp.content, resp.finish_reason) == ("391", "stop")
+    assert resp.usage["prompt_tokens"] == 1200
+    assert resp.usage["completion_tokens"] == 9
+    assert resp.usage["total_tokens"] == 1209
+    assert resp.usage["cache_read_input_tokens"] == 1024
+    assert resp.usage["reasoning_tokens"] == 4
+
+
+def test_a_failed_stream_still_reports_what_it_used(monkeypatch):
+    """A response that fails after generating was still paid for in tokens."""
+    _stream_codex_events(
+        monkeypatch,
+        [
+            {
+                "type": "response.failed",
+                "response": {
+                    "status": "failed",
+                    "usage": _COMPLETED_USAGE,
+                    "error": {"code": "server_error", "message": "boom"},
+                },
+            },
+        ],
+    )
+
+    resp = asyncio.run(
+        OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol").chat([{"role": "user", "content": "x"}])
+    )
+
+    assert resp.finish_reason == "error"
+    assert resp.usage["prompt_tokens"] == 1200
+
+
 _TINY_PNG_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
 
 

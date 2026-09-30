@@ -538,7 +538,7 @@ def oauth_credentials_present(provider_name: str) -> bool:
 def oauth_credential_files(provider_name: str) -> list[Path]:
     """Every file a sign-in for this provider can leave behind.
 
-    Two callers, one list. Disconnect has to clear all of them -- Copilot's API key
+    Every caller, one list. Disconnect has to clear all of them -- Copilot's API key
     outlives the access token it came from, so deleting the token alone leaves a
     working credential -- and a sign-in has to restrict all of them, for the same
     reason in the other direction.
@@ -1359,6 +1359,12 @@ def test_provider(
     endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
     api_key = endpoint.api_key if endpoint else ""
     api_base = (endpoint.api_base if endpoint else None) or (spec.default_api_base if spec else "") or ""
+    # From the same resolved endpoint as the key and the address, because a
+    # relay that needs a header of its own refuses a request without it -- and
+    # the request path already sends them (`providers/factory.py` hands each
+    # endpoint's headers to its provider). A probe that dropped them reported a
+    # working section as `invalid_key`.
+    extra_headers = dict(endpoint.extra_headers or {}) if endpoint else {}
     derived_api_base = False
 
     # Before the token fetch below, which asks a question this backend does not
@@ -1450,8 +1456,13 @@ def test_provider(
         # api_base is pointed at somebody's proxy, and a proxy speaks the OpenAI
         # shape the generic path sends. Answering that with Google's header
         # would break a probe that works today.
-        url, headers = shape(api_key)
-        return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
+        url, shaped = shape(api_key)
+        # The vendor's own auth header wins over a configured one, for the same
+        # reason `Authorization` does below: this probe reports on the credential
+        # it resolved, not on one the section names beside it.
+        return _probe_models_endpoint(
+            url, _with_authoritative(extra_headers, shaped), timeout_s=timeout_s, transport=transport, extras=extras
+        )
 
     if not api_base:
         # Asked here and not above: the branches in between return for the
@@ -1503,9 +1514,9 @@ def test_provider(
     if "/v1" not in api_base:
         url = api_base.rstrip("/") + "/v1/models"
 
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    headers = _with_authoritative(extra_headers, {"Authorization": f"Bearer {api_key}"} if api_key else {})
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
-        headers["x-api-key"] = api_key
+        headers = _with_authoritative(headers, {"x-api-key": api_key})
 
     result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
     if check_credential and api_key and result.get("status") == "valid":
@@ -1689,6 +1700,23 @@ def _without_userinfo(url: str) -> str:
     if "@" not in parts.netloc:
         return url
     return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
+def _with_authoritative(configured: dict[str, str], authoritative: dict[str, str]) -> dict[str, str]:
+    """``configured`` headers with ``authoritative`` ones laid over them.
+
+    Overlaid by NAME, not by key: an HTTP header name means the same thing
+    whichever way it is capitalized and a Python dict does not, so a section
+    spelling the probe's own header differently would otherwise keep its entry
+    and the request would carry both values -- a relay requiring one bearer
+    reads that as neither, and the probe would report a working key as refused.
+
+    The authoritative headers are what the probe resolves itself (its bearer,
+    and a vendor's shaped auth header); a configured one is the section's, and
+    the probe reports on the credential it resolved.
+    """
+    lowered = {name.lower() for name in authoritative}
+    return {**{k: v for k, v in configured.items() if k.lower() not in lowered}, **authoritative}
 
 
 def _probe_models_endpoint(

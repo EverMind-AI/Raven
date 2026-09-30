@@ -196,6 +196,18 @@ const TEXT_EXT = new Set(['c', 'cfg', 'conf', 'cpp', 'css', 'diff', 'env', 'go',
   'js', 'json', 'jsonl', 'jsx', 'kt', 'log', 'lua', 'patch', 'php', 'pl', 'py', 'pyi', 'rb', 'rs',
   'sh', 'sql', 'swift', 'toml', 'ts', 'tsx', 'txt', 'vue', 'yaml', 'yml', 'zsh'])
 const IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif'])
+/* What the gateway can turn into a PDF with LibreOffice, and so what the
+   viewer draws as pictures of pages: raven/rpc/pdf_preview.py's
+   RENDERABLE_SUFFIXES, which is the list to change first. */
+const OFFICE_EXT = new Set(['ppt', 'pptx', 'doc', 'docx', 'xls', 'xlsx', 'odp', 'odt', 'ods', 'rtf'])
+/* Names that are never text, so opening one does not first read its head to
+   find that out. Anything else the kinds above do not claim is read and
+   looked at (sniffFile). */
+const BIN_EXT = new Set(['7z', 'a', 'aac', 'ai', 'avi', 'bin', 'bz2', 'ckpt', 'class', 'db', 'dll', 'dmg',
+  'dylib', 'eot', 'exe', 'flac', 'gguf', 'gz', 'heic', 'iso', 'jar', 'key', 'm4a', 'mkv', 'mov', 'mp3',
+  'mp4', 'npy', 'npz', 'numbers', 'o', 'ogg', 'onnx', 'otf', 'pages', 'parquet', 'pkl', 'psd', 'pt',
+  'pth', 'pyc', 'rar', 'safetensors', 'so', 'sqlite', 'tar', 'tgz', 'tif', 'tiff', 'ttf', 'wasm', 'wav',
+  'webm', 'woff', 'woff2', 'xz', 'zip', 'zst'])
 
 export function fileKind(p: string): string {
   const ext = (String(p).split('.').pop() || '').toLowerCase()
@@ -203,7 +215,7 @@ export function fileKind(p: string): string {
   if (IMG_EXT.has(ext)) return 'img'
   if (ext === 'svg') return 'svg'
   if (ext === 'pdf') return 'pdf'
-  if (ext === 'pptx') return 'pptx'
+  if (OFFICE_EXT.has(ext)) return 'office'
   if (ext === 'html' || ext === 'htm') return 'html'
   if (ext === 'csv' || ext === 'tsv') return 'csv'
   if (ext === 'json') return 'json'
@@ -211,7 +223,23 @@ export function fileKind(p: string): string {
   if (TEXT_EXT.has(ext)) return 'code'
   return 'bin'
 }
-export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1, pptx: 1 }
+
+/* Whether a file of kind `bin` is worth reading the head of: a name the
+   tables do not know (`x.model`, `Makefile`, `.gitignore`) is as often text as
+   not, and a name that is known to be binary is not worth the request. */
+export const sniffable = (p: string): boolean => !BIN_EXT.has(extOf(p))
+
+/* A NUL byte never appears in text, and a decoder that had to replace more
+   than a sliver of what it read was not reading UTF-8. It reads all it is
+   given: the sniff hands it the head, and the text view the whole file, so a
+   binary whose first 8 KB happen to read as text is still caught. */
+export function looksBinary(text: string): boolean {
+  if (text.includes('\u0000')) return true
+  let bad = 0
+  for (let i = text.indexOf('\ufffd'); i !== -1; i = text.indexOf('\ufffd', i + 1)) bad += 1
+  return bad > text.length * 0.02
+}
+export const RENDERED: Record<string, 1> = { md: 1, img: 1, svg: 1, pdf: 1, html: 1, csv: 1, json: 1, office: 1 }
 /* The kinds with two ways to be read, the rendered form and the text under it,
    and so the only ones the bar offers the pair on. A picture and a deck draw
    the same in either position, and a PDF read as text is its bytes as lines.
@@ -364,12 +392,14 @@ export const markDeliveryMissing = (path: string): void => deliveries.markMissin
    and a file served 200 that the browser cannot decode fails here too. So the
    status is asked for, and only 404 marks the shelf. The transcript's tile
    probes the same way. */
-export async function probeDeliveryMissing(path: string): Promise<void> {
+export async function probeDeliveryMissing(path: string): Promise<number | null> {
   try {
     const r = await fetch(fileURL(path), { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
     if (r.status === 404) deliveries.markMissing(path)
+    return r.status
   } catch {
     /* No answer at all is not an answer about the file. */
+    return null
   }
 }
 
@@ -397,23 +427,68 @@ export async function loadDeliveries(sessionKey: string): Promise<void> {
   }
 }
 
+/* Only 404 says the file is gone. A refusal (403) or a file too big to render
+   (413) is the viewer's limit, not the file's absence, and marking a
+   deliverable missing for either would put a lie on the shelf. */
+function refused(f: WsFile, status: number): Error {
+  if (status === 404) deliveries.markMissing(f.path)
+  return new Error(status === 403 ? t('gui.ws.file_denied')
+    : status === 404 ? t('gui.ws.file_gone')
+      : status === 413 ? t('gui.ws.file_big') : `HTTP ${status}`)
+}
+
 export async function loadFileText(f: WsFile): Promise<void> {
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), { credentials: 'same-origin' })
-    if (!r.ok) {
-      /* Only 404 says the file is gone. A refusal (403) or a file too big to
-         render (413) is the viewer's limit, not the file's absence, and marking
-         a deliverable missing for either would put a lie on the shelf. */
-      if (r.status === 404) deliveries.markMissing(f.path)
-      throw new Error(r.status === 403 ? t('gui.ws.file_denied')
-        : r.status === 404 ? t('gui.ws.file_gone')
-          : r.status === 413 ? t('gui.ws.file_big') : `HTTP ${r.status}`)
-    }
+    if (!r.ok) throw refused(f, r.status)
     f.text = await r.text()
   } catch (e) {
     f.err = (e as Error).message || String(e)
   } finally {
+    f.loading = false
+    redraw()
+  }
+}
+
+const SNIFF_BYTES = 8192
+
+/* Read the head of a file whose name did not say what it is, and decide from
+   the bytes. The route is a FileResponse, which answers a Range with 206 and
+   the file's whole size in Content-Range -- so the note gets its size from the
+   same request. Text sets `raw`, and the text view takes it from there; a file
+   the head covered whole is kept rather than fetched a second time. A file
+   over the view ceiling (413) cannot be read as text either way, so it stays
+   the note, and so does an answer that is no answer at all. */
+export async function sniffFile(f: WsFile): Promise<void> {
+  f.loading = true
+  try {
+    const r = await fetch(fileURL(f.path), {
+      credentials: 'same-origin', headers: { Range: `bytes=0-${SNIFF_BYTES - 1}` },
+    })
+    if (r.status === 403 || r.status === 404) throw refused(f, r.status)
+    /* An empty file has no first byte to ask for; it is empty text. */
+    if (r.status === 416) {
+      f.raw = true
+      f.text = ''
+      f.size = 0
+      return
+    }
+    if (!r.ok) return
+    const bytes = new Uint8Array(await r.arrayBuffer())
+    const total = Number((r.headers.get('Content-Range') || '').split('/')[1] || bytes.length)
+    if (Number.isFinite(total) && total >= 0) f.size = total
+    /* `stream` holds back a character the range cut in half, so the cut is not
+       counted against the file as a byte it could not decode. */
+    const whole = bytes.length >= total
+    const text = new TextDecoder('utf-8').decode(bytes, { stream: !whole })
+    if (looksBinary(text)) return
+    f.raw = true
+    if (whole) f.text = text
+  } catch (e) {
+    f.err = (e as Error).message || String(e)
+  } finally {
+    f.sniffed = true
     f.loading = false
     redraw()
   }

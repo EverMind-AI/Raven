@@ -3138,17 +3138,6 @@ textarea:focus, textarea:focus-visible,
   border: 1px solid var(--line-soft); padding: 4px 9px; text-align: left; white-space: nowrap;
 }
 .fview table.csvt th { background: var(--surface); font-weight: 600; position: sticky; top: 0; }
-.fview .binote { padding: 20px 16px; display: grid; gap: 8px; justify-items: start; }
-.fview .binote .h { font-size: 13px; }
-.fview .binote .w { font-size: 12px; color: var(--muted); line-height: 1.6; }
-/* The note's grid stacks its rows; the two open actions belong on one line.
-
-   NOT `.acts`, which this used to be called: that is the transcript answer's
-   icon bar (`.acts button` is a 27px square with `display: grid`), and these
-   two are text buttons. Sharing the name squeezed both labels into 27x27
-   boxes, where they overflowed and drew on top of each other -- the note read
-   as a font or encoding fault rather than as two buttons. */
-.fview .binote .binacts { display: flex; flex-wrap: wrap; gap: 7px; }
 .fview .vspin { padding: 22px 16px; font-size: 12px; color: var(--faint); }
 .fview .verr { padding: 18px 16px; font-size: 12.5px; color: var(--clay); line-height: 1.6; }
 
@@ -4916,28 +4905,60 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .csheet .other input { flex: 1; min-width: 0; border: 0; background: none;
   font: inherit; font-size: 13px; color: var(--text); outline: 0; }
 .csheet .foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
-.csheet .foot .btn { padding: 5px 12px; font-size: 12px; }
-/* An approval request is the same sheet with the agent's own sentence quoted
-   above the two answers -- what it wants to do is the thing being judged. */
+.csheet .foot .btn { padding: 5px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 8px; }
+/* The key that answers a control, drawn on it so nobody has to remember it:
+   an outlined cap after the label, and on a filled button the ground colour
+   standing in for the line and the ink. */
+.chrome-keycap {
+  flex: none; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px;
+  font-family: var(--mono); font-size: 10px; line-height: 15px; color: var(--faint);
+}
+.csheet.perm .cp-acts .opt:last-child .chrome-keycap,
+.csheet .foot .btn.key .chrome-keycap {
+  border-color: color-mix(in oklab, var(--ink) 28%, transparent);
+  color: color-mix(in oklab, var(--ink) 72%, transparent);
+}
+.csheet .foot .btn.key:disabled .chrome-keycap { border-color: currentColor; color: inherit; }
+/* An approval request, drawn as a tool-approval card: the question, one line
+   of why, the evidence in a box of its own, and the answers along the foot.
+   Solid rather than the rack's frosted glass -- the reader is judging what is
+   in it -- and capped, so a long diff scrolls inside the evidence box and the
+   card does not grow; the answers stay pinned to its foot. */
+.csheet.perm {
+  display: flex; flex-direction: column; max-height: 300px; overflow: hidden;
+  border-radius: 16px; padding: 15px 16px 13px;
+  background: var(--ink); -webkit-backdrop-filter: none; backdrop-filter: none; border: 0;
+  box-shadow: 0 2px 14px var(--sh-soft), 0 0 0 1px var(--ring-2);
+}
+.csheet.perm .q { font-size: 15px; }
+/* Everything between the question and the answers scrolls as one when it has
+   to -- a long why and a long rule on a narrow window -- and the answers are a
+   sibling of it, not a child, so no amount of text can push them out of the
+   card: a blocking prompt whose buttons were clipped would leave Esc as the
+   only way out. The evidence keeps a cap of its own and scrolls inside it, so
+   in the ordinary case the outer area never needs to. */
+.csheet.perm .body { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; gap: 0; margin-top: 4px; }
 .csheet.perm .what {
-  font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--text);
-  background: var(--surface); border-left: 2px solid var(--amber);
-  border-radius: 0 7px 7px 0; padding: 8px 10px; margin-bottom: 8px;
-  overflow-wrap: anywhere; max-height: 168px; overflow-y: auto;
+  flex: none; max-height: 140px; overflow: auto; margin-top: 11px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.75; color: var(--text);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px;
+  overflow-wrap: anywhere;
 }
-.csheet.perm .opt.go .n { background: var(--amber-dp); color: var(--amber); }
-/* The permission sheet's answers in one row: deny on the left, allow once as
-   the primary on the right. The row's own name is the composer's; what it lays
-   out is the rack's `.opt`, so the rule lives with the rack's. */
-.csheet.perm .cp-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; }
-.csheet.perm .cp-acts .opt { width: auto; flex: none; }
+/* The answers in one row: deny on the left, allow once as the solid one on
+   the right. The row's own name is the composer's; what it lays out is the
+   rack's `.opt`, so the rule lives with the rack's. */
+.csheet.perm .cp-acts { flex: none; display: flex; gap: 8px; justify-content: flex-end; padding-top: 12px; }
+.csheet.perm .cp-acts .opt {
+  width: auto; flex: none; gap: 6px; height: 30px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--ink); font-size: 13px;
+}
+.csheet.perm .cp-acts .opt:hover, .csheet.perm .cp-acts .opt:focus-visible {
+  border-color: var(--muted); background: var(--surface);
+}
 .csheet.perm .cp-acts .opt:first-child { margin-right: auto; }
-.csheet.perm .cp-acts .opt:last-child { background: var(--text); color: var(--surface); }
+.csheet.perm .cp-acts .opt:last-child { background: var(--black); border-color: var(--black); color: var(--ink); }
 .csheet.perm .cp-acts .opt:last-child:hover, .csheet.perm .cp-acts .opt:last-child:focus-visible {
-  background: var(--text); opacity: .88;
-}
-.csheet.perm .cp-acts .opt:last-child .n {
-  background: color-mix(in oklab, var(--surface) 25%, transparent); color: var(--surface);
+  background: var(--black); filter: brightness(1.18);
 }
 
 /* The page behind is dimmed and blurred the way the settings dialog's is
@@ -5469,7 +5490,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-dlv-row .dlv-kind[data-kind="img"],
 .desk-dlv-row .dlv-kind[data-kind="svg"],
 .desk-dlv-row .dlv-kind[data-kind="pdf"],
-.desk-dlv-row .dlv-kind[data-kind="pptx"] { color: var(--clay); }
+.desk-dlv-row .dlv-kind[data-kind="office"] { color: var(--clay); }
 .desk-dlv-row .dlv-kind[data-kind="csv"],
 .desk-dlv-row .dlv-kind[data-kind="json"] { color: var(--moss); }
 .desk-dlv-row .desk-name { display: grid; gap: 2px; }

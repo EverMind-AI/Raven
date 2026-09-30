@@ -4624,12 +4624,12 @@
       "zh": "用 {a} 打开"
     },
     "gui.ws.open_with_host": {
-      "en": "Open this {k} in its app",
-      "zh": "用系统默认程序打开这个 {k}"
+      "en": "Open in default app",
+      "zh": "用默认应用打开"
     },
     "gui.ws.open_with_pick": {
-      "en": "Open with...",
-      "zh": "换个应用打开…"
+      "en": "Choose another app",
+      "zh": "选择其他应用"
     },
     "gui.ws.open_with_default": {
       "en": "Host default",
@@ -4664,8 +4664,20 @@
       "zh": "太大了，没法在这里渲染。"
     },
     "gui.ws.file_binary": {
-      "en": "Nothing to render for this kind of file.",
-      "zh": "这种文件没有可渲染的形式。"
+      "en": "No preview for this kind of file",
+      "zh": "暂不支持预览这种文件"
+    },
+    "gui.ws.file_kind": {
+      "en": "{k} file",
+      "zh": "{k} 文件"
+    },
+    "gui.ws.file_not_text": {
+      "en": "This file is not text",
+      "zh": "这个文件不是文本"
+    },
+    "gui.ws.img_broken": {
+      "en": "This picture could not be drawn here.",
+      "zh": "这张图片没法在这里显示。"
     },
     "gui.ws.file_denied": {
       "en": "Raven is confined to the workspace, so this file cannot be opened here.",
@@ -5872,8 +5884,12 @@
       "zh": "一个操作等待批准超时未回应 · 该操作没有执行"
     },
     "gui.confirm.always": {
-      "en": "Always allow: {pattern} (every directory)",
-      "zh": "始终允许：{pattern}（所有工作目录）"
+      "en": "Always allow",
+      "zh": "始终允许"
+    },
+    "gui.confirm.always_rule": {
+      "en": "Always allow saves the rule {pattern}, for every working directory",
+      "zh": "始终允许会保存规则 {pattern}，在所有工作目录生效"
     },
     "gui.confirm.title.shell": {
       "en": "Allow {who} to run this command?",

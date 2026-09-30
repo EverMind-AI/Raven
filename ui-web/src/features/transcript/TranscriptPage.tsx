@@ -1330,7 +1330,7 @@ const askIfGone = (url: string): Promise<boolean> =>
    output-file variants). A page is opened in a browser tab as well as in the
    panel; a document the panel can read is opened there; a binary is fetched.
    The card itself opens in the panel whichever it is. */
-const BINARY_KINDS = new Set(['pptx', 'pdf', 'bin'])
+const BINARY_KINDS = new Set(['office', 'pdf', 'bin'])
 
 const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): ReactElement {
   const [state, setState] = useState<'probe' | 'ready' | 'missing'>(row.missing ? 'missing' : 'probe')
@@ -1377,7 +1377,7 @@ const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): 
         setShot('broken')
         void askIfGone(url).then((gone) => { if (gone) setState('missing') })
       }} />
-    ) : kind === 'pptx' || kind === 'pdf' ? (
+    ) : kind === 'office' || kind === 'pdf' ? (
       <DeliveryShot row={row} src={thumbURL(row.path)} broken={() => setShot('broken')} />
     ) : mark
   const type = row.ext ? row.ext.toUpperCase() : t('gui.arts.file')

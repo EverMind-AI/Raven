@@ -183,8 +183,8 @@ const SHARED = new Set([
 // counted is not.
 const LEGACY_SHARED = {
   a: 3, btn: 2, cap: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2, k: 2,
-  gap: 2, 'ghost-ic': 3, h: 2, hd: 2, key: 2, lb: 3, n: 2, rm: 2, row: 2,
-  shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 3, wkg: 3,
+  gap: 2, 'ghost-ic': 3, hd: 2, key: 2, lb: 3, n: 2, rm: 2, row: 2,
+  shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 2, wkg: 3,
   wsnote: 2,
 }
 
@@ -208,8 +208,11 @@ const LEGACY_LOCAL = {
      shared vocabulary -- `.lab`, `.rule`, `.meta`, `.seg` and the rest -- so a
      class those domains shared with one other is that one domain's alone now,
      and moves off the shared tally onto its own. The page's total debt is
-     unchanged; where it is counted is not. */
-  browser: 25,
+     unchanged; where it is counted is not.
+
+     Up to 26 the same way: `.h` was shared with the workspace's binary-file
+     note, which is prefixed in features/workspace/styles.css now. */
+  browser: 26,
   /* Up from 9, and none of the three is new code: an earlier branch deleted
      the old settings page, which also named `.icb`, `.other`, `.srow` and
      `.what`, so what the check read as two domains' it now reads as
@@ -303,8 +306,9 @@ const LEGACY_LOCAL = {
      shared with it, and the timestamp on a folded turn's own head is this
      domain's alone now. */
   transcript: 60,
-  /* Up from 37 with the playbooks page gone: `.t` was shared with it. */
-  workspace: 35,
+  /* Up from 37 with the playbooks page gone: `.t` was shared with it. Down
+     to 33 with the binary-file note's rules moved into its own sheet. */
+  workspace: 33,
 }
 
 // The same count for the classes a domain names from inside a `className={...}`
