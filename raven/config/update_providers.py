@@ -1461,7 +1461,7 @@ def test_provider(
         # reason `Authorization` does below: this probe reports on the credential
         # it resolved, not on one the section names beside it.
         return _probe_models_endpoint(
-            url, {**extra_headers, **shaped}, timeout_s=timeout_s, transport=transport, extras=extras
+            url, _with_authoritative(extra_headers, shaped), timeout_s=timeout_s, transport=transport, extras=extras
         )
 
     if not api_base:
@@ -1514,14 +1514,9 @@ def test_provider(
     if "/v1" not in api_base:
         url = api_base.rstrip("/") + "/v1/models"
 
-    # The configured headers first, so the credential this probe is reporting on
-    # is the one it resolved: a section naming `Authorization` itself would
-    # otherwise answer the question about its key with a different key.
-    headers = dict(extra_headers)
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+    headers = _with_authoritative(extra_headers, {"Authorization": f"Bearer {api_key}"} if api_key else {})
     if spec and spec.name in {"minimax_global", "minimax_cn"} and api_key:
-        headers["x-api-key"] = api_key
+        headers = _with_authoritative(headers, {"x-api-key": api_key})
 
     result = _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
     if check_credential and api_key and result.get("status") == "valid":
@@ -1705,6 +1700,23 @@ def _without_userinfo(url: str) -> str:
     if "@" not in parts.netloc:
         return url
     return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
+def _with_authoritative(configured: dict[str, str], authoritative: dict[str, str]) -> dict[str, str]:
+    """``configured`` headers with ``authoritative`` ones laid over them.
+
+    Overlaid by NAME, not by key: an HTTP header name means the same thing
+    whichever way it is capitalized and a Python dict does not, so a section
+    spelling the probe's own header differently would otherwise keep its entry
+    and the request would carry both values -- a relay requiring one bearer
+    reads that as neither, and the probe would report a working key as refused.
+
+    The authoritative headers are what the probe resolves itself (its bearer,
+    and a vendor's shaped auth header); a configured one is the section's, and
+    the probe reports on the credential it resolved.
+    """
+    lowered = {name.lower() for name in authoritative}
+    return {**{k: v for k, v in configured.items() if k.lower() not in lowered}, **authoritative}
 
 
 def _probe_models_endpoint(

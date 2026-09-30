@@ -2319,9 +2319,19 @@ def test_a_section_with_no_headers_sends_the_same_request_it_always_did(cfg_path
     assert "x-tenant" not in sent[0]
 
 
-def test_a_configured_header_does_not_displace_the_key(cfg_path: Path) -> None:
+@pytest.mark.parametrize(
+    "spelling",
+    [pytest.param("Authorization", id="exact"), pytest.param("authorization", id="lower")],
+)
+def test_a_configured_header_does_not_displace_the_key(cfg_path: Path, spelling: str) -> None:
     """Authorization is the probe's own to send: a section that also names it
-    must not be able to answer the credential question with a different key."""
+    must not be able to answer the credential question with a different key.
+
+    By either spelling, because a header name means the same thing capitalized
+    or not and this dict does not: a section spelling it `authorization` kept
+    its own entry beside the probe's, and httpx sent both values -- which a
+    relay requiring one bearer reads as neither.
+    """
     cfg_path.write_text(
         json.dumps(
             {
@@ -2329,18 +2339,37 @@ def test_a_configured_header_does_not_displace_the_key(cfg_path: Path) -> None:
                     "custom": {
                         "apiKey": "sk-real",
                         "apiBase": "https://relay.test/v1",
-                        "extraHeaders": {"Authorization": "Bearer sk-other"},
+                        "extraHeaders": {spelling: "Bearer sk-other"},
                     }
                 }
             }
         ),
         encoding="utf-8",
     )
-    sent: list[str | None] = []
+    sent: list[list[str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        sent.append(request.headers.get("Authorization"))
+        sent.append([v for k, v in request.headers.multi_items() if k.lower() == "authorization"])
         return httpx.Response(200, json={"data": [{"id": "m1"}]})
 
     probe_provider("custom", config_path=cfg_path, transport=_mock_transport(handler))
-    assert sent == ["Bearer sk-real"]
+    assert sent == [["Bearer sk-real"]]
+
+
+def test_a_differently_cased_tenant_header_still_reaches_the_relay(cfg_path: Path) -> None:
+    """The forwarding is not the probe's to respell: a configured header the
+    probe has no opinion about goes out exactly as written."""
+    set_provider_fields(
+        "custom",
+        {
+            "api_key": "sk-test",
+            "api_base": "https://relay.test/v1",
+            "extra_headers": {"x-tenant": "test-tenant"},
+        },
+        config_path=cfg_path,
+    )
+    seen: list[str | None] = []
+
+    result = probe_provider("custom", config_path=cfg_path, transport=_tenant_relay(seen))
+    assert result["status"] == "valid"
+    assert seen == ["test-tenant"]
