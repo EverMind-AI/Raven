@@ -260,9 +260,11 @@ held from a tree staged just before; the paper only names what travels back --
 a path, whether it is new, its size, and the line counts and diff when the
 change could be measured -- and gives ``ToolResult`` and ``ToolOutput`` one
 ``written`` tuple each, empty for every other call. 34 lines, a dataclass and
-its prose.
+its prose. The same change gives ``FileRemoval`` a ``withheld`` flag, set when
+the shell tool kept a removed file's text back on purpose, so nothing else may
+fill it in: five more lines.
 
-Measured at 3,627.
+Measured at 3,632.
 
 """
 
