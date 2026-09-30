@@ -269,6 +269,9 @@ const LEGACY_LOCAL = {
      vocabulary, shared with the popovers beside it. */
   model: 4,
   onboard: 0,
+  /* A domain that arrived after the rule: every class it names carries its
+     own prefix, with its rules in features/persona/styles.css. */
+  persona: 0,
   /* Down one: an empty group is its heading alone, so `.grp-empty` is gone. */
   rail: 9,
   settings: 0,
@@ -330,6 +333,7 @@ const LEGACY_EXPR = {
   memory: 0,
   model: 0,
   onboard: 0,
+  persona: 0,
   rail: 2,
   settings: 0,
   /* Down from 5: `.task` moved to `LEGACY_LOCAL` and `.hl` went, with the

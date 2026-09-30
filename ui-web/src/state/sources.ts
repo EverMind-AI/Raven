@@ -23,6 +23,7 @@ import type { ImportSyncSource } from '../features/importSync/types'
 import type { MemorySource } from '../features/memory/types'
 import type { ModelSource } from '../features/model/types'
 import type { OnboardSource } from '../features/onboard/types'
+import type { PersonaSource } from '../features/persona/types'
 import type { RailSource } from '../features/rail/types'
 import type { SettingsSource } from '../features/settings/types'
 import type { SubagentsSource } from '../features/subagents/types'
@@ -54,6 +55,7 @@ export interface Sources {
   memory: MemorySource
   model: ModelSource
   onboard: OnboardSource
+  persona: PersonaSource
   prose: ProseSource
   rail: RailSource
   settings: SettingsSource

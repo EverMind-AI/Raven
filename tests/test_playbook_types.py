@@ -250,8 +250,10 @@ def test_a_role_row_is_a_delegate_row_with_the_round_on_it():
     assert issubclass(RoleEntry, DelegateEntry)
     assert set(DelegateEntry.model_fields) <= set(RoleEntry.model_fields)
     # And the parent stays as narrow as it was: a field here is a field the
-    # per-turn worker-table generator could emit.
-    assert set(DelegateEntry.model_fields) == {"as_", "name", "playbook"}
+    # per-turn worker-table generator could emit. `brief` is one of those -- the
+    # dispatch brief the generator writes per worker, which v1 kept in a
+    # transient sidecar and this model now carries itself.
+    assert set(DelegateEntry.model_fields) == {"as_", "brief", "name", "playbook"}
 
 
 def test_the_shipped_developer_is_judged_by_every_directory_its_guard_may_grant() -> None:

@@ -66,6 +66,32 @@ def _shape(spec: PlaybookSpec) -> list[dict[str, Any]]:
     return [{"id": node.id, "depends_on": list(node.depends_on)} for node in (spec.nodes or [])]
 
 
+def _artifact_fields(spec: Any, *, detail: bool = False) -> dict[str, Any]:
+    """Unified-only fields beside the legacy graph projection."""
+    from raven.playbook.unified import UnifiedPlaybookSpec
+
+    if not isinstance(spec, UnifiedPlaybookSpec):
+        return {"schema_version": 1, "artifact_kind": "legacy", "workers": [], "coordinator": False}
+    kind = "composite" if spec.harness and spec.workflow else "harness" if spec.harness else "workflow"
+    workers = []
+    for entry in spec.harness.delegate if spec.harness else []:
+        worker = {"label": entry.label, "agent": entry.name}
+        if detail:
+            worker["brief"] = entry.brief
+        workers.append(worker)
+    seat = spec.harness.coordinator if spec.harness else None
+    return {
+        "schema_version": spec.schema_version,
+        "artifact_kind": kind,
+        "workers": workers,
+        "coordinator": bool(seat),
+        # What the main Raven is, in this Persona's words. A card that drew the
+        # delegates alone read as "two agents" rather than as the one identity
+        # the reader talks to plus the seats it hands work to.
+        "coordinator_brief": str(getattr(seat, "brief", "") or "") if seat else "",
+    }
+
+
 def _stint_wire(spec: PlaybookSpec) -> dict[str, Any]:
     """The four sections `mode: stint` adds, as the page reads them.
 
@@ -138,6 +164,10 @@ def _row(store: PlaybookStore, name: str, disabled: set[str]) -> dict[str, Any]:
         "mode": "dag",
         "confirm": True,
         "nodes": [],
+        "schema_version": 1,
+        "artifact_kind": "legacy",
+        "workers": [],
+        "coordinator": False,
         "error": "",
     }
     try:
@@ -150,6 +180,7 @@ def _row(store: PlaybookStore, name: str, disabled: set[str]) -> dict[str, Any]:
     row["mode"] = spec.mode
     row["confirm"] = spec.confirm
     row["nodes"] = _shape(spec)
+    row.update(_artifact_fields(spec))
     return row
 
 
@@ -203,6 +234,7 @@ async def playbooks_get(params: dict) -> dict:
     return {
         "playbook": {
             "name": spec.name,
+            **_artifact_fields(spec, detail=True),
             "description": spec.description,
             "task_summary": spec.task_summary,
             "version": spec.version,
@@ -546,7 +578,7 @@ async def playbooks_validate(
     import yaml
     from pydantic import ValidationError
 
-    from raven.playbook.validate import validate_structure
+    from raven.playbook.runtime import validation_errors
 
     name = _known_name(params.get("name"))
     store = _store()
@@ -563,7 +595,7 @@ async def playbooks_validate(
     except (ValidationError, ValueError, yaml.YAMLError) as exc:
         errors.append(str(exc))
     if spec is not None:
-        errors.extend(validate_structure(spec, known_agents=_known_agent_names(agent_loop_factory)))
+        errors.extend(validation_errors(spec, _known_agent_names(agent_loop_factory)))
     return {"name": name, "ok": not errors, "errors": errors, "path": str(store.path_for(name))}
 
 
@@ -787,7 +819,7 @@ async def playbooks_create(
 
     budget = _generation_budget_s()
     try:
-        generated = await asyncio.wait_for(runtime.generator.generate(workflow, skills), budget)
+        generated = await asyncio.wait_for(runtime.generator.generate(workflow, skills, dag_only=True), budget)
     except PlaybookGenerationError as exc:
         return {
             "name": name,
@@ -807,7 +839,9 @@ async def playbooks_create(
             "adopted": False,
         }
 
-    spec = generated.spec.model_copy(update={"name": name})
+    from raven.playbook.unified import unified_from_legacy
+
+    spec = unified_from_legacy(generated.spec, name=name)
     try:
         path = store.save(spec, notes=generated.notes)
     except PlaybookExistsError as exc:
@@ -830,6 +864,111 @@ async def playbooks_create(
         "notes": list(generated.notes or []),
         "errors": [],
         "adopted": adopted,
+    }
+
+
+async def playbooks_draft(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``playbooks.draft`` -- the Persona this session generated and has not saved.
+
+    A read with no side effect, so a page may poll it after a turn: the answer
+    is ``{"draft": null}`` until a turn generates one, and the same row shape
+    ``playbooks.list`` answers with once it has, so the page draws a draft with
+    the card it already has.
+    """
+    from raven.rpc.errors import InvalidParamsError
+
+    session_key = str(params.get("session_key") or "").strip()
+    if not session_key:
+        raise InvalidParamsError("session_key is required")
+    loop = _loop_or_none(agent_loop_factory)
+    reader = getattr(loop, "session_draft", None)
+    if reader is None:
+        return {"draft": None}
+    artifact = reader(session_key)
+    if artifact is None:
+        return {"draft": None}
+    return {"draft": _draft_row(artifact)}
+
+
+async def playbooks_draft_save(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``playbooks.draft_save`` -- keep this session's generated Persona.
+
+    The one moment a generated Harness becomes a library entry. An optional
+    ``name`` renames it on the way in, because the reader is naming a thing
+    they will look for later and the generator only guessed.
+    """
+    from raven.rpc.errors import ConfigValidationError, InvalidParamsError
+
+    session_key = str(params.get("session_key") or "").strip()
+    if not session_key:
+        raise InvalidParamsError("session_key is required")
+    loop = _loop_or_none(agent_loop_factory)
+    saver = getattr(loop, "save_session_draft", None)
+    if saver is None:
+        raise ConfigValidationError("this build cannot save a generated Persona", data={"field": "session_key"})
+    raw = params.get("name")
+    name = str(raw).strip() if raw is not None else None
+    try:
+        saved = saver(session_key, name)
+    except ValueError as exc:
+        raise ConfigValidationError(str(exc), data={"field": "name"}) from exc
+    return {"name": saved}
+
+
+async def playbooks_draft_discard(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``playbooks.draft_discard`` -- let this session's generated Persona go."""
+    from raven.rpc.errors import InvalidParamsError
+
+    session_key = str(params.get("session_key") or "").strip()
+    if not session_key:
+        raise InvalidParamsError("session_key is required")
+    loop = _loop_or_none(agent_loop_factory)
+    dropper = getattr(loop, "discard_session_draft", None)
+    return {"discarded": bool(dropper(session_key)) if dropper is not None else False}
+
+
+def _loop_or_none(agent_loop_factory: "AgentLoopFactory | None") -> Any:
+    """The live loop, or ``None`` where a test or demo wired no factory."""
+    if agent_loop_factory is None:
+        return None
+    try:
+        return agent_loop_factory()
+    except Exception as exc:  # noqa: BLE001 - a page asking about a draft must not 500
+        logger.debug("playbooks: no agent loop for the draft read ({})", exc)
+        return None
+
+
+def _draft_row(artifact: Any) -> dict[str, Any]:
+    """A draft in the row shape the library answers, so one card draws both.
+
+    ``origin`` is ``draft`` rather than ``user``: nothing is on disk yet, and a
+    page that treated the two alike would offer to delete a file that does not
+    exist. The graph fields are empty because a Persona is a coordinator and
+    its workers, not a stored graph.
+    """
+    return {
+        "name": artifact.name,
+        "description": artifact.description or "",
+        "task_summary": "",
+        "mode": "prompt",
+        "confirm": False,
+        "nodes": [],
+        "origin": "draft",
+        "disabled": False,
+        "error": "",
+        **_artifact_fields(artifact),
     }
 
 
@@ -1167,10 +1306,26 @@ def register_playbooks_methods(
     dispatcher.register("playbooks.stints.extend", _extend)
     dispatcher.register("playbooks.stints.answer", playbooks_stints_answer)
 
+    async def _draft(p: dict) -> dict:
+        return await playbooks_draft(p, agent_loop_factory=agent_loop_factory)
+
+    async def _draft_save(p: dict) -> dict:
+        return await playbooks_draft_save(p, agent_loop_factory=agent_loop_factory)
+
+    async def _draft_discard(p: dict) -> dict:
+        return await playbooks_draft_discard(p, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("playbooks.draft", _draft)
+    dispatcher.register("playbooks.draft_save", _draft_save)
+    dispatcher.register("playbooks.draft_discard", _draft_discard)
+
 
 __all__ = [
     "playbooks_create",
     "playbooks_credentials_clear",
+    "playbooks_draft",
+    "playbooks_draft_discard",
+    "playbooks_draft_save",
     "playbooks_credentials_get",
     "playbooks_credentials_set",
     "playbooks_get",

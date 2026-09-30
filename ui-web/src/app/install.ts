@@ -26,6 +26,7 @@ import { memorySource } from '../features/memory/source'
 import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { isOpen as onboardOpen, setBodies as setOnboardBodies, subscribe as onOnboard } from '../features/onboard/store'
+import { personaSource } from '../features/persona/source'
 import { markNew } from '../features/rail/store'
 import { installSessionActions } from '../features/rail/wire'
 import { MemoryStepBody, ModelStepBody, WebStepBody } from '../features/settings/SetupBodies'
@@ -146,6 +147,7 @@ export function installSources(): void {
   sources.cron = cronSource
   sources.connections = connSource
   sources.memory = memorySource
+  sources.persona = personaSource
   /* The wizard's data-sync step asks for the same run the rail's own click
      does, so it goes through the same verb rather than calling `import.run` a
      second way: the store is then following a run it knows is its own, which is

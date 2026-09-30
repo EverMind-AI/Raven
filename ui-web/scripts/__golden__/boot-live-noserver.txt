@@ -45,6 +45,11 @@ div.app[data-rail=on]
             path
             path
         span
+      button#personaBtn.navi
+        svg
+          path
+          path
+        span
     div#findBox.find
       span.ic
         svg
@@ -200,6 +205,11 @@ section#extAgentsPage.page[data-open=false]
     h2
   div.work
     div#extAgentsBody.wrap
+section#personaPage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#personaBody.wrap
 aside#detail.detail[data-open=false]
   div.dpanel
     header

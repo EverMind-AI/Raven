@@ -33,6 +33,7 @@ import { createImport } from './import'
 import { createKnowledge } from './knowledge'
 import { createMemory } from './memory'
 import { createModel } from './model'
+import { createPersona } from './persona'
 import { createPlughub } from './plughub'
 import { createSessions } from './sessions'
 import { createSettings } from './settings'
@@ -80,6 +81,7 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createImport(env).fixtures,
     ...createBrowser(env).fixtures,
     ...createKnowledge(env).fixtures,
+    ...createPersona(env).fixtures,
   }
 }
 

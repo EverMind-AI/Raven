@@ -64,6 +64,13 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
 
 
+# What a turn that asked to design a Persona may reach. Talking to the reader
+# and nothing else: designing is the platform's own step, and every tool that
+# writes a file or dispatches work would be this turn doing by hand what it was
+# not asked to do (see the charter in `_run_turn`).
+MAKER_TOOLS: tuple[str, ...] = ("ask_user", "message")
+
+
 class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     """
     The agent loop is the core processing engine.
@@ -645,6 +652,19 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # session on a connection.
         self._session_charters: dict[str, Any] = {}
 
+        # The Persona a session is running as, by session. Held rather than
+        # consumed, which is the whole difference from the dict above: a staged
+        # charter describes one dispatch, and a Persona is what the session is
+        # until another one replaces it.
+        self._session_personas: dict[str, tuple[Any, Any]] = {}
+
+        # The Persona a session has generated but not saved, by session. A
+        # generated Harness is a draft until someone says to keep it: the page
+        # shows this one and saves it by name, and a session that generates a
+        # second one before saving the first replaces it, because a draft is
+        # the answer to the request that is on screen.
+        self._session_drafts: dict[str, Any] = {}
+
         # ``self.subagents``, ``self.context_engine`` and
         # ``self.memory_consolidator`` were each handed ``provider`` earlier in
         # this constructor. Inside a turn they read the turn's binding; the
@@ -836,6 +856,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         """
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
         flush = True
+        capture = None
         try:
             # The tools a session brought with it become visible here, for the same
             # reason the model binding does: this is where the turn's task begins.
@@ -855,11 +876,70 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # forbids: a turn resolves its pair once and holds it for the whole
             # turn tree.
             binding = self._with_live_window(self.binding_for_session(session_key))
-            delegate_table = await self._write_worker_table(req, session_key, binding)
+            resolution = await self._resolve_playbook_turn(req, session_key, binding)
+            delegate_table = resolution.table
+            if resolution.active:
+                from raven.playbook.run_record import PlaybookRunCapture
+
+                capture = PlaybookRunCapture(
+                    query=getattr(req, "text", "") or "",
+                    disposition=resolution.disposition,
+                    selected_playbook=resolution.selected_playbook,
+                    artifact_name=resolution.artifact_name,
+                    capture_workflow=resolution.capture_workflow,
+                )
+            from raven.playbook.run_record import capture_scope
+
             # The charter a dispatch staged for this session, taken for this turn
             # only. Both scopes below are None on an ordinary turn, which is the
             # path every reader answers to as "no playbook".
             charter = self._take_session_charter(session_key)
+            # A turn that asked to design a Persona never writes the library,
+            # whether or not the design came back. It used to be told not to,
+            # in a prompt, and only when generation had succeeded -- so a
+            # generation the validator threw away left an ordinary turn holding
+            # every tool, and a reader whose own words said "create and save it"
+            # got exactly that: a playbook written by `create_playbook`, a name
+            # collision, and a question about overwriting something they had
+            # never asked to save. The narrowing is the tool table now, not the
+            # wording: what this turn may reach is what it may do.
+            asked_persona = getattr(req, "playbook_mode", None) == "persona"
+            if asked_persona:
+                from raven.agent.subagent.charter import Charter
+
+                charter = Charter(
+                    prompt=(
+                        "The platform could not design a Persona for this request. Say so plainly, in one or "
+                        "two sentences, and say what you would need to try again. Create nothing and save "
+                        "nothing: the reader asked to design a Persona, not to have a playbook written for "
+                        "them."
+                    ),
+                    tools=MAKER_TOOLS,
+                )
+            if resolution.disposition == "artifact" and resolution.artifact_name:
+                from raven.agent.subagent.charter import Charter
+
+                artifact_status = (
+                    f"has generated the Persona Harness {resolution.artifact_name!r} and is holding it as a "
+                    "draft the reader can save or let go"
+                    if not resolution.persisted
+                    else f"has generated and saved the reusable Persona Harness {resolution.artifact_name!r}"
+                )
+                charter = Charter(
+                    prompt=(
+                        f"The platform {artifact_status}. Reply concisely with what the generated Harness is "
+                        "for and who it can hand work to. Do not claim it has been saved."
+                    ),
+                    tools=MAKER_TOOLS if asked_persona else None,
+                )
+                self.adopt_session_persona(session_key, resolution)
+                # The workers go with the coordinator, to the turns that will
+                # dispatch them. This turn was just told not to.
+                delegate_table = None
+            elif charter is None and (persona := self.session_persona(session_key)) is not None:
+                charter, persona_table = persona
+                if delegate_table is None:
+                    delegate_table = persona_table
             with (
                 use_binding(binding),
                 # Beside the binding and for the same reason: the settings a
@@ -870,12 +950,13 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),
                 charter_scope(charter),
+                capture_scope(capture),
                 # The participant seats in the hook chain ask this turn's modules,
                 # so a replaced Action or Planning decides what a plugin's
                 # judgement does -- bound per turn like the model.
                 bind_harness(self.harness),
             ):
-                return await self._run_turn(
+                outcome = await self._run_turn(
                     req,
                     emit,
                     drain,
@@ -883,10 +964,26 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     usage_sink=usage_sink,
                     text_sink=text_sink,
                 )
+            if capture is not None:
+                await self._finish_playbook_turn(resolution, capture, binding)
+            return outcome
         except asyncio.CancelledError:
             flush = False
             raise
         finally:
+            if capture is not None and capture.status == "running" and self._playbooks is not None:
+                from raven.playbook.run_record import RunRecordStore
+
+                capture.finish(status="cancelled" if not flush else "failed")
+                try:
+                    RunRecordStore(self._playbooks.store.root).save(capture)
+                except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
+                    logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
+            loader = self.tools.get("load_playbook")
+            setter = getattr(loader, "set_preselected", None)
+            if callable(setter):
+                setter(None)
+
             # Every way a turn ends passes here, which is what makes this the
             # place a foreground DAG run learns its turn is over. A direct chat
             # runs on an instance's own lane, concurrently with the main agent's

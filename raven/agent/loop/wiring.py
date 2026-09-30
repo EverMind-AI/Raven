@@ -730,6 +730,10 @@ class WiringMixin:
         marking that claims we looked when we did not.
         """
         self._session_bindings.pop(session_key, None)
+        # The Persona goes with the session for the same reason the binding
+        # does: a deleted session has nothing left to run as, and this is the
+        # one place that says a session is over.
+        self._session_personas.pop(session_key, None)
 
     def _forget_transport_verdicts(self) -> None:
         """Drop the capability verdicts a new provider may answer differently.
@@ -783,64 +787,326 @@ class WiringMixin:
         """
         return self._session_charters.pop(session_key, None)
 
-    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
-        """This turn's worker table, or ``None`` to run it unconfigured.
+    def adopt_session_persona(self, session_key: str, resolution: Any) -> None:
+        """Make this session run as the Persona that was just generated.
 
-        ``None`` on every path that is not a deliberate, successful generation:
-        the feature off, a sub-agent process (a worker writing its own workers
-        would be the third level the two-level rule forbids), a direct chat with
-        one sub-agent, an empty roster, or a generation that failed. A turn that
-        dies because its setup step failed is strictly worse than one that runs
-        without it.
-
-        The binding is handed in rather than resolved here. It has to be the
-        turn's own pair, because this runs *before* ``use_binding`` opens and
-        ``self.provider`` still answers with the loop's default; and it has to
-        be resolved once for both, because this call awaits a model and a
-        session that switched while it was in flight would otherwise split the
-        turn across two pairs.
-
-        The tool names handed over are the registry's current view, taken
-        outside the turn's freeze for the same reason. They are a vocabulary for
-        the brief, not the array the turn will run on, so a session-overlay tool
-        missing from them costs a word the generator could have used and
-        nothing else.
+        The generating turn itself does not run as it -- that turn saves the
+        artifact and reports it, and a coordinator whose ``intake`` gates on
+        trip dates would refuse to answer that. What is adopted here is read by
+        every *later* turn of the session, which is the experience the Persona
+        was written for.
         """
-        cfg = self._playbook_config
-        if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
+        if getattr(resolution, "coordinator_charter", None) is None:
+            self.bind_session_harness(session_key, None)
+            return
+        self.bind_session_harness(session_key, resolution.artifact_name or "", spec=resolution.spec)
+
+    def bind_session_harness(self, session_key: str, name: str | None, *, spec: Any = None) -> str | None:
+        """Freeze a Harness onto this session, for every turn it takes.
+
+        A snapshot rather than a name to look up later: the window the user
+        opened keeps the Harness they chose, so editing the library entry --
+        or deleting it -- does not rewrite or break a conversation already
+        running on it. It rides the session's own metadata, so it survives a
+        restart the way a pinned workdir does.
+
+        ``None`` unbinds. ``spec`` is for a caller that already holds the
+        Harness; everything else names one in the library.
+        """
+        self._session_personas.pop(session_key, None)
+        session = self.sessions.get_or_create(session_key)
+        if name is None:
+            session.metadata.pop("harness", None)
             return None
-        if is_subagent_process():
-            return None
-        # A direct chat with one sub-agent returns through ``subagents.chat``
-        # without ever rendering or executing ``spawn``, so a table written for
-        # it is never read. Guarded before the call rather than after: the cost
-        # of generating one is a model round trip (two, when the table needs a
-        # repair round), paid on every direct turn for nothing.
-        if getattr(req, "direct_target", None) is not None:
+        if spec is None:
+            stored = self._playbooks.spec(name) if self._playbooks is not None else None
+            spec = getattr(stored, "harness", None)
+            if spec is None:
+                raise ValueError(f"no stored Harness named {name!r}")
+        # ``exclude_unset`` for the reason ``UnifiedPlaybookSpec.block_dump``
+        # gives: a nested default re-emitted here reads back as an explicit
+        # choice, and ``Checks.impl`` then fails validation as a disabled field.
+        session.metadata["harness"] = {
+            "name": name,
+            "spec": spec.model_dump(by_alias=True, exclude_none=True, exclude_unset=True),
+        }
+        logger.info("agent playbook: session bound to Harness {} ({} worker(s))", name or "?", len(spec.delegate))
+        return name
+
+    def session_harness_name(self, session_key: str) -> str | None:
+        """The Harness this session is bound to, by name, for a client to show."""
+        held = self.sessions.get_or_create(session_key).metadata.get("harness")
+        return str(held.get("name") or "") or None if isinstance(held, dict) else None
+
+    def session_persona(self, session_key: str) -> "tuple[Charter, Any] | None":
+        """This session's bound Harness as seats, or ``None`` for an ordinary one.
+
+        Rebuilt from the frozen snapshot rather than from the library, and
+        cached per session because it is asked once a turn.
+        """
+        held = self._session_personas.get(session_key)
+        if held is not None:
+            return held
+        raw = self.sessions.get_or_create(session_key).metadata.get("harness")
+        if not isinstance(raw, dict) or not isinstance(raw.get("spec"), dict):
             return None
         try:
-            from raven.playbook.agent_generator import WorkerTableGenerator, roster_note
+            from raven.playbook.agent_generator import build_coordinator_charter, build_table
+            from raven.playbook.agent_spec import AgentPlaybookSpec
+
+            spec = AgentPlaybookSpec.model_validate(raw["spec"])
+            charter = build_coordinator_charter(spec)
+        except Exception:  # noqa: BLE001 - a Harness this build cannot read is not a reason to lose the turn
+            logger.opt(exception=True).warning("agent playbook: session Harness could not be rebuilt; running plain")
+            return None
+        if charter is None:
+            return None
+        seats = (charter, build_table(spec, {}))
+        self._session_personas[session_key] = seats
+        return seats
+
+    async def _resolve_playbook_turn(self, req: Any, session_key: str, binding: Any):
+        """Generate, persist and bind the Harness selected by this turn's mode."""
+        from raven.playbook.agent_generator import HarnessResolution
+
+        cfg = self._playbook_config
+        if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
+            return HarnessResolution()
+        asked = getattr(req, "playbook_mode", None)
+        mode = asked or getattr(cfg, "default_generation_mode", "task")
+        if mode == "off":
+            return HarnessResolution()
+        if is_subagent_process() or getattr(req, "direct_target", None) is not None:
+            return HarnessResolution()
+        # A Persona is minted only for a turn that asked for one. The config's
+        # default says what this deployment generates, not that every message
+        # is a request to be given an identity -- and read as the latter it
+        # was: a reader typing "hi" spent a model call minting a Persona,
+        # bound the conversation to it, and heard the assistant volunteer a
+        # draft nobody had asked about. A Task artifact configures workers for
+        # the turn in hand and carries no identity, so the default still
+        # reaches it.
+        if mode == "persona" and asked != "persona":
+            return HarnessResolution()
+        try:
+            from raven.playbook.agent_generator import (
+                PersonaPlaybookGenerator,
+                TaskPlaybookGenerator,
+                persona_roster_profile,
+                task_roster_profile,
+            )
 
             metas = list(self.subagents.list_agents())
             agents = [a.name for a in metas]
             if not agents:
-                return None
-            # What each agent is for, in the registry's own words and its own
-            # advertised capabilities. Without them the generating model is
-            # handed a list of bare names and, on a roster that is not the
-            # shipped one, cannot tell which agent the task wants -- not even
-            # when only one of them can read the local files it is about.
-            notes = {a.name: roster_note(a) for a in metas}
-            tools = sorted((d.get("function", d) or {}).get("name", "") for d in self.tools.get_definitions())
-            table = await WorkerTableGenerator(binding.provider, binding.model).generate(
-                getattr(req, "text", "") or "", agents, [t for t in tools if t], notes
-            )
+                return HarnessResolution()
+            tool_catalog = self.tools.get_definitions()
+            query = getattr(req, "text", "") or ""
+            if mode == "persona":
+                profiles = {meta.name: persona_roster_profile(meta) for meta in metas}
+                names = self._playbooks.names() if self._playbooks is not None else []
+                resolution = await PersonaPlaybookGenerator(binding.provider, binding.model).resolve(
+                    query,
+                    agents,
+                    tool_catalog,
+                    profiles,
+                    names,
+                )
+            else:
+                profiles = {meta.name: task_roster_profile(meta) for meta in metas}
+                resolution = await TaskPlaybookGenerator(binding.provider, binding.model).resolve(
+                    query,
+                    agents,
+                    tool_catalog,
+                    profiles,
+                )
+            if resolution.active:
+                # Only a Persona is a draft. A Task artifact is the record of
+                # a graph the turn is about to run and its Workflow is compiled
+                # into it when the turn ends (``_finish_playbook_turn``), so
+                # holding one back would leave that compile nothing to update.
+                if getattr(resolution, "generation_mode", None) == "persona":
+                    resolution = self._hold_generated_harness(resolution, query, session_key)
+                else:
+                    resolution = self._persist_generated_harness(resolution, query)
         except Exception:  # noqa: BLE001 - setup must not cost the turn
-            logger.opt(exception=True).warning("agent playbook: worker table failed; running unconfigured")
-            return None
+            logger.opt(exception=True).warning("agent playbook: resolution failed; running unconfigured")
+            return HarnessResolution()
+        table = resolution.table
         if table:
             logger.info("agent playbook: {} worker(s) for this turn: {}", len(table.workers), table.labels())
-        return table
+        return resolution
+
+    def _hold_generated_harness(self, resolution: Any, query: str, session_key: str):
+        """Hold a validated Harness as this session's draft; nothing is written.
+
+        A generated Persona is an answer on screen, not a library entry. The
+        page that asked for it saves it by name (``playbooks.draft_save``) or
+        lets it go, and until then the library is untouched -- which is the
+        whole difference from what this did before: a row was written on every
+        turn that generated one, so a reader who asked twice ended up with
+        ``travel-planner`` and ``travel-planner-2`` and nothing saying which of
+        the two they had meant to keep.
+
+        The draft still binds to the session (``adopt_session_persona`` runs on
+        the resolution this returns), because running as the Persona you just
+        described is the point of describing it; saving is what makes it
+        outlive the conversation.
+        """
+        if resolution.spec is None:
+            return resolution
+        from dataclasses import replace
+
+        artifact = self._generated_artifact(resolution, query)
+        self._session_drafts[session_key] = artifact
+        logger.info("playbook: holding generated Harness {!r} as {}'s draft", artifact.name, session_key)
+        return replace(resolution, artifact_name=artifact.name, persisted=False)
+
+    def _generated_artifact(self, resolution: Any, query: str):
+        """The library artifact a generated Harness would be saved as."""
+        import re
+
+        from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec
+
+        description = (resolution.description or query.strip().splitlines()[0])[:200]
+        keywords = [word.lower() for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", query)[:8]]
+        return UnifiedPlaybookSpec(
+            name=resolution.artifact_name or resolution.spec.name,
+            description=description,
+            match=PlaybookMatch(summary=description, keywords=keywords or [description[:80]]),
+            harness=resolution.spec,
+        )
+
+    def _persist_generated_harness(self, resolution: Any, query: str):
+        """Save a validated Harness now; persistence failure never blocks binding.
+
+        The Task path's own. A Persona goes through ``_hold_generated_harness``
+        instead, because a Persona is something a reader decides to keep.
+        """
+        if self._playbooks is None or resolution.spec is None:
+            return resolution
+        from dataclasses import replace
+
+        artifact = self._generated_artifact(resolution, query)
+        try:
+            artifact, path = self._save_generated_artifact(artifact)
+            self._playbooks.adopt(artifact.name)
+            logger.info("playbook: saved generated Harness {!r} at {}", artifact.name, path)
+            return replace(
+                resolution,
+                spec=artifact.harness,
+                artifact_name=artifact.name,
+                persisted=True,
+            )
+        except Exception:  # noqa: BLE001 - persistence must not cost the turn
+            logger.opt(exception=True).warning("playbook: generated Harness could not be saved; using it in memory")
+            return resolution
+
+    def session_draft(self, session_key: str):
+        """The Persona this session generated and has not saved, or ``None``."""
+        return self._session_drafts.get(session_key)
+
+    def save_session_draft(self, session_key: str, name: str | None = None) -> str:
+        """Write this session's draft to the library, and answer its saved name.
+
+        The name is the reader's to choose: the generator proposes one, and the
+        page may send another. A collision takes the first free numeric suffix,
+        the way every other generated artifact does -- but now only when a
+        reader asked for the save, so the suffix means two Personas were kept,
+        not two turns were taken.
+        """
+        artifact = self._session_drafts.get(session_key)
+        if artifact is None:
+            raise ValueError("this session has no generated Persona to save")
+        if self._playbooks is None:
+            raise RuntimeError("Playbook runtime is unavailable")
+        wanted = (name or artifact.name).strip()
+        if not wanted:
+            raise ValueError("a Persona needs a name")
+        if wanted != artifact.name:
+            harness = artifact.harness
+            if harness is not None:
+                harness = harness.model_copy(update={"name": wanted})
+            artifact = artifact.model_copy(update={"name": wanted, "harness": harness})
+        saved, path = self._save_generated_artifact(artifact)
+        self._playbooks.adopt(saved.name)
+        self._session_drafts.pop(session_key, None)
+        logger.info("playbook: saved Persona {!r} at {}", saved.name, path)
+        return saved.name
+
+    def discard_session_draft(self, session_key: str) -> bool:
+        """Drop this session's unsaved Persona; ``True`` when there was one."""
+        return self._session_drafts.pop(session_key, None) is not None
+
+    def _save_generated_artifact(self, artifact: Any):
+        """Atomically save under the requested name or the first numeric suffix."""
+        if self._playbooks is None:
+            raise RuntimeError("Playbook runtime is unavailable")
+        from raven.playbook.store import PlaybookExistsError
+
+        base = artifact.name
+        attempt = 1
+        while True:
+            name = base if attempt == 1 else f"{base}-{attempt}"
+            harness = artifact.harness
+            if harness is not None:
+                harness = harness.model_copy(update={"name": name})
+            candidate = artifact.model_copy(update={"name": name, "harness": harness})
+            try:
+                return candidate, self._playbooks.store.save(candidate)
+            except PlaybookExistsError:
+                attempt += 1
+
+    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
+        """Backward-compatible table-only face used by focused tests."""
+        return (await self._resolve_playbook_turn(req, session_key, binding)).table
+
+    async def _finish_playbook_turn(self, resolution: Any, capture: Any, binding: Any) -> None:
+        """Update a Task artifact with proven Workflow evidence and save the run."""
+        if self._playbooks is None:
+            return
+        from raven.playbook.run_record import RunRecordStore
+
+        try:
+            harness = resolution.spec
+            capture.saved_playbook = resolution.artifact_name if resolution.persisted else None
+            if resolution.capture_workflow and capture.dags and not resolution.selected_playbook:
+                from raven.playbook.workflow_compiler import WorkflowCompiler
+
+                artifact = await WorkflowCompiler(binding.provider, binding.model).compile(
+                    query=capture.query,
+                    dag=capture.dags[-1].spec,
+                    run_id=capture.run_id,
+                    harness=harness,
+                    name_hint=resolution.artifact_name,
+                    description_hint=resolution.description,
+                )
+                store = self._playbooks.store
+                if resolution.persisted:
+                    # The compiler parameterizes a proven graph; it does not own
+                    # artifact identity. Keep the numeric suffix chosen by the
+                    # atomic Harness save even when the model ignores nameHint.
+                    artifact = artifact.model_copy(update={"name": resolution.artifact_name, "harness": harness})
+                    path = store.save(artifact, overwrite=True)
+                else:
+                    artifact, path = self._save_generated_artifact(artifact)
+                self._playbooks.adopt(artifact.name)
+                capture.saved_playbook = artifact.name
+                logger.info("playbook: updated Task artifact {!r} with Workflow at {}", artifact.name, path)
+            capture.finish()
+        except Exception as exc:  # noqa: BLE001 - persistence must not replace the user's answer
+            logger.opt(exception=True).warning("playbook: turn finalization failed")
+            capture.finish(status="completed", error=str(exc))
+        finally:
+            try:
+                path = RunRecordStore(self._playbooks.store.root).save(capture)
+                logger.info("playbook: saved run record {}", path)
+            except Exception:  # noqa: BLE001 - record failure must not cost the turn
+                logger.opt(exception=True).warning("playbook: run record could not be saved")
+            loader = self.tools.get("load_playbook")
+            setter = getattr(loader, "set_preselected", None)
+            if callable(setter):
+                setter(None)
 
     def set_default_binding(self, binding: ModelBinding) -> None:
         """Change what new sessions start on.
@@ -1469,10 +1735,10 @@ class WiringMixin:
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
             binding_for=self._turn_binding,
-            # Stored Playbook nodes already name roster agents and carry their
-            # own prompts. A turn-scoped generated worker with the same label
-            # must not rewrite that persisted graph.
-            worker_table_for=lambda: None,
+            # PlaybookRuntime opens an explicit delegate scope for every stored
+            # graph: its durable Harness table for a v2 composite, or None for a
+            # legacy/workflow-only graph. Reading the scope here lets composites
+            # resolve aliases without exposing them to unrelated stored DAGs.
             control_reachable=self.dag_control_reachable,
             control_advert=self.dag_control_advert,
             verdict_config=self.subagent_dag_config,

@@ -43,6 +43,7 @@ import { useSyncExternalStore } from 'react'
 import { AgentsGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
 import { open as openExtAgents } from '../features/extAgents/store'
+import { openPage as openPersona } from '../features/persona/store'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
@@ -110,6 +111,22 @@ const NAV_ROWS: ReadonlyArray<{
     key: 'gui.nav.agents',
     open: () => openExtAgents(),
     icon: <AgentsGlyph />,
+  },
+  {
+    button: 'personaBtn',
+    key: 'gui.nav.persona',
+    open: () => openPersona(),
+    /* The design's own, like AgentsGlyph beside it: a head over shoulders.
+       Drawn on HugeIcons' 24 grid and inked in `currentColor`, so the row
+       decides its colour through hover, selection and both themes. */
+    icon: (
+      <svg
+        width={16} height={16} viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" strokeWidth={1.8} aria-hidden="true"
+      >
+        <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /><path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+      </svg>
+    ),
   },
 ]
 

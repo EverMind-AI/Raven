@@ -618,33 +618,33 @@ def test_nothing_the_model_may_emit_is_quietly_dropped() -> None:
     The failure this catches is silent by construction: a field offered to the
     generating model and consumed by nobody produces a table that validates,
     a dispatch that runs, and a brief that is missing half of what its author
-    wrote -- with no error anywhere. ``code`` and ``timeoutSeconds`` were in
-    exactly that state.
+    wrote -- with no error anywhere. Judge's external ``functions`` entry and
+    ``timeoutSeconds`` were once in exactly that state.
     """
-    from raven.playbook.agent_generator import _spec_from_args, emit_tool
+    from raven.playbook.agent_generator import _persona_spec_from_args, persona_tool
 
-    schema = emit_tool(["Raven"], ["grep", "write_file"])[0]["function"]["parameters"]
+    schema = persona_tool(["Raven"], ["grep", "write_file"])[0]["function"]["parameters"]
     offered = set(schema["properties"]["workers"]["items"]["properties"])
 
     row: dict = {
-        "name": "Raven",
+        "agent": "Raven",
         "as": "w",
         "brief": "a brief",
         "systemPrompt": BRIEF,
         "stopWhen": "it lands",
         "tools": ["grep"],
         "checks": [{"tool": "write_file", "pathPrefix": "out/"}],
-        "code": "def judge(name, params, prior):\n    return []\n",
         "functions": {
             "intake": "def intake(text, step):\n    return {'text': text}",
             "advise": "def advise(step):\n    return None",
+            "judge": "def judge(name, params, prior):\n    return []\n",
             "salvage": "def salvage(step):\n    return None",
         },
         "timeoutSeconds": 90,
     }
     assert offered == set(row), "this test must exercise exactly what the schema offers"
 
-    spec, briefs = _spec_from_args({"workers": [row]}, {"Raven"})
+    spec, briefs = _persona_spec_from_args({"workers": [row]}, {"Raven"})
     payload = build_table(spec, briefs).get("w").payload
 
     assert briefs["w"] == "a brief"

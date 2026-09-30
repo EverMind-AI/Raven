@@ -220,12 +220,12 @@ const UNSENT = new Set([
   'plug.revoke.mcp.auth_url', 'plug.revoke.mcp.error',
   // skills.manage: 9 -- the gate asks for the list; inspect, open, search, browse and install answer the rest
   'skills.manage.info', 'skills.manage.installed', 'skills.manage.items', 'skills.manage.name', 'skills.manage.opened', 'skills.manage.page', 'skills.manage.results', 'skills.manage.total', 'skills.manage.total_pages',
-  // session.compress: 10
-  'session.compress.info.config_notices', 'session.compress.info.endpoint', 'session.compress.info.running_ms', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
-  // session.create: 6 -- nothing is ever in flight on this canvas, so the age of a running turn has nothing to report
-  'session.create.info.config_notices', 'session.create.info.endpoint', 'session.create.info.running_ms', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
-  // session.resume: 13
-  'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.running_ms', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
+  // session.compress: 11
+  'session.compress.info.config_notices', 'session.compress.info.endpoint', 'session.compress.info.harness', 'session.compress.info.running_ms', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
+  // session.create: 7 -- nothing is ever in flight on this canvas, so the age of a running turn has nothing to report
+  'session.create.info.config_notices', 'session.create.info.endpoint', 'session.create.info.harness', 'session.create.info.running_ms', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
+  // session.resume: 14
+  'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.harness', 'session.resume.info.running_ms', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
   // settings.everos: 1
   'settings.everos.note',
   // settings.everosSet: 1 -- the gateway's re-index warning, which only a real embedding move raises

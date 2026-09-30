@@ -13,7 +13,7 @@
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
  * fullscreen -> node -> pane -> collapse retreat). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all forty-five pairs of layers. The three
+ * fixture page, and all fifty-five pairs of layers. The three
  * capture-phase handlers
  * each open sheet registers run *before* the table and two of them act on
  * Escape without stopping propagation, so one Escape can both deny an approval
@@ -27,6 +27,7 @@ import { openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
 import * as desk from '../features/desk/store'
 import * as extAgents from '../features/extAgents/store'
+import * as persona from '../features/persona/store'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as escapeOrder from './escapeOrder'
@@ -53,6 +54,7 @@ const LAYER_IDS = [
   '#veil',
   '#detail',
   '#extAgentsPage',
+  '#personaPage',
   'setIsOpen()',
   'desk.escapeOpen()',
   '#permPop',
@@ -77,6 +79,7 @@ const PAGE = [
   '<div class="pop" id="plusPop" data-open="false"></div>',
   '<div class="pop" id="wdPop" data-open="false"></div></div></div></div>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
+  '<section class="page" id="personaPage" data-open="false"></section>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
   '<div class="veil setveil" id="setVeil" data-open="false"><div id="setModal"></div></div>',
   '<div class="veil" id="veil" data-open="false"><button id="cfNo"></button></div>',
@@ -91,6 +94,7 @@ const PAGE = [
 const spies = {
   extAgentsClose: vi.fn(),
   permClose: vi.fn(),
+  personaClose: vi.fn(),
   plusClose: vi.fn(),
   wdClose: vi.fn(),
   stop: vi.fn(),
@@ -119,6 +123,7 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
+  '#personaPage': { up: flag('personaPage'), taken: called(spies.personaClose) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
   /* Its four-rung retreat (fullscreen -> node -> pane -> collapse) is
      store.test.ts's to prove; this fixture only needs one rung on screen and
@@ -154,6 +159,7 @@ beforeEach(() => {
      test is which one the key reaches, not what any of them does. */
   vi.spyOn(extAgents, 'close').mockImplementation(spies.extAgentsClose)
   vi.spyOn(perm, 'close').mockImplementation(spies.permClose)
+  vi.spyOn(persona, 'closePage').mockImplementation(spies.personaClose)
   vi.spyOn(plus, 'close').mockImplementation(spies.plusClose)
   vi.spyOn(workdir, 'close').mockImplementation(spies.wdClose)
   sources.composer = { stop: spies.stop } as unknown as ComposerSource
@@ -188,11 +194,11 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the ten layers in', () => {
+  it('is the order the table reaches the eleven layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
-  it('has no eleventh entry, and every entry is in the fixture', () => {
+  it('has no twelfth entry, and every entry is in the fixture', () => {
     expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
     expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
@@ -215,8 +221,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
-  it('has forty-five pairs to answer for', () => {
-    expect(pairs).toHaveLength(45)
+  it('has fifty-five pairs to answer for', () => {
+    expect(pairs).toHaveLength(55)
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {

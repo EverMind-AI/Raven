@@ -1,0 +1,5 @@
+section#personaPage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#personaBody.wrap

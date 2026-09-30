@@ -52,6 +52,7 @@ export interface ModulePage {
    six registrations from going stale, and it is the same cost for one row. */
 const DECLARED = [
   { id: 'extAgentsPage', bodyId: 'extAgentsBody', navButtons: ['agentsBtn'], escapeRank: 1, head: 'gui.page.agents', aria: 'gui.page.agents' },
+  { id: 'personaPage', bodyId: 'personaBody', navButtons: ['personaBtn'], escapeRank: 2, head: 'gui.nav.persona', aria: 'gui.nav.persona' },
 ] as const satisfies readonly ModulePage[]
 
 /** The module pages, keyed as their `<section>` ids. */
