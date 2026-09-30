@@ -60,10 +60,15 @@ class FileRemoval:
     too large to hold, was not utf-8, or nothing had read it this turn. That is a
     missing value rather than a distinction: a reader draws the deletion either
     way, and only the body of the removed file is lost.
+
+    ``withheld`` is the one exception: the text was kept back on purpose (a file
+    the checkpoint would not store, or one no rule was read for in time), and
+    ``before`` is ``None`` for that. A reader must not fill it in from elsewhere.
     """
 
     path: str
     before: str | None = None
+    withheld: bool = False
 
 
 @dataclass(frozen=True)

@@ -81,15 +81,28 @@ def test_rewriting_a_path_gives_its_room_back(tmp_path: Path) -> None:
     assert [(r.path, r.before) for r in watch.settle()] == [(str(gone), body)]
 
 
-def test_a_removal_the_tool_reported_keeps_the_body_it_was_reported_with(tmp_path: Path) -> None:
-    """A tool that reports a removal without its body may have withheld it on
-    purpose -- the command tool does, for a file the checkpoint would not store.
-    What the watch holds for that path must not put the body back."""
+def test_a_removal_the_tool_reported_without_a_body_gets_the_one_this_run_wrote(tmp_path: Path) -> None:
+    """A tool that read the disk after the fact may not know what a file held;
+    what this run wrote there is its last known text."""
+    gone = tmp_path / "made.txt"
+    gone.write_text("x\ny\n")
+    watch = RemovalWatch()
+    watch.note_write(FileChange(path=str(gone), after="x\ny\n"))
+    gone.unlink()
+
+    assert [(r.path, r.before) for r in watch.settle((FileRemoval(path=str(gone)),))] == [(str(gone), "x\ny\n")]
+    assert watch.settle() == []
+
+
+def test_a_removal_whose_body_the_tool_withheld_stays_without_one(tmp_path: Path) -> None:
+    """The command tool keeps back the text of a file the checkpoint would not
+    store, and says so. What the watch holds for that path must not put it back."""
     gone = tmp_path / "creds.env"
     gone.write_text("SECRET")
     watch = RemovalWatch()
     watch.note_write(FileChange(path=str(gone), after="SECRET"))
     gone.unlink()
 
-    assert [(r.path, r.before) for r in watch.settle((FileRemoval(path=str(gone)),))] == [(str(gone), None)]
+    [removal] = watch.settle((FileRemoval(path=str(gone), withheld=True),))
+    assert (removal.path, removal.before, removal.withheld) == (str(gone), None, True)
     assert watch.settle() == []

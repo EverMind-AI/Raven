@@ -167,7 +167,24 @@ async def test_a_file_the_command_named_keeps_its_text_only_where_the_repo_would
 
     result = await _tool(tmp_path, _Shadow(tmp_path, ignored={".env"})).execute(command="rm .env notes.md")
 
-    assert {Path(r.path).name: r.before for r in result.removed} == {".env": None, "notes.md": "one\n"}
+    assert {Path(r.path).name: (r.before, r.withheld) for r in result.removed} == {
+        ".env": (None, True),
+        "notes.md": ("one\n", False),
+    }
+
+
+@pytest.mark.parametrize("shadowed", [True, False])
+async def test_a_listed_removal_says_whether_its_body_was_kept_back_or_is_unknown(tmp_path, shadowed):
+    """A bare removal is either one the rules kept back, which nothing else may
+    fill in, or one whose text nobody had, which the turn's own record of the
+    file may. Only a repo that ruled can say the first."""
+    (tmp_path / "keys.secret").write_text("TOKEN=x\n")
+    shadow = _Shadow(tmp_path, stage=lambda: None, ignored={"keys.secret"}) if shadowed else None
+
+    result = await _tool(tmp_path, shadow).execute(command="find . -name '*.secret' -delete")
+
+    [removal] = result.removed
+    assert (removal.before, removal.withheld) == (None, shadowed)
 
 
 async def test_a_tool_not_asked_to_record_writes_does_not_list_or_stage(tmp_path, monkeypatch):
@@ -281,7 +298,7 @@ async def test_a_shadow_repo_too_slow_to_answer_after_the_command_leaves_every_f
     assert "Exit code: 0" in result
     [write] = result.written
     assert (write.added, write.diff) == (None, None)
-    assert [(Path(r.path).name, r.before) for r in result.removed] == [("gone.txt", None)]
+    assert [(Path(r.path).name, r.before, r.withheld) for r in result.removed] == [("gone.txt", None, True)]
 
 
 async def test_measuring_that_runs_past_its_bound_still_returns_the_commands_output(tmp_path, monkeypatch):
@@ -301,7 +318,10 @@ async def test_measuring_that_runs_past_its_bound_still_returns_the_commands_out
 
     monkeypatch.setattr(snapshot, "take", _slow_second_walk)
 
-    result = await _tool(tmp_path, _Shadow(tmp_path)).execute(command="echo done && echo x > made.txt")
+    (tmp_path / "gone.txt").write_text("secret\n")
+
+    result = await _tool(tmp_path, _Shadow(tmp_path)).execute(command="echo done && echo x > made.txt && rm gone.txt")
 
     assert "done" in result and result.ok is True
     assert result.written == ()
+    assert [(Path(r.path).name, r.before, r.withheld) for r in result.removed] == [("gone.txt", None, True)]

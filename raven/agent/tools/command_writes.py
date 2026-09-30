@@ -134,7 +134,7 @@ async def after(
     Bounded (:data:`AFTER_WAIT_SECONDS`): the command has already run, and its
     output must reach the model whatever the measuring costs. Past the bound
     nothing is reported, and a named removal keeps its text only where no
-    shadow repo could have ruled on it.
+    shadow repo could have ruled on it; elsewhere it goes out ``withheld``.
     """
     try:
         return await asyncio.wait_for(_after(start, named), AFTER_WAIT_SECONDS)
@@ -142,7 +142,7 @@ async def after(
         logger.warning("exec files not recorded: measuring {} did not finish in time", start.root)
         if start.shadow is None:
             return (), named
-        return (), tuple(FileRemoval(path=removal.path) for removal in named)
+        return (), tuple(FileRemoval(path=removal.path, withheld=True) for removal in named)
 
 
 async def _after(
@@ -157,7 +157,7 @@ async def _after(
     held: dict[str, bytes] = {}
     shown: set[str] = set()
     if start.shadow is not None:
-        subjects = [*created, *modified, *deleted, *(removal.path for removal in named if removal.before is not None)]
+        subjects = [*created, *modified, *deleted, *(removal.path for removal in named)]
         try:
             shown, held = await asyncio.wait_for(
                 _shown_and_held(start.shadow, start.tree, subjects, [*modified, *deleted]), READ_WAIT_SECONDS
@@ -166,12 +166,20 @@ async def _after(
             # Nothing the repo did not rule on goes out: every file stays bare.
             logger.warning("exec diffs dropped: the shadow repo for {} did not answer in time", start.root)
             shown, held = set(), {}
-        named = tuple(removal if removal.path in shown else FileRemoval(path=removal.path) for removal in named)
+        named = tuple(
+            removal if removal.path in shown else FileRemoval(path=removal.path, withheld=True) for removal in named
+        )
     # Off the loop too: this reads every written file, and one command can write hundreds.
     written = (
         await asyncio.to_thread(_writes, created, modified, listing or {}, held, shown) if created or modified else ()
     )
-    removed = named + tuple(FileRemoval(path=path, before=_decoded(held.get(path))) for path in deleted)
+    # A body the rules kept back is marked so, and no other record of the file
+    # may put it back; one that is merely unknown is left for them to supply.
+    ruled = start.shadow is not None
+    removed = named + tuple(
+        FileRemoval(path=path, before=_decoded(held.get(path)), withheld=ruled and path not in shown)
+        for path in deleted
+    )
     return written, removed
 
 

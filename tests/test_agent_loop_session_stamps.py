@@ -899,6 +899,27 @@ async def test_a_removal_the_command_named_is_not_reported_twice(workspace):
 
 
 @pytest.mark.asyncio
+async def test_a_file_this_turn_wrote_keeps_its_text_when_a_command_removes_it_unseen(workspace):
+    """The listing reports the deletion without a body when no shadow repo held
+    the file. The turn itself wrote it, though, so what it wrote is still the
+    last thing anyone knew the file to hold."""
+    work = workspace / "work"
+    work.mkdir()
+    made = work / "made.txt"
+    script = [
+        _tool_call("c1", "write_file", {"path": str(made), "content": "x\ny\n"}),
+        _tool_call("c2", "exec", {"command": "find . -name '*.txt' -delete"}),
+        LLMResponse(content="done", finish_reason="stop"),
+    ]
+
+    completes = await _run_command_turn(workspace, work, script, made.unlink)
+
+    removed = completes[1]["file_removed"]
+    assert len(removed) == 1, removed
+    assert removed[0]["before"] == "x\ny\n"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("name", ["made.txt", "local.secret"])
 async def test_a_file_this_turn_wrote_is_removed_with_the_text_the_command_reported(workspace, name):
     """The turn's own watch also holds what the turn wrote to a path, and a
