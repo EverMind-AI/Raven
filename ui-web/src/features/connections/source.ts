@@ -40,6 +40,9 @@ export async function loadChannels(): Promise<void> {
     c.running = s.running
     c.connected = s.connected
     c.qrLogin = !!s.qr_login
+    /* An entrance that came up, or was switched off, has nothing left to be
+       refused for. */
+    if (s.running || !s.enabled) delete c.refusal
   })
   gatewayRunningLive = r.gateway_running
 }
@@ -79,7 +82,7 @@ function sayOutcome(c: ConnChannel, on: boolean, r: ChannelsConfigureResult): vo
   const name = chanName(c)
   const refused = refusalOf(on, r)
   if (refused) {
-    toast(t('gui.conn.toggle_failed', { name, detail: refused }))
+    c.refusal = refused
     return
   }
   const state = t(on ? 'gui.conn.enabled' : 'gui.conn.disabled')
@@ -88,17 +91,14 @@ function sayOutcome(c: ConnChannel, on: boolean, r: ChannelsConfigureResult): vo
 }
 
 export const connSource: ConnectionsSource = {
-  /* `initial` is the page-open fetch: only that one toasts a failed load or
-     warns about a gateway that is not receiving -- a background reload (the
-     scan poll's refresh) stays silent, as the old page did. */
+  /* `initial` is the page-open fetch: only that one toasts a failed load -- a
+     background reload (the scan poll's refresh) stays silent. A gateway that
+     is not receiving is the page's notice now, drawn off `hostRunning`. */
   rows: async (initial) => {
     try {
       await loadChannels()
     } catch (e) {
       if (initial) toast(t('gui.op.load_failed', { detail: String((e as Error).message || e) }))
-    }
-    if (initial && !gatewayRunningLive && CHANNELS.some((c) => c.on)) {
-      toast(t('gui.conn.not_receiving'))
     }
     return CHANNELS
   },
@@ -150,8 +150,11 @@ export const connSource: ConnectionsSource = {
          no words for. The write itself was applied either way, which is what
          the caller's boolean says; whether the adapter then came up is the
          row's to show. */
+      /* Kept, not toasted: the sheet the write came from is open, and its state
+         line carries the reason for as long as the entrance stays down. */
       const refused = refusalOf(!!enable, r)
-      if (refused) toast(t('gui.conn.toggle_failed', { name: chanName(c), detail: refused }))
+      if (refused) c.refusal = refused
+      else delete c.refusal
       return true
     } catch (e) {
       const err = e as { data?: { detail?: string }; message?: string }

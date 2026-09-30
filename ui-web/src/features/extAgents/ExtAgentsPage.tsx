@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 
+import { HubHead } from '../../components/HubHead'
 import { KeyInput } from '../../components/KeyInput'
 import { ModelPicker } from '../../components/ModelPicker'
 import { t } from '../../i18n/t'
@@ -704,12 +705,7 @@ export function ExtAgentsApp(): JSX.Element {
   const sheetRow = s.sheet ? s.rows.find((x) => x.name === s.sheet) : undefined
   return (
     <>
-      <div className="pmhero">
-        <div>
-          <h3>{t('gui.page.agents')}</h3>
-          <p>{t('gui.page.agents_sub')}</p>
-        </div>
-      </div>
+      <HubHead current="agents" />
       {/* All and Connected are always offered; the other two only with agents in
           them, or while they are the tab being read -- so connecting the last
           one leaves the reader on an emptied tab rather than moving them. */}

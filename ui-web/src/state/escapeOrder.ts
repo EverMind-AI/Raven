@@ -1,6 +1,6 @@
 /* What Escape takes back, and in which order.
  *
- * Ten layers can be on screen at once, and one key closes one of them.
+ * Eleven layers can be on screen at once, and one key closes one of them.
  * Which one was a fourteen-branch if chain in the page's chrome: a list of
  * selectors read top to bottom, each branch returning so the ones below it
  * never ran.
@@ -30,6 +30,7 @@ import { busy as turnBusy } from '../features/composer/turn'
 import * as extAgents from '../features/extAgents/store'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
+import * as page from './page'
 import { byEscape } from './pages'
 import * as perm from './perm'
 import * as plus from './plus'
@@ -65,6 +66,7 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
    silence. The verb is the domain's; the order is the table's. */
 const CLOSERS: Record<PageId, () => void> = {
   extAgentsPage: () => extAgents.close(),
+  connectionsPage: () => page.show(null),
 }
 
 /* The four layers Escape reaches before any page. Two of them are raised from
@@ -126,7 +128,7 @@ const BELOW: readonly EscapeLayer[] = [
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The ten, in the order Escape reaches them. */
+/** The eleven, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

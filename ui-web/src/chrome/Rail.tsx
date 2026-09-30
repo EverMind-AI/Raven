@@ -42,10 +42,10 @@ import { useSyncExternalStore } from 'react'
 
 import { AgentsGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
-import { open as openExtAgents } from '../features/extAgents/store'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
+import * as hub from '../state/hub'
 import * as lang from '../state/lang'
 import * as rail from '../state/rail'
 
@@ -95,10 +95,11 @@ function RailTop(): JSX.Element {
    that same table (features/rail/store.ts's markNew), which is the pair a page
    used to be able to miss in silence.
 
-   One destination, not five. Schedules, channels and memory are set up once
-   and then left alone, so they are sections of the settings dialog now, which
-   the foot opens; a playbook is not a place a reader goes at all. What is left
-   on the strip is the one module you go TO. */
+   One destination, not five. Schedules and memory are set up once and then
+   left alone, so they are sections of the settings dialog, which the foot
+   opens; a playbook is not a place a reader goes at all. What is left is the
+   one place you go TO: what Raven connects to, agents and channels, one row
+   that goes back to whichever of the two the reader was last on. */
 const NAV_ROWS: ReadonlyArray<{
   readonly button: NavButton
   readonly key: string
@@ -107,8 +108,8 @@ const NAV_ROWS: ReadonlyArray<{
 }> = [
   {
     button: 'agentsBtn',
-    key: 'gui.nav.agents',
-    open: () => openExtAgents(),
+    key: 'gui.nav.hub',
+    open: () => hub.open(),
     icon: <AgentsGlyph />,
   },
 ]

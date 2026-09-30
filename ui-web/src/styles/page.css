@@ -3370,17 +3370,25 @@ details[open] summary { margin-bottom: 8px; }
 
 /* ── plugin market (pm*) — rides the hub grid, adds status language ── */
 /* page hero: the market's one big line -- everything else stays quiet */
-/* Every module page opens with the same hero: h3 title, muted sub, one
-   rhythm (10px above, 18px down to the page's controls). */
-.pmhero { margin: 10px 0 22px; display: flex; align-items: center;
-  justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 #pageHero { margin: 10px 0 18px; }
 #pageHero[hidden] { display: none; }
-.pmhero h3 {
-  margin: 0; font-family: var(--mono); font-size: var(--step-2); font-weight: 700;
-  letter-spacing: -.01em; line-height: 1.3;
+/* The connections hub's header (components/HubHead.tsx): the two modules as
+   underlined tabs over a hairline, the top of the page with no title above
+   and no counts beside them.
+   Both tabs keep one weight so the row does not shift when the pick moves;
+   the colour and the rule under the current one are the whole difference. */
+.hub-head { display: flex; gap: 28px; margin: 10px 0 16px; border-bottom: 1px solid var(--line-soft); }
+.hub-head-tab {
+  position: relative; padding: 0 0 11px; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 16px; font-weight: 600; color: var(--muted);
+  transition: color .15s ease;
 }
-.pmhero p { margin: 5px 0 0; font-size: 12.5px; color: var(--muted); }
+.hub-head-tab:hover { color: var(--text); }
+.hub-head-tab[aria-selected="true"] { color: var(--text); cursor: default; }
+.hub-head-tab[aria-selected="true"]::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px; background: var(--text);
+}
+.hub-head-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 4px; }
 .pmchips { display: flex; gap: 7px; flex-wrap: wrap; margin: 14px 0 18px; }
 .pmcard { cursor: pointer; }
 .pmcard.dim { opacity: .68; }
@@ -3684,19 +3692,6 @@ details[open] summary { margin-bottom: 8px; }
   padding-top: 14px; border-top: 1px solid var(--line);
 }
 .sufoot .n { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--faint); }
-/* The credentials heading, and the one link that answers "where do I get
-   these" -- a channel's secrets are minted in its own console, and the reader
-   should not have to guess which of a vendor's portals issues this token. */
-.sucreds { display: flex; align-items: baseline; gap: 10px; margin-top: 16px; }
-.sucreds .k { font-family: var(--mono); font-size: var(--xs, 10.5px); letter-spacing: .1em;
-  text-transform: uppercase; color: var(--faint); }
-.sucreds .k .n { margin-left: 8px; letter-spacing: 0; text-transform: none; color: var(--muted);
-  font-variant-numeric: tabular-nums; }
-.jump { display: inline-flex; align-items: center; gap: 4px; margin-left: auto;
-  font-family: var(--mono); font-size: 11.5px; color: var(--gold); text-decoration: none; flex: none; }
-.jump:hover { text-decoration: underline; }
-.jump svg { width: 10px; height: 10px; stroke: currentColor; stroke-width: 2; fill: none;
-  stroke-linecap: round; stroke-linejoin: round; }
 
 /* The dialog's one-line subject, between title and fields. */
 .sheet .dsub { padding: 3px 20px 0; font-size: 12px; color: var(--faint); }
@@ -3851,10 +3846,13 @@ details[open] summary { margin-bottom: 8px; }
   transition: transform .3s cubic-bezier(.22, .61, .36, 1);
 }
 .detail[data-open="true"] .dpanel { transform: none; }
-/* The agents sheet is a fixed box the domain fills to its edges: the panel takes
-   its size from the owner, and the body's padding is the sheet's to spend. */
-.detail[data-owner="extAgents"] .dpanel { width: 520px; height: min(500px, 78vh); }
-.detail[data-owner="extAgents"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* The agent and channel sheets are fixed boxes the domain fills to its edges:
+   the panel takes its size from the owner, and the body's padding is the
+   sheet's to spend. */
+.detail[data-owner="extAgents"] .dpanel,
+.detail[data-owner="connections"] .dpanel { width: 520px; height: min(500px, 78vh); }
+.detail[data-owner="extAgents"] .body,
+.detail[data-owner="connections"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* A card whose body is fetched when it opens gets a settled box instead of one
    that sizes to its content: it went 63px (a line of loading text) -> 640px
    (the card), and a skeleton of any fixed height only moves that jump
@@ -3982,32 +3980,28 @@ details[open] summary { margin-bottom: 8px; }
 .shd .sub { font-size: 12.5px; color: var(--muted); margin: 3px 0 0; line-height: 1.5; }
 .spanels { overflow-y: auto; min-height: 0; padding: 18px 20px 26px; }
 
-/* Three sections are another domain's island, rooted in a box of its own
-   beside #spanels rather than inside it (src/App.tsx renders all four, and
+/* Two sections are another domain's island, rooted in a box of its own
+   beside #spanels rather than inside it (src/App.tsx renders all three, and
    features/settings/store.ts's HOSTED says why the roots stay separate). One
-   of the four is on screen, and the section the dialog stands on is what picks
+   of the three is on screen, and the section the dialog stands on is what picks
    it -- `data-section` on the veil, written by the settings island on every
    draw. Rows: .sbody is a two-row grid, and `display: none` takes the other
-   three out of it rather than leaving three empty tracks. */
+   two out of it rather than leaving two empty tracks. */
 .sbody > .spanels[data-for] { display: none; }
-.setveil[data-section="channels"] .spanels[data-for="channels"],
 .setveil[data-section="cron"] .spanels[data-for="cron"],
 .setveil[data-section="memory"] .spanels[data-for="memory"] { display: block; }
-.setveil[data-section="channels"] #spanels,
 .setveil[data-section="cron"] #spanels,
 .setveil[data-section="memory"] #spanels { display: none; }
 
 /* ── the two-pane section frame ─────────────────────────────────────────
-   Three sections are a list and what the picked row is: channels, schedules
-   and memory. The frame is src/components/TwoPane.tsx, which owns these names
-   and is why all three read as one dialog rather than three pages that
-   happened to move. Beside the dialog's own rules, not in a domain's sheet,
-   because no one domain owns it.
+   Two sections are a list and what the picked row is: schedules and memory.
+   The frame is src/components/TwoPane.tsx, which owns these names and is why
+   both read as one dialog rather than two pages that happened to move. Beside
+   the dialog's own rules, not in a domain's sheet, because no one domain owns
+   it.
 
    The hosted panel does not scroll: the two columns inside it do, each on its
-   own, so a long channel list never carries the form on the right down with
-   it. */
-.setveil[data-section="channels"] .spanels[data-for="channels"],
+   own, so a long list never carries the form on the right down with it. */
 .setveil[data-section="cron"] .spanels[data-for="cron"],
 .setveil[data-section="memory"] .spanels[data-for="memory"] {
   display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden;
@@ -4439,7 +4433,6 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 
 /* ── scheduled work: job cards ride the market card language ───────── */
 .herorow { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 10px 0 18px; }
-.herorow .pmhero { margin: 0; }
 .cronlist { display: grid; gap: 12px; }
 .cronjob {
   display: grid; grid-template-columns: 1fr auto; gap: 5px 14px; align-items: start;
@@ -5851,7 +5844,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* The agent connector's column is the composer's: the same `--col` cap and
    the same 36px gutters `.dock` gives it, so the grid's edges line up with the
    input box the reader just left rather than sitting inside a narrower one. */
-#extAgentsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
+#extAgentsPage .wrap, #connectionsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
 #kbPage .wrap {
   max-width: none; height: 100%; min-height: 0;
   display: flex; flex-direction: column; padding: 18px 22px 22px;

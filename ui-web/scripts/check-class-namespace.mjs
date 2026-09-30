@@ -182,7 +182,7 @@ const SHARED = new Set([
 // shared is gone with them. The page's total debt is unchanged; where it is
 // counted is not.
 const LEGACY_SHARED = {
-  a: 3, btn: 2, cap: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2, k: 3,
+  a: 3, btn: 2, cap: 2, chgs: 2, cmd: 2, ct: 2, d: 4, foot: 2, k: 2,
   gap: 2, 'ghost-ic': 3, h: 2, hd: 2, key: 2, lb: 3, n: 2, rm: 2, row: 2,
   shot: 3, sk: 2, skel: 2, step: 2, sz: 2, tipdn: 2, v: 3, w: 3, wkg: 3,
   wsnote: 2,
@@ -254,9 +254,10 @@ const LEGACY_LOCAL = {
      with it, so they are this domain's alone now and are counted here rather
      than on the shared tally. Nothing was added. Down to one with the
      onboarding wizard's agents step drawing the hub's rows: `.kd` and
-     `.sulist` were the step's alone, and nothing names them now; `.pmhero`
-     on the page's hero is what remains. */
-  extAgents: 1,
+     `.sulist` were the step's alone, and nothing names them now. Down to none
+     with `.pmhero` gone: the page's title is the connections hub's shared
+     header now (components/HubHead.tsx). */
+  extAgents: 0,
   importSync: 0,
   installed: 0,
   /* Down from 14 with the memory section: the page's hero, its own list and
