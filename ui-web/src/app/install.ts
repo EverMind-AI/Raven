@@ -14,6 +14,7 @@
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
 import { open as approveSheet } from '../features/composer/approve'
 import { closeCredential, openCredential } from '../features/composer/credential'
+import { startTaskWith } from '../features/composer/startTaskWith'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
@@ -299,6 +300,7 @@ export function installPushes(): void {
      side-channel requests by the conversation whose turn is blocked on the
      answer. */
   registerCredentialCard({ open: openCredential, close: closeCredential })
+  extAgentsStore.lendAskRaven(startTaskWith)
   installPipeline()
 
   gateway().on('system.update_available', onUpdateAvailable)

@@ -2591,6 +2591,13 @@ class SubagentsAddParams(_Strict):
         default=None,
         description="A model the agent itself lists, used for the readiness ping and stored on the row.",
     )
+    lend_key: str | None = Field(
+        default=None,
+        description=(
+            "A Raven provider (e.g. openrouter) whose key the agent is started with, read from Raven's config at "
+            "each start; refused unless the preset reads a key for it and Raven holds one."
+        ),
+    )
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
@@ -2612,6 +2619,10 @@ class SubagentsUpdateParams(_Strict):
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
+    lend_keys: list[str] | None = Field(
+        default=None,
+        description="The Raven providers whose key an acp agent is started with; [] lends none.",
+    )
     model: str | None = None
     provider: str | None = Field(
         default=None,

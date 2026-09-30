@@ -14,6 +14,7 @@ from raven.config.schema import ThirdPartyCliSubagentConfig
 from raven.rpc.dispatcher import Dispatcher
 from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError, SubagentNotReadyError
 from raven.rpc.methods.subagents import (
+    _as_configs,
     _read_the_shell_again,
     register_subagents_methods,
     subagents_list,
@@ -2979,3 +2980,88 @@ async def test_add_takes_a_preset_by_the_name_it_is_shown_under(
     assert next(e for e in _stored(config_path) if e["name"] == "OpenCode")["preset"] == "opencode"
     with pytest.raises(SubagentNotFoundError):
         await subagents_add({"preset": "no-such-agent"})
+
+
+def _holding_keys(config_path: Path, monkeypatch: pytest.MonkeyPatch, **keys: str) -> None:
+    """Raven's own provider keys in the fixture config, read the way lending reads them."""
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    raw["providers"] = {name: {"apiKey": key} for name, key in keys.items()}
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr("raven.config.self_surface.get_config_path", lambda: config_path)
+
+    async def _unmeasured(cfg: object) -> None:
+        return None
+
+    # An answered ping records the agent's menu through a real handshake.
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _unmeasured)
+
+
+async def test_an_agent_is_started_with_a_key_raven_lends_it_never_a_copy(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: Pi was said to need a login of its own while Raven held an
+    OpenRouter key Pi reads from OPENROUTER_API_KEY."""
+    from raven.agent.subagent.backends import build_third_party_backend
+
+    _holding_keys(config_path, monkeypatch, openrouter="sk-or-raven")
+    started: list[dict[str, str]] = []
+
+    async def _ping(cfg: object) -> object:
+        started.append(build_third_party_backend(cfg).env)
+        return await _pings_ok(cfg)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _ping)
+    await subagents_add({"preset": "pi", "lend_key": "openrouter"})
+
+    entry = next(e for e in _stored(config_path) if e["name"] == "Pi")
+    assert entry["lendKeys"] == ["openrouter"]
+    assert "sk-or-raven" not in json.dumps(entry), "the row names the provider; the key stays Raven's"
+    assert started[0]["OPENROUTER_API_KEY"] == "sk-or-raven", "the readiness ping starts it with the key"
+
+    _holding_keys(config_path, monkeypatch, openrouter="sk-or-rotated")
+    cfg = _as_configs([entry])[0]
+    assert build_third_party_backend(cfg).env["OPENROUTER_API_KEY"] == "sk-or-rotated", "read at each start"
+
+
+@pytest.mark.parametrize(
+    ("provider", "why"),
+    [("poe", "cannot be started with Raven's 'poe' key"), ("anthropic", "holds no key for 'anthropic'")],
+)
+async def test_a_key_is_lent_only_where_the_agent_reads_it_and_raven_holds_it(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, why: str
+) -> None:
+    _holding_keys(config_path, monkeypatch, openrouter="sk-or-raven", poe="sk-poe")
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    with pytest.raises(ConfigValidationError, match=why):
+        await subagents_add({"preset": "pi", "lend_key": provider})
+    assert not any(e["name"] == "Pi" for e in _stored(config_path))
+
+
+async def test_lending_is_changed_on_an_added_agent_and_only_an_acp_one(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _holding_keys(config_path, monkeypatch, openrouter="sk-or-raven", deepseek="sk-ds")
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    await subagents_add({"preset": "pi"})
+
+    await subagents_update({"name": "Pi", "lend_keys": ["deepseek", "openrouter"]})
+    assert next(e for e in _stored(config_path) if e["name"] == "Pi")["lendKeys"] == ["deepseek", "openrouter"]
+    await subagents_update({"name": "Pi", "lend_keys": []})
+    assert next(e for e in _stored(config_path) if e["name"] == "Pi")["lendKeys"] == []
+    with pytest.raises(ConfigFieldReadonlyError):
+        await subagents_update({"name": "Coder", "lend_keys": ["openrouter"]})
+
+
+def test_a_row_that_lends_nothing_keeps_its_recorded_verdicts() -> None:
+    """The fingerprints gain the field only when it is set: every verdict and
+    menu measured before lending existed still matches its row."""
+    from raven.acp_client.capabilities import snapshot_fingerprint
+    from raven.agent.subagent.probe_state import fingerprint
+
+    plain = {"name": "Pi", "kind": "acp", "preset": "pi", "command": "npx -y pi-acp"}
+    (before,) = _as_configs([plain])
+    (empty,) = _as_configs([{**plain, "lendKeys": []}])
+    (lent,) = _as_configs([{**plain, "lendKeys": ["openrouter"]}])
+    for digest in (fingerprint, snapshot_fingerprint):
+        assert digest(before) == digest(empty)
+        assert digest(lent) != digest(before)

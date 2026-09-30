@@ -619,6 +619,18 @@ SECTIONS: tuple[Section, ...] = (
                     'row and agents that borrow Raven\'s model it is {"provider", "model"}; null clears it'
                 ),
             ),
+            Setting(
+                "subagents.*.lendKeys",
+                "Raven providers whose key the agent is started with, instead of a login of its own",
+                "list",
+                _E.IMMEDIATE,
+                writer="subagents",
+                sensitive="gives the agent Raven's key for these providers; what it spends is billed to that key",
+                note=(
+                    "describe subagents.<name> lists can_lend; the key is read from Raven's config at each start "
+                    "and never passes through a tool call; [] lends none"
+                ),
+            ),
         ),
     ),
     Section(
@@ -929,6 +941,8 @@ def _agent_added(item: dict[str, Any]) -> str:
     said = str(item.get("name") or item.get("preset") or "an agent")
     if item.get("model"):
         said += f" on model {item['model']}"
+    if item.get("lend_key"):
+        said += f", started with Raven's {item['lend_key']} key"
     return said
 
 

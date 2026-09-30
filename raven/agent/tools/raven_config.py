@@ -182,7 +182,7 @@ def _model_check(value: str, row: dict[str, Any]) -> str:
     return f"The agent does not list it ({', '.join(choices[:12])}); it may refuse it -- pick one of those."
 
 
-_ADD_KEYS = ("preset", "name", "description", "model")
+_ADD_KEYS = ("preset", "name", "description", "model", "lend_key")
 
 
 def _add_params(value: dict[str, Any]) -> dict[str, Any]:
@@ -193,6 +193,39 @@ def _add_params(value: dict[str, Any]) -> dict[str, Any]:
             f"add does not take {unknown}; it takes {list(_ADD_KEYS)}. A preset's launch command is fixed."
         )
     return {k: value[k] for k in _ADD_KEYS if isinstance(value.get(k), str)}
+
+
+def _lending(preset: str | None, name: str | None = None) -> tuple[list[str], list[str]]:
+    """``(lent, can_lend)``: the Raven providers this agent is started with, and the ones it could be.
+
+    ``can_lend`` is every provider the preset reads a key for that Raven holds
+    a key for and does not lend it yet; the key itself is never read out.
+    """
+    from raven.agent.subagent.presets import lendable_keys
+
+    readable = lendable_keys(preset)
+    if not readable:
+        return [], []
+    try:
+        raw = surface.read_raw()
+    except (OSError, ValueError):
+        return [], []
+    lent: list[str] = []
+    for row in surface.lookup(raw, "subagents.agents")[1] or []:
+        if isinstance(row, dict) and name and row.get("name") == name:
+            lent = [str(p) for p in row.get("lendKeys") or row.get("lend_keys") or []]
+    held = [p for p in readable if (surface.lookup(raw, f"providers.{p}.apiKey")[1] or "").strip()]
+    return lent, [p for p in held if p not in lent]
+
+
+def _lend_line(preset: str, name: str | None, can_lend: list[str]) -> str:
+    target = f"set subagents.{name}.lendKeys to {json.dumps(can_lend[:1])}" if name else ""
+    add = f'add with {{"preset": "{preset}", "lend_key": "{can_lend[0]}"}}'
+    return (
+        f"- Raven holds a key it can use ({', '.join(can_lend)}): it can be started with Raven's key instead of "
+        f"a login of its own -- {target + ', or ' if target else ''}{add}; the user confirms and nothing is "
+        "entered or read. Offer that before asking the user to sign it in."
+    )
 
 
 def _what_it_needs(
@@ -214,7 +247,10 @@ def _what_it_needs(
         "found": remedy.get("found") or "older",
         "with_command": f" with `{remedy['command']}`" if remedy.get("command") else "",
     }
-    if kind in _THEIRS:
+    lent, can_lend = _lending(preset, row.get("name") if row.get("configured") else None)
+    if kind in ("sign_in", "setup", "api_key") and can_lend:
+        lines = [_lend_line(preset, row.get("name") if row.get("configured") else None, can_lend)]
+    elif kind in _THEIRS:
         lines = ["- This one needs the user. " + _THEIRS[kind].format(**fields)]
     elif kind in _YOURS and (kind != "silent" or remedy.get("command")):
         lines = ["- " + _YOURS[kind].format(**fields)]
@@ -246,9 +282,9 @@ def _fix_rules(retry: str) -> list[str]:
         "its config. The user's: a sign-in or a key (401, 403, authentication failed, unauthorized, invalid API "
         "key, not logged in, token missing) -- name the agent's own command for it -- and a model that costs "
         "money (ask; if nobody answers, do not switch to a paid one).",
-        "- Do not hunt for a key elsewhere, copy Raven's, test keys with curl, or open credential stores and "
-        "databases; do not generate or replace its tokens, and do not restart or stop its services -- other "
-        "apps depend on them.",
+        "- Never read, copy or test a key yourself: no hunting for one elsewhere, no curl, no credential stores "
+        "or databases (a key Raven holds reaches an agent only by lending it, which you never see); do not "
+        "generate or replace its tokens, and do not restart or stop its services -- other apps depend on them.",
         "- Its settings are its own files (keys in them come back redacted); Raven's config, logs and state are "
         "no help here. Tell the user what you found and what you already fixed.",
     ]
@@ -685,8 +721,17 @@ class RavenConfigTool(Tool):
             out["status_detail"] = row["probe_detail"]
         if row.get("probe_missing"):
             out["missing_program"] = row["probe_missing"]
+        lent, can_lend = _lending(row.get("preset"), row.get("name") if row.get("configured") else None)
+        if lent:
+            out["lends_keys"] = lent
+        if can_lend:
+            out["can_lend"] = can_lend
         if row.get("needs_auth"):
-            out["needs_auth"] = "it needs a credential of its own (its login or API key), set up outside Raven"
+            out["needs_auth"] = (
+                "it needs a credential: Raven's key can be lent (can_lend), or its own login or API key"
+                if can_lend
+                else "it needs a credential of its own (its login or API key), set up outside Raven"
+            )
         if row.get("last_test_ok") is not None:
             last: dict[str, Any] = {"ok": row["last_test_ok"]}
             if row.get("last_test_detail"):
@@ -1079,8 +1124,12 @@ class RavenConfigTool(Tool):
                 if provider:
                     params["provider"] = provider
                 await self._rpc("subagents.update", params)
+        elif field_name == "lendKeys":
+            if not isinstance(value, list) or not all(isinstance(p, str) for p in value):
+                raise ValueError(f'{path} takes a list of Raven providers, e.g. ["openrouter"]; [] lends none')
+            await self._rpc("subagents.update", {"name": name, "lend_keys": value})
         else:
-            raise LookupError(f"sub-agents expose description, enabled and model; not {field_name!r}")
+            raise LookupError(f"sub-agents expose description, enabled, model and lendKeys; not {field_name!r}")
         said = f"Set {path} to {json.dumps(value, ensure_ascii=False)} ({EFFECT_TEXT[Effect.IMMEDIATE]})."
         if field_name == "model" and value is not None:
             said += " " + _model_check(str(value), await self._subagent_row(name))

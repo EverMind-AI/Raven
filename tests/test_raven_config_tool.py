@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from raven.agent.tools.raven_config import RavenConfigTool
+from raven.config import self_surface as surface
 from raven.config.schema import PermissionsConfig
 from raven.config.self_surface import Effect
 from raven.contracts.permissions import Allow, ApprovalChoice, ApprovalOutcome, NeedsApproval
@@ -990,7 +991,9 @@ async def test_an_agent_that_does_not_answer_its_test_is_reported_with_what_to_d
     assert "`openclaw agent --agent main -m hi --json`" in reply and "scripting its protocol" in reply
     assert "come back redacted" in reply and "a sign-in" in reply
     assert (
-        "name the agent's own command" in reply and "copy Raven's" in reply and "three have not told you why" in reply
+        "name the agent's own command" in reply
+        and "Never read, copy or test a key yourself" in reply
+        and "three have not told you why" in reply
     )
 
 
@@ -1332,7 +1335,7 @@ async def test_several_agents_connect_under_one_confirmation(config_file):
     ]
     assert "Connected sub-agent qwen_code" in reply and "Connected sub-agent kimi_code" in reply
     assert "Not added:" in reply and "This one needs the user" in reply
-    assert reply.count("copy Raven's") == 1
+    assert reply.count("Never read, copy or test a key yourself") == 1
 
 
 @pytest.mark.asyncio
@@ -1385,3 +1388,62 @@ async def test_an_unmeasured_agent_is_described_as_settable_rather_than_needing_
     tool.set_rpc_caller(Calls({"subagents.list": {"rows": [row]}}))
     described = json.loads(await _run(tool, action="describe", path="subagents.CodeBuddy"))
     assert described["model_choices"] == [] and "set subagents.CodeBuddy.model" in described["model_note"]
+
+
+def _raven_holds(config_file: Path, lent: list[str] | None = None, **keys: str) -> None:
+    raw = json.loads(config_file.read_text())
+    raw["providers"] = {name: {"apiKey": key} for name, key in keys.items()}
+    if lent is not None:
+        raw["subagents"] = {"agents": [{"name": "Pi", "preset": "pi", "kind": "acp", "command": "x", "lendKeys": lent}]}
+    config_file.write_text(json.dumps(raw))
+
+
+_PI_ROW = {"name": "Pi", "preset": "pi", "kind": "acp", "enabled": True, "configured": True, "needs_auth": True}
+
+
+@pytest.mark.asyncio
+async def test_a_key_raven_holds_is_offered_before_a_sign_in(config_file):
+    """Seen live: Pi was told to log in on its own -- "Pi's credentials are its
+    own, it cannot borrow Raven's key" -- while Raven held the OpenRouter key Pi reads."""
+    _raven_holds(config_file, openrouter="sk-or-raven")
+    refusal = _Refused("sub-agent 'Pi' did not answer a test message, so it was not added: 401", {"kind": "api_key"})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(
+        Calls({"subagents.add": refusal, "subagents.list": {"rows": [_PI_ROW | {"configured": False}]}})
+    )
+
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "pi"}')
+
+    assert '"lend_key": "openrouter"' in reply and "This one needs the user" not in reply
+    assert "sk-or-raven" not in reply
+
+
+@pytest.mark.asyncio
+async def test_describe_names_what_can_be_lent_and_what_is(config_file):
+    _raven_holds(config_file, lent=["openrouter"], openrouter="sk-or", deepseek="sk-ds", poe="sk-poe")
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.list": {"rows": [_PI_ROW]}}))
+    pi = json.loads(await _run(tool, action="describe", path="subagents.Pi"))
+    assert pi["lends_keys"] == ["openrouter"]
+    assert pi["can_lend"] == ["deepseek"], "only providers Pi reads, and not one it already has"
+    assert "can be lent" in pi["needs_auth"]
+    assert "sk-" not in json.dumps(pi)
+
+
+@pytest.mark.asyncio
+async def test_lending_is_set_through_the_agents_own_writer_and_confirmed_as_sensitive(config_file):
+    calls = Calls({"subagents.list": {"rows": [_PI_ROW]}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    await _run(tool, action="set", path="subagents.Pi.lendKeys", value='["openrouter"]')
+    assert ("subagents.update", {"name": "Pi", "lend_keys": ["openrouter"]}) in calls.calls
+
+    params = {"action": "set", "path": "subagents.Pi.lendKeys", "value": '["openrouter"]'}
+    assert surface.touches_sensitive(params), "smart mode's reviewer never hands out Raven's key"
+    card = tool.approval_evidence(
+        {"action": "add", "path": "subagents", "value": '{"preset": "pi", "lend_key": "openrouter"}'}
+    )
+    assert "started with Raven's openrouter key" in card["change"]
+    assert not surface.carries_secret_value(
+        {"action": "add", "path": "subagents", "value": '{"preset": "pi", "lend_key": "openrouter"}'}
+    )

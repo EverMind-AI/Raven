@@ -470,6 +470,43 @@ tool, like :data:`SIGN_IN_HINTS`; an unlisted agent is told what happened
 without a command."""
 
 
+LENDABLE_KEYS: dict[str, dict[str, str]] = {
+    # Pi reads a provider's key from these variables when it starts
+    # (docs/providers.md, "Use an API key from the environment", pi-coding-agent
+    # 0.99.1). Only providers whose Raven section is the same service are listed:
+    # Pi's ZAI entries are the Coding Plan, not the API Raven's `zai` serves.
+    "pi": {
+        "openrouter": "OPENROUTER_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "deepseek": "DEEPSEEK_API_KEY",
+        "gemini": "GEMINI_API_KEY",
+        "moonshot": "MOONSHOT_API_KEY",
+        "minimax": "MINIMAX_API_KEY",
+        "minimax_cn_api": "MINIMAX_CN_API_KEY",
+        "mistral": "MISTRAL_API_KEY",
+        "groq": "GROQ_API_KEY",
+        "xai": "XAI_API_KEY",
+        "cerebras": "CEREBRAS_API_KEY",
+        "fireworks_ai": "FIREWORKS_API_KEY",
+        "together_ai": "TOGETHER_API_KEY",
+        "nvidia_nim": "NVIDIA_API_KEY",
+    },
+}
+"""Raven providers whose key a preset can be started with, and the variable it reads it from.
+
+Lending is by reference: a row names the providers (``lendKeys``) and the key
+is read from Raven's own configuration each time the agent starts, into that
+variable, so it never passes through the model and follows a key Raven
+rotates. A preset missing here reads no key Raven could hand it that way.
+"""
+
+
+def lendable_keys(preset: str | None) -> dict[str, str]:
+    """The Raven providers ``preset`` can borrow a key for, mapped to the variable it reads."""
+    return dict(LENDABLE_KEYS.get(preset or "", {}))
+
+
 DIAGNOSE_HINTS: dict[str, str] = {
     # Qwen Code retries a refused model call for minutes and says nothing while
     # it does -- measured, 90 s of ACP traffic under a 429 carried no update and
@@ -589,9 +626,11 @@ def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
 __all__ = [
     "SHIM_LAUNCHED_PRESETS",
     "SHIM_REQUIRED_EXECUTABLES",
+    "LENDABLE_KEYS",
     "SIGN_IN_HINTS",
     "SignIn",
     "install_hint_for",
+    "lendable_keys",
     "shim_requirement_for",
     "sign_in_hint_for",
     "THIRD_PARTY_SUBAGENT_PRESETS",

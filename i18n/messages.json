@@ -5251,6 +5251,22 @@
       "en": "Original error",
       "zh": "原始报错"
     },
+    "gui.agent.ask_raven": {
+      "en": "Hand it to Raven →",
+      "zh": "交给 Raven 排查 →"
+    },
+    "gui.agent.ask_connect": {
+      "en": "Connect {name} for me. The last try failed: {reason}. Fix what you can yourself, and tell me only when something needs me.",
+      "zh": "帮我把 {name} 接进来。刚才接入失败：{reason}。能自己排查和修的先修好，确实需要我操作的时候再告诉我。"
+    },
+    "gui.agent.ask_test": {
+      "en": "{name}'s last test failed: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+      "zh": "{name} 最近一次测试没通过：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+    },
+    "gui.agent.ask_fix": {
+      "en": "A change to {name} did not go through: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+      "zh": "{name} 刚才的操作没成功：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+    },
     "gui.agent.fix_download": {
       "en": "{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this command in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}:",
       "zh": "{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行下面这条命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」："

@@ -265,6 +265,15 @@
 .extAgents-note-t { font-size: 13px; font-weight: 600; color: var(--clay); display: flex; align-items: center; gap: 7px; }
 .extAgents-note-when { font-weight: 400; font-size: 11.5px; color: var(--faint); }
 .extAgents-note-p { font-size: 12.5px; color: var(--text); line-height: 1.6; margin-top: 4px; }
+/* The note's hand-off to Raven: a link-weight button, under the lead and above
+   the server's sentence, so it reads as the next step rather than a third press
+   in the action bar. */
+.extAgents-note-ask {
+  display: inline-flex; align-items: center; margin-top: 7px; padding: 0; border: 0; background: none;
+  font: inherit; font-size: 12.5px; font-weight: 600; color: var(--text); cursor: pointer;
+}
+.extAgents-note-ask:hover { text-decoration: underline; text-underline-offset: 3px; }
+.extAgents-note-ask:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 3px; }
 .extAgents-note .extAgents-cmd { margin-top: 9px; background: var(--paper); }
 .extAgents-note-raw { margin-top: 9px; font-size: 11.5px; color: var(--faint); }
 .extAgents-note-raw summary { cursor: pointer; }

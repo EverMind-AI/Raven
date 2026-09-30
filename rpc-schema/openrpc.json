@@ -2083,6 +2083,14 @@
           }
         },
         {
+          "name": "lend_key",
+          "required": false,
+          "description": "A Raven provider (e.g. openrouter) whose key the agent is started with, read from Raven's config at each start; refused unless the preset reads a key for it and Raven holds one.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
           "name": "api_key",
           "required": false,
           "schema": {
@@ -2192,6 +2200,17 @@
           "required": false,
           "schema": {
             "type": "boolean"
+          }
+        },
+        {
+          "name": "lend_keys",
+          "required": false,
+          "description": "The Raven providers whose key an acp agent is started with; [] lends none.",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         {

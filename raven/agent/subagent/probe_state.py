@@ -191,6 +191,10 @@ def fingerprint(cfg: Any) -> str:
         # verdict on upgrade, and the per-kind field names already differ enough
         # that two kinds cannot collide.
         payload = {name: getattr(cfg, name, None) for name in fields}
+        # A key lent or withdrawn changes what the agent can reach; only when
+        # set, so every verdict recorded before the field existed holds.
+        if getattr(cfg, "lend_keys", None):
+            payload["lend_keys"] = list(cfg.lend_keys)
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 

@@ -1996,6 +1996,14 @@ class ThirdPartyAcpSubagentConfig(Base):
     the field on the write path."""
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    lend_keys: list[str] = Field(default_factory=list)
+    """Raven providers whose key this agent is started with, by name (``openrouter``).
+
+    A reference, not the key: each start reads the key from Raven's own
+    ``providers`` into the variable the preset reads it from
+    (:data:`raven.agent.subagent.presets.LENDABLE_KEYS`), so it never passes
+    through the model and a key Raven rotates is the one the agent gets next.
+    A variable ``env`` sets itself wins."""
     ready_timeout_ms: int = 30000
     """How long the ``initialize`` handshake may take before the agent is
     reported unreachable. Generous by default because a bridge-backed server can

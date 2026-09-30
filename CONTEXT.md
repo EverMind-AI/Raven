@@ -1513,7 +1513,10 @@ roster by `tests/test_config_self_surface.py`. Every mutating call of the tool a
 (`permissions.rules.self_config_tier`); in a turn someone is at, an allow rule, full
 access, or smart mode's reviewer (never for a setting the catalog marks sensitive) lets
 it through, and a grant for the session never does. Secrets are reported as set / not
-set and never carried through a call; the user types one on a credential card.
+set and never carried through a call; the user types one on a credential card. A
+**lent key** is a Raven provider key a sub-agent is started with (`lendKeys` on its row):
+the row names the provider, and each start reads the key into the variable the preset
+reads it from (`presets.LENDABLE_KEYS`), so it never passes through the model.
 _Avoid_: "config tool" for the catalog (the tool is one reader of it; the permission
 gate is another); editing `config.json` with file tools as a way to configure Raven.
 

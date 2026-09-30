@@ -1512,6 +1512,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} has no model provider it can use yet. Run this command in a terminal and follow its prompts to choose one, then press {button}:',
     'gui.agent.fix_api_key': '{agent} could not use its API key. Change it to a valid key, then press {button}.',
     'gui.agent.fix_raw': 'Original error',
+    'gui.agent.ask_raven': 'Hand it to Raven →',
+    'gui.agent.ask_connect':
+      'Connect {name} for me. The last try failed: {reason}. Fix what you can yourself, and tell me only when something needs me.',
+    'gui.agent.ask_test':
+      "{name}'s last test failed: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+    'gui.agent.ask_fix':
+      'A change to {name} did not go through: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.',
     'gui.agent.fix_download':
       '{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this command in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}:',
     'gui.agent.fix_download_bare':
@@ -4085,6 +4092,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       '{agent} 还没有可用的模型服务商。在终端运行下面这条命令，按提示选择服务商，完成后点「{button}」：',
     'gui.agent.fix_api_key': '{agent} 的 API key 不可用，换一个有效的 key 后点「{button}」。',
     'gui.agent.fix_raw': '原始报错',
+    'gui.agent.ask_raven': '交给 Raven 排查 →',
+    'gui.agent.ask_connect':
+      '帮我把 {name} 接进来。刚才接入失败：{reason}。能自己排查和修的先修好，确实需要我操作的时候再告诉我。',
+    'gui.agent.ask_test':
+      '{name} 最近一次测试没通过：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。',
+    'gui.agent.ask_fix':
+      '{name} 刚才的操作没成功：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。',
     'gui.agent.fix_download':
       '{agent} 没能下载下来。第一次接入时要联网下载它，请检查网络、npm 源或代理设置，然后点「{button}」。网络慢的话，也可以先在终端运行下面这条命令把它下载好（下载完会停住等待输入，按 Ctrl-C 退出即可），再点「{button}」：',
     'gui.agent.fix_download_bare':

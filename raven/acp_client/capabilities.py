@@ -316,6 +316,9 @@ def snapshot_fingerprint(cfg: Any) -> str:
     discard a measurement that still holds.
     """
     payload = {name: getattr(cfg, name, None) for name in _LAUNCH_FIELDS}
+    # Only when set, so every snapshot measured before the field existed holds.
+    if getattr(cfg, "lend_keys", None):
+        payload["lend_keys"] = list(cfg.lend_keys)
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 

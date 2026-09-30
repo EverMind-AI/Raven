@@ -461,6 +461,8 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         entry["name"] = name
     if params.get("description"):
         entry["description"] = params["description"]
+    if (params.get("lend_key") or "").strip():
+        entry["lendKeys"] = _lend_keys(entry.get("preset"), [params["lend_key"]])
     # A model the agent itself lists, so an add can be retried on another one
     # when the agent's own default is the thing its provider refuses.
     if isinstance(params.get("model"), str) and params["model"].strip():
@@ -506,6 +508,32 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
     return {"added": True, "name": entry["name"]}
+
+
+def _lend_keys(preset: Any, providers: list[Any]) -> list[str]:
+    """``providers`` as a row's ``lendKeys``, refused unless the preset reads each and Raven holds its key."""
+    from raven.agent.subagent.presets import lendable_keys
+    from raven.config.self_surface import lookup, read_raw
+
+    readable = lendable_keys(preset if isinstance(preset, str) else None)
+    raw = read_raw()
+    out: list[str] = []
+    for provider in (str(p).strip() for p in providers):
+        if not provider or provider in out:
+            continue
+        if provider not in readable:
+            raise ConfigValidationError(
+                f"this agent cannot be started with Raven's {provider!r} key"
+                + (f"; it reads one for {sorted(readable)}" if readable else "; it reads none Raven can lend"),
+                data={"field": "lend_keys", "provider": provider},
+            )
+        _, key = lookup(raw, f"providers.{provider}.apiKey")
+        if not (isinstance(key, str) and key.strip()):
+            raise ConfigValidationError(
+                f"Raven holds no key for {provider!r} to lend", data={"field": "lend_keys", "provider": provider}
+            )
+        out.append(provider)
+    return out
 
 
 def _preset_key(asked: Any) -> Any:
@@ -717,6 +745,14 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         target["mcps"] = list(params["mcps"])
     if params.get("allow_mcp_secrets") is not None:
         target["allowMcpSecrets"] = params["allow_mcp_secrets"]
+    # Before the model: a key lent in the same call is what lets the agent list
+    # that provider's models, and the pick below is judged on that list.
+    if params.get("lend_keys") is not None:
+        if target.get("kind") != "acp":
+            raise ConfigFieldReadonlyError(
+                "only an acp agent can be started with Raven's keys", data={"field": "lend_keys", "name": name}
+            )
+        target["lendKeys"] = _lend_keys(target.get("preset"), list(params["lend_keys"]))
     if params.get("clear_model") or params.get("model") is not None:
         cfg_for_meta = _as_configs([target])[0]
         snapshot = acp_snapshot_for(cfg_for_meta) if cfg_for_meta.kind == "acp" else None

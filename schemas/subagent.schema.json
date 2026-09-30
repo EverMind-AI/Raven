@@ -150,6 +150,13 @@
           "title": "Kind",
           "type": "string"
         },
+        "lendKeys": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Lendkeys",
+          "type": "array"
+        },
         "maxOutputChars": {
           "default": 30000,
           "title": "Maxoutputchars",

@@ -3519,6 +3519,7 @@ export interface SubagentsAddParams {
   name?: string;
   description?: string;
   model?: string;
+  lend_key?: string;
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
@@ -3543,6 +3544,7 @@ export interface SubagentsUpdateParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
+  lend_keys?: string[];
   model?: string;
   /**
    * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.

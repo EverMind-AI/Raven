@@ -366,6 +366,19 @@ interface NoteSpec {
      is to go on. */
   raw: string
   folded: boolean
+  /* Handing the failure to Raven: a new conversation whose composer opens with
+     this prompt, naming the agent and the reason, for the reader to send. */
+  ask?: { key: string; agent: string; reason: string }
+}
+
+/* The reason a prompt hands Raven: the classified title when there is one --
+   it names what is missing in the reader's language -- else the first line of
+   the server's own sentence, since a generic title ("connect failed") says
+   nothing the prompt does not already. */
+function askFor(key: string, agent: string, spec: NoteSpec, classified: boolean): NoteSpec['ask'] {
+  const said = spec.raw.split('\n').find((l) => l.trim())?.trim() || ''
+  const reason = classified || !said ? spec.title : said.length > 160 ? `${said.slice(0, 157)}...` : said
+  return { key, agent, reason }
 }
 
 /* A refusal the server classified: what is missing, in the reader's language,
@@ -407,26 +420,29 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
   const agent = row.name
   const failed = s.failed[row.name]
   if (failed) {
-    const spec = remedied(agent, failed.remedy || null, press, failed.detail)
-    if (spec) return spec
     const write = refusedWrite(failed)
-    return {
+    const key = write === 'connect' ? 'gui.agent.ask_connect' : 'gui.agent.ask_fix'
+    const spec = remedied(agent, failed.remedy || null, press, failed.detail)
+    if (spec) return { ...spec, ask: askFor(key, agent, spec, true) }
+    const plain: NoteSpec = {
       title: write === 'save' ? t('gui.agent.bad_save') : t(write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', { agent }),
       lead: write === 'save' ? t('gui.agent.said_save') : t(write === 'disconnect' ? 'gui.agent.said_disconnect' : 'gui.agent.said_connect', { button: press }),
       raw: failed.detail,
       folded: false,
     }
+    return { ...plain, ask: askFor(key, agent, plain, false) }
   }
   if (row.last_test_ok !== false) return null
   const button = testPress(row, shown)
   if (!button) return null
   const when = ago(row.last_test_at_ms)
   const spec = remedied(agent, row.last_test_remedy || null, button, row.last_test_detail || '')
-  if (spec) return { ...spec, when }
-  return { title: t('gui.agent.st_test_bad'), when, lead: t('gui.agent.said_test', { button }), raw: row.last_test_detail || '', folded: false }
+  if (spec) return { ...spec, when, ask: askFor('gui.agent.ask_test', agent, spec, true) }
+  const plain: NoteSpec = { title: t('gui.agent.st_test_bad'), when, lead: t('gui.agent.said_test', { button }), raw: row.last_test_detail || '', folded: false }
+  return { ...plain, ask: askFor('gui.agent.ask_test', agent, plain, false) }
 }
 
-function Note({ title, when, lead, command, then, raw, folded }: NoteSpec): JSX.Element {
+function Note({ title, when, lead, command, then, raw, folded, ask }: NoteSpec): JSX.Element {
   return (
     <div className="extAgents-note">
       <div className="extAgents-note-t">
@@ -447,6 +463,11 @@ function Note({ title, when, lead, command, then, raw, folded }: NoteSpec): JSX.
         </ol>
       ) : command ? (
         <CmdCopy cmd={command} />
+      ) : null}
+      {ask ? (
+        <button className="extAgents-note-ask" onClick={() => store.handToRaven(ask.key, ask.agent, { reason: ask.reason })}>
+          {t('gui.agent.ask_raven')}
+        </button>
       ) : null}
       {!raw ? null : folded ? (
         <details className="extAgents-note-raw">

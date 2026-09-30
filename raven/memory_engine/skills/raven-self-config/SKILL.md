@@ -164,10 +164,15 @@ The reply to `set` says it; repeat it to the user in plain words.
     "unauthorized", "token missing"), a model that costs money (ask; with no
     answer, do not switch to it) -- stop there and name the agent's own
     command for it.
-  - Never go after a key yourself: no copying Raven's or another agent's, no
-    testing keys with curl, no opening credential stores or databases. Do not
-    generate or replace its tokens or restart its services (a gateway, a
-    daemon): other apps depend on them.
+  - A key it lacks may be one Raven holds: `can_lend` in its describe lists
+    Raven's providers it can be started with (`lend_key` on add,
+    `subagents.<name>.lendKeys` once added). Offer that before a sign-in; the
+    user confirms, and the key goes from Raven's config to the agent at each
+    start without you seeing it.
+  - Never read, copy or test a key yourself: no curl, no credential stores or
+    databases, no key from another agent's files. Do not generate or replace
+    its tokens or restart its services (a gateway, a daemon): other apps
+    depend on them.
   - Its settings are its own files; keys in them come back redacted. Raven's
     own config, logs and state are no help here.
   - Do not script its ACP protocol; its own CLI is quicker and says more.

@@ -1008,6 +1008,37 @@ describe('a refusal that names its fix', () => {
     expect(note()!.querySelector('.extAgents-cmd button')!.textContent).toBe('gui.agent.copied')
   })
 
+  /* The note's link opens a conversation whose first message names the agent
+     and the reason -- the classified title when there is one, else the
+     server's own sentence -- for the reader to send. */
+  it('hands a refused connect or a failed test to Raven with its reason', async () => {
+    const handed: Array<[string, string, Record<string, string>]> = []
+    store.lendAskRaven((key, name, vars) => handed.push([key, name, vars]))
+    const codex = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
+    install([codex, row({ name: 'failed', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it returned nothing\nstderr: -' })], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: 'no usable credential', remedy: { kind: 'sign_in', command: 'codex login' } } }
+        return [codex]
+      },
+    })
+    await mount()
+    await openSheet('Codex')
+    expect(note()).toBeNull()
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    const ask = note()!.querySelector<HTMLButtonElement>('.extAgents-note-ask')!
+    expect(ask.textContent).toBe('gui.agent.ask_raven')
+    await click(ask)
+    expect(handed).toEqual([['gui.agent.ask_connect', 'Codex', { reason: say('gui.agent.bad_sign_in', { agent: 'Codex' }) }]])
+
+    await act(async () => {
+      detail.close()
+    })
+    await openSheet('failed')
+    await click(note()!.querySelector('.extAgents-note-ask'))
+    expect(handed[1]).toEqual(['gui.agent.ask_test', 'failed', { reason: 'it returned nothing' }])
+    store.lendAskRaven(null)
+  })
+
   it('gives an endpoint row no command, since its key is fixed here and not in a terminal', async () => {
     install([
       row({
