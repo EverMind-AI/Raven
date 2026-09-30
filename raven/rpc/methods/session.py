@@ -228,6 +228,10 @@ async def _default_session_info(
         "usage": usage,
         "version": _RAVEN_VERSION,
         "cwd": _session_cwd(agent_loop, session_key),
+        # What this session may search, as it was left. Empty for a session
+        # that has not been created yet -- the bundle is built before the
+        # create writes one, and the create fills it in below.
+        "knowledge_bases": list(_read_knowledge(agent_loop, config, session_key)),
         "mcp_servers": [],
         # Which of a multi-endpoint provider's endpoints this session is on.
         # None for every single-endpoint provider -- there is one address and it
@@ -462,10 +466,59 @@ async def session_create(
             raise ConfigValidationError(str(e), data={"field": "workdir"}) from e
         manager_for(agent_loop, config).get_or_create(session_id).metadata["workdir"] = str(resolved)
         info["cwd"] = str(resolved)
+    picked = params.get("knowledge_bases")
+    if picked:
+        info["knowledge_bases"] = _write_knowledge(agent_loop, config, session_id, picked)
     return {
         "session_id": session_id,
         "info": info,
     }
+
+
+def _read_knowledge(agent_loop: object, config: object, session_key: str | None) -> tuple[str, ...]:
+    """What one session may search, for the bundle that reports it."""
+    from raven.agent import knowledge_scope
+
+    if not session_key:
+        return ()
+    try:
+        return knowledge_scope.read(manager_for(agent_loop, config), session_key)
+    except Exception:  # noqa: BLE001 - a bundle is not worth failing over a selection
+        return ()
+
+
+def _write_knowledge(agent_loop: object, config: object, session_id: str, picked: object) -> list[str]:
+    """Record which bases a session's turns may search.
+
+    Ids are taken as given and not looked up. Whether a base still exists is
+    the engine's question at search time -- a session naming one since deleted
+    has to open, and its search answers nothing for it, which is what a deleted
+    base holds.
+    """
+    from raven.agent import knowledge_scope
+
+    if not isinstance(picked, (list, tuple)):
+        raise ConfigValidationError("knowledge_bases must be a list of ids", data={"field": "knowledge_bases"})
+    sessions = manager_for(agent_loop, config)
+    return list(knowledge_scope.write(sessions, session_id, [str(one) for one in picked]))
+
+
+async def session_set_knowledge(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``session.set_knowledge`` -- choose what this session's turns may search.
+
+    Replaces rather than adds: the picker sends what is ticked, and a call that
+    added would have no way to say that something was unticked.
+    """
+    session_id = str(params.get("session_id") or "").strip()
+    if not session_id:
+        raise ConfigValidationError("session_id is required", data={"field": "session_id"})
+    agent_loop = _safe_invoke_factory(agent_loop_factory)
+    config = load_config()
+    return {"knowledge_bases": _write_knowledge(agent_loop, config, session_id, params.get("knowledge_bases") or [])}
 
 
 async def session_close(
@@ -1430,10 +1483,16 @@ def register_session_methods(
     dispatcher.register("session.export", _export)
     dispatcher.register("session.set_mode", _set_mode)
 
+    async def _set_knowledge(params: dict) -> dict:
+        return await session_set_knowledge(params, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("session.set_knowledge", _set_knowledge)
+
 
 __all__ = [
     "AgentLoopFactory",
     "session_create",
+    "session_set_knowledge",
     "session_close",
     "session_resume",
     "session_list",

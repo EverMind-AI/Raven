@@ -40,9 +40,10 @@
 import { LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
 import { useSyncExternalStore } from 'react'
 
-import { AgentsGlyph, Icon } from '../components/Icon'
+import { AgentsGlyph, CubeGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
 import { open as openExtAgents } from '../features/extAgents/store'
+import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
@@ -95,7 +96,7 @@ function RailTop(): JSX.Element {
    that same table (features/rail/store.ts's markNew), which is the pair a page
    used to be able to miss in silence.
 
-   One destination, not five. Schedules, channels and memory are set up once
+   Two destinations, not five. Schedules, channels and memory are set up once
    and then left alone, so they are sections of the settings dialog now, which
    the foot opens; a playbook is not a place a reader goes at all. What is left
    on the strip is the one module you go TO. */
@@ -110,6 +111,12 @@ const NAV_ROWS: ReadonlyArray<{
     key: 'gui.nav.agents',
     open: () => openExtAgents(),
     icon: <AgentsGlyph />,
+  },
+  {
+    button: 'knowledgeBtn',
+    key: 'gui.nav.knowledge',
+    open: () => openKnowledge(),
+    icon: <CubeGlyph />,
   },
 ]
 

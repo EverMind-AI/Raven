@@ -23,8 +23,6 @@ as a download and renders it blank in the frame.
 
 from __future__ import annotations
 
-import os
-import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -79,36 +77,10 @@ def is_renderable(record: "KnowledgeDocumentRecord") -> bool:
 async def pdf_for(record: "KnowledgeDocumentRecord", blob: Path) -> Path:
     """A PDF rendering of the stored copy.
 
-    LibreOffice is handed a suffixed alias rather than the blob. It decides the
-    input filter partly from the extension, and a legacy ``.doc`` arriving as an
-    extensionless file is exactly the case its sniffing is worst at -- the
-    conversion fails, or worse, succeeds as the wrong format.
-
-    A hard link, so the alias is the same inode: ``cache_key`` reads size and
-    mtime, and a copy would change neither by accident but would double the
-    bytes on disk for every preview. The fallback is a copy, for the case the
-    cache and the blobs are on different filesystems.
+    The making of the suffixed alias the renderer needs lives in `pdf_preview`,
+    which owns that cache directory and sweeps it.
     """
-    alias = _alias_for(record, blob)
-    return await pdf_preview.pdf_for(alias)
-
-
-def _alias_dir() -> Path:
-    return pdf_preview.sources_dir()
-
-
-def _alias_for(record: "KnowledgeDocumentRecord", blob: Path) -> Path:
-    suffix = named(record).suffix
-    alias = _alias_dir() / f"{record.id}{suffix}"
-    if alias.is_file() and alias.stat().st_mtime == blob.stat().st_mtime:
-        return alias
-    alias.parent.mkdir(parents=True, exist_ok=True)
-    alias.unlink(missing_ok=True)
-    try:
-        os.link(blob, alias)
-    except OSError:
-        shutil.copy2(blob, alias)
-    return alias
+    return await pdf_preview.pdf_for_stored(record.id, blob, record.source)
 
 
 def forget(document_id: str) -> None:

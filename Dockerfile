@@ -90,6 +90,23 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     for extra in $(echo "${RAVEN_EXTRAS}" | tr ',' ' '); do flags="${flags} --extra ${extra}"; done; \
     uv sync --frozen --no-dev ${flags}
 
+# The weights and dictionaries that cannot live in git: the word dictionary the
+# tokenizer segments Chinese with, the nltk corpora beside it, and the deepdoc
+# vision models the PDF parser runs -- about 160 MB, fetched into the package
+# directories their readers look in. Done here rather than at first use so the
+# image is self-contained: a container that had to reach huggingface the first
+# time somebody uploaded a PDF is one that fails in a deployment with no egress,
+# long after the build that could have said so.
+#
+# RAVEN_RESOURCES=0 builds a smaller image without them. What it costs is
+# Chinese segmentation and PDF layout; both report their own absence.
+ARG RAVEN_RESOURCES="1"
+RUN --mount=type=cache,target=/root/.cache/uv \
+    set -eu; \
+    if [ "${RAVEN_RESOURCES}" = "1" ]; then \
+        uv run --frozen --no-dev python scripts/fetch_resources.py; \
+    fi
+
 # The distributables beside the host wheel, discovered through the
 # `raven.plugins` entry-point group. everos-memory by default: the gateway
 # starts the everos memory server on boot, so without it memory is the one

@@ -6,6 +6,7 @@ Module-level names live in ``_shared``; method groups live in mixins
 
 from __future__ import annotations
 
+from raven.agent import knowledge_scope
 from raven.agent.harness import bind_harness, default_harness_modules
 from raven.agent.loop._shared import (
     TYPE_CHECKING,
@@ -867,6 +868,15 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # through it.
                 self._turn_scope(),
                 self.tools.session_scope_for(session_key),
+                # Above `turn_scope`, which is the whole of why it is here and
+                # not in the turn body. That freeze decides which tools this
+                # turn's schema may carry, and it reads the withheld set --
+                # which asks this binding whether the conversation named a
+                # base. Bound after the freeze, the search tool was withheld at
+                # the moment that mattered and frozen out of every turn: the
+                # feature could not work at all, however well the rest of it
+                # was wired.
+                knowledge_scope.bind(knowledge_scope.read(self.sessions, session_key), session_key),
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),
                 charter_scope(charter),

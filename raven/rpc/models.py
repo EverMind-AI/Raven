@@ -1399,6 +1399,13 @@ class SessionCreateParams(_Strict):
             "How a client attached to a shared gateway keeps its launch directory."
         ),
     )
+    knowledge_bases: list[str] | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
+        ),
+    )
 
 
 class SessionCreateResult(_Strict):
@@ -2896,6 +2903,27 @@ class SubagentsInstanceSetModelResult(_Strict):
     )
 
 
+class SessionSetKnowledgeParams(_Strict):
+    session_id: str
+    knowledge_bases: list[str] | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
+        ),
+    )
+
+
+class SessionSetKnowledgeResult(_Strict):
+    """The selection as it now stands.
+
+    Replaced rather than added to: the picker sends what is ticked, and a call
+    that added would have no way to say that something was unticked.
+    """
+
+    knowledge_bases: list[str]
+
+
 class SessionSetModeParams(_Strict):
     session_key: str
     mode: str | None = Field(None, description="The tier id to switch to. Omit it to report without changing.")
@@ -3215,6 +3243,11 @@ class SessionInitInfo(_Strict):
     usage: SessionUsage
     version: str
     cwd: str
+    #: Ids of the knowledge bases this session's turns may search, as it was
+    #: left. Beside ``cwd`` and for the same reason: a reader reopening a
+    #: conversation has to see what it is pointed at, or the picker draws it
+    #: as pointed at nothing.
+    knowledge_bases: list[str] = Field(default_factory=list)
     mcp_servers: list[JsonValue]
     update_available: bool | None = None
     update_command: str | None = Field(default=None, description="The command that would install the newer release.")
@@ -4478,6 +4511,9 @@ class KnowledgeStatusResult(_Strict):
 
     configured: bool
     model: str
+    #: Who serves that model. The two together are what a picker selects with:
+    #: a model id names no credential, so half the pin cannot be preselected.
+    provider: str = ""
     #: Filename extensions some registered parser can index, each with its
     #: leading dot. What a surface that walks a folder filters by; it moves
     #: with the optional extras installed, so it is reported rather than
@@ -4497,10 +4533,17 @@ class KnowledgeBase(_Strict):
     name: str
     description: str
     embedding_model: str
+    #: Which account that model is reached through. Empty means the configured
+    #: endpoint -- what every base built before the pair was recorded says.
+    embedding_provider: str = ""
     dimensions: int
     created_at: str
     updated_at: str
     documents: int
+    #: How many pieces the base holds. Not how many documents are in it: one
+    #: that failed, one still queued and one in a base with no model all count
+    #: as documents and hold nothing.
+    chunks: int = 0
     #: At most this many chunks come back from one search of this base. A
     #: property of the base rather than of each call: how much context this
     #: material is worth is a fact about the material.
@@ -4510,12 +4553,26 @@ class KnowledgeBase(_Strict):
     smart_chunking: bool = True
     #: Where a plain split may cut, when smart chunking is off.
     separator: str = "\n\n"
+    #: Tokens of the prose around a table or a figure to carry into the chunk
+    #: that holds it. Zero is off.
+    table_context_size: int = 64
+    image_context_size: int = 64
+    #: Empty when the base's model can be reached; otherwise why not. Answered
+    #: from what is recorded rather than by calling the endpoint.
+    embedding_reach: str = ""
     #: What a chunk is aimed at, and how much of the previous one each carries.
     chunk_size: int = 2048
     chunk_overlap: int = 215
     #: Which pre-processing a file goes through on the way in. Empty is
     #: "don't use", the only setting there is so far.
     file_processing: str = ""
+    #: Kept at the head of the list. A property of the base rather than of the
+    #: browser looking at it: pinning says something about the base, not about
+    #: this machine.
+    pinned: bool = False
+    #: Marked by the reader, and the whole of what the starred tab shows. Not
+    #: the same fact as ``pinned``, which is about order.
+    starred: bool = False
 
 
 class KnowledgeBasesListParams(_Strict):
@@ -4541,11 +4598,18 @@ class KnowledgeDocument(_Strict):
     status: str
     chunk_count: int
     error: str
+    #: What the parse could not do, on a document that was indexed anyway --
+    #: pictures no model could read, most often. Not a second ``error``: this
+    #: row is searchable, and the line says which part of the file is not in
+    #: the index. Empty when there was nothing to report.
+    warning: str = ""
     created_at: str
     updated_at: str
     #: Which kind of data source this arrived through: ``file``, ``note`` or
     #: ``url``. A folder is not one of them -- the browser walks it and sends
     #: the files, so each lands here as a file.
+    #: Which folder of its base it is filed under. Empty is Root.
+    folder_id: str = ""
     origin: str = "file"
     #: What the origin points back at: a url document's page. Empty otherwise.
     origin_ref: str = ""
@@ -4556,9 +4620,13 @@ class KnowledgeBasesCreateParams(_Strict):
     description: str | None = None
     #: Whether the base is searched by vector. False is a base that keeps its
     #: documents and is never embedded -- the choice a surface offers as
-    #: "Disabled", and one that cannot be changed afterwards, because a
-    #: collection's width is fixed when it is made.
+    #: "Disabled".
     embedding: bool = True
+    #: The model to build the base on, and who serves it. Omitted, the base is
+    #: built on the configured pin; a surface that offers a picker sends the
+    #: pair it picked, because a model id alone names no credential.
+    embedding_model: str | None = None
+    embedding_provider: str | None = None
 
 
 class KnowledgeBasesCreateResult(_Strict):
@@ -4580,14 +4648,25 @@ class KnowledgeBasesRenameResult(_Strict):
 class KnowledgeBasesSettingsParams(_Strict):
     """Every field is optional; the ones left out are untouched.
 
-    The embedding model is deliberately not among them: the collection is
-    sized to its width, so changing it is a rebuild of every vector in the
-    base rather than a setting."""
+    ``embedding_model`` is the one field that is not a setting: the collection
+    is sized to the model's width and holds vectors that model made, so sending
+    it rebuilds the base -- the collection is made again and every document
+    goes back to the queue. Empty turns embedding off."""
 
     base_id: str
     top_k: int | None = None
     smart_chunking: bool | None = None
     separator: str | None = None
+    table_context_size: int | None = None
+    image_context_size: int | None = None
+    #: Where this base's model is reached. Sent alone, it only moves the
+    #: address the same model is called at, which costs nothing.
+    embedding_provider: str | None = None
+    pinned: bool | None = None
+    starred: bool | None = None
+    #: The model itself. Sent, the base is rebuilt onto it; empty turns
+    #: embedding off. Every document is requeued either way.
+    embedding_model: str | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
     file_processing: str | None = None
@@ -4612,15 +4691,24 @@ class KnowledgeDocumentsListParams(_Strict):
     base_id: str
 
 
+class KnowledgeDocumentsMoveResult(_Strict):
+    document: KnowledgeDocument
+
+
 class KnowledgeDocumentsListResult(_Strict):
     documents: list[KnowledgeDocument]
 
 
 class KnowledgeHit(_Strict):
-    """One search hit. ``score`` is a similarity, so higher is nearer -- the
-    direction every caller already reads."""
+    """One search hit. ``score`` runs one direction whatever found it -- higher
+    is nearer -- and ``retrieval`` says what it is."""
 
     score: float
+    #: How this hit was found: ``vector`` for a cosine similarity in 0..1,
+    #: ``keyword`` for a BM25 score on the index's own unbounded scale. The two
+    #: are not comparable by value, and a surface that labels both "similarity"
+    #: is stating something false about each.
+    retrieval: Literal["vector", "keyword"] = "vector"
     document_id: str
     text: str
     #: Which piece of its document this was, and of how many. A chunk read on
@@ -4690,6 +4778,234 @@ class KnowledgeDocumentsIndexResult(_Strict):
     document: KnowledgeDocument
 
 
+class KnowledgeChunkPart(_Strict):
+    """One piece of a chunk that merged several, and where it came from.
+
+    The naive strategy merges across section boundaries, so a chunk can hold
+    two pages, two headings and two sections. The flattened fields on the chunk
+    can only carry the first of each, which is why this exists: without it a
+    merged chunk reads as a chunk of its first section, and the half that came
+    from elsewhere is attributed to a place it was never written.
+    """
+
+    #: Where this piece sits in the chunk's own text.
+    char_start: int
+    char_end: int
+    layout_type: str = ""
+    page_number: int | None = None
+    heading_path: list[str] = Field(default_factory=list)
+    #: Which section of the document this piece was cut from. The section
+    #: identity: a heading path is not one, because two same-named children of
+    #: a parent share it. Absent when the parser recorded none.
+    section_ordinal: int | None = None
+
+
+class KnowledgeFolder(_Strict):
+    """One folder inside a knowledge base.
+
+    One level deep. Root is not one of these but the absence of one, so a
+    document with no folder is in Root and nothing had to be written to put
+    every pre-folder document somewhere sensible.
+    """
+
+    id: str
+    base_id: str
+    name: str
+    created_at: str
+    #: How many documents are filed under it.
+    documents: int
+
+
+class KnowledgeFoldersListParams(_Strict):
+    base_id: str
+
+
+class KnowledgeFoldersListResult(_Strict):
+    folders: list[KnowledgeFolder] = Field(default_factory=list)
+
+
+class KnowledgeFoldersCreateParams(_Strict):
+    base_id: str
+    name: str
+
+
+class KnowledgeFoldersCreateResult(_Strict):
+    folder: KnowledgeFolder
+
+
+class KnowledgeFoldersRenameParams(_Strict):
+    folder_id: str
+    name: str
+
+
+class KnowledgeFoldersRenameResult(_Strict):
+    folder: KnowledgeFolder
+
+
+class KnowledgeFoldersDeleteParams(_Strict):
+    folder_id: str
+
+
+class KnowledgeFoldersDeleteResult(_Strict):
+    #: How many documents returned to Root.
+    moved: int
+
+
+class KnowledgeDocumentsMoveParams(_Strict):
+    document_id: str
+    #: Empty is Root.
+    folder_id: str | None = None
+
+
+class KnowledgeChunkRegion(_Strict):
+    """One place on a page that a chunk was cut from.
+
+    Points (1/72 inch) with the origin at the top left, which is the frame
+    every parser here records positions in, so a viewer scales by the page it
+    is drawing and nothing converts twice.
+    """
+
+    page_number: int
+    x0: float
+    top: float
+    x1: float
+    bottom: float
+
+
+class KnowledgeChunk(_Strict):
+    """One indexed piece of a document, as the search sees it.
+
+    Positional fields are optional because only some formats have them: a
+    parser reports a page and a box for a document laid out on pages, and
+    nothing for a text file that has no such thing. Absent means the format
+    does not know, never that the value is zero.
+    """
+
+    #: Where the piece sits in its document, and how many there are. This is
+    #: the reading order: the chunker numbers pieces as it walks the sections
+    #: the parser produced, so the sequence is the document's own.
+    chunk_index: int
+    total_chunks: int
+    text: str
+    #: What the region is, as the source file marked it -- a heading, a table,
+    #: a figure caption. Empty when the parser had nothing to go on.
+    layout_type: str = ""
+    #: The 1-based page the piece starts on, for a format that has pages.
+    page_number: int | None = None
+    #: The 1-based page it ends on. Equal to ``page_number`` unless the piece
+    #: runs over a page boundary, which it can whenever it merged.
+    page_end: int | None = None
+    #: The heading path the piece sits under, outermost first. The path of the
+    #: section it *starts* in when it merged several; each part carries its own.
+    heading_path: list[str] = Field(default_factory=list)
+    #: Where each piece of a merged chunk came from. Empty for a chunk that
+    #: merged nothing -- the fields above already say where that one is -- so a
+    #: non-empty list is itself the statement that this chunk crossed a
+    #: boundary.
+    parts: list[KnowledgeChunkPart] = Field(default_factory=list)
+    #: What addresses this piece. Derived from its text, so it survives a
+    #: rebuild of the same document. Empty on rows written before ids existed:
+    #: readable, but not actionable until the document is reindexed.
+    chunk_id: str = ""
+    #: Whether this piece may be retrieved at all. Disabled is not a ranking
+    #: penalty -- it is never searched and never reaches the agent.
+    enabled: bool = True
+    #: Whether a person wrote this piece rather than a parser cutting it.
+    manual: bool = False
+    #: Whether a picture of the region this piece was cut from is stored for
+    #: it, at ``/knowledge/crop?document=<id>&chunk=<chunk_id>``. False for a
+    #: format with no pages, for a piece a person wrote, and for one whose
+    #: parser knew the page but not the position on it.
+    has_crop: bool = False
+    #: Every place on a page this piece was cut from, in reading order, for a
+    #: viewer that draws where it came from. A chunk that merged several pieces
+    #: reports each one's region, so this can cross a page boundary.
+    regions: list[KnowledgeChunkRegion] = Field(default_factory=list)
+
+
+class KnowledgeDocumentsChunksParams(_Strict):
+    document_id: str
+    page: int | None = None
+    page_size: int | None = None
+    available: bool | None = None
+    query: str | None = None
+
+
+class KnowledgeDocumentsChunksResult(_Strict):
+    """A document's chunks in reading order.
+
+    Empty is an ordinary answer, not an error: a document that failed, one
+    still queued, and one in a base with no embedding model all have nothing
+    indexed to show.
+    """
+
+    chunks: list[KnowledgeChunk]
+    total: int
+
+
+class KnowledgePage(_Strict):
+    """One page of a document, as the reader's side draws it."""
+
+    #: 1-based, and the number a chunk's region names.
+    number: int
+    #: Points. What a region's x coordinates are a fraction of.
+    width: float
+    #: Points. What a region's y coordinates are a fraction of.
+    height: float
+
+
+class KnowledgeDocumentsPagesParams(_Strict):
+    document_id: str
+
+
+class KnowledgeDocumentsPagesResult(_Strict):
+    """Every page of one document, numbered and measured.
+
+    Empty for everything that is not pages -- a text file, a note, a format
+    that cannot be rendered. Not a failure: the page frames the file instead.
+    """
+
+    pages: list[KnowledgePage]
+
+
+class KnowledgeChunksSwitchParams(_Strict):
+    document_id: str
+    chunk_ids: list[str]
+    enabled: bool
+
+
+class KnowledgeChunksSwitchResult(_Strict):
+    changed: int
+
+
+class KnowledgeChunksDeleteParams(_Strict):
+    document_id: str
+    chunk_ids: list[str]
+
+
+class KnowledgeChunksDeleteResult(_Strict):
+    remaining: int
+
+
+class KnowledgeChunksCreateParams(_Strict):
+    document_id: str
+    text: str
+
+
+class KnowledgeChunksCreateResult(_Strict):
+    chunk: KnowledgeChunk
+
+
+class KnowledgeChunksUpdateParams(_Strict):
+    document_id: str
+    chunk_id: str
+    text: str
+
+
+class KnowledgeChunksUpdateResult(_Strict):
+    chunk: KnowledgeChunk
+
+
 class KnowledgeDocumentsDeleteParams(_Strict):
     document_id: str
 
@@ -4708,6 +5024,13 @@ class KnowledgeSearchParams(_Strict):
     top_k: int | None = None
 
 
+class KnowledgeFallback(_Strict):
+    """One base that answered by words, and why its vectors were out of reach."""
+
+    base_id: str
+    reason: str
+
+
 class KnowledgeSearchResult(_Strict):
     """The hits, and what each half of the search cost.
 
@@ -4716,6 +5039,11 @@ class KnowledgeSearchResult(_Strict):
     job. A surface reporting one number as the search time wants the second."""
 
     hits: list[KnowledgeHit]
+    #: The bases that answered by words rather than by meaning, each with the
+    #: reason its vectors could not be reached. Empty on an ordinary search.
+    #: Carried because an unreachable endpoint otherwise produces a normal
+    #: looking result set on a different scale, with nothing saying so.
+    by_keyword: list[KnowledgeFallback] = Field(default_factory=list)
     search_ms: float = 0.0
     embed_ms: float = 0.0
 
@@ -5371,7 +5699,18 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     ),
     "knowledge.documents.add_url": (KnowledgeDocumentsAddUrlParams, KnowledgeDocumentsAddUrlResult),
     "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
+    "knowledge.documents.move": (KnowledgeDocumentsMoveParams, KnowledgeDocumentsMoveResult),
+    "knowledge.folders.list": (KnowledgeFoldersListParams, KnowledgeFoldersListResult),
+    "knowledge.folders.create": (KnowledgeFoldersCreateParams, KnowledgeFoldersCreateResult),
+    "knowledge.folders.rename": (KnowledgeFoldersRenameParams, KnowledgeFoldersRenameResult),
+    "knowledge.folders.delete": (KnowledgeFoldersDeleteParams, KnowledgeFoldersDeleteResult),
     "knowledge.documents.delete": (KnowledgeDocumentsDeleteParams, KnowledgeDocumentsDeleteResult),
+    "knowledge.documents.chunks": (KnowledgeDocumentsChunksParams, KnowledgeDocumentsChunksResult),
+    "knowledge.documents.pages": (KnowledgeDocumentsPagesParams, KnowledgeDocumentsPagesResult),
+    "knowledge.chunks.switch": (KnowledgeChunksSwitchParams, KnowledgeChunksSwitchResult),
+    "knowledge.chunks.delete": (KnowledgeChunksDeleteParams, KnowledgeChunksDeleteResult),
+    "knowledge.chunks.create": (KnowledgeChunksCreateParams, KnowledgeChunksCreateResult),
+    "knowledge.chunks.update": (KnowledgeChunksUpdateParams, KnowledgeChunksUpdateResult),
     "knowledge.search": (KnowledgeSearchParams, KnowledgeSearchResult),
     # playbooks.* -- the stored library, read-only
     "playbooks.list": (PlaybooksListParams, PlaybooksListResult),
@@ -5427,6 +5766,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.compress": (SessionCompressParams, SessionCompressResult),
     "session.usage": (SessionUsageParams, SessionUsageResult),
     "session.status": (SessionStatusParams, SessionStatusResult),
+    "session.set_knowledge": (SessionSetKnowledgeParams, SessionSetKnowledgeResult),
     "session.set_mode": (SessionSetModeParams, SessionSetModeResult),
     # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
     "ext.list": (ExtListParams, ExtListResult),

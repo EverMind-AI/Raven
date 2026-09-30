@@ -1,26 +1,26 @@
-/* The working directory a conversation runs in: the chip on the composer
- * (#wdChip), the popover it opens (#wdPop) and the tag beside a conversation's
- * title (#wdTag).
+/* The working directory a conversation runs in: the popover it is chosen from
+ * (#wdPop), raised by the "@" menu's Folder row, and the tag beside a
+ * conversation's title (#wdTag).
  *
  * A store rather than a writer, the way perm.ts and tier.ts next door are:
- * <WorkdirChip/>, <WorkdirPopover/> and <WorkdirTag/> render from it
- * (src/chrome/WorkdirChip.tsx, src/chrome/WorkdirPopover.tsx,
+ * <WorkdirPopover/> and <WorkdirTag/> render from it
+ * (src/chrome/WorkdirPopover.tsx,
  * src/chrome/WorkdirTag.tsx). Nothing here reads the document; what stays here
  * is what decides.
  *
- * Two states. On a DRAFT the chip is live: the reader picks a folder here, or
+ * Two states. On a DRAFT the row is live: the reader picks a folder here, or
  * leaves the default, and the pick is held in this module until the first
  * message mints a session -- the runtime's promotion reads it off `staged()`
  * and hands it to `session.create`, which is the only moment a working
  * directory can be set (raven/rpc/methods/session.py). Held here rather than
  * on the draft runtime because state/session/registry.ts imports the rail's
- * store and the rail's draw repaints this chip: a pick that lived on the
- * runtime would close that ring. IN a conversation the chip is gone and the
+ * store and the rail's draw repaints this row: a pick that lived on the
+ * runtime would close that ring. IN a conversation the row is gone and the
  * tag beside the title reports instead: the row's `workdir` names the folder,
  * with the path on its title, because the engine cannot move a conversation
  * once it has started -- and the default is nothing to announce.
  *
- * "Default" is the word for no pick, on the chip and in the menu: the engine's
+ * "Default" is the word for no pick, on the row and in the menu: the engine's
  * policy default is a real place to work, not an absence of one.
  *
  * The menu's recent folders come from the conversations on the rail, deduped
@@ -55,7 +55,7 @@ export interface WdRow {
   readonly ticked: boolean
 }
 
-/* The chip's own values, as the last draw read the page: the word on it, the
+/* The row's own values, as the last draw read the page: the word on it, the
    sentence on its title, whether a folder (rather than the default) is named,
    and whether the reader may still change it. Null until the first draw. */
 export interface WdPaint {
@@ -66,7 +66,7 @@ export interface WdPaint {
 }
 
 export interface WdState {
-  /** Up or down: the popover's data-open and the chip's aria-expanded. */
+  /** Up or down: the popover's data-open. */
   readonly open: boolean
   /** The host's folder dialog is up, and the menu is waiting on it. */
   readonly picking: boolean
@@ -82,7 +82,7 @@ export interface WdState {
   readonly loading: boolean
   /** Why the browser could not open, said on the menu; null when it could. */
   readonly err: string | null
-  /** What the chip shows, or null while nothing has drawn it yet. */
+  /** What the "@" menu's row shows, or null while nothing has drawn it yet. */
   readonly paint: WdPaint | null
 }
 
@@ -91,7 +91,7 @@ const shut: WdState = {
 }
 const store = makeStore<WdState>(shut)
 
-/** The store, for <WorkdirChip/>, <WorkdirPopover/> and <WorkdirTag/>. */
+/** The store, for <WorkdirPopover/>, <WorkdirTag/> and the "@" menu's row. */
 export const { get, subscribe } = store
 
 const samePaint = (a: WdPaint | null, b: WdPaint | null): boolean => {
@@ -123,7 +123,7 @@ let picked: string | null = null
 export const staged = (): string | null => picked
 
 /* The pick is spent or the draft is gone -- and so is any menu that was open
-   over it: a fresh draft starts with the chip closed. */
+   over it: a fresh draft starts with the menu closed. */
 export function clearStaged(): void {
   picked = null
   set({ ...get(), open: false })
@@ -136,9 +136,9 @@ export function base(path: string): string {
   return parts[parts.length - 1] || path
 }
 
-/* ---- the chip -------------------------------------------------------------- */
+/* ---- what the row and the tag say ----------------------------------------- */
 
-/* The chip and the tag, as the values <WorkdirChip/> and <WorkdirTag/> render.
+/* The name and the tag, as the "@" menu's row and <WorkdirTag/> render them.
    Called by the rail's own draw (features/rail/store.ts), which runs on every
    change of the list and of the conversation on screen -- the two things this
    reads -- and by the picks below. Nothing here reads the document. */
@@ -205,9 +205,9 @@ const menuRows = (): readonly WdRow[] => {
   ]
 }
 
-/* Open only while the pick can still change: a conversation's chip is hidden,
-   and a click that reached here anyway must not raise a menu over it. The way
-   back out is the chip, a pointer landing outside (state/globalListeners.ts's
+/* Open only while the pick can still change: a conversation's row is not
+   offered, and a click that reached here anyway must not raise a menu over it.
+   The way back out is a pointer landing outside (state/globalListeners.ts's
    click-away arbitration), Escape (state/escapeOrder.ts), a pick, or leaving
    the draft. */
 export function open(): void {

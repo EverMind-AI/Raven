@@ -45,6 +45,12 @@ div.app[data-rail=on]
             path
             path
         span
+      button#knowledgeBtn.navi
+        svg
+          g
+            path
+            path
+        span
     div#findBox.find
       span.ic
         svg
@@ -128,10 +134,9 @@ div.app[data-rail=on]
                     path
                 div#plusPop.pop[data-open=false]
               span.chrome-anch
-                button#wdChip.chip
-                  svg.pico
-                    path
-                  span#wdName
+                button#atBtn.plus[data-tip]
+                  span
+                div#atPop.pop[data-open=false]
                 div#wdPop.pop[data-open=false][data-view=menu]
               span.chrome-anch
                 button#permChip.chip
@@ -202,6 +207,11 @@ section#extAgentsPage.page[data-open=false]
     h2
   div.work
     div#extAgentsBody.wrap
+section#knowledgePage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#knowledgeBody.wrap
 aside#detail.detail[data-open=false]
   div.dpanel
     header

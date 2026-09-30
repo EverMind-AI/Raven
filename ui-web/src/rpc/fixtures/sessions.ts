@@ -155,6 +155,10 @@ const info = (title: string): InitInfo => ({
   context_window: 200000, lazy: false, skills: {}, tools: {},
   usage: { input: 0, output: 0, cost_usd: 0, calls: 0, context_max: 200000, context_used: 0, context_percent: 0 },
   version: '0.1.0', cwd: '~/work/raven', mcp_servers: [], title, running: false, running_ms: null,
+  /* Pointed at nothing, which is what a conversation on a machine with no
+     bases is. Sent rather than left out: a field the offline page never sees
+     is a field its picker is never drawn against. */
+  knowledge_bases: [],
 })
 
 export interface SessionsFixture {

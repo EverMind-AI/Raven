@@ -68,6 +68,32 @@ dependencies = [
     "aiohttp>=3.13.4",
     "click>=8.1",
     "pyarrow>=17",
+    # Reading PDFs into a knowledge base (raven.knowledge.parser.pdf_parser).
+    # PyMuPDF does the text, the page geometry and the page rendering; pypdf
+    # reads the outline a PDF states about itself, which PyMuPDF exposes
+    # differently and less directly.
+    "pymupdf>=1.24,<2",
+    "pypdf>=6.0",
+    "pdfplumber>=0.11,<1",
+    # The deepdoc vision pipeline: layout detection, text detection and
+    # recognition, and table structure, all as ONNX graphs. onnxruntime runs
+    # them; opencv, shapely and pyclipper are what the pre- and post-processing
+    # around them is written in, and scikit-learn clusters the columns a page
+    # is laid out in. Headless opencv on purpose -- nothing here opens a
+    # window, and the GUI build pulls a display stack a server does not have.
+    "onnxruntime>=1.20,<2",
+    "opencv-python-headless>=4.10,<5",
+    "shapely>=2.0,<3",
+    "pyclipper>=1.3,<2",
+    "scikit-learn>=1.5,<2",
+    # The Chinese tokenizer (raven.core.tokenizer). datrie holds the dictionary
+    # as a trie, hanziconv folds traditional characters onto simplified before
+    # a lookup, and nltk supplies the stemmer and lemmatizer the latin path
+    # uses. A tokenizer that splits CJK on characters is what makes a keyword
+    # search over Chinese answer with noise.
+    "datrie>=0.8.2,<0.9",
+    "hanziconv>=0.3,<0.4",
+    "nltk>=3.9,<4",
     "a2a-sdk>=1.1.2",
     # The A2A object model IS protobuf, so the inbound face converts at its own
     # boundary (raven/a2a/runtime.py, routes_aiohttp.py) rather than letting the
@@ -416,6 +442,23 @@ max-complexity = 40
 # unused variables, deferred imports, ambiguous names — idiomatic in tests, not
 # product code. (Auto-fixable churn E702/F401/I001 is left for the reformat branch.)
 "tests/**" = ["E402", "E741", "F811", "F841", "N802", "N805", "N806", "N817", "N818", "S101", "S105", "S106", "S107", "S607"]
+
+# A port kept recognisable against its original (Infinity's `rag_tokenizer`).
+# The names are upstream's -- `preTks`, `_strQ2B`, and single capitals for the
+# scores and spans inside the segmentation search -- and renaming them by hand
+# in dense dynamic-programming code buys a lint pass at the price of being able
+# to diff this file against the source it has to stay faithful to. The asserts
+# are upstream's invariants for the same reason.
+"raven/core/tokenizer.py" = ["N802", "N803", "N806", "S101"]
+
+# The same rule for the deepdoc port: these modules are RAGFlow's vision
+# pipeline kept diff-able against it, and its operator and recogniser classes
+# carry PaddleOCR's names and its asserts on tensor shapes. Renaming them by
+# hand would buy a lint pass and cost the ability to check this tree against
+# the one it has to stay faithful to. C901 for one function: rebuilding a
+# table's rows from where its cells sit is a 65-branch walk upstream, and
+# splitting it up here is how a port stops being one.
+"raven/knowledge/parser/deepdoc/*.py" = ["C901", "N801", "N802", "N803", "N806", "S101"]
 
 # Tracing probe factories take the target class as an argument, named after
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.

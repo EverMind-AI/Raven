@@ -188,6 +188,11 @@ const UNSENT = new Set([
   'fs.open.app',
   // import.status: 4
   'import.status.current', 'import.status.phase', 'import.status.phases', 'import.status.tier',
+  // knowledge.chunks.create: 2 -- and knowledge.chunks.update: 2. Both answer
+  // with a piece a person wrote, and a written piece has no page: the pages
+  // are what a parser found on the way in, and nobody parsed this one.
+  'knowledge.chunks.create.chunk.page_end', 'knowledge.chunks.create.chunk.page_number',
+  'knowledge.chunks.update.chunk.page_end', 'knowledge.chunks.update.chunk.page_number',
   // knowledge.search: 2
   'knowledge.search.embed_ms', 'knowledge.search.search_ms',
   // knowledge.status: 1
