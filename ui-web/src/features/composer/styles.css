@@ -101,7 +101,13 @@
 /* The permission sheet's own parts: why the agent is asking, the evidence
    block by kind, the landed line an answer leaves. The row of answers is laid
    out in styles/page.css beside the rack's `.opt`, which is the rack's class. */
-.cp-why { color: var(--muted); font-size: 12.5px; line-height: 1.5; margin-bottom: 8px; }
+.cp-why { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+/* The rule "Always allow" would save, under the evidence it is about. */
+.cp-rule { flex: none; color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: 9px; overflow-wrap: anywhere; }
+.cp-rule code {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text);
+  background: var(--surface); border-radius: 4px; padding: 1px 5px; margin: 0 2px;
+}
 .cp-ev { display: grid; gap: 6px; }
 .cp-ev-path { font-weight: 600; }
 .cp-ev-none { color: var(--faint); font-style: italic; }

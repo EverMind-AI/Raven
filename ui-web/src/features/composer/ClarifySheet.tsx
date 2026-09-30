@@ -32,8 +32,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 
-import { SheetOption } from '../../chrome/SheetRack'
+import { KeyCap, SheetOption } from '../../chrome/SheetRack'
 import { CHEVRON_DOWN, CROSS, Glyph } from '../../components/Ico'
+import { chordLabel, sendChord } from '../../lib/platform'
 import * as drafts from '../../state/sheetDrafts'
 import { composing } from './store'
 
@@ -50,6 +51,7 @@ export interface ClarifyControls {
   setFold: ((v: boolean) => void) | null
   pick: ((n: number) => boolean) | null
   move: ((delta: number) => boolean) | null
+  forward: (() => void) | null
 }
 
 /** One question of the form, as the opener resolved it from the frame. */
@@ -273,7 +275,8 @@ export function ClarifySheet(
     ctl.setFold = setFold
     ctl.pick = pick
     ctl.move = move
-  }, [ctl, move, pick, setFold])
+    ctl.forward = forward
+  }, [ctl, forward, move, pick, setFold])
 
   const at = form.step
   useEffect(() => {
@@ -297,6 +300,7 @@ export function ClarifySheet(
          into this field. */
       e.stopPropagation()
       if (composing(e)) return
+      if (sendChord(e) === 'plain') { e.preventDefault(); forward(); return }
       if (e.key === 'Enter' && el.value.trim()) forward()
     }
     el.addEventListener('input', onInput)
@@ -359,6 +363,7 @@ export function ClarifySheet(
         <button className="btn key" onClick={forward}
           disabled={at === steps.length - 1 ? !complete(form) : !answerOf(step, filled)}>
           {at === steps.length - 1 ? words.submit : words.next}
+          <KeyCap keys={chordLabel()} />
         </button>
       </div>
     </>

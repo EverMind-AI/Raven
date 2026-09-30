@@ -73,7 +73,7 @@ export class BridgeServer {
       },
       onStatus: status => {
         this.lastStatus = status
-        if (status === 'connected') {
+        if (status === 'connected' || status === 'pairing_expired') {
           this.lastQr = null
         }
         this.broadcast({ type: 'status', status })
@@ -104,6 +104,13 @@ export class BridgeServer {
 
   private setupClient(ws: WebSocket): void {
     this.clients.add(ws)
+
+    // A client arriving at a paused bridge is someone asking to pair, so the
+    // expired status is not replayed: a fresh code follows instead.
+    if (this.wa?.pairingPaused) {
+      this.lastStatus = null
+      this.wa.resumePairing().catch(error => console.error('Could not resume pairing:', error))
+    }
 
     // Baileys emits a QR (and a pairing status) once, roughly every 60s. A client
     // that attaches between two of those would otherwise show nothing until the

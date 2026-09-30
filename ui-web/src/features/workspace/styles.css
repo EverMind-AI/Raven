@@ -25,3 +25,51 @@
    to put their strokes on the same 10px as the rest of the row. */
 .fcopy.ghost-ic svg { width: 14px; height: 14px; }
 .workspace-ext.ghost-ic svg { width: 14px; height: 14px; }
+
+/* A file the viewer has no rendering for. It fills the pane and sits a little
+   above its middle, the way an empty pane waits, rather than starting as a
+   line of text in the corner that reads as a view that did not finish
+   loading. The card scrolls on its own when a short pane cannot hold it. */
+.workspace-bin { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+.workspace-bin-card {
+  margin: auto; padding: 32px 24px 9vh; max-width: 380px;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+}
+/* A page with its corner folded and the extension on a tag across its foot:
+   what the file is, read before any word under it. */
+.workspace-bin-tile { position: relative; width: 48px; height: 60px; margin-bottom: 18px; }
+.workspace-bin-tile svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.workspace-bin-sheet { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.workspace-bin-fold { fill: var(--raised); stroke: var(--line); stroke-width: 1.5; stroke-linejoin: round; }
+.workspace-bin-ext {
+  position: absolute; left: 50%; bottom: 9px; transform: translateX(-50%);
+  max-width: 54px; padding: 0 5px; border-radius: 4px;
+  background: var(--muted); color: var(--ink);
+  font: 600 9px/15px var(--mono); letter-spacing: .04em; text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.workspace-bin-title { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.5; }
+.workspace-bin-meta {
+  margin-top: 4px; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+/* What the gateway said when a render failed: its own words, in the face a
+   log line is written in, so they read as quoted rather than as the page's. */
+.workspace-bin-detail {
+  margin-top: 12px; max-width: 100%; padding: 8px 11px; border-radius: 8px;
+  background: var(--surface); color: var(--muted); text-align: left;
+  font: 11.5px/1.6 var(--mono); overflow-wrap: anywhere;
+}
+.workspace-bin-acts {
+  margin-top: 20px; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+}
+/* Open and the choice of what to open with are one control: the chevron is
+   the same button's other half, joined along a hairline in the ground colour
+   so the pair reads as one pill with two hit areas. */
+.workspace-bin-split { display: inline-flex; }
+.workspace-bin-split > .mini:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.workspace-bin .workspace-bin-split > .mini.workspace-bin-more {
+  min-width: 0; width: 28px; padding: 0;
+  border-top-left-radius: 0; border-bottom-left-radius: 0;
+  border-left-color: color-mix(in srgb, var(--ink) 28%, transparent);
+}
+.workspace-bin-more svg { width: 14px; height: 14px; }

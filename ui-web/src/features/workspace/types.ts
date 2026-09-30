@@ -43,6 +43,9 @@ export interface WsFile {
   err: string | null
   size: number | null
   loading: boolean
+  /* Set once a `bin` file's head has been read (store.sniffFile), so an
+     answer that left it the note is not asked for again on every paint. */
+  sniffed?: boolean
   /* Island-only identity: two opens of the same path are two fresh views. */
   seq?: number
 }
