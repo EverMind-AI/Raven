@@ -73,6 +73,9 @@ export interface EverosSection {
   /* Set from exported EVEROS_<ROLE>__* variables, which outrank raven. The
      slot is read-only: raven cannot edit a shell. */
   env_managed?: boolean
+  /* Unset and running on the chat model, which it follows. Only the memory
+     LLM, and only while that model's provider has a key EverOS can use. */
+  follows_main?: boolean
 }
 
 export interface EverosInfo {

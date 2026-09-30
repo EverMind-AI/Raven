@@ -15,6 +15,8 @@ that shape, never for the class
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from raven.contracts.permissions import ApprovalOutcome
@@ -117,5 +119,53 @@ class SupportsDirectAsk(Protocol):
     ) -> str | None: ...
 
 
-__all__ = ["ApprovalResponder", "Asker", "QuestionResponder", "SupportsDirectAsk"]
+class CredentialOutcome(StrEnum):
+    """What became of a credential the user was asked to type."""
+
+    SAVED = "saved"
+    #: Declined, left empty, timed out, or the request went away unanswered.
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True)
+class CredentialRequest:
+    """One credential for the user to type where the model cannot read it.
+
+    ``target`` names where the value is written, as ``<sink>:<reference>``
+    (``config:tools.web.providers.tavily.apiKey``, ``channel:telegram.token``).
+    The host resolves it against the sinks it serves; the model never sees the
+    value, and the value never reaches a tool result, a log or a transcript.
+    """
+
+    target: str
+    #: What the card calls it: "Tavily API key".
+    label: str
+    #: One sentence on what it is for, when the label does not say.
+    note: str = ""
+    #: A value is already set, so what the user types replaces it.
+    replaces: bool = False
+
+
+class CredentialAsker(Protocol):
+    """Turn-scoped capability that asks the user to type a credential.
+
+    Bound only where a surface can show a masked field for it (the page); a turn
+    without one must tell the user where to enter it instead. Every failure,
+    timeout and dismissal comes back as ``SKIPPED``, never as an exception.
+    """
+
+    async def request_credential(
+        self, *, conversation_id: str, turn_id: str, request: CredentialRequest
+    ) -> CredentialOutcome: ...
+
+
+__all__ = [
+    "ApprovalResponder",
+    "Asker",
+    "CredentialAsker",
+    "CredentialOutcome",
+    "CredentialRequest",
+    "QuestionResponder",
+    "SupportsDirectAsk",
+]
 __tier__ = "contract"

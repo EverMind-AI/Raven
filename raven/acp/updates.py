@@ -91,6 +91,10 @@ SIDE_CHANNEL_METHODS = frozenset(
         "memory.health",
         "oauth.pending",
         "oauth.done",
+        # The page's credential card. An ACP stack never lends the asker, so
+        # one arriving here reached a surface that draws no card.
+        "credential.request",
+        "credential.closed",
     }
 )
 

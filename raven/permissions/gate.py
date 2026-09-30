@@ -31,7 +31,7 @@ from typing import Any
 from loguru import logger
 
 from raven.config.schema import PermissionsConfig
-from raven.config.self_surface import change_line
+from raven.config.self_surface import change_line, only_asks_for_secrets, touches_sensitive
 from raven.config.update import allow_exec_pattern
 from raven.contracts.permissions import (
     Allow,
@@ -45,7 +45,7 @@ from raven.contracts.permissions import (
 )
 from raven.contracts.tool import PARSE_RETRY_INSTRUCTION, STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolResult
 from raven.permissions.builtin import BuiltinRulings, action_digest, action_line, session_keys
-from raven.permissions.judge import review
+from raven.permissions.judge import JudgeOutcome, review
 from raven.permissions.rules import (
     default_tier,
     exec_approval_shape,
@@ -133,19 +133,35 @@ class PermissionGate:
         if own is Tier.DENY:
             return Deny(
                 reason=(
-                    "A key or token never goes through a tool call. Name the secret with an empty value and the "
-                    "confirmation card asks the user to type it; tell them a key pasted into the chat should be "
-                    "rotated"
+                    "A key or token never goes through a tool call. Name the secret with an empty value and a "
+                    "card asks the user to type it; tell them a key pasted into the chat should be rotated"
                 ),
                 source=DecisionSource.DEFAULT,
             )
         if own is Tier.ALLOW:
             return Allow(source=DecisionSource.DEFAULT)
         if own is Tier.ASK:
-            # No session keys: a grant "for this session" must not carry the
-            # next change through unseen, so every change is asked about.
+            # The user's own allow rule, full access and the smart-mode reviewer
+            # are honoured, but only in a turn someone is at: a cron job or a
+            # channel message is not the owner reconfiguring Raven. A grant "for
+            # this session" never carries a change through. The reviewer sees
+            # the call and not the conversation, so it cannot tell a change the
+            # user asked for from one an injected instruction asked for; the
+            # settings the catalog marks sensitive stay with the user.
+            attended = self._allow_ask and current_turn().responder is not None
+            if attended and only_asks_for_secrets(params):
+                # The credential card that follows is where the user decides.
+                return Allow(source=DecisionSource.DEFAULT)
+            if attended and user_tier(tool_name, params, cfg.tools) is Tier.ALLOW:
+                return Allow(source=DecisionSource.USER_ALLOW)
+            if attended and mode is PermissionMode.FULL:
+                return Allow(source=DecisionSource.MODE)
+            if attended and mode is PermissionMode.SMART and not touches_sensitive(params):
+                outcome = await self._review(tool_name, params, cfg)
+                if outcome is not None and outcome.allow:
+                    return Allow(source=DecisionSource.JUDGE)
             return NeedsApproval(
-                reason="Changing Raven's own configuration always needs the user's approval",
+                reason="Changing Raven's own configuration needs the user's approval",
                 description=change_line(params),
                 digest=action_digest(tool_name, params),
                 family="",
@@ -178,27 +194,9 @@ class PermissionGate:
         # shipped executor provides today.
         digest = action_digest(tool_name, params)
         description = described.description if described else f"Approve this action: {action_line(tool_name, params)}"
-        if mode is PermissionMode.SMART and self._judge_provider_for is not None:
-            provider = self._judge_provider_for()
-            if provider is not None:
-                await self._notify_review("started", tool_name)
-                try:
-                    outcome = await review(
-                        provider,
-                        tool_name=tool_name,
-                        params=params,
-                        model=cfg.judge_model or None,
-                        timeout_s=cfg.judge_timeout_seconds,
-                    )
-                finally:
-                    await self._notify_review("ended", tool_name)
-                self._annotate(
-                    {
-                        "permission.judge.decision": "allow" if outcome.allow else "escalate",
-                        "permission.judge.reason": outcome.reason,
-                        "permission.judge.failed": outcome.failed,
-                    }
-                )
+        if mode is PermissionMode.SMART:
+            outcome = await self._review(tool_name, params, cfg)
+            if outcome is not None:
                 if outcome.allow:
                     return Allow(source=DecisionSource.JUDGE)
                 return NeedsApproval(
@@ -448,6 +446,31 @@ class PermissionGate:
         span = trace.current_span()
         if span is not None:
             span.set(attributes)
+
+    async def _review(self, tool_name: str, params: dict[str, Any], cfg: PermissionsConfig) -> JudgeOutcome | None:
+        """The smart-mode reviewer's verdict, recorded on the span; None when no reviewer is configured."""
+        provider = self._judge_provider_for() if self._judge_provider_for is not None else None
+        if provider is None:
+            return None
+        await self._notify_review("started", tool_name)
+        try:
+            outcome = await review(
+                provider,
+                tool_name=tool_name,
+                params=params,
+                model=cfg.judge_model or None,
+                timeout_s=cfg.judge_timeout_seconds,
+            )
+        finally:
+            await self._notify_review("ended", tool_name)
+        self._annotate(
+            {
+                "permission.judge.decision": "allow" if outcome.allow else "escalate",
+                "permission.judge.reason": outcome.reason,
+                "permission.judge.failed": outcome.failed,
+            }
+        )
+        return outcome
 
     @staticmethod
     async def _notify_review(phase: str, tool_name: str) -> None:

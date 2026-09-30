@@ -152,13 +152,21 @@ export function everosLocked(r: Role, snap: SettingsSnapshot): 'foreign' | 'env'
   return snap.everos?.sections?.[r.everos]?.env_managed ? 'env' : null
 }
 
+/* Whether an unset role runs on the chat model. A keyed role always does; the
+   memory LLM does when the server says so -- it cannot when the chat model's
+   provider has no key raven can hand EverOS, and then unset means memory off. */
+export function followsChat(r: Role, snap: SettingsSnapshot): boolean {
+  if (r.keys) return true
+  return !!r.everos && !!snap.everos?.sections?.[r.everos]?.follows_main
+}
+
 /* The roles a provider (and optionally one of its models) serves right now.
    A role that follows the chat model counts through the chat role. */
 export function rolesUsing(snap: SettingsSnapshot, slug: string, model?: string): Role[] {
   const chat = roleValue(ROLES[0]!, snap)
   return ROLES.filter((r) => {
     const own = roleValue(r, snap)
-    const v = own || (r.keys ? chat : null)
+    const v = own || (followsChat(r, snap) ? chat : null)
     return !!v && v.provider === slug && (model === undefined || v.model === model)
   })
 }
@@ -246,7 +254,7 @@ export function RolePill({ role, setup }: { role: Role; setup?: boolean }): JSX.
   const s = store.get()
   const val = roleValue(role, s.snap)
   const provs = roleProviders(role, s.snap)
-  const inherit = !!role.keys
+  const inherit = followsChat(role, s.snap)
   const chat = roleValue(ROLES[0]!, s.snap)
   /* No provider this role may use is connected: there is nothing to open onto,
      and the way out is the providers page rather than an empty popover. A

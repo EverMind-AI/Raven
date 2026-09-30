@@ -17,6 +17,16 @@ from raven.permissions.gate import PermissionGate
 from raven.permissions.turn import start_permission_turn
 
 
+@pytest.fixture(autouse=True)
+def _no_bound_turn():
+    """A turn one test binds must not be the next test's conversation."""
+    from raven.permissions import turn
+
+    turn._TURN.set(None)
+    yield
+    turn._TURN.set(None)
+
+
 @pytest.fixture
 def config_file(tmp_path: Path, monkeypatch) -> Path:
     home = tmp_path / "home"
@@ -45,15 +55,26 @@ def _run(tool: RavenConfigTool, **kwargs: Any):
 
 
 @pytest.mark.asyncio
-async def test_describe_lists_sections_then_one_section(config_file):
+async def test_describe_is_one_index_of_every_setting_with_its_value(config_file):
+    """The model used to walk describe -> describe <section> -> get -> set for a
+    one-line change. One read now carries the path, the current value and when
+    a change applies."""
     tool = RavenConfigTool()
-    root = json.loads(await _run(tool, action="describe"))
-    names = [s["name"] for s in root["sections"]]
-    assert {"model", "tools", "channels", "subagents", "security"} <= set(names)
-    assert "note" in root  # no writer lent yet
-    tools = json.loads(await _run(tool, action="describe", path="tools"))
-    timeout = next(s for s in tools["settings"] if s["path"] == "tools.exec.timeout")
-    assert timeout["type"] == "int" and "next turn" in timeout["takes_effect"]
+    root = await _run(tool, action="describe")
+    for section in ("[model]", "[tools]", "[channels]", "[subagents]", "[security]"):
+        assert section in root
+    assert "  tools.exec.timeout = 60 [int 5.., next turn] Seconds a shell command may run" in root
+    assert "note: this process lent no settings writer" in root
+    assert "sk-x" not in root
+    tools = await _run(tool, action="describe", path="tools")
+    assert "[tools]" in tools and "[model]" not in tools
+    one = json.loads(await _run(tool, action="describe", path="tools.exec.timeout"))
+    assert one["type"] == "int" and "next turn" in one["takes_effect"] and one["value"] == 60
+
+
+def _pending(text: str) -> Any:
+    line = next((x for x in text.splitlines() if x.startswith("pending: ")), None)
+    return json.loads(line.removeprefix("pending: ")) if line else None
 
 
 @pytest.mark.asyncio
@@ -82,7 +103,7 @@ async def test_a_section_or_instance_read_expands_to_what_is_configured(config_f
     assert not any("anthropic" in p for p in json.loads(await _run(tool, action="get", path="providers")))
     below = json.loads(await _run(tool, action="get", path="tools.exec"))
     assert below["tools.exec.timeout"] == 60 and all(p.startswith("tools.exec.") for p in below)
-    assert "not in the catalog" in await _run(tool, action="get", path="providers.nobody")
+    assert "is not a path" in await _run(tool, action="get", path="providers.nobody")
 
 
 @pytest.mark.asyncio
@@ -91,8 +112,7 @@ async def test_a_raw_setting_is_written_and_a_reload_left_pending(config_file):
     reply = await _run(tool, action="set", path="agents.defaults.temperature", value="0.7")
     assert "reload" in reply and "Pending" in reply
     assert json.loads(config_file.read_text())["agents"]["defaults"]["temperature"] == 0.7
-    root = json.loads(await _run(tool, action="describe"))
-    assert root["pending"] == {"reload": ["agents.defaults.temperature"]}
+    assert _pending(await _run(tool, action="describe")) == {"reload": ["agents.defaults.temperature"]}
 
 
 @pytest.mark.asyncio
@@ -101,7 +121,7 @@ async def test_restart_without_a_restarter_says_so_and_keeps_pending(config_file
     await _run(tool, action="set", path="agents.defaults.temperature", value="0.7")
     reply = await _run(tool, action="restart")
     assert "cannot restart itself" in reply
-    assert json.loads(await _run(tool, action="describe"))["pending"]
+    assert _pending(await _run(tool, action="describe"))
 
 
 @pytest.mark.asyncio
@@ -118,7 +138,7 @@ async def test_restart_picks_the_strongest_pending_target_and_clears_it(config_f
     await _run(tool, action="set", path="sentinel.enabled", value="true")
     assert await _run(tool, action="restart") == "scheduled restart"
     assert asked == ["restart"]
-    assert "pending" not in json.loads(await _run(tool, action="describe"))
+    assert _pending(await _run(tool, action="describe")) is None
 
 
 @pytest.mark.asyncio
@@ -131,7 +151,7 @@ async def test_a_reload_keeps_what_only_a_restart_applies(config_file):
     await _run(tool, action="set", path="agents.defaults.temperature", value="0.7")
     await _run(tool, action="set", path="sentinel.enabled", value="true")
     await _run(tool, action="restart", value="reload")
-    assert json.loads(await _run(tool, action="describe"))["pending"] == {"restart": ["sentinel.enabled"]}
+    assert _pending(await _run(tool, action="describe")) == {"restart": ["sentinel.enabled"]}
 
 
 @pytest.mark.asyncio
@@ -219,7 +239,14 @@ async def test_a_channel_is_switched_through_the_gateway(config_file):
 async def test_sub_agents_go_through_the_roster_methods(config_file):
     rows = {
         "rows": [
-            {"name": "codex", "kind": "acp", "enabled": True, "model_source": "agent", "model_choices": ["gpt-6"]},
+            {
+                "name": "codex",
+                "kind": "acp",
+                "enabled": True,
+                "configured": True,
+                "model_source": "agent",
+                "model_choices": ["gpt-6"],
+            },
             {"name": "Raven", "kind": "builtin", "enabled": True, "builtin": True, "model_source": "raven"},
         ]
     }
@@ -276,6 +303,16 @@ async def test_reads_run_without_a_prompt_in_ask_mode():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["ask", "smart"])
+async def test_every_change_asks_outside_full_access(mode):
+    params = {"action": "set", "path": "permissions.mode", "value": '"full"'}
+    decision = await _gate(PermissionsConfig(mode=mode)).check("raven_config", params)
+    assert isinstance(decision, NeedsApproval)
+    assert decision.session_keys == ()
+    assert "permissions.mode" in decision.description
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config",
     [
@@ -283,12 +320,79 @@ async def test_reads_run_without_a_prompt_in_ask_mode():
         PermissionsConfig(mode="ask", tools={"raven_config": "allow"}),
     ],
 )
-async def test_every_change_asks_whatever_the_mode_or_rules_say(config):
-    params = {"action": "set", "path": "permissions.mode", "value": '"full"'}
-    decision = await _gate(config).check("raven_config", params)
-    assert isinstance(decision, NeedsApproval)
-    assert decision.session_keys == ()
-    assert "permissions.mode" in decision.description
+async def test_full_access_and_an_allow_rule_let_a_change_through(config):
+    """Seen live: with full access on, every config change still raised a card."""
+    start_permission_turn(_Responder(), conversation_id="c-1", turn_id="t-1")
+    params = {"action": "set", "path": "tools.exec.timeout", "value": "30"}
+    assert isinstance(await _gate(config).check("raven_config", params), Allow)
+
+
+def _reviewing(monkeypatch, allow: bool) -> list[dict[str, Any]]:
+    """Smart mode's reviewer, answering ``allow``; returns what it was shown."""
+    from raven.permissions import gate as gate_module
+    from raven.permissions.judge import JudgeOutcome
+
+    shown: list[dict[str, Any]] = []
+
+    async def review(provider, **kwargs):
+        shown.append(kwargs["params"])
+        return JudgeOutcome(allow=allow, reason="r")
+
+    monkeypatch.setattr(gate_module, "review", review)
+    return shown
+
+
+def _smart_gate() -> PermissionGate:
+    return PermissionGate(
+        config_source=lambda: PermissionsConfig(mode="smart"), builtin=BuiltinRulings(), judge_provider_for=object
+    )
+
+
+@pytest.mark.asyncio
+async def test_smart_mode_lets_its_reviewer_approve_an_ordinary_change(monkeypatch):
+    shown = _reviewing(monkeypatch, allow=True)
+    start_permission_turn(_Responder(), conversation_id="c-1", turn_id="t-1")
+    params = {"action": "set", "path": "tools.exec.timeout", "value": "30"}
+    assert isinstance(await _smart_gate().check("raven_config", params), Allow)
+    # The call as the model made it: prose written for the user, sent along
+    # once, read to the reviewer as instructions embedded in the request.
+    assert shown == [params]
+
+
+@pytest.mark.asyncio
+async def test_smart_mode_asks_the_user_when_the_reviewer_escalates(monkeypatch):
+    _reviewing(monkeypatch, allow=False)
+    start_permission_turn(_Responder(), conversation_id="c-1", turn_id="t-1")
+    params = {"action": "set", "path": "tools.exec.timeout", "value": "30"}
+    decision = await _smart_gate().check("raven_config", params)
+    assert isinstance(decision, NeedsApproval) and decision.session_keys == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"action": "set", "path": "permissions.mode", "value": '"full"'},
+        {"action": "set", "path": "channels.telegram.allowFrom", "value": '["*"]'},
+        {"action": "set", "value": json.dumps({"tools.exec.timeout": 30, "tools.restrictToWorkspace": False})},
+    ],
+)
+async def test_smart_mode_never_lets_its_reviewer_approve_a_sensitive_change(monkeypatch, params):
+    """The reviewer sees the call, not the conversation: it cannot tell the user's
+    request from an injected one, and these widen what Raven may do."""
+    shown = _reviewing(monkeypatch, allow=True)
+    start_permission_turn(_Responder(), conversation_id="c-1", turn_id="t-1")
+    assert isinstance(await _smart_gate().check("raven_config", params), NeedsApproval)
+    assert shown == []
+
+
+@pytest.mark.asyncio
+async def test_an_unattended_turn_gets_no_review(monkeypatch):
+    shown = _reviewing(monkeypatch, allow=True)
+    start_permission_turn(None, conversation_id="c-1", turn_id="t-1")
+    params = {"action": "set", "path": "tools.exec.timeout", "value": "30"}
+    assert isinstance(await _smart_gate().check("raven_config", params), NeedsApproval)
+    assert shown == []
 
 
 @pytest.mark.asyncio
@@ -488,10 +592,9 @@ def test_a_count_of_tokens_is_not_taken_for_a_token(config_file):
 @pytest.mark.asyncio
 async def test_describe_answers_a_prefix_with_what_sits_under_it(config_file):
     tool = RavenConfigTool()
-    below = json.loads(await _run(tool, action="describe", path="tools.exec"))
-    assert below["prefix"] == "tools.exec"
-    assert "tools.exec.timeout" in [s["path"] for s in below["settings"]]
-    assert "not in the catalog" in await _run(tool, action="describe", path="tools.nothing")
+    below = await _run(tool, action="describe", path="tools.exec")
+    assert "  tools.exec.timeout = 60 " in below and "tools.web" not in below
+    assert "is not a path" in await _run(tool, action="describe", path="tools.nothing")
 
 
 @pytest.mark.asyncio
@@ -517,20 +620,66 @@ async def test_a_batch_is_checked_whole_before_anything_is_written(config_file):
 
 @pytest.mark.asyncio
 async def test_a_secret_is_asked_for_on_the_card_and_reported_by_whether_it_is_set(config_file):
-    """The card saves the key itself; the tool only learns whether it landed."""
+    """The card takes the key and the host writes it; the tool learns only saved or skipped."""
+    from raven.contracts.asking import CredentialOutcome
+
+    asked: list[object] = []
+
+    class Card:
+        def __init__(self, outcome: CredentialOutcome) -> None:
+            self.outcome = outcome
+
+        async def request_credential(self, *, conversation_id: str, turn_id: str, request) -> CredentialOutcome:
+            asked.append((conversation_id, request))
+            return self.outcome
+
     tool = RavenConfigTool()
     calls = Calls()
     tool.set_rpc_caller(calls)
     batch = json.dumps({"tools.web.search.provider": "tavily", "tools.web.providers.tavily.apiKey": None})
-    reply = await _run(tool, action="set", value=batch)
-    assert "tools.web.providers.tavily.apiKey is still not set" in reply
-    assert calls.calls == [("settings.set", {"key": "tools.web.search.provider", "value": "tavily"})]
 
-    data = json.loads(config_file.read_text())
-    data["tools"]["web"] = {"providers": {"tavily": {"apiKey": "tvly-typed-on-the-card"}}}
-    config_file.write_text(json.dumps(data))
-    reply = await _run(tool, action="set", path="tools.web.providers.tavily.apiKey", value="null")
-    assert "is set" in reply and "tvly-typed-on-the-card" not in reply
+    start_permission_turn(None, conversation_id="c-1", turn_id="t-1")
+    nowhere = await _run(tool, action="set", value=batch)
+    assert "cannot be typed in here" in nowhere and not asked
+
+    start_permission_turn(None, conversation_id="c-1", turn_id="t-2", credentials=Card(CredentialOutcome.SAVED))
+    saved = await _run(tool, action="set", value=batch)
+    conversation, request = asked[-1]
+    assert conversation == "c-1" and request.target == "config:tools.web.providers.tavily.apiKey"
+    assert "tools.web.providers.tavily.apiKey is set" in saved and "not shown" in saved
+    assert ("settings.set", {"key": "tools.web.search.provider", "value": "tavily"}) in calls.calls
+
+    start_permission_turn(None, conversation_id="c-1", turn_id="t-3", credentials=Card(CredentialOutcome.SKIPPED))
+    skipped = await _run(tool, action="set", path="tools.web.providers.tavily.apiKey", value="null")
+    assert "skipped" in skipped and "Settings" in skipped
+
+
+@pytest.mark.asyncio
+async def test_a_channel_secret_is_typed_on_the_card_before_the_channel_starts(config_file):
+    """A channel's secret went to "enter it in Settings" while the vendor keys had a card."""
+    from raven.contracts.asking import CredentialOutcome
+
+    order: list[str] = []
+
+    class Card:
+        async def request_credential(self, *, conversation_id: str, turn_id: str, request) -> CredentialOutcome:
+            order.append(request.target)
+            return CredentialOutcome.SAVED
+
+    class Configure(Calls):
+        async def __call__(self, method: str, params: dict[str, Any]) -> Any:
+            order.append(method)
+            return await super().__call__(method, params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Configure({"channels.configure": {"outcome": "started"}, "channels.status": {"channels": []}}))
+    start_permission_turn(None, conversation_id="c-1", turn_id="t-1", credentials=Card())
+    reply = await _run(
+        tool, action="set", path="channels.feishu", value='{"appId": "cli_1", "appSecret": null, "enabled": true}'
+    )
+
+    assert order[:2] == ["channel:feishu.app_secret", "channels.configure"]
+    assert "channels.feishu.app_secret is set" in reply
 
 
 def test_the_card_offers_a_field_only_where_the_page_can_save_it(config_file):
@@ -545,7 +694,7 @@ def test_the_card_offers_a_field_only_where_the_page_can_save_it(config_file):
     )
     provider, key = view["changes"]
     assert provider["value"] == "tavily" and "secret" not in provider
-    assert key == {**key, "secret": True, "was": "not set", "input": {"via": "settings.set"}}
+    assert key == {**key, "secret": True, "was": "not set", "enterable": True}
     assert "value" not in key
     assert surface.secret_input("providers.openrouter.apiKey") == {"via": "model.save_key", "slug": "openrouter"}
     for setting in surface.all_settings():
@@ -575,9 +724,25 @@ async def test_a_key_pasted_into_the_chat_is_refused_before_anyone_is_asked(para
 
 
 @pytest.mark.asyncio
-async def test_a_secret_named_to_be_typed_asks_like_any_change():
-    params = {"action": "set", "path": "tools.web.providers.tavily.apiKey", "value": "null"}
-    decision = await _gate(PermissionsConfig(mode="ask")).check("raven_config", params)
+async def test_asking_only_for_a_key_goes_straight_to_the_credential_card():
+    """Seen live: a key the user asked to enter raised a confirmation ("let a card
+    ask you for this key?") before the card itself, which is where they decide."""
+    ask = _gate(PermissionsConfig(mode="ask"))
+    only_key = {"action": "set", "path": "providers.deepseek.apiKey", "value": "null"}
+    with_more = {
+        "action": "set",
+        "value": json.dumps(
+            {
+                "agents.defaults.model": {"provider": "deepseek", "model": "deepseek-chat"},
+                "providers.deepseek.apiKey": None,
+            }
+        ),
+    }
+    start_permission_turn(None, conversation_id="c-1", turn_id="t-1")
+    assert isinstance(await ask.check("raven_config", only_key), NeedsApproval), "no card can show unattended"
+    start_permission_turn(_Responder(), conversation_id="c-1", turn_id="t-2")
+    assert isinstance(await ask.check("raven_config", only_key), Allow)
+    decision = await ask.check("raven_config", with_more)
     assert isinstance(decision, NeedsApproval) and decision.session_keys == ()
 
 
@@ -613,3 +778,610 @@ async def test_the_conversation_model_moves_only_this_conversation(config_file):
     assert view["was"].endswith("(the default)") and view["value"] == "openrouter/z-ai/glm-5.3"
     assert set(seen) == {"tui:abc"}
     assert "session" not in json.loads(config_file.read_text())
+
+
+def _with_memory_model(config_file: Path, pin: dict[str, str] | None) -> None:
+    raw = json.loads(config_file.read_text())
+    raw["agents"] = {"defaults": {"model": "deepseek-chat", "provider": "deepseek"}}
+    raw.pop("plugins", None)
+    if pin is not None:
+        raw["plugins"] = {"config": {"everos-memory": {"llm": pin}}}
+    config_file.write_text(json.dumps(raw))
+
+
+def _roles(llm: dict[str, Any]) -> dict[str, Any]:
+    return {"available": True, "sections": {"llm": llm}, "required": []}
+
+
+@pytest.mark.asyncio
+async def test_an_unset_memory_model_reads_as_following_the_main_model(config_file):
+    """ "Follow the main model" is what a person asks for, and it is also what an
+    unset memory model does. A read that said "not set" sent the model grepping
+    the plugin's source for how to make it follow."""
+    _with_memory_model(config_file, None)
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"settings.everos": _roles({"model": "", "provider": "", "follows_main": True})}))
+
+    reply = json.loads(await _run(tool, action="get", path="memory.models.llm"))
+
+    assert reply["memory.models.llm"] == {
+        "follows": "the main model",
+        "now": {"provider": "deepseek", "model": "deepseek-chat"},
+    }
+    described = json.loads(await _run(tool, action="describe", path="memory.models.llm"))
+    assert described["when_unset"] == "it follows the main model"
+
+
+@pytest.mark.asyncio
+async def test_a_memory_model_the_main_model_cannot_stand_in_for_says_memory_is_off(config_file):
+    _with_memory_model(config_file, None)
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"settings.everos": _roles({"model": "", "provider": "", "api_key_set": False})}))
+
+    reply = json.loads(await _run(tool, action="get", path="memory"))
+
+    assert "memory is off" in reply["memory.models.llm"]
+    assert reply["memory.models.rerank"] == "not set (reranking is off)"
+
+
+@pytest.mark.asyncio
+async def test_a_memory_model_is_pinned_and_unpinned_through_the_memory_writer(config_file):
+    _with_memory_model(config_file, {"model": "Qwen/Qwen3-32B", "provider": "deepinfra"})
+    calls = Calls()
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    set_reply = await _run(
+        tool, action="set", path="memory.models.llm", value='{"provider": "deepseek", "model": "deepseek-chat"}'
+    )
+    unset_reply = await _run(tool, action="unset", path="memory.models.llm")
+
+    assert calls.calls == [
+        ("settings.everos_set", {"section": "llm", "model": "deepseek-chat", "provider": "deepseek"}),
+        ("settings.everos_set", {"section": "llm", "clear": True}),
+    ]
+    assert "Qwen/Qwen3-32B" in set_reply
+    assert "follows the main model" in unset_reply
+
+
+@pytest.mark.asyncio
+async def test_unsetting_a_memory_model_that_is_already_unset_writes_nothing(config_file):
+    _with_memory_model(config_file, None)
+    calls = Calls()
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="unset", path="memory.models.llm")
+
+    assert calls.calls == []
+    assert "already unset" in reply and "follows the main model" in reply
+
+
+def test_the_card_says_what_clearing_the_memory_model_means(config_file):
+    _with_memory_model(config_file, {"model": "Qwen/Qwen3-32B", "provider": "deepinfra"})
+    tool = RavenConfigTool()
+
+    cleared = tool.approval_evidence({"action": "unset", "path": "memory.models.llm"})
+    assert "follows the main model" in cleared["change"]
+    assert (cleared["was"], cleared["unset_to"]) == ("deepinfra/Qwen/Qwen3-32B", "main_model")
+
+    _with_memory_model(config_file, None)
+    pinned = tool.approval_evidence(
+        {"action": "set", "path": "memory.models.llm", "value": '{"provider": "deepinfra", "model": "m"}'}
+    )
+    assert pinned["was_unset"] is True and "was" not in pinned
+    assert pinned["unset_to"] == "main_model"
+
+
+@pytest.mark.asyncio
+async def test_the_lent_caller_reaches_the_memory_roles():
+    from raven.rpc.bootstrap import SELF_CONFIG_METHODS
+
+    assert {"settings.everos", "settings.everos_set"} <= SELF_CONFIG_METHODS
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_path_answers_with_the_closest_ones_and_says_where_to_stop(config_file):
+    """Seen in the evals: tools.web.search.apiKey, channels.telegram.token,
+    tools.media.image.apiKeyy -- invented paths, each one more call, and after a
+    few of them the model went reading config files."""
+    tool = RavenConfigTool()
+    reply = await _run(tool, action="get", path="tools.media.image.apiKeyy")
+    assert "tools.media.image.apiKey = not set" in reply
+    assert "Do not look for it in Raven's source code" in reply
+    searched = await _run(tool, action="describe", path="image generation")
+    assert "tools.media.image.model = not set (there is no image generation tool" in searched
+    assert "search matches the English words" in await _run(tool, action="describe", path="生图")
+
+
+@pytest.mark.asyncio
+async def test_vendor_keys_read_as_one_line_of_which_are_set(config_file):
+    """Asked why web search did not work, the agent spent seven gets checking one vendor key at a time."""
+    raw = json.loads(config_file.read_text())
+    raw["tools"]["web"] = {"providers": {"tavily": {"apiKey": "tv-secret"}}}
+    config_file.write_text(json.dumps(raw))
+    root = await _run(RavenConfigTool(), action="describe", path="tools")
+    line = next(x for x in root.splitlines() if "tools.web.providers.<name>.apiKey" in x)
+    assert "key set for: tavily;" in line and "serper" in line
+    assert "tv-secret" not in root
+
+
+def _roster() -> dict[str, Any]:
+    return {
+        "rows": [
+            {
+                "name": "Raven-Research",
+                "kind": "acp",
+                "enabled": True,
+                "configured": True,
+                "probe_status": "attention",
+                "probe_detail": "the launcher exited before the handshake",
+                "last_test_ok": False,
+                "last_test_detail": "no answer to the test message",
+                "needs_auth": True,
+            },
+            {"name": "OpenClaw", "preset": "openclaw", "kind": "acp", "enabled": False, "configured": False},
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_sub_agent_read_says_why_it_fails_and_whether_it_is_added(config_file):
+    """Asked why a sub-agent failed, the agent read 24 to 44 log and launcher files:
+    the roster knew the agent's health all along and the tool dropped it."""
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.list": _roster()}))
+
+    research = json.loads(await _run(tool, action="describe", path="subagents.Raven-Research"))
+    assert research["status"] == "attention" and "handshake" in research["status_detail"]
+    assert research["last_test"] == {"ok": False, "detail": "no answer to the test message"}
+    assert "credential" in research["needs_auth"]
+    claw = json.loads(await _run(tool, action="describe", path="subagents.OpenClaw"))
+    assert claw["added"] is False and '"preset": "openclaw"' in claw["next_step"]
+    root = await _run(tool, action="describe")
+    assert "subagents.OpenClaw: not added" in root
+    assert "subagents.Raven-Research: on; acp; status attention" in root
+
+
+@pytest.mark.asyncio
+async def test_switching_on_a_preset_that_is_not_added_says_to_add_it(config_file):
+    """Seen live: describe showed OpenClaw as enabled=false, so the model tried
+    set enabled=true, which failed, before it thought of add."""
+    calls = Calls({"subagents.list": _roster()})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    reply = await _run(tool, action="set", path="subagents.OpenClaw.enabled", value="true")
+    assert 'add subagents {"preset": "openclaw"}' in reply
+    assert not any(m == "subagents.toggle" for m, _ in calls.calls)
+
+
+@pytest.mark.asyncio
+async def test_a_provider_catalog_is_read_and_narrowed_through_the_page_method(config_file):
+    """Seen live: asked for glm 5.3, the model curled OpenRouter's model list."""
+    models = [
+        {"id": "z-ai/glm-5.3", "label": "GLM 5.3", "kind": "chat", "added": False},
+        {"id": "z-ai/glm-5.2", "label": "GLM 5.2", "kind": "chat", "added": True},
+        {"id": "openai/gpt-6", "label": "GPT-6", "kind": "chat", "added": False},
+    ]
+    calls = Calls({"model.fetch_models": {"models": models, "status": "ok"}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = json.loads(await _run(tool, action="get", path="providers.openrouter.catalog", value="glm 5.3"))
+
+    assert calls.calls == [("model.fetch_models", {"slug": "openrouter"})]
+    assert [m["id"] for m in reply["models"]] == ["z-ai/glm-5.3"]
+    assert '"provider": "openrouter"' in reply["use"]
+    assert "providers.<name>.catalog" in await _run(tool, action="describe", path="providers")
+
+
+@pytest.mark.asyncio
+async def test_an_agent_that_does_not_answer_its_test_is_reported_with_what_to_do(config_file):
+    """Seen live: add openclaw failed its test, and the model spent sixteen shell
+    calls hand-writing ACP frames before finding its own provider key had lapsed."""
+    refusal = RuntimeError(
+        "sub-agent 'OpenClaw' did not answer a test message, so it was not added: acp agent 'OpenClaw' ended "
+        "its turn with no content; stderr tail: [config] warnings: plugin disabled"
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "openclaw"}')
+    assert reply.startswith("Not added:") and "Find out why yourself" in reply
+    assert "`openclaw agent --agent main -m hi --json`" in reply and "scripting its protocol" in reply
+    assert "come back redacted" in reply and "a sign-in" in reply
+    assert (
+        "name the agent's own command" in reply and "copy Raven's" in reply and "three have not told you why" in reply
+    )
+
+
+class _Refused(RuntimeError):
+    def __init__(self, text: str, remedy: dict[str, Any]) -> None:
+        super().__init__(text)
+        self.data = {"remedy": remedy}
+
+
+@pytest.mark.parametrize(
+    ("remedy", "raven_does", "user_does"),
+    [
+        ({"kind": "upgrade", "command": "npm i -g @qwen-code/qwen-code@latest"}, "Upgrade it with `npm i", None),
+        ({"kind": "download", "command": "npx -y pi-acp@0.0.33"}, "Run `npx -y pi-acp@0.0.33` once", None),
+        ({"kind": "runtime", "command": "brew upgrade node", "needs": "22", "found": "18.20"}, "needs 22", None),
+        ({"kind": "model"}, "Pick another one it lists", None),
+        ({"kind": "sign_in", "command": "codex login"}, None, "the user runs `codex login`"),
+        ({"kind": "setup", "command": "qwen", "then": "/auth"}, None, "runs `qwen`, then types /auth"),
+        ({"kind": "api_key"}, None, "enters it in this agent's settings"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_refusal_says_whether_raven_or_the_user_fixes_it(config_file, remedy, raven_does, user_does):
+    """The probe classifies every refusal and names its fix; the tool used to drop
+    that and hand the model one paragraph telling it to send the user off."""
+    refusal = _Refused("sub-agent 'X' did not answer a test message, so it was not added: ...", remedy)
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "codex"}')
+    if raven_does:
+        assert raven_does in reply and "This one needs the user" not in reply
+    if user_does:
+        assert "This one needs the user" in reply and user_does in reply
+
+
+@pytest.mark.asyncio
+async def test_a_missing_agent_is_installed_rather_than_reported(config_file):
+    refusal = RuntimeError(
+        "sub-agent 'Kimi Code' did not answer a test message, so it was not added: kimi is not on the login "
+        "shell PATH; install with uv tool install kimi-cli"
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "kimi_code"}')
+    assert "It is not installed. Install it with exec" in reply
+
+
+@pytest.mark.asyncio
+async def test_only_a_preset_is_added(config_file):
+    """A launch command comes from the preset table alone; an agent it does not list cannot be added here."""
+    calls = Calls()
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    reply = await _run(tool, action="add", path="subagents", value='{"name": "Gemini", "command": "gemini --acp"}')
+    assert "describe list" in reply
+    assert not any(m == "subagents.add" for m, _ in calls.calls)
+    assert "cannot be connected from here" in await _run(tool, action="describe")
+
+
+@pytest.mark.asyncio
+async def test_an_agent_whose_model_is_refused_can_be_added_on_another_it_lists(config_file):
+    """Seen live: Qwen Code's pinned free model was withdrawn, and the reply sent
+    the user to /auth although the agent listed two other models."""
+    refusal = RuntimeError(
+        "sub-agent 'Qwen Code' did not answer a test message, so it was not added: 404 This model is "
+        "unavailable for free"
+    )
+    roster = {
+        "rows": [
+            {
+                "name": "Qwen Code",
+                "preset": "qwen_code",
+                "kind": "acp",
+                "configured": False,
+                "model_choices": [{"value": "z-ai/glm-4.5-air:free"}, {"value": "GPT-5.5"}],
+            }
+        ]
+    }
+    calls = Calls({"subagents.add": refusal, "subagents.list": roster})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "qwen_code"}')
+    assert "`qwen hi`" in reply and "z-ai/glm-4.5-air:free, GPT-5.5" in reply
+    assert '{"preset": "qwen_code", "model": "<one>"}' in reply and "costs money" in reply
+
+    calls.replies["subagents.add"] = {"added": True, "name": "Qwen Code"}
+    await _run(tool, action="add", path="subagents", value='{"preset": "qwen_code", "model": "GPT-5.5"}')
+    assert [c for c in calls.calls if c[0] == "subagents.add"][-1] == (
+        "subagents.add",
+        {"preset": "qwen_code", "model": "GPT-5.5"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_switching_on_a_scan_channel_says_where_the_code_is(config_file):
+    """Seen live: after enabling WeChat the model grepped code and read logs --
+    another Raven's, too -- to find the QR, which the Channels settings showed."""
+    status = {
+        "gateway_running": True,
+        "channels": [{"name": "weixin", "enabled": True, "running": True, "qr_login": True, "fields": []}],
+    }
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"channels.status": status, "channels.configure": {"outcome": "started"}}))
+
+    reply = await _run(tool, action="set", path="channels.weixin.enabled", value="true")
+    described = json.loads(await _run(tool, action="describe", path="channels.weixin"))
+
+    assert "Settings > Channels > weixin" in reply and "scan" in reply
+    assert described["state"] == "running, not connected yet" and "QR" in described["login"]
+
+
+@pytest.mark.asyncio
+async def test_a_channel_read_carries_its_values_and_how_it_logs_in(config_file):
+    """A silent Telegram was read with describe and then get for the same channel, and
+    a WeChat setup asked the user for a token that the QR scan fills in."""
+    raw = json.loads(config_file.read_text())
+    raw["channels"] = {"telegram": {"enabled": True, "token": "tg-secret", "allowFrom": ["someone_else"]}}
+    config_file.write_text(json.dumps(raw))
+    tool = RavenConfigTool()
+
+    telegram = json.loads(await _run(tool, action="describe", path="channels.telegram"))
+    values = {f["path"]: f["value"] for f in telegram["fields"]}
+    assert values["channels.telegram.allow_from"] == ["someone_else"] and values["channels.telegram.token"] == "set"
+    assert "tg-secret" not in json.dumps(telegram)
+    assert "developer console" in telegram["login"] and "token" in telegram["login"]
+    weixin = json.loads(await _run(tool, action="describe", path="channels.weixin"))
+    assert "QR code" in weixin["login"] and "leave it" in weixin["login"]
+
+
+@pytest.mark.asyncio
+async def test_several_fields_of_a_channel_go_in_one_write(config_file):
+    """Setting up WeChat sent {"enabled": true, "token": null} to channels.weixin and
+    a batch of channel paths; both were refused, one call each."""
+    calls = Calls({"channels.configure": {"outcome": "started"}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    one = await _run(
+        tool, action="set", path="channels.feishu", value='{"appId": "cli_1", "enabled": true, "appSecret": null}'
+    )
+    batch = await _run(tool, action="set", value='{"channels.feishu.appId": "cli_2", "tools.exec.timeout": 90}')
+
+    configures = [p for m, p in calls.calls if m == "channels.configure"]
+    assert configures[0] == {"name": "feishu", "fields": {"app_id": "cli_1"}, "enabled": True}
+    assert configures[1]["fields"] == {"app_id": "cli_2"}
+    assert "app_secret is a secret" in one and "Settings > Channels > feishu" in one
+    assert "tools.exec.timeout" in batch and "channels.feishu.app_id" in batch
+
+
+@pytest.mark.asyncio
+async def test_a_sub_agent_can_be_tested_and_the_verdict_comes_back(config_file):
+    """Told "run a test" by an agent's status, the model searched for a way to run
+    one; the page's Test button was the only door."""
+    tested = {
+        "rows": [
+            {
+                **_roster()["rows"][0],
+                "last_test_ok": True,
+                "last_test_detail": "answered",
+                "probe_status": "ready",
+                "needs_auth": False,
+            }
+        ]
+    }
+    replies = iter([_roster(), tested])
+
+    class Roster(Calls):
+        async def __call__(self, method: str, params: dict[str, Any]) -> Any:
+            self.calls.append((method, params))
+            if method == "subagents.list":
+                return next(replies)
+            return {"ok": True, "detail": "answered in 2.1s"}
+
+    calls = Roster()
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = json.loads(await _run(tool, action="test", path="subagents.Raven-Research"))
+
+    assert ("subagents.test", {"name": "Raven-Research", "source": "config"}) in calls.calls
+    assert reply == {"subagent": "Raven-Research", "ok": True, "detail": "answered in 2.1s", "status": "ready"}
+    card = tool.approval_evidence({"action": "test", "path": "subagents.Raven-Research"})
+    assert card["action"] == "test" and "quota" in card["change"]
+
+
+@pytest.mark.asyncio
+async def test_testing_a_preset_that_is_not_added_points_at_add(config_file):
+    calls = Calls({"subagents.list": _roster()})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    reply = await _run(tool, action="test", path="subagents.OpenClaw")
+    assert 'add subagents {"preset": "openclaw"}' in reply
+    assert not any(m == "subagents.test" for m, _ in calls.calls)
+
+
+@pytest.mark.asyncio
+async def test_the_disabled_tools_list_names_the_tools_there_are(config_file):
+    """Asked to turn the browser tools off, the agent guessed eight browser_* names
+    and then went looking for a tool list to check them against."""
+    tool = RavenConfigTool(tool_names=lambda: ["browser_navigate", "exec", "read_file"])
+    described = json.loads(await _run(tool, action="describe", path="tools.disabledTools"))
+    assert described["tool_names"] == ["browser_navigate", "exec", "read_file"]
+    tool.set_rpc_caller(Calls({"settings.set": {"applied": True, "previous": []}}))
+    reply = await _run(tool, action="set", path="tools.disabledTools", value='["browser_navigate", "browser_fly"]')
+    assert "['browser_fly']" in reply and "browser_navigate'" not in reply.split("Not a tool")[1]
+
+
+@pytest.mark.asyncio
+async def test_a_channel_named_the_way_people_say_it_answers_with_what_it_can_mean(config_file):
+    """channels.wechat was an error, then one describe per candidate."""
+    reply = json.loads(await _run(RavenConfigTool(), action="describe", path="channels.wechat"))
+    by_channel = {v["channel"]: v for v in reply["means_one_of"]}
+    assert "QR code" in by_channel["channels.weixin"]["login"]
+    assert by_channel["channels.wecom"]["required"] == ["channels.wecom.bot_id", "channels.wecom.secret"]
+    assert "`weixin`" in await _run(RavenConfigTool(), action="set", path="channels.wechat.enabled", value="true")
+
+
+@pytest.mark.asyncio
+async def test_naming_a_provider_reads_it_and_points_at_its_catalog(config_file):
+    reply = await _run(RavenConfigTool(), action="describe", path="openrouter")
+    assert "providers.openrouter.apiKey = set" in reply and "providers.openrouter.catalog" in reply
+
+
+@pytest.mark.asyncio
+async def test_a_batch_spelled_as_a_python_dict_is_still_a_batch(config_file):
+    """Seen live: {'tools.web.search.provider': 'tavily', '...apiKey': None}
+    was refused with "set needs a path", and the model fell back to two cards."""
+    calls = Calls({"settings.set": {"applied": True, "previous": None}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    reply = await _run(tool, action="set", value="{'tools.exec.timeout': 90, 'tools.disabledTools': ['exec']}")
+    assert [p["key"] for m, p in calls.calls if m == "settings.set"] == ["tools.exec.timeout", "tools.disabledTools"]
+    assert "90" in reply
+    card = tool.approval_evidence({"action": "set", "value": "{'tools.exec.timeout': 90, 'tools.disabledTools': []}"})
+    assert [row["setting"] for row in card["changes"]] == ["tools.exec.timeout", "tools.disabledTools"]
+
+
+@pytest.mark.asyncio
+async def test_naming_a_channel_or_an_agent_reads_it(config_file):
+    """describe telegram and describe openclaw answered "no setting matches"."""
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.list": _roster()}))
+    telegram = await _run(tool, action="describe", path="telegram")
+    assert "is the channel channels.telegram" in telegram and '"fields"' in telegram
+    claw = await _run(tool, action="describe", path="openclaw")
+    assert "is the sub-agent subagents.OpenClaw" in claw and '"added": false' in claw
+
+
+@pytest.mark.asyncio
+async def test_a_huge_catalog_read_without_a_filter_asks_for_one(config_file):
+    models = [{"id": f"vendor/model-{i}", "kind": "chat", "added": i == 7} for i in range(300)]
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"model.fetch_models": {"models": models, "status": "ok"}}))
+    reply = json.loads(await _run(tool, action="get", path="providers.openrouter.catalog"))
+    assert reply["count"] == 300 and reply["added"] == ["vendor/model-7"] and "value" in reply["narrow"]
+
+
+@pytest.mark.asyncio
+async def test_what_an_unset_media_model_still_needs_follows_the_keys_on_file(config_file):
+    """ "Setting a model is enough" was written as a fixed sentence, true only
+    where a usable key happened to be set; without one the model told the user
+    to pick a model and nothing more."""
+    line = lambda text: next(x for x in text.splitlines() if "tools.media.image.model =" in x)  # noqa: E731
+    with_key = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "a model is all it lacks" in with_key
+
+    raw = json.loads(config_file.read_text())
+    raw["providers"] = {}
+    config_file.write_text(json.dumps(raw))
+    without = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "it also needs a key: tools.media.image.apiKey" in without and "all it lacks" not in without
+
+
+@pytest.mark.asyncio
+async def test_a_download_that_timed_out_names_how_to_fetch_it_even_without_a_command(config_file):
+    """A refusal whose remedy carries no launch to quote read
+    "run `its own sign-in or setup command` once" for an npx fetch."""
+    refusal = _Refused(
+        "sub-agent 'Kimi Code' did not answer a test message, so it was not added: ...", {"kind": "download"}
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "kimi_code"}')
+    assert "npx -y <package> --version" in reply and "sign-in" not in reply.split("\n")[1]
+
+
+@pytest.mark.asyncio
+async def test_a_sub_agent_can_be_named_by_its_preset(config_file):
+    """Connecting Qwen Code, the agent described subagents.qwen_code, the preset it had just been told to add."""
+    roster = {"rows": [{"name": "Qwen Code", "preset": "qwen_code", "kind": "acp", "configured": False}]}
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.list": roster}))
+    qwen = json.loads(await _run(tool, action="describe", path="subagents.qwen_code"))
+    assert qwen["name"] == "Qwen Code"
+
+
+@pytest.mark.asyncio
+async def test_add_refuses_keys_it_would_otherwise_drop(config_file):
+    """Connecting an agent that was not installed, the model passed acp_args, and preset
+    with command; both were dropped without a word and it retried the same launch."""
+    calls = Calls()
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    stray = await _run(tool, action="add", path="subagents", value='{"preset": "kimi_code", "acp_args": "acp"}')
+    both = await _run(tool, action="add", path="subagents", value='{"preset": "kimi_code", "command": "/x/kimi acp"}')
+    assert "acp_args" in stray and "command" in both and "launch command is fixed" in both
+    assert not any(m == "subagents.add" for m, _ in calls.calls)
+
+
+@pytest.mark.asyncio
+async def test_several_agents_connect_under_one_confirmation(config_file):
+    """Seen live: "connect hermes, openclaw, qwen and kimi" raised one card per agent."""
+
+    class Adds(Calls):
+        async def __call__(self, method: str, params: dict[str, Any]) -> Any:
+            self.calls.append((method, params))
+            if method == "subagents.add" and params.get("preset") == "openclaw":
+                raise _Refused(
+                    "sub-agent 'OpenClaw' did not answer a test message, so it was not added: 401", {"kind": "api_key"}
+                )
+            if method == "subagents.add":
+                return {"added": True, "name": params.get("preset") or params.get("name")}
+            return _roster()
+
+    calls = Adds()
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    value = '[{"preset": "qwen_code"}, {"preset": "openclaw"}, {"preset": "kimi_code"}]'
+
+    card = tool.approval_evidence({"action": "add", "path": "subagents", "value": value})
+    reply = await _run(tool, action="add", path="subagents", value=value)
+
+    assert "Connect sub-agents: qwen_code; openclaw; kimi_code" in card["change"]
+    assert [p.get("preset") or p.get("name") for m, p in calls.calls if m == "subagents.add"] == [
+        "qwen_code",
+        "openclaw",
+        "kimi_code",
+    ]
+    assert "Connected sub-agent qwen_code" in reply and "Connected sub-agent kimi_code" in reply
+    assert "Not added:" in reply and "This one needs the user" in reply
+    assert reply.count("copy Raven's") == 1
+
+
+@pytest.mark.asyncio
+async def test_writes_to_a_sub_agent_say_what_it_is_now(config_file):
+    """After setting an agent's model the row was read back twice, and an agent just
+    connected was described again: the replies said "Set" and "Connected" and
+    nothing about the agent itself."""
+    row = {
+        "name": "CodeBuddy",
+        "preset": "codebuddy",
+        "kind": "acp",
+        "enabled": True,
+        "configured": True,
+        "probe_status": "ready",
+        "probe_detail": "connected to codebuddy 1.4.2 over ACP v1",
+        "model_choices": [{"value": "m-base"}, {"value": "m-lite"}],
+    }
+    calls = Calls({"subagents.list": {"rows": [row]}, "subagents.add": {"added": True, "name": "CodeBuddy"}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    listed = await _run(tool, action="set", path="subagents.CodeBuddy.model", value='"m-lite"')
+    unlisted = await _run(tool, action="set", path="subagents.CodeBuddy.model", value='"m-max"')
+    added = await _run(tool, action="add", value='{"preset": "codebuddy"}')
+
+    assert "one of the models the agent lists (m-base, m-lite)" in listed
+    assert "does not list it" in unlisted
+    assert "connected to codebuddy 1.4.2" in added and "Models it lists: m-base, m-lite" in added
+
+
+def test_every_method_the_tool_calls_is_one_the_gateway_lends_it():
+    """`test` was offered and every call of it answered "raven_config may not call
+    subagents.test": the tool and the gateway's allowlist drifted apart."""
+    import re
+    from pathlib import Path
+
+    from raven.agent.tools import raven_config as module
+    from raven.rpc.bootstrap import SELF_CONFIG_METHODS
+
+    called = set(re.findall(r'self\._rpc\(\s*"([a-z_.]+)"', Path(module.__file__).read_text()))
+    assert called and called <= SELF_CONFIG_METHODS, sorted(called - SELF_CONFIG_METHODS)
+
+
+@pytest.mark.asyncio
+async def test_an_unmeasured_agent_is_described_as_settable_rather_than_needing_a_test(config_file):
+    """Changing a connected agent's model, the model read "run a test", tested,
+    re-read twice, then set it -- the set would have measured the menu itself."""
+    row = {"name": "CodeBuddy", "preset": "codebuddy", "kind": "acp", "configured": True, "model_source": "agent"}
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.list": {"rows": [row]}}))
+    described = json.loads(await _run(tool, action="describe", path="subagents.CodeBuddy"))
+    assert described["model_choices"] == [] and "set subagents.CodeBuddy.model" in described["model_note"]

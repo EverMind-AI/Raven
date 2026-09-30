@@ -97,6 +97,7 @@ from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
+from raven.security.redact import redact_home_config_read
 from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
@@ -1453,6 +1454,7 @@ class TurnPathMixin:
                     if tool_call.name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
                         await self._report_skill_read(session_key or "", tool_call.name, tool_call.arguments)
                     result_blocks = getattr(result, "blocks", None)
+                    model_text = redact_home_config_read(tool_call.arguments, model_text)
                     model_text, blocks, attach_blocks = self._route_result_images(
                         model_text, result_blocks, call_model or effective_model
                     )

@@ -317,6 +317,33 @@ READ_ONLY_MAX_POSITIONAL: dict[str, int] = {"uniq": 1}
 
 READ_ONLY_SUBCOMMANDS: dict[str, frozenset[str]] = {
     "docker": frozenset({"images", "inspect", "logs", "ps"}),
+    # Package managers' queries: what is installed, what a package is and ships.
+    # Seen asking in turn after turn of connecting an agent (`npm view <pkg> bin`,
+    # `npm ls -g`) while the install beside them rightly asked once. `config`,
+    # `exec`, `run` and friends are absent: they set or run.
+    "npm": frozenset(
+        {
+            "view",
+            "v",
+            "info",
+            "show",
+            "ls",
+            "list",
+            "ll",
+            "la",
+            "outdated",
+            "search",
+            "root",
+            "prefix",
+            "why",
+            "explain",
+        }
+    ),
+    "pnpm": frozenset({"view", "info", "ls", "list", "ll", "outdated", "root", "why"}),
+    "yarn": frozenset({"info", "list", "why"}),
+    "pip": frozenset({"show", "list", "freeze"}),
+    "pip3": frozenset({"show", "list", "freeze"}),
+    "brew": frozenset({"info", "list", "ls", "search", "deps", "leaves", "outdated"}),
     "git": frozenset(
         {
             "blame",
@@ -613,12 +640,13 @@ SELF_CONFIG_READ_ACTIONS = frozenset({"describe", "get"})
 def self_config_tier(tool_name: str, params: dict[str, Any] | None = None) -> Tier | None:
     """The fixed tier for a ``raven_config`` call, or ``None`` for any other tool.
 
-    Reads allow. A call carrying a credential's value is refused before anyone
-    is asked: that value came through the chat, and a key goes in only through
-    the field the confirmation card offers for it. Everything else -- a write,
-    a reset, a connect, a restart -- asks, and the gate consults this before the user's allow rules and before
-    the mode, because a change to Raven's own configuration is the one
-    mutation the user asked to confirm every time, whichever mode they run in.
+    Reads allow. A call carrying a credential's value is refused in every mode:
+    that value came through the chat, and a key goes in only through the
+    credential card. Everything else -- a write, a reset, a connect, a restart
+    -- asks. In a turn someone is at (never an unattended one) the gate lets
+    the user's allow rule, full access, and the smart-mode reviewer through;
+    the reviewer only for settings the catalog does not mark sensitive. A
+    grant for the session never carries a change.
     """
     if tool_name != SELF_CONFIG_TOOL:
         return None

@@ -13,6 +13,7 @@
 
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
 import { open as approveSheet } from '../features/composer/approve'
+import { closeCredential, openCredential } from '../features/composer/credential'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
@@ -52,7 +53,9 @@ import { refusal as uploadRefusal } from '../lib/upload'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
-import { clarifyRequest, dispatch, installPipeline, replayPendingApprovals } from '../state/session/pipeline'
+import {
+  clarifyRequest, dispatch, installPipeline, registerCredentialCard, replayPendingApprovals, replayPendingCredentials,
+} from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
 import * as settingsDialog from '../state/settings'
@@ -295,6 +298,7 @@ export function installPushes(): void {
      pipeline: the turn stream by the subscription it names, and the five
      side-channel requests by the conversation whose turn is blocked on the
      answer. */
+  registerCredentialCard({ open: openCredential, close: closeCredential })
   installPipeline()
 
   gateway().on('system.update_available', onUpdateAvailable)
@@ -324,6 +328,7 @@ async function afterReconnect(): Promise<void> {
   /* The sheets a question was waiting in are gone with the old socket; the
      questions are not. */
   await replayPendingApprovals()
+  await replayPendingCredentials()
   /* The installed skills, plugins and tools are read once at boot into
      module state and served from there, so a socket that was down when boot
      ran leaves all three empty for the life of the tab -- an empty page

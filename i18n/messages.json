@@ -6088,12 +6088,24 @@
       "zh": "允许 {who} 修改自己的配置吗？"
     },
     "gui.confirm.why.config_change": {
-      "en": "{who} wants to change its own configuration. A change like this asks you every time.",
-      "zh": "{who} 要修改自己的配置。这类改动每次都会问你，不会记住授权。"
+      "en": "{who} wants to change its own configuration. Allowing it covers this change only.",
+      "zh": "{who} 要修改自己的配置。允许只对这一次改动有效。"
     },
     "gui.confirm.cfg.reset": {
       "en": "(default)",
       "zh": "（默认值）"
+    },
+    "gui.confirm.cfg.unset_to.main_model": {
+      "en": "(follows the main model)",
+      "zh": "（跟随主模型）"
+    },
+    "gui.confirm.cfg.unset_to.off": {
+      "en": "(off)",
+      "zh": "（关闭）"
+    },
+    "gui.confirm.cfg.test": {
+      "en": "Run {name} once to check that it works. It spends that agent's own quota.",
+      "zh": "试运行 {name} 一次，检查它能否工作（会用掉它自己的额度）"
     },
     "gui.confirm.cfg.reload": {
       "en": "Reload Raven so the pending changes take effect. The process stays up; running work finishes first.",
@@ -6104,20 +6116,16 @@
       "zh": "重启整个 Raven 进程，让待生效的改动生效。渠道会断开几秒后重连。"
     },
     "gui.confirm.cfg.key_field": {
-      "en": "Paste the key here. It is saved directly and never goes through Raven.",
-      "zh": "在这里粘贴 key，会直接保存，不经过 Raven"
+      "en": "After you allow, a card of its own asks you for this key. It is saved directly and never goes through Raven.",
+      "zh": "允许后会单独弹出一张卡片让你填这个 key，直接保存，不经过 Raven"
     },
     "gui.confirm.cfg.key_is_set": {
-      "en": "A key is already set; what you type replaces it. Leave it empty to keep it.",
-      "zh": "已经填过 key，输入新的会替换；留空保持不变"
+      "en": "A key is already set; entering a new one replaces it.",
+      "zh": "已经设置过 key，填新的会替换它"
     },
     "gui.confirm.cfg.key_no_field": {
       "en": "This key cannot be entered here; set it in Settings.",
       "zh": "这个 key 不能在这里填，请去设置里填写"
-    },
-    "gui.confirm.cfg.key_failed": {
-      "en": "The key was not saved: {e}",
-      "zh": "key 没有保存成功：{e}"
     },
     "gui.confirm.cfg.sensitive": {
       "en": "Security: {note}",
@@ -10358,6 +10366,38 @@
     "gui.pb.stint_status_finished": {
       "en": "finished",
       "zh": "已完成"
+    },
+    "gui.confirm.cred.title": {
+      "en": "Enter a key",
+      "zh": "填写密钥"
+    },
+    "gui.confirm.cred.hint": {
+      "en": "Saved straight into the settings. Raven never sees it.",
+      "zh": "直接保存到设置里，Raven 看不到它"
+    },
+    "gui.confirm.cred.replaces": {
+      "en": "One is already set; what you enter replaces it.",
+      "zh": "已经设置过，填入的新值会替换它"
+    },
+    "gui.confirm.cred.placeholder": {
+      "en": "Paste it here",
+      "zh": "粘贴到这里"
+    },
+    "gui.confirm.cred.save": {
+      "en": "Save",
+      "zh": "保存"
+    },
+    "gui.confirm.cred.skip": {
+      "en": "Skip",
+      "zh": "跳过"
+    },
+    "gui.confirm.cred.saving": {
+      "en": "Saving...",
+      "zh": "正在保存..."
+    },
+    "gui.confirm.cred.unsent": {
+      "en": "It could not be sent; try again.",
+      "zh": "没有发送出去，请再试一次"
     }
   }
 }

@@ -23,7 +23,7 @@ from typing import Any
 
 from raven.agent.spine_runner import AgentTurnRunner
 from raven.agent.tools.message import MessageTool
-from raven.contracts.asking import ApprovalResponder, SupportsDirectAsk
+from raven.contracts.asking import ApprovalResponder, CredentialAsker, SupportsDirectAsk
 from raven.permissions import start_permission_turn
 from raven.rpc.subscriptions import SubscriptionEmitter
 from raven.spine import (
@@ -164,12 +164,14 @@ class RpcTurnRunner(AgentTurnRunner):
         usages: dict[str, dict[str, Any]],
         readback_texts: dict[str, str],
         approval_responder: ApprovalResponder | None = None,
+        credential_asker: CredentialAsker | None = None,
     ) -> None:
         super().__init__(agent_loop, stream=True)
         self._emitter = emitter
         self._usages = usages
         self._readback_texts = readback_texts
         self._approval_responder = approval_responder
+        self._credential_asker = credential_asker
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
         cid = conversation_id(req)
@@ -196,6 +198,7 @@ class RpcTurnRunner(AgentTurnRunner):
             # names it, not the main agent.
             origin="subagent" if req.direct_target else req.origin.value,
             origin_name=req.direct_target[0] if req.direct_target else "",
+            credentials=self._credential_asker if watched else None,
         )
         # Function-level on purpose: the acp client family is future shelf
         # cargo and must not be named at this module's import time
@@ -668,6 +671,7 @@ def build_rpc_spine(
     direct_targets: dict[str, dict[str, str]] | None = None,
     readback_texts: dict[str, str] | None = None,
     approval_responder: ApprovalResponder | None = None,
+    credential_asker: CredentialAsker | None = None,
     user_pool: int = 1,
     system_pool: int = 1,
     direct_pool: int = 8,
@@ -699,7 +703,7 @@ def build_rpc_spine(
     permission. The runner binds it per turn on the same gate the asker uses: a
     USER turn always, a SUBAGENT relay when a surface is watching its
     conversation, and no other origin -- a CRON or otherwise unattended turn is
-    refused at the ask tier."""
+    refused at the ask tier. ``credential_asker`` is bound on the same terms."""
     hub = DeliveryHub()
     if direct_targets is None:
         direct_targets = {}
@@ -716,6 +720,7 @@ def build_rpc_spine(
             usages,
             readback_texts,
             approval_responder=approval_responder,
+            credential_asker=credential_asker,
         ),
         OriginPools(user=user_pool, system=system_pool, direct=direct_pool),
         _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end, on_turn_start),

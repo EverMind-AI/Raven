@@ -1509,10 +1509,11 @@ validated raw writer, or a settings-page RPC lent by the entrance), and its effe
 next turn (a Live preference reader), immediate (a door, or a writer that applies), a
 Generation reload, a whole-process restart, the memory server's restart, or inert. The
 effect is a claim about the runtime, pinned against the schema and the Live preference
-roster by `tests/test_config_self_surface.py`. Every mutating call of the tool is
-confirmed by the user regardless of permission mode or allow rules
-(`permissions.rules.self_config_tier`); secrets are reported as set / not set and never
-carried through a call.
+roster by `tests/test_config_self_surface.py`. Every mutating call of the tool asks
+(`permissions.rules.self_config_tier`); in a turn someone is at, an allow rule, full
+access, or smart mode's reviewer (never for a setting the catalog marks sensitive) lets
+it through, and a grant for the session never does. Secrets are reported as set / not
+set and never carried through a call; the user types one on a credential card.
 _Avoid_: "config tool" for the catalog (the tool is one reader of it; the permission
 gate is another); editing `config.json` with file tools as a way to configure Raven.
 

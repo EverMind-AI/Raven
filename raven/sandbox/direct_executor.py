@@ -91,7 +91,12 @@ _ENV_ALLOWLIST = (
 
 def baseline_env() -> dict[str, str]:
     """The host environment a command may see: the allowlist above, nothing else."""
-    return {k: v for k in _ENV_ALLOWLIST if (v := os.environ.get(k)) is not None}
+    from raven.sandbox.compat_bin import with_compat
+
+    env = {k: v for k in _ENV_ALLOWLIST if (v := os.environ.get(k)) is not None}
+    if "PATH" in env:
+        env["PATH"] = with_compat(env["PATH"])
+    return env
 
 
 class _ExitNotifyingProtocol(asyncio.subprocess.SubprocessStreamProtocol):

@@ -1048,6 +1048,7 @@ class WiringMixin:
                 RavenConfigTool(
                     guide_skill_id=self._shipped_guide(_CONFIG_GUIDE),
                     session_model=lambda key: (self.session_model(key), self.has_session_binding(key)),
+                    tool_names=lambda: self.tools.names(),
                 )
             )
         if self.cron_service:

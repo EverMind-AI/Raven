@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 202 methods, 119 component schemas.
+// 205 methods, 119 component schemas.
 
 /* eslint-disable */
 /**
@@ -456,6 +456,10 @@ export interface EverosSection {
    * The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell.
    */
   env_managed?: boolean;
+  /**
+   * Nothing is pinned and the role runs on the main chat model, which it follows when that changes. Only the memory LLM does this.
+   */
+  follows_main?: boolean;
 }
 export interface ChannelField {
   key: string;
@@ -2671,6 +2675,7 @@ export interface SubagentsAddParams {
   preset: string;
   name?: string;
   description?: string;
+  model?: string;
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
@@ -4101,6 +4106,60 @@ export interface ApprovalPendingResult {
     [k: string]: JsonValue;
   }[];
 }
+export interface CredentialSubmitParams {
+  request_id: string;
+  /**
+   * The credential as typed. Not logged, not returned, not kept once written.
+   */
+  value: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+export interface CredentialSubmitResult {
+  /**
+   * True once the value is written; the waiting tool then resumes.
+   */
+  ok: boolean;
+  /**
+   * Why it was not written, for the card to show; the request stays open.
+   */
+  error?: string;
+}
+export interface CredentialSkipParams {
+  request_id: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+export interface CredentialSkipResult {
+  /**
+   * False for an unknown, answered or mis-bound request.
+   */
+  ok: boolean;
+}
+export interface CredentialPendingParams {
+  /**
+   * One conversation's requests; every conversation's when absent.
+   */
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+export interface CredentialPendingResult {
+  /**
+   * Each open request's credential.request params, exactly as they were first sent.
+   */
+  requests: {
+    [k: string]: JsonValue;
+  }[];
+}
 export interface ClarifyRespondParams {
   answer: string;
   request_id?: string;
@@ -5196,6 +5255,9 @@ export interface RpcMethods {
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
   'approval.revoke': { params: ApprovalRevokeParams; result: ApprovalRevokeResult };
   'approval.pending': { params: ApprovalPendingParams; result: ApprovalPendingResult };
+  'credential.submit': { params: CredentialSubmitParams; result: CredentialSubmitResult };
+  'credential.skip': { params: CredentialSkipParams; result: CredentialSkipResult };
+  'credential.pending': { params: CredentialPendingParams; result: CredentialPendingResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
   'slash.exec': { params: SlashExecParams; result: SlashExecResult };
@@ -5297,6 +5359,9 @@ export const RPC_METHODS = [
   "config.set",
   "config.unset",
   "confirm.respond",
+  "credential.pending",
+  "credential.skip",
+  "credential.submit",
   "cron.delete",
   "cron.list",
   "cron.run_now",

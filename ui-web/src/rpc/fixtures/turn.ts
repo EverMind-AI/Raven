@@ -623,6 +623,9 @@ export function createTurn(env: FixtureEnv, host: TurnHost, websearchOn: () => b
       /* Nothing waits across a reload here: the scripted turns ask no
          approval, so a fresh page finds no question to draw again. */
       'approval.pending': () => ({ requests: [] }),
+      'credential.pending': () => ({ requests: [] }),
+      'credential.submit': () => ({ ok: true }),
+      'credential.skip': () => ({ ok: true }),
       'turn.cancel': (p) => {
         /* Only this conversation's turn: the script stops where the reader
            stopped it, and another conversation's still plays out. */

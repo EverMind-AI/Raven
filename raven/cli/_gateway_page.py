@@ -150,7 +150,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
     bound_port = await pick_port(preferred_port, strict=port_strict())
     ws_gateway.port = bound_port
 
-    stack = await build_rpc_stack(ws_gateway.broadcast, agent_loop=agent_loop)
+    stack = await build_rpc_stack(ws_gateway.broadcast, agent_loop=agent_loop, credential_cards=True)
     ws_gateway.dispatcher = stack.dispatcher
 
     dist = resolve_ui_dist()

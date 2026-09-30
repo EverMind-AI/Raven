@@ -493,12 +493,20 @@ DIAGNOSE_HINTS: dict[str, str] = {
     # still retrying when the connect's wait ran out, so the reply carried no
     # reason.
     "github_copilot": "copilot -p hi",
+    # OpenClaw's ACP bridge relays a refused model call as an empty turn: a 401
+    # from its provider came back as `end_turn` with no content and only a
+    # config warning on stderr. `openclaw agent -m` runs the same turn through
+    # the gateway and prints the provider's answer ("request failed
+    # (authentication failed, HTTP 401)") within seconds (measured 2026-09-29,
+    # OpenClaw 2026.9.1).
+    "openclaw": "openclaw agent --agent main -m hi --json",
 }
 """A command that makes the agent a row defers to say why it is not answering.
 
 For the failure that carries no reason at all: a connect that timed out while
-the agent kept working. Only for an agent measured to fail that way, because
-for the rest a timeout is not known to mean anything in particular."""
+the agent kept working, or a turn that ended with nothing in it. Only for an
+agent measured to fail that way, because for the rest a timeout is not known to
+mean anything in particular."""
 
 
 NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(

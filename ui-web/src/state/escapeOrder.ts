@@ -23,7 +23,9 @@
  * The three capture-phase handlers each open sheet registers run before this
  * table and two of them act on Escape without stopping propagation, so one
  * Escape can both deny an approval and interrupt the turn behind it. That is
- * the behaviour, not an accident of where the listener sits.
+ * the behaviour, not an accident of where the listener sits. The credential
+ * card (features/composer/credential.ts) is the one that stops it: skipping a
+ * key is not stopping the turn, which goes on to say where it can be entered.
  */
 
 import { busy as turnBusy } from '../features/composer/turn'

@@ -960,3 +960,103 @@ class TestAWithheldRole:
             assert "embedding" not in cfg.withheld_roles()
         finally:
             cfg.release_role("embedding")
+
+
+def _main_model(cfg, model: str, provider: str) -> None:
+    import json
+
+    raw = json.loads(cfg.read_text(encoding="utf-8"))
+    raw.setdefault("agents", {})["defaults"] = {"model": model, "provider": provider}
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+
+class TestTheMemoryModelFollowsTheMainModel:
+    """Leaving the memory model alone means "use the chat model". It used to
+    mean memory off: EverOS refuses to start without an LLM, and nothing stood
+    in for one nobody picked."""
+
+    def test_an_unset_memory_model_runs_on_the_main_model(self, pinned) -> None:
+        from raven_everos.config import everos_env, everos_role_configured, follows_main_model, resolve_role
+
+        _main_model(pinned, "deepseek-chat", "deepseek")
+
+        endpoint = resolve_role("llm")
+        assert endpoint is not None and endpoint.model == "deepseek-chat"
+        assert endpoint.api_key == "sk-ds"
+        assert everos_role_configured("llm") is True
+        assert follows_main_model("llm") is True
+        assert everos_env()["EVEROS_LLM__MODEL"] == "deepseek-chat"
+
+    def test_only_the_memory_model_follows(self, pinned) -> None:
+        """Embedding and rerank are different kinds of model: a chat model
+        standing in for them would fail every call."""
+        from raven_everos.config import follows_main_model, resolve_role
+
+        _main_model(pinned, "deepseek-chat", "deepseek")
+
+        for section in ("embedding", "rerank", "multimodal"):
+            assert resolve_role(section) is None, section
+            assert follows_main_model(section) is False, section
+
+    def test_a_pin_of_its_own_wins_over_the_main_model(self, pinned) -> None:
+        from raven_everos.config import describe_roles, follows_main_model, resolve_role, set_role
+
+        _main_model(pinned, "deepseek-chat", "deepseek")
+        set_role("llm", model="Qwen/Qwen3-32B", provider="deepinfra")
+
+        assert resolve_role("llm").model == "Qwen/Qwen3-32B"
+        assert follows_main_model("llm") is False
+        assert describe_roles()["sections"]["llm"]["follows_main"] is False
+
+    def test_clearing_a_pinned_memory_model_goes_back_to_following(self, pinned) -> None:
+        """The page's clear button on this slot is "follow the main model" --
+        a choice, so the write allows it once something can stand in."""
+        from raven_everos.config import clear_role, describe_roles, resolve_role, role_pin, set_role
+
+        _main_model(pinned, "deepseek-chat", "deepseek")
+        set_role("llm", model="Qwen/Qwen3-32B", provider="deepinfra")
+        assert describe_roles()["required"] == []
+
+        clear_role("llm", deliberate=True)
+
+        assert role_pin("llm") is None
+        assert resolve_role("llm").model == "deepseek-chat"
+        assert describe_roles()["sections"]["llm"]["follows_main"] is True
+
+    def test_a_stray_clear_still_cannot_take_it(self, pinned) -> None:
+        """Following is for a person asking. The wizard's skip is not one."""
+        from raven_everos.config import RoleRequiredError, clear_role, role_pin, set_role
+
+        _main_model(pinned, "deepseek-chat", "deepseek")
+        set_role("llm", model="Qwen/Qwen3-32B", provider="deepinfra")
+
+        with pytest.raises(RoleRequiredError):
+            clear_role("llm")
+        assert role_pin("llm") == ("Qwen/Qwen3-32B", "deepinfra")
+
+    @pytest.mark.parametrize("provider", ["groq", "oauth"])
+    def test_a_main_model_that_cannot_stand_in_leaves_memory_unset(self, pinned, provider) -> None:
+        """No key on file, or an OAuth seat whose token raven does not hand out:
+        then unset still means off, the slot says "not set", and the clear
+        button stays away because it would switch memory off."""
+        from raven.providers.registry import PROVIDERS
+        from raven_everos.config import (
+            RoleRequiredError,
+            clear_role,
+            describe_roles,
+            everos_role_configured,
+            follows_main_model,
+            set_role,
+        )
+
+        if provider == "oauth":
+            provider = next(spec.name for spec in PROVIDERS if spec.is_oauth)
+        _main_model(pinned, "some-model", provider)
+
+        assert everos_role_configured("llm") is False
+        assert follows_main_model("llm") is False
+        assert describe_roles()["required"] == ["llm"]
+
+        set_role("llm", model="deepseek-chat", provider="deepseek")
+        with pytest.raises(RoleRequiredError, match="main model cannot stand in"):
+            clear_role("llm", deliberate=True)

@@ -172,6 +172,28 @@ async def test_find_says_so_when_nothing_is_close() -> None:
     assert "No plugin in the catalog matches" in out
 
 
+async def test_find_names_an_agent_or_a_channel_that_is_not_a_plugin() -> None:
+    """Seen live: "connect openclaw" searched the plugin catalog ten times --
+    down to single letters -- because "claw" matched firecrawl and nothing said
+    OpenClaw is an agent Raven dispatches to."""
+    agent = await PluginTool().execute(action="find", query="openclaw")
+    assert "No plugin is called 'openclaw'" in agent
+    assert 'raven_config add subagents {"preset": "openclaw"}' in agent
+    channel = await PluginTool().execute(action="find", query="wechat")
+    assert "raven_config describe channels.weixin" in channel
+    assert "raven_config" not in await PluginTool().execute(action="find", query="asana")
+
+
+async def test_find_for_a_generation_tool_says_raven_has_its_own_and_hides_nothing() -> None:
+    """Asked whether it could generate images, the agent searched the plugin catalog twice before looking
+    at its own image tool. The pointer is added, never swapped in: a plugin may
+    carry such a tool too."""
+    image = await PluginTool().execute(action="find", query="image generation")
+    assert "tools.media.<kind>.model" in image and "catalog match" in image
+    brave = await PluginTool().execute(action="find", query="brave search")
+    assert "brave-search" in brave and "raven_config" not in brave
+
+
 # ── connect ────────────────────────────────────────────────────────
 
 
@@ -336,7 +358,7 @@ async def test_list_reports_state_and_tool_count(_isolated, monkeypatch) -> None
 
 
 async def test_an_empty_list_tells_the_agent_to_say_so_rather_than_work_around_it(_isolated, monkeypatch) -> None:
-    """Seen in the self-config eval: told only "no plugins", the agent read a GitHub PR through the
+    """Seen live: told only "no plugins", the agent read a GitHub PR through the
     browser and never mentioned that GitHub was not connected."""
     monkeypatch.setattr("raven.market.connect.installed_overview", lambda loop: [])
     out = await PluginTool(loop=_FakeLoop("svc", "connected", [])).execute(action="list")

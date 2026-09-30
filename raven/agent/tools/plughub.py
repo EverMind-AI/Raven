@@ -27,6 +27,7 @@ Three boundaries this tool does not cross:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -56,6 +57,65 @@ def _lang() -> str:
         return load_config().language
     except Exception:  # noqa: BLE001 — a catalog listing must not depend on a readable config
         return "en"
+
+
+_OWN_CAPABILITY_WORDS = frozenset({"image", "images", "picture", "pictures", "video", "videos", "speech", "tts"})
+
+
+def _own_capability(query: str) -> str:
+    """A pointer for a search that names one of Raven's own generation tools.
+
+    Only ever added beside the results, never in place of them: a plugin can
+    carry an image or video tool too, and hiding it would be the opposite bug.
+    """
+    words = set(re.findall(r"[a-z]+", (query or "").lower()))
+    if not words & _OWN_CAPABILITY_WORDS:
+        return ""
+    return (
+        "Image, video and speech generation are also Raven's own tools: raven_config describe shows whether "
+        "each is set up (tools.media.<kind>.model) and what switching it on takes."
+    )
+
+
+def _norm(text: object) -> str:
+    return "".join(ch for ch in str(text or "").lower() if ch.isalnum())
+
+
+def _same(query: str, *names: object) -> bool:
+    want = _norm(query)
+    return bool(want) and any(_norm(n) == want for n in names)
+
+
+def _elsewhere(query: str) -> str:
+    """Where a name that is not a plugin lives instead: a sub-agent preset or a chat channel.
+
+    "Connect openclaw" reads the same whichever kind openclaw is, and a plugin
+    search answers it with whatever is spelled alike (firecrawl, for "claw").
+    """
+    if not query:
+        return ""
+    try:
+        from raven.agent.subagent.presets import third_party_subagent_presets
+
+        for preset in third_party_subagent_presets():
+            if _same(query, preset.get("preset"), preset.get("name")):
+                return (
+                    f"{preset.get('name')} is an agent Raven can dispatch work to, not a plugin: connect it with "
+                    f'raven_config add subagents {{"preset": "{preset.get("preset")}"}}. There is nothing more '
+                    "to check here for it; the plugin list does not hold agents."
+                )
+        from raven.config.update_channels import channel_names
+
+        for name in channel_names():
+            if _same(query, name) or (_norm(query) == "wechat" and name == "weixin"):
+                return (
+                    f"{name} is a chat channel (talking to Raven from that app), not a plugin: "
+                    f"raven_config describe channels.{name} shows how to connect it. There is nothing more to "
+                    "check here for it; the plugin list does not hold channels."
+                )
+    except Exception:  # noqa: BLE001 - a pointer is a courtesy; the search result stands without it
+        return ""
+    return ""
 
 
 def _card(item: dict) -> str:
@@ -111,19 +171,17 @@ class PluginTool(Tool):
         return (
             "Connect third-party integrations (MCP plugins: Asana, Notion, Linear, "
             "GitHub, Stripe, Playwright, ...) from Raven's built-in plugin catalog, "
-            "and report what is connected. Use it when the user asks to connect, add, "
-            "install, re-authorize or check an integration, or a task involves one (a GitHub "
-            "link): if not connected, say so and offer to, even when a public page would do.\n"
+            "and report what is connected: a service with an account (an agent or a chat app is "
+            "raven_config). Use it to connect, re-authorize or check one, or when a task involves one (a "
+            "GitHub link): if not connected, say so and offer to, even when a public page would do.\n"
             "Actions:\n"
             "- find: search the catalog. `query` is a name or a description "
             "('asana', 'issue tracker'). Returns each entry's id, what it needs to "
             "authenticate, and whether it is already installed.\n"
             "- connect: install the catalog entry whose id is `name`, and connect it. "
-            "For a plugin that uses OAuth this returns straight away with the "
-            "provider's authorization URL -- it opens no page and does NOT wait for "
-            "the user to finish, so give them the link and stop. If authorization "
-            "settles as failed the plugin is not installed at all, and the result says "
-            "so.\n"
+            "For an OAuth plugin this returns at once with the authorization URL -- it "
+            "opens no page and does NOT wait, so give the user the link and stop. If "
+            "authorization fails the plugin is not installed, and the result says so.\n"
             "- authorize: mint a fresh authorization link for an installed plugin that "
             "is awaiting it (state auth_required), or retry a connection that failed.\n"
             "- list: every installed plugin with its connection state and how many "
@@ -132,9 +190,8 @@ class PluginTool(Tool):
             "- remove: uninstall one. Only with confirm=true, and only when the user "
             "asked for that plugin to be removed in their own words -- never as "
             "cleanup of your own initiative.\n"
-            "Limits, so you do not try: only catalog entries can be installed -- there "
-            "is no way to point this at a URL, a package or a command line, and you "
-            "must not compose one. Never put an API key, token, password or account "
+            "Limits: only catalog entries can be installed -- not a URL, a package or a "
+            "command line, and you must not compose one. Never put an API key, token, password or account "
             "name in these arguments: a plugin that needs a secret is reported with "
             "the field's name, and the user enters it in the plugin panel. A newly "
             "connected plugin's tools appear in your tool list from the next step on, "
@@ -211,17 +268,24 @@ class PluginTool(Tool):
             items = await self._lookup(query, _FIND_LIMIT)
         except HubTrustError as e:
             return f"Error: the plugin catalog is misconfigured and was refused: {e}"
+        elsewhere = _elsewhere(query)
+        own = _own_capability(query)
         if not items:
-            return (
-                f"No plugin in the catalog matches {query!r}. Try a shorter word, or "
-                f"call plugin(action='find') with no query to see the whole catalog."
+            if elsewhere:
+                return f"No plugin is called {query!r}. {elsewhere}"
+            return f"No plugin in the catalog matches {query!r}. " + (
+                own or "Try a shorter word, or call plugin(action='find') with no query to see the whole catalog."
             )
+        if elsewhere and not any(_same(query, it.get("id"), it.get("name")) for it in items):
+            return f"No plugin is called {query!r} (the matches below only look alike). {elsewhere}"
         shown = items[:_FIND_LIMIT]
         head = f"{len(items)} catalog match(es)" + (f" for {query!r}" if query else "")
         if len(items) > len(shown):
             head += f"; showing {len(shown)}"
         lines = [_card(it) for it in shown]
-        return f"{head}:\n" + "\n".join(lines) + "\nConnect one with plugin(action='connect', name='<id>')."
+        also = f"\nAlso: {elsewhere} Ask which one the user means." if elsewhere else ""
+        also += f"\n{own}" if own else ""
+        return f"{head}:\n" + "\n".join(lines) + "\nConnect one with plugin(action='connect', name='<id>')." + also
 
     def _list(self) -> str:
         from raven.market.connect import installed_overview

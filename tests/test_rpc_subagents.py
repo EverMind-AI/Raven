@@ -12,7 +12,7 @@ import pytest
 from raven.agent.subagent.acp_registry_presets import ACP_REGISTRY_PRESETS
 from raven.config.schema import ThirdPartyCliSubagentConfig
 from raven.rpc.dispatcher import Dispatcher
-from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError
+from raven.rpc.errors import ConfigFieldReadonlyError, ConfigValidationError, SubagentNotReadyError
 from raven.rpc.methods.subagents import (
     _read_the_shell_again,
     register_subagents_methods,
@@ -426,6 +426,22 @@ async def test_add_writes_the_preset_template_under_a_chosen_name(
     assert entry["command"].endswith("acp")
     assert "{prompt}" not in entry["command"]
     assert entry["description"] == "builds"
+
+
+async def test_add_can_pin_a_model_the_agent_lists(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The retry for an agent whose own default model its provider refuses: the
+    ping and the stored row both carry the model the caller picked."""
+    pinged: list[object] = []
+
+    async def _ping(cfg: object) -> object:
+        pinged.append(getattr(cfg, "model", None))
+        return await _pings_ok(cfg)
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _ping)
+    await subagents_add({"preset": "opencode", "model": " openai/gpt-5.5 "})
+    entry = next(e for e in _stored(config_path) if e["name"] == "OpenCode")
+    assert entry["model"] == "openai/gpt-5.5"
+    assert pinged == ["openai/gpt-5.5"]
 
 
 async def test_add_defaults_name_and_description_to_the_preset(
@@ -2920,3 +2936,46 @@ async def test_test_can_target_a_discovered_product(
     assert row["last_test_ok"] is True
     with pytest.raises(SubagentNotFoundError):
         await subagents_test({"name": "Coder", "source": "vendored"})
+
+
+async def test_add_takes_no_launch_command_from_its_caller(config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every execution field comes from the preset: a command with no preset is no agent the table vouches for."""
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    with pytest.raises(SubagentNotFoundError):
+        await subagents_add({"name": "Auggie", "command": "npx -y @augmentcode/auggie --acp"})
+    assert not any(e["name"] == "Auggie" for e in _stored(config_path))
+
+
+async def test_a_refusal_about_the_model_names_the_models_the_agent_offers(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: a withdrawn default was refused, and the
+    caller ran the agent's CLI four or five times to find what it could switch to --
+    the menu was in the handshake the ping had already got past."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.probe import PingResult
+    from raven.agent.subagent.probe_state import Remedy
+
+    async def _refused(cfg: object) -> PingResult:
+        return PingResult(False, "404 model 'm-free' is no longer available", Remedy("model"))
+
+    async def _menu(cfg: object) -> object:
+        return SimpleNamespace(model_choices=(SimpleNamespace(value="m-free"), SimpleNamespace(value="m-lite")))
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _refused)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _menu)
+    with pytest.raises(SubagentNotReadyError) as refused:
+        await subagents_add({"preset": "opencode"})
+    assert refused.value.data["models"] == ["m-free", "m-lite"]
+    assert not any(e.get("name") == "OpenCode" for e in _stored(config_path))
+
+
+async def test_add_takes_a_preset_by_the_name_it_is_shown_under(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    await subagents_add({"preset": "OpenCode"})
+    assert next(e for e in _stored(config_path) if e["name"] == "OpenCode")["preset"] == "opencode"
+    with pytest.raises(SubagentNotFoundError):
+        await subagents_add({"preset": "no-such-agent"})

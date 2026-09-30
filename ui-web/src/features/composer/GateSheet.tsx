@@ -38,16 +38,18 @@ export interface ConfigWords {
   readonly restart: string
   /* One per row of `configRows`, in its order. */
   readonly rows: readonly ConfigRowWords[]
+  /* A key row's note: typed on the credential card once the change is
+     allowed, or, where no card can save it, in Settings. */
   readonly keyField: string
   readonly keyIsSet: string
   readonly keyNoField: string
-  /* Why the typed key could not be saved; the sheet stays up with it. */
-  readonly error?: string
 }
 
 export interface ConfigRowWords {
   readonly effect: string
   readonly sensitive: string
+  readonly unsetTo?: string
+  readonly test?: string
 }
 
 /* A change to Raven's own configuration as the card lays it out: one row per
@@ -55,41 +57,38 @@ export interface ConfigRowWords {
 export const configRows = (evidence: Evidence): Evidence[] =>
   Array.isArray(evidence.changes) ? (evidence.changes as Evidence[]) : [evidence]
 
-/* A secret row the page can save: typed into the card, never sent through the
-   agent. `at` is the row's index, which is how the opener finds the value. */
-export const secretField = (row: Evidence): { via: string; slug?: string } | null => {
-  const input = row.input as { via?: unknown; slug?: unknown } | undefined
-  if (row.secret !== true || !input || typeof input.via !== 'string') return null
-  return { via: input.via, ...(typeof input.slug === 'string' ? { slug: input.slug } : {}) }
-}
-
-function ConfigRow({ row, at, words, line }: {
-  row: Evidence; at: number; words: ConfigWords; line?: ConfigRowWords
+function ConfigRow({ row, words, line }: {
+  row: Evidence; words: ConfigWords; line?: ConfigRowWords
 }): JSX.Element {
   const action = str(row.action)
   const setting = str(row.setting)
   if (action === 'restart') return <div>{str(row.target) === 'restart' ? words.restart : words.reload}</div>
+  if (action === 'test') return <div>{line?.test || str(row.change)}</div>
+  /* No field here: the value is typed on a card of its own once this change
+     is allowed (features/composer/credential.ts), so this card only says so. */
   if (row.secret === true) {
     return (
       <div className="cp-ev">
         <div className="cp-ev-path">{setting}</div>
-        {secretField(row)
-          ? <input className="cp-cfg-key" type="password" autoComplete="off" spellCheck={false}
-              data-secret={at} aria-label={setting} placeholder={words.keyField} />
-          : <div className="cp-cfg-note">{words.keyNoField}</div>}
+        <div className="cp-cfg-note">{row.enterable === true ? words.keyField : words.keyNoField}</div>
         {str(row.was) === 'set' ? <div className="cp-cfg-note">{words.keyIsSet}</div> : null}
       </div>
     )
   }
   /* Old and new value as the two sides of a diff, so the reader answers
      about the change rather than about the arguments that spell it. */
-  const was = str(row.was) + (row.was_default === true ? ' ' + words.reset : '')
-  const now = action === 'unset' ? words.reset : str(row.value)
+  /* A setting whose unset is a choice ("follows the main model", "off") says
+     that, rather than "(default)", on whichever side of the diff is unset. */
+  const unsetTo = line?.unsetTo || ''
+  const was = row.was_unset === true && unsetTo
+    ? unsetTo
+    : str(row.was) + (row.was_default === true ? ' ' + words.reset : '')
+  const now = action === 'unset' ? unsetTo || words.reset : str(row.value)
   return (
     <div className="cp-ev">
       {setting ? <div className="cp-ev-path">{setting}</div> : null}
       <pre className="cp-diff">
-        {str(row.was) ? <span className="cp-del">{'- ' + was + '\n'}</span> : null}
+        {was ? <span className="cp-del">{'- ' + was + '\n'}</span> : null}
         <span className="cp-add">{'+ ' + now}</span>
       </pre>
       {line?.effect ? <div className="cp-cfg-note">{line.effect}</div> : null}
@@ -162,8 +161,7 @@ function EvidenceBlock(
     return (
     <>
       <div className="what cp-ev">
-        {rows.map((row, i) => <ConfigRow key={i} row={row} at={i} words={cfg} line={cfg.rows[i]} />)}
-        {cfg.error ? <div className="cp-cfg-warn" role="alert">{cfg.error}</div> : null}
+        {rows.map((row, i) => <ConfigRow key={i} row={row} words={cfg} line={cfg.rows[i]} />)}
       </div>
       {cut}
     </>

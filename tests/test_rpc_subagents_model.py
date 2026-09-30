@@ -81,6 +81,16 @@ def _gate_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subagents_mod, "_read_the_shell_again", _shell_not_read)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model pick on an unmeasured acp row measures it first; here nothing is launched."""
+
+    async def _unmeasured(cfg: object) -> None:
+        return None
+
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _unmeasured)
+
+
 def _fake_agent_meta(choices: tuple[str, ...]):
     """A stand-in for ``agent_meta`` reporting a fixed acp model menu.
 
@@ -486,3 +496,31 @@ async def test_update_clearing_the_description_with_explicit_null_puts_a_builtin
     seed = next(s for s in builtin_agent_seeds() if s.name == "Raven")
     listed = next(r for r in (await subagents_list({"probe": False}))["rows"] if r["name"] == "Raven")
     assert listed["description"] == seed.description
+
+
+async def test_a_model_pick_on_a_row_never_measured_measures_it_first(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Seen live: a connected agent never tested was told
+    "it offers none", and the caller launched a whole run to get a menu recorded.
+    Never measured is not an empty menu; the handshake that holds it spends nothing."""
+    measured = SimpleNamespace(agent_name="hermes")
+    handshakes: list[object] = []
+
+    async def _handshake(cfg: object) -> object:
+        handshakes.append(cfg)
+        return measured
+
+    def _meta(cfg, *, snapshot=None):
+        menu = ("vendor/a", "vendor/b") if snapshot is measured else ()
+        return SimpleNamespace(model_choices=tuple(SimpleNamespace(value=v) for v in menu))
+
+    _gate_answers(monkeypatch)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _handshake)
+    monkeypatch.setattr("raven.rpc.methods.subagents.acp_snapshot_for", lambda cfg: None)
+    monkeypatch.setattr("raven.rpc.methods.subagents.agent_meta", _meta)
+
+    await subagents_update({"name": "Hermes Agent", "model": "vendor/b"})
+
+    assert handshakes, "the menu was measured rather than taken as empty"
+    assert next(e for e in _stored(config_path) if e["name"] == "Hermes Agent")["model"] == "vendor/b"

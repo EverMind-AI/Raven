@@ -1,6 +1,6 @@
 ---
 name: raven-self-config
-description: Raven's own settings via raven_config - check them first when a tool, sub-agent, channel or integration fails or is missing; how changes apply.
+description: Viewing and changing your own settings (raven_config), mostly connecting agents and chat apps; also where to look when one of your abilities is missing or fails.
 metadata: {"raven":{"emoji":"🛠️","always":true,"inject":"description","requires":{"tools":["raven_config"]}}}
 ---
 
@@ -9,10 +9,14 @@ metadata: {"raven":{"emoji":"🛠️","always":true,"inject":"description","requ
 `raven_config` is the only way you change Raven's configuration. Never edit
 `config.json`, an agent's `.env`, or anything under `~/.raven` with file or shell
 tools: those writes skip validation, skip the user's confirmation, and a config
-that fails validation stops Raven from starting. Do not read those files that way
-either: they hold keys in plain text, and `raven_config get` reports the same
-settings with the keys masked. When the settings look right and something still
-fails, say so and point at the logs rather than digging through the files.
+that fails validation stops Raven from starting.
+
+Raven's source code, logs and config files are not a manual. To find out what
+can be configured or why something is set up the way it is, use
+`raven_config` and nothing else: do not grep or read Raven's source, its logs,
+`~/.raven` or another Raven's files. If `raven_config` has no setting for it,
+tell the user it cannot be changed from here (and where, if Settings has it);
+that answer is correct and complete.
 
 ## Suspect configuration when something fails or is missing
 
@@ -21,9 +25,9 @@ configuration questions and look before you answer:
 
 | The user says or you see | Look at |
 |---|---|
-| A sub-agent failed, errored, or "is not there" (`Raven-Research` failed, no Codex) | `get subagents`, then `describe subagents.<name>`: enabled? model? a key it needs? |
-| A tool you would use is not in your tool list (no web search, no image generation) | `describe tools`, `get tools.web` / `get tools.media`: vendor chosen? key set? tool disabled in `tools.disabledTools`? Handing the work to a sub-agent that has the tool is fine; say that your own is not configured |
-| Commands time out, turns stop early, context is forgotten | `tools.exec.timeout`, `agents.defaults.maxToolIterations`, `agents.defaults.contextWindowTokens` |
+| A sub-agent failed, errored, or "is not there" (`Raven-Research` failed, no Codex) | `describe subagents.<name>`: added? enabled? `status`, `last_test`, `needs_auth`, `missing_program` say why. An external agent's own problem you then fix yourself (see Sub-agents); Raven's source and logs are not where the answer is |
+| A tool you would use is not in your tool list, or the user asks whether you can do something (generate images, search the web, speak) | `describe`: a capability that is off shows `not set` with what that means (image, speech and video generation, web search). Answer "yes, once it is configured" and offer to set it up, never a flat "I can't". Handing the work to a sub-agent that has the tool is fine; say your own is not configured |
+| Commands time out, turns stop early, context is forgotten, or the user asks whether you have a limit | `tools.exec.timeout`, `agents.defaults.maxToolIterations`, `agents.defaults.contextWindowTokens`. Read the value before answering; do not answer from what you believe about yourself |
 | "I message you on Telegram/Feishu/... and you don't answer" | `describe channels.<name>`: enabled? `allowFrom` includes them? |
 | A link to GitHub, Notion, Linear, Jira, Slack, Google Drive ... | Not a setting: the `plugin` tool. `plugin list` to see if it is connected; if not, `plugin find` and offer to connect it, and say what connecting gets them (private repos, write access). Reading a public page instead is fine, but the reply still says it is not connected and offers the connection |
 
@@ -33,29 +37,48 @@ cause is a missing key, say which one and where the user enters it.
 
 ## Find before you change
 
-1. `describe` with no path lists the sections. Pick the one the request is about.
-2. `describe <section>` lists its settings: type, choices, range, and the line
-   `takes_effect`. Read `note` and `sensitive` too.
-3. `get <path>` (or `get <section>`) shows the current value. A setting the file
-   does not mention shows `{"default": ...}`.
+`describe` with no path returns every setting with its current value, one line
+each, plus the channels and sub-agents. One call is enough to find the path and
+see what it is set to now; do not walk section by section and do not `get`
+what the index already shows.
 
-Channels and sub-agents are per instance: `describe channels.telegram`,
-`describe subagents.Raven-Research`.
+- `describe <words>` searches (English words: `describe image generation`),
+  and a path that does not exist answers with the closest ones. Use those; do
+  not invent paths.
+- `describe <path>` gives one setting's notes and value format;
+  `describe channels.<name>` and `describe subagents.<name>` give one
+  instance's fields and health.
+- Two settings with similar names are usually two different things
+  (`tools.web.search.provider` picks a vendor; `tools.web.providers.<vendor>.apiKey`
+  is that vendor's key).
 
-Do not guess paths. Two settings with similar names are usually two different
-things (`tools.web.search.provider` picks a vendor; `tools.web.providers.<vendor>.apiKey`
-is that vendor's key).
+## Connecting something ("connect X", "接 X", "用 X")
+
+X is one of three kinds; the `describe` index shows the last two:
+
+- A service with an account (GitHub, Notion, Linear, Slack, Google Drive ...):
+  a plugin. `plugin find <name>`, then offer `plugin connect`.
+- An agent (Codex, Claude Code, OpenClaw, Gemini ...): a sub-agent. It is in
+  the `[subagents]` part of the index, often as a preset marked `not added`:
+  `add subagents {"preset": "<preset>"}`. One that is not listed cannot be
+  connected from here; say so. `add` runs the agent once and says exactly what
+  is wrong, so try it first and diagnose only what it refuses.
+- A chat app you want to talk to Raven from (Telegram, Feishu, WeChat ...): a
+  channel. `describe channels.<name>`, then set its credentials and `enabled`.
 
 ## Change
 
 - `set <path>` with `value` as JSON: `true`, `30`, `"eco"`, `["a","b"]`,
   `{"provider": "openrouter", "model": "anthropic/claude-sonnet-5"}`, `null`.
 - List settings (`tools.disabledTools`, `skillForge.blocklist`,
-  `playbooks.disabled`, `channels.<name>.allowFrom`) are replaced whole. `get`
-  first, change the list, send all of it back.
+  `playbooks.disabled`, `channels.<name>.allowFrom`) are replaced whole: take
+  the current list from the index, change it, send all of it back.
+  `describe tools.disabledTools` lists the tool names there are.
 - `unset <path>` returns a setting to its default.
-- The user confirms every change. State in one sentence what you are about to
-  change and why before calling; if they refuse, do not look for another way.
+- A change is confirmed by the user unless their approval mode lets it
+  through (full access; smart mode's reviewer, except for sensitive settings).
+  State in one sentence what you are about to change and why before calling;
+  if they refuse, do not look for another way.
 - Several settings that belong to one request go in one call, so the user
   confirms them on one card: `set` with no `path` and `value` as an object,
   `{"tools.web.search.provider": "tavily", "tools.web.providers.tavily.apiKey": null}`.
@@ -99,12 +122,18 @@ The reply to `set` says it; repeat it to the user in plain words.
   conversation; "from now on", "by default", "for everything" is the default.
   When it is unclear, ask which one.
 - Both take `{"provider", "model"}`.
-  `get providers` shows which providers have a key (the key itself is masked);
-  offer models only from those, with ids from the provider's own catalog, not
-  from memory. The user picks: a model changes cost and behaviour, so name two
-  or three options and ask, even when told to decide yourself.
+  The index shows which providers have a key; offer models only from those,
+  with ids from `get providers.<name>.catalog` (`value` filters, e.g. `"glm"`),
+  never from memory or a web search. When the user named the model ("switch
+  to glm 5.3"), find its id there and switch; otherwise name two or three
+  options and let them pick, even when told to decide yourself.
 - Sub-agents that borrow Raven's model follow a change of Raven's providers or
   default model the next time they start, not in a conversation already running.
+- Memory has its own models under `memory.models` (`llm` extracts memories,
+  `rerank` and `multimodal` are optional; `embedding` is separate).
+  `memory.models.llm` left unset follows the main model, so "use the main
+  model for memory" is `unset memory.models.llm`, and a read showing
+  `{"follows": "the main model"}` means it already does.
 
 ## Sub-agents
 
@@ -117,7 +146,31 @@ The reply to `set` says it; repeat it to the user in plain words.
 - `set subagents.<name>.description` changes what the dispatching model reads
   about it -- keep it a factual line about what the agent is for.
 - `set subagents.<name>.enabled` takes it on or off the roster at once.
-- `add subagents` with `{"preset": "codex"}` connects a preset.
+- Several agents asked for at once go in one `add` as a list, so the user
+  confirms them together.
+- `add subagents` with `{"preset": "codex"}` connects a preset; it runs the
+  agent once first and refuses if it does not answer.
+- `test subagents.<name>` runs an added agent once (the user confirms; it
+  spends that agent's quota) and records the verdict. Offer it when the status
+  says it has not been tested or its last test failed.
+- An agent that does not answer (add or test refused) is yours to diagnose,
+  not the user's. The refusal says how; a few commands are enough, and if
+  three have not told you why, stop and report what you saw.
+  - Run the agent on its own with `exec` (the command the refusal names, or
+    its one-shot mode); it prints the real error its provider gave.
+  - What it says decides who acts. Yours: not installed, too old, a model it
+    will not serve (`add` takes `"model"`), a switch in its config -- fix it
+    and add or test again. The user's: a sign-in, a key (401, 403,
+    "unauthorized", "token missing"), a model that costs money (ask; with no
+    answer, do not switch to it) -- stop there and name the agent's own
+    command for it.
+  - Never go after a key yourself: no copying Raven's or another agent's, no
+    testing keys with curl, no opening credential stores or databases. Do not
+    generate or replace its tokens or restart its services (a gateway, a
+    daemon): other apps depend on them.
+  - Its settings are its own files; keys in them come back redacted. Raven's
+    own config, logs and state are no help here.
+  - Do not script its ACP protocol; its own CLI is quicker and says more.
 - An external agent's launch command and environment are not settable here.
 
 ## Secrets
@@ -125,12 +178,13 @@ The reply to `set` says it; repeat it to the user in plain words.
 API keys, bot tokens and passwords are never passed through a tool call and
 never asked for in chat. `get` reports only `set` / `not set`.
 
-- To have the user enter one, name it with an empty value (`null`), together
-  with whatever else the request changes: the confirmation card on the web page
-  shows a field for it and saves what they type directly, never through you.
-  The reply says whether it is set now.
-- If it is still not set, the user left the field empty or answered where there
-  is no field (the terminal, a chat channel): tell them where to enter it (the
+- To have the user enter one -- a vendor or provider key, or a channel's secret
+  field -- name it with an empty value (`null`), together with whatever else the
+  request changes. A card of its own asks them for the key and saves it
+  straight into the configuration; you never see it. The reply says whether it
+  is set now.
+- If it is still not set, the user skipped the card or is somewhere no card can
+  show (the terminal, a chat channel): tell them where to enter it (the
   setting's `note`, usually a page in Settings) and continue once they say it is
   done.
 - A key the user pasted into the chat is refused outright. Do not retry it;
@@ -146,6 +200,6 @@ conversation.
 
 ## Verify
 
-After a change that is active now or next turn, `get` the path and report the
-value. For a channel, `describe channels.<name>` again and pass on what the
-gateway said when it started the channel.
+The `set` reply states the old and new value; pass it on instead of reading
+the setting back. For a channel, pass on what the gateway said when it started
+the channel.

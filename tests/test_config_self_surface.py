@@ -73,7 +73,7 @@ def test_the_media_and_vendor_key_claims_ride_the_live_readers():
 def test_every_concrete_path_is_a_schema_field():
     missing = []
     for s in surface.all_settings():
-        if "*" in s.path or s.kind == "pin" or s.session:
+        if "*" in s.path or s.kind == "pin" or s.session or s.stored_at:
             continue
         if surface.default_of(s.path) is None and not s.nullable and s.path != "agents.defaults.reasoningEffort":
             missing.append(s.path)

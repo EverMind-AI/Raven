@@ -27,6 +27,7 @@ their values never travel through a tool call.
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import re
@@ -76,8 +77,9 @@ class Setting:
 
     ``path`` is camelCase, the way the file is written; ``*`` stands for one
     segment the caller names (a provider, a channel, a sub-agent). ``sensitive``
-    is the reason a change deserves a second look -- every write is confirmed
-    by the user, and this sentence is put on the confirmation.
+    is the reason a change deserves a second look: it is put on the
+    confirmation, and smart mode's reviewer never approves such a change for
+    the user.
     """
 
     path: str
@@ -98,6 +100,14 @@ class Setting:
     #: Held by the conversation that asks rather than by config.json, so it
     #: moves no other conversation and has no default in the file.
     session: bool = False
+    #: Where the value is really kept, for a path that names it by what it is
+    #: rather than where it lives (a memory role sits in the plugin's slice).
+    stored_at: str = ""
+    #: What leaving it unset means, for a setting whose unset is a choice:
+    #: a sentence for the model, and a code (``main_model``, ``off``) the
+    #: confirmation card words in the reader's language.
+    unset_means: str = ""
+    unset_to: str = ""
 
     def describe(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -114,9 +124,11 @@ class Setting:
             out["nullable"] = True
         if self.secret:
             out["secret"] = True
-            out["entered_by"] = "the user, in a field on the confirmation card (web) or in Settings"
+            out["entered_by"] = "the user, on a card of its own (web), or in Settings"
         if self.session:
             out["scope"] = "this conversation only"
+        if self.unset_means:
+            out["when_unset"] = self.unset_means
         if self.sensitive:
             out["sensitive"] = self.sensitive
         if self.note:
@@ -267,7 +279,10 @@ SECTIONS: tuple[Section, ...] = (
                 "list",
                 _E.NEXT_TURN,
                 writer="settings",
-                note="the list replaces the stored one; read it first and send the whole list back",
+                note=(
+                    "the list replaces the stored one: send the whole list back; describe tools.disabledTools "
+                    "lists the tool names"
+                ),
             ),
             Setting(
                 "tools.exec.timeout", "Seconds a shell command may run", "int", _E.NEXT_TURN, writer="settings", low=5
@@ -282,7 +297,7 @@ SECTIONS: tuple[Section, ...] = (
             Setting("tools.exec.pathAppend", "Directories appended to PATH for shell commands", "str", _E.RELOAD),
             Setting(
                 "tools.web.search.provider",
-                "Web search vendor",
+                "Web search vendor; web_search runs only once this vendor's key is set",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -290,7 +305,7 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting(
                 "tools.web.fetch.provider",
-                "Web page fetch vendor",
+                "Web page fetch vendor; a keyless vendor (jina) works without one",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -316,6 +331,7 @@ SECTIONS: tuple[Section, ...] = (
                     "str",
                     _E.NEXT_TURN,
                     writer="settings" if medium == "image" else "raw",
+                    unset_means=f"there is no {medium} generation tool until a model is set",
                 )
                 for medium in ("image", "speech", "video")
             ),
@@ -330,7 +346,7 @@ SECTIONS: tuple[Section, ...] = (
             *(
                 Setting(
                     f"tools.media.{medium}.apiKey",
-                    f"API key for {medium} generation",
+                    f"Key for {medium} generation; left empty, the key of providers.openrouter is used",
                     "str",
                     _E.NEXT_TURN,
                     secret=True,
@@ -446,6 +462,39 @@ SECTIONS: tuple[Section, ...] = (
                 sensitive="a different embedding model invalidates every vector already stored",
                 note='value is {"provider": "<provider>", "model": "<model id>"}',
                 keys=("model", "provider"),
+            ),
+            Setting(
+                "memory.models.llm",
+                "Model that turns conversations into long-term memories",
+                "model_ref",
+                _E.MEMORY_SERVER,
+                writer="everos",
+                note='value is {"provider": "<provider>", "model": "<model id>"}',
+                stored_at="plugins.config.everos-memory.llm",
+                unset_means="it follows the main model",
+                unset_to="main_model",
+            ),
+            Setting(
+                "memory.models.rerank",
+                "Model that reorders recalled memories by relevance (optional)",
+                "model_ref",
+                _E.MEMORY_SERVER,
+                writer="everos",
+                note='value is {"provider": "<provider>", "model": "<model id>"}',
+                stored_at="plugins.config.everos-memory.rerank",
+                unset_means="reranking is off",
+                unset_to="off",
+            ),
+            Setting(
+                "memory.models.multimodal",
+                "Model that reads images and files kept in memory (optional)",
+                "model_ref",
+                _E.MEMORY_SERVER,
+                writer="everos",
+                note='value is {"provider": "<provider>", "model": "<model id>"}',
+                stored_at="plugins.config.everos-memory.multimodal",
+                unset_means="memory does not read images or files",
+                unset_to="off",
             ),
         ),
     ),
@@ -753,8 +802,8 @@ def carries_secret_value(params: dict[str, Any]) -> bool:
     """Whether a call holds a credential's value -- one the user typed into the chat.
 
     A secret is named with an empty value, which asks the user to type it into
-    the confirmation card; a value in the arguments has already passed through
-    the model and must not be written or shown anywhere else.
+    a credential card of its own; a value in the arguments has already passed
+    through the model and must not be written or shown anywhere else.
     """
     changes = batch_of(params)
     if changes is None:
@@ -766,6 +815,28 @@ def carries_secret_value(params: dict[str, Any]) -> bool:
     )
 
 
+def only_asks_for_secrets(params: dict[str, Any]) -> bool:
+    """Whether a call does nothing but ask the user to type secrets (each named with an empty value).
+
+    The credential card that follows is the user's decision -- nothing is
+    written unless they type it -- so a confirmation before it decides nothing.
+    """
+    changes = batch_of(params)
+    if changes is None:
+        if params.get("action") != "set":
+            return False
+        changes = [(str(params.get("path") or ""), params.get("value"))]
+    return bool(changes) and all(is_secret_path(path) and _decoded(value) in (None, "") for path, value in changes)
+
+
+def touches_sensitive(params: dict[str, Any]) -> bool:
+    """Whether a call changes a setting the catalog marks ``sensitive`` (it widens or narrows what Raven may do)."""
+    changes = batch_of(params)
+    if changes is None:
+        changes = [(str(params.get("path") or ""), None)]
+    return any((found := find(path)) is not None and bool(found[0].sensitive) for path, _ in changes)
+
+
 def _holds_credential(value: Any) -> bool:
     if isinstance(value, dict):
         return any((_credential_key(k) and item) or _holds_credential(item) for k, item in value.items())
@@ -775,7 +846,7 @@ def _holds_credential(value: Any) -> bool:
 
 
 def secret_input(path: str) -> dict[str, str] | None:
-    """How the confirmation card saves a secret typed into it, or None where it has no field.
+    """How a secret typed into the credential card is saved, or None where no card can take it.
 
     Through the page's own settings methods, the ones the settings page saves
     the same key with, so the value goes from the field to the file and never
@@ -788,6 +859,33 @@ def secret_input(path: str) -> dict[str, str] | None:
     return None
 
 
+_VENDOR_NAMES = {
+    "serper": "Serper",
+    "anysearch": "AnySearch",
+    "serpapi": "SerpApi",
+    "jina": "Jina",
+    "tavily": "Tavily",
+    "exa": "Exa",
+    "brave": "Brave",
+    "firecrawl": "Firecrawl",
+    "serply": "Serply",
+}
+
+
+def secret_label(path: str) -> str:
+    """What the credential card calls a secret setting: whose key it is."""
+    if match := re.fullmatch(r"tools\.web\.providers\.(\w+)\.apiKey", path):
+        return f"{_VENDOR_NAMES.get(match.group(1), match.group(1))} API key"
+    if match := re.fullmatch(r"providers\.([\w-]+)\.apiKey", path):
+        from raven.providers.registry import find_by_name
+
+        spec = find_by_name(match.group(1))
+        return f"{spec.label if spec else match.group(1)} API key"
+    if match := re.fullmatch(r"tools\.media\.(\w+)\.apiKey", path):
+        return f"{match.group(1).capitalize()} generation API key"
+    return path
+
+
 def change_line(params: dict[str, Any]) -> str:
     """One sentence for a confirmation prompt about a ``raven_config`` call."""
     changes = batch_of(params)
@@ -796,13 +894,22 @@ def change_line(params: dict[str, Any]) -> str:
     action = str(params.get("action") or "")
     path = str(params.get("path") or "")
     if action == "set" and is_secret_path(path):
-        return f"Ask you to enter {path} (typed into the card on the web page; elsewhere, in Settings)"
+        return f"Ask you to enter the {secret_label(path)} ({path}) on a card of its own once allowed"
     if action == "restart":
         if restart_target(params) == "restart":
             return "Restart the whole Raven process so pending configuration changes take effect"
         return "Reload Raven (the process stays up) so pending configuration changes take effect"
     if action == "add":
+        added = _decoded(params.get("value"))
+        items = added if isinstance(added, list) else [added]
+        if path == "subagents" and items and all(isinstance(i, dict) for i in items):
+            named = "; ".join(_agent_added(i) for i in items)
+            noun = "sub-agents" if len(items) > 1 else "sub-agent"
+            each = "each runs" if len(items) > 1 else "it runs"
+            return f"Connect {noun}: {named} ({each} once now to check it answers, on that agent's own quota)"
         return f"Add to Raven's configuration at {path}: {_shown(path, params.get('value'))}"
+    if action == "test":
+        return f"Run {path} once to check it works (it spends that agent's own quota) and record the result"
     found = find(path)
     tail = ""
     if found is not None:
@@ -811,8 +918,18 @@ def change_line(params: dict[str, Any]) -> str:
         if setting.sensitive:
             tail += f". Note: {setting.sensitive}"
     if action == "unset":
+        if found is not None and found[0].unset_means:
+            return f"Clear {path} so that {found[0].unset_means}{tail}"
         return f"Reset {path} to its default{tail}"
     return f"Change {path} to {_shown(path, params.get('value'))}{tail}"
+
+
+def _agent_added(item: dict[str, Any]) -> str:
+    """One agent an add connects, as a card names it: which preset, and on which model."""
+    said = str(item.get("name") or item.get("preset") or "an agent")
+    if item.get("model"):
+        said += f" on model {item['model']}"
+    return said
 
 
 def _shown(path: str, value: Any) -> str:
@@ -829,12 +946,24 @@ def _shown(path: str, value: Any) -> str:
 
 
 def _decoded(value: Any) -> Any:
-    """A JSON-encoded argument as the value it spells; anything else as it is."""
+    """A JSON-encoded argument as the value it spells; anything else as it is.
+
+    A Python-spelled object or list (``{'a': None}``) is read too: the tool
+    accepts one, and the card and the gate must see the same change it writes.
+    """
     if isinstance(value, str):
         try:
             return json.loads(value)
         except ValueError:
-            return value
+            pass
+        if value.strip()[:1] in "{[":
+            try:
+                literal = ast.literal_eval(value.strip())
+            except (ValueError, SyntaxError):
+                return value
+            if isinstance(literal, dict | list):
+                return literal
+        return value
     return value
 
 
@@ -863,21 +992,27 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     view: dict[str, Any] = {"action": action, "setting": path, "change": change_line(params)}
     if action == "set" and is_secret_path(path):
         view["secret"] = True
+        view["label"] = secret_label(path)
         present, was = lookup(data, path)
         view["was"] = "set" if present and was else "not set"
-        if (field := secret_input(path)) is not None:
-            view["input"] = field
+        view["enterable"] = secret_input(path) is not None
         return view
     if action == "restart":
         view["target"] = restart_target(params)
         return view
+    if action == "test":
+        return view
     if action != "unset":
         view["value"] = _shown(path, params.get("value"))
-    present, was = lookup(data, path)
+    found = find(path)
+    present, was = lookup(data, (found[0].stored_at if found is not None else "") or path)
     if present:
         view["was"] = _shown(path, was)
-    found = find(path)
-    if not present and found is not None and "*" not in found[0].path:
+    if found is not None and found[0].unset_to:
+        view["unset_to"] = found[0].unset_to
+    if not present and found is not None and found[0].unset_to:
+        view["was_unset"] = True
+    elif not present and found is not None and "*" not in found[0].path:
         default = default_of(path)
         if default is not None:
             view["was"] = _shown(path, default)

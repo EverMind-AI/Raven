@@ -1647,3 +1647,14 @@ async def test_plugin_reads_run_without_asking_and_its_changes_ask():
     assert await gate.enforce("plugin", {"action": "find", "query": "github"}) is None
     for action in ("connect", "authorize", "remove"):
         assert await gate.enforce("plugin", {"action": action, "name": "github"}) is not None
+
+
+def test_package_manager_queries_read_only_and_their_installs_still_ask():
+    """Seen connecting agents: `npm view <pkg> bin` and `npm ls -g` asked in every
+    turn beside the one install that should."""
+    from raven.permissions.rules import exec_reads_only
+
+    for command in ("npm view @moonshot-ai/kimi-code bin", "npm -g ls --depth=0", "pip show requests", "brew info x"):
+        assert exec_reads_only(command), command
+    for command in ("npm i -g x", "npm config set a b", "npm exec x", "npm --prefix /x view y", "brew install x"):
+        assert not exec_reads_only(command), command

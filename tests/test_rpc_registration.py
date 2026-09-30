@@ -16,7 +16,7 @@ from repeating it.
 The dispatcher here is built with a stub for every optional dependency, because
 several groups are capability-gated rather than unimplemented:
 `register_aligned_methods_except_system` skips `turn.*` when `emitter` is None,
-and `approval.respond` / `confirm.respond` / `clarify.respond` when their broker
+and `approval.respond` / `credential.*` / `confirm.respond` / `clarify.respond` when their broker
 is None. Passing no kwargs makes those seven look unimplemented and pushes them
 into the allowlist, which is the opposite of what this guard is for. The stubs
 are never called - registration only stores them.
@@ -62,6 +62,7 @@ def _registered() -> set[str]:
         dispatcher,
         emitter=SimpleNamespace(),
         approval_broker=SimpleNamespace(),
+        credential_broker=SimpleNamespace(),
         confirm_broker=SimpleNamespace(),
         question_broker=SimpleNamespace(),
         scheduler=SimpleNamespace(),

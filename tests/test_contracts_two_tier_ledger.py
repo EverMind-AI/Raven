@@ -61,6 +61,9 @@ LEDGER = {
         # Contract tier: the shapes every shelf implements against.
         "ApprovalResponder",
         "Asker",
+        "CredentialAsker",
+        "CredentialOutcome",
+        "CredentialRequest",
         "AssembledContext",
         "TokenBudget",
         "AssembledPrefix",
@@ -284,7 +287,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("32", "fb1e11f70125b48da8751a0bdaf3bbba788075680a2d2366af6f95f76a76ded5")
+PINNED_CONTRACT_SURFACE = ("33", "1444f86fbfca2538f6edd4412c4c98c4ed98e308dd6ca076d39a384514bc5a50")
 
 
 def _render(node) -> str:

@@ -324,6 +324,8 @@ describe('who counts as asking', () => {
   const DOCKS: Record<string, boolean> = {
     'features/composer/approve.ts': true,
     'features/composer/clarify.ts': true,
+    /* The credential card: the turn is stopped until the key is saved or skipped. */
+    'features/composer/credential.ts': true,
     /* The template picker docks a gallery, and asks nothing: the reader can
        type on with it open. */
     'features/composer/templates.ts': false,

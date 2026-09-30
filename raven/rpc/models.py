@@ -2587,6 +2587,10 @@ class SubagentsAddParams(_Strict):
     preset: str
     name: str | None = None
     description: str | None = None
+    model: str | None = Field(
+        default=None,
+        description="A model the agent itself lists, used for the readiness ping and stored on the row.",
+    )
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
@@ -3706,6 +3710,13 @@ class EverosSection(_Strict):
             "The slot is read-only: raven cannot edit a shell."
         ),
     )
+    follows_main: bool = Field(
+        default=False,
+        description=(
+            "Nothing is pinned and the role runs on the main chat model, which it follows when that "
+            "changes. Only the memory LLM does this."
+        ),
+    )
 
 
 class SettingsEverosParams(_Strict):
@@ -4166,6 +4177,47 @@ class ApprovalPendingParams(_Strict):
 class ApprovalPendingResult(_Strict):
     requests: list[dict[str, Any]] = Field(
         ..., description="Each open request's approval.request params, exactly as they were first sent."
+    )
+
+
+class CredentialSubmitParams(_Strict):
+    """The value the user typed into a credential card. Written by the host, never echoed."""
+
+    request_id: str
+    value: str = Field(..., description="The credential as typed. Not logged, not returned, not kept once written.")
+    session_id: str | None = None
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class CredentialSubmitResult(_Strict):
+    ok: bool = Field(..., description="True once the value is written; the waiting tool then resumes.")
+    error: str | None = Field(
+        default=None, description="Why it was not written, for the card to show; the request stays open."
+    )
+
+
+class CredentialSkipParams(_Strict):
+    request_id: str
+    session_id: str | None = None
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class CredentialSkipResult(_Strict):
+    ok: bool = Field(..., description="False for an unknown, answered or mis-bound request.")
+
+
+class CredentialPendingParams(_Strict):
+    """The credential cards still open, for a page that lost them."""
+
+    session_id: str | None = Field(
+        default=None, description="One conversation's requests; every conversation's when absent."
+    )
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class CredentialPendingResult(_Strict):
+    requests: list[dict[str, Any]] = Field(
+        ..., description="Each open request's credential.request params, exactly as they were first sent."
     )
 
 
@@ -5475,6 +5527,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),
     "approval.pending": (ApprovalPendingParams, ApprovalPendingResult),
+    "credential.submit": (CredentialSubmitParams, CredentialSubmitResult),
+    "credential.skip": (CredentialSkipParams, CredentialSkipResult),
+    "credential.pending": (CredentialPendingParams, CredentialPendingResult),
     "clarify.respond": (ClarifyRespondParams, ClarifyRespondResult),
     "confirm.respond": (ConfirmRespondParams, ConfirmRespondResult),
     # slash routing and completion

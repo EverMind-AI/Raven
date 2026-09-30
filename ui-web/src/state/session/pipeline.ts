@@ -164,12 +164,6 @@ export function approvalRequest(frame: unknown): void {
          this grant put on disk and nothing the reader wrote themselves. */
       onRevoke: () => gateway().call('approval.revoke', { approval_id: p.approval_id })
         .then((r) => !!(r as { ok?: boolean } | null)?.ok, () => false),
-      /* The same methods the settings page saves these keys with: a provider's
-         key through the model service, a tool vendor's through settings. */
-      saveSecret: async (field, setting, value) => {
-        if (field.via === 'model.save_key') await gateway().call('model.save_key', { slug: field.slug || '', api_key: value })
-        else await gateway().call('settings.set', { key: setting, value })
-      },
     },
     owner,
   )
@@ -200,6 +194,69 @@ export function approvalClosed(frame: unknown): void {
    one stalled that run just as completely, and the reader is the only person
    who can unstick either. */
   if (p.reason === 'timeout' || p.reason === 'error') toast(t('gui.confirm.lapsed'))
+}
+
+/* A secret a tool needs, typed on a card of its own (features/composer/credential.ts).
+ The frame names what to ask for and never where it goes; the value goes back
+ in credential.submit and the host writes it before the tool resumes, so the
+ turn waits here the way it waits on an approval. credential.closed below ends
+ the card whatever ended the request. */
+/* The card itself is the composer's (features/composer/credential.ts) and is
+ registered from the app's install rather than imported here: state does not
+ reach up into a feature. Until it is registered a request is left for the
+ host's deadline, which is what a surface with no card does anyway. */
+export interface CredentialCard {
+  open: (
+    req: { requestId: string; label: string; note: string; replaces: boolean },
+    handlers: { submit: (value: string) => Promise<{ ok?: boolean; error?: string }>; skip: () => Promise<unknown> },
+    owner?: string,
+  ) => unknown
+  close: (requestId: string) => void
+}
+
+let credentialCard: CredentialCard | null = null
+
+export function registerCredentialCard(card: CredentialCard): void {
+  credentialCard = card
+}
+
+/* Test seam only: the registered card is the one piece of module state here. */
+export function _resetForTests(): void {
+  credentialCard = null
+}
+
+export function credentialRequest(frame: unknown): void {
+  const p = frame as {
+    request_id: string; conversation_id?: string | null
+    label?: string; note?: string; replaces?: boolean
+  }
+  const owner = p.conversation_id || sessionCurrent()!
+  if (!credentialCard) return
+  notify(owner, { type: 'wait' })
+  credentialCard.open(
+    { requestId: p.request_id, label: p.label || '', note: p.note || '', replaces: !!p.replaces },
+    {
+      submit: (value: string) => gateway().call('credential.submit', {
+        request_id: p.request_id, session_id: owner, value,
+      }) as Promise<{ ok?: boolean; error?: string }>,
+      skip: () => gateway().call('credential.skip', { request_id: p.request_id, session_id: owner }),
+    },
+    owner,
+  )
+}
+
+export function credentialClosed(frame: unknown): void {
+  const p = frame as { request_id: string; conversation_id?: string | null }
+  notify(p.conversation_id || sessionCurrent()!, { type: 'resume' })
+  credentialCard?.close(p.request_id)
+}
+
+/* The cards still open on the host, drawn again after a reload or a reconnect,
+   like the approvals above: the turn is still stopped on them. */
+export async function replayPendingCredentials(): Promise<void> {
+  const r = await gateway().call('credential.pending', {}).catch(() => null)
+  const requests = (r as { requests?: unknown[] } | null)?.requests || []
+  for (const frame of requests) credentialRequest(frame)
 }
 
 /* The question the agent asks mid-turn. The sheet is the island's
@@ -254,4 +311,6 @@ export function installPipeline(): void {
   gateway().on('approval.closed', approvalClosed)
   gateway().on('clarify.request', clarifyRequest)
   gateway().on('clarify.closed', clarifyClosed)
+  gateway().on('credential.request', credentialRequest)
+  gateway().on('credential.closed', credentialClosed)
 }

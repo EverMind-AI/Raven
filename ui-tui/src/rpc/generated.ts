@@ -572,6 +572,10 @@ export interface EverosSection {
    * The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell.
    */
   env_managed?: boolean;
+  /**
+   * Nothing is pinned and the role runs on the main chat model, which it follows when that changes. Only the memory LLM does this.
+   */
+  follows_main?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3514,6 +3518,7 @@ export interface SubagentsAddParams {
   preset: string;
   name?: string;
   description?: string;
+  model?: string;
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
@@ -5475,6 +5480,84 @@ export interface ApprovalPendingParams {
 export interface ApprovalPendingResult {
   /**
    * Each open request's approval.request params, exactly as they were first sent.
+   */
+  requests: {
+    [k: string]: JsonValue;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialSubmitParams".
+ */
+export interface CredentialSubmitParams {
+  request_id: string;
+  /**
+   * The credential as typed. Not logged, not returned, not kept once written.
+   */
+  value: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialSubmitResult".
+ */
+export interface CredentialSubmitResult {
+  /**
+   * True once the value is written; the waiting tool then resumes.
+   */
+  ok: boolean;
+  /**
+   * Why it was not written, for the card to show; the request stays open.
+   */
+  error?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialSkipParams".
+ */
+export interface CredentialSkipParams {
+  request_id: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialSkipResult".
+ */
+export interface CredentialSkipResult {
+  /**
+   * False for an unknown, answered or mis-bound request.
+   */
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialPendingParams".
+ */
+export interface CredentialPendingParams {
+  /**
+   * One conversation's requests; every conversation's when absent.
+   */
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialPendingResult".
+ */
+export interface CredentialPendingResult {
+  /**
+   * Each open request's credential.request params, exactly as they were first sent.
    */
   requests: {
     [k: string]: JsonValue;

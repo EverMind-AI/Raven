@@ -143,11 +143,18 @@ SELF_CONFIG_METHODS = frozenset(
         "settings.set",
         "config.set",
         "model.set_fields",
+        "model.fetch_models",
         "channels.configure",
+        "channels.status",
+        "settings.everos",
+        "settings.everos_set",
         "subagents.list",
         "subagents.add",
         "subagents.update",
         "subagents.toggle",
+        # raven_config's `test` action, behind the same confirmation as a write:
+        # it spends one call of that agent's quota.
+        "subagents.test",
     }
 )
 
@@ -176,10 +183,69 @@ def _lend_settings_writers(agent_loop: Any, dispatcher: Any) -> None:
         if error:
             data = error.get("data") if isinstance(error, dict) else None
             detail = data.get("detail") if isinstance(data, dict) else None
-            raise RuntimeError(detail or (error.get("message") if isinstance(error, dict) else str(error)))
+            raise _RefusedError(detail or (error.get("message") if isinstance(error, dict) else str(error)), data)
         return reply.get("result") if isinstance(reply, dict) else None
 
     tool.set_rpc_caller(_call)
+
+
+class _RefusedError(RuntimeError):
+    """A settings method's refusal, with the error's ``data`` kept: a sub-agent's ``remedy`` rides there."""
+
+    def __init__(self, text: str, data: Any) -> None:
+        super().__init__(text)
+        self.data = data if isinstance(data, dict) else {}
+
+
+#: What a credential card may write through, and nothing else.
+CREDENTIAL_METHODS = frozenset({"settings.set", "model.save_key", "channels.configure"})
+
+
+def _arm_credential_sinks(broker: Any, dispatcher: Any) -> None:
+    """The places a typed credential can land, each through the settings handler that owns it.
+
+    ``config:<path>`` is a secret setting of the catalog (a web or media vendor's
+    key through ``settings.set``, a model provider's through ``model.save_key``);
+    ``channel:<name>.<field>`` a channel's secret field, rebuilt when the channel
+    is running. A target no sink names is never shown a card.
+    """
+    from raven.config import self_surface as surface
+    from raven.rpc.credential_broker import CredentialRefusedError
+
+    ids = itertools.count(1)
+
+    async def _call(method: str, params: dict[str, Any]) -> Any:
+        if method not in CREDENTIAL_METHODS:
+            raise PermissionError(f"a credential may not be written through {method}")
+        reply = await dispatcher.dispatch(
+            {"jsonrpc": "2.0", "id": f"credential-{next(ids)}", "method": method, "params": params}
+        )
+        error = reply.get("error") if isinstance(reply, dict) else None
+        if error:
+            data = error.get("data") if isinstance(error, dict) else None
+            detail = data.get("detail") if isinstance(data, dict) else None
+            raise CredentialRefusedError(detail or (error.get("message") if isinstance(error, dict) else "refused"))
+        return reply.get("result") if isinstance(reply, dict) else None
+
+    async def _config(path: str, value: str) -> None:
+        field = surface.secret_input(path)
+        if field is None:
+            raise CredentialRefusedError(f"{path} cannot be saved from here; enter it in Settings.")
+        if field["via"] == "model.save_key":
+            await _call("model.save_key", {"slug": field["slug"], "api_key": value})
+        else:
+            await _call("settings.set", {"key": path, "value": value})
+
+    async def _channel(reference: str, value: str) -> None:
+        name, _, field_name = reference.partition(".")
+        _, running = surface.lookup(await asyncio.to_thread(surface.read_raw), f"channels.{name}.enabled")
+        params: dict[str, Any] = {"name": name, "fields": {field_name: value}}
+        if running:
+            params["enabled"] = True
+        await _call("channels.configure", params)
+
+    broker.add_sink("config", _config)
+    broker.add_sink("channel", _channel)
 
 
 async def build_rpc_stack(
@@ -188,6 +254,7 @@ async def build_rpc_stack(
     agent_loop: Any = None,
     channel: str = "tui",
     approval_responder: Any = None,
+    credential_cards: bool = False,
     emitter: Any = None,
     ensure_stack: Callable[[], Awaitable[bool]] | None = None,
 ) -> RpcStack:
@@ -232,6 +299,13 @@ async def build_rpc_stack(
     state all stay where they are. ``None`` keeps this stack's own broker, so
     existing callers are unchanged.
 
+    ``credential_cards`` lends this stack's turns the credential card: a secret a
+    tool needs is typed into a masked field on the page (``credential.request``)
+    rather than sent anywhere near the model. Only a surface that draws that card
+    may turn it on -- the served page does -- because a card nobody can see holds
+    its turn until the broker's deadline. Off by default, so the ACP server and
+    any other caller keep telling the user where to enter a key instead.
+
     ``emitter`` and ``ensure_stack`` belong to a host that can assemble this
     stack a second time -- ``raven serve``, whose first run comes up without a
     loop because no model is configured yet and builds one once the page writes
@@ -244,6 +318,7 @@ async def build_rpc_stack(
     from raven.rpc.approval_broker import ApprovalBroker
     from raven.rpc.confirm_broker import ConfirmBroker
     from raven.rpc.connection import conversation_scoped
+    from raven.rpc.credential_broker import CredentialBroker
     from raven.rpc.cron_events import build_cron_callback_spine, fanout_cron_missed
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.errors import RpcError
@@ -275,6 +350,10 @@ async def build_rpc_stack(
     # scoping as the question broker below keeps a protected-command overlay on
     # the surface that sent the turn instead of every attached terminal.
     approval_broker = ApprovalBroker(send_frame=conversation_scoped(send_frame))
+    # The card a credential is typed into, scoped like the approval sheet: it
+    # opens on the surface the conversation speaks through and nowhere else.
+    credential_broker = CredentialBroker(send_frame=conversation_scoped(send_frame))
+    _arm_credential_sinks(credential_broker, dispatcher)
     # A question is not a stream: ``clarify.request`` carries no subscription_id
     # for a client to filter on, so a broadcast one opens the sheet on every
     # surface attached to this transport. Scoped to the connection that sent the
@@ -375,6 +454,7 @@ async def build_rpc_stack(
             # registered from it below, and a caller that overrides the responder
             # is not necessarily removing that method.
             approval_responder=approval_responder or approval_broker,
+            credential_asker=credential_broker if credential_cards else None,
         )
         if owns_loop:
             agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -413,6 +493,7 @@ async def build_rpc_stack(
         emitter=emitter,
         agent_loop_factory=_agent_loop_factory,
         approval_broker=approval_broker,
+        credential_broker=credential_broker,
         confirm_broker=confirm_broker,
         question_broker=question_broker,
         scheduler=turn_scheduler,
@@ -449,6 +530,7 @@ async def build_rpc_stack(
     async def teardown() -> None:
         confirm_broker.cancel_all()
         approval_broker.cancel_all()
+        credential_broker.cancel_all()
         if owns_loop and agent_loop is not None and agent_loop.cron_service is not None:
             try:
                 agent_loop.cron_service.stop()

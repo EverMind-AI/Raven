@@ -1749,16 +1749,19 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.why.unknown': '{who} wants to do this; you have not allowed it yet.',
     'gui.confirm.title.config_change': 'Allow {who} to change its own settings?',
     'gui.confirm.why.config_change':
-      '{who} wants to change its own configuration. A change like this asks you every time.',
+      '{who} wants to change its own configuration. Allowing it covers this change only.',
     'gui.confirm.cfg.reset': '(default)',
+    'gui.confirm.cfg.unset_to.main_model': '(follows the main model)',
+    'gui.confirm.cfg.unset_to.off': '(off)',
+    'gui.confirm.cfg.test': "Run {name} once to check that it works. It spends that agent's own quota.",
     'gui.confirm.cfg.reload':
       'Reload Raven so the pending changes take effect. The process stays up; running work finishes first.',
     'gui.confirm.cfg.restart':
       'Restart the whole Raven process so the pending changes take effect. Channels reconnect after a few seconds.',
-    'gui.confirm.cfg.key_field': 'Paste the key here. It is saved directly and never goes through Raven.',
-    'gui.confirm.cfg.key_is_set': 'A key is already set; what you type replaces it. Leave it empty to keep it.',
+    'gui.confirm.cfg.key_field':
+      'After you allow, a card of its own asks you for this key. It is saved directly and never goes through Raven.',
+    'gui.confirm.cfg.key_is_set': 'A key is already set; entering a new one replaces it.',
     'gui.confirm.cfg.key_no_field': 'This key cannot be entered here; set it in Settings.',
-    'gui.confirm.cfg.key_failed': 'The key was not saved: {e}',
     'gui.confirm.cfg.sensitive': 'Security: {note}',
     'gui.confirm.cfg.effect.next_turn': 'Takes effect from the next message, no restart',
     'gui.confirm.cfg.effect.immediate': 'Takes effect at once',
@@ -2848,7 +2851,15 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.pb.when_hour': '{n} h ago',
     'gui.pb.when_day': '{n} d ago',
     'gui.pb.stints_unsupported': 'This engine has no runs surface; update it to see multi-round runs here.',
-    'gui.pb.stint_status_finished': 'finished'
+    'gui.pb.stint_status_finished': 'finished',
+    'gui.confirm.cred.title': 'Enter a key',
+    'gui.confirm.cred.hint': 'Saved straight into the settings. Raven never sees it.',
+    'gui.confirm.cred.replaces': 'One is already set; what you enter replaces it.',
+    'gui.confirm.cred.placeholder': 'Paste it here',
+    'gui.confirm.cred.save': 'Save',
+    'gui.confirm.cred.skip': 'Skip',
+    'gui.confirm.cred.saving': 'Saving...',
+    'gui.confirm.cred.unsent': 'It could not be sent; try again.'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -4304,14 +4315,16 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.why.mcp_call': '{who} 要用外部工具 {server}，你还没授权过这个工具。',
     'gui.confirm.why.unknown': '{who} 要执行这个操作，你还没授权过。',
     'gui.confirm.title.config_change': '允许 {who} 修改自己的配置吗？',
-    'gui.confirm.why.config_change': '{who} 要修改自己的配置。这类改动每次都会问你，不会记住授权。',
+    'gui.confirm.why.config_change': '{who} 要修改自己的配置。允许只对这一次改动有效。',
     'gui.confirm.cfg.reset': '（默认值）',
+    'gui.confirm.cfg.unset_to.main_model': '（跟随主模型）',
+    'gui.confirm.cfg.unset_to.off': '（关闭）',
+    'gui.confirm.cfg.test': '试运行 {name} 一次，检查它能否工作（会用掉它自己的额度）',
     'gui.confirm.cfg.reload': '重新加载 Raven，让待生效的改动生效。进程不中断，正在跑的任务会先跑完。',
     'gui.confirm.cfg.restart': '重启整个 Raven 进程，让待生效的改动生效。渠道会断开几秒后重连。',
-    'gui.confirm.cfg.key_field': '在这里粘贴 key，会直接保存，不经过 Raven',
-    'gui.confirm.cfg.key_is_set': '已经填过 key，输入新的会替换；留空保持不变',
+    'gui.confirm.cfg.key_field': '允许后会单独弹出一张卡片让你填这个 key，直接保存，不经过 Raven',
+    'gui.confirm.cfg.key_is_set': '已经设置过 key，填新的会替换它',
     'gui.confirm.cfg.key_no_field': '这个 key 不能在这里填，请去设置里填写',
-    'gui.confirm.cfg.key_failed': 'key 没有保存成功：{e}',
     'gui.confirm.cfg.sensitive': '涉及安全：{note}',
     'gui.confirm.cfg.effect.next_turn': '下一条消息起生效，不用重启',
     'gui.confirm.cfg.effect.immediate': '立即生效',
@@ -5371,6 +5384,14 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.pb.when_hour': '{n} 小时前',
     'gui.pb.when_day': '{n} 天前',
     'gui.pb.stints_unsupported': '这个引擎没有运行列表接口；升级后才能在这里看到多轮运行。',
-    'gui.pb.stint_status_finished': '已完成'
+    'gui.pb.stint_status_finished': '已完成',
+    'gui.confirm.cred.title': '填写密钥',
+    'gui.confirm.cred.hint': '直接保存到设置里，Raven 看不到它',
+    'gui.confirm.cred.replaces': '已经设置过，填入的新值会替换它',
+    'gui.confirm.cred.placeholder': '粘贴到这里',
+    'gui.confirm.cred.save': '保存',
+    'gui.confirm.cred.skip': '跳过',
+    'gui.confirm.cred.saving': '正在保存...',
+    'gui.confirm.cred.unsent': '没有发送出去，请再试一次'
   }
 } as Record<Locale, Record<string, string>>

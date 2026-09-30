@@ -29,7 +29,7 @@ import { t } from '../../i18n/t'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { ds } from '../../state/sources'
 import { AskApproveSheet } from './AskApproveSheet'
-import { configRows, GateSheet, LandedSheet, secretField } from './GateSheet'
+import { configRows, GateSheet, LandedSheet } from './GateSheet'
 import { composing } from './store'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
@@ -176,11 +176,6 @@ export interface ApprovalHandlers {
      rule the reader wrote themselves, and cannot race the write. Resolves false
      when this answer wrote nothing of its own. */
   onRevoke?: () => Promise<boolean>
-  /* Saves a key the reader typed into a configuration card, through the page's
-     own settings methods, before the approval is answered -- so the value goes
-     from the field to the file and never through the agent. Rejects with the
-     reason when it could not. */
-  saveSecret?: (field: { via: string; slug?: string }, setting: string, value: string) => Promise<void>
 }
 
 /* How long a landed sheet stays: long enough to read, and for a saved rule
@@ -254,6 +249,10 @@ function wordsFor(req: ApprovalReq): GateWords {
       rows: configRows(ev).map((row) => ({
         effect: str(row.effect) ? t('gui.confirm.cfg.effect.' + str(row.effect), {}, '') : '',
         sensitive: str(row.sensitive) ? t('gui.confirm.cfg.sensitive', { note: str(row.sensitive) }) : '',
+        unsetTo: str(row.unset_to) ? t('gui.confirm.cfg.unset_to.' + str(row.unset_to), {}, '') : '',
+        test: str(row.action) === 'test'
+          ? t('gui.confirm.cfg.test', { name: str(row.setting).replace(/^subagents\./, '') })
+          : '',
       })),
     }
     : undefined
@@ -312,37 +311,6 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
     leave()
     land(key, choice, pattern, handlers, handlers.onChoice(choice, '', pattern))
   }
-  /* A configuration card with key fields saves what was typed first, and
-     answers only once every key landed: the tool then reads the file to learn
-     whether it is set. A failure keeps the card up, saying why. The field is
-     cleared as it is read, so the value is on the page no longer than that. */
-  const rows = req.kind === 'config.change' ? configRows(req.evidence || {}) : []
-  const typed = rows.some((row) => secretField(row)) && handlers.saveSecret
-  let saving = false
-  const repaint = (error: string): void => {
-    sheetAdd(sheet, key, withdraw, createElement(GateSheet, {
-      kind: req.kind || 'unknown', evidence: req.evidence || {}, command: req.command || '',
-      words: { ...words, ...(words.cfg ? { cfg: { ...words.cfg, error } } : {}) }, opts, onDeny: () => answer('deny'),
-    }))
-  }
-  const allow = async (): Promise<void> => {
-    if (answered || saving) return
-    saving = true
-    try {
-      for (const input of sheet.querySelectorAll<HTMLInputElement>('input[data-secret]')) {
-        const value = input.value.trim()
-        input.value = ''
-        const row = rows[Number(input.dataset.secret)]
-        const field = row ? secretField(row) : null
-        if (value && row && field) await handlers.saveSecret!(field, str(row.setting), value)
-      }
-    } catch (e) {
-      saving = false
-      repaint(t('gui.confirm.cfg.key_failed', { e: e instanceof Error ? e.message : String(e) }))
-      return
-    }
-    answer('allow')
-  }
   openApprovals.set(req.approvalId, withdraw)
 
   /* A change to Raven's own configuration asks every time (the gate grants no
@@ -363,7 +331,7 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
          side by side is a question about storage the reader did not come here
          to answer. */
       : [{ label: t('gui.confirm.allow_session'), run: () => answer('allow_session') }]),
-    { label: t('gui.confirm.allow'), run: () => { if (typed) void allow(); else answer('allow') } },
+    { label: t('gui.confirm.allow'), run: () => answer('allow') },
   ]
 
   function onKey(e: KeyboardEvent): void {

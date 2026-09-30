@@ -1693,6 +1693,8 @@ def test_memory_enable_pins_the_roles_in_ravens_config(
     custom_slot = next(p for p in vendors() if p["name"] == "custom")
 
     # _step4_memory select() calls, in order:
+    #   0. LLM "Keep current"           -> "redo"   (unset, it already follows
+    #                                               the main model on openrouter)
     #   1. LLM source picker            -> the `custom` self-hosted slot
     #   2. embedding "Configure it?"    -> "redo"   (optional since it degrades
     #                                               rather than breaks memory)
@@ -1700,7 +1702,9 @@ def test_memory_enable_pins_the_roles_in_ravens_config(
     #      file, so this role asks for no endpoint of its own
     #   4. rerank "Configure it?"       -> "skip"
     #   5. multimodal "Configure it?"   -> "skip"
-    select_answers = iter(["managed", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"])
+    select_answers = iter(
+        ["managed", "redo", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"]
+    )
     # text(): LLM base_url, LLM model, embed model.
     text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
     # password(): LLM api key.
@@ -1784,7 +1788,9 @@ def test_the_memory_step_reaches_the_capability_report(
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
     openrouter = next(p for p in _EVEROS_PROVIDERS if p["name"] == "openrouter")
     custom_slot = next(p for p in vendors() if p["name"] == "custom")
-    select_answers = iter(["managed", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"])
+    select_answers = iter(
+        ["managed", "redo", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"]
+    )
     text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
     password_answers = iter(["k-llm"])
 

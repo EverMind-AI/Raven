@@ -24,6 +24,7 @@ from raven.permissions.shell_policy import (
     executable_text,
 )
 from raven.sandbox import DirectExecutor, SandboxExecutor
+from raven.sandbox.compat_bin import with_compat
 
 
 class _UnmodelledExpansionError(Exception):
@@ -328,7 +329,7 @@ class ExecTool(Tool):
                 # Pass ONLY the PATH override. Copying os.environ here would hand
                 # the full host environment to DirectExecutor and defeat its
                 # baseline-allowlist hygiene; the executor supplies the rest.
-                base_path = os.environ.get("PATH", "")
+                base_path = with_compat(os.environ.get("PATH", ""))
                 env = {"PATH": base_path + os.pathsep + self.path_append}
 
         try:

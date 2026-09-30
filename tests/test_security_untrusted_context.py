@@ -127,3 +127,49 @@ def test_a_trusted_note_follows_the_blocks_untouched(tmp_path: Path) -> None:
     assert isinstance(content, list)
     assert content[-1] == {"type": "text", "text": note}
     assert all("on-call specialist" not in str(blk) for blk in content[:-1])
+
+
+def test_a_key_raven_holds_never_reaches_the_model_through_a_tool_result(tmp_path: Path, monkeypatch) -> None:
+    """Seen live: connecting an agent, the model ran `jq '{providers}' config.json`
+    and read a provider key back into its context."""
+    import json
+    import os
+    import time
+
+    home = tmp_path / "home"
+    home.mkdir()
+    config = home / "config.json"
+    key = "sk-api-aIRsqgvgFxhqL2oxKe0S45Kx"
+    raw = {"providers": {"minimax": {"apiKey": key, "apiBase": "https://api.minimax.io/v1"}}, "agents": {}}
+    config.write_text(json.dumps(raw))
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    b = ContextBuilder(workspace=tmp_path)
+
+    printed = json.dumps({"providers": raw["providers"]}, indent=1)
+    content = b.add_tool_result([], "call-1", "exec", printed)[0]["content"]
+    assert key not in content and "[redacted: providers.minimax.apiKey]" in content
+    assert "https://api.minimax.io/v1" in content
+
+    rotated = "sk-api-rotatedAfterTheFirstRead0"
+    raw["providers"]["minimax"]["apiKey"] = rotated
+    config.write_text(json.dumps(raw))
+    os.utime(config, (time.time() + 5, time.time() + 5))
+    content = b.add_tool_result([], "call-2", "read_file", f"key={rotated}")[0]["content"]
+    assert rotated not in content
+
+
+def test_another_programs_settings_are_redacted_when_a_call_reads_them() -> None:
+    """Seen live: connecting Qwen Code, the model read ~/.qwen/settings.json whole."""
+    from raven.security.redact import redact_home_config_read
+
+    settings = '{"env": {"OPENROUTER_API_KEY": "sk-or-v1-0123456789abcdef0123"}, "model": {"name": "x"}}'
+    for arguments in (
+        {"path": "~/.qwen/settings.json"},
+        {"command": "cat $HOME/.qwen/settings.json"},
+        {"path": str(Path.home() / ".openclaw" / "openclaw.json")},
+    ):
+        shown = redact_home_config_read(arguments, settings)
+        assert "sk-or-v1-0123456789abcdef0123" not in shown and '"name": "x"' in shown
+    source = 'API_KEY = "sk-test-placeholder-for-tests-000"'
+    assert redact_home_config_read({"path": "tests/test_keys.py"}, source) == source
+    assert redact_home_config_read({"command": "grep -r token src/"}, source) == source
