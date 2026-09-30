@@ -137,34 +137,41 @@ class WhatsAppChannel(ChannelBase):
 
         logger.info("Connecting to WhatsApp bridge at {}...", self.config.bridge_url)
         self._running = True
-        while self._running:
-            if not await self._ensure_bridge_process():
-                self._running = False
-                return
-            if not self._running:
-                return  # stopped while the bridge came up, which can take minutes
-            try:
-                async with websockets.connect(self.config.bridge_url) as ws:
-                    self._ws = ws
-                    await ws.send(json.dumps({"type": "auth", "token": self._effective_bridge_token()}))
-                    self._bridge_up = True
-                    logger.info("Connected to WhatsApp bridge")
-                    async for frame in ws:
-                        try:
-                            await self._handle_bridge_message(frame)
-                        except Exception as e:
-                            logger.error("Error handling bridge message: {}", e)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning("WhatsApp bridge connection error: {}", e)
-            finally:
-                self._bridge_up = False
-                self._connected = False
-                self._ws = None
-            if self._running:
-                logger.info("Reconnecting in {} seconds...", _RECONNECT_SECONDS)
-                await asyncio.sleep(_RECONNECT_SECONDS)
+        try:
+            while self._running:
+                if not await self._ensure_bridge_process():
+                    self._running = False
+                    return
+                if not self._running:
+                    return  # stopped while the bridge came up, which can take minutes
+                try:
+                    async with websockets.connect(self.config.bridge_url) as ws:
+                        self._ws = ws
+                        await ws.send(json.dumps({"type": "auth", "token": self._effective_bridge_token()}))
+                        self._bridge_up = True
+                        logger.info("Connected to WhatsApp bridge")
+                        async for frame in ws:
+                            try:
+                                await self._handle_bridge_message(frame)
+                            except Exception as e:
+                                logger.error("Error handling bridge message: {}", e)
+                            if not self._running:
+                                break
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    logger.warning("WhatsApp bridge connection error: {}", e)
+                finally:
+                    self._bridge_up = False
+                    self._connected = False
+                    self._ws = None
+                if self._running:
+                    logger.info("Reconnecting in {} seconds...", _RECONNECT_SECONDS)
+                    await asyncio.sleep(_RECONNECT_SECONDS)
+        finally:
+            # Whatever ended the loop, a cancel included, a bridge we spawned must
+            # not outlive it: an orphan keeps the session and keeps printing codes.
+            await self._discard_bridge_process()
 
     async def stop(self) -> None:
         self._running = False
@@ -219,6 +226,16 @@ class WhatsAppChannel(ChannelBase):
                 self.pending_qr = None
             elif status == "disconnected":
                 self._connected = False
+            elif status == "pairing_expired":
+                # Stopping is what lets a reader see it: the page draws a stopped
+                # QR channel as "expired, try again", and its retry restarts us.
+                self._connected = False
+                self.pending_qr = None
+                self._running = False
+                logger.warning(
+                    "Nobody scanned the WhatsApp pairing codes; stopped the channel. "
+                    "Pair from the Connections page, or run `raven channels login whatsapp`."
+                )
         elif msg_type == "qr":
             self.pending_qr = data.get("qr") or data.get("code")
             logger.info("Scan the QR code (shown in the web UI or the bridge terminal) to connect WhatsApp")

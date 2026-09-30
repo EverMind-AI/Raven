@@ -22,6 +22,11 @@ import qrcode from 'qrcode-terminal'
 
 const VERSION = '0.1.0'
 
+// Baileys issues about six codes per connection (~2.5 minutes) and then closes it
+// with 408. Nobody watching means nobody will ever scan, so after this many
+// unscanned rounds the bridge stops asking until a client comes back for one.
+export const MAX_UNSCANNED_ROUNDS = 3
+
 export interface InboundMessage {
   id: string
   sender: string
@@ -44,6 +49,9 @@ export class WhatsAppClient {
   private sock: any = null
   private options: WhatsAppClientOptions
   private reconnecting = false
+  private qrThisRound = false
+  private unscannedRounds = 0
+  private paused = false
 
   constructor(options: WhatsAppClientOptions) {
     this.options = options
@@ -99,6 +107,27 @@ export class WhatsAppClient {
     }, 5000)
   }
 
+  get pairingPaused(): boolean {
+    return this.paused
+  }
+
+  async resumePairing(): Promise<void> {
+    if (!this.paused) {
+      return
+    }
+    this.paused = false
+    this.unscannedRounds = 0
+    console.log('Pairing requested again; issuing a new code')
+    try {
+      await this.connect()
+    } catch (error) {
+      // Back to paused, or nothing would retry and no later client could resume.
+      this.paused = true
+      this.options.onStatus('pairing_expired')
+      throw error
+    }
+  }
+
   async connect(): Promise<void> {
     const logger = pino({ level: 'silent' })
     const { state, saveCreds } = await useMultiFileAuthState(this.options.authDir)
@@ -127,9 +156,16 @@ export class WhatsAppClient {
     }
 
     this.sock.ev.on('connection.update', async (update: any) => {
-      const { connection, lastDisconnect, qr } = update
+      const { connection, lastDisconnect, qr, isNewLogin } = update
+
+      // A scan is answered with isNewLogin, but the QR timer keeps running; if it
+      // runs out before the restart, the scanned round closes with 408 too.
+      if (isNewLogin) {
+        this.qrThisRound = false
+      }
 
       if (qr) {
+        this.qrThisRound = true
         console.log('\n📱 Scan this QR code with WhatsApp (Linked Devices):\n')
         qrcode.generate(qr, { small: true })
         this.options.onQR(qr)
@@ -143,6 +179,20 @@ export class WhatsAppClient {
         this.options.onStatus('disconnected')
 
         if (this.reconnecting) {
+          return
+        }
+
+        // Only a round that showed a code and never opened counts: a paired
+        // session dropping off the network also closes with 408.
+        if (this.qrThisRound && statusCode === DisconnectReason.timedOut) {
+          this.unscannedRounds += 1
+        }
+        this.qrThisRound = false
+        if (!loggedOut && this.unscannedRounds >= MAX_UNSCANNED_ROUNDS) {
+          this.paused = true
+          this.sock = null
+          console.log(`No pairing code was scanned in ${this.unscannedRounds} rounds; pausing until raven asks again`)
+          this.options.onStatus('pairing_expired')
           return
         }
         this.reconnecting = true
@@ -163,6 +213,8 @@ export class WhatsAppClient {
           this.reconnectLater()
         }
       } else if (connection === 'open') {
+        this.qrThisRound = false
+        this.unscannedRounds = 0
         console.log('✅ Connected to WhatsApp')
         this.options.onStatus('connected')
       }
