@@ -445,9 +445,16 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
 function Note({ title, when, lead, command, then, raw, folded, ask }: NoteSpec): JSX.Element {
   return (
     <div className="extAgents-note">
-      <div className="extAgents-note-t">
-        {title}
-        {when ? <span className="extAgents-note-when">{when}</span> : null}
+      <div className="extAgents-note-h">
+        <div className="extAgents-note-t">
+          {title}
+          {when ? <span className="extAgents-note-when">{when}</span> : null}
+        </div>
+        {ask ? (
+          <button className="extAgents-note-ask" onClick={() => store.handToRaven(ask.key, ask.agent, { reason: ask.reason })}>
+            {t('gui.agent.ask_raven')}
+          </button>
+        ) : null}
       </div>
       <div className="extAgents-note-p">{lead}</div>
       {command && then ? (
@@ -463,11 +470,6 @@ function Note({ title, when, lead, command, then, raw, folded, ask }: NoteSpec):
         </ol>
       ) : command ? (
         <CmdCopy cmd={command} />
-      ) : null}
-      {ask ? (
-        <button className="extAgents-note-ask" onClick={() => store.handToRaven(ask.key, ask.agent, { reason: ask.reason })}>
-          {t('gui.agent.ask_raven')}
-        </button>
       ) : null}
       {!raw ? null : folded ? (
         <details className="extAgents-note-raw">
