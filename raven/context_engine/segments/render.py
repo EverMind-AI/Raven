@@ -364,17 +364,25 @@ def identity_text(
     delegation, delegation_rule = _delegation_block(specialists, dispatch_tools)
     model_line = f"\nYou are running on model: {resolved_model}." if resolved_model else ""
 
+    # One sentence for both policies. A package installed into the interpreter
+    # Raven itself runs on, or into a user-wide prefix, changes every later run.
+    package_install = (
+        "- When you install a package, install it into this project's virtual environment, "
+        "or into a temporary one. Do not install it into the global environment.\n"
+    )
     if system == "Windows":
-        platform_policy = """## Platform Policy (Windows)
-- You are running on Windows. Do not assume GNU tools like `grep`, `sed`, or `awk` exist.
-- Prefer Windows-native commands or file tools when they are more reliable.
-- If terminal output is garbled, retry with UTF-8 output enabled.
-"""
+        platform_policy = (
+            "## Platform Policy (Windows)\n"
+            "- You are running on Windows. Do not assume GNU tools like `grep`, `sed`, or `awk` exist.\n"
+            "- Prefer Windows-native commands or file tools when they are more reliable.\n"
+            "- If terminal output is garbled, retry with UTF-8 output enabled.\n" + package_install
+        )
     else:
-        platform_policy = """## Platform Policy (POSIX)
-- You are running on a POSIX system. Prefer UTF-8 and standard shell tools.
-- Use file tools when they are simpler or more reliable than shell commands.
-"""
+        platform_policy = (
+            "## Platform Policy (POSIX)\n"
+            "- You are running on a POSIX system. Prefer UTF-8 and standard shell tools.\n"
+            "- Use file tools when they are simpler or more reliable than shell commands.\n" + package_install
+        )
 
     return f"""# Raven 🐦‍⬛
 
