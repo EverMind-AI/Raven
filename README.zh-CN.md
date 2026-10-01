@@ -9,7 +9,7 @@
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
-[技术报告](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf) · [官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
+[arXiv](https://arxiv.org/abs/2609.33439) · [Hugging Face 论文](https://huggingface.co/papers/2609.33439) · [官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
 
 </div>
 
@@ -391,15 +391,16 @@ raven web
 
 ## ❯❯ 引用
 
-如果你在研究中使用了 Raven，请引用我们的[技术报告](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf)：
+如果你在研究中使用了 Raven，请引用我们的[技术报告](https://arxiv.org/abs/2609.33439)：
 
 ```bibtex
-@techreport{evermind2026raven,
-  title       = {{Raven: The Harness of Harnesses for Composable Agentic Intelligence}},
-  author      = {{EverMind AI}},
-  institution = {EverMind AI},
-  year        = {2026},
-  month       = sep,
-  url         = {https://github.com/EverMind-AI/Raven/releases/tag/tech-report-v1}
+@misc{evermind2026raven,
+  title         = {{Raven: The Harness of Harnesses for Composable Agentic Intelligence}},
+  author        = {{EverMind AI}},
+  year          = {2026},
+  eprint        = {2609.33439},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  url           = {https://arxiv.org/abs/2609.33439}
 }
 ```
