@@ -139,8 +139,9 @@ async def test_control_characters_in_a_filename_are_stripped(client) -> None:
 
 
 async def test_archive_head_agrees_with_get(client) -> None:
-    """The frontend pre-checks "Download all" with HEAD too, so the branch that
-    skips the zip build must answer with the same status."""
+    """The route is registered with ``allow_head=True``, so a HEAD has to answer
+    what a GET would. The archive builds its zip only on the GET path, so HEAD
+    is a second path that could drift from it."""
     one = _register(client.store, client.tmp_path, "a.txt", b"AAA")
 
     ok = await client.head("/files/download-archive", params={"token": one.token})
@@ -203,6 +204,51 @@ async def test_an_unregistered_route_still_answers_404(client) -> None:
     sitting on disk untouched -- exactly the misdiagnosis this split prevents."""
     res = await client.get("/files/nonexistent")
     assert res.status == 404
+
+
+async def test_download_forbids_storing_so_a_rewritten_file_is_fetched_again(client) -> None:
+    """A deliverable that was rewritten in place must not come back from the
+    browser cache.
+
+    ``register`` reuses the token when a conversation delivers the same path
+    again, so a rewritten file keeps the URL it had -- and the delivery card
+    points an ``<img>`` straight at this route. With no ``Cache-Control`` the
+    browser invents a freshness lifetime from ``Last-Modified`` (about 10% of
+    the file's age) and answers from its own copy without asking. An image the
+    agent replaced then went on rendering as the one it replaced, which is
+    indistinguishable from a server that did not pick the change up.
+    """
+    record = _register(client.store, client.tmp_path)
+
+    res = await client.get("/files/download", params={"token": record.token})
+
+    assert res.headers["Cache-Control"] == "no-store"
+
+
+async def test_archive_download_forbids_storing_too(client) -> None:
+    """The same route for a set of files: a token whose member changed must not
+    be answered from a stored copy either."""
+    one = _register(client.store, client.tmp_path, "a.txt", b"AAA")
+
+    res = await client.get("/files/download-archive", params={"token": one.token})
+
+    assert res.headers["Cache-Control"] == "no-store"
+
+
+async def test_head_carries_the_directive_as_well(client) -> None:
+    """The directive has to be on the response HEAD is answered with.
+
+    HEAD never reaches the archive's zip build: it returns through the early
+    exit before that work starts, so the directive has to sit on the response
+    the constructor builds rather than be set on the GET path afterwards."""
+    record = _register(client.store, client.tmp_path)
+    one = _register(client.store, client.tmp_path, "a.txt", b"AAA")
+
+    file_head = await client.head("/files/download", params={"token": record.token})
+    archive_head = await client.head("/files/download-archive", params={"token": one.token})
+
+    assert file_head.headers["Cache-Control"] == "no-store"
+    assert archive_head.headers["Cache-Control"] == "no-store"
 
 
 async def test_resolve_download_drops_stale_entry(tmp_path) -> None:

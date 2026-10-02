@@ -164,6 +164,26 @@ class TestIdentityBootstrap:
         prompt = render.identity_text(tmp_path, model="openrouter/some-model")
         assert "openrouter/some-model" in prompt
 
+    def test_identity_installs_packages_into_a_virtual_environment(self, tmp_path: Path, monkeypatch) -> None:
+        """Both platform policies carry the same install rule, inside the policy."""
+        import platform
+
+        sentence = "Do not install it into the global environment."
+
+        def policy(system: str) -> str:
+            monkeypatch.setattr(platform, "system", lambda: system)
+            text = render.identity_text(tmp_path, model="openrouter/some-model")
+            assert text.count(sentence) == 1
+            return text.split("## Platform Policy", 1)[1].split("## ", 1)[0]
+
+        for system in ("Darwin", "Windows"):
+            body = policy(system)
+            assert sentence in body, system
+            assert "this project's virtual environment" in body
+            assert "a temporary one" in body
+        assert "GNU tools" in policy("Windows")
+        assert "standard shell tools" in policy("Linux")
+
     def test_identity_default_model_resolved_lazily(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setattr(render, "_resolved_model_id", lambda: "openrouter/acme/lazy-model")
         assert "openrouter/acme/lazy-model" in render.identity_text(tmp_path)

@@ -173,6 +173,13 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- `raven doctor` warns when `permissions.mode` is `full` and when
+  `tools.sandbox.backend` is `none`. Ask-tier calls then run without asking,
+  and commands run on the host with no isolation. The exit code stays 0.
+  The identity prompt tells the agent to install a package into the project's
+  virtual environment, or a temporary one, and to leave the global environment
+  alone.
+
 - An unattended turn that asks a question now leaves a record of it. A one-shot
   run lists those questions after the reply, beside the refused calls, and a
   session opened later shows the same questions as their own notice. Previously
