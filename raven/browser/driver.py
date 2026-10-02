@@ -219,9 +219,9 @@ class Browser:
         self._launch_lock = asyncio.Lock()
         # Told the name of every owner this driver stops binding to a page, so
         # whatever a caller keeps per owner can drop its copy on the same event
-        # instead of on a second, independently drifting clock. An attribute
-        # rather than a state field because the bindings outlive a close(), and
-        # a listener registered before one would otherwise be dropped by it.
+        # instead of on a second, independently drifting clock. Held here
+        # rather than in `_State`, which close() replaces: the store listening
+        # outlives any one browser session, as the launch lock above does.
         self.on_owner_released: Any = None
 
     # ---- lifecycle ---------------------------------------------------------
@@ -614,9 +614,10 @@ class Browser:
         """Remove these bindings, and tell the listener about the ones there were.
 
         Whatever ends a binding -- a reap, an explicit release, the tab it was
-        on closing -- goes through here, so the listener is told once per owner
-        under one rule rather than at each call site. An owner that was never
-        bound is not announced: there is nothing to have lost.
+        on closing, the browser closing -- goes through here, so the listener
+        is told once per owner under one rule rather than at each call site. An
+        owner that was never bound is not announced: there is nothing to have
+        lost.
         """
         gone = [owner for owner in owners if self._s.owners.pop(owner, None) is not None]
         if self.on_owner_released is None:
@@ -798,6 +799,11 @@ class Browser:
                 await s.playwright.stop()
             except Exception:
                 pass
+        # Announced before the state is replaced: closing ends every binding it
+        # held, and a per-owner store keyed against them outlives the state --
+        # the pop-out flow is close-and-relaunch, and a relaunch continues the
+        # same owners. A fresh `_State` would otherwise strand those keys.
+        self._drop_owners(list(s.owners))
         self._s = _State()
         logger.info("browser: closed")
 

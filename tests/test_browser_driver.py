@@ -1002,10 +1002,12 @@ async def test_the_url_reported_for_an_owner_is_where_its_call_lands(
         assert reported == landed.url
 
 
-async def test_every_way_a_binding_ends_names_the_owner_to_the_listener() -> None:
+async def test_a_binding_ends_names_the_owner_to_the_listener_however_it_ended() -> None:
     """A per-owner store outside the driver is told on the same event the driver
-    drops the binding -- an explicit release, a reap, and the owner's tab
-    closing -- and is never told about an owner that was never bound."""
+    drops the binding. Four endings, and the set is the driver's own removal
+    sites rather than a list: an explicit release, a reap, the owner's tab
+    closing, and the whole browser closing. An owner that was never bound is
+    not announced -- there is nothing to have lost."""
     b = get_browser()
     first, second, third = (_FakePage(f"https://{n}.test/") for n in ("a", "b", "c"))
     _driving(b, [first, second, third])
@@ -1029,6 +1031,11 @@ async def test_every_way_a_binding_ends_names_the_owner_to_the_listener() -> Non
     b._s.owners["run:c"] = _Owner(third, time.monotonic())
     await b.tab_close(2, owner=None)
     assert seen == ["run:c"], "closing the tab an owner held announces it"
+
+    seen.clear()
+    b._s.owners["run:d"] = _Owner(first, time.monotonic())
+    await b.close()
+    assert seen == ["run:d"], "closing the browser ends the bindings it still held"
 
 
 async def test_a_listener_that_raises_does_not_stop_the_binding_from_ending() -> None:
