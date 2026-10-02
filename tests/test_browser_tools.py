@@ -774,11 +774,12 @@ def test_site_keyed_permission_set_matches_the_acting_tool_hierarchy() -> None:
 def test_the_stamp_store_is_pruned_by_the_driver_once_it_holds_an_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The store registers with the driver from its only writer, so an owner
-    that holds a stamp is an owner the driver will prune -- and not at import,
-    where reaching for the driver would build the process-wide browser. This
-    drives the release a run's end would cause and asserts the stamp is gone;
-    an unregistered store would keep it for the life of the process."""
+    """The store registers with the driver from the only place that adds a
+    stamp, so an owner that holds one is an owner the driver will prune -- and
+    not at import, where reaching for the driver would build the process-wide
+    browser. This drives the release a run's end would cause and asserts the
+    stamp is gone; an unregistered store would keep it for the life of the
+    process."""
     b = get_browser()
     page = _FakePage("https://a.test/")
     _running(b, [page])
@@ -811,8 +812,8 @@ async def test_the_tabs_description_names_the_close_rule_the_driver_enforces() -
     """The driver refuses an owner's close of a tab nobody holds -- the
     reader's, which may carry a login the model just asked them to finish --
     and the listing marks that tab with neither ``yours`` nor ``held``. The
-    description is the only text the model reads before calling, so without
-    the rule there the refusal is the first it hears of it."""
+    description is what the model reads before it calls; without the rule
+    there, the refusal is the first it hears of it."""
     b = get_browser()
     _running(b, [_FakePage("https://bank.test/")])
 

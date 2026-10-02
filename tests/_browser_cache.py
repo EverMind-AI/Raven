@@ -77,7 +77,7 @@ def chromium_installed(where: str | None = None) -> bool:
 
     A directory entry rather than ``Browser.probe()``, which only answers
     whether the ``playwright`` package imports: skipping on the package alone
-    turned a missing binary into six failures. It does not check the revision
+    turned a missing binary into failures. It does not check the revision
     -- a cache holding only an older build still fails the launch, loudly, and
     the driver's error then names the path it looked for.
     """

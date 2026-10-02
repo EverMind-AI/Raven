@@ -222,8 +222,8 @@ class _BrowserTool(Tool):
     def _bind_to_driver(self) -> None:
         """Have the driver tell the stamp map when it drops an owner's binding.
 
-        Called from ``_mark``, the map's only writer, so no owner can hold a
-        stamp before the driver knows to prune it. Not at import: reaching for
+        Called from ``_mark``, the only place that adds a stamp, so no owner
+        can hold one before the driver knows to prune it. Not at import: reaching for
         the driver is what builds the process-wide browser, and importing this
         module must not construct one as a side effect. The driver is the one
         place that knows when an owner's binding ends, so the map is pruned on

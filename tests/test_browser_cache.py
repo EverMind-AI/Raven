@@ -104,7 +104,7 @@ def test_the_fixture_aims_playwright_at_the_login_cache_unless_already_aimed(
 
 def test_a_chromium_directory_is_what_counts_as_installed(tmp_path) -> None:
     """The old skip asked ``Browser.probe()``, which only tests the package,
-    so a missing binary failed six tests instead of skipping them."""
+    so a missing binary failed the real-page tests instead of skipping them."""
     cache = tmp_path / "ms-playwright"
     cache.mkdir()
     (cache / "ffmpeg-1011").mkdir()
