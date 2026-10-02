@@ -1,5 +1,6 @@
 import { t } from '../../i18n/t'
 import * as detail from '../../state/detail'
+import * as hub from '../../state/hub'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -157,6 +158,7 @@ export function open(): void {
   page.show('extAgentsPage')
   void load(true)
 }
+hub.onOpen('agents', open)
 
 export function close(): void {
   page.show(null)

@@ -1,17 +1,17 @@
 import { t } from '../../i18n/t'
-import * as settingsDialog from '../../state/settings'
+import * as detail from '../../state/detail'
+import * as hub from '../../state/hub'
+import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
 
 import type { ConnChannel, ConnectionsSource } from './types'
 
-/* Section state, outside React on purpose: two of the callers that drive this
- * section are not React. The Escape order closes its credentials dialog
- * (state/escapeOrder.ts) and the module page's own leave slot shuts that
- * dialog behind the reader (app/install.ts fills state/page.ts's slot) -- so
- * the state lives in a plain store those two can call, and the component
- * subscribes.
+/* Page state, outside React on purpose: the callers that close the channel's
+ * sheet are not React -- the shared drawer's own close button, its scrim,
+ * Escape and a page switch all go through state/detail.ts -- so the state
+ * lives in a plain store those can reach, and the component subscribes.
  */
 
 export interface ConnState {
@@ -19,10 +19,9 @@ export interface ConnState {
   /* False until the first rows fetch answers: the list is not drawn at all
      until then, so a page still loading never reads as "no channels". */
   loaded: boolean
-  /* Which entry the column beside the list is showing -- the old `connEdit`,
-     and before that the id of a modal card. */
+  /* Which entry the sheet is showing. */
   viewId: string | null
-  /* Remounts the pane's subtree when another entry is picked, so its
+  /* Remounts the sheet's subtree when another entry is picked, so its
      uncontrolled inputs start from that row's current values. */
   epoch: number
   /* Whether anything is running that could host an adapter (see
@@ -52,41 +51,41 @@ export async function refresh(initial = false): Promise<void> {
   }
 }
 
+/* The page. Its rows are fetched again on every open, because the greeting's
+   entry may have read them long before and a channel may have come up since. */
+export function open(): void {
+  page.show('connectionsPage')
+  void refresh(true)
+}
+hub.onOpen('channels', open)
+
+/** Where the sheet renders: the host the shared drawer keeps for this island. */
+export function detailHost(): HTMLDivElement {
+  return detail.host('connections')
+}
+
 export function openChannel(c: ConnChannel): void {
+  detail.open('connections')
   set({ viewId: c.id, epoch: get().epoch + 1 })
 }
 
 export function closeChannel(): void {
-  set({ viewId: null })
+  detail.close()
 }
 
-/* What arriving at this section of the settings dialog costs: the rows, and the
-   credentials pane a previous visit was left on. Registered at this module's
-   own evaluation rather than by the page's wiring, the same shape
-   features/desk/store.ts fills state/escapeOrder.ts's slot with: the alternative
-   is src/app/install.ts importing three island stores for three lines, which is
-   three island graphs in the page's own wiring. */
-function enter(): void {
-  closeChannel()
-  void refresh(true)
+/* Whoever closed the drawer, the card goes -- a fade later, or what fades is
+   an empty panel. `gen` says whether the reader opened another card inside
+   that window, which the id alone cannot: reopening the same channel writes
+   the same id back. */
+function dismissed(): void {
+  if (!get().viewId) return
+  const gen = detail.get().gen
+  detail.dropAfterFade(
+    () => set({ viewId: null }),
+    () => detail.get().gen !== gen,
+  )
 }
-settingsDialog.onEnter('channels', enter)
-/* And what leaving it costs: a pane left open would come back over whatever
-   section the reader opens next, still showing the channel they had left. */
-settingsDialog.onLeave('clearConnChannel', closeChannel)
-
-/* Optimistic, like the accessor it replaces: both sources flip `c.on` before
-   their first await, so the redraw right after already shows the new get();
-   the rpc source reverts the flag and rejects handled on failure, and the
-   second redraw takes the switch back. */
-export function toggle(c: ConnChannel): void {
-  const p = source().toggle(c, !c.on)
-  redraw()
-  /* Both ways: the write's own answer is what the row is drawn from once the
-     source has read the status back, so the paint the press earns is not the
-     last one. */
-  void p.then(() => redraw(), () => redraw())
-}
+detail.onClose('connections', dismissed)
 
 /* Credentials and the switch travel together; the source speaks its own
    failures, so this only has to repaint whatever get() the write left. */

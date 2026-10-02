@@ -93,8 +93,8 @@ describe('the page root', () => {
       'dTitle', 'dClose', 'dBody',
       'setModal', 'snav', 'snavList', 'setTitle', 'setSub', 'setClose', 'spanels',
       'railShow', 'split', 'menu', 'toasts',
-      'extAgentsPage', 'extAgentsBody',
-      'connectionsBody', 'memoryBody', 'cronBody',
+      'extAgentsPage', 'extAgentsBody', 'connectionsPage', 'connectionsBody',
+      'memoryBody', 'cronBody',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
@@ -103,7 +103,7 @@ describe('the page root', () => {
   /* Shared ground: the detail-drawer openers append their own host under
      #dBody, the settings island portals its nav into #snavList and roots its
      panels in #spanels, each module page's body is the root of its own island,
-     and the three sections another domain fills are rooted in a box of their
+     and the two sections another domain fills are rooted in a box of their
      own beside #spanels. React owning any of those child lists would tear down
      what the other side put there. */
   it('hands the shared grounds over empty', () => {

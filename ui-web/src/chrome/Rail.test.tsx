@@ -13,8 +13,8 @@ import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as extAgents from '../features/extAgents/store'
 import * as settings from '../features/settings/store'
+import * as hub from '../state/hub'
 import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 
@@ -28,7 +28,7 @@ const opened = { list: [] as string[] }
 const note = (name: string) => async () => {
   opened.list.push(name)
 }
-vi.spyOn(extAgents, 'open').mockImplementation(note('agents'))
+vi.spyOn(hub, 'open').mockImplementation(note('hub'))
 vi.spyOn(settings, 'open').mockImplementation(note('settings'))
 
 /* Nothing: the page root renders the grid, the column and the collapse's twin,
@@ -143,7 +143,7 @@ describe('the rail', () => {
         el(id).click()
       })
     }
-    expect(opened.list).toEqual(['agents', 'settings'])
+    expect(opened.list).toEqual(['hub', 'settings'])
   })
 
   /* A React onClick leaves no trace on the element -- the root delegates every

@@ -2,7 +2,7 @@
 
 EverMind AI, September 2026. The full author list is in the report's appendix.
 
-**[Download the PDF](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf)** (v1, 82 pages). The [release page](https://github.com/EverMind-AI/Raven/releases/tag/tech-report-v1) lists the file's SHA-256.
+**[Download the PDF](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf)** (v1, 82 pages), also on [arXiv](https://arxiv.org/abs/2609.33439) and [Hugging Face](https://huggingface.co/papers/2609.33439). The [release page](https://github.com/EverMind-AI/Raven/releases/tag/tech-report-v1) lists the file's SHA-256.
 
 ## Abstract
 
@@ -11,12 +11,13 @@ As large language models advance, AI agents are moving beyond isolated, domain-s
 ## Citation
 
 ```bibtex
-@techreport{evermind2026raven,
-  title       = {{Raven: The Harness of Harnesses for Composable Agentic Intelligence}},
-  author      = {{EverMind AI}},
-  institution = {EverMind AI},
-  year        = {2026},
-  month       = sep,
-  url         = {https://github.com/EverMind-AI/Raven/releases/tag/tech-report-v1}
+@misc{evermind2026raven,
+  title         = {{Raven: The Harness of Harnesses for Composable Agentic Intelligence}},
+  author        = {{EverMind AI}},
+  year          = {2026},
+  eprint        = {2609.33439},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  url           = {https://arxiv.org/abs/2609.33439}
 }
 ```

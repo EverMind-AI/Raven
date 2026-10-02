@@ -33,28 +33,28 @@ import type {
 
 export type SectionId =
   | 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'plugins'
-  | 'channels' | 'cron' | 'memory' | 'archive' | 'about'
+  | 'cron' | 'memory' | 'archive' | 'about'
 
 /* The nav's order, which is also the reading: what the dialog is about first
    (the page itself, what it cost), then what it is made of (the accounts, the
-   models each role takes, skills, tools, plugins), then the three surfaces a
-   reader sets up once and leaves alone, then the record and the version. */
+   models each role takes, skills, tools, plugins), then the two surfaces a
+   reader sets up once and leaves alone, then the record and the version.
+   Channels were a third and are a page on the rail now (state/pages.ts). */
 export const SECTIONS: SectionId[] = [
   'general', 'usage', 'provider', 'model', 'skills', 'tools', 'plugins',
-  'channels', 'cron', 'memory', 'archive', 'about',
+  'cron', 'memory', 'archive', 'about',
 ]
 
-/* The three sections another domain's island fills, as the box it fills.
+/* The two sections another domain's island fills, as the box it fills.
  *
- * Schedules, channels and memory were module pages of their own and are
- * sections here now. Their islands did not move with them: each still mounts
+ * Schedules and memory were module pages of their own and are sections here
+ * now. Their islands did not move with them: each still mounts
  * into a box of its own (features/<domain>/manifest.ts's host, rendered by
  * src/App.tsx inside the dialog), because a React root inside this island's
  * tree would be unmounted the moment the reader picked another section. So
- * this island draws nothing for these three -- the pane beside it is theirs --
+ * this island draws nothing for these two -- the pane beside it is theirs --
  * and the stylesheet shows whichever box the open section names. */
 export const HOSTED: Partial<Record<SectionId, string>> = {
-  channels: 'connectionsBody',
   cron: 'cronBody',
   memory: 'memoryBody',
 }

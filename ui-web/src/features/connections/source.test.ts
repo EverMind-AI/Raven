@@ -59,6 +59,7 @@ beforeEach(() => {
     delete c.missing
     delete c.running
     delete c.connected
+    delete c.refusal
   })
 })
 
@@ -169,22 +170,31 @@ describe('the row switch', () => {
 
   /* A refusal has a reason and something to do about it; both were dropped, and
      the row went red with neither. */
-  it('names why an adapter would not start, with the server sentence', async () => {
+  /* Kept on the row rather than toasted: the sheet shows it for as long as
+     the entrance stays down, where a toast was gone before the reader looked. */
+  it('keeps why an adapter would not start, with the server sentence', async () => {
     switching({ applied: true, outcome: 'missing_dep', detail: 'Run: uv sync --inexact --extra channels' }, [
       { name: 'slack', enabled: true, running: false },
     ])
     await connSource.toggle(row('slack'), true)
-    expect(said).toEqual([
-      'gui.conn.toggle_failed(name=gui.chan.slack,detail=gui.conn.out_missing_dep Run: uv sync --inexact --extra channels)',
-    ])
+    expect(said).toEqual([])
+    expect(row('slack').refusal).toBe('gui.conn.out_missing_dep Run: uv sync --inexact --extra channels')
   })
 
   it('keeps an outcome it has no sentence for readable', async () => {
     switching({ applied: true, outcome: 'no_manager' }, [{ name: 'slack', enabled: true }])
     await connSource.toggle(row('slack'), true)
-    expect(said).toEqual([
-      'gui.conn.toggle_failed(name=gui.chan.slack,detail=gui.conn.out_refused(outcome=no_manager))',
-    ])
+    expect(row('slack').refusal).toBe('gui.conn.out_refused(outcome=no_manager)')
+  })
+
+  /* Once the entrance comes up the reason is stale, and a status read says so. */
+  it('drops the reason once a status read finds the entrance running', async () => {
+    switching({ applied: true, outcome: 'missing_dep' }, [{ name: 'slack', enabled: true, running: false }])
+    await connSource.toggle(row('slack'), true)
+    expect(row('slack').refusal).toBeTruthy()
+    switching({ applied: true, outcome: 'started' }, [{ name: 'slack', enabled: true, running: true }])
+    await connSource.rows()
+    expect(row('slack').refusal).toBeUndefined()
   })
 
   /* The reload rides on the write's promise, so its failure would otherwise
@@ -209,10 +219,8 @@ describe('the row switch', () => {
       { name: 'slack', enabled: true, running: false },
     ])
     await connSource.apply(row('slack'), { bot_token: 'x' }, true)
-    expect(said).toEqual([
-      'gui.conn.saved_x(name=gui.chan.slack)',
-      'gui.conn.toggle_failed(name=gui.chan.slack,detail=gui.conn.out_missing_dep Run: the installer)',
-    ])
+    expect(said).toEqual(['gui.conn.saved_x(name=gui.chan.slack)'])
+    expect(row('slack').refusal).toBe('gui.conn.out_missing_dep Run: the installer')
   })
 
   /* Switching off is done the moment the config says so, whatever the gateway

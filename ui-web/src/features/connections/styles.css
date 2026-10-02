@@ -1,0 +1,191 @@
+/* The connections domain's own rules.
+ *
+ * Collected by Vite into the one CSS asset build.py inlines after page.css
+ * (features/extAgents/styles.css says how). Every class below carries this
+ * domain's `su` prefix. The page is drawn the way the agent hub is -- tabs over
+ * a grid of fixed-height cards, the picked one in the shared drawer -- so the
+ * geometry below is that page's, restated under this prefix rather than
+ * borrowed: a class belongs to one domain (scripts/check-class-namespace.mjs).
+ */
+
+/* ── the page ───────────────────────────────────────────────────── */
+
+.su-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
+.su-tab {
+  height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: none;
+  font: inherit; font-size: 13px; color: var(--muted); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.su-tab:hover { color: var(--text); }
+.su-tab[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 500; }
+.su-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.su-tn { font-size: 11.5px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.su-tn::before { content: "("; }
+.su-tn::after { content: ")"; }
+
+/* Four a row at most and never narrower than 200px, the hub's tracks. */
+.su-grid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(max(200px, calc((100% - 36px) / 4)), 1fr));
+}
+/* The page's one notice: nothing is running that could host an entrance. A
+   wash in the warning hue and one line, above the grid it explains. */
+.su-notice {
+  margin: -4px 0 14px; padding: 9px 13px; border-radius: 9px;
+  background: color-mix(in oklab, var(--gold) 9%, var(--paper));
+  color: var(--text); font-size: 12.5px; line-height: 1.5;
+  display: flex; align-items: center; gap: 9px;
+}
+.su-notice::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--gold); flex: none; }
+.su-empty {
+  padding: 18px 16px; border: 1px dashed var(--line); border-radius: 10px;
+  color: var(--faint); font-size: 13px; text-align: center;
+}
+
+/* A column of fixed parts -- the name, two lines of room for the line under
+   it, the foot's place -- so every card is one height in every state. */
+.su-card {
+  position: relative; min-width: 0; min-height: 104px; padding: 14px;
+  display: flex; flex-direction: column;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+  color: inherit; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease;
+}
+.su-card:hover, .su-card[aria-current="true"] {
+  border-color: color-mix(in oklab, var(--line) 60%, var(--muted));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .06);
+}
+.su-card:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.su-card .channel-mark { width: 32px; height: 32px; border-radius: 9px; }
+.su-card .channel-mark-inset img, .su-card .channel-mark-inset svg { width: 19px; height: 19px; }
+.su-ctop { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.su-nm { flex: 1; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.su-t { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.su-led { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--moss); }
+.su-led-bad { background: var(--clay); }
+.su-one {
+  margin: 10px 0; font-size: 12px; line-height: 1.55; min-height: 3.1em; color: var(--muted);
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.su-foot-slot { margin-top: auto; height: 30px; }
+.su-foot {
+  height: 100%; padding: 0 9px; border-radius: 7px; min-width: 0;
+  display: flex; align-items: center; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.su-foot-quiet { padding: 0; color: var(--faint); }
+.su-foot-bad { color: var(--clay); font-weight: 600; background: color-mix(in oklab, var(--clay) 6%, var(--paper)); }
+
+/* The corner: a quiet square, the card's one press. */
+.su-cbtn {
+  flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 7px;
+  background: var(--raised); color: var(--muted); cursor: pointer;
+  display: grid; place-items: center;
+}
+.su-cbtn svg { width: 14px; height: 14px; }
+.su-cbtn:hover { color: var(--text); background: color-mix(in oklab, var(--raised) 70%, var(--line)); }
+.su-cbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+
+/* The wait: bars where a card's parts go, at the sizes they take. */
+.su-wbar {
+  display: block; flex: none; border-radius: 5px;
+  background: linear-gradient(90deg,
+    color-mix(in oklab, var(--text) 7%, transparent) 30%,
+    color-mix(in oklab, var(--text) 15%, transparent) 50%,
+    color-mix(in oklab, var(--text) 7%, transparent) 70%);
+  background-size: 300% 100%; animation: su-wshine 1.3s linear infinite;
+}
+@keyframes su-wshine { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .su-wbar { animation: none; } }
+.su-wcard { cursor: default; pointer-events: none; }
+.su-wtile { width: 32px; height: 32px; border-radius: 9px; }
+.su-wname { width: 44%; height: 14px; }
+.su-wline { width: 72%; height: 12px; margin: 13px 0 32px; }
+.su-wfoot { width: 38%; height: 12px; margin-top: 9px; }
+.su-wtn { display: inline-block; width: 14px; height: 10px; border-radius: 3px; margin-left: 6px; vertical-align: -1px; }
+
+/* ── the sheet ──────────────────────────────────────────────────── */
+
+/* The owner's fixed 520x500 box (page.css sizes `.dpanel` off `data-owner`):
+   head, one scrolling body, foot. The form and the wizard bring the body and
+   the foot. Its geometry is the agent sheet's, measure for measure
+   (features/extAgents/styles.css): the two halves of the hub open the same
+   drawer, and a second set of paddings, weights and a grey foot read as a
+   different product. */
+.su-sheet { width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.su-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 20px 48px 0 20px; }
+.su-head .channel-mark { width: 46px; height: 46px; border-radius: 12px; }
+.su-meta { flex: 1; min-width: 0; }
+.su-meta h3 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
+.su-by { display: flex; align-items: center; gap: 6px; margin-top: 1px; font-size: 11.5px; color: var(--faint); }
+.su-by .su-led { width: 5px; height: 5px; }
+.su-by .st.ok { color: var(--moss); }
+.su-by .st.bad { color: var(--clay); }
+.su-by .st.off { color: var(--faint); }
+
+.su-sheet > .subody {
+  flex: 1; min-height: 0; padding: 18px 20px 4px; overflow-y: auto;
+  display: grid; gap: 16px; align-content: start;
+  color: var(--muted); font-size: 12.5px;
+}
+.su-sheet > .subody > * { margin-top: 0; }
+.su-sheet .sufields { gap: 16px; }
+.su-sheet .sufield > label { font-size: 12px; font-weight: 400; color: var(--muted); margin-bottom: 6px; }
+.su-sheet .sufield > input {
+  width: 100%; box-sizing: border-box; height: var(--ctl-h); padding: 0 10px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: var(--ctl-r);
+  font-size: 13px; color: var(--text); outline: 0;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.su-sheet .sufield > input:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
+.su-sheet .sufield > input:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); background: var(--paper); }
+.su-sheet .sugsub { font-size: 12px; font-weight: 600; color: var(--muted); }
+.su-sheet .sucap { font-family: inherit; font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--muted); }
+
+/* Where the credentials come from: one quiet box above the boxes it is about,
+   the whole of it the link to the console. */
+.su-guide {
+  display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--line-soft);
+  color: var(--muted); font-size: 12.5px; line-height: 1.5; text-decoration: none;
+  transition: border-color .15s ease;
+}
+.su-guide:hover { border-color: var(--line); }
+.su-guide-t { flex: 1; min-width: 0; }
+.su-guide-go { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--text); font-weight: 500; }
+.su-guide-go svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.su-keep { margin: 0; font-size: 12px; color: var(--faint); }
+
+.su-sheet > .sufoot {
+  flex: none; margin-top: 0; padding: 14px 20px 18px; gap: 9px;
+  border-top: 1px solid var(--line-soft); background: none;
+}
+.su-sheet > .sufoot .n { font-family: inherit; font-size: 12px; color: var(--faint); }
+/* Backing out: a word at the far end, not a second button beside the verb. */
+.su-sheet > .sufoot .mini.su-off { min-width: 0; padding: 0 10px; margin-left: -10px; border-color: transparent; background: none; color: var(--muted); }
+:root[data-lang="en"] .su-sheet > .sufoot .mini.su-off { min-width: 0; }
+.su-sheet > .sufoot .mini.su-off:hover:not(:disabled) { color: var(--clay); background: color-mix(in oklab, var(--clay) 7%, transparent); }
+
+/* Scanning: the code's place on the left, drawn before there is a code, and
+   the three steps beside it. */
+.su-sheet > .subody.su-scan { grid-template-columns: 172px minmax(0, 1fr); gap: 0 24px; align-items: start; }
+.su-qr { display: grid; justify-items: center; }
+.su-qr .qrbox { padding: 0; margin: 0; border: 0; gap: 10px; }
+.su-qr .qrshot { width: 172px; height: 172px; border-radius: 12px; }
+.su-qr .qrsay { font-size: 12px; }
+.su-qrph {
+  width: 172px; height: 172px; box-sizing: border-box; padding: 18px; border-radius: 12px;
+  border: 1px dashed var(--line); background: var(--surface);
+  display: grid; place-items: center; align-content: center; gap: 10px;
+  color: var(--faint); font-size: 12px; line-height: 1.5; text-align: center;
+}
+.su-qrph svg { width: 34px; height: 34px; }
+.su-qrph-ok { border-style: solid; border-color: color-mix(in oklab, var(--moss) 40%, transparent); color: var(--moss); }
+.su-steps { display: grid; gap: 2px; padding-top: 4px; }
+.su-steps .step .st { font-size: 13.5px; }
+.su-steps .step .sd { font-size: 12px; line-height: 1.5; }
+
+/* The sheet's one verb in the ink the agent hub's sheet uses for its own. A
+   disabled one keeps that ink and takes the page's disabled fade, as the
+   agent sheet's does, rather than turning a grey of its own. */
+.su-sheet > .sufoot .mini.key { background: var(--text); border-color: var(--text); color: var(--ink); }
+.su-sheet > .sufoot .mini.key:hover:not(:disabled) { filter: brightness(1.18); }

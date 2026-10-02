@@ -1,23 +1,23 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { createPortal } from 'react-dom'
 
 import { ChannelMark } from '../../components/ChannelMark'
+import { HubHead } from '../../components/HubHead'
 import { Field } from '../../components/SetupSheet'
-import {
-  TwoPane, TwoPaneFind, TwoPaneGroup, TwoPaneHead, TwoPaneList, TwoPaneNoHit, TwoPaneNone, TwoPaneRow, TwoPaneSwitch,
-  TwoPaneWait,
-} from '../../components/TwoPane'
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
-import { chanName } from './catalogue'
+import { CHANNELS, chanName } from './catalogue'
 import * as store from './store'
 
 import type { ConnChannel, ConnField } from './types'
 import type { JSX } from 'react'
+import './styles.css'
 
-/* Where Raven receives messages: a section of the settings dialog, drawn as a
-   list of the channel catalogue with the picked one beside it. The fields that
-   pane draws come from the channel's own Pydantic schema, shipped on
-   channels.status, so the form cannot drift from the model.
+/* Where Raven receives messages: the channel half of the connections hub
+   (state/hub.ts), drawn the way its agent half is -- tabs over a grid of
+   cards, and the picked one in the shared drawer.
+   The fields the sheet draws come from the channel's own Pydantic schema,
+   shipped on channels.status, so the form cannot drift from the model.
  */
 
 /* Configured means the schema's required fields are all set. Entries whose
@@ -38,21 +38,35 @@ function connState(c: ConnChannel): 'off' | 'unknown' | 'down' | 'unpaired' | 'l
   return 'live'
 }
 
-/* An entrance's state: the dot's class plus one line of fact. Five states, five
-   things worth saying -- "nobody could be asked" is not the same as "off".
+/* What the reader is told, which is three things rather than the five above:
+ * it works, it does not work yet, or it was set up and failed.
  *
- * The sentence is for the card, which has room for it; the row shows only the
- * dot. Under a row it was a third grey line saying what the group heading, the
- * cost badge and the button had each already said. */
-function stateOf(c: ConnChannel): { cls: string; text: string } {
+ * The other two collapse on purpose. An adapter up and waiting on a code is
+ * signing in, and signing in happens in the sheet; to the reader it is simply
+ * not connected yet. And "nobody could be asked" is a fact about the page, not
+ * about one entrance: with no host running every entrance is equally deaf, so
+ * the page says that once (the notice over the grid) and no card claims it.
+ * Only an adapter the host tried and could not start is this entrance's own
+ * trouble, and the one worth a red light.
+ */
+type Shown = 'live' | 'broken' | 'idle'
+
+function shownOf(c: ConnChannel): Shown {
   const live = connState(c)
-  if (live === 'live') return { cls: 'ok', text: c.who ? t('gui.conn.as_you', { who: c.who }) : t('gui.conn.st_live') }
-  if (live === 'down') return { cls: 'bad', text: t('gui.conn.st_down') }
-  if (live === 'unpaired') return { cls: 'warn', text: t('gui.conn.st_unpaired') }
-  if (live === 'unknown') return { cls: 'warn', text: t('gui.conn.st_unknown') }
-  /* Not in service. What is worth saying is how far off it is -- and a fully
-     configured entry that is simply switched off says that, rather than
-     nothing. */
+  if (live === 'live') return 'live'
+  if (live === 'down' && store.get().host !== false) return 'broken'
+  return 'idle'
+}
+
+/* The sheet's own line: the same three, with room for the reason. The reason
+   is the gateway's word from this page's last write (the source keeps it on
+   the row); a status read has none to give. */
+function stateOf(c: ConnChannel): { cls: string; text: string } {
+  const shown = shownOf(c)
+  if (shown === 'live') return { cls: 'ok', text: c.who ? t('gui.conn.as_you', { who: c.who }) : t('gui.conn.st_live') }
+  if (shown === 'broken') {
+    return { cls: 'bad', text: c.refusal ? t('gui.conn.st_bad_why', { why: c.refusal }) : t('gui.conn.st_bad') }
+  }
   const missing = (c.missing || []).length
   if (missing) return { cls: 'off', text: t('gui.conn.st_missing', { n: missing }) }
   return { cls: 'off', text: isConfigured(c) ? t('gui.conn.st_off') : '' }
@@ -89,161 +103,211 @@ const APPLY: Record<string, string> = {
   matrix: 'https://app.element.io',
 }
 
-const CHANNEL_GLYPH = (
-  <svg viewBox="0 0 24 24"><path d="M5.5 5.5h13a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H11l-4.5 3v-3h-1a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2z" /><path d="M8 10.5h8M8 13.5h5" /></svg>
-)
+/* What a card says under its name: what to do about a failure, how far this
+   entrance is from receiving, or, once it receives, who it receives as. */
+function lineOf(c: ConnChannel): string {
+  const shown = shownOf(c)
+  if (shown === 'live') return c.who ? t('gui.conn.as_you', { who: c.who }) : t('gui.conn.line_live')
+  if (shown === 'broken') return t(scanLogin(c) ? 'gui.conn.line_bad_scan' : 'gui.conn.line_bad_creds')
+  if (scanLogin(c)) return t('gui.conn.line_scan')
+  const missing = (c.missing || []).length
+  if (missing) return t('gui.conn.line_creds', { n: String(missing) })
+  /* Switched on and still not in: whatever is holding it (no host, a code not
+     scanned yet) the page or the sheet says -- "not switched on" would be
+     false here. */
+  return t(c.on ? 'gui.conn.line_saved' : 'gui.conn.line_ready')
+}
 
+/* The card's foot: one word for the three, in the same quiet grey for two of
+   them, so a grid of twelve can be scanned for the one in trouble. */
+function footOf(c: ConnChannel): { tone: 'quiet' | 'bad'; text: string } {
+  const shown = shownOf(c)
+  if (shown === 'live') return { tone: 'quiet', text: t('gui.conn.foot_on') }
+  if (shown === 'broken') return { tone: 'bad', text: t('gui.conn.foot_bad') }
+  return { tone: 'quiet', text: t('gui.conn.foot_off') }
+}
+
+const FOOT_CLASS = { quiet: 'su-foot su-foot-quiet', bad: 'su-foot su-foot-bad' } as const
+
+const PLUS = 'M12 5v14M5 12h14'
+
+/* One entrance. The whole card opens its sheet, and so does the corner: that
+   is the only press a card has, because getting in is scanning a code or
+   handing over credentials, and both happen in the sheet. */
+function ChanCard({ c, current }: { c: ConnChannel; current: boolean }): JSX.Element {
+  const shown = shownOf(c)
+  const live = shown === 'live'
+  const foot = footOf(c)
+  const name = chanName(c)
+  const open = (): void => store.openChannel(c)
+  const led = live ? 'su-led' : shown === 'broken' ? 'su-led su-led-bad' : null
+  return (
+    <div
+      className="su-card"
+      role="button"
+      tabIndex={0}
+      aria-current={current ? 'true' : undefined}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+    >
+      <div className="su-ctop">
+        <ChannelMark id={c.id} />
+        <div className="su-nm">
+          <span className="su-t">{name}</span>
+          {led ? <span className={led} /> : null}
+        </div>
+        {live ? null : (
+          <button
+            aria-label={t('gui.conn.connect')}
+            className="su-cbtn"
+            onClick={(e) => {
+              e.stopPropagation()
+              open()
+            }}
+            title={t('gui.conn.connect')}
+            type="button"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+              <path d={PLUS} />
+            </svg>
+          </button>
+        )}
+      </div>
+      <div className="su-one">{lineOf(c)}</div>
+      <div className="su-foot-slot">
+        <div className={FOOT_CLASS[foot.tone]}>{foot.text}</div>
+      </div>
+    </div>
+  )
+}
+
+/* The grid before the first answer: one placeholder per catalogue entry, the
+   shape a real card has, so the cards land in place rather than after a jump. */
+function WaitGrid(): JSX.Element {
+  return (
+    <div className="su-grid" aria-busy="true">
+      {CHANNELS.map((c) => (
+        <div className="su-card su-wcard" key={c.id}>
+          <div className="su-ctop">
+            <span className="su-wbar su-wtile" />
+            <span className="su-wbar su-wname" />
+          </div>
+          <span className="su-wbar su-wline" />
+          <div className="su-foot-slot">
+            <span className="su-wbar su-wfoot" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/* The picked entrance, in the shared drawer. Signing in by phone is a
+   sequence, not a form: nothing can be scanned until the entry is running. So
+   a scan channel gets the wizard until it is paired, and the credential form
+   is for the channels that have one. */
+const SHEET_LED: Record<Shown, string | null> = { live: 'su-led', broken: 'su-led su-led-bad', idle: null }
+
+function ChanSheet({ c }: { c: ConnChannel }): JSX.Element {
+  const st = stateOf(c)
+  const shown = shownOf(c)
+  const signing = scanLogin(c) && connState(c) !== 'live'
+  /* A scan entrance still to sign in says how it signs in; one that failed
+     says it failed, like any other. */
+  const led = SHEET_LED[shown]
+  const by = signing && shown !== 'broken'
+    ? <span className="st off">{t('gui.conn.cost_scan_line')}</span>
+    : <span className={'st ' + st.cls}>{st.text}</span>
+  return createPortal(
+    <div className="su-sheet" aria-label={chanName(c)} role="document">
+      <div className="su-head">
+        <ChannelMark id={c.id} />
+        <div className="su-meta">
+          <h3>{chanName(c)}</h3>
+          <div className="su-by">
+            {led ? <span className={led} /> : null}
+            {by}
+          </div>
+        </div>
+      </div>
+      {signing ? <ScanWizard c={c} /> : <ConnForm c={c} />}
+    </div>,
+    store.detailHost(),
+  )
+}
+
+type Tab = 'all' | 'on' | 'off'
+
+const TABS: ReadonlyArray<{ tab: Tab; label: string; empty: string }> = [
+  { tab: 'all', label: 'gui.conn.tab_all', empty: 'gui.conn.none' },
+  { tab: 'on', label: 'gui.conn.tab_on', empty: 'gui.conn.none_on' },
+  { tab: 'off', label: 'gui.conn.tab_off', empty: 'gui.conn.none_off' },
+]
+
+/* Two groups, because there are two answers to "is this entrance mine yet".
+   Connected is a fact only the live adapter can report, so a switch flipped on
+   for an entrance that never came up stays with the ones still to connect.
+   Those are ordered by what it costs to get in: a scan-login channel is one
+   phone away, a channel wanting six credentials is an afternoon. */
 export function ConnectionsApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: every word
      below is a t(key) read at render time (state/lang/store.ts). */
   useSyncExternalStore(lang.subscribe, lang.get)
-  const [q, setQ] = useState('')
+  const [tab, setTab] = useState<Tab>('all')
+  const on = s.rows.filter((c) => connState(c) === 'live')
+  /* The ones in trouble lead the rest: they are the only cards asking for
+     something. */
+  const broken = (c: ConnChannel): number => (shownOf(c) === 'broken' ? 0 : 1)
+  const off = s.rows
+    .filter((c) => connState(c) !== 'live')
+    .sort((a, b) => broken(a) - broken(b) || costOf(a) - costOf(b))
+  const rows: Record<Tab, ConnChannel[]> = { all: [...on, ...off], on, off }
+  const current = TABS.find((x) => x.tab === tab)!
+  const waiting = !s.loaded && !s.rows.length
   const picked = s.viewId ? s.rows.find((c) => c.id === s.viewId) : undefined
-  if (s.loaded && !s.rows.length) {
-    return <TwoPane><TwoPaneNone icon={CHANNEL_GLYPH} title={t('gui.conn.none')} /></TwoPane>
-  }
   return (
-    <TwoPane side={<ConnSide rows={s.rows} loaded={s.loaded} q={q} onQ={setQ} pickedId={s.viewId} />}>
-      {picked ? (
-        <ConnDetail key={`${picked.id}:${s.epoch}`} c={picked} />
+    <>
+      <HubHead current="channels" />
+      <div className="su-tabs" role="tablist">
+        {TABS.map((x) => (
+          <button
+            aria-selected={tab === x.tab}
+            className="su-tab"
+            key={x.tab}
+            onClick={() => setTab(x.tab)}
+            role="tab"
+            type="button"
+          >
+            {t(x.label)}
+            {waiting ? <span className="su-wbar su-wtn" /> : <span className="su-tn">{String(rows[x.tab].length)}</span>}
+          </button>
+        ))}
+      </div>
+      {/* Nothing running that could host an entrance: every one of them is
+          deaf for the same reason, so it is said once, here, and no card
+          repeats it. */}
+      {s.host === false ? (
+        <div className="su-notice" role="status">
+          {t('gui.conn.host_down')}
+        </div>
+      ) : null}
+      {waiting ? (
+        <WaitGrid />
+      ) : rows[tab].length ? (
+        <div className="su-grid">
+          {rows[tab].map((c) => <ChanCard c={c} current={c.id === s.viewId} key={c.id} />)}
+        </div>
       ) : (
-        <TwoPaneNone>{t('gui.conn.pick')}</TwoPaneNone>
+        <div className="su-empty">{t(current.empty)}</div>
       )}
-    </TwoPane>
-  )
-}
-
-/* Why an entrance that is in service is not receiving, in the row's own second
-   line -- the same line an addable row uses for what it costs to get in. A live
-   one needs no reason: the group and the green dot have said it. */
-/* Why an entrance is not in service, when something actually went wrong.
- *
- * Only a thing gone wrong earns a reason. An adapter that is up and waiting on a
- * code is not wrong and not a state to advertise -- it is a step of signing in,
- * which happens in the pane the reader has open. An entrance that started and
- * stopped, or has nothing running it, is a different matter: that is why it is
- * not in service, and the row is where the reader looks for it.
- *
- * "State unknown" is the honest answer when nobody could be asked, and the wrong
- * one when we know why nobody answered: with no host running there is no
- * adapter, and naming that is the difference between a reader who thinks their
- * entrance is broken and one who knows nothing is running it. */
-function reasonOf(c: ConnChannel): string | null {
-  const live = connState(c)
-  if (live === 'live' || live === 'unpaired' || live === 'off') return null
-  if (live === 'down') return 'tag_down'
-  return store.get().host === false ? 'tag_nohost' : 'tag_unknown'
-}
-
-/* The row's second line: a reason where there is one, then the state, and for
-   an entrance nobody has started what it costs to get in. */
-function rowSub(c: ConnChannel): { text: string; tone?: 'warn' | 'live' | 'bad' } {
-  const live = connState(c)
-  if (live === 'live') return { text: stateOf(c).text, tone: 'live' }
-  const reason = reasonOf(c)
-  if (reason) return { text: t('gui.conn.' + reason), tone: reason === 'tag_down' ? 'bad' : 'warn' }
-  if (live === 'unpaired') return { text: t('gui.conn.st_unpaired'), tone: 'warn' }
-  if (scanLogin(c)) return { text: t('gui.conn.cost_scan') }
-  const n = (c.fields || []).filter((f) => f.required).length
-  const missing = (c.missing || []).length
-  return { text: missing ? t('gui.conn.st_missing', { n: missing }) : t('gui.conn.cost_n', { n: String(n) }) }
-}
-
-/* The left column: search, then two groups, because there are two answers to
-   "is this entrance mine yet".
- *
- * Grouping by the config switch made pressing the button the whole of joining:
- * an entrance moved to "in service" before a code had been scanned, before a
- * credential had been tried, and would have sat there just the same with a
- * made-up token in it. The switch is a decision; being in service is a fact,
- * and only the live adapter can report it. The addable ones are ordered by what
- * it costs to get in -- a scan-login channel is one phone away, a channel
- * wanting six credentials is an afternoon. */
-function ConnSide({ rows, loaded, q, onQ, pickedId }: {
-  rows: ConnChannel[]
-  loaded: boolean
-  q: string
-  onQ(v: string): void
-  pickedId: string | null
-}): JSX.Element {
-  const term = q.trim().toLowerCase()
-  const shown = rows.filter((c) => !term || chanName(c).toLowerCase().includes(term) || c.id.includes(term))
-  const on = shown.filter((c) => connState(c) === 'live')
-  const off = shown.filter((c) => connState(c) !== 'live').sort((a, b) => costOf(a) - costOf(b))
-  const row = (c: ConnChannel): JSX.Element => {
-    const cn = chanName(c)
-    const sub = rowSub(c)
-    return (
-      <TwoPaneRow
-        key={c.id}
-        current={c.id === pickedId}
-        off={!c.on}
-        icon={<ChannelMark id={c.id} />}
-        name={cn}
-        sub={sub.text}
-        {...(sub.tone ? { tone: sub.tone } : {})}
-        onOpen={() => store.openChannel(c)}
-        trailing={
-          /* The switch only takes an entrance in or out of service. An entrance
-             whose credentials are not in yet has nothing to switch on, so the
-             way in is the pane beside this list rather than a control that can
-             only fail. */
-          <TwoPaneSwitch
-            on={c.on}
-            disabled={!isConfigured(c)}
-            label={cn}
-            onChange={() => {
-              /* A scan entrance switched on from the list has its code in the
-                 pane, and the list says nothing about that: opening the card
-                 with the switch is the cue, and the reader is where the code
-                 appears instead of watching a row that will never turn green
-                 on its own. */
-              if (!c.on && scanLogin(c)) store.openChannel(c)
-              store.toggle(c)
-            }}
-          />
-        }
-      />
-    )
-  }
-  return (
-    <>
-      <TwoPaneFind value={q} onChange={onQ} placeholder={t('gui.conn.search')} />
-      <TwoPaneList>
-        {!loaded && !rows.length ? <TwoPaneWait /> : shown.length === 0 ? (
-          rows.length ? <TwoPaneNoHit>{t('gui.conn.none_match')}</TwoPaneNoHit> : null
-        ) : (
-          <>
-            {on.length ? <TwoPaneGroup>{t('gui.conn.g_on')}</TwoPaneGroup> : null}
-            {on.map(row)}
-            {off.length ? <TwoPaneGroup>{t('gui.conn.g_off')}</TwoPaneGroup> : null}
-            {off.map(row)}
-          </>
-        )}
-      </TwoPaneList>
-    </>
-  )
-}
-
-/* The picked entrance, in the right column. It used to be a card over the list:
-   inside the settings dialog that is a layer over a layer, and the list it
-   covered was the one thing a reader comparing entrances needed to keep.
- *
- * Signing in by phone is a sequence, not a form: nothing can be scanned until
- * the entry is running. So a scan channel gets the wizard until it is paired,
- * and the credential form is for the channels that have one. */
-function ConnDetail({ c }: { c: ConnChannel }): JSX.Element {
-  const st = stateOf(c)
-  const signing = scanLogin(c) && connState(c) !== 'live'
-  return (
-    <>
-      <TwoPaneHead
-        icon={<ChannelMark id={c.id} />}
-        name={chanName(c)}
-        meta={signing ? t('gui.conn.cost_scan_line') : <span className={'st ' + st.cls}>{st.text}</span>}
-      />
-      {signing ? <ScanWizard c={c} /> : <ConnForm c={c} />}
+      {picked ? <ChanSheet c={picked} key={`${picked.id}:${s.epoch}`} /> : null}
     </>
   )
 }
@@ -345,25 +409,24 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
   return (
     <>
       <div className="subody" id="connDlgBody">
-        {/* Both sections wear the same caption: a small mono line that says
-            what the block below it is, and nothing else. The credential count
-            rides on it, which is why the head no longer repeats it. */}
-        {required.length ? (
-          <div className="sucreds">
-            <span className="k">
-              {t('gui.conn.creds')}
-              <span className="n">{`${required.filter((f) => f.set).length} / ${required.length}`}</span>
+        {/* Where the credentials come from, for an entrance still to get in:
+            the first question a reader has, answered above the boxes it is
+            about, with the console one press away. The count of what is
+            missing is the head's, so it is not said here again. */}
+        {apply && !live ? (
+          <a className="su-guide" href={apply} target="_blank" rel="noreferrer">
+            <span className="su-guide-t">{t('gui.conn.guide', { name: spaced(chanName(c)) })}</span>
+            <span className="su-guide-go">
+              {t('gui.conn.apply')}
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M7 17 17 7M9 7h8v8" />
+              </svg>
             </span>
-            {apply ? (
-              <a className="jump" href={apply} target="_blank" rel="noreferrer">
-                {t('gui.conn.apply')}
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M7 17 17 7M9 7h8v8" />
-                </svg>
-              </a>
-            ) : null}
-          </div>
+          </a>
         ) : null}
+        {/* Said once for the form, not in every box: the boxes of a mail
+            entrance read "set, leave blank to keep" six times over. */}
+        {(c.fields || []).some((f) => f.set) ? <p className="su-keep">{t('gui.conn.keep_hint')}</p> : null}
         {groups.map(([label, fs]) => (
           <div className="sugroup" key={label || '_'}>
             {label ? <div className="sugsub">{t(label)}</div> : null}
@@ -386,25 +449,17 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
         )}
       </div>
       <div className="sufoot">
-        {/* Where this form stands, in the one place a form's state belongs:
-            beside the button that acts on it. It was an empty span. */}
-        <span className="n">
-          {dirty
-            ? t('gui.conn.foot_dirty')
-            : (c.missing || []).length
-              ? t('gui.conn.foot_need', { n: String((c.missing || []).length) })
-              : t('gui.conn.foot_clean')}
-        </span>
-        {/* Clearing the switch, for the entrance whose row no longer offers it:
-            a row shows "disconnect" only where an adapter is up, so an entrance
-            switched on that never started would otherwise have no way back to
-            off. Here, beside the form, "disconnect" has the card around it to
-            say what is being switched. */}
+        {/* The way back to off, at the far end from the verb that connects:
+            side by side the two were one slip apart. */}
         {c.on ? (
-          <button className="mini ghost" onClick={() => void store.apply(c, {}, false)}>
+          <button className="mini ghost su-off" onClick={() => void store.apply(c, {}, false)}>
             {t('gui.conn.disconnect')}
           </button>
         ) : null}
+        {/* Only what the head cannot say: that the boxes hold something not
+            yet saved. What is still missing is the head's line, and a second
+            count down here said it twice. */}
+        <span className="n">{dirty ? t('gui.conn.foot_dirty') : ''}</span>
         <button className="mini key" disabled={!ready} onClick={save}>
           {/* Keyed on receiving, not on the flag: a card whose credentials were
               written and refused would otherwise offer to "save" them again. */}
@@ -413,6 +468,13 @@ function ConnForm({ c }: { c: ConnChannel }): JSX.Element {
       </div>
     </>
   )
+}
+
+/* A Latin name set inside a Chinese sentence takes a space either side, the
+   way the catalogue writes "Raven" into its own sentences; a Chinese name or
+   an English sentence (whose template has its spaces) takes none. */
+function spaced(name: string): string {
+  return lang.get().lang === 'zh' && /^[\x20-\x7e]+$/.test(name) ? ` ${name} ` : name
 }
 
 /* Channels that are two of something. Mail is a receiving server and a sending
@@ -465,7 +527,9 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
    * tell them something it knew all along. */
   const host = store.get().host
   const stalled = c.running !== true && (!!c.on || host === false)
-  const s1 = c.on ? 'done' : 'idle'
+  /* Pressing connect is the step there is before anything is on, so it is
+     the current one, not a grey line like the two after it. */
+  const s1 = c.on ? 'done' : 'now'
   const s2 = paired ? 'done' : up ? 'now' : 'idle'
   const s3 = paired ? 'now' : 'idle'
   const step = (n: string, state: string, title: string, sub?: JSX.Element | string | null): JSX.Element => (
@@ -479,37 +543,61 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
   )
   return (
     <>
-      <div className="subody suwiz" id="connDlgBody">
+      <div className="subody suwiz su-scan" id="connDlgBody">
+        {/* The code's place, drawn before there is a code: the reader sees
+            where it will appear, and what brings it. The panel itself only
+            mounts where a code can exist, and unmounting it is what stops the
+            poll. */}
+        <div className="su-qr">
+          {s2 === 'now' ? (
+            <QrPanel c={c} />
+          ) : (
+            <div className={paired ? 'su-qrph su-qrph-ok' : 'su-qrph'}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                {paired ? (
+                  <path d="m5 12.5 4.5 4.5L19 7.5" />
+                ) : (
+                  <>
+                    <rect x="4" y="4" width="6" height="6" rx="1" />
+                    <rect x="14" y="4" width="6" height="6" rx="1" />
+                    <rect x="4" y="14" width="6" height="6" rx="1" />
+                    <path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2" />
+                  </>
+                )}
+              </svg>
+              <span>{t(paired ? 'gui.conn.qr_done' : 'gui.conn.qr_idle')}</span>
+            </div>
+          )}
+        </div>
+        <div className="su-steps">
         {step('1', s1, c.on ? t('gui.conn.w1_done') : t('gui.conn.w1_idle'))}
         {step(
           '2',
           s2,
           paired ? t('gui.conn.w2_done') : t('gui.conn.w2'),
-          /* The panel only polls where a code can exist, and unmounting it is
-             what stops the poll -- so it lives inside the step that is
-             current, not above the wizard.
-           *
-           * Two ways for there to be no code, and one sentence for both was
+          /* Two ways for there to be no code, and one sentence for both was
            * wrong in the more common one: "Raven is not running" printed over a
            * page the gateway itself was serving. Only a KNOWN host shifts the
            * blame to the adapter -- something is running it, so it started and
            * gave up, and that is the case worth trying again. Not knowing keeps
            * the old advice, because "open the app" is still the useful thing to
            * say to a reader whose gateway may well be down. */
-          s2 === 'now' ? (
-            <QrPanel c={c} />
-          ) : stalled ? (
-            t(host === true ? 'gui.conn.w2_down' : 'gui.conn.w2_blocked')
-          ) : null,
+          s2 !== 'now' && stalled ? t(host === true ? 'gui.conn.w2_down' : 'gui.conn.w2_blocked') : null,
         )}
         {step('3', s3, t('gui.conn.w3'))}
+        </div>
       </div>
       <div className="sufoot">
+        {/* Backing out sits at the far end, as it does under the form. */}
+        {c.on && !paired ? (
+          <button className="mini ghost su-off" onClick={() => void store.apply(c, {}, false)}>
+            {t('gui.conn.disconnect')}
+          </button>
+        ) : null}
         <span className="n">{up && !paired ? t('gui.conn.w_wait') : ''}</span>
         {/* The list's two verbs, not two more of their own: the wizard's first
             button does what the row's does, and backing out is the same
-            disconnect. It read "turn the entry on" -- the words step 1 above it
-            already carries -- and "cancel connecting". */}
+            disconnect. */}
         {!c.on ? (
           <button className="mini key" onClick={() => void store.apply(c, {}, true)}>
             {t('gui.conn.connect')}
@@ -518,22 +606,14 @@ function ScanWizard({ c }: { c: ConnChannel }): JSX.Element {
           <button className="mini key" onClick={() => store.closeChannel()}>
             {t('gui.conn.w_done')}
           </button>
-        ) : (
-          <>
-            <button className="mini ghost" onClick={() => void store.apply(c, {}, false)}>
-              {t('gui.conn.disconnect')}
-            </button>
-            {/* On and not up: the entrance gave up, or nothing started it. The
-                row's connect is the retry, and this card is covering it -- so
-                the card carries one, or the only way to try again is to close
-                this and find the row underneath. */}
-            {!up ? (
-              <button className="mini key" onClick={() => void store.apply(c, {}, true)}>
-                {t('gui.conn.w_retry')}
-              </button>
-            ) : null}
-          </>
-        )}
+        ) : !up ? (
+          /* On and not up: the entrance gave up, or nothing started it. The
+             card carries the retry, or the only way to try again is to close
+             this and find the card underneath. */
+          <button className="mini key" onClick={() => void store.apply(c, {}, true)}>
+            {t('gui.conn.w_retry')}
+          </button>
+        ) : null}
       </div>
     </>
   )

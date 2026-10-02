@@ -23,8 +23,8 @@
 
 import { makeStore } from './store'
 
-/** The four islands that share the drawer. */
-export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'extAgents'
+/** The five islands that share the drawer. */
+export type DetailOwner = 'memory' | 'plugins' | 'skills' | 'extAgents' | 'connections'
 
 export type DetailState = {
   readonly owner: DetailOwner | null
@@ -37,7 +37,7 @@ export type DetailState = {
   readonly gen: number
 }
 
-const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'memory', 'extAgents']
+const CLOSE_ORDER: readonly DetailOwner[] = ['plugins', 'skills', 'memory', 'extAgents', 'connections']
 
 /* Kept in step with `.detail`'s opacity transition in page.css. A little
    longer than the transition, so the drop lands after the last painted frame
@@ -81,7 +81,7 @@ export function host(owner: DetailOwner): HTMLDivElement {
   let el = hosts.get(owner)
   if (!el) {
     el = document.createElement('div')
-    if (owner === 'memory' || owner === 'extAgents') el.style.display = 'contents'
+    if (owner === 'memory' || owner === 'extAgents' || owner === 'connections') el.style.display = 'contents'
     hosts.set(owner, el)
   }
   return el
