@@ -217,6 +217,12 @@ class Browser:
         # moment two callers are most likely to collide. Separate from
         # `_s.lock`, which the navigation methods take after calling `_ensure`.
         self._launch_lock = asyncio.Lock()
+        # Told the name of every owner this driver stops binding to a page, so
+        # whatever a caller keeps per owner can drop its copy on the same event
+        # instead of on a second, independently drifting clock. An attribute
+        # rather than a state field because the bindings outlive a close(), and
+        # a listener registered before one would otherwise be dropped by it.
+        self.on_owner_released: Any = None
 
     # ---- lifecycle ---------------------------------------------------------
 
@@ -318,7 +324,18 @@ class Browser:
             await self.close()
             hint = f"{exc}"
             if "Executable doesn't exist" in hint or "playwright install" in hint:
-                raise BrowserUnavailableError(f"Chromium is not installed. Run: {CHROMIUM_INSTALL_HINT}") from None
+                # A search failure, not only a missing install. This fires when
+                # the browser is on disk somewhere the launcher did not look --
+                # Playwright resolves its cache under HOME, which a sandboxed
+                # test or a different user profile can point elsewhere -- and
+                # "not installed" then sends the reader to download something
+                # they already have. Playwright's own first line names the path
+                # it tried, which is the one fact that tells the two apart.
+                tried = hint.strip().splitlines()[0] if hint.strip() else ""
+                detail = f"\n({tried})" if tried else ""
+                raise BrowserUnavailableError(
+                    f"Chromium is not installed where this process looks for it. Run: {CHROMIUM_INSTALL_HINT}{detail}"
+                ) from None
             raise BrowserUnavailableError(f"could not start Chromium: {hint}") from None
         logger.info("browser: chromium started ({}x{})", w, h)
         return self._s.page
@@ -485,9 +502,14 @@ class Browser:
             closed = True
         return not closed and now - rec.seen < OWNER_IDLE_S
 
-    def _reap_owners(self, now: float) -> None:
-        for key in [k for k, rec in self._s.owners.items() if not self._owner_live(rec, now)]:
-            del self._s.owners[key]
+    def _reap_owners(self, now: float) -> list[str]:
+        """The owners whose bindings have just died. Removal is the caller's.
+
+        Names rather than removal, because every way a binding ends has to be
+        announced in one place: ``_drop_owners`` does the removing and the
+        telling, so a reap and an explicit release cannot drift apart.
+        """
+        return [k for k, rec in self._s.owners.items() if not self._owner_live(rec, now)]
 
     def owner_of(self, page: Any) -> str | None:
         """Which live owner holds this page, if any."""
@@ -498,12 +520,22 @@ class Browser:
         return None
 
     def url_for(self, owner: str | None) -> str:
-        """Where an owner's tab is, without starting anything or rebinding."""
-        if owner is not None:
-            rec = self._s.owners.get(owner)
-            if rec is not None and self._owner_live(rec, time.monotonic()):
-                return rec.page.url
-        return self.url
+        """Where an owner's tab is, without starting anything or rebinding.
+
+        An owner already bound to a live page reads that page. An owner with no
+        live binding answers empty rather than the panel's active page: the
+        panel may be showing somebody else's tab, and a caller that keys an
+        action on this url -- the permission gate does -- would otherwise ask
+        about a site the call is not going to touch. Empty is the answer that
+        says "this owner has no page yet", and the caller decides what that
+        means.
+        """
+        if owner is None:
+            return self.url
+        rec = self._s.owners.get(owner)
+        if rec is not None and self._owner_live(rec, time.monotonic()):
+            return rec.page.url
+        return ""
 
     async def _page_for(self, owner: str | None, *, act: bool = True) -> Any:
         """The page a caller works on, binding an owner on its first call.
@@ -518,7 +550,7 @@ class Browser:
             if act:
                 self._s.touched = now
             return active
-        self._reap_owners(now)
+        self._drop_owners(self._reap_owners(now))
         rec = self._s.owners.get(owner)
         if rec is not None:
             rec.seen = now
@@ -559,7 +591,24 @@ class Browser:
 
     def release(self, owner: str) -> None:
         """Forget an owner's binding; its tab stays open for whoever claims it next."""
-        self._s.owners.pop(owner, None)
+        self._drop_owners([owner])
+
+    def _drop_owners(self, owners: list[str]) -> None:
+        """Remove these bindings, and tell the listener about the ones there were.
+
+        Whatever ends a binding -- a reap, an explicit release, the tab it was
+        on closing -- goes through here, so the listener is told once per owner
+        under one rule rather than at each call site. An owner that was never
+        bound is not announced: there is nothing to have lost.
+        """
+        gone = [owner for owner in owners if self._s.owners.pop(owner, None) is not None]
+        if self.on_owner_released is None:
+            return
+        for owner in gone:
+            try:
+                self.on_owner_released(owner)
+            except Exception as exc:  # noqa: BLE001 - a listener must not take a binding drop down
+                logger.debug("browser: owner-release listener failed for {}: {}", owner, exc)
 
     # ---- tabs ----------------------------------------------------------------
 
@@ -670,8 +719,7 @@ class Browser:
             await victim.close()
         except Exception:
             pass
-        for key in [k for k, rec in self._s.owners.items() if rec.page is victim]:
-            del self._s.owners[key]
+        self._drop_owners([k for k, rec in self._s.owners.items() if rec.page is victim])
         rest = self._pages()
         if not rest:
             await self.close()

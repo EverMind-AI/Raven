@@ -349,8 +349,12 @@ async def test_launch_reports_missing_chromium_with_the_interpreter_command(monk
         await b._ensure()
 
     why = str(exc.value)
-    assert "Chromium is not installed" in why
+    assert "Chromium is not installed where this process looks for it" in why
     assert f"{shlex.quote(sys.executable)} -m playwright install chromium" in why
+    # The path Playwright searched, quoted back. Without it the message reads
+    # as "not installed" whichever of the two it was, and a sandboxed HOME
+    # sends the reader to download a browser they already have.
+    assert "/nowhere/chrome" in why
 
 
 # ── tabs ────────────────────────────────────────────────────────────────
@@ -379,6 +383,11 @@ class _FakePage:
 class _FakeContext:
     def __init__(self, pages: list[Any]) -> None:
         self.pages = pages
+
+    async def new_page(self) -> _FakePage:
+        page = _FakePage("about:blank", f"tab{len(self.pages)}")
+        self.pages.append(page)
+        return page
 
 
 def _with_pages(b: Browser, pages: list[_FakePage], active: int = 0) -> None:
@@ -733,12 +742,12 @@ async def test_an_owner_keeps_its_tab_and_can_hand_it_back() -> None:
     first, second = _ActingPage("https://a.test", "A"), _ActingPage("https://b.test", "B")
     _driving(b, [first, second])
 
-    assert b.url_for("run:a") == "https://a.test", "an unbound owner reads the active tab"
+    assert b.url_for("run:a") == "", "an owner with no binding has no page of its own"
     b._s.owners["run:a"] = _Owner(second, time.monotonic())
     assert b.url_for("run:a") == "https://b.test"
 
     b.release("run:a")
-    assert b.url_for("run:a") == "https://a.test"
+    assert b.url_for("run:a") == "", "and releasing it hands back nothing, not the panel"
     assert not second.is_closed(), "releasing a binding leaves the tab open"
 
 
@@ -947,3 +956,84 @@ async def test_an_acting_owner_that_opens_a_tab_still_fronts_it() -> None:
 
     assert b._s.page is page and page is not held
     assert streams == ["restream"], "an act fronts the new tab exactly once"
+
+
+async def test_an_unbound_owner_has_no_site_and_keeps_the_panel_out_of_it() -> None:
+    """A caller that keys an action on an owner's url must not be handed the
+    panel's page when that owner has no binding: the panel may be showing
+    another owner's tab, and the caller -- the permission gate -- would then ask
+    the person about a site the call is not going to touch."""
+    b = get_browser()
+    other, panel = _FakePage("https://mine.test/"), _FakePage("https://bank.test/")
+    _with_pages(b, [other, panel], active=1)
+    b._s.owners["run:other"] = _Owner(other, time.monotonic())
+
+    assert b.url_for("run:absent") == "", "an owner with no binding has no site"
+    assert b.url_for(None) == "https://bank.test/", "the reader still reads the panel"
+    assert b.url_for("run:other") == "https://mine.test/"
+
+
+async def test_a_stale_binding_is_dropped_rather_than_handed_the_panel() -> None:
+    """Past OWNER_IDLE_S a binding is dead, but it is still that owner's own.
+    Reaping it and then binding the caller to whatever the panel shows would
+    move the call onto somebody else's tab, and a sibling's live binding is
+    untouched by the reap either way."""
+    b = get_browser()
+    stale, held = _FakePage("https://mine.test/"), _FakePage("https://theirs.test/")
+    _driving(b, [stale, held], active=1)
+    b._s.owners["run:x"] = _Owner(stale, time.monotonic() - driver_module.OWNER_IDLE_S - 1)
+    b._s.owners["run:other"] = _Owner(held, time.monotonic())
+    b._wire = lambda page: None  # type: ignore[method-assign]
+
+    page = await b._page_for("run:x")
+
+    assert page is not stale, "a stale binding is left behind"
+    assert page is not held, "and the panel's tab is not simply handed over"
+    assert b._s.owners["run:other"].page is held, "the sibling keeps its own"
+    assert b.url_for("run:x") == page.url
+
+
+async def test_every_way_a_binding_ends_names_the_owner_to_the_listener() -> None:
+    """A per-owner store outside the driver is told on the same event the driver
+    drops the binding -- an explicit release, a reap, and the owner's tab
+    closing -- and is never told about an owner that was never bound."""
+    b = get_browser()
+    first, second, third = (_FakePage(f"https://{n}.test/") for n in ("a", "b", "c"))
+    _driving(b, [first, second, third])
+    b._wire = lambda page: None  # type: ignore[method-assign]
+    seen: list[str] = []
+    b.on_owner_released = seen.append
+
+    b.release("never-bound")
+    assert seen == [], "nothing to announce"
+
+    b._s.owners["run:a"] = _Owner(first, time.monotonic())
+    b.release("run:a")
+    assert seen == ["run:a"]
+
+    seen.clear()
+    b._s.owners["run:b"] = _Owner(second, time.monotonic() - driver_module.OWNER_IDLE_S - 1)
+    await b._page_for("run:c", act=False)
+    assert seen == ["run:b"], "a reaped binding is announced, and only it"
+
+    seen.clear()
+    b._s.owners["run:c"] = _Owner(third, time.monotonic())
+    await b.tab_close(2, owner=None)
+    assert seen == ["run:c"], "closing the tab an owner held announces it"
+
+
+async def test_a_listener_that_raises_does_not_stop_the_binding_from_ending() -> None:
+    """The listener is a caller's bookkeeping; a bug in it must not leave the
+    driver holding a binding it has decided to drop."""
+    b = get_browser()
+    page = _FakePage("https://a.test/")
+    _driving(b, [page])
+    b._s.owners["run:a"] = _Owner(page, time.monotonic())
+
+    def explode(owner: str) -> None:
+        raise RuntimeError("listener is broken")
+
+    b.on_owner_released = explode
+    b.release("run:a")
+
+    assert "run:a" not in b._s.owners

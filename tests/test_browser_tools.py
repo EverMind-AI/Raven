@@ -152,16 +152,40 @@ def test_a_site_grant_covers_click_and_type_alike() -> None:
 
 def test_acting_tools_write_the_site_into_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate only sees parameters, so the site rides in them; a site the
-    model wrote itself is replaced, never trusted."""
+    model wrote itself is replaced, never trusted. The site is the owner's own
+    page, so an owner that has none contributes none: the panel may be showing
+    somebody else's tab, and keying the call on that site would ask the person
+    to approve a site the call is not going to act on."""
     b = get_browser()
     p = _FakePage("https://shop.example.com/cart")
     _running(b, [p])
     monkeypatch.setattr(tools_mod, "current_owner", lambda: "session:x")
+    b._s.owners["session:x"] = _Owner(p, time.monotonic())
 
     out = BrowserClickTool().cast_params({"ref": "ref_2", "site": "attacker.test"})
 
     assert out == {"ref": "ref_2", "site": "shop.example.com"}
-    assert BrowserClickTool().cast_params({"ref": "ref_2"})["site"] == "shop.example.com"
+
+
+def test_an_unbound_owner_contributes_no_site_and_the_call_stands_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    b = get_browser()
+    held = _FakePage("https://bank.test/login")
+    _running(b, [held])
+    b._s.owners["session:parent"] = _Owner(held, time.monotonic())
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "run:child")
+
+    out = BrowserPressTool().cast_params({"key": "Enter", "site": "attacker.test"})
+
+    assert out == {"key": "Enter"}, "neither the panel's site nor the model's own"
+    from raven.permissions.builtin import BROWSER_SITE_KEYED_TOOLS, action_digest, session_keys
+
+    assert "browser_press" in BROWSER_SITE_KEYED_TOOLS
+    assert session_keys("browser_press", out) == (action_digest("browser_press", out),), (
+        "no site means the grant is this call's own, so a later click on bank.test "
+        "presents a different key and a site nobody approved cannot be banked"
+    )
 
 
 def test_no_page_means_no_site() -> None:

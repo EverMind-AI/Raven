@@ -12,15 +12,19 @@ that has been stable for two decades.
 
 from __future__ import annotations
 
-import os
-import pwd
-
 import pytest
 
 from raven.browser import get_browser
 from raven.browser.driver import Browser
+from tests._browser_cache import chromium_installed, point_at_login_cache
 
-pytestmark = pytest.mark.skipif(not Browser.probe()[0], reason="browser extra not installed")
+# Both halves matter: the package can import with no browser downloaded, and a
+# skip that only asks about the package reports that as six failures rather
+# than as a skip. The install line above is what the second half is about.
+pytestmark = pytest.mark.skipif(
+    not Browser.probe()[0] or not chromium_installed(),
+    reason="playwright or its Chromium is not installed (see the module docstring)",
+)
 
 
 @pytest.fixture
@@ -136,9 +140,7 @@ async def test_chromium_starts_only_on_demand(browser) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _browsers_from_the_real_home(monkeypatch):
+def _browsers_from_the_real_home(monkeypatch: pytest.MonkeyPatch) -> None:
     """The suite redirects HOME to a temp dir; playwright keeps its browsers
     under the real one. Point it there unless the caller already did."""
-    if not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        real_home = pwd.getpwuid(os.getuid()).pw_dir
-        monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", os.path.join(real_home, "Library", "Caches", "ms-playwright"))
+    point_at_login_cache(monkeypatch)
