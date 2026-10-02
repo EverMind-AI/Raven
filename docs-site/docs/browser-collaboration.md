@@ -98,6 +98,8 @@ that an external Claude Code session, for example, uses the panel's Chromium.
 Check the effective [permission mode](permissions.md): `full` skips ordinary
 ask-tier prompts. Site-scoped consent is broader than one button, and the
 approval may show a ref and site rather than a human-readable element label.
+An action that would open a fresh tab has no site yet: its prompt names none,
+and a session grant for it covers only an identical call.
 Disable tools through `tools.disabledTools` or explicit permission rules when
 they must not be available.
 

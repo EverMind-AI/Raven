@@ -56,7 +56,10 @@ HANDOFF_NOTE = (
 # person approves for a click is the site, not the ref id -- so the site the
 # call will land on is written into the parameters before the gate reads them.
 # ``raven.permissions.builtin.session_keys`` keys a browser grant on it, and
-# the approval prompt shows it.
+# the approval prompt shows it. The driver's ``url_for`` predicts that page by
+# the rule ``_page_for`` then binds by. When the call would open a tab of its
+# own, no site describes it yet and none is written: the grant is keyed on the
+# call itself, which no later call to a real site can present.
 
 
 def _browser():

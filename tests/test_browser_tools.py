@@ -152,24 +152,23 @@ def test_a_site_grant_covers_click_and_type_alike() -> None:
 
 def test_acting_tools_write_the_site_into_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate only sees parameters, so the site rides in them; a site the
-    model wrote itself is replaced, never trusted. The site is the owner's own
-    page, so an owner that has none contributes none: the panel may be showing
-    somebody else's tab, and keying the call on that site would ask the person
-    to approve a site the call is not going to act on."""
+    model wrote itself is replaced, never trusted."""
     b = get_browser()
     p = _FakePage("https://shop.example.com/cart")
     _running(b, [p])
     monkeypatch.setattr(tools_mod, "current_owner", lambda: "session:x")
-    b._s.owners["session:x"] = _Owner(p, time.monotonic())
 
     out = BrowserClickTool().cast_params({"ref": "ref_2", "site": "attacker.test"})
 
     assert out == {"ref": "ref_2", "site": "shop.example.com"}
+    assert BrowserClickTool().cast_params({"ref": "ref_2"})["site"] == "shop.example.com"
 
 
-def test_an_unbound_owner_contributes_no_site_and_the_call_stands_alone(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_a_call_that_would_open_its_own_tab_carries_no_site(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the front tab another owner's, this owner's first call opens a tab
+    of its own, so no site describes where it acts yet. None is written -- not
+    the front tab's, and not one the model supplied -- and the grant is then
+    keyed on the call itself."""
     b = get_browser()
     held = _FakePage("https://bank.test/login")
     _running(b, [held])

@@ -742,12 +742,12 @@ async def test_an_owner_keeps_its_tab_and_can_hand_it_back() -> None:
     first, second = _ActingPage("https://a.test", "A"), _ActingPage("https://b.test", "B")
     _driving(b, [first, second])
 
-    assert b.url_for("run:a") == "", "an owner with no binding has no page of its own"
+    assert b.url_for("run:a") == "https://a.test", "an unbound owner reads the active tab"
     b._s.owners["run:a"] = _Owner(second, time.monotonic())
     assert b.url_for("run:a") == "https://b.test"
 
     b.release("run:a")
-    assert b.url_for("run:a") == "", "and releasing it hands back nothing, not the panel"
+    assert b.url_for("run:a") == "https://a.test"
     assert not second.is_closed(), "releasing a binding leaves the tab open"
 
 
@@ -958,39 +958,48 @@ async def test_an_acting_owner_that_opens_a_tab_still_fronts_it() -> None:
     assert streams == ["restream"], "an act fronts the new tab exactly once"
 
 
-async def test_an_unbound_owner_has_no_site_and_keeps_the_panel_out_of_it() -> None:
-    """A caller that keys an action on an owner's url must not be handed the
-    panel's page when that owner has no binding: the panel may be showing
-    another owner's tab, and the caller -- the permission gate -- would then ask
-    the person about a site the call is not going to touch."""
+@pytest.mark.parametrize(
+    ("bindings", "lands_on"),
+    [
+        pytest.param({}, "front", id="front-tab-is-the-readers"),
+        pytest.param({"run:other": ("front", 0)}, "new", id="front-tab-held-by-another-owner"),
+        pytest.param({"run:x": ("mine", 0)}, "mine", id="caller-holds-its-own-tab"),
+        pytest.param({"run:x": ("mine", "idle")}, "front", id="caller-idled-out-front-tab-free"),
+        pytest.param(
+            {"run:x": ("mine", "idle"), "run:other": ("front", 0)}, "new", id="caller-idled-out-front-tab-held"
+        ),
+        pytest.param({"run:x": ("mine", "closed")}, "front", id="callers-tab-was-closed"),
+        pytest.param({"run:other": ("front", "idle")}, "front", id="front-tab-held-by-an-idled-out-owner"),
+    ],
+)
+async def test_the_url_reported_for_an_owner_is_where_its_call_lands(
+    bindings: dict[str, tuple[str, Any]], lands_on: str
+) -> None:
+    """The permission gate keys an acting call on ``url_for`` before the call
+    runs, so the site a person approves is the site acted on only if this
+    report and ``_page_for`` pick the same page. One case per branch of that
+    choice; a call that must open a tab of its own is reported empty, since no
+    site describes a page nobody has opened yet."""
     b = get_browser()
-    other, panel = _FakePage("https://mine.test/"), _FakePage("https://bank.test/")
-    _with_pages(b, [other, panel], active=1)
-    b._s.owners["run:other"] = _Owner(other, time.monotonic())
-
-    assert b.url_for("run:absent") == "", "an owner with no binding has no site"
-    assert b.url_for(None) == "https://bank.test/", "the reader still reads the panel"
-    assert b.url_for("run:other") == "https://mine.test/"
-
-
-async def test_a_stale_binding_is_dropped_rather_than_handed_the_panel() -> None:
-    """Past OWNER_IDLE_S a binding is dead, but it is still that owner's own.
-    Reaping it and then binding the caller to whatever the panel shows would
-    move the call onto somebody else's tab, and a sibling's live binding is
-    untouched by the reap either way."""
-    b = get_browser()
-    stale, held = _FakePage("https://mine.test/"), _FakePage("https://theirs.test/")
-    _driving(b, [stale, held], active=1)
-    b._s.owners["run:x"] = _Owner(stale, time.monotonic() - driver_module.OWNER_IDLE_S - 1)
-    b._s.owners["run:other"] = _Owner(held, time.monotonic())
+    pages = {"mine": _FakePage("https://mine.test/"), "front": _FakePage("https://bank.test/")}
+    _driving(b, [pages["mine"], pages["front"]], active=1)
     b._wire = lambda page: None  # type: ignore[method-assign]
+    for owner, (name, age) in bindings.items():
+        if age == "closed":
+            pages[name]._closed = True
+        seen = time.monotonic() - (driver_module.OWNER_IDLE_S + 1 if age == "idle" else 0)
+        b._s.owners[owner] = _Owner(pages[name], seen)
+    before = set(map(id, pages.values()))
 
-    page = await b._page_for("run:x")
+    reported = b.url_for("run:x")
+    landed = await b._page_for("run:x")
 
-    assert page is not stale, "a stale binding is left behind"
-    assert page is not held, "and the panel's tab is not simply handed over"
-    assert b._s.owners["run:other"].page is held, "the sibling keeps its own"
-    assert b.url_for("run:x") == page.url
+    if lands_on == "new":
+        assert id(landed) not in before, "the call opened a tab of its own"
+        assert reported == ""
+    else:
+        assert landed is pages[lands_on]
+        assert reported == landed.url
 
 
 async def test_every_way_a_binding_ends_names_the_owner_to_the_listener() -> None:

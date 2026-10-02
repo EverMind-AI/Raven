@@ -519,23 +519,42 @@ class Browser:
                 return key
         return None
 
-    def url_for(self, owner: str | None) -> str:
-        """Where an owner's tab is, without starting anything or rebinding.
+    def _landing(self, owner: str, now: float) -> Any | None:
+        """The page a call for ``owner`` lands on now, or None for a new tab.
 
-        An owner already bound to a live page reads that page. An owner with no
-        live binding answers empty rather than the panel's active page: the
-        panel may be showing somebody else's tab, and a caller that keys an
-        action on this url -- the permission gate does -- would otherwise ask
-        about a site the call is not going to touch. Empty is the answer that
-        says "this owner has no page yet", and the caller decides what that
-        means.
+        The one rule both questions about it go through: ``_page_for`` binds
+        the answer and ``url_for`` reports it without binding. The permission
+        gate keys an acting call on that report before the call runs, so the
+        site a person is asked about is only the site acted on if the same
+        rule picks the page both times. Only live bindings count, which is the
+        view ``_page_for`` acts on once it has reaped.
+        """
+        rec = self._s.owners.get(owner)
+        if rec is not None and self._owner_live(rec, now):
+            return rec.page
+        active = self._s.page
+        held = {id(r.page) for k, r in self._s.owners.items() if k != owner and self._owner_live(r, now)}
+        if id(active) not in held:
+            return active
+        return None
+
+    def url_for(self, owner: str | None) -> str:
+        """Where a call for this owner would act, without starting or binding.
+
+        The owner's own tab while it holds a live one; otherwise the page
+        ``_page_for`` would hand it -- the front tab, unless another live owner
+        holds that -- and empty when the call would have to open a tab of its
+        own, which no site describes yet, or when no browser is running and the
+        call would start one. A prediction, made before the call:
+        whatever moves in between (the reader switches tabs, another owner
+        takes the front one, the binding idles past ``OWNER_IDLE_S`` while a
+        person decides) moves the call with it. The reader, ``None``, reads
+        the front tab.
         """
         if owner is None:
             return self.url
-        rec = self._s.owners.get(owner)
-        if rec is not None and self._owner_live(rec, time.monotonic()):
-            return rec.page.url
-        return ""
+        page = self._landing(owner, time.monotonic())
+        return page.url if page is not None else ""
 
     async def _page_for(self, owner: str | None, *, act: bool = True) -> Any:
         """The page a caller works on, binding an owner on its first call.
@@ -556,12 +575,10 @@ class Browser:
             rec.seen = now
             page = rec.page
         else:
-            held = {id(r.page) for k, r in self._s.owners.items() if k != owner}
-            if id(active) not in held:
-                page = active
-            elif len(self._pages()) >= MAX_TABS:
-                raise BrowserBusyError(f"tab limit reached ({MAX_TABS}); close one before opening another")
-            else:
+            page = self._landing(owner, now)
+            if page is None:
+                if len(self._pages()) >= MAX_TABS:
+                    raise BrowserBusyError(f"tab limit reached ({MAX_TABS}); close one before opening another")
                 self._s.spawning += 1
                 try:
                     page = await self._s.context.new_page()
