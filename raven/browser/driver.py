@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import shlex
 import sys
 import time
@@ -324,17 +325,19 @@ class Browser:
             await self.close()
             hint = f"{exc}"
             if "Executable doesn't exist" in hint or "playwright install" in hint:
-                # A search failure, not only a missing install. This fires when
-                # the browser is on disk somewhere the launcher did not look --
-                # Playwright resolves its cache under HOME, which a sandboxed
-                # test or a different user profile can point elsewhere -- and
-                # "not installed" then sends the reader to download something
-                # they already have. Playwright's own first line names the path
-                # it tried, which is the one fact that tells the two apart.
-                tried = hint.strip().splitlines()[0] if hint.strip() else ""
-                detail = f"\n({tried})" if tried else ""
+                # "Not installed" is the right reading only when nothing is on
+                # disk. The same error comes back when a browser is installed
+                # where this process does not look -- Playwright resolves its
+                # cache from HOME, which a sandboxed run or another account
+                # moves -- and then the install line sends the reader to fetch
+                # what they already have. Playwright's error names the path it
+                # tried, which is the one fact that tells the two apart.
+                looked = re.search(r"Executable doesn't exist at (.+)", hint)
+                where = f" ({looked.group(1).strip()})" if looked else ""
                 raise BrowserUnavailableError(
-                    f"Chromium is not installed where this process looks for it. Run: {CHROMIUM_INSTALL_HINT}{detail}"
+                    f"Chromium is not installed where this process looks for it{where}; if it is "
+                    "installed elsewhere, set PLAYWRIGHT_BROWSERS_PATH to its ms-playwright directory. "
+                    f"Otherwise run: {CHROMIUM_INSTALL_HINT}"
                 ) from None
             raise BrowserUnavailableError(f"could not start Chromium: {hint}") from None
         logger.info("browser: chromium started ({}x{})", w, h)

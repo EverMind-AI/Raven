@@ -350,11 +350,14 @@ async def test_launch_reports_missing_chromium_with_the_interpreter_command(monk
 
     why = str(exc.value)
     assert "Chromium is not installed where this process looks for it" in why
-    assert f"{shlex.quote(sys.executable)} -m playwright install chromium" in why
-    # The path Playwright searched, quoted back. Without it the message reads
-    # as "not installed" whichever of the two it was, and a sandboxed HOME
-    # sends the reader to download a browser they already have.
-    assert "/nowhere/chrome" in why
+    assert why.endswith(f"{shlex.quote(sys.executable)} -m playwright install chromium"), "the fix closes the line"
+    # The path Playwright searched, quoted back, and the knob that moves the
+    # search: without them the message reads as "not installed" whichever of
+    # the two it was, and a sandboxed HOME sends the reader to download a
+    # browser they already have.
+    assert "(/nowhere/chrome)" in why
+    assert "PLAYWRIGHT_BROWSERS_PATH" in why
+    assert "\n" not in why, "the panel shows this in one block, where a newline collapses to a space"
 
 
 # ── tabs ────────────────────────────────────────────────────────────────
