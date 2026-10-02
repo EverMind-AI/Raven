@@ -37,10 +37,11 @@ ACTION_TEXT_CHARS = 3_000
 SNAPSHOT_TEXT_CHARS = 8_000
 MAX_REFS_SHOWN = 120
 
-# How many owners' stamps ``_acted`` keeps. The stamps only answer "did the
-# reader touch the page since I last acted", which the newest few owners can
-# answer as well as all of them; the cap is what stops one key per delegated run
-# from accumulating for the life of the process.
+# How many owners' stamps ``_acted`` keeps, most recent first. The stamps only
+# answer "did the reader touch the page since this owner last acted", which the
+# owners acting lately can answer as well as all of them. The driver prunes an
+# owner when it drops that owner's binding; the cap is for the owners it never
+# drops, so one key per delegated run cannot accumulate for the process's life.
 _ACTED_MAX = 512
 
 # Carried by browser_navigate alone. Every tool's description is paid for on
@@ -201,14 +202,14 @@ class _BrowserTool(Tool):
 
     def _mark(self, owner: str) -> None:
         acted = _BrowserTool._acted
+        # Re-inserted rather than updated, so the dict's own order is the order
+        # owners last acted in and the cap can evict from the front: no sort,
+        # and no tie to break between two stamps one clock tick apart.
+        acted.pop(owner, None)
         acted[owner] = time.monotonic()
         self._bind_to_driver()
-        if len(acted) > _ACTED_MAX:
-            # Oldest-first, and only ever to the cap: the keys are owner names
-            # that a finished delegated run never speaks again, so without this
-            # one key per run outlives the process.
-            for stale in sorted(acted, key=lambda k: acted[k])[: len(acted) - _ACTED_MAX]:
-                acted.pop(stale, None)
+        while len(acted) > _ACTED_MAX:
+            acted.pop(next(iter(acted)))
 
     def _touched(self, owner: str) -> bool:
         last = _BrowserTool._acted.get(owner)
@@ -219,17 +220,16 @@ class _BrowserTool(Tool):
         cls._acted.pop(owner, None)
 
     def _bind_to_driver(self) -> None:
-        """Register this owner's store with the driver that ends it.
+        """Have the driver tell the stamp map when it drops an owner's binding.
 
-        Lazy and idempotent: the driver is the process-wide one, and reaching
-        for it is what builds it, so doing this at import would have the tools
-        module construct the shared browser as a side effect. The driver is the
-        one place that knows when an owner's tab binding ends, so the stamp map
-        is pruned from there rather than on a second clock of its own.
+        Called from ``_mark``, the map's only writer, so no owner can hold a
+        stamp before the driver knows to prune it. Not at import: reaching for
+        the driver is what builds the process-wide browser, and importing this
+        module must not construct one as a side effect. The driver is the one
+        place that knows when an owner's binding ends, so the map is pruned on
+        that event rather than on a second clock of its own.
         """
-        browser = _browser()
-        if browser.on_owner_released is not _BrowserTool._forget_owner:
-            browser.on_owner_released = _BrowserTool._forget_owner
+        _browser().on_owner_released = _BrowserTool._forget_owner
 
     async def _readback(self, owner: str, state: dict[str, Any], *, acted: bool) -> ToolResult:
         """State plus a compact snapshot; the snapshot is skipped on an error

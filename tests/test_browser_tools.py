@@ -769,3 +769,39 @@ def test_site_keyed_permission_set_matches_the_acting_tool_hierarchy() -> None:
 
     acting = {cls().name for cls in tools_mod._ActingTool.__subclasses__()}
     assert acting == set(BROWSER_SITE_KEYED_TOOLS)
+
+
+def test_the_stamp_store_is_pruned_by_the_driver_once_it_holds_an_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The store registers with the driver from its only writer, so an owner
+    that holds a stamp is an owner the driver will prune -- and not at import,
+    where reaching for the driver would build the process-wide browser. This
+    drives the release a run's end would cause and asserts the stamp is gone;
+    an unregistered store would keep it for the life of the process."""
+    b = get_browser()
+    page = _FakePage("https://a.test/")
+    _running(b, [page])
+    assert b.on_owner_released is None, "nothing has reached the driver yet"
+
+    BrowserPressTool()._mark("run:r1")
+    b._s.owners["run:r1"] = _Owner(page, time.monotonic())
+
+    assert b.on_owner_released == tools_mod._BrowserTool._forget_owner
+    b.release("run:r1")
+    assert "run:r1" not in tools_mod._BrowserTool._acted
+
+
+def test_the_stamp_store_keeps_the_owners_that_acted_most_recently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An owner the driver never drops is still evicted once the store is
+    full, least recent first, and acting again moves an owner to the back."""
+    monkeypatch.setattr(tools_mod, "_ACTED_MAX", 3)
+    _running(get_browser(), [_FakePage("https://a.test/")])
+    tool = BrowserPressTool()
+
+    for owner in ("run:a", "run:b", "run:c"):
+        tool._mark(owner)
+    tool._mark("run:a")
+    tool._mark("run:d")
+
+    assert list(tools_mod._BrowserTool._acted) == ["run:c", "run:a", "run:d"]
