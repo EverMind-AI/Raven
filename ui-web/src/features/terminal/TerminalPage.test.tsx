@@ -86,6 +86,7 @@ const terminal = (over: Partial<TerminalRow> = {}): TerminalRow => ({
     agentName: 'rsi-research-imp',
     brand: 'claude',
     bindingGeneration: 1,
+    taskRef: 'task-1',
   },
   ...over,
 })
@@ -106,6 +107,9 @@ function wire(): void {
     resize: vi.fn(async () => ({})),
     subscribe: vi.fn(async ({ handle, enabled = true }) => ({
       subscription: { handle, enabled, seq: 0, ackBytes: 65536, subscription_id: `sub-${handle}` },
+    })),
+    mailboxOverview: vi.fn(async () => ({
+      data: { bindings: [], messages: [], notifications: [], authority: null },
     })),
     onOutput: null,
     onEvent: null,
@@ -303,5 +307,390 @@ describe('hosted terminal tabs', () => {
       },
     }))
     expect(acknowledged.classList.contains('active')).toBe(true)
+  })
+
+  it('polls and displays mailbox overview with message phases, authority, and compact artifact evidence', async () => {
+    rows = [terminal({ identity: { agentName: 'rsi-research-imp', brand: 'claude', bindingGeneration: 1, taskRef: 'task-auth-1' } })]
+    ;(source.mailboxOverview as any).mockResolvedValue({
+      data: {
+        bindings: [{
+          binding_id: 'b-1',
+          ref: { authority_id: 'auth-1', tenant_id: 't-1', agent_id: 'agent-1', instance_id: 'inst-1', generation: 1 },
+          scope: { task_id: 'task-auth-1', workspace_id: 'worktree-1' },
+          agent_name: 'rsi-research-imp',
+          registry_generation: 1,
+          terminal_handle: 'term_claude',
+          terminal_incarnation: 'inc-1',
+          session_key: null,
+          capabilities: ['poll'],
+        }],
+        authority: {
+          task_id: 'task-auth-1',
+          workspace_id: 'worktree-1',
+          owner_agent_id: 'agent-owner-1',
+          assignment_epoch: 3,
+          confirmed_handoff_id: null,
+          offer_message_id: null,
+          accept_message_id: null,
+        },
+        messages: [
+          {
+            message_id: 'msg-stored-12345678',
+            phase: 'pending',
+            result_hash: null,
+            terminal_reason: null,
+            outcome: null,
+            attempt: 0,
+            direction: 'incoming',
+            envelope: {
+              message_id: 'msg-stored-12345678',
+              kind: 'task.request',
+              sender_identity: { agent_id: 'sender-1' },
+              target_identity: { agent_id: 'agent-1' },
+              scope: { task_id: 'task-auth-1', workspace_id: 'worktree-1' },
+              artifacts: [{ name: 'spec.md', sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', size: 100 }],
+            },
+          },
+          {
+            message_id: 'msg-claimed-12345678',
+            phase: 'in_progress',
+            result_hash: null,
+            terminal_reason: null,
+            outcome: null,
+            attempt: 1,
+            direction: 'incoming',
+          },
+          {
+            message_id: 'msg-processed-12345678',
+            phase: 'completed',
+            result_hash: 'res-hash-12345678',
+            terminal_reason: null,
+            outcome: 'succeeded',
+            attempt: 1,
+            direction: 'outgoing',
+            envelope: {
+              message_id: 'msg-processed-12345678',
+              kind: 'task.result',
+              in_reply_to: 'msg-stored-12345678',
+              sender_identity: { agent_id: 'agent-1' },
+              target_identity: { agent_id: 'sender-1' },
+              scope: { task_id: 'task-auth-1', workspace_id: 'worktree-1' },
+            },
+          },
+          {
+            message_id: 'msg-blocked-12345678',
+            phase: 'dead_letter',
+            result_hash: null,
+            terminal_reason: 'blocked',
+            outcome: 'blocked',
+            attempt: 5,
+            direction: 'incoming',
+          },
+        ],
+        notifications: [
+          {
+            request_id: 'req-input-12345678',
+            binding_id: 'b-1',
+            message_ids: '["msg-1"]',
+            input_hash: 'hash-input-12345678',
+            stage: 'input_accepted',
+            bytes_written: 42,
+          },
+          {
+            request_id: 'req-turn-12345678',
+            binding_id: 'b-1',
+            message_ids: '["msg-1"]',
+            input_hash: 'hash-turn-12345678',
+            stage: 'turn_started',
+            turn_id: 'turn-99',
+          },
+          {
+            request_id: 'req-unc-12345678',
+            binding_id: 'b-1',
+            message_ids: '["msg-1"]',
+            input_hash: 'hash-unc-12345678',
+            stage: 'uncertain',
+            detail: 'host_restarted',
+          },
+        ],
+      },
+    })
+
+    await mount()
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(source.mailboxOverview).toHaveBeenCalledWith({
+      task_id: 'task-auth-1',
+      workspace_id: 'worktree-1',
+      terminal_handle: 'term_claude',
+    })
+
+    expect(screen.getByText('task-auth-1')).toBeTruthy()
+    expect(screen.getByText('agent-owner-1')).toBeTruthy()
+    expect(screen.getByText(/epoch 3/)).toBeTruthy()
+
+    expect(screen.getByText(/stored: 1/)).toBeTruthy()
+    expect(screen.getByText(/claimed: 1/)).toBeTruthy()
+    expect(screen.getByText(/processed: 1/)).toBeTruthy()
+    expect(screen.getByText('(task incomplete)')).toBeTruthy()
+    expect(screen.getByText(/blocked: 1/)).toBeTruthy()
+
+    expect(screen.getByText('spec.md')).toBeTruthy()
+    expect(screen.getByText('e3b0c442')).toBeTruthy()
+    expect(screen.getByText('reply-to:')).toBeTruthy()
+    expect(screen.getByText('result:')).toBeTruthy()
+
+    expect(screen.getByText('input_accepted')).toBeTruthy()
+    expect(screen.getByText('turn_started')).toBeTruthy()
+    expect(screen.getByText('uncertain')).toBeTruthy()
+    expect(screen.getByText('host_restarted')).toBeTruthy()
+  })
+
+  it('displays backend handoff status distinctions without assuming every accept is PROPOSED', async () => {
+    rows = [terminal()]
+    ;(source.mailboxOverview as any).mockResolvedValue({
+      data: {
+        bindings: [{ binding_id: 'b-1' }],
+        messages: [
+          {
+            message_id: 'msg-accept-raw-12345678',
+            phase: 'pending',
+            result_hash: null,
+            terminal_reason: null,
+            outcome: null,
+            attempt: 0,
+            handoff: { status: 'accept_received' },
+            envelope: {
+              message_id: 'msg-accept-raw-12345678',
+              kind: 'handoff.accept',
+            },
+          },
+          {
+            message_id: 'msg-accept-prop-12345678',
+            phase: 'pending',
+            result_hash: null,
+            terminal_reason: null,
+            outcome: null,
+            attempt: 0,
+            handoff: { status: 'PROPOSED' },
+            envelope: {
+              message_id: 'msg-accept-prop-12345678',
+              kind: 'handoff.accept',
+            },
+          },
+        ],
+        notifications: [],
+        authority: null,
+      },
+    })
+
+    await mount()
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('handoff: accept_received')).toBeTruthy()
+    expect(screen.getByText('handoff: PROPOSED')).toBeTruthy()
+  })
+
+  it('hides mailbox section when terminal is unenrolled or has no mailbox data', async () => {
+    rows = [terminal()]
+    ;(source.mailboxOverview as any).mockResolvedValue({
+      data: { bindings: [], messages: [], notifications: [], authority: null },
+    })
+
+    await mount()
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(document.querySelector('.terminal-mailbox-section')).toBeNull()
+    expect(document.querySelector('.terminal-mailbox-notice')).toBeNull()
+    expect(screen.getByText('gui.terminal.waiting')).toBeTruthy()
+  })
+
+  it.each([
+    new Error('receiver_capability_unavailable'),
+    { code: -32601, message: 'method_not_found' },
+    { code: -32099, message: 'mailbox_error', data: { code: 'receiver_capability_unavailable' } },
+  ])('reports honest capability unavailable notice without breaking terminal: %j', async (error) => {
+    rows = [terminal()]
+    ;(source.mailboxOverview as any).mockRejectedValue(error)
+
+    await mount()
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(document.querySelector('.terminal-mailbox-notice')).toBeTruthy()
+    expect(screen.getByText('gui.terminal.mailbox_unavailable')).toBeTruthy()
+    expect(document.querySelector('.terminal-mailbox-section')).toBeNull()
+    expect(screen.getByText('gui.terminal.waiting')).toBeTruthy()
+  })
+
+  it('drops stale mailbox responses when task changes or is reconciled', async () => {
+    rows = [terminal({ handle: 'term_claude', worktreeId: 'worktree-1', identity: { agentName: 'rsi-research-imp', brand: 'claude', bindingGeneration: 1, taskRef: 'task-1' } })]
+
+    let resolveTask1: ((val: unknown) => void) | null = null
+    ;(source.mailboxOverview as any).mockImplementation(({ task_id }: { task_id: string }) => {
+      if (task_id === 'task-1') {
+        return new Promise((resolve) => {
+          resolveTask1 = resolve
+        })
+      }
+      return Promise.resolve({
+        data: {
+          bindings: [{ binding_id: 'b-task2' }],
+          authority: { task_id: 'task-2', workspace_id: 'worktree-1', owner_agent_id: 'agent-2', assignment_epoch: 1 },
+          messages: [{
+            message_id: 'msg-task2-12345678',
+            phase: 'completed',
+            result_hash: null,
+            terminal_reason: null,
+            outcome: 'succeeded',
+            attempt: 1,
+          }],
+          notifications: [],
+        },
+      })
+    })
+
+    await mount('task-1')
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+
+    rows = [terminal({ handle: 'term_claude', worktreeId: 'worktree-1', identity: { agentName: 'rsi-research-imp', brand: 'claude', bindingGeneration: 1, taskRef: 'task-2' } })]
+    await act(async () => {
+      store.setTask('task-2')
+      await Promise.resolve()
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('agent-2')).toBeTruthy()
+
+    await act(async () => {
+      resolveTask1?.({
+        data: {
+          bindings: [{ binding_id: 'b-task1-stale' }],
+          authority: { task_id: 'task-1', workspace_id: 'worktree-1', owner_agent_id: 'agent-1-STALE', assignment_epoch: 99 },
+          messages: [],
+          notifications: [],
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByText('agent-1-STALE')).toBeNull()
+    expect(screen.getByText('agent-2')).toBeTruthy()
+  })
+
+  it('drops stale mailbox responses and clears cache when terminal row identity fence changes under the same task', async () => {
+    rows = [terminal({
+      incarnationId: 'inc-1',
+      worktreeId: 'worktree-1',
+      identity: { agentName: 'rsi-research-imp', brand: 'claude', bindingGeneration: 1, taskRef: 'task-1' },
+    })]
+    const overview = (workspace: string, owner: string, epoch: number) => ({ data: {
+      bindings: [{ binding_id: owner }],
+      authority: { task_id: 'task-1', workspace_id: workspace, owner_agent_id: owner, assignment_epoch: epoch },
+      messages: [],
+      notifications: [],
+    } })
+    let resolveOld: (val: unknown) => void = () => { throw new Error('Old request was not started') }
+    let resolveNew: (val: unknown) => void = () => { throw new Error('New request was not started') }
+    const oldRequest = new Promise((resolve) => { resolveOld = resolve })
+    const newRequest = new Promise((resolve) => { resolveNew = resolve })
+    ;(source.mailboxOverview as any)
+      .mockResolvedValueOnce(overview('worktree-1', 'agent-inc1', 1))
+      .mockImplementationOnce(() => oldRequest)
+      .mockImplementation(() => newRequest)
+
+    await mount('task-1')
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByText('agent-inc1')).toBeTruthy()
+    act(() => { store.selectTab('term_claude') })
+    expect(source.mailboxOverview).toHaveBeenCalledTimes(2)
+
+    rows = [terminal({
+      incarnationId: 'inc-2',
+      worktreeId: 'worktree-2',
+      identity: { agentName: 'rsi-research-imp', brand: 'claude', bindingGeneration: 2, taskRef: 'task-1' },
+    })]
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(source.mailboxOverview).toHaveBeenCalledTimes(3)
+    expect(source.mailboxOverview).toHaveBeenLastCalledWith({
+      task_id: 'task-1', workspace_id: 'worktree-2', terminal_handle: 'term_claude',
+    })
+    expect(screen.queryByText('agent-inc1')).toBeNull()
+    await act(async () => {
+      resolveNew(overview('worktree-2', 'agent-inc2', 2))
+      await Promise.resolve()
+    })
+    expect(screen.getByText('agent-inc2')).toBeTruthy()
+    await act(async () => {
+      resolveOld(overview('worktree-1', 'agent-stale-inc1', 1))
+      await Promise.resolve()
+    })
+    expect(screen.queryByText('agent-stale-inc1')).toBeNull()
+    expect(screen.getByText('agent-inc2')).toBeTruthy()
+  })
+
+  it('displays unresolved items beside PROPOSED handoff status and omits notification input_hash', async () => {
+    rows = [terminal()]
+    ;(source.mailboxOverview as any).mockResolvedValue({
+      data: {
+        bindings: [{ binding_id: 'b-1' }],
+        messages: [
+          {
+            message_id: 'msg-proposed-12345678',
+            phase: 'pending',
+            result_hash: null,
+            terminal_reason: null,
+            outcome: null,
+            attempt: 0,
+            handoff: {
+              status: 'PROPOSED',
+              unresolved_items: ['contract-review', 'coverage-check'],
+            },
+            envelope: {
+              message_id: 'msg-proposed-12345678',
+              kind: 'handoff.accept',
+            },
+          },
+        ],
+        notifications: [
+          {
+            request_id: 'req-input-12345678',
+            binding_id: 'b-1',
+            message_ids: '["msg-1"]',
+            input_hash: 'hash-hidden-12345678',
+            stage: 'input_accepted',
+            bytes_written: 42,
+          },
+        ],
+        authority: null,
+      },
+    })
+
+    await mount()
+    fireEvent.click(screen.getByRole('tab', { name: 'rsi-research-imp' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('handoff: PROPOSED')).toBeTruthy()
+    expect(screen.getByText('unresolved: contract-review, coverage-check')).toBeTruthy()
+    expect(screen.queryByText(/hash:/)).toBeNull()
+    expect(screen.queryByText('hash-hidden-12345678')).toBeNull()
   })
 })

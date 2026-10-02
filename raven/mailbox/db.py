@@ -95,6 +95,33 @@ CREATE TABLE tombstones (
 """
 
 
+_RECEIVER_SCHEMA = (
+    """CREATE TABLE receiver_bindings (
+        binding_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL, instance_id TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation>=1),
+        agent_name TEXT NOT NULL, registry_generation INTEGER NOT NULL CHECK(registry_generation>=1),
+        task_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+        terminal_handle TEXT, terminal_incarnation TEXT, session_key TEXT,
+        capability_json TEXT NOT NULL, credential_hash TEXT NOT NULL UNIQUE,
+        revoked_at INTEGER, created_at INTEGER NOT NULL)""",
+    """CREATE TABLE notifications (
+        request_id TEXT PRIMARY KEY, binding_id TEXT NOT NULL REFERENCES receiver_bindings(binding_id),
+        message_ids TEXT NOT NULL, input_hash TEXT NOT NULL, stage TEXT NOT NULL,
+        terminal_incarnation TEXT, bytes_written INTEGER NOT NULL DEFAULT 0 CHECK(bytes_written>=0),
+        turn_id TEXT, detail TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)""",
+    """CREATE TABLE handoff_reads (
+        offer_message_id TEXT NOT NULL, agent_id TEXT NOT NULL, instance_id TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK(generation>=1), artifact_hash TEXT NOT NULL,
+        bytes_read INTEGER NOT NULL CHECK(bytes_read>=0), read_at INTEGER NOT NULL,
+        PRIMARY KEY(offer_message_id,agent_id,instance_id,generation,artifact_hash))""",
+    """CREATE TABLE task_authority (
+        task_id TEXT NOT NULL, workspace_id TEXT NOT NULL, owner_agent_id TEXT NOT NULL,
+        assignment_epoch INTEGER NOT NULL CHECK(assignment_epoch>=1), confirmed_handoff_id TEXT,
+        offer_message_id TEXT, accept_message_id TEXT, updated_at INTEGER NOT NULL,
+        PRIMARY KEY(task_id,workspace_id))""",
+)
+
+
 def canonical_id(value: str) -> str:
     """Use UUID semantic identity without rewriting immutable envelope bytes."""
     try:
@@ -168,8 +195,13 @@ class Database:
         return conn
 
     def _validate(self, conn: sqlite3.Connection) -> None:
-        if conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version not in (SCHEMA_VERSION, 2):
             raise MailboxError("unsupported_schema")
+        if version == 2:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {"receiver_bindings", "notifications", "handoff_reads", "task_authority"} <= tables:
+                raise MailboxError("unsupported_schema")
         metadata = dict(
             conn.execute("SELECT key,value FROM metadata WHERE key IN ('authority_id','tenant_id','storage_profile')")
         )
@@ -318,6 +350,15 @@ class Database:
         finally:
             if conn is not None:
                 conn.close()
+
+    def upgrade_receivers(self) -> None:
+        """Explicitly add receiver and handoff records without changing R1 data."""
+        with self.connection(write=True) as conn:
+            if conn.execute("PRAGMA user_version").fetchone()[0] == 2:
+                return
+            for statement in _RECEIVER_SCHEMA:
+                conn.execute(statement)
+            conn.execute("PRAGMA user_version=2")
 
     def replay(self, conn, agent_id: str, request_id: str, method: str, inputs: dict):
         request_id = canonical_id(request_id)

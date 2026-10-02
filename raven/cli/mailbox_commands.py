@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import stat
 import tempfile
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit
 
 import click
 import typer
@@ -325,6 +327,81 @@ def _artifact_map(values: list[str]) -> dict[str, Path]:
 
 def _claim_payload(claims: list[MailboxClaim]) -> list[dict]:
     return [claim.model_dump() for claim in claims]
+
+
+async def _receiver_rpc(credential, method, params):
+    import aiohttp
+
+    from raven.cli._terminal_rpc import _exchange, _TransportError
+
+    request_started = False
+    try:
+        async with asyncio.timeout(60):
+            async with aiohttp.ClientSession() as client:
+                async with client.ws_connect(
+                    credential["url"], headers={"X-Raven-Receiver": credential["token"]}, max_msg_size=24 * 1024 * 1024
+                ) as ws:
+                    request_started = True
+                    frame = await _exchange(ws, method, params)
+                    if "error" in frame:
+                        details = frame["error"].get("data") or {}
+                        raise MailboxError(
+                            details.get("code", "receiver_rpc_error"),
+                            retryable=details.get("retryable", False),
+                            message_id=details.get("message_id"),
+                        )
+                    result = frame.get("result")
+                    if not isinstance(result, dict) or not isinstance(result.get("data"), dict):
+                        raise MailboxError("invalid_response")
+                    return result["data"]
+    except TimeoutError:
+        raise MailboxError("commit_unknown", retryable=True) from None
+    except _TransportError:
+        raise MailboxError("commit_unknown", retryable=True) from None
+    except (aiohttp.ClientError, OSError):
+        raise MailboxError("commit_unknown" if request_started else "receiver_offline", retryable=True) from None
+
+
+@mailbox_app.command("rpc")
+def mailbox_rpc(
+    credential_file: Path = typer.Option(..., "--credential-file"),
+    method: str = typer.Option(..., "--method"),
+    params_file: Path | None = typer.Option(None, "--params-file"),
+    json_output: bool = typer.Option(False, "--json"),
+):
+    """Call a scoped receiver method with a protected local credential."""
+
+    def action():
+        from raven.rpc.mailbox_models import RECEIVER_METHODS
+
+        if method not in RECEIVER_METHODS:
+            raise MailboxError("receiver_method_forbidden")
+        try:
+            credential = json.loads(_read_credential(credential_file))
+            if type(credential) is not dict or set(credential) != {"url", "token"}:
+                raise ValueError
+            url = urlsplit(credential["url"])
+            if (
+                url.scheme not in {"http", "ws"}
+                or url.hostname not in {"127.0.0.1", "localhost", "::1"}
+                or url.path != "/rpc"
+                or url.username
+                or url.password
+                or url.query
+                or url.fragment
+                or not url.port
+                or not isinstance(credential["token"], str)
+                or not 20 <= len(credential["token"]) <= 128
+            ):
+                raise ValueError
+            params = json.loads(_read_credential(params_file)) if params_file else {}
+            if type(params) is not dict:
+                raise ValueError
+        except (ValueError, TypeError, KeyError):
+            raise MailboxError("invalid_credential_file") from None
+        return asyncio.run(_receiver_rpc(credential, method, params))
+
+    _execute(json_output, action)
 
 
 @mailbox_app.command("init")

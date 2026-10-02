@@ -144,6 +144,7 @@ class DeliveryService:
         *,
         ack_timeout_ms: int = DEFAULT_TIMEOUT_MS,
         force: bool = False,
+        guard: Callable[[], None] | None = None,
     ) -> SendResult:
         state = self.host.state(handle)
         envelope = self._envelope(text)
@@ -154,6 +155,8 @@ class DeliveryService:
             baseline_permission = state.permission_sequence
             incarnation = state.record.incarnation_id
             self._assert_target(state, incarnation, baseline_permission)
+            if guard is not None:
+                guard()
             if force:
                 state.composer_dirty = False
             if state.composer_dirty:
@@ -188,6 +191,8 @@ class DeliveryService:
                 for offset in range(0, len(paste), PASTE_CHUNK_BYTES):
                     self._assert_target(state, incarnation, baseline_permission)
                     chunk = paste[offset : offset + PASTE_CHUNK_BYTES]
+                    if guard is not None:
+                        guard()
                     await self.host.write(handle, chunk)
                     written += len(chunk)
                 render_start = self.clock()
@@ -203,6 +208,8 @@ class DeliveryService:
                 rendered = state.show_cursor_sequence > baseline_cursor
                 self._assert_target(state, incarnation, baseline_permission)
                 if enter:
+                    if guard is not None:
+                        guard()
                     await self.host.write(handle, b"\r")
                     written += 1
                     deadline = self.clock() + VERIFY_SECONDS

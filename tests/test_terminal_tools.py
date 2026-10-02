@@ -564,3 +564,21 @@ async def test_resume_checks_old_host_before_creating(liveness):
         assert result["handle"] == "new"
         assert calls[-1][1]["session_key"] == "tui:creator"
         assert calls[-1][1]["task_ref"] == "repo::/selected"
+
+
+@pytest.mark.parametrize("operation", ["unattended", "force"])
+async def test_background_turn_cannot_override_human_terminal_gates(operation):
+    from raven.agent.tools.terminal import bind_terminal_session
+    from raven.spine.turn import Origin
+
+    rpc = AsyncMock()
+    if operation == "unattended":
+        tool = CreateTerminalTool(rpc, lambda *args, **kwargs: ("codex", ["codex"]), lambda *args: "task")
+        args = {"provider": "codex", "name": "worker", "unattended": True}
+    else:
+        tool = SendTerminalTool(rpc)
+        args = {"to": "worker", "text": "work", "force": True}
+    with bind_terminal_session("native", origin=Origin.SUBAGENT):
+        result = json.loads(await tool.execute(**args))
+    assert result["error"]["code"] == "approval_required"
+    rpc.assert_not_awaited()

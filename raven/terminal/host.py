@@ -215,11 +215,8 @@ class TerminalHost:
             key: value
             for key, value in os.environ.items()
             if not key.startswith("ORCA_")
-            and key != "RAVEN_HOOK_URL"
-            and (
-                not key.startswith(("CLAUDE", "CODEX"))
-                or key.endswith(("_API_KEY", "_AUTH_TOKEN", "_OAUTH_TOKEN"))
-            )
+            and key not in {"RAVEN_HOOK_URL", "RAVEN_SERVE_TOKEN", "RAVEN_SERVE_COOKIE"}
+            and (not key.startswith(("CLAUDE", "CODEX")) or key.endswith(("_API_KEY", "_AUTH_TOKEN", "_OAUTH_TOKEN")))
         }
         env.update(
             TERM="xterm-256color",

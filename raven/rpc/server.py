@@ -64,6 +64,7 @@ class RpcServer:
         self._writer: asyncio.StreamWriter | None = None
         self._write_lock = asyncio.Lock()
         self._pending: set[asyncio.Task] = set()
+        self._mailbox_binding_id: str | None = None
         self._stopped = asyncio.Event()
         self._started = asyncio.Event()
 
@@ -88,6 +89,8 @@ class RpcServer:
         into a stuck one. Waiting outside the lock so a slow peer blocks the
         producers rather than the ordering of what has already been written.
         """
+        if self._mailbox_binding_id is not None and "method" in frame:
+            return
         if self._write_transport is None:
             raise RuntimeError("RpcServer.send_frame called before serve_forever()")
         data = (json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8")
@@ -147,6 +150,8 @@ class RpcServer:
         # JSON-RPC frame. Only our spawned Node child knows it (passed via env),
         # so a rogue local process that connects to the port is rejected here
         # before any dispatch. Disabled (None) for the pipe/test paths.
+        mailbox_binding_id = None
+        mailbox_admin = False
         if self._auth_token is not None:
             try:
                 first = await asyncio.wait_for(reader.readuntil(b"\n"), timeout=10.0)
@@ -154,10 +159,22 @@ class RpcServer:
                 logger.error("rpc: auth token not received; closing connection")
                 self._stopped.set()
                 return
-            if first.rstrip(b"\n") != self._auth_token.encode("utf-8"):
-                logger.error("rpc: auth token mismatch; closing connection")
-                self._stopped.set()
-                return
+            supplied = first.rstrip(b"\n")
+            if supplied == self._auth_token.encode("utf-8"):
+                mailbox_admin = True
+            else:
+                from raven.contracts.mailbox import MailboxError
+
+                try:
+                    methods = getattr(self._dispatcher, "mailbox_receivers", None)
+                    if methods is None:
+                        raise MailboxError("receiver_unauthorized")
+                    binding = await asyncio.to_thread(lambda: methods.receivers.authenticate(supplied.decode("ascii")))
+                    mailbox_binding_id = binding.binding_id
+                except (MailboxError, UnicodeDecodeError):
+                    logger.error("rpc: auth token mismatch; closing connection")
+                    self._stopped.set()
+                    return
 
         # One RpcServer serves one client connection, but it shares process-wide
         # handler state with any other dispatcher in the process (a gateway also
@@ -165,7 +182,8 @@ class RpcServer:
         # declared surface on this connection's dispatch tasks only.
         from raven.rpc import connection
 
-        conn_token = connection.bind_connection()
+        self._mailbox_binding_id = mailbox_binding_id
+        conn_token = connection.bind_connection(mailbox_admin=mailbox_admin, mailbox_binding_id=mailbox_binding_id)
         try:
             while not self._stopped.is_set():
                 try:

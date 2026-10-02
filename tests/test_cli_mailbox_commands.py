@@ -35,6 +35,27 @@ def _payload(result) -> dict:
     return payload
 
 
+def test_receiver_rpc_rejects_public_or_unprotected_credentials(tmp_path):
+    credential = tmp_path / "receiver.json"
+    credential.write_text(json.dumps({"url": "http://example.com/rpc", "token": "s" * 43}))
+    credential.chmod(0o600)
+    result = _run("rpc", "--credential-file", credential, "--method", "mailbox.poll", "--json")
+    assert _payload(result)["error"]["code"] == "invalid_credential_file"
+    assert "s" * 43 not in result.output
+    credential.write_text(json.dumps({"url": "http://127.0.0.1:18792/rpc", "token": "s" * 43}))
+    credential.chmod(0o644)
+    result = _run("rpc", "--credential-file", credential, "--method", "mailbox.poll", "--json")
+    assert _payload(result)["error"]["code"] == "invalid_credential_file"
+
+
+def test_receiver_rpc_cli_cannot_call_admin_or_legacy_methods(tmp_path):
+    credential = tmp_path / "receiver.json"
+    credential.write_text(json.dumps({"url": "http://127.0.0.1:18792/rpc", "token": "s" * 43}))
+    credential.chmod(0o600)
+    result = _run("rpc", "--credential-file", credential, "--method", "agents.register", "--json")
+    assert _payload(result)["error"]["code"] == "receiver_method_forbidden"
+
+
 def _init(root: Path, agent_id: str, instance_out: Path, request_id: str | None = None) -> MailboxInstanceRef:
     result = _run(
         "init",

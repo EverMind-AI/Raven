@@ -165,6 +165,14 @@ export type Schemaversion = 1;
 export type Exitedat = number | null;
 export type Runtimeid1 = string;
 export type Reason = 'exact' | 'alias';
+export type AuthorityId = string;
+export type TenantId = string;
+export type AgentId = string;
+export type InstanceId = string;
+export type Generation = number;
+export type Outcome = 'succeeded' | 'failed' | 'blocked';
+export type Summary = string;
+export type Evidence = string[];
 export type Handle12 = string | null;
 export type Cols = number | null;
 export type Rows = number | null;
@@ -219,6 +227,51 @@ export type Name1 = string;
 export type Mention = string;
 export type Candidates = IdentityCandidate[];
 export type Unique = boolean;
+export type AgentName = string;
+export type RequestId = string;
+export type Capabilities1 = string[];
+export type BindingId = string;
+export type TaskId = string;
+export type WorkspaceId = string;
+export type TerminalHandle = string | null;
+export type BindingId1 = string | null;
+export type BindingId2 = string | null;
+export type RequestId1 = string | null;
+export type Peek = boolean;
+export type Limit1 = number;
+export type LeaseSeconds = number;
+export type BindingId3 = string | null;
+export type Action = 'finish' | 'retry' | 'reject';
+export type Reason1 = string | null;
+export type BindingId4 = string | null;
+export type RequestId2 = string;
+export type LeaseSeconds1 = number;
+export type BindingId5 = string | null;
+export type MessageId = string;
+export type BindingId6 = string | null;
+export type Limit2 = number;
+export type BindingId7 = string | null;
+export type OfferMessageId = string;
+export type ArtifactHash = string;
+export type BindingId8 = string | null;
+export type OfferMessageId1 = string;
+export type AcceptMessageId = string;
+export type TaskId1 = string;
+export type WorkspaceId1 = string;
+export type OwnerAgentId = string;
+export type RequestId3 = string;
+export type BindingId9 = string;
+export type OfferMessageId2 = string;
+export type AcceptMessageId1 = string;
+export type ExpectedOwnerAgentId = string;
+export type ExpectedAssignmentEpoch = number;
+export type RequestId4 = string;
+export type BindingId10 = string | null;
+export type BindingId11 = string;
+export type RequestId5 = string;
+export type MessageIds = string[];
+export type BindingId12 = string | null;
+export type RequestId6 = string;
 
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -2264,6 +2317,26 @@ export interface RuntimeInfo {
 export interface IdentityCandidate {
   agent: IdentityRecord;
   reason: Reason;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxInstanceRef".
+ */
+export interface MailboxInstanceRef {
+  authority_id: AuthorityId;
+  tenant_id: TenantId;
+  agent_id: AgentId;
+  instance_id: InstanceId;
+  generation: Generation;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxResult".
+ */
+export interface MailboxResult {
+  outcome: Outcome;
+  summary: Summary;
+  evidence: Evidence;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5543,6 +5616,340 @@ export interface AgentsResolveResult {
   candidates: Candidates;
   unique: Unique;
 }
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxEnrollParams".
+ */
+export interface MailboxEnrollParams {
+  agent_name: AgentName;
+  ref: MailboxInstanceRef;
+  scope: Scope;
+  request_id: RequestId;
+  capabilities?: Capabilities1;
+}
+export interface Scope {
+  [k: string]: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxEnrollResult".
+ */
+export interface MailboxDataResult {
+  data: Data1;
+}
+export interface Data1 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxRevokeParams".
+ */
+export interface MailboxRevokeParams {
+  binding_id: BindingId;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxRevokeResult".
+ */
+export interface MailboxDataResult1 {
+  data: Data2;
+}
+export interface Data2 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxBindingsParams".
+ */
+export interface MailboxBindingsParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxBindingsResult".
+ */
+export interface MailboxDataResult2 {
+  data: Data3;
+}
+export interface Data3 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxOverviewParams".
+ */
+export interface MailboxOverviewParams {
+  task_id: TaskId;
+  workspace_id: WorkspaceId;
+  terminal_handle?: TerminalHandle;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxOverviewResult".
+ */
+export interface MailboxDataResult3 {
+  data: Data4;
+}
+export interface Data4 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxSendParams".
+ */
+export interface MailboxSendParams {
+  binding_id?: BindingId1;
+  envelope: Envelope;
+}
+export interface Envelope {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxSendResult".
+ */
+export interface MailboxDataResult4 {
+  data: Data5;
+}
+export interface Data5 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxPollParams".
+ */
+export interface MailboxPollParams {
+  binding_id?: BindingId2;
+  request_id?: RequestId1;
+  peek?: Peek;
+  limit?: Limit1;
+  lease_seconds?: LeaseSeconds;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxPollResult".
+ */
+export interface MailboxDataResult5 {
+  data: Data6;
+}
+export interface Data6 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxAckParams".
+ */
+export interface MailboxAckParams {
+  binding_id?: BindingId3;
+  claim: Claim;
+  result?: MailboxResult | null;
+  action?: Action;
+  reason?: Reason1;
+}
+export interface Claim {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxAckResult".
+ */
+export interface MailboxDataResult6 {
+  data: Data7;
+}
+export interface Data7 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxRenewParams".
+ */
+export interface MailboxRenewParams {
+  binding_id?: BindingId4;
+  claim: Claim1;
+  request_id: RequestId2;
+  lease_seconds?: LeaseSeconds1;
+}
+export interface Claim1 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxRenewResult".
+ */
+export interface MailboxDataResult7 {
+  data: Data8;
+}
+export interface Data8 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxStatusParams".
+ */
+export interface MailboxStatusParams {
+  binding_id?: BindingId5;
+  message_id: MessageId;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxStatusResult".
+ */
+export interface MailboxDataResult8 {
+  data: Data9;
+}
+export interface Data9 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxMessagesParams".
+ */
+export interface MailboxMessagesParams {
+  binding_id?: BindingId6;
+  limit?: Limit2;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxMessagesResult".
+ */
+export interface MailboxDataResult9 {
+  data: Data10;
+}
+export interface Data10 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxArtifactReadParams".
+ */
+export interface MailboxArtifactReadParams {
+  binding_id?: BindingId7;
+  offer_message_id: OfferMessageId;
+  artifact_hash: ArtifactHash;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxArtifactReadResult".
+ */
+export interface MailboxDataResult10 {
+  data: Data11;
+}
+export interface Data11 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxHandoffProposeParams".
+ */
+export interface MailboxHandoffProposeParams {
+  binding_id?: BindingId8;
+  offer_message_id: OfferMessageId1;
+  accept_message_id: AcceptMessageId;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxHandoffProposeResult".
+ */
+export interface MailboxDataResult11 {
+  data: Data12;
+}
+export interface Data12 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxHandoffCreateParams".
+ */
+export interface MailboxHandoffCreateParams {
+  task_id: TaskId1;
+  workspace_id: WorkspaceId1;
+  owner_agent_id: OwnerAgentId;
+  request_id: RequestId3;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxHandoffCreateResult".
+ */
+export interface MailboxDataResult12 {
+  data: Data13;
+}
+export interface Data13 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxHandoffCommitParams".
+ */
+export interface MailboxHandoffCommitParams {
+  binding_id: BindingId9;
+  offer_message_id: OfferMessageId2;
+  accept_message_id: AcceptMessageId1;
+  expected_owner_agent_id: ExpectedOwnerAgentId;
+  expected_assignment_epoch: ExpectedAssignmentEpoch;
+  request_id: RequestId4;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxHandoffCommitResult".
+ */
+export interface MailboxDataResult13 {
+  data: Data14;
+}
+export interface Data14 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxHandoffStatusParams".
+ */
+export interface MailboxHandoffStatusParams {
+  binding_id?: BindingId10;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxHandoffStatusResult".
+ */
+export interface MailboxDataResult14 {
+  data: Data15;
+}
+export interface Data15 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxNotifyParams".
+ */
+export interface MailboxNotifyParams {
+  binding_id: BindingId11;
+  request_id: RequestId5;
+  message_ids: MessageIds;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxNotifyResult".
+ */
+export interface MailboxDataResult15 {
+  data: Data16;
+}
+export interface Data16 {
+  [k: string]: JsonValue;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxNotifyStatusParams".
+ */
+export interface MailboxNotifyStatusParams {
+  binding_id?: BindingId12;
+  request_id: RequestId6;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "MailboxNotifyStatusResult".
+ */
+export interface MailboxDataResult16 {
+  data: Data17;
+}
+export interface Data17 {
+  [k: string]: JsonValue;
+}
 
 // ---- Schema-name aliases for structurally-deduplicated types ----
 export type A2aAckMatchedEvent = A2AAckMatchedEvent;
@@ -5555,6 +5962,23 @@ export type BrowserManageResult = StubResult;
 export type CliDispatchResult = CliResult;
 export type CommandsCatalogResult = CommandsCatalogResponse;
 export type ImageAttachResult = StubResult;
+export type MailboxAckResult = MailboxDataResult6;
+export type MailboxArtifactReadResult = MailboxDataResult10;
+export type MailboxBindingsResult = MailboxDataResult2;
+export type MailboxEnrollResult = MailboxDataResult;
+export type MailboxHandoffCommitResult = MailboxDataResult13;
+export type MailboxHandoffCreateResult = MailboxDataResult12;
+export type MailboxHandoffProposeResult = MailboxDataResult11;
+export type MailboxHandoffStatusResult = MailboxDataResult14;
+export type MailboxMessagesResult = MailboxDataResult9;
+export type MailboxNotifyResult = MailboxDataResult15;
+export type MailboxNotifyStatusResult = MailboxDataResult16;
+export type MailboxOverviewResult = MailboxDataResult3;
+export type MailboxPollResult = MailboxDataResult5;
+export type MailboxRenewResult = MailboxDataResult7;
+export type MailboxRevokeResult = MailboxDataResult1;
+export type MailboxSendResult = MailboxDataResult4;
+export type MailboxStatusResult = MailboxDataResult8;
 export type ProcessStopResult = StubResult;
 export type PromptBackgroundResult = StubResult;
 export type PromptSubmitResult = StubResult;

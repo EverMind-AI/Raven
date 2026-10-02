@@ -485,6 +485,7 @@ def _make_rpc_sink(
     usages: dict[str, dict[str, Any]],
     direct_targets: dict[str, dict[str, str]],
     on_turn_end: Callable[[str], None] | None,
+    on_mailbox_turn: Callable[[TurnEvent], Awaitable[None]] | None = None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
     """Adapt the hub into the scheduler's EventSink for the TUI. Deliverables
     route through the hub; a turn's end fires message.complete / error after the
@@ -533,6 +534,8 @@ def _make_rpc_sink(
         return target
 
     async def sink(event: TurnEvent) -> None:
+        if on_mailbox_turn is not None and isinstance(event, (TurnStarted, TurnEnded, TurnFailed)):
+            await on_mailbox_turn(event)
         if isinstance(event, TurnEnded):
             await _finish(event.conversation_id)
             usage = usages.get(event.conversation_id) or {
@@ -600,6 +603,7 @@ def build_rpc_spine(
     *,
     channel: str = "tui",
     on_turn_end: Callable[[str], None] | None = None,
+    on_mailbox_turn: Callable[[TurnEvent], Awaitable[None]] | None = None,
     direct_targets: dict[str, dict[str, str]] | None = None,
     readback_texts: dict[str, str] | None = None,
     approval_responder: ApprovalResponder | None = None,
@@ -649,7 +653,7 @@ def build_rpc_spine(
             approval_responder=approval_responder,
         ),
         OriginPools(user=user_pool, system=system_pool, direct=direct_pool),
-        _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end),
+        _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end, on_mailbox_turn),
     )
 
     async def teardown() -> None:

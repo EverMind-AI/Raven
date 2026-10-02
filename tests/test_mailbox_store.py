@@ -711,3 +711,54 @@ def test_ordinary_receipt_admission_enforces_raw_size_after_replay(mailbox, monk
     )
     stored = store.send(small, sender, now=NOW)
     assert store.send(small, sender, now=NOW + 100)["message_id"] == stored["message_id"]
+
+
+def test_receiver_schema_upgrade_preserves_messages_and_poll_replay(mailbox):
+    from raven.mailbox.delivery import MailboxDelivery
+
+    store, sender, target = mailbox
+    stored = store.send(wire(sender, target), sender, now=NOW)
+    delivery = MailboxDelivery(store)
+    request_id = str(uuid4())
+    claims = delivery.poll(target, request_id=request_id, now=NOW)
+    with store.db.connection() as conn:
+        before = [tuple(row) for row in conn.execute("SELECT * FROM messages")]
+        receipts = [tuple(row) for row in conn.execute("SELECT * FROM mutation_receipts")]
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    store.db.upgrade_receivers()
+    store.db.upgrade_receivers()
+    with store.db.connection() as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert [tuple(row) for row in conn.execute("SELECT * FROM messages")] == before
+        assert [tuple(row) for row in conn.execute("SELECT * FROM mutation_receipts")] == receipts
+        assert {"receiver_bindings", "notifications", "handoff_reads", "task_authority"} <= {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    assert delivery.poll(target, request_id=request_id, now=NOW) == claims
+    assert store.status(target.agent_id, stored["message_id"])["phase"] == "in_progress"
+
+
+def test_receiver_schema_upgrade_rolls_back_partial_ddl(mailbox, monkeypatch):
+    from raven.mailbox import db
+
+    store, sender, target = mailbox
+    store.send(wire(sender, target), sender, now=NOW)
+    monkeypatch.setattr(db, "_RECEIVER_SCHEMA", (*db._RECEIVER_SCHEMA[:1], "INVALID SQL"))
+    with pytest.raises(MailboxError, match="storage_error"):
+        store.db.upgrade_receivers()
+    with store.db.connection() as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert conn.execute("SELECT count(*) FROM messages").fetchone()[0] == 1
+        assert conn.execute("SELECT name FROM sqlite_master WHERE name='receiver_bindings'").fetchone() is None
+    assert len(store.peek(target, now=NOW)) == 1
+
+
+def test_receiver_schema_upgrade_refuses_future_version(mailbox):
+    store, _, _ = mailbox
+    with store.db.connection(write=True) as conn:
+        conn.execute("PRAGMA user_version=3")
+    with pytest.raises(MailboxError, match="unsupported_schema"):
+        store.db.upgrade_receivers()
+    with sqlite3.connect(store.db.path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute("SELECT name FROM sqlite_master WHERE name='receiver_bindings'").fetchone() is None

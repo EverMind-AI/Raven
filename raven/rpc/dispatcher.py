@@ -94,6 +94,11 @@ class Dispatcher:
             )
 
         # ----- Method routing -------------------------------------------------------
+        from raven.rpc.connection import current_state
+        from raven.rpc.mailbox_models import RECEIVER_METHODS
+
+        if (current_state() or {}).get("mailbox_binding_id") and method not in RECEIVER_METHODS:
+            return _err_frame(frame_id, -32099, "receiver_method_forbidden", data={"code": "receiver_method_forbidden"})
         handler = self._handlers.get(method)
         if handler is None:
             return _err_frame(frame_id, METHOD_NOT_FOUND, "method_not_found", data={"method": method})

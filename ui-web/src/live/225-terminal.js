@@ -27,6 +27,7 @@ const terminalAttachIdentities = (result, terminals, agents) => {
           agentName: agent.agentName,
           brand: agent.brand,
           bindingGeneration: agent.bindingGeneration,
+          taskRef: agent.taskRef,
         },
       };
     }),
@@ -63,6 +64,7 @@ DS.terminal = {
     else if (subscription.subscription_id) terminalSubscriptions.set(params.handle, subscription.subscription_id);
     return result;
   },
+  mailboxOverview: (params) => rpc.call('mailbox.overview', params),
   acceptEvent: (params) => {
     if (![...terminalSubscriptions.values()].includes(params.subscription_id)) return false;
     if (DS.terminal.onEvent) DS.terminal.onEvent(params.event || {});

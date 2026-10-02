@@ -7893,6 +7893,985 @@
           "type": "object"
         }
       }
+    },
+    {
+      "name": "mailbox.enroll",
+      "params": [
+        {
+          "name": "agent_name",
+          "required": true,
+          "schema": {
+            "title": "Agent Name",
+            "type": "string"
+          }
+        },
+        {
+          "name": "ref",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/MailboxInstanceRef"
+          }
+        },
+        {
+          "name": "scope",
+          "required": true,
+          "schema": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Scope",
+            "type": "object"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "capabilities",
+          "required": false,
+          "schema": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.revoke",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": true,
+          "schema": {
+            "title": "Binding Id",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.bindings",
+      "params": [],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.overview",
+      "params": [
+        {
+          "name": "task_id",
+          "required": true,
+          "schema": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "workspace_id",
+          "required": true,
+          "schema": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "terminal_handle",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Terminal Handle"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.send",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "envelope",
+          "required": true,
+          "schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Envelope",
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.poll",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Request Id"
+          }
+        },
+        {
+          "name": "peek",
+          "required": false,
+          "schema": {
+            "default": false,
+            "title": "Peek",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "default": 1,
+            "maximum": 16,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        {
+          "name": "lease_seconds",
+          "required": false,
+          "schema": {
+            "default": 120,
+            "maximum": 3600,
+            "minimum": 10,
+            "title": "Lease Seconds",
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.ack",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "claim",
+          "required": true,
+          "schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Claim",
+            "type": "object"
+          }
+        },
+        {
+          "name": "result",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MailboxResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        {
+          "name": "action",
+          "required": false,
+          "schema": {
+            "default": "finish",
+            "enum": [
+              "finish",
+              "retry",
+              "reject"
+            ],
+            "title": "Action",
+            "type": "string"
+          }
+        },
+        {
+          "name": "reason",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.renew",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "claim",
+          "required": true,
+          "schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Claim",
+            "type": "object"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "lease_seconds",
+          "required": false,
+          "schema": {
+            "default": 120,
+            "maximum": 3600,
+            "minimum": 10,
+            "title": "Lease Seconds",
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.status",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "message_id",
+          "required": true,
+          "schema": {
+            "title": "Message Id",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.messages",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "default": 50,
+            "maximum": 100,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.artifact.read",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "offer_message_id",
+          "required": true,
+          "schema": {
+            "title": "Offer Message Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "artifact_hash",
+          "required": true,
+          "schema": {
+            "title": "Artifact Hash",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.handoff.propose",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "offer_message_id",
+          "required": true,
+          "schema": {
+            "title": "Offer Message Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "accept_message_id",
+          "required": true,
+          "schema": {
+            "title": "Accept Message Id",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.handoff.create",
+      "params": [
+        {
+          "name": "task_id",
+          "required": true,
+          "schema": {
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "workspace_id",
+          "required": true,
+          "schema": {
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "owner_agent_id",
+          "required": true,
+          "schema": {
+            "title": "Owner Agent Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.handoff.commit",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": true,
+          "schema": {
+            "title": "Binding Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "offer_message_id",
+          "required": true,
+          "schema": {
+            "title": "Offer Message Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "accept_message_id",
+          "required": true,
+          "schema": {
+            "title": "Accept Message Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "expected_owner_agent_id",
+          "required": true,
+          "schema": {
+            "title": "Expected Owner Agent Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "expected_assignment_epoch",
+          "required": true,
+          "schema": {
+            "title": "Expected Assignment Epoch",
+            "type": "integer"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.handoff.status",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.notify",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": true,
+          "schema": {
+            "title": "Binding Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "message_ids",
+          "required": true,
+          "schema": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Message Ids",
+            "type": "array"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.notify.status",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
     }
   ],
   "components": {
@@ -12516,6 +13495,74 @@
           "payload"
         ],
         "title": "A2aAckMatchedEvent",
+        "type": "object"
+      },
+      "MailboxInstanceRef": {
+        "additionalProperties": false,
+        "properties": {
+          "authority_id": {
+            "title": "Authority Id",
+            "type": "string"
+          },
+          "tenant_id": {
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "generation": {
+            "minimum": 1,
+            "title": "Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "authority_id",
+          "tenant_id",
+          "agent_id",
+          "instance_id",
+          "generation"
+        ],
+        "title": "MailboxInstanceRef",
+        "type": "object"
+      },
+      "MailboxResult": {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "enum": [
+              "succeeded",
+              "failed",
+              "blocked"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence",
+            "type": "array"
+          }
+        },
+        "required": [
+          "outcome",
+          "summary",
+          "evidence"
+        ],
+        "title": "MailboxResult",
         "type": "object"
       }
     },

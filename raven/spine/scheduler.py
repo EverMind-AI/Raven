@@ -546,6 +546,11 @@ class Scheduler:
         lane = self._lanes.get(conversation_id)
         return lane is not None and lane.running_future() is not None
 
+    def has_work(self, conversation_id: str) -> bool:
+        """Report queued, running, or pending injected work at an automatic-input boundary."""
+        lane = self._lanes.get(conversation_id)
+        return bool(lane and (lane.running_future() is not None or lane._pending or lane._inject_mailbox))
+
     def has_running(self) -> bool:
         """True if any lane has a turn in flight, whatever its origin. The
         gateway's reload guard asks this: a cron or sentinel turn mid-tool is

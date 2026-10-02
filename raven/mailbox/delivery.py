@@ -128,9 +128,11 @@ class MailboxDelivery:
             evidence_artifacts=evidence_artifacts,
         )
 
-    def _recover(self, conn, now, agent_id=None):
+    def _recover(self, conn, now, agent_id=None, allowed_scopes=None):
         count = 0
         for row in self._rows(conn, agent_id):
+            if not self.store._scope_allowed(row, allowed_scopes):
+                continue
             self._envelope(row)
             card = self.store._card_row(conn, row["recipient"])
             reason = None
@@ -158,7 +160,7 @@ class MailboxDelivery:
         with self.db.connection(write=True) as conn:
             return self._recover(conn, self._now(now))
 
-    def poll(self, ref, *, request_id, limit=1, lease_seconds=120, now=None, event_schemas=()):
+    def poll(self, ref, *, request_id, limit=1, lease_seconds=120, now=None, event_schemas=(), allowed_scopes=None):
         """Claim a bounded eligible batch once per durable caller request."""
         self._lease(lease_seconds)
         if type(limit) is not int or not 1 <= limit <= 16:
@@ -167,6 +169,8 @@ class MailboxDelivery:
         inputs = dict(
             ref=ref.model_dump(), limit=limit, lease_seconds=lease_seconds, event_schemas=sorted(event_schemas)
         )
+        if allowed_scopes is not None:
+            inputs["allowed_scopes"] = list(allowed_scopes)
         with blobs.locked(self.db):
             with self.db.connection() as conn:
                 self.store._current(conn, ref)
@@ -182,7 +186,9 @@ class MailboxDelivery:
                     rows = [
                         row
                         for row in self._rows(conn, ref.agent_id)
-                        if row["expires_at"] > now and row["not_before"] <= now
+                        if row["expires_at"] > now
+                        and row["not_before"] <= now
+                        and self.store._scope_allowed(row, allowed_scopes)
                     ]
                 verified = {}
                 for row in rows:
@@ -199,7 +205,7 @@ class MailboxDelivery:
                             raise MailboxError("stale_claim", message_id=claim.envelope.message_id)
                         self._active(conn, ref, claim, now)
                     return claims
-                self._recover(conn, now, ref.agent_id)
+                self._recover(conn, now, ref.agent_id, allowed_scopes)
                 inflight = conn.execute(
                     "SELECT count(*) FROM messages WHERE authority_id=? AND tenant_id=? AND recipient=? "
                     "AND phase='in_progress'",

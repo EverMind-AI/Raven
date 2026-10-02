@@ -11,18 +11,22 @@ from typing import Any
 
 from raven.contracts.terminal import Envelope, TerminalError
 from raven.contracts.tool import Tool
+from raven.spine.turn import Origin
 
 RpcCall = Callable[[str, dict], Awaitable[dict]]
 _turn_session_key: ContextVar[str | None] = ContextVar("terminal_turn_session", default=None)
+_turn_origin: ContextVar[Origin | None] = ContextVar("terminal_turn_origin", default=None)
 
 
 @contextmanager
-def bind_terminal_session(session_key: str):
+def bind_terminal_session(session_key: str, *, origin: Origin | None = None):
     token = _turn_session_key.set(session_key)
+    origin_token = _turn_origin.set(origin)
     try:
         yield
     finally:
         _turn_session_key.reset(token)
+        _turn_origin.reset(origin_token)
 
 
 def _failure(exc: TerminalError) -> str:
@@ -86,6 +90,8 @@ class CreateTerminalTool(_TerminalTool):
         **kwargs: Any,
     ) -> str:
         try:
+            if unattended and _turn_origin.get() not in {None, Origin.USER}:
+                raise TerminalError("approval_required", "A background turn cannot bypass terminal permission prompts")
             if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
                 raise TerminalError("invalid_agent_name", "Use a lowercase canonical agent name")
             session_key = self.session_key()
@@ -196,6 +202,8 @@ class SendTerminalTool(_TerminalTool):
     async def execute(self, to: str, text: str, require_ack: bool = False, force: bool = False, **kwargs: Any) -> str:
         last_handle = None
         try:
+            if force and _turn_origin.get() not in {None, Origin.USER}:
+                raise TerminalError("approval_required", "A background turn cannot override the Human composer")
             resolution = await self.rpc("agents.resolve", {"mention": to})
             candidates = resolution.get("candidates", [])
             if len(candidates) == 1:

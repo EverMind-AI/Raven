@@ -144,6 +144,8 @@ class WsGateway:
 
                 terminal_handle = decode_frame(frame)[0]["handle"]
             for ws in list(self._sockets):
+                if self._connection_states.get(ws, {}).get("mailbox_binding_id"):
+                    continue
                 if terminal_handle is not None and terminal_handle not in self._connection_states.get(ws, {}).get(
                     "terminal_subscriptions", set()
                 ):
@@ -155,6 +157,8 @@ class WsGateway:
             return
         data = json.dumps(frame, ensure_ascii=False)
         for ws in list(self._sockets):
+            if self._connection_states.get(ws, {}).get("mailbox_binding_id"):
+                continue
             try:
                 await ws.send_str(data)
             except Exception:
@@ -286,7 +290,20 @@ class WsGateway:
     async def handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         if not self._origin_ok(request):
             raise web.HTTPForbidden(reason="bad origin")
-        if not self._authorized(request):
+        receiver_token = request.headers.get("X-Raven-Receiver")
+        binding_id = None
+        if receiver_token is not None:
+            from raven.contracts.mailbox import MailboxError
+
+            try:
+                methods = getattr(self.dispatcher, "mailbox_receivers", None)
+                if methods is None:
+                    raise MailboxError("receiver_unauthorized")
+                binding = await asyncio.to_thread(lambda: methods.receivers.authenticate(receiver_token))
+                binding_id = binding.binding_id
+            except MailboxError:
+                raise web.HTTPUnauthorized(reason="missing or invalid receiver") from None
+        elif not self._authorized(request):
             raise web.HTTPUnauthorized(reason="missing or invalid session")
 
         ws = web.WebSocketResponse(heartbeat=30)
@@ -298,7 +315,7 @@ class WsGateway:
         # system.hello reaches this socket's turn.send and nobody else's.
         from raven.rpc import connection
 
-        conn_token = connection.bind_connection()
+        conn_token = connection.bind_connection(mailbox_admin=binding_id is None, mailbox_binding_id=binding_id)
         self._connection_states[ws] = connection.current_state()
         # ...and one way to reach this socket alone, for the frames that
         # interrupt a single conversation rather than stream to whoever is

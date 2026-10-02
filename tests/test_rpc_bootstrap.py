@@ -14,9 +14,14 @@ import asyncio
 import inspect
 import json
 from pathlib import Path
+from uuid import uuid4
+
+import pytest
 
 from raven.rpc import bootstrap
 from raven.rpc.subscriptions import COALESCE_WINDOW_S
+from tests.test_mailbox_store import SCOPE
+from tests.test_mailbox_store import mailbox as mailbox
 
 
 class _FakeCron:
@@ -91,6 +96,56 @@ class _FakeLoop:
 
 async def _sink(_frame: dict) -> None:
     pass
+
+
+@pytest.mark.parametrize("grant_state", ["schema_one", "poll", "revoked", "stale", "notify"])
+async def test_restart_resumes_only_current_persisted_notification_grants(mailbox, tmp_path, monkeypatch, grant_state):
+    from raven.agent.registry.identity import IdentityRegistry
+    from raven.mailbox.receiver import ReceiverService
+
+    store, _, ref = mailbox
+    registry = IdentityRegistry(tmp_path / "identity.json", config_rows=lambda: [{"name": "worker", "kind": "builtin"}])
+    registry.register("worker", kind_ref="worker", task_ref="task", session_key="tui:synthetic")
+    receivers = ReceiverService(store, registry, upgrade=False)
+    if grant_state != "schema_one":
+        issued = receivers.grant(
+            "worker",
+            ref,
+            SCOPE,
+            request_id=str(uuid4()),
+            capabilities=["poll" if grant_state == "poll" else "native_notify"],
+        )
+        if grant_state == "revoked":
+            receivers.revoke(issued["binding"]["binding_id"])
+        if grant_state == "stale":
+            registry.register("worker", kind_ref="worker", task_ref="task", session_key="tui:replacement")
+    monkeypatch.setattr("raven.mailbox.store.MailboxStore", lambda: store)
+    monkeypatch.setattr("raven.agent.registry.identity.IdentityRegistry", lambda: registry)
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=_FakeLoop())
+    try:
+        notifier = stack.dispatcher.mailbox_receivers.notification_receiver
+        if grant_state == "notify":
+            assert notifier is not None
+            assert notifier._watcher is not None and not notifier._watcher.done()
+        else:
+            assert notifier is None
+        with store.db.connection() as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == (1 if grant_state == "schema_one" else 2)
+    finally:
+        await stack.teardown()
+    if notifier:
+        assert notifier._watcher is None
+
+
+async def test_unenrolled_boot_does_not_create_mailbox_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=_FakeLoop())
+    try:
+        assert stack.dispatcher.mailbox_receivers.notification_receiver is None
+        assert stack.dispatcher.mailbox_receivers._receivers is None
+        assert not (tmp_path / "a2a").exists()
+    finally:
+        await stack.teardown()
 
 
 class _RecordingBackend:

@@ -2,10 +2,16 @@
 
 import { ds } from '../../shell/bridge'
 
-import type { TerminalEvent, TerminalOutputFrame, TerminalRow, TerminalSource } from './types'
+import type { MailboxOverviewData, TerminalEvent, TerminalOutputFrame, TerminalRow, TerminalSource } from './types'
 
 export const TRANSCRIPT_TAB = 'raven-transcript'
 export const POLL_INTERVAL_MS = 2000
+
+export interface MailboxState {
+  data: MailboxOverviewData | null
+  capabilityUnavailable: boolean
+  error: string | null
+}
 
 export interface TerminalState {
   taskId: string | null
@@ -14,6 +20,7 @@ export interface TerminalState {
   loading: boolean
   error: string
   deliveries: Record<string, TerminalDelivery>
+  mailboxes: Record<string, MailboxState>
 }
 
 export interface TerminalDelivery {
@@ -28,6 +35,7 @@ const initial: TerminalState = {
   loading: false,
   error: '',
   deliveries: {},
+  mailboxes: {},
 }
 
 let state: TerminalState = { ...initial }
@@ -51,6 +59,77 @@ function set(patch: Partial<TerminalState>): void {
   for (const listener of listeners) listener()
 }
 
+interface StructuredRpcError {
+  code?: number
+  message?: string
+  data?: {
+    code?: string
+  } | null
+}
+
+function sameTerminalFence(a: TerminalRow, b: TerminalRow): boolean {
+  return (
+    a.handle === b.handle &&
+    a.incarnationId === b.incarnationId &&
+    a.worktreeId === b.worktreeId &&
+    a.identity?.taskRef === b.identity?.taskRef &&
+    a.identity?.bindingGeneration === b.identity?.bindingGeneration
+  )
+}
+
+async function fetchMailbox(row: TerminalRow, generation: number): Promise<void> {
+  const terminalSource = source()
+  if (!terminalSource.mailboxOverview) return
+  const taskId = row.identity?.taskRef || state.taskId
+  const workspaceId = row.worktreeId
+  if (!taskId || !workspaceId) return
+  try {
+    const res = await terminalSource.mailboxOverview({
+      task_id: taskId,
+      workspace_id: workspaceId,
+      terminal_handle: row.handle,
+    })
+    if (generation !== requestGeneration || state.taskId === null) return
+    const currentRow = state.terminals.find((r) => r.handle === row.handle)
+    if (!currentRow || !sameTerminalFence(row, currentRow)) return
+    set({
+      mailboxes: {
+        ...state.mailboxes,
+        [row.handle]: {
+          data: res?.data ?? null,
+          capabilityUnavailable: false,
+          error: null,
+        },
+      },
+    })
+  } catch (error: unknown) {
+    if (generation !== requestGeneration || state.taskId === null) return
+    const currentRow = state.terminals.find((r) => r.handle === row.handle)
+    if (!currentRow || !sameTerminalFence(row, currentRow)) return
+    const rpcError = error as StructuredRpcError | null | undefined
+    const message = (error as Error)?.message || String(error)
+    const dataCode = rpcError?.data?.code
+    const isUnavailable =
+      rpcError?.code === -32601 ||
+      dataCode === 'receiver_capability_unavailable' ||
+      dataCode === 'capability_unavailable' ||
+      message.includes('receiver_capability_unavailable') ||
+      message.includes('capability_unavailable') ||
+      message.includes('Method not found') ||
+      message.includes('-32601')
+    set({
+      mailboxes: {
+        ...state.mailboxes,
+        [row.handle]: {
+          data: null,
+          capabilityUnavailable: isUnavailable,
+          error: isUnavailable ? null : message,
+        },
+      },
+    })
+  }
+}
+
 export async function refresh(): Promise<void> {
   const taskId = state.taskId
   if (!taskId) return
@@ -60,16 +139,32 @@ export async function refresh(): Promise<void> {
     const reply = await source().list(taskId)
     if (generation !== requestGeneration || taskId !== state.taskId) return
     const handles = new Set(reply.terminals.map((row) => row.handle))
+    const activeTab =
+      state.activeTab === TRANSCRIPT_TAB || handles.has(state.activeTab) ? state.activeTab : TRANSCRIPT_TAB
+    const currentRows = new Map(state.terminals.map((row) => [row.handle, row]))
+    const mailboxes = Object.fromEntries(
+      Object.entries(state.mailboxes).filter(([handle]) => {
+        const oldRow = currentRows.get(handle)
+        const newRow = reply.terminals.find((row) => row.handle === handle)
+        return Boolean(oldRow && newRow && sameTerminalFence(oldRow, newRow))
+      }),
+    )
     set({
       terminals: reply.terminals,
-      activeTab:
-        state.activeTab === TRANSCRIPT_TAB || handles.has(state.activeTab) ? state.activeTab : TRANSCRIPT_TAB,
+      activeTab,
       loading: false,
       error: '',
       deliveries: Object.fromEntries(
         Object.entries(state.deliveries).filter(([handle]) => handles.has(handle)),
       ),
+      mailboxes,
     })
+    if (activeTab !== TRANSCRIPT_TAB) {
+      const activeRow = reply.terminals.find((r) => r.handle === activeTab)
+      if (activeRow) {
+        await fetchMailbox(activeRow, generation)
+      }
+    }
   } catch (error) {
     if (generation !== requestGeneration || taskId !== state.taskId) return
     set({ loading: false, error: (error as Error)?.message || String(error) })
@@ -78,7 +173,7 @@ export async function refresh(): Promise<void> {
 
 function resetTask(taskId: string | null): void {
   requestGeneration += 1
-  set({ taskId, terminals: [], activeTab: TRANSCRIPT_TAB, loading: false, error: '', deliveries: {} })
+  set({ taskId, terminals: [], activeTab: TRANSCRIPT_TAB, loading: false, error: '', deliveries: {}, mailboxes: {} })
   if (taskId) void refresh()
 }
 
@@ -94,6 +189,12 @@ export function reconcileTask(taskId: string | null): void {
 export function selectTab(tab: string): void {
   if (tab !== TRANSCRIPT_TAB && !state.terminals.some((row) => row.handle === tab)) return
   set({ activeTab: tab })
+  if (tab !== TRANSCRIPT_TAB) {
+    const row = state.terminals.find((r) => r.handle === tab)
+    if (row) {
+      void fetchMailbox(row, requestGeneration)
+    }
+  }
 }
 
 export function onOutput(handle: string, listener: (frame: TerminalOutputFrame) => void): () => void {

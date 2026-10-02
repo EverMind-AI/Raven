@@ -749,6 +749,71 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chat[data-terminal-active="true"] #backpill,
 .chat[data-terminal-active="true"] #brand { display: none; }
 
+.terminal-task-ref { color: var(--gold); }
+.terminal-mailbox-notice {
+  padding: 6px 20px; border-bottom: 1px solid var(--line-soft);
+  background: var(--surface); color: var(--faint); font-family: var(--mono); font-size: 11px;
+}
+.terminal-mailbox-section {
+  display: flex; flex-direction: column; gap: 8px; padding: 8px 20px;
+  border-bottom: 1px solid var(--line-soft); background: var(--surface);
+  font-family: var(--mono); font-size: 11px;
+}
+.terminal-mailbox-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+.terminal-mailbox-authority {
+  display: flex; align-items: baseline; gap: 6px; color: var(--faint);
+}
+.terminal-mailbox-label { color: var(--faint); text-transform: uppercase; font-size: 10px; }
+.terminal-mailbox-owner code { color: var(--moss); }
+.terminal-mailbox-owner-none { color: var(--faint); font-style: italic; }
+.terminal-mailbox-phases {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.terminal-phase-pill {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px;
+  border-radius: 3px; font-size: 10.5px; background: var(--stage-bg); color: var(--muted);
+}
+.terminal-phase-pill.phase-stored { color: var(--muted); }
+.terminal-phase-pill.phase-claimed { color: var(--gold); }
+.terminal-phase-pill.phase-processed { color: var(--moss); }
+.terminal-phase-pill.phase-blocked { color: var(--clay); }
+.terminal-phase-note { color: var(--faint); font-size: 10px; margin-left: 2px; }
+.terminal-mailbox-messages, .terminal-mailbox-notifications {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.terminal-msg-row, .terminal-notification-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 3px 0;
+  border-top: 1px solid var(--line-soft); color: var(--muted); font-size: 11px;
+}
+.terminal-msg-dir {
+  font-size: 10px; text-transform: uppercase; padding: 1px 4px; border-radius: 2px;
+}
+.terminal-msg-dir.incoming { color: var(--moss); background: rgba(80, 160, 80, 0.1); }
+.terminal-msg-dir.outgoing { color: var(--amber); background: rgba(200, 140, 40, 0.1); }
+.terminal-msg-phase, .terminal-notif-stage {
+  padding: 1px 5px; border-radius: 2px; font-size: 10.5px;
+}
+.terminal-msg-phase.phase-stored { background: var(--stage-bg); color: var(--muted); }
+.terminal-msg-phase.phase-claimed { background: rgba(220, 170, 50, 0.15); color: var(--gold); }
+.terminal-msg-phase.phase-processed { background: rgba(80, 160, 80, 0.15); color: var(--moss); }
+.terminal-msg-phase.phase-blocked { background: rgba(220, 80, 80, 0.15); color: var(--clay); }
+.terminal-handoff-status {
+  padding: 1px 5px; border-radius: 2px; font-size: 10.5px;
+}
+.terminal-handoff-status.status-accept_received { background: var(--stage-bg); color: var(--muted); }
+.terminal-handoff-status.status-proposed { background: rgba(220, 170, 50, 0.2); color: var(--gold); font-weight: 600; }
+.terminal-handoff-status.status-confirmed { background: rgba(80, 160, 80, 0.2); color: var(--moss); font-weight: 600; }
+.terminal-art-badge {
+  color: var(--faint); display: inline-flex; align-items: center; gap: 3px;
+}
+.terminal-receipt-link code, .terminal-art-badge code { color: var(--muted); }
+.terminal-notif-stage.stage-input_accepted { color: var(--amber); }
+.terminal-notif-stage.stage-turn_started { color: var(--moss); }
+.terminal-notif-stage.stage-uncertain { color: var(--clay); font-weight: 600; }
+.terminal-notifications-title { color: var(--faint); font-size: 10px; text-transform: uppercase; }
+
 /* Bottom inset tracks the floating composer (--lift is the card's height plus
    its offset, published by dockLift), so the last message always clears the
    glass with room to spare -- growing exactly when the textarea does. */

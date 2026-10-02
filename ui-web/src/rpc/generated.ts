@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 176 methods, 115 component schemas.
+// 193 methods, 117 component schemas.
 
 /* eslint-disable */
 /**
@@ -150,6 +150,14 @@ export type Schemaversion = 1;
 export type Exitedat = number | null;
 export type Runtimeid1 = string;
 export type Reason = 'exact' | 'alias';
+export type AuthorityId = string;
+export type TenantId = string;
+export type AgentId = string;
+export type InstanceId = string;
+export type Generation = number;
+export type Outcome = 'succeeded' | 'failed' | 'blocked';
+export type Summary = string;
+export type Evidence = string[];
 export type Handle12 = string | null;
 export type Cols = number | null;
 export type Rows = number | null;
@@ -204,6 +212,51 @@ export type Name1 = string;
 export type Mention = string;
 export type Candidates = IdentityCandidate[];
 export type Unique = boolean;
+export type AgentName = string;
+export type RequestId = string;
+export type Capabilities1 = string[];
+export type BindingId = string;
+export type TaskId = string;
+export type WorkspaceId = string;
+export type TerminalHandle = string | null;
+export type BindingId1 = string | null;
+export type BindingId2 = string | null;
+export type RequestId1 = string | null;
+export type Peek = boolean;
+export type Limit1 = number;
+export type LeaseSeconds = number;
+export type BindingId3 = string | null;
+export type Action = 'finish' | 'retry' | 'reject';
+export type Reason1 = string | null;
+export type BindingId4 = string | null;
+export type RequestId2 = string;
+export type LeaseSeconds1 = number;
+export type BindingId5 = string | null;
+export type MessageId = string;
+export type BindingId6 = string | null;
+export type Limit2 = number;
+export type BindingId7 = string | null;
+export type OfferMessageId = string;
+export type ArtifactHash = string;
+export type BindingId8 = string | null;
+export type OfferMessageId1 = string;
+export type AcceptMessageId = string;
+export type TaskId1 = string;
+export type WorkspaceId1 = string;
+export type OwnerAgentId = string;
+export type RequestId3 = string;
+export type BindingId9 = string;
+export type OfferMessageId2 = string;
+export type AcceptMessageId1 = string;
+export type ExpectedOwnerAgentId = string;
+export type ExpectedAssignmentEpoch = number;
+export type RequestId4 = string;
+export type BindingId10 = string | null;
+export type BindingId11 = string;
+export type RequestId5 = string;
+export type MessageIds = string[];
+export type BindingId12 = string | null;
+export type RequestId6 = string;
 
 export interface BrowserTab {
   index: number;
@@ -1777,6 +1830,18 @@ export interface RuntimeInfo {
 export interface IdentityCandidate {
   agent: IdentityRecord;
   reason: Reason;
+}
+export interface MailboxInstanceRef {
+  authority_id: AuthorityId;
+  tenant_id: TenantId;
+  agent_id: AgentId;
+  instance_id: InstanceId;
+  generation: Generation;
+}
+export interface MailboxResult {
+  outcome: Outcome;
+  summary: Summary;
+  evidence: Evidence;
 }
 export interface SessionListParams {
   /**
@@ -4015,6 +4080,204 @@ export interface AgentsResolveResult {
   candidates: Candidates;
   unique: Unique;
 }
+export interface MailboxEnrollParams {
+  agent_name: AgentName;
+  ref: MailboxInstanceRef;
+  scope: Scope;
+  request_id: RequestId;
+  capabilities?: Capabilities1;
+}
+export interface Scope {
+  [k: string]: string;
+}
+export interface MailboxEnrollResult {
+  data: Data1;
+}
+export interface Data1 {
+  [k: string]: JsonValue;
+}
+export interface MailboxRevokeParams {
+  binding_id: BindingId;
+}
+export interface MailboxRevokeResult {
+  data: Data2;
+}
+export interface Data2 {
+  [k: string]: JsonValue;
+}
+export interface MailboxBindingsParams {}
+export interface MailboxBindingsResult {
+  data: Data3;
+}
+export interface Data3 {
+  [k: string]: JsonValue;
+}
+export interface MailboxOverviewParams {
+  task_id: TaskId;
+  workspace_id: WorkspaceId;
+  terminal_handle?: TerminalHandle;
+}
+export interface MailboxOverviewResult {
+  data: Data4;
+}
+export interface Data4 {
+  [k: string]: JsonValue;
+}
+export interface MailboxSendParams {
+  binding_id?: BindingId1;
+  envelope: Envelope;
+}
+export interface Envelope {
+  [k: string]: JsonValue;
+}
+export interface MailboxSendResult {
+  data: Data5;
+}
+export interface Data5 {
+  [k: string]: JsonValue;
+}
+export interface MailboxPollParams {
+  binding_id?: BindingId2;
+  request_id?: RequestId1;
+  peek?: Peek;
+  limit?: Limit1;
+  lease_seconds?: LeaseSeconds;
+}
+export interface MailboxPollResult {
+  data: Data6;
+}
+export interface Data6 {
+  [k: string]: JsonValue;
+}
+export interface MailboxAckParams {
+  binding_id?: BindingId3;
+  claim: Claim;
+  result?: MailboxResult | null;
+  action?: Action;
+  reason?: Reason1;
+}
+export interface Claim {
+  [k: string]: JsonValue;
+}
+export interface MailboxAckResult {
+  data: Data7;
+}
+export interface Data7 {
+  [k: string]: JsonValue;
+}
+export interface MailboxRenewParams {
+  binding_id?: BindingId4;
+  claim: Claim1;
+  request_id: RequestId2;
+  lease_seconds?: LeaseSeconds1;
+}
+export interface Claim1 {
+  [k: string]: JsonValue;
+}
+export interface MailboxRenewResult {
+  data: Data8;
+}
+export interface Data8 {
+  [k: string]: JsonValue;
+}
+export interface MailboxStatusParams {
+  binding_id?: BindingId5;
+  message_id: MessageId;
+}
+export interface MailboxStatusResult {
+  data: Data9;
+}
+export interface Data9 {
+  [k: string]: JsonValue;
+}
+export interface MailboxMessagesParams {
+  binding_id?: BindingId6;
+  limit?: Limit2;
+}
+export interface MailboxMessagesResult {
+  data: Data10;
+}
+export interface Data10 {
+  [k: string]: JsonValue;
+}
+export interface MailboxArtifactReadParams {
+  binding_id?: BindingId7;
+  offer_message_id: OfferMessageId;
+  artifact_hash: ArtifactHash;
+}
+export interface MailboxArtifactReadResult {
+  data: Data11;
+}
+export interface Data11 {
+  [k: string]: JsonValue;
+}
+export interface MailboxHandoffProposeParams {
+  binding_id?: BindingId8;
+  offer_message_id: OfferMessageId1;
+  accept_message_id: AcceptMessageId;
+}
+export interface MailboxHandoffProposeResult {
+  data: Data12;
+}
+export interface Data12 {
+  [k: string]: JsonValue;
+}
+export interface MailboxHandoffCreateParams {
+  task_id: TaskId1;
+  workspace_id: WorkspaceId1;
+  owner_agent_id: OwnerAgentId;
+  request_id: RequestId3;
+}
+export interface MailboxHandoffCreateResult {
+  data: Data13;
+}
+export interface Data13 {
+  [k: string]: JsonValue;
+}
+export interface MailboxHandoffCommitParams {
+  binding_id: BindingId9;
+  offer_message_id: OfferMessageId2;
+  accept_message_id: AcceptMessageId1;
+  expected_owner_agent_id: ExpectedOwnerAgentId;
+  expected_assignment_epoch: ExpectedAssignmentEpoch;
+  request_id: RequestId4;
+}
+export interface MailboxHandoffCommitResult {
+  data: Data14;
+}
+export interface Data14 {
+  [k: string]: JsonValue;
+}
+export interface MailboxHandoffStatusParams {
+  binding_id?: BindingId10;
+}
+export interface MailboxHandoffStatusResult {
+  data: Data15;
+}
+export interface Data15 {
+  [k: string]: JsonValue;
+}
+export interface MailboxNotifyParams {
+  binding_id: BindingId11;
+  request_id: RequestId5;
+  message_ids: MessageIds;
+}
+export interface MailboxNotifyResult {
+  data: Data16;
+}
+export interface Data16 {
+  [k: string]: JsonValue;
+}
+export interface MailboxNotifyStatusParams {
+  binding_id?: BindingId12;
+  request_id: RequestId6;
+}
+export interface MailboxNotifyStatusResult {
+  data: Data17;
+}
+export interface Data17 {
+  [k: string]: JsonValue;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -4198,6 +4461,23 @@ export interface RpcMethods {
   'agents.list': { params: AgentsListParams; result: AgentsListResult };
   'agents.show': { params: AgentsShowParams; result: AgentsShowResult };
   'agents.resolve': { params: AgentsResolveParams; result: AgentsResolveResult };
+  'mailbox.enroll': { params: MailboxEnrollParams; result: MailboxEnrollResult };
+  'mailbox.revoke': { params: MailboxRevokeParams; result: MailboxRevokeResult };
+  'mailbox.bindings': { params: MailboxBindingsParams; result: MailboxBindingsResult };
+  'mailbox.overview': { params: MailboxOverviewParams; result: MailboxOverviewResult };
+  'mailbox.send': { params: MailboxSendParams; result: MailboxSendResult };
+  'mailbox.poll': { params: MailboxPollParams; result: MailboxPollResult };
+  'mailbox.ack': { params: MailboxAckParams; result: MailboxAckResult };
+  'mailbox.renew': { params: MailboxRenewParams; result: MailboxRenewResult };
+  'mailbox.status': { params: MailboxStatusParams; result: MailboxStatusResult };
+  'mailbox.messages': { params: MailboxMessagesParams; result: MailboxMessagesResult };
+  'mailbox.artifact.read': { params: MailboxArtifactReadParams; result: MailboxArtifactReadResult };
+  'mailbox.handoff.propose': { params: MailboxHandoffProposeParams; result: MailboxHandoffProposeResult };
+  'mailbox.handoff.create': { params: MailboxHandoffCreateParams; result: MailboxHandoffCreateResult };
+  'mailbox.handoff.commit': { params: MailboxHandoffCommitParams; result: MailboxHandoffCommitResult };
+  'mailbox.handoff.status': { params: MailboxHandoffStatusParams; result: MailboxHandoffStatusResult };
+  'mailbox.notify': { params: MailboxNotifyParams; result: MailboxNotifyResult };
+  'mailbox.notify.status': { params: MailboxNotifyStatusParams; result: MailboxNotifyStatusResult };
 }
 
 /** The literal union of callable method names. */
@@ -4266,6 +4546,23 @@ export const RPC_METHODS = [
   "knowledge.documents.list",
   "knowledge.search",
   "knowledge.status",
+  "mailbox.ack",
+  "mailbox.artifact.read",
+  "mailbox.bindings",
+  "mailbox.enroll",
+  "mailbox.handoff.commit",
+  "mailbox.handoff.create",
+  "mailbox.handoff.propose",
+  "mailbox.handoff.status",
+  "mailbox.messages",
+  "mailbox.notify",
+  "mailbox.notify.status",
+  "mailbox.overview",
+  "mailbox.poll",
+  "mailbox.renew",
+  "mailbox.revoke",
+  "mailbox.send",
+  "mailbox.status",
   "mcp.list",
   "mcp.test",
   "mcp.tools",

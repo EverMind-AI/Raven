@@ -362,11 +362,14 @@ class MailboxStore:
         limit: int = 1,
         now: int | None = None,
         event_schemas: Collection[str] = (),
+        allowed_scopes: Collection[dict] | None = None,
+        exclude_message_ids: Collection[str] = (),
     ) -> list[dict]:
         """Inspect eligible immutable envelopes without consuming or exposing claims."""
         if type(limit) is not int or not 1 <= limit <= 16:
             raise MailboxError("invalid_limit")
         now = int(time.time()) if now is None else now
+        excluded = set(exclude_message_ids)
         with self.db.connection() as conn:
             card = self._current(conn, instance_ref)
             rows = conn.execute(
@@ -377,6 +380,10 @@ class MailboxStore:
             )
             result = []
             for row in rows:
+                if row["message_id"] in excluded:
+                    continue
+                if not self._scope_allowed(row, allowed_scopes):
+                    continue
                 try:
                     envelope = decode_envelope(row["envelope_bytes"], event_schemas=event_schemas)
                 except MailboxError:
@@ -399,6 +406,15 @@ class MailboxStore:
                 if len(result) == limit:
                     break
             return result
+
+    @staticmethod
+    def _scope_allowed(row, allowed_scopes):
+        if allowed_scopes is None:
+            return True
+        try:
+            return json.loads(row["envelope_bytes"])["scope"] in allowed_scopes
+        except (ValueError, KeyError, TypeError):
+            raise MailboxError("storage_conflict", message_id=row["message_id"]) from None
 
     def gc_blobs(self, *, now: int | None = None) -> list[str]:
         """Collect old unreferenced artifacts under the publication lock."""

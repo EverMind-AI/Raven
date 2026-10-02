@@ -17,6 +17,7 @@ from typing import Annotated, Any, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from raven.rpc.identity_models import IDENTITY_METHOD_MODELS
+from raven.rpc.mailbox_models import MAILBOX_METHOD_MODELS
 from raven.rpc.terminal_events import (
     A2aAckMatchedEvent,
     A2aSendEvent,
@@ -3823,6 +3824,7 @@ class SubagentCancelInstanceResult(_Strict):
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     **TERMINAL_METHOD_MODELS,
     **IDENTITY_METHOD_MODELS,
+    **MAILBOX_METHOD_MODELS,
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
     "knowledge.bases.list": (KnowledgeBasesListParams, KnowledgeBasesListResult),

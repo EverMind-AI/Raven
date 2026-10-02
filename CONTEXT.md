@@ -2147,3 +2147,45 @@ for all receipt intents to be published and defaults to thirty days after the
 terminal transition. Tombstones expire at the later of the original TTL plus
 thirty seconds or thirty days after the terminal transition; deduplication is
 finite. Retained records and unsettled outbox intents protect referenced blobs.
+
+**Mailbox receiver binding** (`raven/mailbox/receiver.py:ReceiverService`):
+A host-issued credential tied to one current Registry binding generation, mailbox
+Card instance/generation, task/workspace, and terminal incarnation or native session.
+Receiver operations revalidate that binding; message fields cannot expand its scope.
+The credential grants the configured mailbox capabilities, not host administration.
+
+**Handoff read coverage** (`raven/mailbox/handoff.py:MailboxHandoff.read_artifact`):
+Durable evidence that Raven read every byte of a declared artifact and verified its
+size and SHA-256 for one offer and current receiver instance/generation. The accept
+message describes coverage as `{sha256: {bytes_read: size}}`; self-reported coverage
+alone cannot substitute for the matching durable read records.
+
+**Handoff proposal** (`raven/mailbox/handoff.py:MailboxHandoff.propose`):
+A validated, persisted `handoff.accept` linked to the exact offer, source/receiver
+identities, task/workspace, actual read coverage, and unresolved items. Its visible
+status is `PROPOSED`. Neither proposal nor processed receipt changes task ownership.
+
+**Task authority** (`raven/mailbox/handoff.py:MailboxHandoff.create_task`, `commit`):
+The durable task/workspace row containing the stable owner and assignment epoch.
+An explicit host operation creates epoch one. A separately authorized host commit
+compares the expected owner and epoch, verifies the offer/accept and artifacts, and
+atomically advances ownership and epoch with the confirmed handoff identities.
+An exact mutation-request replay returns the original confirmation once.
+_Avoid_: "claim owner" -- a mailbox claim controls a delivery lease, not this row.
+
+**Mailbox notification pointer** (`raven/mailbox/notifications.py:MailboxNotifications`):
+A durable intent containing the exact ordered message UUIDs, receiver binding and
+instance, terminal incarnation, request UUID, and canonical input hash. It contains
+no envelope body and does not claim or process its messages. Submission evidence
+advances its stage separately from mailbox results; interrupted submission stays
+`uncertain` and cannot reenter submission merely because a caller retries.
+
+
+**Native mailbox consumer** (`raven/mailbox/receiver_runtime.py:MailboxReceiver`):
+An explicitly enrolled native-session receiver submits a durable pointer as a
+`SUBAGENT` turn only when its exact task scope and current binding remain valid
+and the session has no queued work or pending Human question. Its current-session
+tools expose receiver operations and label peer results as untrusted data.
+Automatic notification skips previously submitted message IDs, including uncertain
+ones; it does not retry business work or grant permission bypass. A correlated
+`TurnStarted` proves launch separately from accepted input and processed results.

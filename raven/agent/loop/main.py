@@ -845,7 +845,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 use_binding(self.binding_for_session(session_key)),
                 self.tools.session_scope_for(session_key),
                 self.tools.turn_scope(),
-                bind_terminal_session(session_key),
+                bind_terminal_session(session_key, origin=req.origin),
             ):
                 return await self._run_turn(
                     req,

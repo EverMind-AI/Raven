@@ -59,13 +59,17 @@ SendFrame = Callable[[dict[str, Any] | bytes], Awaitable[None]]
 SURFACE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
-def bind_connection() -> Token:
+def bind_connection(*, mailbox_admin: bool = False, mailbox_binding_id: str | None = None) -> Token:
     """Give the current context a fresh connection state; returns a reset token.
 
     Called by a transport once per accepted connection, before it starts
     dispatching that connection's frames. Pair with :func:`unbind_connection`.
     """
     state: dict[str, Any] = {}
+    if mailbox_binding_id is not None:
+        state["mailbox_binding_id"] = mailbox_binding_id
+    elif mailbox_admin:
+        state["mailbox_admin"] = True
     token = _state.set(state)
     _live.add(id(state))
     return token

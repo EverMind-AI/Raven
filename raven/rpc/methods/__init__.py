@@ -29,6 +29,7 @@ from raven.rpc.methods.delegation import register_delegation_methods
 from raven.rpc.methods.input import register_input_methods
 from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.knowledge import register_knowledge_methods
+from raven.rpc.methods.mailbox import register_mailbox_methods
 from raven.rpc.methods.memory import register_memory_methods
 from raven.rpc.methods.model import register_model_methods
 from raven.rpc.methods.playbooks import register_playbooks_methods
@@ -229,6 +230,7 @@ def register_aligned_methods_except_system(
     # without an RPC surface. (A matching subagent.* view waits for the
     # transcript writer that would give it anything to list.)
     register_memory_methods(dispatcher)
+    register_mailbox_methods(dispatcher)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the
     # page can list what is stored and read one whole spec. Registered

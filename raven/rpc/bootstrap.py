@@ -286,6 +286,13 @@ async def build_rpc_stack(
     # it back to tag that turn's events (see build_rpc_spine).
     direct_targets: dict[str, dict[str, str]] = {}
     turn_teardown = None
+
+    async def mailbox_event(event):
+        methods = getattr(dispatcher, "mailbox_receivers", None)
+        receiver = methods.notification_receiver if methods is not None else None
+        if receiver is not None:
+            await receiver.on_turn_event(event)
+
     if agent_loop is not None:
         from raven.core.cron_stack import make_on_cron_job
 
@@ -305,6 +312,7 @@ async def build_rpc_stack(
             # registered from it below, and a caller that overrides the responder
             # is not necessarily removing that method.
             approval_responder=approval_responder or approval_broker,
+            on_mailbox_turn=mailbox_event,
         )
         if owns_loop:
             agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -346,7 +354,39 @@ async def build_rpc_stack(
         terminal_services=terminal_services,
     )
 
+    def mailbox_receivers():
+        from raven.agent.registry.identity import IdentityRegistry
+        from raven.mailbox.receiver import ReceiverService
+        from raven.mailbox.store import MailboxStore
+
+        return ReceiverService(
+            MailboxStore(),
+            terminal_services.identities if terminal_services else IdentityRegistry(),
+            terminal_services.host if terminal_services else None,
+            upgrade=False,
+        )
+
+    def mailbox_notifier(receivers):
+        from raven.mailbox.receiver_runtime import MailboxReceiver
+
+        return MailboxReceiver(
+            receivers,
+            host=terminal_services.host if terminal_services else None,
+            delivery=terminal_services.delivery if terminal_services else None,
+            scheduler=turn_scheduler,
+            sessions=getattr(agent_loop, "sessions", None),
+            channel=channel,
+        )
+
+    dispatcher.mailbox_receivers.receiver_factory = mailbox_receivers
+    dispatcher.mailbox_receivers.notification_factory = mailbox_notifier
+    from raven.mailbox.store import MailboxStore
+
+    if MailboxStore().db.path.exists():
+        dispatcher.mailbox_receivers.resume_notifications()
+
     unregister_terminal_tools = None
+    unregister_mailbox_tools = None
     if terminal_services is not None and agent_loop is not None:
         from raven.rpc.terminal_tools import register_terminal_tools
 
@@ -356,6 +396,11 @@ async def build_rpc_stack(
             unregister_terminal_tools = register_terminal_tools(
                 tools, dispatcher, session_cwd=getattr(agent_loop, "peek_session_workdir", None)
             )
+    if agent_loop is not None and getattr(agent_loop, "tools", None) is not None:
+        from raven.rpc.mailbox_tools import register_mailbox_tools
+
+        if callable(getattr(agent_loop.tools, "register", None)):
+            unregister_mailbox_tools = register_mailbox_tools(agent_loop.tools, dispatcher)
 
     if owns_loop and agent_loop is not None:
         # A one-time runtime preparation belongs to whoever assembles the engine.
@@ -378,6 +423,11 @@ async def build_rpc_stack(
         asyncio.create_task(_start_backend())
 
     async def teardown() -> None:
+        if unregister_mailbox_tools is not None:
+            unregister_mailbox_tools()
+        receiver = dispatcher.mailbox_receivers.notification_receiver
+        if receiver is not None:
+            await receiver.close()
         if unregister_terminal_tools is not None:
             unregister_terminal_tools()
         if terminal_services is not None:
