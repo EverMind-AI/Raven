@@ -805,3 +805,21 @@ def test_the_stamp_store_keeps_the_owners_that_acted_most_recently(monkeypatch: 
     tool._mark("run:d")
 
     assert list(tools_mod._BrowserTool._acted) == ["run:c", "run:a", "run:d"]
+
+
+async def test_the_tabs_description_names_the_close_rule_the_driver_enforces() -> None:
+    """The driver refuses an owner's close of a tab nobody holds -- the
+    reader's, which may carry a login the model just asked them to finish --
+    and the listing marks that tab with neither ``yours`` nor ``held``. The
+    description is the only text the model reads before calling, so without
+    the rule there the refusal is the first it hears of it."""
+    b = get_browser()
+    _running(b, [_FakePage("https://bank.test/")])
+
+    refused = await b.tab_close(0, owner="run:x")
+
+    assert "activate it first" in refused["error"], "the driver's own recovery, which the description must match"
+    said = " ".join(BrowserTabsTool().description.split())
+    assert "close takes only a tab you hold" in said
+    assert "a tab with no mark at all is the user's" in said
+    assert "closing it needs activate first" in said
