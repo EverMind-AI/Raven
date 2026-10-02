@@ -124,9 +124,15 @@ def add_files_routes(
                 # a directive the browser invents a freshness lifetime from
                 # Last-Modified (about a tenth of the file's age) and answers
                 # from its own copy without asking, so an image the agent
-                # replaced went on rendering as the one it replaced. The file
-                # route and the knowledge route already say this; a token is
-                # not a content address and must not be cached as one.
+                # replaced went on rendering as the one it replaced.
+                # `no-cache` would also close that window: `web.FileResponse`
+                # derives its validator from the file now at this path, so a
+                # conditional request after a rewrite does get the new bytes.
+                # `no-store` is chosen for the two reasons that do separate
+                # them: it matches `/file` and `/knowledge/file`, which serve
+                # the same kind of file, and it is the only directive that
+                # keeps an agent's output out of the reader's disk cache. This
+                # route has no size ceiling, unlike those two.
                 "Cache-Control": "no-store",
             },
         )

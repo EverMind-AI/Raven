@@ -139,8 +139,9 @@ async def test_control_characters_in_a_filename_are_stripped(client) -> None:
 
 
 async def test_archive_head_agrees_with_get(client) -> None:
-    """The frontend pre-checks "Download all" with HEAD too, so the branch that
-    skips the zip build must answer with the same status."""
+    """The route is registered with ``allow_head=True``, so a HEAD has to answer
+    what a GET would. The archive builds its zip only on the GET path, so HEAD
+    is a second path that could drift from it."""
     one = _register(client.store, client.tmp_path, "a.txt", b"AAA")
 
     ok = await client.head("/files/download-archive", params={"token": one.token})
@@ -235,9 +236,11 @@ async def test_archive_download_forbids_storing_too(client) -> None:
 
 
 async def test_head_carries_the_directive_as_well(client) -> None:
-    """The frontend pre-checks both routes with HEAD, and a HEAD response that
-    omitted the directive would let the browser store the copy it is about to
-    fetch."""
+    """The directive has to be on the response HEAD is answered with.
+
+    HEAD never reaches the archive's zip build: it returns through the early
+    exit before that work starts, so the directive has to sit on the response
+    the constructor builds rather than be set on the GET path afterwards."""
     record = _register(client.store, client.tmp_path)
     one = _register(client.store, client.tmp_path, "a.txt", b"AAA")
 
