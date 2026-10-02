@@ -205,6 +205,49 @@ async def test_an_unregistered_route_still_answers_404(client) -> None:
     assert res.status == 404
 
 
+async def test_download_forbids_storing_so_a_rewritten_file_is_fetched_again(client) -> None:
+    """A deliverable that was rewritten in place must not come back from the
+    browser cache.
+
+    ``register`` reuses the token when a conversation delivers the same path
+    again, so a rewritten file keeps the URL it had -- and the delivery card
+    points an ``<img>`` straight at this route. With no ``Cache-Control`` the
+    browser invents a freshness lifetime from ``Last-Modified`` (about 10% of
+    the file's age) and answers from its own copy without asking. An image the
+    agent replaced then went on rendering as the one it replaced, which is
+    indistinguishable from a server that did not pick the change up.
+    """
+    record = _register(client.store, client.tmp_path)
+
+    res = await client.get("/files/download", params={"token": record.token})
+
+    assert res.headers["Cache-Control"] == "no-store"
+
+
+async def test_archive_download_forbids_storing_too(client) -> None:
+    """The same route for a set of files: a token whose member changed must not
+    be answered from a stored copy either."""
+    one = _register(client.store, client.tmp_path, "a.txt", b"AAA")
+
+    res = await client.get("/files/download-archive", params={"token": one.token})
+
+    assert res.headers["Cache-Control"] == "no-store"
+
+
+async def test_head_carries_the_directive_as_well(client) -> None:
+    """The frontend pre-checks both routes with HEAD, and a HEAD response that
+    omitted the directive would let the browser store the copy it is about to
+    fetch."""
+    record = _register(client.store, client.tmp_path)
+    one = _register(client.store, client.tmp_path, "a.txt", b"AAA")
+
+    file_head = await client.head("/files/download", params={"token": record.token})
+    archive_head = await client.head("/files/download-archive", params={"token": one.token})
+
+    assert file_head.headers["Cache-Control"] == "no-store"
+    assert archive_head.headers["Cache-Control"] == "no-store"
+
+
 async def test_resolve_download_drops_stale_entry(tmp_path) -> None:
     store = DeliverableStore(tmp_path / "deliverables.json")
     record = _register(store, tmp_path)
