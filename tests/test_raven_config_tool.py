@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from raven.agent.tools.raven_config import RavenConfigTool
 from raven.config import self_surface as surface
 from raven.config.schema import PermissionsConfig
 from raven.config.self_surface import Effect
-from raven.contracts.permissions import Allow, ApprovalChoice, ApprovalOutcome, NeedsApproval
+from raven.contracts.permissions import Allow, ApprovalChoice, ApprovalOutcome, Deny, NeedsApproval
 from raven.permissions.builtin import BuiltinRulings
 from raven.permissions.gate import PermissionGate
 from raven.permissions.turn import start_permission_turn
@@ -1454,3 +1455,113 @@ async def test_lending_is_set_through_the_agents_own_writer_and_confirmed_as_sen
     assert not surface.carries_secret_value(
         {"action": "add", "path": "subagents", "value": '{"preset": "pi", "lend_key": "openrouter"}'}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [None, "", "null", ' "restart"', "0", "false"])
+async def test_the_restart_card_names_the_restart_that_runs(config_file, value):
+    """For a value the tool falls back on, the card said reload while the tool
+    restarted the whole process."""
+    asked: list[str] = []
+
+    async def restart(target: str) -> str:
+        asked.append(target)
+        return f"scheduled {target}"
+
+    tool = RavenConfigTool()
+    tool.set_restarter(restart)
+    await _run(tool, action="set", path="sentinel.enabled", value="true")
+    card = tool.approval_evidence({"action": "restart", "value": value})
+    await _run(tool, action="restart", value=value)
+    assert card["target"] == "restart" and asked == ["restart"]
+    assert card["change"].startswith("Restart the whole Raven process")
+
+
+@pytest.mark.asyncio
+async def test_one_field_named_twice_in_a_call_is_refused(config_file):
+    """The card showed both values and the write kept whichever came last."""
+    calls = Calls({"channels.configure": {"applied": True, "outcome": "restarted"}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    batch = {"channels.telegram.allowFrom": ["me"], "channels.telegram.allow_from": ["*"]}
+    reply = await _run(tool, action="set", value=json.dumps(batch))
+    assert "named twice" in reply and calls.calls == []
+    reply = await _run(tool, action="set", path="channels.telegram", value='{"allowFrom": ["me"], "allow_from": ["*"]}')
+    assert "named twice" in reply and calls.calls == []
+    reply = await _run(tool, action="set", value='{"tools.exec.timeout": 30, "tools.exec.timeout ": 90}')
+    assert "named twice" in reply
+    assert json.loads(config_file.read_text())["tools"]["exec"]["timeout"] == 60
+
+
+@pytest.mark.asyncio
+async def test_reading_a_channel_secret_reports_only_whether_it_is_set(config_file):
+    raw = json.loads(config_file.read_text())
+    raw["channels"] = {"telegram": {"token": "PLAINTEXT-tgtoken-123"}, "feishu": {"encryptKey": "PLAINTEXT-enc-1"}}
+    config_file.write_text(json.dumps(raw))
+    tool = RavenConfigTool()
+    for path in ("channels.telegram.token", "channels.feishu.encryptKey"):
+        reply = await _run(tool, action="get", path=path)
+        assert "PLAINTEXT" not in reply and '"set"' in reply, reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"action": "set", "path": "tools.mcpServers.z.url", "value": "https://mcp.example/s/PLAINpathSecret/mcp"},
+        {"action": "set", "path": "tools.mcpServers.z.args", "value": '["--api-key", "PLAINargSecret"]'},
+        {"action": "add", "path": "tools.mcpServers", "value": '{"z": {"url": "https://h/s/PLAINaddSecret"}}'},
+        {"action": "unset", "path": "tools.mcpServers.z.url"},
+        {"action": "set", "value": '{"tools.exec.timeout": 30, "tools.mcpServers.z.url": "https://h/PLAINbatch"}'},
+    ],
+)
+async def test_a_path_the_tool_will_not_write_is_refused_before_anyone_reads_it(monkeypatch, params):
+    """A key in an MCP server's URL or arguments has no name to recognise it by.
+    The tool refuses those paths anyway, so the gate refuses them first and the
+    value reaches neither the card nor the reviewer."""
+    shown = _reviewing(monkeypatch, allow=True)
+    responder = _Responder()
+    start_permission_turn(responder, conversation_id="c-1", turn_id="t-1")
+    decision = await _smart_gate().check("raven_config", params)
+    assert isinstance(decision, Deny) and "not something raven_config changes" in decision.reason
+    assert shown == [] and responder.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"action": "set", "path": "tools.exec.timeout", "value": "30"},
+        {"action": "set", "path": "channels.telegram", "value": '{"replyToMessage": true}'},
+        {"action": "set", "path": "channels.telegram.replyToMessage", "value": "true"},
+        {"action": "set", "path": "subagents.pi.model", "value": '"x"'},
+        {"action": "set", "value": '{"tools.exec.timeout": 30}'},
+        {"action": "add", "value": '{"preset": "pi"}'},
+        {"action": "unset", "path": "tools.exec.timeout"},
+        {"action": "restart"},
+    ],
+)
+async def test_everything_the_tool_does_write_still_reaches_the_ordinary_decision(params):
+    decision = await _gate(PermissionsConfig(mode="ask")).check("raven_config", params)
+    assert not isinstance(decision, Deny), params
+
+
+@pytest.mark.asyncio
+async def test_the_restart_prompt_title_names_the_restart_that_runs(config_file):
+    """The ACP client draws only the description, which still said reload."""
+    tool = RavenConfigTool()
+    tool.set_restarter(lambda target: asyncio.sleep(0, result=target))
+    await _run(tool, action="set", path="sentinel.enabled", value="true")
+    responder = _Responder()
+    start_permission_turn(responder, conversation_id="c-1", turn_id="t-1")
+    await _gate(PermissionsConfig(mode="ask")).enforce("raven_config", {"action": "restart", "value": "null"}, tool)
+    assert responder.calls and responder.calls[0]["description"].startswith("Restart the whole Raven process")
+
+
+def test_the_card_carries_the_note_of_a_field_inside_an_object_and_names_a_bare_add():
+    line = surface.change_line({"action": "set", "path": "channels.telegram", "value": '{"allow_from": ["*"]}'})
+    assert "Note: widening it lets more people instruct Raven" in line
+    view = surface.change_view({"action": "set", "path": "channels.slack", "value": '{"dm.policy": "open"}'}, {})
+    assert view["sensitive"] == "widening it lets more people instruct Raven"
+    added = surface.change_line({"action": "add", "value": '{"preset": "claude-code", "lend_key": "anthropic"}'})
+    assert added.startswith("Connect sub-agent") and "started with Raven's anthropic key" in added

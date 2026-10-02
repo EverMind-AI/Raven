@@ -1216,7 +1216,10 @@ class MCPServerConfig(Base):
     args: list[str] = Field(default_factory=list)  # Stdio: command arguments
     env: dict[str, str] = Field(default_factory=dict)  # Stdio: extra env vars
     url: str = ""  # HTTP/SSE: endpoint URL
-    headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
+    # Any header can carry a credential (Authorization, X-Custom-Auth), whatever it is called.
+    headers: dict[str, str] = Field(
+        default_factory=dict, json_schema_extra={"secret": True}
+    )  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
     # Disabled keeps the stanza and any stored credentials but never connects, so
     # turning a server off does not cost the user their re-authorisation.

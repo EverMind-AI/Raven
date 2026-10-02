@@ -11,17 +11,21 @@ match on the values Raven actually holds has no false positives.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from raven.config.loader import get_config_path
-from raven.config.self_surface import is_secret_path, read_raw
+from raven.config.self_surface import is_secret_path, read_raw, url_credentials
 from raven.security.redact import redact_home_config_read
 
-#: Shorter strings are too likely to be ordinary text ("true", a port).
-_MIN_LEN = 8
+#: Shorter strings are too likely to be ordinary text ("true", a port). Six,
+#: not eight: a mailbox password (``hunter2``) is a credential too.
+_MIN_LEN = 6
+#: Values a credential field holds when it holds nothing.
+_PLACEHOLDERS = frozenset({"EMPTY", "empty", "dummy", "changeme", "not-needed", "sk-xxx"})
 
 _cache: tuple[Path, float, tuple[tuple[str, str], ...]] | None = None
 
@@ -35,8 +39,11 @@ def _collect(node: Any, prefix: str, out: list[tuple[str, str]]) -> None:
         return
     for path, item in children:
         if isinstance(item, str):
-            if len(item.strip()) >= _MIN_LEN and is_secret_path(path):
-                out.append((item.strip(), path))
+            value = item.strip()
+            if len(value) >= _MIN_LEN and value not in _PLACEHOLDERS and is_secret_path(path):
+                out.append((value, path))
+            elif "://" in value:
+                out.extend((part, f"{path} (in its URL)") for part in url_credentials(value))
         else:
             _collect(item, path, out)
 
@@ -57,6 +64,9 @@ def held_secrets() -> tuple[tuple[str, str], ...]:
     except Exception as exc:  # noqa: BLE001 - an unreadable config holds nothing to scrub
         logger.debug("held_secrets: config unreadable: {}", exc)
     unique = {value: where for value, where in found}
+    # As a JSON file prints it too: a quote or a backslash in the value is
+    # escaped there, and `cat config.json` shows that spelling.
+    unique.update({json.dumps(value)[1:-1]: where for value, where in list(unique.items())})
     held = tuple(sorted(unique.items(), key=lambda pair: -len(pair[0])))
     _cache = (path, mtime, held)
     return held
@@ -70,6 +80,17 @@ def scrub_held_secrets(text: str) -> str:
         if value in text:
             text = text.replace(value, f"[redacted: {where}]")
     return text
+
+
+def scrub_held_value(value: Any) -> Any:
+    """``value`` with every string in it scrubbed, its shape kept: a transcript, an event payload."""
+    if isinstance(value, str):
+        return scrub_held_secrets(value)
+    if isinstance(value, dict):
+        return {key: scrub_held_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [scrub_held_value(item) for item in value]
+    return value
 
 
 def scrub_tool_output(arguments: Any, text: str) -> str:
@@ -100,4 +121,4 @@ def scrub_tool_blocks(arguments: Any, blocks: list[dict[str, Any]] | None) -> li
     ]
 
 
-__all__ = ["held_secrets", "scrub_held_secrets", "scrub_tool_blocks", "scrub_tool_output"]
+__all__ = ["held_secrets", "scrub_held_secrets", "scrub_held_value", "scrub_tool_blocks", "scrub_tool_output"]

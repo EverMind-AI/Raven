@@ -861,6 +861,23 @@ class ToolRegistry:
         *,
         run_meta: RunMeta | None = None,
     ) -> str:
+        """Execute a tool by name with given parameters, its output scrubbed of the credentials it could carry.
+
+        Scrubbed here, inside the traced call, because every reader starts from
+        this return value: the main and sub-agent loops, the sentinel's action
+        executor, the tool forwarder, and the trace span that records it. A
+        loop that scrubbed only its own copy left the span, the file diff sent
+        to the page and the sentinel's channel reply holding the key.
+        """
+        return _scrubbed(params, await self._execute(name, params, run_meta=run_meta))
+
+    async def _execute(
+        self,
+        name: str,
+        params: dict[str, Any],
+        *,
+        run_meta: RunMeta | None = None,
+    ) -> str:
         """Execute a tool by name with given parameters.
 
         ``run_meta`` carries what happened around the call rather than what it
@@ -1119,3 +1136,34 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+
+
+def _scrubbed(arguments: Any, out: Any) -> Any:
+    """``out`` with every text it carries scrubbed: the model text, the display, the blocks and the file contents.
+
+    The file contents are display only (the page's diff, the removal watch);
+    nothing writes them back, so a redaction there cannot reach a file.
+    """
+    from dataclasses import replace
+
+    from raven.config.held_secrets import scrub_tool_blocks, scrub_tool_output
+
+    def text(value: Any) -> Any:
+        return scrub_tool_output(arguments, value) if isinstance(value, str) and value else value
+
+    if not isinstance(out, ToolOutput):
+        return text(out)
+    change = out.file_change
+    return ToolOutput(
+        text(str(out)),
+        text(out.display_text),
+        retryable=out.retryable,
+        blocks_call=out.blocks_call,
+        continuation=out.continuation,
+        ok=out.ok,
+        blocks=scrub_tool_blocks(arguments, out.blocks),
+        diff=text(out.diff),
+        file_change=replace(change, after=text(change.after), before=text(change.before)) if change else None,
+        removed=tuple(replace(item, before=text(item.before)) for item in out.removed),
+        written=tuple(replace(item, diff=text(item.diff)) for item in out.written),
+    )

@@ -22,8 +22,16 @@ SPEC = ChannelSpec(
     # is the only truth. Socket fields (enabled / allow_from / workspace)
     # stay with the host.
     config_schema={
-        "base_url": {"type": "string", "default": "https://mochat.io", "sensitive": True},
-        "socket_url": {"type": "string", "default": "", "sensitive": True},
+        "base_url": {
+            "type": "string",
+            "default": "https://mochat.io",
+            "sensitive": "sends this channel's credentials and messages to the address given",
+        },
+        "socket_url": {
+            "type": "string",
+            "default": "",
+            "sensitive": "sends this channel's credentials and messages to the address given",
+        },
         "socket_path": {"type": "string", "default": "/socket.io"},
         "socket_disable_msgpack": {"type": "boolean", "default": False},
         "socket_reconnect_delay_ms": {"type": "integer", "default": 1000},
@@ -36,15 +44,19 @@ SPEC = ChannelSpec(
         "max_retry_attempts": {"type": "integer", "default": 0},
         "claw_token": {"type": "string", "default": "", "required": True, "secret": True},
         "agent_user_id": {"type": "string", "default": ""},
-        "sessions": {"type": "array", "default": []},
-        "panels": {"type": "array", "default": []},
+        "sessions": {"type": "array", "default": [], "sensitive": "widening it lets more people instruct Raven"},
+        "panels": {"type": "array", "default": [], "sensitive": "widening it lets more people instruct Raven"},
         "mention": {
             "type": "object",
             "fields": {
-                "require_in_groups": {"type": "boolean", "default": False},
+                "require_in_groups": {
+                    "type": "boolean",
+                    "default": False,
+                    "sensitive": "widening it lets more people instruct Raven",
+                },
             },
         },
-        "groups": {"type": "object", "default": {}},
+        "groups": {"type": "object", "default": {}, "sensitive": "widening it lets more people instruct Raven"},
         "reply_delay_mode": {"type": "string", "default": "non-mention"},
         "reply_delay_ms": {"type": "integer", "default": 120000},
     },

@@ -22,8 +22,17 @@ SPEC = ChannelSpec(
     # stay with the host.
     config_schema={
         "token": {"type": "string", "default": "", "required": True, "secret": True},
-        "gateway_url": {"type": "string", "default": "wss://gateway.discord.gg/?v=10&encoding=json", "sensitive": True},
+        "gateway_url": {
+            "type": "string",
+            "default": "wss://gateway.discord.gg/?v=10&encoding=json",
+            "sensitive": "sends this channel's credentials and messages to the address given",
+        },
         "intents": {"type": "integer", "default": 37377},
-        "group_policy": {"type": "string", "default": "mention", "choices": ["mention", "open"]},
+        "group_policy": {
+            "type": "string",
+            "default": "mention",
+            "choices": ["mention", "open"],
+            "sensitive": "widening it lets more people instruct Raven",
+        },
     },
 )

@@ -27,7 +27,6 @@ set and where the user enters it.
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import difflib
 import json
@@ -36,7 +35,6 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from loguru import logger
-from pydantic.alias_generators import to_snake
 
 from raven.config import self_surface as surface
 from raven.config.self_surface import EFFECT_TEXT, PENDING_EFFECTS, Effect, Section, Setting
@@ -103,27 +101,7 @@ _NOT_HERE = (
 )
 
 
-def _parse_value(raw: Any) -> Any:
-    """The value the model meant: JSON when it parses, the bare string otherwise."""
-    if not isinstance(raw, str):
-        return raw
-    text = raw.strip()
-    if not text:
-        return ""
-    try:
-        return json.loads(text)
-    except ValueError:
-        pass
-    if text[:1] in "{[":
-        # A Python-spelled object ({'a': None, 'b': True}) is what some models
-        # send for a batch; reading it beats refusing a call whose intent is plain.
-        try:
-            literal = ast.literal_eval(text)
-        except (ValueError, SyntaxError):
-            return raw
-        if isinstance(literal, dict | list):
-            return literal
-    return raw
+_parse_value = surface.decode_value
 
 
 def _conversation() -> str:
@@ -383,7 +361,11 @@ class RavenConfigTool(Tool):
         return any(surface.is_secret_path(path) for path, _ in changes)
 
     def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
-        if params.get("action") == "restart" and not params.get("value"):
+        if params.get("action") == "restart" and not (
+            isinstance(target := surface.decode_value(params.get("value")), str) and target
+        ):
+            # What `_do_restart` falls back to for the same value, so the card
+            # names the restart that will run and not a reload.
             params = {**params, "value": self._needed_restart()}
         view = surface.change_view(params, surface.read_raw())
         for row in view.get("changes") or [view]:
@@ -659,9 +641,7 @@ class RavenConfigTool(Tool):
                 entry["summary"] = spec["description"]
             if spec.get("is_secret"):
                 entry["secret"] = True
-            if key == "allow_from":
-                entry["sensitive"] = "widening it lets more people instruct Raven"
-            elif reason := surface.sensitive_reason(entry["path"]):
+            if reason := surface.sensitive_reason(entry["path"]):
                 entry["sensitive"] = reason
             fields.append(entry)
         out: dict[str, Any] = {
@@ -765,7 +745,7 @@ class RavenConfigTool(Tool):
             row = await self._subagent_row(parts[1])
             if len(parts) == 2:
                 return _dump(self._subagent_view(row))
-            return _dump({path: row.get(parts[2])})
+            return _dump({path: surface.redacted({parts[2]: row.get(parts[2])})[parts[2]]})
         if path.startswith("channels.") and path.count(".") == 1:
             name = path.split(".", 1)[1]
             view = self._describe_channel(name, raw)
@@ -773,7 +753,7 @@ class RavenConfigTool(Tool):
         found = surface.find(path)
         if found is None:
             if path.startswith("channels."):
-                return _dump({path: self._channel_value(raw, {"path": path})})
+                return _dump({path: self._channel_value(raw, {"path": path, "secret": surface.is_secret_path(path)})})
             below = {
                 p: self._value_view(raw, s, p, roles)
                 for s in surface.all_settings()
@@ -798,10 +778,10 @@ class RavenConfigTool(Tool):
             value = {"default": surface.default_of(path)}
             if setting.keys and isinstance(value["default"], dict):
                 value = {"default": {k: value["default"].get(k) for k in setting.keys}}
-            return surface.redacted(value)
+            return surface.redacted(value, path)
         if setting.keys and isinstance(value, dict):
             value = {k: surface.lookup(value, k)[1] for k in setting.keys}
-        return surface.redacted(value)
+        return surface.redacted(value, path)
 
     async def _everos_roles(self) -> dict[str, Any] | None:
         if self._call is None:
@@ -882,6 +862,9 @@ class RavenConfigTool(Tool):
         plan: list[tuple[str, Setting, list[str], Any]] = []
         channels: dict[str, dict[str, Any]] = {}
         agents: list[tuple[str, Any]] = []
+        named = [surface.canonical_path(p) for p in changes]
+        if len(set(named)) < len(named):
+            raise ValueError("one setting is named twice in this call; nothing was changed")
         for path, raw in ((surface.canonical_path(p), r) for p, r in changes.items()):
             if path.startswith("channels.") and path.count(".") == 2:
                 _, name, field_name = path.split(".")
@@ -1021,7 +1004,11 @@ class RavenConfigTool(Tool):
         write: dict[str, Any] = {}
         secrets: list[str] = []
         for field_name, value in changes.items():
-            key = to_snake(field_name)
+            key = surface.channel_key(field_name, specs)
+            if key in write or key in secrets:
+                # Two spellings of one field (allowFrom and allow_from): the card
+                # showed both values and the write kept whichever came last.
+                raise ValueError(f"channels.{name}.{key} is named twice in one call; nothing was changed")
             if key not in specs or key == "workspace":
                 raise LookupError(
                     f"channel {name} has no setting {field_name!r}; describe channels.{name} lists them; "

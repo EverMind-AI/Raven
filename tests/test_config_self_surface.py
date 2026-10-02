@@ -335,3 +335,176 @@ def test_a_channel_field_that_sends_its_traffic_somewhere_stays_with_the_user():
     line = surface.change_line({"action": "set", "path": "channels.telegram.proxy", "value": "http://h:1"})
     assert "Note: sends this channel's credentials" in line
     assert not surface.touches_sensitive({"action": "set", "path": "channels.telegram.replyToMessage", "value": True})
+
+
+_TRIMMED_NOT_JSON = [c for c in map(chr, range(0x3001)) if c.isspace() and c not in " \t\n\r"]
+
+
+@pytest.mark.parametrize("lead", _TRIMMED_NOT_JSON, ids=lambda c: f"U+{ord(c):04X}")
+def test_the_gate_decodes_a_value_the_way_the_tool_does(lead):
+    """The tool trimmed before parsing and the gate did not, so a batch led by a
+    character JSON does not count as space was an object to one and text to the
+    other -- and switched approval to full with only the reviewer asked."""
+    from raven.agent.tools.raven_config import _parse_value
+    from raven.permissions.rules import self_config_tier
+
+    raw = lead + '{"permissions.mode": "full", "tools.restrictToWorkspace": false}'
+    assert (
+        _parse_value(raw)
+        == surface.decode_value(raw)
+        == {"permissions.mode": "full", "tools.restrictToWorkspace": False}
+    )
+    assert surface.touches_sensitive({"action": "set", "value": raw})
+    keyed = lead + '{"providers.openai.apiKey": "sk-LEAKED-123"}'
+    assert self_config_tier("raven_config", {"action": "set", "value": keyed}).value == "deny"
+    lent = lead + '{"preset": "claude-code", "lend_key": "anthropic", "model": null}'
+    assert surface.touches_sensitive({"action": "add", "path": "subagents", "value": lent})
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"path": "channels.telegram.allow_from", "value": '["*"]'},
+        {"path": "channels.telegram.AllowFrom", "value": '["*"]'},
+        {"path": "channels.Telegram.allowFrom", "value": '["*"]'},
+        {"path": "channels.telegram", "value": '{"allow_from": ["*"]}'},
+        {"value": '{"channels.telegram.allow_from": ["*"]}'},
+        {"path": "channels.slack", "value": '{"dm.allow_from": ["*"], "dm.policy": "open"}'},
+        {"path": "channels.slack.groupPolicy", "value": "open"},
+        {"path": "channels.telegram.enabled", "value": "true"},
+        {"path": "channels.telegram.workspace", "value": "/"},
+        {"path": "channels.email.imapUseSsl", "value": "false"},
+        {"path": "channels.matrix.e2ee_enabled", "value": "false"},
+        {"path": "channels.slack.userTokenReadOnly", "value": "false"},
+        {"path": "channels.weixin.state_dir", "value": '"/tmp/x"'},
+    ],
+)
+def test_who_may_instruct_raven_on_a_channel_stays_with_the_user_however_it_is_spelled(call):
+    """The catalog's camelCase ``allowFrom`` was the only spelling the gate knew;
+    the adapter's declaration now decides, read through the tool's own spelling."""
+    assert surface.touches_sensitive({"action": "set", **call}), call
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tools.disabledTools",
+        "tools.mcpServers.gh.enabled",
+        "skillForge.blocklist",
+        "skillForge.autoInstall",
+        "subagents.pi.description",
+    ],
+)
+def test_a_setting_that_hands_back_something_the_user_took_away_stays_with_them(path):
+    assert surface.touches_sensitive({"action": "set", "path": path, "value": "x"})
+    assert surface.touches_sensitive({"action": "unset", "path": path}) or path.startswith("subagents.")
+
+
+@pytest.mark.parametrize(
+    ("path", "secret"),
+    [
+        ("tools.mcpServers.gh.env.AWS_SECRET_ACCESS_KEY", True),
+        ("tools.mcpServers.gh.env.GH_PAT", True),
+        ("tools.mcpServers.gh.env.LANGFUSE_SECRET_KEY", True),
+        ("subagents.agents.0.env.OPENAI_KEY", True),
+        ("tools.mcpServers.gh.headers.Authorization", True),
+        ("tools.mcpServers.gh.headers.X-Anything", True),
+        ("channels.FEISHU.encryptKey", True),
+        ("a2a.peers.0.credential", True),
+        ("tools.mcpServers.gh.env.BEARER", True),
+        ("tools.mcpServers.gh.env.JWT", True),
+        ("tools.mcpServers.gh.env.SENTRY_DSN", True),
+        ("tools.mcpServers.gh.env.SESSION_DIR", False),
+        ("tools.mcpServers.gh.env.PATH", False),
+        ("tools.mcpServers.gh.env.NODE_OPTIONS", False),
+        ("tools.mcpServers.gh.command", False),
+    ],
+)
+def test_a_credential_is_found_wherever_the_config_keeps_one(path, secret):
+    assert surface.is_secret_path(path) is secret
+
+
+def test_a_call_carrying_a_credential_anywhere_in_its_value_is_refused_and_never_shown():
+    from raven.permissions.rules import self_config_tier
+
+    calls = [
+        {"action": "set", "path": "providers.openai", "value": {"apiKey": "PLAINTEXT-k1"}},
+        {"action": "set", "value": {"providers.openai": {"apiKey": "PLAINTEXT-k2"}}},
+        {
+            "action": "add",
+            "path": "subagents",
+            "value": {"preset": "codex", "env": {"AWS_SECRET_ACCESS_KEY": "PLAINTEXT-k5"}},
+        },
+        {
+            "action": "add",
+            "path": "tools.mcpServers",
+            "value": {"x": {"headers": {"Authorization": "Bearer PLAINTEXT-k6"}}},
+        },
+        {"action": "set", "path": "channels.FEISHU.encryptKey", "value": "PLAINTEXT-k8"},
+    ]
+    for call in calls:
+        assert self_config_tier("raven_config", call).value == "deny", call
+        assert "PLAINTEXT" not in surface.change_line(call), call
+        assert "PLAINTEXT" not in json.dumps(surface.change_view(call, {})), call
+
+
+def test_a_key_named_with_only_spaces_is_asked_for_on_the_card():
+    from raven.permissions.rules import self_config_tier
+
+    call = {"action": "set", "path": "providers.openai.apiKey", "value": "   "}
+    assert self_config_tier("raven_config", call).value != "deny"
+    assert surface.only_asks_for_secrets(call)
+
+
+def test_every_credential_the_config_holds_is_scrubbed_in_every_spelling_it_prints_in(monkeypatch, tmp_path):
+    """Measured: an MCP server's AWS key, a Bearer header, a key in a URL's query
+    or userinfo, a seven-character mailbox password and a password JSON escapes
+    all came back through `jq . config.json` untouched."""
+    from raven.config import held_secrets
+
+    config = tmp_path / "config.json"
+    raw = {
+        "tools": {
+            "mcpServers": {
+                "gh": {
+                    "env": {"AWS_SECRET_ACCESS_KEY": "aws-secret-value-1", "PATH": "/usr/bin:/bin"},
+                    "headers": {"Authorization": "Bearer tok-abcdef123"},
+                    "url": "https://mcp.example/x?api_key=urlkey12345",
+                }
+            }
+        },
+        "channels": {
+            "email": {"imapPassword": "hunter2", "smtpPassword": 'pa"ss\\word'},
+            "telegram": {"proxy": "http://user:proxypass99@h:1"},
+        },
+        "providers": {"openai": {"apiBase": "https://h/v1?key=basekey9876"}, "vllm": {"apiKey": "EMPTY"}},
+    }
+    config.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
+    monkeypatch.setattr(held_secrets, "_cache", None)
+
+    printed = held_secrets.scrub_held_secrets(json.dumps(raw, indent=1))
+    for value in ("aws-secret-value-1", "tok-abcdef123", "urlkey12345", "proxypass99", "basekey9876", "hunter2"):
+        assert value not in printed, value
+    assert 'pa\\"ss\\\\word' not in printed
+    assert "/usr/bin:/bin" in printed and '"EMPTY"' in printed
+
+
+def test_a_url_with_a_credential_in_it_is_one_to_the_gate_the_card_and_the_scrub(monkeypatch, tmp_path):
+    """The scrub alone knew `mongodb://u:pw@host` held a password, so the gate asked
+    and the card printed it; a Sentry DSN keeps its key as the username."""
+    from raven.config import held_secrets
+    from raven.permissions.rules import self_config_tier
+
+    call = {"action": "set", "path": "providers.openai.apiBase", "value": "https://u:PLAINTEXT-c1@h/v1"}
+    assert self_config_tier("raven_config", call).value == "deny"
+    assert "PLAINTEXT" not in surface.change_line(call)
+    assert surface.redacted({"uri": "mongodb://u:PLAINTEXT-c2@h/db"}) == {"uri": "mongodb://u:***@h/db"}
+
+    dsn = "https://0123456789abcdef0123456789abcdef@o1.ingest.sentry.io/42"
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"tools": {"mcpServers": {"s": {"url": dsn}}}}), encoding="utf-8")
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
+    monkeypatch.setattr(held_secrets, "_cache", None)
+    assert "0123456789abcdef0123456789abcdef" not in held_secrets.scrub_held_secrets(f"dsn={dsn}")
+    assert "https://api.openai.com/v1" == held_secrets.scrub_held_secrets("https://api.openai.com/v1")

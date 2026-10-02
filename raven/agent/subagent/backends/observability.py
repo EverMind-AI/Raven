@@ -109,8 +109,11 @@ def record_transcript(span: Any, payload: dict[str, Any]) -> None:
     The cli lane's only way to keep what it saw: it reconstructs a run from
     whatever the command printed, so the payload *is* the evidence. The acp lane
     uses :func:`record_frames` instead, because its evidence is already a file.
+    Scrubbed of the keys Raven holds: an agent that reads Raven's config prints them.
     """
-    span.artifact(TRANSCRIPT_KEY, payload)
+    from raven.config.held_secrets import scrub_held_value
+
+    span.artifact(TRANSCRIPT_KEY, scrub_held_value(payload))
 
 
 def record_frames(span: Any, frames: dict[str, Any] | None) -> None:

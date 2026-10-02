@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import ast
 import copy
-import functools
 import json
 import re
 import string
@@ -282,6 +281,7 @@ SECTIONS: tuple[Section, ...] = (
                 "list",
                 _E.NEXT_TURN,
                 writer="settings",
+                sensitive="taking a tool off the list gives back one the user withheld",
                 note=(
                     "the list replaces the stored one: send the whole list back; describe tools.disabledTools "
                     "lists the tool names"
@@ -379,6 +379,7 @@ SECTIONS: tuple[Section, ...] = (
                 "Whether a configured MCP server is connected",
                 "bool",
                 _E.NEXT_TURN,
+                sensitive="turning a server on runs its command, or reaches its address, with its credentials",
                 note="new MCP servers are added with the plugin tool, not here",
             ),
             Setting(
@@ -428,6 +429,7 @@ SECTIONS: tuple[Section, ...] = (
                 "bool",
                 _E.IMMEDIATE,
                 writer="channels",
+                sensitive="turning a channel on lets whoever its allow list admits instruct Raven there",
                 note="the gateway starts or stops the adapter at once",
             ),
             Setting(
@@ -525,6 +527,7 @@ SECTIONS: tuple[Section, ...] = (
                 "list",
                 _E.NEXT_TURN,
                 writer="settings",
+                sensitive="taking a skill off the list lets it be offered and installed again",
                 note="the list replaces the stored one; read it first",
             ),
             Setting("skillForge.enabled", "Mount the extra local skill directories", "bool", _E.RELOAD),
@@ -534,6 +537,7 @@ SECTIONS: tuple[Section, ...] = (
                 "enum",
                 _E.RELOAD,
                 choices=("auto", "prompt", "off"),
+                sensitive="'auto' downloads and installs skills without asking",
             ),
             Setting("skillForge.router.topK", "Skills the router offers per turn", "int", _E.RELOAD, low=1),
             Setting("skillForge.llmGateEnabled", "Let a model pick among candidate skills", "bool", _E.RELOAD),
@@ -616,6 +620,7 @@ SECTIONS: tuple[Section, ...] = (
                 "str",
                 _E.IMMEDIATE,
                 writer="subagents",
+                sensitive="the dispatching model reads it every turn, so it can steer what is sent where",
                 note="the built-in Raven row's description is fixed",
             ),
             Setting(
@@ -813,6 +818,68 @@ def check_value(setting: Setting, value: Any) -> Any:
     return value
 
 
+def unwritable_target(params: dict[str, Any]) -> str:
+    """The first path a change names that ``raven_config`` does not write, or ``""``.
+
+    The tool's own routing, asked before it runs: a catalog entry, a channel's
+    field (or a channel's fields as one object), a sub-agent's setting, and
+    ``add`` for sub-agents only. Anything else the tool refuses -- and refusing it
+    at the gate keeps the value from the card and the reviewer on the way.
+    """
+    action = params.get("action")
+    if action not in ("set", "unset", "add"):
+        return ""
+    path = path_of(params)
+    if action == "add":
+        return "" if path in ("", "subagents") else path
+    if action == "unset":
+        return "" if find(path) is not None else path or "(no path)"
+    changes = batch_of(params)
+    if changes is not None:
+        return next((p for p, _ in changes if not _writable(p)), "")
+    if path.startswith("channels.") and path.count(".") == 1:
+        return "" if isinstance(_decoded(params.get("value")), dict) else path
+    return "" if path and _writable(path) else path or "(no path)"
+
+
+def _writable(path: str) -> bool:
+    if path.startswith(("channels.", "subagents.")) and path.count(".") == 2:
+        return True
+    return find(path) is not None
+
+
+#: Query parameters that carry a credential in a URL (``?key=``, ``?access_token=``).
+_URL_CREDENTIAL = re.compile(r"(?i)^(?:.*[_-])?(?:key|apikey|token|secret|sig|signature|password|pass|auth|code)$")
+#: A username long enough to be a key rather than a name (Sentry's DSN puts its key there).
+_KEY_LIKE_USER = 16
+_URL_IN_TEXT = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"'<>]+")
+
+
+def url_credentials(text: str) -> list[str]:
+    """The credentials the URLs in ``text`` carry: a userinfo password (or a key-length
+    username), a key or token in the query.
+
+    One reading for the gate, the card and the scrub: the scrub alone knew a
+    password in ``mongodb://u:pw@host`` was one, so the gate asked and the card
+    printed it.
+    """
+    from urllib.parse import parse_qsl, urlsplit
+
+    found: list[str] = []
+    for url in _URL_IN_TEXT.findall(text or ""):
+        try:
+            parts = urlsplit(url)
+            password, user = parts.password, parts.username
+        except ValueError:
+            continue
+        if password:
+            found.append(password)
+        elif user and len(user) >= _KEY_LIKE_USER:
+            found.append(user)
+        found += [value for name, value in parse_qsl(parts.query) if _URL_CREDENTIAL.match(name)]
+    return [value for value in found if len(value) >= 6]
+
+
 def batch_of(params: dict[str, Any]) -> list[tuple[str, Any]] | None:
     """The changes of a ``set`` that names no path and carries ``{path: value, ...}``, else None."""
     if params.get("action") != "set" or path_of(params):
@@ -847,11 +914,23 @@ def is_secret_path(path: str) -> bool:
         (found is not None and found[0].secret)
         or _credential_key(path.rsplit(".", 1)[-1])
         or bool((_channel_field(path) or {}).get("is_secret"))
-        or _provider_field_secret(path)
+        or _schema_secret(path)
+        or _secret_env_entry(path)
     )
 
 
-_CHANNEL_ADDRESS = "sends this channel's credentials and messages to the address given"
+#: A variable name that holds a credential: ``AWS_SECRET_ACCESS_KEY``, ``GH_PAT``,
+#: ``LANGFUSE_SECRET_KEY``. Broader than the config-key rule, because an
+#: environment's names follow every vendor's habit and not Raven's.
+_SECRET_ENV_NAME = re.compile(
+    r"(?i)(?:^|_)(?:key|apikey|token|secret|password|passwd|pwd|pass|credentials?|auth|pat|cookie|bearer|jwt|dsn)(?:_|$)"
+)
+
+
+def _secret_env_entry(path: str) -> bool:
+    """Whether ``path`` names a credential-named variable in an ``env`` map (an MCP server's, an agent's)."""
+    parts = path.split(".")
+    return len(parts) >= 2 and parts[-2].lower() == "env" and bool(_SECRET_ENV_NAME.search(parts[-1]))
 
 
 def sensitive_reason(path: str) -> str:
@@ -859,7 +938,7 @@ def sensitive_reason(path: str) -> str:
     found = find(path)
     if found is not None and found[0].sensitive:
         return found[0].sensitive
-    return _CHANNEL_ADDRESS if (_channel_field(path) or {}).get("is_sensitive") else ""
+    return str((_channel_field(path) or {}).get("sensitive") or "")
 
 
 def _channel_field(path: str) -> dict[str, Any] | None:
@@ -875,55 +954,88 @@ def _channel_field(path: str) -> dict[str, Any] | None:
         return None
     from raven.config.update_channels import channel_field_specs, channel_names
 
-    if parts[1] not in channel_names():
+    # Any spelling the tool would write: a channel name in another case, a field
+    # in camelCase or snake_case.
+    name = parts[1].lower()
+    if name not in channel_names():
         return None
-    return channel_field_specs(parts[1]).get(".".join(to_snake(part) for part in parts[2:]))
+    specs = channel_field_specs(name)
+    return specs.get(channel_key(".".join(parts[2:]), specs))
 
 
-def _provider_field_secret(path: str) -> bool:
-    """Whether ``providers.<name>.<field>...`` is under a field the provider schema treats as a credential.
+def channel_key(field: str, specs: dict[str, Any]) -> str:
+    """The declared name a channel field spelled ``field`` writes: as given when declared, else in snake_case.
 
-    Read from the schema the provider writer redacts by (``extraHeaders`` is
-    declared secret, on the provider and on each of its ``endpoints``; Gemini's
-    ``apiKeyList`` is on its patch list), so a value nested inside one -- a
-    header, a listed key -- is a credential too.
+    Exact first, because ``to_snake`` mangles a declared name with a digit in it
+    (``e2ee_enabled`` -> ``e_2ee_enabled``). The tool writes through this and the
+    gate judges through it, so both mean the same field.
     """
-    parts = path.split(".")
-    if len(parts) < 3 or parts[0] != "providers":
-        return False
-    if to_snake(parts[2]) == "endpoints" and len(parts) >= 5:
-        return to_snake(parts[4]) in _endpoint_secret_fields()
-    return to_snake(parts[2]) in _provider_secret_fields()
+    if field in specs:
+        return field
+    return ".".join(to_snake(part) for part in field.split("."))
 
 
-@functools.cache
-def _endpoint_secret_fields() -> frozenset[str]:
-    from raven.config.schema import ProviderEndpoint
-    from raven.config.update_providers import _is_secret_field
+def _schema_secret(path: str) -> bool:
+    """Whether ``path`` is, or sits under, a config field the schema declares secret.
 
-    return frozenset(name for name, info in ProviderEndpoint.model_fields.items() if _is_secret_field(name, info))
+    Read from the declaration the provider writer and the trajectory exporter
+    redact by (``json_schema_extra={"secret": True}``, plus the provider writer's
+    patch list for Gemini's ``apiKeyList``), so a value nested inside one -- a
+    header, an MCP server's environment, a listed key -- is a credential too.
+    Walked through lists, maps and unions; a block the root model does not
+    describe falls back to the key-name rule.
+    """
+    from raven.config.schema import Config
+
+    return _walk_secret(Config, path.split("."))
 
 
-@functools.cache
-def _provider_secret_fields() -> frozenset[str]:
+def _walk_secret(annotation: Any, parts: list[str]) -> bool:
+    import types
+    import typing
+
     from raven.config.schema import ProviderConfig, ProvidersConfig
-    from raven.config.update_providers import _is_secret_field
+    from raven.config.update_providers import _KNOWN_SECRET_FIELDS
 
-    models = {ProviderConfig}
-    for entry in ProvidersConfig.model_fields.values():
-        for candidate in (entry.annotation, *getattr(entry.annotation, "__args__", ())):
-            if isinstance(candidate, type) and issubclass(candidate, ProviderConfig):
-                models.add(candidate)
-    return frozenset(
-        name for model in models for name, info in model.model_fields.items() if _is_secret_field(name, info)
-    )
+    if not parts:
+        return False
+    origin = typing.get_origin(annotation)
+    if origin is typing.Annotated:
+        return _walk_secret(typing.get_args(annotation)[0], parts)
+    if origin in (typing.Union, types.UnionType):
+        return any(_walk_secret(member, parts) for member in typing.get_args(annotation) if member is not type(None))
+    if origin in (list, tuple, set, frozenset):
+        args = typing.get_args(annotation)
+        return bool(args) and _walk_secret(args[0], parts[1:])
+    if origin is dict:
+        args = typing.get_args(annotation)
+        return len(args) == 2 and _walk_secret(args[1], parts[1:])
+    if not (isinstance(annotation, type) and issubclass(annotation, BaseModel)):
+        return False
+    head = parts[0]
+    for name, info in annotation.model_fields.items():
+        if head in (name, info.alias, to_camel(name)) or to_snake(head) == name:
+            extra = info.json_schema_extra
+            if (isinstance(extra, dict) and extra.get("secret") is True) or name in _KNOWN_SECRET_FIELDS:
+                return True
+            return _walk_secret(info.annotation, parts[1:])
+    if annotation is ProvidersConfig:
+        # A provider Raven carries no spec for is kept and read as a plain section.
+        return _walk_secret(ProviderConfig, parts[1:])
+    return False
 
 
 def _leaves(path: str, value: Any) -> list[tuple[str, Any]]:
-    """The settings one change writes: an object set on a channel writes each of its fields."""
-    if path.startswith("channels.") and path.count(".") == 1 and isinstance(value, dict):
-        return [(f"{path}.{canonical_path(key)}", item) for key, item in value.items()]
-    return [(path, value)]
+    """Every setting one change touches: the path itself and, for an object, each field below it.
+
+    A call is judged by all of them -- an object set on ``providers.openai``
+    carrying an ``apiKey`` carries a secret however the tool then routes it.
+    """
+    out = [(path, value)]
+    if isinstance(value, dict):
+        for key, item in value.items():
+            out += _leaves(f"{path}.{canonical_path(key)}" if path else canonical_path(key), item)
+    return out
 
 
 def carries_secret_value(params: dict[str, Any]) -> bool:
@@ -937,10 +1049,23 @@ def carries_secret_value(params: dict[str, Any]) -> bool:
     if changes is None:
         if params.get("action") not in ("set", "add"):
             return False
-        changes = _leaves(path_of(params), _decoded(params.get("value")))
-    return any(is_secret_path(path) and _decoded(value) not in (None, "") for path, value in changes) or (
-        params.get("action") == "add" and _holds_credential(_decoded(params.get("value")))
+        changes = [(path_of(params), _decoded(params.get("value")))]
+    leaves = [leaf for path, value in changes for leaf in _leaves(path, _decoded(value))]
+    if any(isinstance(value, str) and url_credentials(value) for _, value in leaves):
+        return True
+    return any(is_secret_path(path) and _filled(value) for path, value in leaves) or (
+        params.get("action") == "add" and _holds_credential(_decoded(params.get("value")), path_of(params))
     )
+
+
+def _filled(value: Any) -> bool:
+    """A value that holds something: not empty, not only whitespace, not an empty container."""
+    value = _decoded(value)
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict | list):
+        return any(_filled(item) for item in (value.values() if isinstance(value, dict) else value))
+    return value is not None
 
 
 def only_asks_for_secrets(params: dict[str, Any]) -> bool:
@@ -971,16 +1096,31 @@ def touches_sensitive(params: dict[str, Any]) -> bool:
             return True
     changes = batch_of(params)
     if changes is None:
-        changes = _leaves(path_of(params), _decoded(params.get("value")))
-    return any(sensitive_reason(path) for path, _ in changes)
+        changes = [(path_of(params), _decoded(params.get("value")))]
+    return any(sensitive_reason(leaf) for path, value in changes for leaf, _ in _leaves(path, _decoded(value)))
 
 
-def _holds_credential(value: Any) -> bool:
+def _holds_credential(value: Any, path: str = "") -> bool:
     if isinstance(value, dict):
-        return any((_credential_key(k) and item) or _holds_credential(item) for k, item in value.items())
+        return any(
+            (_names_credential(k, f"{path}.{k}" if path else str(k)) and _filled(item))
+            or _holds_credential(item, f"{path}.{k}" if path else str(k))
+            for k, item in value.items()
+        )
     if isinstance(value, list):
-        return any(_holds_credential(item) for item in value)
+        return any(_holds_credential(item, path) for item in value)
     return False
+
+
+#: Maps whose every value is a credential whatever it is called (an MCP server's
+#: ``env``, a request's ``headers``): ``AWS_SECRET_ACCESS_KEY`` and
+#: ``Authorization`` end in no credential marker.
+_CREDENTIAL_MAPS = frozenset({"env", "headers", "extraheaders", "extra_headers"})
+
+
+def _names_credential(key: Any, path: str = "") -> bool:
+    """Whether ``key`` (at ``path``) names a credential or a map of them."""
+    return _credential_key(key) or str(key).lower() in _CREDENTIAL_MAPS or bool(path and is_secret_path(path))
 
 
 def secret_input(path: str) -> dict[str, str] | None:
@@ -1030,7 +1170,7 @@ def change_line(params: dict[str, Any]) -> str:
     if changes is not None:
         return "; ".join(change_line({"action": "set", "path": path, "value": value}) for path, value in changes)
     action = str(params.get("action") or "")
-    path = path_of(params)
+    path = path_of(params) or ("subagents" if action == "add" else "")
     if action == "set" and is_secret_path(path):
         return f"Ask you to enter the {secret_label(path)} ({path}) on a card of its own once allowed"
     if action == "restart":
@@ -1050,7 +1190,7 @@ def change_line(params: dict[str, Any]) -> str:
         return f"Run {path} once to check it works (it spends that agent's own quota) and record the result"
     found = find(path)
     tail = f" ({EFFECT_TEXT[found[0].effect]})" if found is not None else ""
-    if reason := sensitive_reason(path):
+    if reason := _reason_within(path, params.get("value")):
         tail += f". Note: {reason}"
     if action == "unset":
         if found is not None and found[0].unset_means:
@@ -1079,51 +1219,44 @@ def _shown(path: str, value: Any) -> str:
         # Spelled the way a configured model is stored and shown, so the card's
         # two sides of a switch read alike.
         return f"{value['provider']}/{value['model']}" if value.get("provider") else str(value["model"])
-    return _short(redacted(_masked(path, value)))
+    return _short(redacted(value, path))
 
 
-def _masked(path: str, value: Any) -> Any:
-    """An object's fields that are secret settings in their own right, as set / not set."""
-    if not isinstance(value, dict):
-        return value
-    out: dict[str, Any] = {}
-    for key, item in value.items():
-        inner = f"{path}.{canonical_path(key)}"
-        out[key] = ("set" if item else "not set") if is_secret_path(inner) else _masked(inner, item)
-    return out
+def decode_value(raw: Any) -> Any:
+    """The value a ``raven_config`` argument spells: JSON when it parses, the bare string otherwise.
 
-
-def _decoded(value: Any) -> Any:
-    """A JSON-encoded argument as the value it spells; anything else as it is.
-
-    A Python-spelled object or list (``{'a': None}``) is read too: the tool
-    accepts one, and the card and the gate must see the same change it writes.
+    The one decoder both readers use -- the tool before it writes and the gate
+    and the card before they judge. Two of them disagreed once: the tool trimmed
+    before parsing and the gate did not, so a batch led by a non-breaking space
+    was an object to the tool and a plain string to the gate, and it switched
+    approval to full without anyone being asked. A Python-spelled object
+    (``{'a': None}``) is read too, since some models send a batch that way.
     """
-    if isinstance(value, str):
+    if not isinstance(raw, str):
+        return raw
+    text = raw.strip()
+    if not text:
+        return ""
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    if text[:1] in "{[":
         try:
-            return json.loads(value)
-        except ValueError:
-            pass
-        if value.strip()[:1] in "{[":
-            try:
-                literal = ast.literal_eval(value.strip())
-            except (ValueError, SyntaxError):
-                return value
-            if isinstance(literal, dict | list):
-                return literal
-        return value
-    return value
+            literal = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return raw
+        if isinstance(literal, dict | list):
+            return literal
+    return raw
+
+
+_decoded = decode_value
 
 
 def restart_target(params: dict[str, Any]) -> str:
     """``reload`` or ``restart``: what a ``restart`` call asks for, its value decoded."""
-    value = params.get("value")
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except ValueError:
-            pass
-    return "restart" if value == "restart" else "reload"
+    return "restart" if decode_value(params.get("value")) == "restart" else "reload"
 
 
 def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
@@ -1136,7 +1269,7 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             "change": change_line(params),
         }
     action = str(params.get("action") or "")
-    path = path_of(params)
+    path = path_of(params) or ("subagents" if action == "add" else "")
     view: dict[str, Any] = {"action": action, "setting": path, "change": change_line(params)}
     if action == "set" and is_secret_path(path):
         view["secret"] = True
@@ -1167,9 +1300,14 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             view["was_default"] = True
     if found is not None:
         view["effect"] = found[0].effect.value
-    if reason := sensitive_reason(path):
+    if reason := _reason_within(path, params.get("value")):
         view["sensitive"] = reason
     return view
+
+
+def _reason_within(path: str, value: Any) -> str:
+    """The sensitive reason for ``path``, or for the first field below it an object sets."""
+    return next((reason for leaf, _ in _leaves(path, _decoded(value)) if (reason := sensitive_reason(leaf))), "")
 
 
 def _short(value: Any) -> str:
@@ -1225,18 +1363,30 @@ def _credential_key(key: str) -> bool:
     return str(key).lower().replace("-", "_").endswith(_SECRET_MARKERS)
 
 
-def redacted(value: Any) -> Any:
-    """``value`` with anything keyed like a credential replaced by set / not set."""
+def redacted(value: Any, path: str = "") -> Any:
+    """``value`` (found at ``path``) with every credential in it replaced by set / not set.
+
+    A field counts when its name says so or when, read at its place under
+    ``path``, the schema or the channel's spec does (``encryptKey``); a map of
+    credentials keeps its names and loses its values.
+    """
     if isinstance(value, dict):
         out: dict[str, Any] = {}
         for key, item in value.items():
-            if _credential_key(key):
-                out[key] = "set" if item else "not set"
+            inner = f"{path}.{canonical_path(key)}" if path else ""
+            if _names_credential(key, inner):
+                if isinstance(item, dict):
+                    out[key] = {name: "set" if part else "not set" for name, part in item.items()}
+                else:
+                    out[key] = "set" if _filled(item) else "not set"
             else:
-                out[key] = redacted(item)
+                out[key] = redacted(item, inner)
         return out
     if isinstance(value, list):
-        return [redacted(item) for item in value]
+        return [redacted(item, f"{path}.{index}" if path else "") for index, item in enumerate(value)]
+    if isinstance(value, str):
+        for part in url_credentials(value):
+            value = value.replace(part, "***")
     return value
 
 

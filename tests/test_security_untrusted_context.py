@@ -281,3 +281,139 @@ def test_a_sub_agents_model_never_reads_a_key_raven_holds(tmp_path: Path, monkey
     assert tool_messages, "the sub-agent never ran the read"
     assert _HELD not in str(tool_messages)
     assert "[redacted: providers.openrouter.apiKey]" in str(tool_messages)
+
+
+def test_every_reader_of_a_tool_result_gets_it_scrubbed(monkeypatch) -> None:
+    """The loops scrubbed their own copies, after the trace span, the page's diff
+    and the sentinel's reply had already read the raw output from the registry."""
+    import asyncio
+
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.contracts.tool import FileChange, FileRemoval, FileWrite, Tool, ToolResult
+    from raven.utils.images import text_block
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    seen: list[str] = []
+    monkeypatch.setattr("raven.observability.semconv.tool_call", lambda *a, **k: seen.append(repr(a) + repr(k)) or {})
+
+    class _Prints(Tool):
+        name = "prints"
+        description = "prints a key Raven holds everywhere a result can carry text"
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **_):  # noqa: ANN003
+            line = f"KEY={_HELD}"
+            return ToolResult(
+                model_text=line,
+                display_text=line,
+                blocks=[text_block(line)],
+                diff=f"+{line}",
+                file_change=FileChange(path=".env", after=line, before="KEY="),
+                removed=(FileRemoval(path="old.env", before=line),),
+                written=(FileWrite(path="new.env", created=True, size=1, diff=f"+{line}"),),
+            )
+
+    registry = ToolRegistry()
+    registry.register(_Prints())
+    out = asyncio.run(registry.execute("prints", {}))
+    carried = [
+        str(out),
+        out.display_text,
+        str(out.blocks),
+        out.diff,
+        out.file_change.after,
+        out.removed[0].before,
+        out.written[0].diff,
+    ]
+    assert all(_HELD not in text for text in carried), carried
+    assert "[redacted: providers.openrouter.apiKey]" in str(out)
+
+
+def test_what_a_sub_agent_says_is_scrubbed_where_it_is_kept_and_shown(tmp_path: Path, monkeypatch) -> None:
+    """A third-party agent started with Raven's key can print it: on its stdout
+    (the frame journal), in its transcript (the page), in its probe's stderr tail
+    (the settings page) and in the report it hands back to the main session."""
+    import json
+
+    from raven.acp_client.journal import FrameJournal
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.manager import SubagentManager
+    from raven.agent.subagent.probe_state import TestStateStore
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+
+    run = activity.RunActivity()
+    activity.set_transcript(
+        run, [{"role": "tool", "content": [{"type": "text", "text": f"OPENROUTER_API_KEY={_HELD}"}]}]
+    )
+    assert _HELD not in json.dumps(run.transcript)
+
+    journal = FrameJournal(tmp_path / "frames.jsonl")
+    journal.note("in", frame={"params": {"update": {"rawOutput": f"key {_HELD}"}}})
+    journal.note("err", text=f"using {_HELD}")
+    journal.close()
+    assert _HELD not in (tmp_path / "frames.jsonl").read_text(encoding="utf-8")
+
+    class _Cfg:
+        name = "Pi"
+
+    state = TestStateStore(tmp_path / "state.json")
+    state.record(_Cfg(), "acp", ok=False, detail=f"stderr: {_HELD}", tested_at_ms=1)
+    assert _HELD not in (tmp_path / "state.json").read_text(encoding="utf-8")
+
+    class _Provider:
+        def get_default_model(self) -> str:
+            return "stub"
+
+    manager = SubagentManager(provider=_Provider(), workspace=tmp_path)  # type: ignore[arg-type]
+    submitted: list[str] = []
+    emitted: list[dict] = []
+    manager.set_submit(lambda request: submitted.append(request.text))
+    manager._emit_event = lambda key, event: emitted.append(event)  # type: ignore[method-assign]
+    origin = {"channel": "web", "chat_id": "c", "session_key": "web:c"}
+    manager._inject(f"the agent said {_HELD}", origin)
+    manager._emit_delivered(origin, {"content": f"the agent said {_HELD}"})
+    assert submitted and _HELD not in submitted[0]
+    assert emitted and _HELD not in json.dumps(emitted)
+
+
+def test_a_sub_agents_own_record_never_keeps_a_key_it_echoed(tmp_path: Path, monkeypatch) -> None:
+    """The live transcript was clean while the call labels, the closing line, the
+    output file a later DAG node's prompt renders, and the error record were not."""
+    import json
+
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends.observability import record_transcript
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    run = activity.RunActivity()
+    activity.set_tool_calls(run, [f"curl -H 'Authorization: Bearer {_HELD}'"], [f"wget {_HELD}"])
+    token = activity._current.set(run)
+    try:
+        activity.note_closing(f"done with {_HELD}")
+        activity.append_closing(f" and {_HELD}")
+    finally:
+        activity._current.reset(token)
+    assert _HELD not in json.dumps([run.tool_calls, run.tool_failures, run.closing])
+    assert _HELD not in activity.persisted_output(None, f"the answer is {_HELD}")
+    run.truncation, run.full_output = {"returned": 1}, f"the whole answer is {_HELD} and more"
+    assert _HELD not in activity.persisted_output(run, "x")
+
+    class _Span:
+        artifacts: list = []
+
+        def artifact(self, key, payload):  # noqa: ANN001
+            self.artifacts.append(payload)
+
+    span = _Span()
+    record_transcript(span, {"invocations": [{"stdout": f"key={_HELD}", "stderr": ""}]})
+    assert _HELD not in json.dumps(span.artifacts)
+
+
+def test_a_failed_sub_agents_error_record_keeps_no_key(tmp_path: Path, monkeypatch) -> None:
+    from raven.agent.subagent.history import SpawnRecord
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    record = SpawnRecord.open(tmp_path / "s", task_id="t1", task="ask", meta={"agent": "Pi"})
+    record.finish(status="failed", error=f"agent exited: OPENROUTER_API_KEY={_HELD}")
+    assert _HELD not in record.file("error.md").read_text(encoding="utf-8")

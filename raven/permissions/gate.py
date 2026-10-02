@@ -31,7 +31,7 @@ from typing import Any
 from loguru import logger
 
 from raven.config.schema import PermissionsConfig
-from raven.config.self_surface import change_line, only_asks_for_secrets, touches_sensitive
+from raven.config.self_surface import change_line, only_asks_for_secrets, touches_sensitive, unwritable_target
 from raven.config.update import allow_exec_pattern
 from raven.contracts.permissions import (
     Allow,
@@ -130,6 +130,14 @@ class PermissionGate:
                 source=DecisionSource.USER_DENY,
             )
         own = self_config_tier(tool_name, params)
+        if own is not None and (target := unwritable_target(params)):
+            # Refused here rather than by the tool, so a value at a path the tool
+            # will not write (a credential in an MCP server's URL) reaches neither
+            # the card nor the reviewer on its way to that refusal.
+            return Deny(
+                reason=f"{target} is not something raven_config changes; describe lists what it can",
+                source=DecisionSource.DEFAULT,
+            )
         if own is Tier.DENY:
             return Deny(
                 reason=(
@@ -276,7 +284,11 @@ class PermissionGate:
                 turn_id=turn.turn_id,
                 tool_call_id=current_tool_call_id(),
                 command=action_line(tool_name, params),
-                description=decision.description,
+                # The tool's own account where it gives one: it knows what a
+                # call resolves to (which restart a bare `restart` runs).
+                description=str(evidence.get("change") or decision.description)
+                if kind == "config.change"
+                else decision.description,
                 suggested_pattern=decision.suggested_pattern,
                 kind=kind,
                 family=decision.family,
