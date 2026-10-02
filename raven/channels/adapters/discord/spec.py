@@ -22,7 +22,7 @@ SPEC = ChannelSpec(
     # stay with the host.
     config_schema={
         "token": {"type": "string", "default": "", "required": True, "secret": True},
-        "gateway_url": {"type": "string", "default": "wss://gateway.discord.gg/?v=10&encoding=json"},
+        "gateway_url": {"type": "string", "default": "wss://gateway.discord.gg/?v=10&encoding=json", "sensitive": True},
         "intents": {"type": "integer", "default": 37377},
         "group_policy": {"type": "string", "default": "mention", "choices": ["mention", "open"]},
     },

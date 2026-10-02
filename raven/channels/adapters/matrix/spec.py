@@ -21,7 +21,7 @@ SPEC = ChannelSpec(
     # is the only truth. Socket fields (enabled / allow_from / workspace)
     # stay with the host.
     config_schema={
-        "homeserver": {"type": "string", "default": "https://matrix.org"},
+        "homeserver": {"type": "string", "default": "https://matrix.org", "sensitive": True},
         "access_token": {"type": "string", "default": "", "required": True, "secret": True},
         "user_id": {"type": "string", "default": "", "required": True},
         "device_id": {"type": "string", "default": ""},

@@ -661,6 +661,8 @@ class RavenConfigTool(Tool):
                 entry["secret"] = True
             if key == "allow_from":
                 entry["sensitive"] = "widening it lets more people instruct Raven"
+            elif reason := surface.sensitive_reason(entry["path"]):
+                entry["sensitive"] = reason
             fields.append(entry)
         out: dict[str, Any] = {
             "channel": name,

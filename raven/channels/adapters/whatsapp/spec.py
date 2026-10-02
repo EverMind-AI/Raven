@@ -22,7 +22,7 @@ SPEC = ChannelSpec(
     # is the only truth. Socket fields (enabled / allow_from / workspace)
     # stay with the host.
     config_schema={
-        "bridge_url": {"type": "string", "default": "ws://localhost:3001"},
+        "bridge_url": {"type": "string", "default": "ws://localhost:3001", "sensitive": True},
         "bridge_token": {"type": "string", "default": "", "secret": True},
         "group_policy": {"type": "string", "default": "open", "choices": ["open", "mention"]},
     },

@@ -197,7 +197,9 @@ def test_extension_blocks_validate_too(tmp_path, monkeypatch):
         surface.write_value("sentinel.nudgePolicy.maxNudgesPerHour", "many")
 
 
-@pytest.mark.parametrize("path", ["tools.web.proxy", "tools.media.proxy", "providers.openai.apiBase"])
+@pytest.mark.parametrize(
+    "path", ["tools.web.proxy", "tools.media.proxy", "providers.openai.apiBase", "permissions.judgeModel"]
+)
 def test_a_setting_that_redirects_keyed_traffic_stays_with_the_user(path):
     """Smart mode's reviewer settles anything not marked sensitive, and each of
     these sends Raven's keys and traffic to a host the call names."""
@@ -247,3 +249,85 @@ def test_a_channel_secret_inside_an_object_is_refused_and_never_shown():
     assert self_config_tier("raven_config", whole).value == "deny"
     shown = surface.change_line(whole)
     assert "FEISHU-PLAINTEXT" not in shown and "cli_1" in shown
+
+
+def _wrappings(core: str) -> list[str]:
+    import itertools
+
+    ends = ["".join(chars) for n in range(3) for chars in itertools.product(" \t.", repeat=n)]
+    return [f"{before}{core}{after}" for before in ends for after in ends]
+
+
+def test_the_path_spelling_settles_in_one_pass_whatever_wraps_it():
+    """Trimming spaces then dots left ``token .`` as ``token `` -- a secret read as
+    an ordinary setting -- so every order of them must come off at once."""
+    from raven.permissions.rules import self_config_tier
+
+    for spelled in _wrappings("channels.telegram.token"):
+        assert surface.canonical_path(spelled) == "channels.telegram.token", repr(spelled)
+        call = {"action": "set", "path": spelled, "value": "123:PLAINTEXT"}
+        assert self_config_tier("raven_config", call).value == "deny", repr(spelled)
+        assert "PLAINTEXT" not in surface.change_line(call), repr(spelled)
+    for spelled in _wrappings("tools.restrictToWorkspace"):
+        assert surface.touches_sensitive({"action": "set", "path": spelled, "value": False}), repr(spelled)
+
+
+def test_every_field_the_provider_schema_treats_as_secret_is_secret_to_the_gate(monkeypatch, tmp_path):
+    """The provider writer redacts by the schema's own marker (``extraHeaders``) and
+    its patch list (Gemini's ``apiKeyList``); the gate and the scrub read the same."""
+    from pydantic.alias_generators import to_camel
+
+    from raven.config import held_secrets
+    from raven.config.schema import GeminiProviderConfig, ProviderConfig
+    from raven.config.update_providers import _is_secret_field
+
+    declared = [
+        name
+        for model in (ProviderConfig, GeminiProviderConfig)
+        for name, info in model.model_fields.items()
+        if _is_secret_field(name, info)
+    ]
+    assert {"extra_headers", "api_key_list"} <= set(declared)
+    assert [n for n in declared if not surface.is_secret_path(f"providers.gemini.{to_camel(n)}")] == []
+    assert not surface.is_secret_path("providers.gemini.models")
+
+    config = tmp_path / "config.json"
+    header, listed = "hdr-0123456789abcdef", "AIza-listed-0123456789"
+    config.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "aihubmix": {"extraHeaders": {"APP-Code": header}},
+                    "gemini": {"apiKeyList": [listed]},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
+    monkeypatch.setattr(held_secrets, "_cache", None)
+    scrubbed = held_secrets.scrub_held_secrets(f"APP-Code: {header}; key {listed}")
+    assert header not in scrubbed and listed not in scrubbed
+
+
+def test_a_channel_field_that_sends_its_traffic_somewhere_stays_with_the_user():
+    """A proxy or server address carries the channel's credential to whatever host
+    it names; the adapter declares it, the way it declares a secret."""
+    import re
+
+    from pydantic.alias_generators import to_camel
+
+    from raven.config.update_channels import channel_field_specs, channel_names
+
+    addresses = [
+        f"channels.{name}.{to_camel(field)}"
+        for name in channel_names()
+        for field in channel_field_specs(name)
+        if re.search(r"(url|host|proxy|homeserver)$", field)
+    ]
+    assert "channels.telegram.proxy" in addresses and "channels.matrix.homeserver" in addresses
+    unmarked = [p for p in addresses if not surface.touches_sensitive({"action": "set", "path": p, "value": "x"})]
+    assert unmarked == [], "declare these sensitive in the adapter's spec"
+    line = surface.change_line({"action": "set", "path": "channels.telegram.proxy", "value": "http://h:1"})
+    assert "Note: sends this channel's credentials" in line
+    assert not surface.touches_sensitive({"action": "set", "path": "channels.telegram.replyToMessage", "value": True})

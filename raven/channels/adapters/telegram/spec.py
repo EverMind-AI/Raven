@@ -22,7 +22,7 @@ SPEC = ChannelSpec(
     # stay with the host.
     config_schema={
         "token": {"type": "string", "default": "", "required": True, "secret": True},
-        "proxy": {"type": "string", "default": None},
+        "proxy": {"type": "string", "default": None, "sensitive": True},
         "reply_to_message": {"type": "boolean", "default": False},
         "group_policy": {"type": "string", "default": "mention", "choices": ["open", "mention"]},
     },

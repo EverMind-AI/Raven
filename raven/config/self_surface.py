@@ -29,8 +29,10 @@ from __future__ import annotations
 
 import ast
 import copy
+import functools
 import json
 import re
+import string
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -703,6 +705,7 @@ SECTIONS: tuple[Section, ...] = (
                 "str",
                 _E.NEXT_TURN,
                 nullable=True,
+                sensitive="picks the model that decides which calls run without asking you",
             ),
         ),
     ),
@@ -820,14 +823,18 @@ def batch_of(params: dict[str, Any]) -> list[tuple[str, Any]] | None:
     return [(canonical_path(path), item) for path, item in value.items()]
 
 
+_TRIMMED = string.whitespace + "."
+
+
 def canonical_path(path: Any) -> str:
     """``path`` the way the tool reads it before it writes: outer spaces and dots dropped.
 
     The one spelling every reader goes by. The gate classifying the raw argument
     while the tool wrote the trimmed one let ``channels.telegram.token `` (a
-    trailing space) through as an ordinary setting rather than a secret.
+    trailing space) through as an ordinary setting rather than a secret. Both
+    kinds come off together, so no order of them survives (``token .``).
     """
-    return str(path or "").strip().strip(".")
+    return str(path or "").strip(_TRIMMED)
 
 
 def path_of(params: dict[str, Any]) -> str:
@@ -839,26 +846,64 @@ def is_secret_path(path: str) -> bool:
     return (
         (found is not None and found[0].secret)
         or _credential_key(path.rsplit(".", 1)[-1])
-        or _channel_field_secret(path)
+        or bool((_channel_field(path) or {}).get("is_secret"))
+        or _provider_field_secret(path)
     )
 
 
-def _channel_field_secret(path: str) -> bool:
-    """Whether a ``channels.<name>.<field>`` path is a field its adapter declares secret.
+_CHANNEL_ADDRESS = "sends this channel's credentials and messages to the address given"
 
-    The adapter's spec is what decides it (Feishu's ``encrypt_key`` is secret and
-    names no credential marker); a guess from the key's spelling would be a
-    second definition, one that disagrees with the channel's own.
+
+def sensitive_reason(path: str) -> str:
+    """Why changing ``path`` stays with the user, or ``""`` when it need not."""
+    found = find(path)
+    if found is not None and found[0].sensitive:
+        return found[0].sensitive
+    return _CHANNEL_ADDRESS if (_channel_field(path) or {}).get("is_sensitive") else ""
+
+
+def _channel_field(path: str) -> dict[str, Any] | None:
+    """The declaration a channel's adapter gives a ``channels.<name>.<field>`` path, if any.
+
+    The adapter's spec decides which fields are secret (Feishu's ``encrypt_key``
+    names no credential marker) and which send its traffic somewhere (a proxy, a
+    server address); a guess from the key's spelling would be a second
+    definition, one that disagrees with the channel's own.
     """
     parts = path.split(".")
     if len(parts) < 3 or parts[0] != "channels":
-        return False
+        return None
     from raven.config.update_channels import channel_field_specs, channel_names
 
     if parts[1] not in channel_names():
-        return False
-    field = ".".join(to_snake(part) for part in parts[2:])
-    return bool((channel_field_specs(parts[1]).get(field) or {}).get("is_secret"))
+        return None
+    return channel_field_specs(parts[1]).get(".".join(to_snake(part) for part in parts[2:]))
+
+
+def _provider_field_secret(path: str) -> bool:
+    """Whether ``providers.<name>.<field>...`` is under a field the provider schema treats as a credential.
+
+    Read from the schema the provider writer redacts by (``extraHeaders`` is
+    declared secret; Gemini's ``apiKeyList`` is on its patch list), so a value
+    nested inside one -- a header, a listed key -- is a credential too.
+    """
+    parts = path.split(".")
+    return len(parts) >= 3 and parts[0] == "providers" and to_snake(parts[2]) in _provider_secret_fields()
+
+
+@functools.cache
+def _provider_secret_fields() -> frozenset[str]:
+    from raven.config.schema import ProviderConfig, ProvidersConfig
+    from raven.config.update_providers import _is_secret_field
+
+    models = {ProviderConfig}
+    for entry in ProvidersConfig.model_fields.values():
+        for candidate in (entry.annotation, *getattr(entry.annotation, "__args__", ())):
+            if isinstance(candidate, type) and issubclass(candidate, ProviderConfig):
+                models.add(candidate)
+    return frozenset(
+        name for model in models for name, info in model.model_fields.items() if _is_secret_field(name, info)
+    )
 
 
 def _leaves(path: str, value: Any) -> list[tuple[str, Any]]:
@@ -914,7 +959,7 @@ def touches_sensitive(params: dict[str, Any]) -> bool:
     changes = batch_of(params)
     if changes is None:
         changes = _leaves(path_of(params), _decoded(params.get("value")))
-    return any((found := find(path)) is not None and bool(found[0].sensitive) for path, _ in changes)
+    return any(sensitive_reason(path) for path, _ in changes)
 
 
 def _holds_credential(value: Any) -> bool:
@@ -991,12 +1036,9 @@ def change_line(params: dict[str, Any]) -> str:
     if action == "test":
         return f"Run {path} once to check it works (it spends that agent's own quota) and record the result"
     found = find(path)
-    tail = ""
-    if found is not None:
-        setting = found[0]
-        tail = f" ({EFFECT_TEXT[setting.effect]})"
-        if setting.sensitive:
-            tail += f". Note: {setting.sensitive}"
+    tail = f" ({EFFECT_TEXT[found[0].effect]})" if found is not None else ""
+    if reason := sensitive_reason(path):
+        tail += f". Note: {reason}"
     if action == "unset":
         if found is not None and found[0].unset_means:
             return f"Clear {path} so that {found[0].unset_means}{tail}"
@@ -1112,8 +1154,8 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             view["was_default"] = True
     if found is not None:
         view["effect"] = found[0].effect.value
-        if found[0].sensitive:
-            view["sensitive"] = found[0].sensitive
+    if reason := sensitive_reason(path):
+        view["sensitive"] = reason
     return view
 
 

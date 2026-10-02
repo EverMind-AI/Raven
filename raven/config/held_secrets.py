@@ -28,16 +28,17 @@ _cache: tuple[Path, float, tuple[tuple[str, str], ...]] | None = None
 
 def _collect(node: Any, prefix: str, out: list[tuple[str, str]]) -> None:
     if isinstance(node, dict):
-        for key, item in node.items():
-            path = f"{prefix}.{key}" if prefix else str(key)
-            if isinstance(item, str):
-                if len(item.strip()) >= _MIN_LEN and is_secret_path(path):
-                    out.append((item.strip(), path))
-            else:
-                _collect(item, path, out)
+        children = [(f"{prefix}.{key}" if prefix else str(key), item) for key, item in node.items()]
     elif isinstance(node, list):
-        for index, item in enumerate(node):
-            _collect(item, f"{prefix}.{index}", out)
+        children = [(f"{prefix}.{index}", item) for index, item in enumerate(node)]
+    else:
+        return
+    for path, item in children:
+        if isinstance(item, str):
+            if len(item.strip()) >= _MIN_LEN and is_secret_path(path):
+                out.append((item.strip(), path))
+        else:
+            _collect(item, path, out)
 
 
 def held_secrets() -> tuple[tuple[str, str], ...]:

@@ -133,6 +133,7 @@ def _flatten_schema(declaration: dict[str, Any], prefix: str = "") -> dict[str, 
             "type": type_display,
             "default": copy.deepcopy(decl.get("default")),
             "is_secret": decl.get("secret") is True,
+            "is_sensitive": decl.get("sensitive") is True,
             "required": decl.get("required") is True,
             "description": description,
         }

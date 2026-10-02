@@ -22,8 +22,8 @@ SPEC = ChannelSpec(
     # is the only truth. Socket fields (enabled / allow_from / workspace)
     # stay with the host.
     config_schema={
-        "base_url": {"type": "string", "default": "https://mochat.io"},
-        "socket_url": {"type": "string", "default": ""},
+        "base_url": {"type": "string", "default": "https://mochat.io", "sensitive": True},
+        "socket_url": {"type": "string", "default": "", "sensitive": True},
         "socket_path": {"type": "string", "default": "/socket.io"},
         "socket_disable_msgpack": {"type": "boolean", "default": False},
         "socket_reconnect_delay_ms": {"type": "integer", "default": 1000},

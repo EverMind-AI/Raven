@@ -23,13 +23,13 @@ SPEC = ChannelSpec(
     # stay with the host.
     config_schema={
         "consent_granted": {"type": "boolean", "default": False},
-        "imap_host": {"type": "string", "default": "", "required": True},
+        "imap_host": {"type": "string", "default": "", "required": True, "sensitive": True},
         "imap_port": {"type": "integer", "default": 993},
         "imap_username": {"type": "string", "default": "", "required": True},
         "imap_password": {"type": "string", "default": "", "required": True, "secret": True},
         "imap_mailbox": {"type": "string", "default": "INBOX"},
         "imap_use_ssl": {"type": "boolean", "default": True},
-        "smtp_host": {"type": "string", "default": "", "required": True},
+        "smtp_host": {"type": "string", "default": "", "required": True, "sensitive": True},
         "smtp_port": {"type": "integer", "default": 587},
         "smtp_username": {"type": "string", "default": "", "required": True},
         "smtp_password": {"type": "string", "default": "", "required": True, "secret": True},

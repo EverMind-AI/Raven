@@ -24,8 +24,8 @@ SPEC = ChannelSpec(
     # route_tag is str | int in the central model; declared as string, the
     # widest scalar the flat vocabulary offers for a mixed union.
     config_schema={
-        "base_url": {"type": "string", "default": "https://ilinkai.weixin.qq.com"},
-        "cdn_base_url": {"type": "string", "default": "https://novac2c.cdn.weixin.qq.com/c2c"},
+        "base_url": {"type": "string", "default": "https://ilinkai.weixin.qq.com", "sensitive": True},
+        "cdn_base_url": {"type": "string", "default": "https://novac2c.cdn.weixin.qq.com/c2c", "sensitive": True},
         "route_tag": {"type": "string", "default": None},
         "token": {"type": "string", "default": "", "secret": True},
         "state_dir": {"type": "string", "default": ""},
