@@ -884,11 +884,24 @@ def _provider_field_secret(path: str) -> bool:
     """Whether ``providers.<name>.<field>...`` is under a field the provider schema treats as a credential.
 
     Read from the schema the provider writer redacts by (``extraHeaders`` is
-    declared secret; Gemini's ``apiKeyList`` is on its patch list), so a value
-    nested inside one -- a header, a listed key -- is a credential too.
+    declared secret, on the provider and on each of its ``endpoints``; Gemini's
+    ``apiKeyList`` is on its patch list), so a value nested inside one -- a
+    header, a listed key -- is a credential too.
     """
     parts = path.split(".")
-    return len(parts) >= 3 and parts[0] == "providers" and to_snake(parts[2]) in _provider_secret_fields()
+    if len(parts) < 3 or parts[0] != "providers":
+        return False
+    if to_snake(parts[2]) == "endpoints" and len(parts) >= 5:
+        return to_snake(parts[4]) in _endpoint_secret_fields()
+    return to_snake(parts[2]) in _provider_secret_fields()
+
+
+@functools.cache
+def _endpoint_secret_fields() -> frozenset[str]:
+    from raven.config.schema import ProviderEndpoint
+    from raven.config.update_providers import _is_secret_field
+
+    return frozenset(name for name, info in ProviderEndpoint.model_fields.items() if _is_secret_field(name, info))
 
 
 @functools.cache

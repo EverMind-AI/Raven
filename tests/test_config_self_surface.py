@@ -292,12 +292,15 @@ def test_every_field_the_provider_schema_treats_as_secret_is_secret_to_the_gate(
     assert not surface.is_secret_path("providers.gemini.models")
 
     config = tmp_path / "config.json"
-    header, listed = "hdr-0123456789abcdef", "AIza-listed-0123456789"
+    header, listed, per_endpoint = "hdr-0123456789abcdef", "AIza-listed-0123456789", "hdr-endpoint-0123456789"
     config.write_text(
         json.dumps(
             {
                 "providers": {
-                    "aihubmix": {"extraHeaders": {"APP-Code": header}},
+                    "aihubmix": {
+                        "extraHeaders": {"APP-Code": header},
+                        "endpoints": [{"label": "b", "extraHeaders": {"APP-Code": per_endpoint}}],
+                    },
                     "gemini": {"apiKeyList": [listed]},
                 }
             }
@@ -306,8 +309,9 @@ def test_every_field_the_provider_schema_treats_as_secret_is_secret_to_the_gate(
     )
     monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
     monkeypatch.setattr(held_secrets, "_cache", None)
-    scrubbed = held_secrets.scrub_held_secrets(f"APP-Code: {header}; key {listed}")
-    assert header not in scrubbed and listed not in scrubbed
+    scrubbed = held_secrets.scrub_held_secrets(f"APP-Code: {header}; key {listed}; {per_endpoint}")
+    assert header not in scrubbed and listed not in scrubbed and per_endpoint not in scrubbed
+    assert not surface.is_secret_path("providers.aihubmix.endpoints.0.label")
 
 
 def test_a_channel_field_that_sends_its_traffic_somewhere_stays_with_the_user():

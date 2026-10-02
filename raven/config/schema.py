@@ -355,7 +355,8 @@ class ProviderEndpoint(Base):
     label: str = Field(min_length=1)
     api_key: str = ""
     api_base: str | None = None
-    extra_headers: dict[str, str] | None = None
+    # Can carry a secret (APP-Code and the like), as the provider-level one can.
+    extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
 
 
 class ProviderConfig(Base):
