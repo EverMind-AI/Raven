@@ -379,7 +379,7 @@ class RavenConfigTool(Tool):
         """A call that asks the user to type a key waits on them, so no tool timeout cuts it short."""
         if params.get("action") != "set":
             return False
-        changes = surface.batch_of(params) or [(str(params.get("path") or ""), params.get("value"))]
+        changes = surface.batch_of(params) or [(surface.path_of(params), params.get("value"))]
         return any(surface.is_secret_path(path) for path, _ in changes)
 
     def approval_evidence(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -428,7 +428,7 @@ class RavenConfigTool(Tool):
 
     async def execute(self, **kwargs: Any) -> str:
         action = str(kwargs.get("action") or "")
-        path = str(kwargs.get("path") or "").strip().strip(".")
+        path = surface.path_of(kwargs)
         value = _parse_value(kwargs.get("value"))
         try:
             if action == "describe":
@@ -880,7 +880,7 @@ class RavenConfigTool(Tool):
         plan: list[tuple[str, Setting, list[str], Any]] = []
         channels: dict[str, dict[str, Any]] = {}
         agents: list[tuple[str, Any]] = []
-        for path, raw in changes.items():
+        for path, raw in ((surface.canonical_path(p), r) for p, r in changes.items()):
             if path.startswith("channels.") and path.count(".") == 2:
                 _, name, field_name = path.split(".")
                 channels.setdefault(name, {})[field_name] = _parse_value(raw)

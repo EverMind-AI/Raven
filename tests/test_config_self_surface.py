@@ -195,3 +195,55 @@ def test_extension_blocks_validate_too(tmp_path, monkeypatch):
     assert json.loads(path.read_text()) == {"tracing": {"enabled": False}}
     with pytest.raises(ValueError, match="would not load"):
         surface.write_value("sentinel.nudgePolicy.maxNudgesPerHour", "many")
+
+
+@pytest.mark.parametrize("path", ["tools.web.proxy", "tools.media.proxy", "providers.openai.apiBase"])
+def test_a_setting_that_redirects_keyed_traffic_stays_with_the_user(path):
+    """Smart mode's reviewer settles anything not marked sensitive, and each of
+    these sends Raven's keys and traffic to a host the call names."""
+    assert surface.touches_sensitive({"action": "set", "path": path, "value": "http://127.0.0.1:9"})
+
+
+@pytest.mark.parametrize("spelled", [" {}", "{} ", "{}.", ".{}", " {}. "])
+def test_the_gate_classifies_the_path_the_tool_writes(spelled):
+    """The tool trims spaces and dots before it writes; classifying the raw
+    argument let one trailing space turn a secret into an ordinary setting."""
+    from raven.permissions.rules import self_config_tier
+
+    sensitive = {"action": "set", "path": spelled.format("tools.restrictToWorkspace"), "value": False}
+    assert surface.touches_sensitive(sensitive)
+    secret = {"action": "set", "path": spelled.format("channels.telegram.token"), "value": "123:PLAINTEXT"}
+    assert self_config_tier("raven_config", secret).value == "deny"
+    assert "PLAINTEXT" not in surface.change_line(secret)
+
+
+def test_a_batch_names_its_settings_the_way_the_tool_writes_them():
+    assert surface.touches_sensitive({"action": "set", "path": " ", "value": {"tools.restrictToWorkspace": False}})
+    assert surface.touches_sensitive({"action": "set", "value": {"tools.restrictToWorkspace ": False}})
+
+
+def test_every_field_a_channel_declares_secret_is_secret_to_the_gate():
+    """The adapter's spec decides; Feishu's encrypt_key names no credential marker."""
+    from pydantic.alias_generators import to_camel
+
+    from raven.config.update_channels import channel_field_specs, channel_names
+
+    declared = [
+        f"channels.{name}.{to_camel(field)}"
+        for name in channel_names()
+        for field, spec in channel_field_specs(name).items()
+        if spec.get("is_secret")
+    ]
+    assert "channels.feishu.encryptKey" in declared
+    assert [path for path in declared if not surface.is_secret_path(path)] == []
+    assert not surface.is_secret_path("channels.feishu.appId")
+    assert not surface.is_secret_path("channels.nosuchchannel.encryptKey")
+
+
+def test_a_channel_secret_inside_an_object_is_refused_and_never_shown():
+    from raven.permissions.rules import self_config_tier
+
+    whole = {"action": "set", "path": "channels.feishu", "value": {"encryptKey": "FEISHU-PLAINTEXT", "appId": "cli_1"}}
+    assert self_config_tier("raven_config", whole).value == "deny"
+    shown = surface.change_line(whole)
+    assert "FEISHU-PLAINTEXT" not in shown and "cli_1" in shown

@@ -95,7 +95,6 @@ from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
-from raven.security.redact import redact_home_config_read
 from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
@@ -120,9 +119,16 @@ def _scrubbed_result(arguments: Any, text: str) -> str:
     is first read, so the preview logged and sent to the page is the same text
     the model gets.
     """
-    from raven.config.held_secrets import scrub_held_secrets
+    from raven.config.held_secrets import scrub_tool_output
 
-    return scrub_held_secrets(redact_home_config_read(arguments, text))
+    return scrub_tool_output(arguments, text)
+
+
+def _scrubbed_blocks(arguments: Any, blocks: Any) -> Any:
+    """The image-bearing form of a result, its text parts scrubbed like :func:`_scrubbed_result`."""
+    from raven.config.held_secrets import scrub_tool_blocks
+
+    return scrub_tool_blocks(arguments, blocks)
 
 
 def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None) -> str:
@@ -1449,7 +1455,7 @@ class TurnPathMixin:
                     # misses the whole class (builtin guides in particular).
                     if tool_call.name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
                         await self._report_skill_read(session_key or "", tool_call.name, tool_call.arguments)
-                    result_blocks = getattr(result, "blocks", None)
+                    result_blocks = _scrubbed_blocks(tool_call.arguments, getattr(result, "blocks", None))
                     model_text, blocks, attach_blocks = self._route_result_images(
                         model_text, result_blocks, call_model or effective_model
                     )

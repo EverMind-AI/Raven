@@ -18,15 +18,23 @@ from loguru import logger
 
 from raven.home import raven_home
 
+#: The DURATION spellings the shim accepts, and the only ones the permission
+#: gate reads past to find the command a ``timeout`` runs. One definition for
+#: both: a spelling the shim ran and the gate did not parse (``.5``, ``1e3``,
+#: ``+5``) left the gate classifying the duration as the program, so a command a
+#: deny rule refuses written plainly ran once it was wrapped.
+TIMEOUT_DURATION = r"[0-9]+(?:\.[0-9]+)?[smhd]?"
+
 # A GNU `timeout` subset: DURATION with s/m/h/d suffixes, -s/--signal,
 # -k/--kill-after, --preserve-status, --foreground; exit 124 on timeout, 125 on
 # its own error, 126/127 when the command cannot be run.
 _TIMEOUT = r"""
-import os, signal, subprocess, sys
+import os, re, signal, subprocess, sys
 
 def seconds(text):
     units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    text = text.strip()
+    if not re.fullmatch(__DURATION__, text):
+        raise ValueError(text)
     scale = units.get(text[-1:], None)
     return float(text[:-1] if scale else text) * (scale or 1)
 
@@ -88,7 +96,12 @@ def main(argv):
         child.send_signal(signal.SIGINT)
         return child.wait()
 
-sys.exit(main(sys.argv[1:]))
+try:
+    status = main(sys.argv[1:])
+except (ValueError, IndexError, AttributeError):
+    sys.stderr.write("timeout: invalid argument\n")
+    status = 125
+sys.exit(status)
 """
 
 _dir: str | None = None
@@ -104,7 +117,7 @@ def compat_bin_dir() -> str | None:
     if shutil.which("timeout") is not None:
         return None
     target = raven_home() / "cache" / "compat-bin"
-    script = f"#!{sys.executable}\n{_TIMEOUT}"
+    script = f"#!{sys.executable}\n" + _TIMEOUT.replace("__DURATION__", repr(TIMEOUT_DURATION))
     try:
         target.mkdir(parents=True, exist_ok=True)
         path = target / "timeout"
@@ -126,4 +139,4 @@ def with_compat(path: str) -> str:
     return f"{path}{os.pathsep}{extra}" if path else extra
 
 
-__all__ = ["compat_bin_dir", "with_compat"]
+__all__ = ["TIMEOUT_DURATION", "compat_bin_dir", "with_compat"]

@@ -259,6 +259,7 @@ SECTIONS: tuple[Section, ...] = (
                 _E.NEXT_TURN,
                 writer="model.fields",
                 nullable=True,
+                sensitive="sends this provider's API key, and every conversation on it, to the address given",
                 note="a raven serve or TUI process keeps its startup default binding until restarted",
             ),
             Setting(
@@ -322,7 +323,14 @@ SECTIONS: tuple[Section, ...] = (
                 )
                 for vendor in _WEB_VENDORS
             ),
-            Setting("tools.web.proxy", "HTTP/SOCKS proxy for web tools", "str", _E.RELOAD, nullable=True),
+            Setting(
+                "tools.web.proxy",
+                "HTTP/SOCKS proxy for web tools",
+                "str",
+                _E.RELOAD,
+                nullable=True,
+                sensitive="routes every web search and fetch, search API keys included, through that host",
+            ),
             Setting("tools.web.search.images", "Offer the image search tool", "bool", _E.RELOAD),
             *(
                 Setting(
@@ -354,7 +362,14 @@ SECTIONS: tuple[Section, ...] = (
                 )
                 for medium in ("image", "speech", "video")
             ),
-            Setting("tools.media.proxy", "Proxy for media API calls", "str", _E.RELOAD, nullable=True),
+            Setting(
+                "tools.media.proxy",
+                "Proxy for media API calls",
+                "str",
+                _E.RELOAD,
+                nullable=True,
+                sensitive="routes every media API call, its API key included, through that host",
+            ),
             Setting("tools.askUser.timeout", "Seconds a question to the user waits", "int", _E.RELOAD, low=1),
             Setting("tools.toolSearch.enabled", "Defer rarely used tools behind tool search", "bool", _E.RELOAD),
             Setting(
@@ -797,17 +812,60 @@ def check_value(setting: Setting, value: Any) -> Any:
 
 def batch_of(params: dict[str, Any]) -> list[tuple[str, Any]] | None:
     """The changes of a ``set`` that names no path and carries ``{path: value, ...}``, else None."""
-    if params.get("action") != "set" or params.get("path"):
+    if params.get("action") != "set" or path_of(params):
         return None
     value = _decoded(params.get("value"))
     if not isinstance(value, dict) or not value:
         return None
-    return [(str(path), item) for path, item in value.items()]
+    return [(canonical_path(path), item) for path, item in value.items()]
+
+
+def canonical_path(path: Any) -> str:
+    """``path`` the way the tool reads it before it writes: outer spaces and dots dropped.
+
+    The one spelling every reader goes by. The gate classifying the raw argument
+    while the tool wrote the trimmed one let ``channels.telegram.token `` (a
+    trailing space) through as an ordinary setting rather than a secret.
+    """
+    return str(path or "").strip().strip(".")
+
+
+def path_of(params: dict[str, Any]) -> str:
+    return canonical_path(params.get("path"))
 
 
 def is_secret_path(path: str) -> bool:
     found = find(path)
-    return (found is not None and found[0].secret) or _credential_key(path.rsplit(".", 1)[-1])
+    return (
+        (found is not None and found[0].secret)
+        or _credential_key(path.rsplit(".", 1)[-1])
+        or _channel_field_secret(path)
+    )
+
+
+def _channel_field_secret(path: str) -> bool:
+    """Whether a ``channels.<name>.<field>`` path is a field its adapter declares secret.
+
+    The adapter's spec is what decides it (Feishu's ``encrypt_key`` is secret and
+    names no credential marker); a guess from the key's spelling would be a
+    second definition, one that disagrees with the channel's own.
+    """
+    parts = path.split(".")
+    if len(parts) < 3 or parts[0] != "channels":
+        return False
+    from raven.config.update_channels import channel_field_specs, channel_names
+
+    if parts[1] not in channel_names():
+        return False
+    field = ".".join(to_snake(part) for part in parts[2:])
+    return bool((channel_field_specs(parts[1]).get(field) or {}).get("is_secret"))
+
+
+def _leaves(path: str, value: Any) -> list[tuple[str, Any]]:
+    """The settings one change writes: an object set on a channel writes each of its fields."""
+    if path.startswith("channels.") and path.count(".") == 1 and isinstance(value, dict):
+        return [(f"{path}.{canonical_path(key)}", item) for key, item in value.items()]
+    return [(path, value)]
 
 
 def carries_secret_value(params: dict[str, Any]) -> bool:
@@ -821,7 +879,7 @@ def carries_secret_value(params: dict[str, Any]) -> bool:
     if changes is None:
         if params.get("action") not in ("set", "add"):
             return False
-        changes = [(str(params.get("path") or ""), params.get("value"))]
+        changes = _leaves(path_of(params), _decoded(params.get("value")))
     return any(is_secret_path(path) and _decoded(value) not in (None, "") for path, value in changes) or (
         params.get("action") == "add" and _holds_credential(_decoded(params.get("value")))
     )
@@ -837,7 +895,7 @@ def only_asks_for_secrets(params: dict[str, Any]) -> bool:
     if changes is None:
         if params.get("action") != "set":
             return False
-        changes = [(str(params.get("path") or ""), params.get("value"))]
+        changes = [(path_of(params), params.get("value"))]
     return bool(changes) and all(is_secret_path(path) and _decoded(value) in (None, "") for path, value in changes)
 
 
@@ -855,7 +913,7 @@ def touches_sensitive(params: dict[str, Any]) -> bool:
             return True
     changes = batch_of(params)
     if changes is None:
-        changes = [(str(params.get("path") or ""), None)]
+        changes = _leaves(path_of(params), _decoded(params.get("value")))
     return any((found := find(path)) is not None and bool(found[0].sensitive) for path, _ in changes)
 
 
@@ -914,7 +972,7 @@ def change_line(params: dict[str, Any]) -> str:
     if changes is not None:
         return "; ".join(change_line({"action": "set", "path": path, "value": value}) for path, value in changes)
     action = str(params.get("action") or "")
-    path = str(params.get("path") or "")
+    path = path_of(params)
     if action == "set" and is_secret_path(path):
         return f"Ask you to enter the {secret_label(path)} ({path}) on a card of its own once allowed"
     if action == "restart":
@@ -966,7 +1024,18 @@ def _shown(path: str, value: Any) -> str:
         # Spelled the way a configured model is stored and shown, so the card's
         # two sides of a switch read alike.
         return f"{value['provider']}/{value['model']}" if value.get("provider") else str(value["model"])
-    return _short(redacted(value))
+    return _short(redacted(_masked(path, value)))
+
+
+def _masked(path: str, value: Any) -> Any:
+    """An object's fields that are secret settings in their own right, as set / not set."""
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        inner = f"{path}.{canonical_path(key)}"
+        out[key] = ("set" if item else "not set") if is_secret_path(inner) else _masked(inner, item)
+    return out
 
 
 def _decoded(value: Any) -> Any:
@@ -1012,7 +1081,7 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             "change": change_line(params),
         }
     action = str(params.get("action") or "")
-    path = str(params.get("path") or "")
+    path = path_of(params)
     view: dict[str, Any] = {"action": action, "setting": path, "change": change_line(params)}
     if action == "set" and is_secret_path(path):
         view["secret"] = True

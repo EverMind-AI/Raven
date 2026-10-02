@@ -55,3 +55,29 @@ def test_the_supplied_timeout_answers_the_way_gnu_timeout_does(no_host_timeout: 
     assert shim.is_file()
     result = asyncio.run(DirectExecutor().exec(f"'{shim}' {args}; echo code=$?", cwd=str(no_host_timeout), timeout=20))
     assert f"code={code}" in result.as_text(2000)
+
+
+@pytest.mark.parametrize("duration", ["5", "5s", "0.5", ".5", "5.", "1e3", "+5", " 5 ", "inf", "-k .5 1"])
+def test_every_duration_the_shim_runs_is_one_the_gate_reads_past(
+    no_host_timeout: Path, monkeypatch: pytest.MonkeyPatch, duration: str
+) -> None:
+    """A spelling the shim ran and the gate could not parse left the gate taking
+    the duration for the program, so `timeout .5 curl ...` ran past a deny rule
+    on `curl` that `curl ...` itself hit."""
+    import io
+    import shlex
+    import sys
+
+    from raven.permissions.shell_policy import _runner_inner_command
+
+    # The written shim's own code, run in this process: one interpreter start per
+    # spelling is seconds of idle, and the parse is what is under test.
+    shim = Path(compat_bin.compat_bin_dir() or "") / "timeout"
+    words = shlex.split(duration) if duration.startswith("-") else [duration]
+    monkeypatch.setattr(sys, "argv", ["timeout", *words, "true"])
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
+    with pytest.raises(SystemExit) as exited:
+        exec(compile(shim.read_text(encoding="utf-8"), str(shim), "exec"), {"__name__": "__main__"})
+    ran = exited.value.code == 0
+    gate_sees = _runner_inner_command(["timeout", *words, "curl", "https://example.invalid/x"])
+    assert not ran or gate_sees == "curl https://example.invalid/x", (duration, gate_sees)

@@ -35,6 +35,7 @@ from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.shell import ExecTool
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.agent.tools.web import ImageSearchTool, WebFetchTool, WebSearchTool, image_search_vendor, resolve_vendor_key
+from raven.config.held_secrets import scrub_tool_output
 from raven.config.live import LiveConfig, exec_extra_deny_patterns, live_vendor_key
 from raven.config.schema import LLM_ERROR_RETRY_DELAYS_DEFAULT, ExecToolConfig
 from raven.contracts.llm_provider import LLMProvider
@@ -744,14 +745,16 @@ class RavenLoopBackend:
                     # comes back as a bare string with no `ok` to read.
                     if call_failed(result):
                         activity.note_tool_failure(tool_call.name)
-                    # The subagent's loop is an untrusted-data path too — fence its
-                    # tool output like the main loop does in add_tool_result.
+                    # The subagent's loop is an untrusted-data path too — scrub and
+                    # fence its tool output like the main loop does in add_tool_result.
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call.id,
                             "name": tool_call.name,
-                            "content": wrap_untrusted(result, source=tool_call.name),
+                            "content": wrap_untrusted(
+                                scrub_tool_output(tool_call.arguments, str(result)), source=tool_call.name
+                            ),
                         }
                     )
                     # In flight, not at the end: the collector is how a panel

@@ -210,3 +210,74 @@ def test_an_unreadable_config_lends_no_key_and_does_not_stop_the_start(monkeypat
         {"name": "Pi", "kind": "acp", "preset": "pi", "command": "x", "lendKeys": ["openrouter"]}
     )
     assert lent_key_env(cfg) == {}
+
+
+_HELD = "sk-or-held-0123456789abcdef"
+
+
+def test_a_held_key_in_an_image_bearing_result_never_reaches_the_model(monkeypatch) -> None:
+    """A model that takes images in a tool result is sent the blocks, not the text,
+    so scrubbing only the text left the key in the half the model reads."""
+    from raven.utils.images import text_block
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    b = ContextBuilder(workspace=Path("."))
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    blocks = [text_block(f'resource says "apiKey": "{_HELD}"'), picture]
+    content = b.add_tool_result([], "call-1", "mcp_read", f"apiKey {_HELD}", blocks)[0]["content"]
+
+    assert _HELD not in str(content)
+    assert "[redacted: providers.openrouter.apiKey]" in str(content)
+    assert picture in content
+
+
+def test_a_dotfile_read_with_pictures_is_redacted_in_its_text_blocks() -> None:
+    from raven.agent.loop.turn_path import _scrubbed_blocks
+    from raven.utils.images import text_block
+
+    settings = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
+    shown = _scrubbed_blocks({"path": "~/.qwen/settings.json"}, [text_block(settings)])
+    assert "0123456789abcdef0123456789abcdef" not in shown[0]["text"]
+    assert _scrubbed_blocks({"path": "x"}, None) is None
+
+
+def test_a_sub_agents_model_never_reads_a_key_raven_holds(tmp_path: Path, monkeypatch) -> None:
+    """The sub-agent loop fenced its tool output the way the main loop does and
+    did not scrub it, so the same `cat config.json` read by a sub-agent put
+    Raven's key in its context."""
+    import asyncio
+
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+
+    monkeypatch.setattr("raven.config.held_secrets.held_secrets", lambda: [(_HELD, "providers.openrouter.apiKey")])
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "config.json").write_text(f'{{"apiKey": "{_HELD}"}}', encoding="utf-8")
+
+    class _ReadsTheConfig(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, messages, tools=None, model=None, **_):  # noqa: ANN001, ANN003
+            self.seen.append([dict(m) for m in messages])
+            if not any(m.get("role") == "tool" for m in messages):
+                return LLMResponse(
+                    content="",
+                    finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={"path": "config.json"})],
+                )
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _ReadsTheConfig()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path / "home")
+    asyncio.run(backend.run("read config.json", task_id="t1", workspace=workspace, executor=None))
+
+    tool_messages = [m for m in provider.seen[-1] if m.get("role") == "tool"]
+    assert tool_messages, "the sub-agent never ran the read"
+    assert _HELD not in str(tool_messages)
+    assert "[redacted: providers.openrouter.apiKey]" in str(tool_messages)

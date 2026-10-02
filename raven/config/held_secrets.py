@@ -18,6 +18,7 @@ from loguru import logger
 
 from raven.config.loader import get_config_path
 from raven.config.self_surface import is_secret_path, read_raw
+from raven.security.redact import redact_home_config_read
 
 #: Shorter strings are too likely to be ordinary text ("true", a port).
 _MIN_LEN = 8
@@ -70,4 +71,32 @@ def scrub_held_secrets(text: str) -> str:
     return text
 
 
-__all__ = ["held_secrets", "scrub_held_secrets"]
+def scrub_tool_output(arguments: Any, text: str) -> str:
+    """A tool result with the credentials it could carry taken out.
+
+    A read of a dotfile config under home loses its key values, and any value
+    Raven itself holds is replaced by where it is kept. Every loop that hands a
+    tool result to a model -- the main turn and a sub-agent's -- goes through
+    this, so neither is the one that forgot.
+    """
+    return scrub_held_secrets(redact_home_config_read(arguments, text))
+
+
+def scrub_tool_blocks(arguments: Any, blocks: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """The text parts of a multimodal tool result scrubbed like :func:`scrub_tool_output`; pictures pass as they are.
+
+    A model that carries images in a tool result is sent these blocks instead of
+    the text, so scrubbing the text alone would leave the same key in the half
+    the model actually reads.
+    """
+    if not blocks:
+        return blocks
+    return [
+        {**block, "text": scrub_tool_output(arguments, block["text"])}
+        if block.get("type") == "text" and isinstance(block.get("text"), str)
+        else block
+        for block in blocks
+    ]
+
+
+__all__ = ["held_secrets", "scrub_held_secrets", "scrub_tool_blocks", "scrub_tool_output"]
