@@ -838,14 +838,35 @@ def unwritable_target(params: dict[str, Any]) -> str:
     if changes is not None:
         return next((p for p, _ in changes if not _writable(p)), "")
     if path.startswith("channels.") and path.count(".") == 1:
-        return "" if isinstance(_decoded(params.get("value")), dict) else path
+        fields = _decoded(params.get("value"))
+        if not isinstance(fields, dict) or not fields:
+            return path
+        name = path.split(".", 1)[1]
+        return next((f"{path}.{key}" for key in fields if not _channel_writes(name, str(key))), "")
     return "" if path and _writable(path) else path or "(no path)"
 
 
 def _writable(path: str) -> bool:
-    if path.startswith(("channels.", "subagents.")) and path.count(".") == 2:
-        return True
+    """Whether the tool writes ``path``: a catalog entry (a sub-agent's four settings
+    are wildcard entries) or a field the channel's adapter declares.
+
+    Checked against the same declarations the writer uses, so a misspelt field
+    (``channels.telegram.tokne``) is refused before its value is shown to anyone.
+    """
+    if path.startswith("channels.") and path.count(".") == 2:
+        _, name, field_name = path.split(".")
+        return _channel_writes(name, field_name)
     return find(path) is not None
+
+
+def _channel_writes(name: str, field_name: str) -> bool:
+    from raven.config.update_channels import channel_field_specs, channel_names
+
+    if name not in channel_names():
+        return False
+    specs = channel_field_specs(name)
+    key = channel_key(field_name, specs)
+    return key in specs and key != "workspace"
 
 
 #: Query parameters that carry a credential in a URL (``?key=``, ``?access_token=``).

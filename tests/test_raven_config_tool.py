@@ -1513,6 +1513,13 @@ async def test_reading_a_channel_secret_reports_only_whether_it_is_set(config_fi
         {"action": "add", "path": "tools.mcpServers", "value": '{"z": {"url": "https://h/s/PLAINaddSecret"}}'},
         {"action": "unset", "path": "tools.mcpServers.z.url"},
         {"action": "set", "value": '{"tools.exec.timeout": 30, "tools.mcpServers.z.url": "https://h/PLAINbatch"}'},
+        # A misspelt field is a path the tool will not write either, and its
+        # value is often the very key that was meant for the real one.
+        {"action": "set", "path": "channels.telegram.tokne", "value": "PLAINTEXT-ordinary-typo"},
+        {"action": "set", "path": "channels.telegram", "value": '{"replyToMessage": true, "tokne": "PLAINobj"}'},
+        {"action": "set", "value": '{"channels.telegram.tokne": "PLAINbatchtypo"}'},
+        {"action": "set", "path": "channels.nosuch.token", "value": "PLAINchannel"},
+        {"action": "set", "path": "subagents.pi.tokne", "value": "PLAINsub"},
     ],
 )
 async def test_a_path_the_tool_will_not_write_is_refused_before_anyone_reads_it(monkeypatch, params):
@@ -1534,6 +1541,8 @@ async def test_a_path_the_tool_will_not_write_is_refused_before_anyone_reads_it(
         {"action": "set", "path": "tools.exec.timeout", "value": "30"},
         {"action": "set", "path": "channels.telegram", "value": '{"replyToMessage": true}'},
         {"action": "set", "path": "channels.telegram.replyToMessage", "value": "true"},
+        {"action": "set", "path": "channels.slack", "value": '{"dm.policy": "allowlist"}'},
+        {"action": "set", "path": "channels.matrix.e2ee_enabled", "value": "true"},
         {"action": "set", "path": "subagents.pi.model", "value": '"x"'},
         {"action": "set", "value": '{"tools.exec.timeout": 30}'},
         {"action": "add", "value": '{"preset": "pi"}'},
