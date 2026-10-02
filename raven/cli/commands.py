@@ -186,8 +186,10 @@ app.add_typer(plugin_app, name="plugin")
 
 from raven import i18n
 from raven.cli.import_commands import import_app
+from raven.cli.mailbox_commands import mailbox_app
 
 app.add_typer(import_app, name="import")
+app.add_typer(mailbox_app, name="mailbox")
 
 
 def run() -> None:

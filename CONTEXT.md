@@ -25,8 +25,11 @@ An addressed reply carrying `ack_for` equal to the original envelope nonce. Matc
 requires the reversed sender/recipient and the same scope; the claim is not authentication.
 
 **Inbox receipt**:
-A durable receipt for an inbox enqueue operation. Reserved for the future inbox layer;
-V1 terminal delivery produces no Inbox receipt.
+The committed admission status returned by `mailbox/store.py:MailboxStore.send`.
+It establishes local durable enqueue only; the record remains pending until claimed.
+V1 terminal delivery produces no Inbox receipt. OpenA2A receipt envelopes are
+separate received/processed/rejected stage messages whose delivery implementation
+is not part of this admission layer.
 
 
 **Session**:
@@ -1242,7 +1245,7 @@ member, seated inner here as well so every package appears in one roster), `conf
 turns through its schedulers and sentinel but is an engine the loop and the assembly root
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
 and takes no seat. Surfaces: `cli`, `rpc`, and `acp` (an entrance: Raven serving as an
-agent for another host). `browser` and `importer` are seated inner (feature
+agent for another host). `browser`, `importer`, and `mailbox` are seated inner (feature
 libraries consumed by surfaces, importing none themselves -- the edge is watched
 by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
@@ -2088,3 +2091,59 @@ Agent home via `sync_workspace_templates()`; gated at startup by `ensure_configu
 The identity files concatenated into every prompt — `soul.md` + `agent.md` + `TOOLS.md` —
 rendered by the Context Builder / bootstrap segment.
 _Avoid_: lumping `user.md` in — the user profile enters via the `# Memory` segment, not bootstrap.
+
+
+**Agent mailbox** (`raven/mailbox/db.py`, `store.py`):
+The trusted-local SQLite authority for immutable OpenA2A envelopes, addressed by
+canonical authority UUID, tenant, stable recipient UUID, and message UUID. Its
+Card records the current receiver instance, generation, capabilities, and explicit
+local kind/scope policy. It is independent of the agent loop, Registry online
+resolution, terminal transport, and memory storage. `stored` means the message
+transaction committed; it does not establish processing or task acceptance.
+_Avoid_: "inject mailbox" -- that existing lane queue is a separate runtime object.
+
+**Receiver generation** (`raven/mailbox/store.py:MailboxStore.resume`):
+The Card's monotonically increasing local ownership generation. A durable resume
+request changes it once, and replay returns the original immutable instance
+reference. New sends and peek require the current instance and generation.
+It is separate from RuntimeGeneration, terminal binding generations, and DAG
+assignment epochs; none of those owns or substitutes for this Card field.
+
+**Mutation receipt** (`raven/mailbox/db.py:Database.replay`, `save_receipt`):
+A durable operation response keyed by authority, tenant, caller agent, and request
+UUID, with method and canonical input hash. Exact init/resume replay recovers the
+same reference after response loss; conflicting input cannot reuse its request.
+It is local persistence metadata, separate from an OpenA2A receipt envelope.
+
+**Mailbox Claim** (`raven/mailbox/delivery.py:MailboxDelivery.poll`, `renew`):
+A delivery attempt owned by the current Card instance and receiver generation,
+with a random 256-bit token and an expiring lease bounded by the envelope TTL.
+Fixed request UUIDs replay the original valid response; stale responses never
+claim another message. A claim is transport ownership, not task acceptance.
+
+**Mailbox processed** (`raven/mailbox/delivery.py:MailboxDelivery.finish`):
+A completed delivery with an atomically persisted strict result and, when the
+receipt policy requests it, a frozen `processed` receipt intent. The result's
+`succeeded`, `failed`, or `blocked` outcome reports processing; none establishes
+DAG or task acceptance. Evidence hashes refer to physically verified artifacts
+already admitted in the same scope, including separately published outputs.
+Processed receipts preserve each evidence artifact's hash and size, while using
+bounded receipt display metadata (a twelve-character hash prefix as the name
+and `application/octet-stream` as the media type). Received and rejected
+receipts carry no input artifact descriptors; the source record retains them.
+
+**Mailbox receipt outbox** (`raven/mailbox/delivery.py:MailboxDelivery.flush_receipts`):
+Receipt intents committed with source state. Recovery can leave an intent
+unmaterialized until the current source owner supplies its instance reference.
+Materialization freezes the receipt ID, bytes, digest, and seven-day TTL once.
+An expired frozen receipt becomes `delivery_unknown` and blocks compaction.
+Historical sender bytes can replay only when the current owner supplies the
+exact persisted outbox event through ordinary validated admission.
+
+**Mailbox tombstone** (`raven/mailbox/delivery.py:MailboxDelivery.gc`):
+A compact terminal deduplication record retaining its digest, result hash,
+outcome, reason, artifact hashes, and published receipt links. Compaction waits
+for all receipt intents to be published and defaults to thirty days after the
+terminal transition. Tombstones expire at the later of the original TTL plus
+thirty seconds or thirty days after the terminal transition; deduplication is
+finite. Retained records and unsettled outbox intents protect referenced blobs.

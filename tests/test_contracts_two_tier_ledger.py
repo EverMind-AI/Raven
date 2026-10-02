@@ -62,6 +62,12 @@ LEDGER = {
         "AGENT_PROMPT_BLOCKED",
         "AGENT_PROMPT_STALLED",
         "Envelope",
+        "MailboxEnvelope",
+        "MailboxCard",
+        "MailboxInstanceRef",
+        "MailboxClaim",
+        "MailboxResult",
+        "MailboxError",
         "HostScope",
         "RuntimeInfo",
         "SendResult",
@@ -240,7 +246,7 @@ def test_import_guard_bites_machinery_and_spares_type_checking(tmp_path):
 # The contract tier is versioned: its shape moves only with a version bump
 # ---------------------------------------------------------------------------
 
-PINNED_CONTRACT_SURFACE = ("10", "90b6d741eae571d1af79d91559f154baabfcfb58a51362261f940815b6f54539")
+PINNED_CONTRACT_SURFACE = ("11", "d72f23bf9a5db16640215e7a92f536d59ed2f5fdbe8a9e971edc885333eaa8f4")
 
 
 def contract_surface_digest(pkg_dir: Path) -> str:
