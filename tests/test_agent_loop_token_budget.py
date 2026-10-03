@@ -121,7 +121,7 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     #
     # Lowered from 127_000 (measured 127_067, ~70 to spare once the tool surface
     # below had grown) when the host prompt gained its `## How you reply`
-    # section: ~240 tokens, measured 126_847 here. What was trimmed first: the
+    # section: ~260 tokens, measured 126_823 here. What was trimmed first: the
     # first draft cost ~390; its worked examples went, and so did a rule the
     # Raven Guidelines above it already state. Still loose, as this bound is
     # meant to be: the regression it guards is history at zero.
