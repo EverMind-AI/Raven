@@ -24,6 +24,7 @@ import pytest
 import raven.home as raven_home_module
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.subagent import subagent_context, subagent_list
+from tests.test_subagent_dag_strict import native_runtime as native_runtime
 
 SESSION = "tui:live"
 
@@ -811,3 +812,36 @@ async def test_a_graph_node_s_own_order_is_pinned_not_incidental(workspace: Path
     items = (await subagent_list({"session_id": SESSION}))["items"]
 
     assert [i["node"] for i in items] == ["write", "survey"], "the id is the tie-break, descending like the stamp"
+
+
+async def test_strict_native_listing_rebuilds_lost_json_projection(native_runtime, monkeypatch):
+    import shutil
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    import raven.rpc.methods.subagent as methods
+    from tests.test_subagent_dag_strict import _root_for_runtime
+
+    runtime, tool, binding, provider, _, _ = native_runtime
+    provider.attempts = 1
+    root, _ = await _root_for_runtime(native_runtime)
+    await runtime.start(binding, root_id=root.root_id, request_id=str(uuid4()), expected_owner_epoch=0)
+    await tool._runs[root.run_id]
+    loop = SimpleNamespace(tools=SimpleNamespace(get=lambda name: tool if name == "run_subagent_dag" else None))
+    monkeypatch.setattr(
+        methods,
+        "_session_dir",
+        lambda session, factory: (
+            tool._session_dir_for(session)
+            if session == "session"
+            else tool._session_dir_for("session").parent / "other-session"
+        ),
+    )
+    listed = await subagent_list({"session_id": "session"}, agent_loop_factory=lambda: loop)
+    assert len(listed["items"]) == 1 and listed["items"][0]["status"] == "ok"
+    shutil.rmtree(tool._history_root("session"))
+    listed = await subagent_list({"session_id": "session"}, agent_loop_factory=lambda: loop)
+    assert len(listed["items"]) == 1
+    assert listed["items"][0]["run_id"] == root.run_id
+    assert listed["items"][0]["status"] == "ok"
+    assert (await subagent_list({"session_id": "other-session"}, agent_loop_factory=lambda: loop))["items"] == []

@@ -546,11 +546,24 @@ class MailboxDelivery:
         with blobs.locked(self.db):
             with self.db.connection(write=True) as conn:
                 deleted = conn.execute("DELETE FROM tombstones WHERE retain_until<=?", (now,)).rowcount
+                strict_pins = ""
+                if conn.execute("PRAGMA user_version").fetchone()[0] >= 3:
+                    strict_pins = (
+                        " AND NOT EXISTS (SELECT 1 FROM strict_attempts a "
+                        "WHERE json_extract(a.record_json,'$.result.recipient_agent_id')=m.recipient "
+                        "AND json_extract(a.record_json,'$.result.message_id')=m.message_id "
+                        "AND json_extract(a.record_json,'$.result.digest')=m.digest)"
+                        " AND NOT EXISTS (SELECT 1 FROM strict_attempts a JOIN strict_dispatch_outbox d "
+                        "ON d.attempt_id=a.attempt_id WHERE a.candidate_bytes IS NOT NULL "
+                        "AND json_extract(d.record_json,'$.recipient_ref.agent_id')=m.recipient "
+                        "AND json_extract(d.record_json,'$.result_message_id')=m.message_id "
+                        "AND json_extract(CAST(a.candidate_bytes AS TEXT),'$.digest.value')=m.digest)"
+                    )
                 rows = conn.execute(
                     "SELECT * FROM messages m WHERE phase IN ('completed','dead_letter') AND terminal_at<=? "
                     "AND NOT EXISTS (SELECT 1 FROM receipt_outbox o WHERE o.authority_id=m.authority_id "
                     "AND o.tenant_id=m.tenant_id AND o.recipient=m.recipient AND o.message_id=m.message_id "
-                    "AND o.status!='published')",
+                    "AND o.status!='published')" + strict_pins,
                     (now - retention_seconds,),
                 ).fetchall()
                 for row in rows:

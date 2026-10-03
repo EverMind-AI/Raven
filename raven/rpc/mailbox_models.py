@@ -1,6 +1,6 @@
-"""Strict RPC shapes for scoped reliable messages and handoff."""
+"""Strict RPC shapes for reliable messages, handoff and host-authorized DAGs."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -109,6 +109,101 @@ class MailboxOverviewParams(BaseModel):
     terminal_handle: str | None = None
 
 
+class MailboxDagRevision(MailboxEmptyParams):
+    repo_id: Literal["workspace"]
+    ref: str
+
+
+class MailboxDagCheck(MailboxEmptyParams):
+    check_id: str
+    argv: list[str] = Field(min_length=1)
+    cwd: str
+    timeout_seconds: int = Field(ge=1)
+    repairable_exit_codes: list[int] = Field(default_factory=list)
+    nonrepairable_exit_codes: list[int] = Field(default_factory=list)
+
+
+class MailboxDagNodePolicy(MailboxEmptyParams):
+    logical_node_id: str
+    depends_on: list[str] = Field(default_factory=list)
+    output_paths: list[str] = Field(default_factory=list)
+    protected_paths: list[str] = Field(default_factory=list)
+    checks: list[MailboxDagCheck] = Field(default_factory=list)
+    subjective_review: bool = False
+
+
+class MailboxDagCreateParams(MailboxBindingParams):
+    request_id: str
+    history_root: str | None = None
+    session_key: str
+    graph: dict
+    revision_selector: MailboxDagRevision
+    node_policies: list[MailboxDagNodePolicy]
+    max_auto_repairs: int = Field(default=3, ge=0)
+
+
+class MailboxDagStartParams(MailboxBindingParams):
+    root_id: str
+    request_id: str
+    expected_owner_epoch: int = Field(ge=0)
+
+
+class MailboxDagRecoverParams(MailboxDagStartParams):
+    expected_executor_id: str
+    replace_owner: bool = False
+
+
+class MailboxDagStatusParams(MailboxParams):
+    root_id: str
+
+
+class MailboxDagSubjectiveResolution(MailboxEmptyParams):
+    action: Literal["subjective_approve"]
+    snapshot_fingerprint: str
+    decision_note: str
+
+
+class MailboxDagResultKey(MailboxEmptyParams):
+    recipient_agent_id: str
+    message_id: str
+    digest: str
+
+
+class MailboxDagExecutionResolution(MailboxEmptyParams):
+    action: Literal["reconcile_execution"]
+    result_key: MailboxDagResultKey
+
+
+class MailboxDagVerificationResolution(MailboxEmptyParams):
+    action: Literal["reconcile_verification"]
+    check_run_id: str
+
+
+class MailboxDagAbandonResolution(MailboxEmptyParams):
+    action: Literal["abandon"]
+    decision_note: str
+
+
+class MailboxDagReplanResolution(MailboxEmptyParams):
+    action: Literal["replan"]
+    successor_graph: dict
+    successor_verification_plan: dict
+    logical_node_mapping: dict[str, str]
+    decision_note: str
+
+
+class MailboxDagResolveParams(MailboxDagStartParams):
+    attempt_id: str
+    resolution: Annotated[
+        MailboxDagSubjectiveResolution
+        | MailboxDagExecutionResolution
+        | MailboxDagVerificationResolution
+        | MailboxDagAbandonResolution
+        | MailboxDagReplanResolution,
+        Field(discriminator="action"),
+    ]
+
+
 MAILBOX_METHOD_MODELS = {
     "mailbox.enroll": (MailboxEnrollParams, MailboxDataResult),
     "mailbox.revoke": (MailboxBindingParams, MailboxDataResult),
@@ -127,6 +222,11 @@ MAILBOX_METHOD_MODELS = {
     "mailbox.handoff.status": (MailboxParams, MailboxDataResult),
     "mailbox.notify": (MailboxNotifyParams, MailboxDataResult),
     "mailbox.notify.status": (MailboxNotifyStatusParams, MailboxDataResult),
+    "mailbox.dag.create": (MailboxDagCreateParams, MailboxDataResult),
+    "mailbox.dag.start": (MailboxDagStartParams, MailboxDataResult),
+    "mailbox.dag.recover": (MailboxDagRecoverParams, MailboxDataResult),
+    "mailbox.dag.resolve": (MailboxDagResolveParams, MailboxDataResult),
+    "mailbox.dag.status": (MailboxDagStatusParams, MailboxDataResult),
 }
 
 RECEIVER_METHODS = frozenset(
@@ -141,5 +241,6 @@ RECEIVER_METHODS = frozenset(
         "mailbox.handoff.propose",
         "mailbox.handoff.status",
         "mailbox.notify.status",
+        "mailbox.dag.status",
     }
 )

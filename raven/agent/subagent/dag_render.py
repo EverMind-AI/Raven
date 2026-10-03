@@ -33,6 +33,7 @@ async def render_prompt(
     run_id: str | None = None,
     by_id: dict[str, "DagNodeSpec"] | None = None,
     capabilities: dict[str, "AgentCapabilities"] | None = None,
+    include_memory: bool = True,
 ) -> str:
     """Render ``node.prompt_template`` into the node's prompt text.
 
@@ -87,13 +88,17 @@ async def render_prompt(
         last = end
     parts.append(template[last:])
     rendered = "".join(parts)
-    upstream = _upstream_memory_lines(
-        node,
-        backend=backend,
-        nodes_root=nodes_root,
-        run_id=run_id,
-        by_id=by_id,
-        capabilities=capabilities,
+    upstream = (
+        _upstream_memory_lines(
+            node,
+            backend=backend,
+            nodes_root=nodes_root,
+            run_id=run_id,
+            by_id=by_id,
+            capabilities=capabilities,
+        )
+        if include_memory
+        else []
     )
     if upstream:
         rendered = f"{rendered}\n\n{_MEMORY_BLOCK_HEADING}\n\n" + "\n".join(upstream) + f"\n\n{_MEMORY_BLOCK_NOTE}"

@@ -207,6 +207,8 @@ class RavenLoopBackend:
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        allowed_dirs: tuple[Path, ...] | None = None,
+        tools_allow: Collection[str] | None = None,
     ) -> str:
         token = IN_SUBAGENT_RUN.set(True)
         grant = self.resolve_mcp_grant(mcps)
@@ -226,6 +228,8 @@ class RavenLoopBackend:
                     on_messages=on_messages,
                     on_delta=on_delta,
                     media=media,
+                    allowed_dirs=allowed_dirs,
+                    tools_allow=tools_allow,
                 )
         finally:
             IN_SUBAGENT_RUN.reset(token)
@@ -246,25 +250,34 @@ class RavenLoopBackend:
         on_messages: Callable[[list[dict[str, Any]]], None] | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        allowed_dirs: tuple[Path, ...] | None = None,
+        tools_allow: Collection[str] | None = None,
     ) -> str:
         # The spawn's snapshot wins over the pair this backend was built with;
         # see ``SubagentBackend.run``. The constructor pair remains the fallback
         # for callers that drive a backend directly.
         provider = provider or self.provider
         model = model or self.model
+        strict_workspace = allowed_dirs is not None
         # Build subagent tools (no message tool, no spawn tool).
         tools = ToolRegistry()
         if self.mcp_source is not None:
             tools.set_withheld_source(self.mcp_source.disabled_tools)
-        for wrapper, origin in grant.for_registry():
-            tools.register(wrapper, origin=origin)
+        if allowed_dirs is None:
+            for wrapper, origin in grant.for_registry():
+                tools.register(wrapper, origin=origin)
 
         def allowed(name: str) -> bool:
-            return self.tools_allow is None or name in self.tools_allow
+            return (self.tools_allow is None or name in self.tools_allow) and (
+                tools_allow is None or name in tools_allow
+            )
 
         # Two roots, matching the main loop: the session directory the run works
         # in, and agent home, whose absolute paths this prompt hands out.
-        allowed_dirs = (workspace, self.agent_home) if self.restrict_to_workspace else ()
+        if allowed_dirs is None:
+            allowed_dirs = (workspace, self.agent_home) if self.restrict_to_workspace else ()
+        else:
+            history = None
         # follow_binding=False: this run is a background asyncio task that can
         # outlive the turn that spawned it, since SubagentManager.spawn captures
         # the workspace at spawn time, so its tools must fence on the directory
@@ -401,6 +414,9 @@ class RavenLoopBackend:
                         raise SubagentNoAnswerError(
                             "sub-agent's model call failed in transport twice: " + (response.content or "")[:200]
                         )
+            if strict_workspace and response.finish_reason == "error":
+                activity.note_usage(response.usage)
+                raise SubagentNoAnswerError("strict native model call failed")
             # Per iteration, because that is how the cost accrues: this loop calls
             # the model once per round and the run's cost is their sum, unlike an
             # ACP agent's one cumulative report for the whole turn. Both arms

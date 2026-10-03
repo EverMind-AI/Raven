@@ -44,7 +44,9 @@ class DagReadError(ValueError):
 
 
 def _check_run_id(run_id: str) -> str:
-    if not isinstance(run_id, str) or not _RUN_ID_RE.match(run_id):
+    if not isinstance(run_id, str) or not (
+        _RUN_ID_RE.fullmatch(run_id) or re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", run_id)
+    ):
         raise DagReadError(f"invalid run id: {run_id!r}")
     return run_id
 

@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 193 methods, 117 component schemas.
+// 198 methods, 126 component schemas.
 
 /* eslint-disable */
 /**
@@ -158,6 +158,36 @@ export type Generation = number;
 export type Outcome = 'succeeded' | 'failed' | 'blocked';
 export type Summary = string;
 export type Evidence = string[];
+export type Action = 'abandon';
+export type DecisionNote = string;
+export type CheckId = string;
+/**
+ * @minItems 1
+ */
+export type Argv = [string, ...string[]];
+export type Cwd = string;
+export type TimeoutSeconds = number;
+export type RepairableExitCodes = number[];
+export type NonrepairableExitCodes = number[];
+export type Action1 = 'reconcile_execution';
+export type RecipientAgentId = string;
+export type MessageId = string;
+export type Digest = string;
+export type LogicalNodeId = string;
+export type DependsOn = string[];
+export type OutputPaths = string[];
+export type ProtectedPaths = string[];
+export type Checks = MailboxDagCheck[];
+export type SubjectiveReview = boolean;
+export type Action2 = 'replan';
+export type DecisionNote1 = string;
+export type RepoId = 'workspace';
+export type Ref = string;
+export type Action3 = 'subjective_approve';
+export type SnapshotFingerprint = string;
+export type DecisionNote2 = string;
+export type Action4 = 'reconcile_verification';
+export type CheckRunId = string;
 export type Handle12 = string | null;
 export type Cols = number | null;
 export type Rows = number | null;
@@ -226,13 +256,13 @@ export type Peek = boolean;
 export type Limit1 = number;
 export type LeaseSeconds = number;
 export type BindingId3 = string | null;
-export type Action = 'finish' | 'retry' | 'reject';
+export type Action5 = 'finish' | 'retry' | 'reject';
 export type Reason1 = string | null;
 export type BindingId4 = string | null;
 export type RequestId2 = string;
 export type LeaseSeconds1 = number;
 export type BindingId5 = string | null;
-export type MessageId = string;
+export type MessageId1 = string;
 export type BindingId6 = string | null;
 export type Limit2 = number;
 export type BindingId7 = string | null;
@@ -257,6 +287,35 @@ export type RequestId5 = string;
 export type MessageIds = string[];
 export type BindingId12 = string | null;
 export type RequestId6 = string;
+export type BindingId13 = string;
+export type RequestId7 = string;
+export type HistoryRoot = string | null;
+export type SessionKey = string;
+export type NodePolicies = MailboxDagNodePolicy[];
+export type MaxAutoRepairs = number;
+export type BindingId14 = string;
+export type RootId = string;
+export type RequestId8 = string;
+export type ExpectedOwnerEpoch = number;
+export type BindingId15 = string;
+export type RootId1 = string;
+export type RequestId9 = string;
+export type ExpectedOwnerEpoch1 = number;
+export type ExpectedExecutorId = string;
+export type ReplaceOwner = boolean;
+export type BindingId16 = string;
+export type RootId2 = string;
+export type RequestId10 = string;
+export type ExpectedOwnerEpoch2 = number;
+export type AttemptId = string;
+export type Resolution =
+  | MailboxDagSubjectiveResolution
+  | MailboxDagExecutionResolution
+  | MailboxDagVerificationResolution
+  | MailboxDagAbandonResolution
+  | MailboxDagReplanResolution;
+export type BindingId17 = string | null;
+export type RootId3 = string;
 
 export interface BrowserTab {
   index: number;
@@ -1842,6 +1901,64 @@ export interface MailboxResult {
   outcome: Outcome;
   summary: Summary;
   evidence: Evidence;
+}
+export interface MailboxDagAbandonResolution {
+  action: Action;
+  decision_note: DecisionNote;
+}
+export interface MailboxDagCheck {
+  check_id: CheckId;
+  argv: Argv;
+  cwd: Cwd;
+  timeout_seconds: TimeoutSeconds;
+  repairable_exit_codes?: RepairableExitCodes;
+  nonrepairable_exit_codes?: NonrepairableExitCodes;
+}
+export interface MailboxDagExecutionResolution {
+  action: Action1;
+  result_key: MailboxDagResultKey;
+}
+export interface MailboxDagResultKey {
+  recipient_agent_id: RecipientAgentId;
+  message_id: MessageId;
+  digest: Digest;
+}
+export interface MailboxDagNodePolicy {
+  logical_node_id: LogicalNodeId;
+  depends_on?: DependsOn;
+  output_paths?: OutputPaths;
+  protected_paths?: ProtectedPaths;
+  checks?: Checks;
+  subjective_review?: SubjectiveReview;
+}
+export interface MailboxDagReplanResolution {
+  action: Action2;
+  successor_graph: SuccessorGraph;
+  successor_verification_plan: SuccessorVerificationPlan;
+  logical_node_mapping: LogicalNodeMapping;
+  decision_note: DecisionNote1;
+}
+export interface SuccessorGraph {
+  [k: string]: JsonValue;
+}
+export interface SuccessorVerificationPlan {
+  [k: string]: JsonValue;
+}
+export interface LogicalNodeMapping {
+  [k: string]: string;
+}
+export interface MailboxDagRevision {
+  repo_id: RepoId;
+  ref: Ref;
+}
+export interface MailboxDagSubjectiveResolution {
+  action: Action3;
+  snapshot_fingerprint: SnapshotFingerprint;
+  decision_note: DecisionNote2;
+}
+export interface MailboxDagVerificationResolution {
+  action: Action4;
+  check_run_id: CheckRunId;
 }
 export interface SessionListParams {
   /**
@@ -4153,7 +4270,7 @@ export interface MailboxAckParams {
   binding_id?: BindingId3;
   claim: Claim;
   result?: MailboxResult | null;
-  action?: Action;
+  action?: Action5;
   reason?: Reason1;
 }
 export interface Claim {
@@ -4182,7 +4299,7 @@ export interface Data8 {
 }
 export interface MailboxStatusParams {
   binding_id?: BindingId5;
-  message_id: MessageId;
+  message_id: MessageId1;
 }
 export interface MailboxStatusResult {
   data: Data9;
@@ -4276,6 +4393,75 @@ export interface MailboxNotifyStatusResult {
   data: Data17;
 }
 export interface Data17 {
+  [k: string]: JsonValue;
+}
+export interface MailboxDagCreateParams {
+  binding_id: BindingId13;
+  request_id: RequestId7;
+  history_root?: HistoryRoot;
+  session_key: SessionKey;
+  graph: Graph;
+  revision_selector: MailboxDagRevision;
+  node_policies: NodePolicies;
+  max_auto_repairs?: MaxAutoRepairs;
+}
+export interface Graph {
+  [k: string]: JsonValue;
+}
+export interface MailboxDagCreateResult {
+  data: Data18;
+}
+export interface Data18 {
+  [k: string]: JsonValue;
+}
+export interface MailboxDagStartParams {
+  binding_id: BindingId14;
+  root_id: RootId;
+  request_id: RequestId8;
+  expected_owner_epoch: ExpectedOwnerEpoch;
+}
+export interface MailboxDagStartResult {
+  data: Data19;
+}
+export interface Data19 {
+  [k: string]: JsonValue;
+}
+export interface MailboxDagRecoverParams {
+  binding_id: BindingId15;
+  root_id: RootId1;
+  request_id: RequestId9;
+  expected_owner_epoch: ExpectedOwnerEpoch1;
+  expected_executor_id: ExpectedExecutorId;
+  replace_owner?: ReplaceOwner;
+}
+export interface MailboxDagRecoverResult {
+  data: Data20;
+}
+export interface Data20 {
+  [k: string]: JsonValue;
+}
+export interface MailboxDagResolveParams {
+  binding_id: BindingId16;
+  root_id: RootId2;
+  request_id: RequestId10;
+  expected_owner_epoch: ExpectedOwnerEpoch2;
+  attempt_id: AttemptId;
+  resolution: Resolution;
+}
+export interface MailboxDagResolveResult {
+  data: Data21;
+}
+export interface Data21 {
+  [k: string]: JsonValue;
+}
+export interface MailboxDagStatusParams {
+  binding_id?: BindingId17;
+  root_id: RootId3;
+}
+export interface MailboxDagStatusResult {
+  data: Data22;
+}
+export interface Data22 {
   [k: string]: JsonValue;
 }
 
@@ -4478,6 +4664,11 @@ export interface RpcMethods {
   'mailbox.handoff.status': { params: MailboxHandoffStatusParams; result: MailboxHandoffStatusResult };
   'mailbox.notify': { params: MailboxNotifyParams; result: MailboxNotifyResult };
   'mailbox.notify.status': { params: MailboxNotifyStatusParams; result: MailboxNotifyStatusResult };
+  'mailbox.dag.create': { params: MailboxDagCreateParams; result: MailboxDagCreateResult };
+  'mailbox.dag.start': { params: MailboxDagStartParams; result: MailboxDagStartResult };
+  'mailbox.dag.recover': { params: MailboxDagRecoverParams; result: MailboxDagRecoverResult };
+  'mailbox.dag.resolve': { params: MailboxDagResolveParams; result: MailboxDagResolveResult };
+  'mailbox.dag.status': { params: MailboxDagStatusParams; result: MailboxDagStatusResult };
 }
 
 /** The literal union of callable method names. */
@@ -4549,6 +4740,11 @@ export const RPC_METHODS = [
   "mailbox.ack",
   "mailbox.artifact.read",
   "mailbox.bindings",
+  "mailbox.dag.create",
+  "mailbox.dag.recover",
+  "mailbox.dag.resolve",
+  "mailbox.dag.start",
+  "mailbox.dag.status",
   "mailbox.enroll",
   "mailbox.handoff.commit",
   "mailbox.handoff.create",

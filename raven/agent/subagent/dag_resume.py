@@ -50,7 +50,7 @@ async def read_run_reconciled(
             overlay when the run had not finalized.
     """
     run = await tool.read_run(run_id, session_key)
-    if run.get("finalized"):
+    if run.get("finalized") or run.get("strict"):
         return run
 
     rows = {

@@ -378,8 +378,48 @@ async def build_rpc_stack(
             channel=channel,
         )
 
+    def mailbox_dag():
+        import shutil
+        from pathlib import Path
+
+        from raven.contracts.mailbox import MailboxError
+
+        tools = getattr(agent_loop, "tools", None)
+        tool = tools.get("run_subagent_dag") if tools is not None else None
+        if tool is None:
+            raise MailboxError("receiver_capability_unavailable")
+
+        from raven.agent.subagent.dag_strict import StrictDagRuntime, executor_identity
+
+        def repository_for(repo_id, session_key):
+            if repo_id != "workspace":
+                raise MailboxError("scope_denied")
+            resolver = getattr(agent_loop, "peek_session_workdir", None)
+            if resolver is None:
+                raise MailboxError("receiver_capability_unavailable")
+            return Path(resolver(session_key)).resolve()
+
+        def executable_for(command):
+            resolved = shutil.which(command)
+            if resolved is None:
+                raise MailboxError("verification_executable_unavailable")
+            return Path(resolved).resolve()
+
+        return StrictDagRuntime(
+            dispatcher.mailbox_receivers.dag_ledger(),
+            tool,
+            executor_identity=executor_identity(),
+            repository_for=repository_for,
+            executable_for=executable_for,
+        )
+
     dispatcher.mailbox_receivers.receiver_factory = mailbox_receivers
     dispatcher.mailbox_receivers.notification_factory = mailbox_notifier
+    dispatcher.mailbox_receivers.dag_factory = mailbox_dag
+    tools = getattr(agent_loop, "tools", None)
+    dag_tool = tools.get("run_subagent_dag") if tools is not None else None
+    if dag_tool is not None:
+        dag_tool._strict_runtime_factory = dispatcher.mailbox_receivers.dag_runtime
     from raven.mailbox.store import MailboxStore
 
     if MailboxStore().db.path.exists():

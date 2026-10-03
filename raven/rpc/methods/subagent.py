@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent.subagent import activity as run_activity
-from raven.agent.subagent.dag_live import live_run_ids
+from raven.agent.subagent.dag_live import live_run_ids, owning_tool
 from raven.agent.subagent.dag_store import REGISTRY_FILENAME
 from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
 from raven.agent.subagent.instances import get_registry
@@ -345,6 +345,18 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
     return rows
 
 
+async def _project_strict_runs(session_id, agent_loop_factory):
+    tool = owning_tool(_safe_invoke_factory(agent_loop_factory), "")
+    if tool is None:
+        return
+    strict = getattr(tool, "_strict_runtime", None)
+    if strict is None and (factory := getattr(tool, "_strict_runtime_factory", None)) is not None:
+        strict = factory()
+    if strict is not None:
+        for run_id in strict.session_run_ids(session_id):
+            await strict.project_run(run_id, session_id)
+
+
 async def subagent_list(
     params: dict[str, Any],
     *,
@@ -368,6 +380,7 @@ async def subagent_list(
     except OSError:
         return {"items": []}
 
+    await _project_strict_runs(session_id, agent_loop_factory)
     items: list[dict[str, Any]] = []
     root = nodes_root(session_dir)
     # From the registry, not the directory: the flat namespace holds both

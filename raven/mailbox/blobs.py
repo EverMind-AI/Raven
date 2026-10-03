@@ -182,6 +182,13 @@ def collect(db, *, now: int) -> list[str]:
                     "SELECT artifact_refs FROM receipt_outbox UNION ALL SELECT artifact_refs FROM tombstones"
                 ):
                     referenced.update(json.loads(row[0]))
+                if conn.execute("PRAGMA user_version").fetchone()[0] >= 3:
+                    for row in conn.execute(
+                        "SELECT artifact_refs FROM strict_roots UNION ALL "
+                        "SELECT artifact_refs FROM strict_attempts UNION ALL "
+                        "SELECT artifact_refs FROM strict_dispatch_outbox"
+                    ):
+                        referenced.update(json.loads(row[0]))
             except (ValueError, KeyError, TypeError):
                 raise MailboxError("storage_conflict") from None
         deleted = []

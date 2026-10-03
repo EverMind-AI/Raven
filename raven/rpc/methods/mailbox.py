@@ -1,11 +1,12 @@
-"""Reliable-message RPC using host-established receiver authority."""
+"""Mailbox and strict DAG RPC using host-established receiver authority."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+from dataclasses import fields, is_dataclass
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from raven.contracts.mailbox import MailboxClaim, MailboxError
 from raven.mailbox.codec import decode_envelope, encode_envelope
@@ -19,6 +20,22 @@ class MailboxRpcError(RpcError):
     MESSAGE = "mailbox_error"
 
 
+def _public_dag(record):
+    if is_dataclass(record):
+        record = {field.name: getattr(record, field.name) for field in fields(record)}
+    elif isinstance(record, BaseModel):
+        record = record.model_dump()
+    if isinstance(record, dict):
+        return {
+            key: _public_dag(value)
+            for key, value in record.items()
+            if key not in {"staged_envelope_bytes", "submit_now"}
+        }
+    if isinstance(record, (tuple, list)):
+        return [_public_dag(value) for value in record]
+    return record
+
+
 class MailboxMethods:
     def __init__(self, receivers=None, *, receiver_factory=None):
         self._receivers = receivers
@@ -26,6 +43,23 @@ class MailboxMethods:
         self.notification_receiver = None
         self.notification_factory = None
         self._handoff = None
+        self._dag_ledger = None
+        self._dag_runtime = None
+        self.dag_factory = None
+
+    def dag_ledger(self):
+        if self._dag_ledger is None:
+            from raven.mailbox.dag import StrictDagLedger
+
+            self._dag_ledger = StrictDagLedger(self.receivers.store, upgrade=False)
+        return self._dag_ledger
+
+    def dag_runtime(self):
+        if self._dag_runtime is None and self.dag_factory is not None:
+            self._dag_runtime = self.dag_factory()
+        if self._dag_runtime is None:
+            raise MailboxError("receiver_capability_unavailable")
+        return self._dag_runtime
 
     def handoff(self):
         if self._handoff is None:
@@ -213,6 +247,8 @@ class MailboxMethods:
                 revalidate_receiver=lambda: self.receivers.current(binding.binding_id),
             )
         binding = self.binding(params)
+        if name == "dag.status":
+            return _public_dag(self.dag_ledger().status(params.root_id, scope=binding.scope))
         store = self.receivers.store
         delivery = MailboxDelivery(store)
         if name in {"poll", "ack", "renew"} and "poll" not in binding.capabilities:
@@ -313,6 +349,13 @@ class MailboxMethods:
                 result = await self.notifier().notify(
                     model.binding_id, request_id=model.request_id, message_ids=model.message_ids
                 )
+            elif name in {"dag.create", "dag.start", "dag.recover", "dag.resolve"}:
+                self.admin()
+                binding = self.binding(model)
+                if name == "dag.create" and binding.session_key != model.session_key:
+                    raise MailboxError("scope_denied")
+                mutation = getattr(self.dag_runtime(), name.removeprefix("dag."))
+                result = _public_dag(await mutation(binding, **model.model_dump(exclude={"binding_id"})))
             else:
                 result = await asyncio.to_thread(self.invoke, name, model)
                 if name == "enroll" and {"native_notify", "terminal_notify"} & set(model.capabilities):

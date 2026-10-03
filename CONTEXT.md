@@ -2189,3 +2189,46 @@ tools expose receiver operations and label peer results as untrusted data.
 Automatic notification skips previously submitted message IDs, including uncertain
 ones; it does not retry business work or grant permission bypass. A correlated
 `TurnStarted` proves launch separately from accepted input and processed results.
+
+**Strict DAG root** (`raven/mailbox/dag.py:StrictDagLedger`,
+`raven/agent/subagent/dag_strict.py:StrictDagRuntime`): The durable logical DAG
+identity whose SQLite authority saves the host-approved graph, pinned Git
+revision and verification plan, current execution owner, attempts and repair
+budget. An explicit replan creates another run under this root and preserves
+its repair history. Existing `mas_dag` and node files are projections of this
+authority and can be rebuilt from admitted evidence.
+
+**Strict DAG attempt** (`raven/mailbox/dag.py:AttemptRecord`): One reserved
+native execution with fixed request/result identities, worker provenance,
+input evidence and a complete candidate snapshot. A native return becomes a
+host-authored `task.result` through actual mailbox admission; the return itself
+is a candidate. A submitted execution without durable evidence remains unknown
+and does not launch again during recovery.
+
+**Fixed check** (`raven/mailbox/dag.py:CheckSpec`,
+`raven/agent/subagent/dag_strict.py:SnapshotVerifier`): A host-authorized argv,
+executable hash, working directory, timeout and exit-code policy saved against
+a pinned revision. The host executes it as a real subprocess on a separately
+materialized candidate snapshot. Acceptance requires recorded check outcomes
+and an unchanged complete snapshot fingerprint. Worker tools are limited to the
+attempt's file tools; this boundary does not provide an OS sandbox.
+
+**Automatic repair budget** (`raven/mailbox/dag.py:StrictDagLedger.decide`):
+The persistent count of repairs after a logical node's initial attempt, default
+three. Only a known repairable check failure spends it. Unknown execution or
+verification evidence, subjective review and exhausted budgets require typed
+host resolution; delivery retries and exact request replay spend nothing.
+
+**Accepted snapshot** (`raven/mailbox/dag.py:SnapshotManifest`): The complete
+candidate file manifest accepted by the strict ledger after its saved checks and
+any required host review. Its immutable baseline archive and admitted artifact
+blobs remain pinned. Derived predecessor reports under `.raven-inputs` carry
+verified hashes and belong to the next attempt's snapshot; a processed mailbox
+report alone does not establish acceptance.
+
+**Execution owner** (`raven/mailbox/dag.py:ExecutorIdentity`, `RootFence`):
+The current host process incarnation identified by executor UUID, PID, Linux boot
+ID and process start ticks. A root's `owner_epoch` fences its callbacks separately
+from the task authority's `assignment_epoch`. Explicit recovery can attach the
+current Card reference through an owner compare-and-set while preserving prior
+worker and check execution evidence.

@@ -278,6 +278,7 @@ async def run_dag(
     released: asyncio.Event | None = None,
     provider: Any = None,
     model: str | None = None,
+    strict: Any = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -395,7 +396,7 @@ async def run_dag(
     # name, which is exactly what the id being unique is supposed to rule out.
     async with index_guard(history_root):
         session_nodes = await read_session_nodes(backend, history_root)
-        validate_and_order(spec, roots, session_nodes)
+        validate_and_order(spec, roots, session_nodes if strict is None else None)
         by_id: dict[str, DagNodeSpec] = {node.id: node for node in spec.nodes}
         # Resolved once per node, here, rather than per dispatch: a narrowed backend
         # is built for the node that asked for it, and the unknown-name check below
@@ -421,6 +422,8 @@ async def run_dag(
     status: dict[str, str] = {nid: "pending" for nid in by_id}
     output_paths: dict[str, str] = {}
     errors: dict[str, str] = {}
+    if strict is not None:
+        await strict.hydrate(store, status, output_paths)
     continuations: dict[str, str] = {}
     attempts: dict[str, int] = {}
     prompt_written: set[str] = set()
@@ -573,6 +576,7 @@ async def run_dag(
                         control_reachable=control_reachable,
                         provider=provider,
                         model=model,
+                        strict=strict,
                     )
                     for nids in groups.values()
                 ),
@@ -1172,6 +1176,7 @@ async def _run_group(
     control_reachable: "Callable[[], bool] | None" = None,
     provider: Any = None,
     model: str | None = None,
+    strict: Any = None,
 ) -> None:
     """Run one instance-group's nodes sequentially, in id order."""
     for nid in nids:
@@ -1212,6 +1217,7 @@ async def _run_group(
             control_reachable=control_reachable,
             provider=provider,
             model=model,
+            strict=strict,
         )
 
 
@@ -1345,9 +1351,21 @@ async def _run_node(
     control_reachable: "Callable[[], bool] | None" = None,
     provider: Any = None,
     model: str | None = None,
+    strict: Any = None,
 ) -> None:
     """Render, dispatch to the node's backend, and record one node."""
     async with semaphore:
+        if strict is not None:
+            await strict.run_node(
+                node,
+                agent_backend,
+                store=store,
+                status=status,
+                output_paths=output_paths,
+                errors=errors,
+                prompt_written=prompt_written,
+            )
+            return
         attempt = (attempts or {}).get(node.id, 0) + 1
         if attempts is not None:
             attempts[node.id] = attempt

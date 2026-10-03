@@ -122,6 +122,14 @@ _RECEIVER_SCHEMA = (
 )
 
 
+_STRICT_SCHEMA = (
+    "CREATE TABLE strict_roots (root_id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, task_id TEXT NOT NULL, workspace_id TEXT NOT NULL, record_json TEXT NOT NULL, artifact_refs TEXT NOT NULL DEFAULT '[]', history_json TEXT NOT NULL DEFAULT '{}')",
+    "CREATE TABLE strict_nodes (root_id TEXT NOT NULL REFERENCES strict_roots(root_id), logical_node_id TEXT NOT NULL, record_json TEXT NOT NULL, PRIMARY KEY(root_id,logical_node_id))",
+    "CREATE TABLE strict_attempts (attempt_id TEXT PRIMARY KEY, root_id TEXT NOT NULL REFERENCES strict_roots(root_id), logical_node_id TEXT NOT NULL, run_id TEXT NOT NULL, record_json TEXT NOT NULL, candidate_bytes BLOB, artifact_refs TEXT NOT NULL DEFAULT '[]')",
+    "CREATE TABLE strict_dispatch_outbox (dispatch_id TEXT PRIMARY KEY, root_id TEXT NOT NULL REFERENCES strict_roots(root_id), attempt_id TEXT NOT NULL UNIQUE REFERENCES strict_attempts(attempt_id), record_json TEXT NOT NULL, artifact_refs TEXT NOT NULL DEFAULT '[]')",
+)
+
+
 def canonical_id(value: str) -> str:
     """Use UUID semantic identity without rewriting immutable envelope bytes."""
     try:
@@ -196,11 +204,14 @@ class Database:
 
     def _validate(self, conn: sqlite3.Connection) -> None:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (SCHEMA_VERSION, 2):
+        if version not in (SCHEMA_VERSION, 2, 3):
             raise MailboxError("unsupported_schema")
-        if version == 2:
+        if version >= 2:
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not {"receiver_bindings", "notifications", "handoff_reads", "task_authority"} <= tables:
+                raise MailboxError("unsupported_schema")
+        if version == 3:
+            if not {"strict_roots", "strict_nodes", "strict_attempts", "strict_dispatch_outbox"} <= tables:
                 raise MailboxError("unsupported_schema")
         metadata = dict(
             conn.execute("SELECT key,value FROM metadata WHERE key IN ('authority_id','tenant_id','storage_profile')")
@@ -354,11 +365,24 @@ class Database:
     def upgrade_receivers(self) -> None:
         """Explicitly add receiver and handoff records without changing R1 data."""
         with self.connection(write=True) as conn:
-            if conn.execute("PRAGMA user_version").fetchone()[0] == 2:
+            if conn.execute("PRAGMA user_version").fetchone()[0] >= 2:
                 return
             for statement in _RECEIVER_SCHEMA:
                 conn.execute(statement)
             conn.execute("PRAGMA user_version=2")
+
+    def upgrade_strict(self) -> None:
+        """Explicitly add strict DAG authority while retaining ordinary mailbox records."""
+        with self.connection(write=True) as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version == 3:
+                return
+            if version == 1:
+                for statement in _RECEIVER_SCHEMA:
+                    conn.execute(statement)
+            for statement in _STRICT_SCHEMA:
+                conn.execute(statement)
+            conn.execute("PRAGMA user_version=3")
 
     def replay(self, conn, agent_id: str, request_id: str, method: str, inputs: dict):
         request_id = canonical_id(request_id)

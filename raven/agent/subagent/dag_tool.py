@@ -712,6 +712,20 @@ class SubAgentDagTool(Tool):
             return None
         return str(session_history_root(self._session_dir_for(session_key)))
 
+    def _strict_for_read(self, run_id: str):
+        strict = getattr(self, "_strict_runtime", None)
+        if strict is None and isinstance(run_id, str) and len(run_id) == 36:
+            from uuid import UUID
+
+            try:
+                UUID(run_id)
+            except ValueError:
+                return None
+            factory = getattr(self, "_strict_runtime_factory", None)
+            if factory is not None:
+                strict = factory()
+        return strict
+
     async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
         """One run's durable structure + per-node state, read back from disk.
 
@@ -719,7 +733,12 @@ class SubAgentDagTool(Tool):
         way a consumer that missed them (a reloaded browser tab) can rebuild the
         graph. Serves in-flight runs too -- see :func:`dag_reader.read_run`.
         """
-        return await _read_run(self._backend, self._run_root(session_key), run_id, self._nodes_root(session_key))
+        if (strict := self._strict_for_read(run_id)) is not None:
+            await strict.project_run(run_id, session_key)
+        result = await _read_run(self._backend, self._run_root(session_key), run_id, self._nodes_root(session_key))
+        if strict is not None and (details := strict.projection_details(run_id, session_key)) is not None:
+            result["strict"] = details
+        return result
 
     async def session_run_ids(self, session_key: str | None = None) -> set[str]:
         """Every run id this conversation's node registry records.
@@ -732,7 +751,16 @@ class SubAgentDagTool(Tool):
         if history is None:
             return set()
         registry = await read_registry(self._backend, history)
-        return {str(run["run_id"]) for run in registry["runs"] if run.get("run_id")}
+        result = {str(run["run_id"]) for run in registry["runs"] if run.get("run_id")}
+        strict = getattr(self, "_strict_runtime", None)
+        if strict is None and (factory := getattr(self, "_strict_runtime_factory", None)) is not None:
+            strict = factory()
+        if strict is not None:
+            strict_ids = strict.session_run_ids(session_key)
+            for run_id in strict_ids:
+                await strict.project_run(run_id, session_key)
+            result.update(strict_ids)
+        return result
 
     async def read_node(
         self,
@@ -743,7 +771,9 @@ class SubAgentDagTool(Tool):
         session_key: str | None = None,
     ) -> dict:
         """One node's rendered prompt and (truncated) output, read back from disk."""
-        return await _read_node(
+        if (strict := self._strict_for_read(run_id)) is not None:
+            await strict.project_run(run_id, session_key)
+        result = await _read_node(
             self._backend,
             self._run_root(session_key),
             run_id,
@@ -751,6 +781,9 @@ class SubAgentDagTool(Tool):
             self._nodes_root(session_key),
             max_output_chars=max_output_chars,
         )
+        if strict is not None and (details := strict.projection_details(run_id, session_key)) is not None:
+            result["strict"] = details
+        return result
 
     def _emitter(self, conversation: str | None, call_id: str | None) -> ProgressPublisher:
         """A publisher bound to one call's conversation and tool row.
@@ -1095,6 +1128,7 @@ class SubAgentDagTool(Tool):
         origin: _DagOrigin,
         call_id: str | None,
         background: bool,
+        strict: Any = None,
     ) -> str | ToolResult:
         """Start a validated, minted spec running and return its first result.
 
@@ -1117,7 +1151,9 @@ class SubAgentDagTool(Tool):
             self._outboxes[run_id] = outbox
 
         task = asyncio.create_task(
-            self._run_detached(spec, run_id, cancel, origin, dirs, call_id, auto_instances, backends, outbox)
+            self._run_detached(
+                spec, run_id, cancel, origin, dirs, call_id, auto_instances, backends, outbox, strict=strict
+            )
         )
         self._runs[run_id] = task
 
@@ -1241,6 +1277,9 @@ class SubAgentDagTool(Tool):
         reference to the agent loop -- the control tool does, and its own
         ``_read_live`` already asks exactly that question with the right source.
         """
+        strict = self._strict_for_read(run_id)
+        if strict is not None and strict.root_for_session_run(run_id, session_key) is not None:
+            return "Strict DAG decisions require host mailbox.dag.resolve with the saved owner epoch."
         if self._is_paused is not None and self._is_paused():
             return (
                 "Error: delegation is paused. The user paused sub-agent spawning; "
@@ -1507,6 +1546,7 @@ class SubAgentDagTool(Tool):
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
         outbox: Outbox | None,
+        strict: Any = None,
     ) -> None:
         """Run a graph as its own task, then hand the result on.
 
@@ -1516,7 +1556,16 @@ class SubAgentDagTool(Tool):
         """
         try:
             result = await self._run(
-                spec, run_id, cancel, origin, dirs, call_id, auto_instances, dispatch_backends, outbox=outbox
+                spec,
+                run_id,
+                cancel,
+                origin,
+                dirs,
+                call_id,
+                auto_instances,
+                dispatch_backends,
+                outbox=outbox,
+                strict=strict,
             )
         except asyncio.CancelledError:
             if outbox is not None:
@@ -1666,6 +1715,7 @@ class SubAgentDagTool(Tool):
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
         outbox: Outbox | None = None,
+        strict: Any = None,
     ) -> str | ToolResult | DagRunResult:
         """Execute one validated graph and render its outcome.
 
@@ -1718,8 +1768,9 @@ class SubAgentDagTool(Tool):
                 run_id=run_id,
                 cancel=cancel,
                 auto_instances=auto_instances,
-                desk=desk,
-                judge_node=self._judge_node(),
+                desk=desk if strict is None else None,
+                strict=strict,
+                judge_node=self._judge_node() if strict is None else None,
                 announce_exception=announce_exception,
                 origin=origin.as_dict(),
                 max_continuations=self._verdict_config.max_continuations,

@@ -8872,6 +8872,392 @@
           "type": "object"
         }
       }
+    },
+    {
+      "name": "mailbox.dag.create",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": true,
+          "schema": {
+            "title": "Binding Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "history_root",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "History Root"
+          }
+        },
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "title": "Session Key",
+            "type": "string"
+          }
+        },
+        {
+          "name": "graph",
+          "required": true,
+          "schema": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Graph",
+            "type": "object"
+          }
+        },
+        {
+          "name": "revision_selector",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/MailboxDagRevision"
+          }
+        },
+        {
+          "name": "node_policies",
+          "required": true,
+          "schema": {
+            "items": {
+              "$ref": "#/components/schemas/MailboxDagNodePolicy"
+            },
+            "title": "Node Policies",
+            "type": "array"
+          }
+        },
+        {
+          "name": "max_auto_repairs",
+          "required": false,
+          "schema": {
+            "default": 3,
+            "minimum": 0,
+            "title": "Max Auto Repairs",
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.dag.start",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": true,
+          "schema": {
+            "title": "Binding Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "root_id",
+          "required": true,
+          "schema": {
+            "title": "Root Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "expected_owner_epoch",
+          "required": true,
+          "schema": {
+            "minimum": 0,
+            "title": "Expected Owner Epoch",
+            "type": "integer"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.dag.recover",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": true,
+          "schema": {
+            "title": "Binding Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "root_id",
+          "required": true,
+          "schema": {
+            "title": "Root Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "expected_owner_epoch",
+          "required": true,
+          "schema": {
+            "minimum": 0,
+            "title": "Expected Owner Epoch",
+            "type": "integer"
+          }
+        },
+        {
+          "name": "expected_executor_id",
+          "required": true,
+          "schema": {
+            "title": "Expected Executor Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "replace_owner",
+          "required": false,
+          "schema": {
+            "default": false,
+            "title": "Replace Owner",
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.dag.resolve",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": true,
+          "schema": {
+            "title": "Binding Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "root_id",
+          "required": true,
+          "schema": {
+            "title": "Root Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "expected_owner_epoch",
+          "required": true,
+          "schema": {
+            "minimum": 0,
+            "title": "Expected Owner Epoch",
+            "type": "integer"
+          }
+        },
+        {
+          "name": "attempt_id",
+          "required": true,
+          "schema": {
+            "title": "Attempt Id",
+            "type": "string"
+          }
+        },
+        {
+          "name": "resolution",
+          "required": true,
+          "schema": {
+            "discriminator": {
+              "mapping": {
+                "abandon": "#/components/schemas/MailboxDagAbandonResolution",
+                "reconcile_execution": "#/components/schemas/MailboxDagExecutionResolution",
+                "reconcile_verification": "#/components/schemas/MailboxDagVerificationResolution",
+                "replan": "#/components/schemas/MailboxDagReplanResolution",
+                "subjective_approve": "#/components/schemas/MailboxDagSubjectiveResolution"
+              },
+              "propertyName": "action"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MailboxDagSubjectiveResolution"
+              },
+              {
+                "$ref": "#/components/schemas/MailboxDagExecutionResolution"
+              },
+              {
+                "$ref": "#/components/schemas/MailboxDagVerificationResolution"
+              },
+              {
+                "$ref": "#/components/schemas/MailboxDagAbandonResolution"
+              },
+              {
+                "$ref": "#/components/schemas/MailboxDagReplanResolution"
+              }
+            ],
+            "title": "Resolution"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "mailbox.dag.status",
+      "params": [
+        {
+          "name": "binding_id",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Binding Id"
+          }
+        },
+        {
+          "name": "root_id",
+          "required": true,
+          "schema": {
+            "title": "Root Id",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "required": [
+            "data"
+          ],
+          "title": "MailboxDataResult",
+          "type": "object"
+        }
+      }
     }
   ],
   "components": {
@@ -13563,6 +13949,273 @@
           "evidence"
         ],
         "title": "MailboxResult",
+        "type": "object"
+      },
+      "MailboxDagAbandonResolution": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "abandon",
+            "title": "Action",
+            "type": "string"
+          },
+          "decision_note": {
+            "title": "Decision Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "decision_note"
+        ],
+        "title": "MailboxDagAbandonResolution",
+        "type": "object"
+      },
+      "MailboxDagCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "check_id": {
+            "title": "Check Id",
+            "type": "string"
+          },
+          "argv": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Argv",
+            "type": "array"
+          },
+          "cwd": {
+            "title": "Cwd",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "minimum": 1,
+            "title": "Timeout Seconds",
+            "type": "integer"
+          },
+          "repairable_exit_codes": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Repairable Exit Codes",
+            "type": "array"
+          },
+          "nonrepairable_exit_codes": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Nonrepairable Exit Codes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "check_id",
+          "argv",
+          "cwd",
+          "timeout_seconds"
+        ],
+        "title": "MailboxDagCheck",
+        "type": "object"
+      },
+      "MailboxDagExecutionResolution": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "reconcile_execution",
+            "title": "Action",
+            "type": "string"
+          },
+          "result_key": {
+            "$ref": "#/components/schemas/MailboxDagResultKey"
+          }
+        },
+        "required": [
+          "action",
+          "result_key"
+        ],
+        "title": "MailboxDagExecutionResolution",
+        "type": "object"
+      },
+      "MailboxDagNodePolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "logical_node_id": {
+            "title": "Logical Node Id",
+            "type": "string"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "output_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Output Paths",
+            "type": "array"
+          },
+          "protected_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Protected Paths",
+            "type": "array"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/MailboxDagCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "subjective_review": {
+            "default": false,
+            "title": "Subjective Review",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "logical_node_id"
+        ],
+        "title": "MailboxDagNodePolicy",
+        "type": "object"
+      },
+      "MailboxDagReplanResolution": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "replan",
+            "title": "Action",
+            "type": "string"
+          },
+          "successor_graph": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Successor Graph",
+            "type": "object"
+          },
+          "successor_verification_plan": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Successor Verification Plan",
+            "type": "object"
+          },
+          "logical_node_mapping": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Logical Node Mapping",
+            "type": "object"
+          },
+          "decision_note": {
+            "title": "Decision Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "successor_graph",
+          "successor_verification_plan",
+          "logical_node_mapping",
+          "decision_note"
+        ],
+        "title": "MailboxDagReplanResolution",
+        "type": "object"
+      },
+      "MailboxDagResultKey": {
+        "additionalProperties": false,
+        "properties": {
+          "recipient_agent_id": {
+            "title": "Recipient Agent Id",
+            "type": "string"
+          },
+          "message_id": {
+            "title": "Message Id",
+            "type": "string"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipient_agent_id",
+          "message_id",
+          "digest"
+        ],
+        "title": "MailboxDagResultKey",
+        "type": "object"
+      },
+      "MailboxDagRevision": {
+        "additionalProperties": false,
+        "properties": {
+          "repo_id": {
+            "const": "workspace",
+            "title": "Repo Id",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo_id",
+          "ref"
+        ],
+        "title": "MailboxDagRevision",
+        "type": "object"
+      },
+      "MailboxDagSubjectiveResolution": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "subjective_approve",
+            "title": "Action",
+            "type": "string"
+          },
+          "snapshot_fingerprint": {
+            "title": "Snapshot Fingerprint",
+            "type": "string"
+          },
+          "decision_note": {
+            "title": "Decision Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "snapshot_fingerprint",
+          "decision_note"
+        ],
+        "title": "MailboxDagSubjectiveResolution",
+        "type": "object"
+      },
+      "MailboxDagVerificationResolution": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "const": "reconcile_verification",
+            "title": "Action",
+            "type": "string"
+          },
+          "check_run_id": {
+            "title": "Check Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "check_run_id"
+        ],
+        "title": "MailboxDagVerificationResolution",
         "type": "object"
       }
     },
