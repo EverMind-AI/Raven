@@ -23,7 +23,7 @@ class _Session:
         self._fail = fail
         self.calls: list[tuple[str, dict | None]] = []
 
-    async def list_prompts(self):
+    async def list_prompts(self, params=None):
         if self._fail:
             raise self._fail
         return types.ListPromptsResult(prompts=self._prompts)
@@ -33,6 +33,20 @@ class _Session:
         if self._fail:
             raise self._fail
         return self._result
+
+
+class _PagingSession:
+    """Answers each page by the cursor it was asked for; a call past the pages is a walk that lost its stop rule."""
+
+    def __init__(self, pages: dict) -> None:
+        self._pages = pages
+        self.cursors: list[str | None] = []
+
+    async def list_prompts(self, params=None):
+        cursor = params.cursor if params else None
+        self.cursors.append(cursor)
+        assert len(self.cursors) <= len(self._pages), "walked past the last page"
+        return self._pages[cursor]
 
 
 class _Manager:
@@ -83,6 +97,16 @@ class TestListing:
     async def test_nothing_offering_says_so(self):
         mgr = _Manager({}, offering=[])
         assert "no MCP server is serving prompts" in await ListMcpPromptsTool(mgr).execute()
+
+    async def test_a_paging_server_hands_over_every_page(self):
+        pages = {
+            None: types.ListPromptsResult(prompts=[types.Prompt(name="triage")], nextCursor="page-2"),
+            "page-2": types.ListPromptsResult(prompts=[types.Prompt(name="review")]),
+        }
+        session = _PagingSession(pages)
+        rows = json.loads(await ListMcpPromptsTool(_Manager({"a": session})).execute())
+        assert [row["name"] for row in rows] == ["triage", "review"]
+        assert session.cursors == [None, "page-2"]
 
 
 class TestExpanding:
