@@ -110,8 +110,11 @@ def session_keys(tool_name: str, params: dict[str, Any], ask_segments: tuple[str
     path names another file once the directory is rebound. The browser's acting
     tools share one key per site: what the human approved was letting the agent
     work on that site, and a click and the typing that follows it are one such
-    piece of work, not two. Every other tool keys the exact call -- a `path`
-    field on an unknown tool says nothing about what its other fields do.
+    piece of work, not two. One that names no site -- the page it acts on has
+    none yet: a tab it is about to open, or one still blank -- keys the exact
+    call, so its grant is never presented by a call to a real site. Every other
+    tool keys the exact call -- a `path` field on an unknown tool says nothing
+    about what its other fields do.
     """
     if tool_name == "exec" and ask_segments:
         working_dir = params.get("working_dir")

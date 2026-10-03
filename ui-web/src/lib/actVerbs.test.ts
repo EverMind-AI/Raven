@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { argPath, firstErrLine, phraseOf, rawVerb, shortArg, splitMcp, verbIngOf, verbOf } from './actVerbs'
+import { actName, argPath, firstErrLine, phraseOf, rawVerb, shortArg, splitMcp, verbIngOf, verbOf } from './actVerbs'
 
 describe('splitMcp', () => {
   it('splits an mcp_<server>_<tool> name into its server and the bare tool', () => {
@@ -25,6 +25,31 @@ describe('verbOf / verbIngOf', () => {
     const { bare } = splitMcp('mcp_github_search_issues')
     expect(rawVerb('mcp_github_search_issues')).toBe('search issues')
     expect(verbOf(bare)).toBe('search issues')
+  })
+})
+
+/* Seen live: a turn that looked at its settings, changed one and checked the
+   plugins read as "plugin · raven config ×2", "raven config", "raven config". */
+describe('actName', () => {
+  it('words a bundled tool by what the call did, and leaves every other tool alone', () => {
+    expect(actName('raven_config', { action: 'get', path: 'tools' })).toBe('raven_config_read')
+    expect(actName('raven_config', '{"action": "set", "path": "a"}')).toBe('raven_config_change')
+    expect(actName('raven_config', { action: 'restart' })).toBe('raven_config_restart')
+    expect(actName('plugin', { action: 'list' })).toBe('plugin_read')
+    expect(actName('plugin', { action: 'authorize', name: 'github' })).toBe('plugin_connect')
+    expect(actName('raven_config', {})).toBe('raven_config')
+    expect(actName('read_file', { action: 'get' })).toBe('read_file')
+    expect(verbOf(actName('raven_config', { action: 'describe' }))).toBe('checked settings')
+    expect(verbIngOf(actName('plugin', { action: 'connect' }))).toBe('connecting a plugin')
+  })
+
+  it('folds a run of them by kind of action, not by tool', () => {
+    expect(phraseOf([
+      { name: 'raven_config', args: { action: 'describe' } },
+      { name: 'raven_config', args: { action: 'get', path: 'tools' } },
+      { name: 'raven_config', args: { action: 'set', path: 'tools.exec.timeout' } },
+      { name: 'plugin', args: { action: 'list' } },
+    ])).toBe('checked settings 2 times · changed settings · checked plugins')
   })
 })
 

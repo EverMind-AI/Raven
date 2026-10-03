@@ -28,10 +28,22 @@ from raven.utils.atomic_io import atomic_update
 
 # The socket: what the host plugs every channel into, whatever the
 # transport. Uniform across the adapters; declared here and pinned by tests.
+# ``sensitive`` (here and in an adapter's own declaration) says why a change to
+# that field stays with the user rather than an approval mode's reviewer: it
+# decides who may instruct Raven, or where the channel's credentials and
+# traffic go.
 _SOCKET_SCHEMA: dict[str, dict[str, Any]] = {
-    "enabled": {"type": "boolean", "default": False},
-    "allow_from": {"type": "array", "default": ["*"]},
-    "workspace": {"type": "string", "default": ""},
+    "enabled": {
+        "type": "boolean",
+        "default": False,
+        "sensitive": "turning a channel on lets whoever its allow list admits instruct Raven there",
+    },
+    "allow_from": {"type": "array", "default": ["*"], "sensitive": "widening it lets more people instruct Raven"},
+    "workspace": {
+        "type": "string",
+        "default": "",
+        "sensitive": "moves where this channel's conversations read and write files",
+    },
 }
 
 # Display names for the CLI table, mapping schema types onto the pythonic
@@ -133,6 +145,7 @@ def _flatten_schema(declaration: dict[str, Any], prefix: str = "") -> dict[str, 
             "type": type_display,
             "default": copy.deepcopy(decl.get("default")),
             "is_secret": decl.get("secret") is True,
+            "sensitive": decl.get("sensitive") if isinstance(decl.get("sensitive"), str) else "",
             "required": decl.get("required") is True,
             "description": description,
         }

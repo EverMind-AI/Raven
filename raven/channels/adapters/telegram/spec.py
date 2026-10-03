@@ -22,8 +22,17 @@ SPEC = ChannelSpec(
     # stay with the host.
     config_schema={
         "token": {"type": "string", "default": "", "required": True, "secret": True},
-        "proxy": {"type": "string", "default": None},
+        "proxy": {
+            "type": "string",
+            "default": None,
+            "sensitive": "sends this channel's credentials and messages to the address given",
+        },
         "reply_to_message": {"type": "boolean", "default": False},
-        "group_policy": {"type": "string", "default": "mention", "choices": ["open", "mention"]},
+        "group_policy": {
+            "type": "string",
+            "default": "mention",
+            "choices": ["open", "mention"],
+            "sensitive": "widening it lets more people instruct Raven",
+        },
     },
 )

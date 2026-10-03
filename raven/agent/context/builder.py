@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from raven.config.held_secrets import scrub_held_secrets, scrub_tool_blocks
 from raven.memory_engine import LocalSkillCatalog, MemoryStore, SkillMeta
 from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
 from raven.utils.messages import build_assistant_message
@@ -288,6 +289,9 @@ Skills with available="false" need dependencies installed first - you can try in
         composed may travel through here; never tool output.
         """
         content: Any
+        # A command or a read can print Raven's own config; its keys stop here.
+        result = scrub_held_secrets(result)
+        blocks = scrub_tool_blocks(None, blocks)
         if blocks:
             content = wrap_untrusted_blocks(blocks, source=tool_name)
             if trusted_note:

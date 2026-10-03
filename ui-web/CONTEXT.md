@@ -165,16 +165,28 @@ children -- and every table that names a page derives from them:
 `chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
 `src/test/regions.test.ts`'s goldens. Adding a page is adding a row.
 
-One row today, because a place and a setting are different things: what a
-reader goes TO is the agent hub, while schedules, channels and memory are set
-up once and then left alone, so those three are **settings sections** instead.
+Two rows today, because a place and a setting are different things: what a
+reader goes TO is the **connections hub** -- the agents Raven hands work to and
+the channels it can be reached from -- while schedules and memory are set up
+once and then left alone, so those two are **settings sections** instead.
 _Avoid_: "page" for the whole document, or for a dialog -- the settings dialog
 and the model picker are overlays, not module pages.
 
+**Connections hub**:
+The two module pages the rail's one `agentsBtn` row opens -- `extAgentsPage`
+(agents) and `connectionsPage` (channels) -- and `src/state/hub.ts`, which
+makes them one place: the module the reader was last on, followed off the page
+switch, so the rail row goes back to it. Both pages open on the same header,
+`src/components/HubHead.tsx`, whose two tabs are the top of the page. They stay
+two pages because each domain already owns its store, its drawer card and its
+fetch; each registers what opening its module costs on `hub.onOpen` at its own
+module evaluation, because `state/` may not import an island.
+_Avoid_: "agent hub" for the whole -- that is the agents module, one of its two.
+
 **Settings section**:
 One row of `features/settings/store.ts`'s `SECTIONS`: a pane of the settings
-dialog. Nine of the twelve are that domain's own components. The other three --
-channels, schedules, memory -- are another domain's island, rooted in a box
+dialog. Nine of the eleven are that domain's own components. The other two --
+schedules and memory -- are another domain's island, rooted in a box
 `src/App.tsx` renders beside `#spanels` and named by that store's `HOSTED`,
 because a React root inside the settings island's own tree would be unmounted
 the moment the reader picked another section. Which one is on screen is
@@ -351,7 +363,7 @@ vocabulary a card is the drawer's content.
 
 **Escape order**:
 The ordered table in `src/state/escapeOrder.ts` (`ESCAPE_ORDER`, of
-`EscapeLayer`): ten layers that can be on screen at once, and which one an
+`EscapeLayer`): eleven layers that can be on screen at once, and which one an
 Escape takes back. A table rather than a
 stack, because each entry answers "am I open" when the key arrives -- the
 channel dialog opens over the entries page and closes first, while the shared

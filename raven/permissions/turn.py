@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 
-from raven.contracts.asking import ApprovalResponder
+from raven.contracts.asking import ApprovalResponder, CredentialAsker
 
 
 @dataclass(frozen=True)
@@ -79,6 +79,9 @@ class PermissionTurn:
     """
 
     responder: ApprovalResponder | None = None
+    #: Who can take a credential the user types, bound beside the responder and
+    #: on the same terms: only where a person is there to type it.
+    credentials: CredentialAsker | None = None
     conversation_id: str = ""
     turn_id: str = ""
     # Who this turn speaks for, as the approval prompt names it: the request's
@@ -112,6 +115,7 @@ def start_permission_turn(
     on_review: Callable[[str, str], Awaitable[None]] | None = None,
     origin: str = "",
     origin_name: str = "",
+    credentials: CredentialAsker | None = None,
 ) -> PermissionTurn:
     """Bind or revoke the asking capability for the current turn's task.
 
@@ -123,6 +127,7 @@ def start_permission_turn(
     """
     turn = PermissionTurn(
         responder=responder,
+        credentials=credentials,
         conversation_id=conversation_id,
         turn_id=turn_id,
         origin=origin,

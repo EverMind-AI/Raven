@@ -3,7 +3,7 @@
 import asyncio
 import copy
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -336,8 +336,9 @@ class ToolRegistry:
         # unreachable everywhere), the second a design property (a hidden tool
         # stays callable -- ``tool_call`` resolves by registry, never by schema
         # -- it is just not advertised), and the freeze is per turn (a mid-turn
-        # arrival is unreachable through every surface until the next turn --
-        # ``offers`` consults it for schema and tool-search, and ``execute``
+        # arrival is unreachable through every surface until the next turn,
+        # unless the turn's own call admits it -- ``admit_to_this_turn`` --
+        # and ``offers`` consults it for schema and tool-search, and ``execute``
         # consults it for dispatch, so the three cannot disagree).
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
@@ -535,7 +536,10 @@ class ToolRegistry:
         dispatched to whatever now wears the name.
 
         Session-overlay tools are admitted by name: they enter with the turn
-        that carries them, after the freeze captured the base registry.
+        that carries them, after the freeze captured the base registry. A name
+        :meth:`admit_to_this_turn` let in is an entry pair like any other, and
+        that method adds only names the turn did not already hold, so a
+        replacement stays dropped through it too.
         """
         frozen = self._turn_names.get()
         if frozen is None:
@@ -659,7 +663,8 @@ class ToolRegistry:
         (``schema_dynamic``): its instance is stable and its variability is its
         contract, so the freeze pins the pair and leaves the rendering to it.
         Session-overlay tools are exempt: they enter with the turn that carries
-        them.
+        them, and so are arrivals the turn itself asked for
+        (:meth:`admit_to_this_turn`).
         """
         token = self._turn_names.set(dict(self._tools))
         wtoken = self._turn_withheld.set(self.withheld_names())
@@ -668,6 +673,36 @@ class ToolRegistry:
         finally:
             self._turn_withheld.reset(wtoken)
             self._turn_names.reset(token)
+
+    def admit_to_this_turn(self, names: Iterable[str]) -> None:
+        """Let arrivals the turn itself asked for join it from the next step.
+
+        The one exception to the freeze in :meth:`turn_scope`. The freeze is
+        right for a background arrival: nobody in the turn is waiting for it.
+        It is wrong when the turn's own call produced the arrival -- the
+        ``plugin`` tool connecting what the user just asked for -- because then
+        all the wait buys is a user having to say "go on" before the agent can
+        use it. That is paid for with one rebuilt cache prefix, once.
+
+        Mutated in place rather than re-set, so the admission reaches the
+        loop's reads however the call was dispatched: a ``set`` made inside a
+        task would stay in that task's copy of the context.
+
+        Only names the turn does not already hold are added. A name it holds
+        against an instance that has since been replaced keeps the stale pair
+        and so stays dropped -- the identity rule in
+        :meth:`_visible_to_this_turn` -- rather than swapping in a schema the
+        turn's earlier calls were never composed against. The off switch and
+        the channel restriction still decide whether an admitted name is
+        offered. Outside a scope this is a no-op; everything is already offered.
+        """
+        frozen = self._turn_names.get()
+        if frozen is None:
+            return
+        for name in names:
+            tool = self._tools.get(name)
+            if tool is not None:
+                frozen.setdefault(name, tool)
 
     def session_tools_in_scope(self) -> dict[str, Tool]:
         """The session tools this turn can see; empty outside any scope.
@@ -820,6 +855,23 @@ class ToolRegistry:
 
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(
+        self,
+        name: str,
+        params: dict[str, Any],
+        *,
+        run_meta: RunMeta | None = None,
+    ) -> str:
+        """Execute a tool by name with given parameters, its output scrubbed of the credentials it could carry.
+
+        Scrubbed here, inside the traced call, because every reader starts from
+        this return value: the main and sub-agent loops, the sentinel's action
+        executor, the tool forwarder, and the trace span that records it. A
+        loop that scrubbed only its own copy left the span, the file diff sent
+        to the page and the sentinel's channel reply holding the key.
+        """
+        return _scrubbed(params, await self._execute(name, params, run_meta=run_meta))
+
+    async def _execute(
         self,
         name: str,
         params: dict[str, Any],
@@ -981,6 +1033,7 @@ class ToolRegistry:
                 diff = result.diff
                 file_change = result.file_change
                 removed = result.removed
+                written = result.written
             else:
                 model_text, display_text = str(result), None
                 retryable, blocks_call = True, False
@@ -993,6 +1046,7 @@ class ToolRegistry:
                 # return is already a ToolOutput (exec) misses the unwrap above,
                 # and its removals would be dropped at this boundary.
                 removed = tuple(getattr(result, "removed", ()) or ())
+                written = tuple(getattr(result, "written", ()) or ())
             # Remembered once the verdict is in, and only when it is good. A
             # rule that asks for a prior ``read_file`` is asking whether the
             # file was read; a read that errored read nothing, and letting it
@@ -1017,6 +1071,9 @@ class ToolRegistry:
                 #
                 # An error also replaces the result, so any blocks it came with
                 # are no longer what the model should be looking at.
+                #
+                # What the call did to the disk is kept: a command whose output
+                # happens to begin with the word still removed and wrote what it did.
                 suffix = _hint if retryable else ""
                 return ToolOutput(
                     model_text + suffix,
@@ -1025,6 +1082,8 @@ class ToolRegistry:
                     blocks_call=blocks_call,
                     continuation=continuation,
                     ok=False,
+                    removed=removed,
+                    written=written,
                 )
             return ToolOutput(
                 model_text,
@@ -1037,6 +1096,7 @@ class ToolRegistry:
                 diff=diff,
                 file_change=file_change,
                 removed=removed,
+                written=written,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
@@ -1076,3 +1136,34 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+
+
+def _scrubbed(arguments: Any, out: Any) -> Any:
+    """``out`` with every text it carries scrubbed: the model text, the display, the blocks and the file contents.
+
+    The file contents are display only (the page's diff, the removal watch);
+    nothing writes them back, so a redaction there cannot reach a file.
+    """
+    from dataclasses import replace
+
+    from raven.config.held_secrets import scrub_tool_blocks, scrub_tool_output
+
+    def text(value: Any) -> Any:
+        return scrub_tool_output(arguments, value) if isinstance(value, str) and value else value
+
+    if not isinstance(out, ToolOutput):
+        return text(out)
+    change = out.file_change
+    return ToolOutput(
+        text(str(out)),
+        text(out.display_text),
+        retryable=out.retryable,
+        blocks_call=out.blocks_call,
+        continuation=out.continuation,
+        ok=out.ok,
+        blocks=scrub_tool_blocks(arguments, out.blocks),
+        diff=text(out.diff),
+        file_change=replace(change, after=text(change.after), before=text(change.before)) if change else None,
+        removed=tuple(replace(item, before=text(item.before)) for item in out.removed),
+        written=tuple(replace(item, diff=text(item.diff)) for item in out.written),
+    )

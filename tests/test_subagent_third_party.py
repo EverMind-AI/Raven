@@ -5026,6 +5026,27 @@ async def test_a_connect_that_outlasted_its_wait_says_how_to_hear_why(monkeypatc
     assert probe_mod._ping_refusal(qwen, timed_out)[1] == Remedy("silent", "qwen hi")
 
 
+def test_an_empty_turn_from_openclaw_names_the_command_that_prints_why() -> None:
+    """Seen live: OpenClaw's provider refused its key with a 401, and its ACP bridge
+    relayed that as an empty turn whose stderr held only a plugin warning, so the
+    connect reported nothing a reader could act on."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    empty = RuntimeError(
+        "acp agent 'OpenClaw' ended its turn with no content (stopReason='end_turn'); stderr tail: [config] "
+        "warnings: plugins.entries.@everme/openclaw: plugin disabled (disabled in config) but config is present"
+    )
+    claw = SimpleNamespace(name="OpenClaw", preset="openclaw", kind="acp", command="openclaw acp")
+    text, remedy = probe_mod._ping_refusal(claw, empty)
+    assert remedy == Remedy("silent", "openclaw agent --agent main -m hi --json")
+    assert "run `openclaw agent --agent main -m hi --json`" in text and "usually unrelated" in text
+    codex = SimpleNamespace(name="Codex", preset="codex", kind="acp", command="codex-acp")
+    assert probe_mod._ping_refusal(codex, empty)[1] is None
+
+
 async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test fails on the handshake first, and that verdict named no fix for a launch that quit.
 
@@ -5081,3 +5102,26 @@ def test_the_sign_in_command_is_one_the_machine_can_run(monkeypatch: pytest.Monk
     clean = probe_mod._refusal_detail(cfg, said)
     assert hint.anywhere in clean
     assert f"`{hint.local}`" not in clean, "a command that is not there to run is no better than a guess"
+
+
+async def test_a_ping_runs_on_the_model_the_row_is_pinned_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Seen live: Qwen Code's default model was withdrawn, and adding it with another
+    model it lists still failed with the same 404 -- the ping never sent the model,
+    so every retry asked the default again."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+
+    asked: list[object] = []
+
+    class _Backend:
+        async def run(self, prompt, *, task_id, workspace, executor, session_model=None):  # noqa: ANN001
+            asked.append(session_model)
+            return "PONG"
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda *args, **kwargs: _Backend())
+    pinned = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp", model="GPT-5.5")
+    assert (await probe_mod.ping_agent(pinned)).ok
+    unpinned = SimpleNamespace(name="Codex", preset="codex", kind="acp", command="codex-acp", model=None)
+    assert (await probe_mod.ping_agent(unpinned)).ok
+    assert asked == ["GPT-5.5", None]

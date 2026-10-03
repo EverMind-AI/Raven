@@ -128,8 +128,15 @@ body order, `chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
 readers is in `state/` and a single aggregate would pull eighteen islands in
 there with it.
 
+Two pages may light one rail button: `extAgentsPage` and `connectionsPage` both
+name `agentsBtn`, because agents and channels are one place on the rail, the
+connections hub. What makes them one place is `state/hub.ts` (the module the
+reader was last on) and `components/HubHead.tsx` (the tabs both pages open
+on), not a shared island: each stays its own domain's page, store and drawer
+card. A third module belongs there only if it is something Raven connects to.
+
 A domain that is a **section of the settings dialog** rather than a page
-(channels, schedules, memory) claims no page and names a `host` instead: the
+(schedules, memory) claims no page and names a `host` instead: the
 box `src/App.tsx` renders beside `#spanels`, which `features/settings/store.ts`'s
 `HOSTED` maps its section id to. Its island is its own root, because one inside
 the settings island's tree would be unmounted the moment the reader picked
@@ -189,10 +196,11 @@ effects and the session pipeline all read and write from outside any component.
 `state/` does not import `features/` at runtime. Where the page's machinery has
 to ask a domain to do something, the state module declares a slot and the domain
 fills it: `src/app/install.ts` fills `state/page.ts`'s `onShow` slot and
-`state/settings.ts`'s `onOpen`, and the three domains that are settings sections
-fill that module's `onEnter` and `onLeave` at their own module evaluation --
-the page's wiring would otherwise import three island stores for three lines,
-which is three island graphs it does not otherwise carry. Enforced by
+`state/settings.ts`'s `onOpen`, the two domains that are settings sections
+fill that module's `onEnter` and `onLeave`, and the two connections-hub
+domains fill `state/hub.ts`'s `onOpen`, each at its own module evaluation --
+the page's wiring would otherwise import an island store for every one of those
+lines, which is an island graph it does not otherwise carry. Enforced by
 `import-direction`.
 
 ## 4. Rendering

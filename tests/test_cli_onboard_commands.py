@@ -1327,6 +1327,59 @@ def test_sandbox_boxlite_probe_failure_falls_back(tmp_env: Path, monkeypatch: py
     assert data["tools"]["sandbox"]["backend"] == "none"
 
 
+def test_sandbox_boxlite_missing_advises_the_running_environment(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The missing-boxlite screen prints a copy-pasteable uv command that targets
+    this raven's interpreter, not a global install of an index-resolvable name."""
+    import questionary
+
+    answers = iter(["boxlite"])
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
+    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "skip")
+
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+
+    out = capsys.readouterr().out
+    assert "uv pip install --python" in out
+    assert "raven\\[sandbox]" not in out
+
+
+def test_sandbox_boxlite_hint_survives_long_interpreter_paths(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The install hint stays on one line even when the interpreter path pushes it
+    past the console width, so copy-paste yields a single runnable command."""
+    import questionary
+
+    answers = iter(["boxlite"])
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
+    monkeypatch.setattr("sys.executable", "/home/someone/.local/share/uv/tools/raven/bin/python")
+    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "skip")
+
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+
+    assert onboard_commands.boxlite_install_hint() in capsys.readouterr().out
+
+
 def test_sandbox_host_decline_reasks_submenu_without_reprobe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Declining the host confirm inside the failure submenu returns to the
     submenu directly: no second boxlite probe, no reprinted failure banner."""
@@ -1693,6 +1746,8 @@ def test_memory_enable_pins_the_roles_in_ravens_config(
     custom_slot = next(p for p in vendors() if p["name"] == "custom")
 
     # _step4_memory select() calls, in order:
+    #   0. LLM "Keep current"           -> "redo"   (unset, it already follows
+    #                                               the main model on openrouter)
     #   1. LLM source picker            -> the `custom` self-hosted slot
     #   2. embedding "Configure it?"    -> "redo"   (optional since it degrades
     #                                               rather than breaks memory)
@@ -1700,7 +1755,9 @@ def test_memory_enable_pins_the_roles_in_ravens_config(
     #      file, so this role asks for no endpoint of its own
     #   4. rerank "Configure it?"       -> "skip"
     #   5. multimodal "Configure it?"   -> "skip"
-    select_answers = iter(["managed", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"])
+    select_answers = iter(
+        ["managed", "redo", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"]
+    )
     # text(): LLM base_url, LLM model, embed model.
     text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
     # password(): LLM api key.
@@ -1784,7 +1841,9 @@ def test_the_memory_step_reaches_the_capability_report(
     _seed_provider("openrouter", "sk-or", "openrouter/anthropic/claude-sonnet-4-5")
     openrouter = next(p for p in _EVEROS_PROVIDERS if p["name"] == "openrouter")
     custom_slot = next(p for p in vendors() if p["name"] == "custom")
-    select_answers = iter(["managed", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"])
+    select_answers = iter(
+        ["managed", "redo", ("provider", custom_slot), "redo", ("provider", openrouter), "skip", "skip"]
+    )
     text_answers = iter(["https://llm/v1", "mem-llm", "mem-embed"])
     password_answers = iter(["k-llm"])
 

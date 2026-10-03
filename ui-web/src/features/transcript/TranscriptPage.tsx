@@ -432,14 +432,14 @@ function Dtl({ c, open }: { c: CallData; open: boolean }): ReactElement | null {
     let title = store.shortArg(c.label, 120)
     if (!title && (c.via || c.srv)) title = store.shortArg(JSON.stringify(c.args), 120)
     if (c.via) title = t('gui.dtl.via') + (title ? ' · ' + title : '')
-    const fp = typeof c.args.path === 'string' && c.name !== 'list_dir' ? c.args.path : ''
+    const fp = typeof c.args.path === 'string' && !NOT_A_FILE.has(c.name) ? c.args.path : ''
     head = <DtlHead name={title || t('gui.dtl.plain')} copyText={String(c.res || '')} {...(fp ? { openPath: fp } : {})} />
     body.push(dtlPre(c.res, 'out'))
   }
   if (c.truncated) body.push(<div key="trunc" className="trunc">…</div>)
   const parts = body.filter(Boolean)
   if (!head && c.label) {
-    const fp = typeof c.args.path === 'string' ? c.args.path : ''
+    const fp = typeof c.args.path === 'string' && !NOT_A_FILE.has(c.name) ? c.args.path : ''
     head = <DtlHead name={store.shortArg(c.label, 160)} copyText={c.label} {...(fp ? { openPath: fp } : {})} />
   }
   if (!head && !parts.length) return null
@@ -450,6 +450,10 @@ function Dtl({ c, open }: { c: CallData; open: boolean }): ReactElement | null {
     </div>
   )
 }
+
+/* Tools whose `path` argument is not a file to open: a directory listing, and
+   `raven_config`, whose path is a setting (`tools.media.image.model`). */
+const NOT_A_FILE = new Set(['list_dir', 'raven_config'])
 
 const shortOr = (p: string): string => {
   try {
@@ -494,7 +498,7 @@ function PlainCallRow({ lane, c }: { lane: Lane; c: CallData }): ReactElement {
         <ActIco name={c.name} bad={c.done && !c.ok} />
         <span className="vb">
           {c.srv ? <span className="srv">{`[${c.srv}] `}</span> : null}
-          {c.done ? store.verbOf(c.name) : store.verbIngOf(c.name)}
+          {c.done ? store.verbOf(store.actName(c.name, c.args)) : store.verbIngOf(store.actName(c.name, c.args))}
         </span>
         {c.done && c.hunk && (c.hunk.add || c.hunk.del) ? (
           <span className="diffn"><span className="a">+{c.hunk.add}</span> <span className="d">-{c.hunk.del}</span></span>
@@ -612,7 +616,7 @@ const DelegRow = memo(function DelegRow({ lane, c }: { lane: Lane; c: CallData }
         <ActIco name={c.name} bad={c.done && !c.ok} />
         <span className="vb">
           {c.srv ? <span className="srv">{`[${c.srv}] `}</span> : null}
-          {head ? t('gui.deleg.spawn_verb') : c.done ? store.verbOf(c.name) : store.verbIngOf(c.name)}
+          {head ? t('gui.deleg.spawn_verb') : c.done ? store.verbOf(store.actName(c.name, c.args)) : store.verbIngOf(store.actName(c.name, c.args))}
         </span>
         <span className="ar">{head
           ? `${head.instance ? head.instance + '@' : ''}${head.agent}: ${head.task}`
@@ -805,7 +809,7 @@ const DagCard = memo(function DagCard({ lane, c }: { lane: Lane; c: CallData }):
         <ActIco name={c.name} bad={c.done && !c.ok} />
         <span className="vb">
           {c.srv ? <span className="srv">{`[${c.srv}] `}</span> : null}
-          {c.done ? store.verbOf(c.name) : store.verbIngOf(c.name)}
+          {c.done ? store.verbOf(store.actName(c.name, c.args)) : store.verbIngOf(store.actName(c.name, c.args))}
         </span>
         <span className="ar">{rowLabel}</span>
         <Chev />
@@ -1330,7 +1334,7 @@ const askIfGone = (url: string): Promise<boolean> =>
    output-file variants). A page is opened in a browser tab as well as in the
    panel; a document the panel can read is opened there; a binary is fetched.
    The card itself opens in the panel whichever it is. */
-const BINARY_KINDS = new Set(['pptx', 'pdf', 'bin'])
+const BINARY_KINDS = new Set(['office', 'pdf', 'bin'])
 
 const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): ReactElement {
   const [state, setState] = useState<'probe' | 'ready' | 'missing'>(row.missing ? 'missing' : 'probe')
@@ -1377,7 +1381,7 @@ const DeliveryTile = memo(function DeliveryTile({ row }: { row: DeliveryRow }): 
         setShot('broken')
         void askIfGone(url).then((gone) => { if (gone) setState('missing') })
       }} />
-    ) : kind === 'pptx' || kind === 'pdf' ? (
+    ) : kind === 'office' || kind === 'pdf' ? (
       <DeliveryShot row={row} src={thumbURL(row.path)} broken={() => setShot('broken')} />
     ) : mark
   const type = row.ext ? row.ext.toUpperCase() : t('gui.arts.file')

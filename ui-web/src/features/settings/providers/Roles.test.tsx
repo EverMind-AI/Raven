@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
-import { ROLES, everosLocked, roleProviders, roleValue, rolesUsing } from './Roles'
+import { ROLES, everosLocked, followsChat, roleProviders, roleValue, rolesUsing } from './Roles'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -170,6 +170,25 @@ describe('model roles', () => {
     expect(screen.queryByLabelText(clearLabel('memllm'))).toBe(null)
     expect(screen.queryByLabelText(clearLabel('embedding'))).toBe(null)
     expect(screen.queryByLabelText(clearLabel('rerank'))).not.toBe(null)
+  })
+
+  it('an unset memory model the server says follows the chat model reads that way, and counts through it', async () => {
+    /* "Use the chat model" is what leaving it alone means. The slot said
+       "not set" and the memory switched off; now the server resolves it to the
+       chat model and the slot has to say so, or the page and memory disagree. */
+    const data = snap()
+    data.everos = { ...data.everos, sections: { llm: { model: '', provider: '', api_key_set: true, follows_main: true } } }
+    expect(followsChat(role('memllm'), data)).toBe(true)
+    expect(rolesUsing(data, 'anthropic').map((r) => r.id)).toContain('memllm')
+    install(data)
+    await mount('model')
+    expect(pill('gui.settings.roles.memllm').textContent).toContain('gui.settings.roles.follows_chat')
+
+    /* The control: a chat model EverOS cannot use leaves the slot unset. */
+    const cannot = snap()
+    cannot.everos = { ...cannot.everos, sections: { llm: { model: '', provider: '', api_key_set: false } } }
+    expect(followsChat(role('memllm'), cannot)).toBe(false)
+    expect(rolesUsing(cannot, 'anthropic').map((r) => r.id)).not.toContain('memllm')
   })
 
   it('the slot shows the vendor as stored, with no address to match', async () => {

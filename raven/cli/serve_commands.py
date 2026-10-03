@@ -354,7 +354,7 @@ class _ServedStack:
         """Assemble the first stack and bind it to the transport."""
         from raven.rpc.bootstrap import build_rpc_stack
 
-        self.current = await build_rpc_stack(self._gateway.broadcast, ensure_stack=self.ensure)
+        self.current = await build_rpc_stack(self._gateway.broadcast, ensure_stack=self.ensure, credential_cards=True)
         self._gateway.dispatcher = self.current.dispatcher
         return self.current
 
@@ -381,6 +381,7 @@ class _ServedStack:
                 self._gateway.broadcast,
                 emitter=self.current.emitter,
                 ensure_stack=self.ensure,
+                credential_cards=True,
             )
             if nxt.agent_loop is None:
                 return False

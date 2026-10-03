@@ -391,7 +391,9 @@ class SpawnRecord:
             if (whole := persisted_output(activity, output)) is not None:
                 self.file("out.md").write_text(whole, encoding="utf-8")
             if error is not None:
-                self.file("error.md").write_text(error, encoding="utf-8")
+                from raven.config.held_secrets import scrub_held_secrets
+
+                self.file("error.md").write_text(scrub_held_secrets(error), encoding="utf-8")
             meta = self._read_meta()
             meta.update(status=status, ended_at_ms=int(time.time() * 1000))
             if activity is not None:

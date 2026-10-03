@@ -50,7 +50,6 @@ from raven.agent.loop._shared import (
     _file_removed_payload,
     _file_written_payload,
     _first_line,
-    _listing_removals,
     _runtime_origin,
     _stamp_reasoning_ms,
     _strip_inline_images,
@@ -85,7 +84,6 @@ from raven.agent.loop._shared import (
 from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
-from raven.agent.tools import snapshot as workdir_snapshot
 from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
@@ -103,12 +101,34 @@ from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from raven.agent.loop.checkpoint import CheckpointService
     from raven.contracts.token_strategy import UsageSnapshot
     from raven.providers.base import ErrorClassification
     from raven.spine.events import NoticeKind
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
+
+
+def _scrubbed_result(arguments: Any, text: str) -> str:
+    """A tool result with the credentials it could carry taken out.
+
+    A read of a dotfile config under home loses its key values, and any value
+    Raven itself holds is replaced by where it is kept. Applied where the result
+    is first read, so the preview logged and sent to the page is the same text
+    the model gets.
+    """
+    from raven.config.held_secrets import scrub_tool_output
+
+    return scrub_tool_output(arguments, text)
+
+
+def _scrubbed_blocks(arguments: Any, blocks: Any) -> Any:
+    """The image-bearing form of a result, its text parts scrubbed like :func:`_scrubbed_result`."""
+    from raven.config.held_secrets import scrub_tool_blocks
+
+    return scrub_tool_blocks(arguments, blocks)
 
 
 def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None) -> str:
@@ -291,7 +311,13 @@ class TurnPathMixin:
         would cross-contaminate their edited-file sets.
         """
         target = workdir.current()
-        if target is None or not self._checkpoint_enabled:
+        if target is None:
+            return None
+        return self._checkpoint_for(target)
+
+    def _checkpoint_for(self, target: Path) -> "CheckpointService | None":
+        """The shadow-git service for ``target``, made on first use; ``None`` when off."""
+        if not self._checkpoint_enabled:
             return None
         if target not in self._checkpoints:
             from raven.agent.loop.checkpoint import CheckpointService
@@ -305,6 +331,17 @@ class TurnPathMixin:
                 logger.warning("runtime.checkpoint disabled for {} -- {}", target, exc)
                 self._checkpoints[target] = None
         return self._checkpoints[target]
+
+    def _command_shadow(self, root: Path) -> "CheckpointService | None":
+        """The shadow repo a command run in ``root`` is measured against (``ExecTool``).
+
+        The turn's own, and only where it covers ``root``: a ``working_dir``
+        outside it has no copy of what its files held. Outside a turn -- a
+        session being opened and warmed -- nothing is bound, and ``root`` is the
+        session's directory itself.
+        """
+        repo = self._checkpoint_for(workdir.current() or root)
+        return repo if repo is not None and repo.covers(root) else None
 
     def _stash_recovery(self, session_key: str, outcome: "LoopOutcome") -> None:
         """Remember an interrupted turn's snapshot so the next turn in this
@@ -725,6 +762,10 @@ class TurnPathMixin:
         # files is seen. Per turn for the reason the counters above are: the loop
         # is a singleton and another session's turn is running beside this one.
         removal_watch = RemovalWatch()
+        # A session opened by its first message (a channel's) was never warmed
+        # as it opened: warm its directory here instead. Once per directory.
+        if (target := workdir.current()) is not None and (warm := getattr(self.tools.get("exec"), "warm", None)):
+            await warm(target)
         # Empty-response recovery state, local to the turn — the AgentLoop is a
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
@@ -1296,11 +1337,6 @@ class TurnPathMixin:
                         setter(tool_call.id)
                     set_current_tool_call_id(tool_call.id)
                     tool_t0 = time.monotonic()
-                    # The working directory either side of a command, set by the
-                    # branch below that actually runs one. Nothing here for every
-                    # other call, which is what the empty diff of two Nones means.
-                    exec_before: workdir_snapshot.Snapshot | None = None
-                    exec_after: workdir_snapshot.Snapshot | None = None
                     tracker = self.strategies.get("usage_tracker")
                     if tracker is not None:
                         await tracker.record_tool_call(tool_call.name, tool_call.id)
@@ -1338,31 +1374,10 @@ class TurnPathMixin:
                         if stalled_verdict is NoProgressAction.END_TURN:
                             stalled_tool = tool_call.name
                     else:
-                        # Only around a command: every other tool reports the
-                        # file it touched, and walking the directory twice per
-                        # call would cost the turn far more than the one change
-                        # it could find. Off the loop, because the walk is tens
-                        # of milliseconds of it and every other session on this
-                        # process waits behind them. The directory is the one
-                        # the command runs in, which the tool itself resolves:
-                        # the turn's unless the call names another.
-                        exec_root = (
-                            workdir_snapshot.root_for(
-                                self.tools.get(tool_call.name),
-                                tool_call.arguments,
-                                workdir.current() or self.workspace,
-                            )
-                            if tool_call.name == "exec"
-                            else None
-                        )
-                        if exec_root is not None:
-                            exec_before = await asyncio.to_thread(workdir_snapshot.take, exec_root)
                         result = await self.tools.execute(
                             tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
                         )
                         duration_ms = int((time.monotonic() - tool_t0) * 1000)
-                        if exec_before is not None:
-                            exec_after = await asyncio.to_thread(workdir_snapshot.take, exec_root)
                         # The result itself is left alone: the note is the
                         # system's own line and is placed by add_tool_result AFTER
                         # the untrusted fence closes, so the model reads it as this
@@ -1371,7 +1386,7 @@ class TurnPathMixin:
                             watch_state,
                             tool_call.name,
                             tool_call.arguments,
-                            str(result),
+                            _scrubbed_result(tool_call.arguments, str(result)),
                             watch_request,
                             reasoning_effort=policy.reasoning_effort,
                         )
@@ -1379,8 +1394,12 @@ class TurnPathMixin:
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
                     # model text; the UI preview prefers the display string.
-                    model_text = str(result)
-                    display_src = getattr(result, "display_text", None) or model_text
+                    # Scrubbed before anything reads it -- the log line, the UI
+                    # event and the model message alike -- so a key a command
+                    # printed reaches none of them.
+                    model_text = _scrubbed_result(tool_call.arguments, str(result))
+                    display_text = getattr(result, "display_text", None)
+                    display_src = _scrubbed_result(tool_call.arguments, display_text) if display_text else model_text
                     # The log stays one line; the UI event keeps newlines so a
                     # tool that reports several items (e.g. ask_user's
                     # question -> answer pairs) renders one row each.
@@ -1403,23 +1422,7 @@ class TurnPathMixin:
                     # so the file it just wrote is not stat'ed to say it exists.
                     tool_removed = removal_watch.settle(getattr(result, "removed", ()))
                     removal_watch.note_write(getattr(result, "file_change", None))
-                    # What the listing found beside what the call said itself. The
-                    # paths the result named are held out of it: the listing sees
-                    # those too, and one write drawn twice is two files to a reader.
-                    tool_change = getattr(result, "file_change", None)
-                    accounted = [removal.path for removal in tool_removed]
-                    if isinstance(getattr(tool_change, "path", None), str):
-                        accounted.append(tool_change.path)
-                    created, modified, deleted = workdir_snapshot.diff(exec_before, exec_after)
-                    # Off the loop for the reason the walks above are: this reads
-                    # every created file to number its lines, and one command can
-                    # create hundreds. The removals stay here -- they read nothing.
-                    tool_written = (
-                        await asyncio.to_thread(_file_written_payload, created, modified, exec_after, already=accounted)
-                        if created or modified
-                        else None
-                    )
-                    tool_removed.extend(_listing_removals(deleted, already=accounted))
+                    tool_written = _file_written_payload(getattr(result, "written", ()))
                     if emit_tool_event:
                         await on_tool_event(
                             "complete",
@@ -1442,8 +1445,8 @@ class TurnPathMixin:
                                 # The deletions, which no tool reports as its
                                 # result: a command's own watch plus the turn's.
                                 "file_removed": _file_removed_payload(tool_removed),
-                                # And what a command wrote, which it reports even
-                                # less: read off the directory either side of it.
+                                # And what a command wrote, which its output never
+                                # names: the tool reads it off the directory.
                                 "file_written": tool_written,
                             },
                         )
@@ -1452,7 +1455,7 @@ class TurnPathMixin:
                     # misses the whole class (builtin guides in particular).
                     if tool_call.name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
                         await self._report_skill_read(session_key or "", tool_call.name, tool_call.arguments)
-                    result_blocks = getattr(result, "blocks", None)
+                    result_blocks = _scrubbed_blocks(tool_call.arguments, getattr(result, "blocks", None))
                     model_text, blocks, attach_blocks = self._route_result_images(
                         model_text, result_blocks, call_model or effective_model
                     )

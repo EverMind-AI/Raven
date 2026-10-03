@@ -166,6 +166,7 @@ TRUNK_HELD_OUT = {
     "image_search",
     "load_playbook",
     "plugin",
+    "raven_config",
     "read_skill",
     "run_subagent_dag",
     "spawn",

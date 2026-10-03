@@ -1380,18 +1380,45 @@ def everos_follows_provider(slug: str, agent_loop_factory: Any) -> None:
     """
     try:
         from raven.providers.registry import names_same_provider
-        from raven_everos.config import ROLES, role_pin
+        from raven_everos.config import FOLLOWS_MAIN_ROLES, ROLES, main_model_pin, role_pin
     except ImportError:
         return
     try:
         for section in ROLES:
             pin = role_pin(section)
+            if pin is None and section in FOLLOWS_MAIN_ROLES:
+                pin = main_model_pin()
             if pin is not None and names_same_provider(pin[1], slug):
                 break
         else:
             return
     except Exception:  # noqa: BLE001 - a save must not fail over this question
         logger.debug("settings/everos: could not tell whether {} serves a memory role", slug)
+        return
+    _everos_applied(agent_loop_factory)
+
+
+def everos_follows_main_model(agent_loop_factory: Any) -> None:
+    """Restart EverOS after the default model moved, when its memory model follows it.
+
+    An unset memory model resolves to the main model at spawn time, so the
+    running server still extracts with the old one until it is restarted --
+    the same gap ``everos_follows_provider`` closes for a key. Only while
+    EverOS is the memory backend: a switch of the chat model must not start a
+    memory server nobody uses.
+    """
+    try:
+        from raven.config.raven import load_raven_config
+        from raven_everos.config import FOLLOWS_MAIN_ROLES, role_is_env_managed, role_pin
+    except ImportError:
+        return
+    try:
+        if load_raven_config().memory.backend != "everos":
+            return
+        if not any(role_pin(s) is None and not role_is_env_managed(s) for s in FOLLOWS_MAIN_ROLES):
+            return
+    except Exception:  # noqa: BLE001 - a model switch must not fail over this question
+        logger.debug("settings/everos: could not tell whether the memory model follows the main model")
         return
     _everos_applied(agent_loop_factory)
 

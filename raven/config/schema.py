@@ -355,7 +355,8 @@ class ProviderEndpoint(Base):
     label: str = Field(min_length=1)
     api_key: str = ""
     api_base: str | None = None
-    extra_headers: dict[str, str] | None = None
+    # Can carry a secret (APP-Code and the like), as the provider-level one can.
+    extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
 
 
 class ProviderConfig(Base):
@@ -1215,7 +1216,10 @@ class MCPServerConfig(Base):
     args: list[str] = Field(default_factory=list)  # Stdio: command arguments
     env: dict[str, str] = Field(default_factory=dict)  # Stdio: extra env vars
     url: str = ""  # HTTP/SSE: endpoint URL
-    headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
+    # Any header can carry a credential (Authorization, X-Custom-Auth), whatever it is called.
+    headers: dict[str, str] = Field(
+        default_factory=dict, json_schema_extra={"secret": True}
+    )  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
     # Disabled keeps the stanza and any stored credentials but never connects, so
     # turning a server off does not cost the user their re-authorisation.
@@ -1996,6 +2000,14 @@ class ThirdPartyAcpSubagentConfig(Base):
     the field on the write path."""
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    lend_keys: list[str] = Field(default_factory=list)
+    """Raven providers whose key this agent is started with, by name (``openrouter``).
+
+    A reference, not the key: each start reads the key from Raven's own
+    ``providers`` into the variable the preset reads it from
+    (:data:`raven.agent.subagent.presets.LENDABLE_KEYS`), so it never passes
+    through the model and a key Raven rotates is the one the agent gets next.
+    A variable ``env`` sets itself wins."""
     ready_timeout_ms: int = 30000
     """How long the ``initialize`` handshake may take before the agent is
     reported unreachable. Generous by default because a bridge-backed server can

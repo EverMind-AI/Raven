@@ -27,6 +27,7 @@ Three boundaries this tool does not cross:
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -34,6 +35,7 @@ from loguru import logger
 from raven.contracts.tool import Tool
 
 if TYPE_CHECKING:
+    from raven.agent.tools.registry import ToolRegistry
     from raven.contracts.mcp_host import McpHost
 
 _ACTIONS = ("find", "connect", "authorize", "list", "remove")
@@ -55,6 +57,65 @@ def _lang() -> str:
         return load_config().language
     except Exception:  # noqa: BLE001 — a catalog listing must not depend on a readable config
         return "en"
+
+
+_OWN_CAPABILITY_WORDS = frozenset({"image", "images", "picture", "pictures", "video", "videos", "speech", "tts"})
+
+
+def _own_capability(query: str) -> str:
+    """A pointer for a search that names one of Raven's own generation tools.
+
+    Only ever added beside the results, never in place of them: a plugin can
+    carry an image or video tool too, and hiding it would be the opposite bug.
+    """
+    words = set(re.findall(r"[a-z]+", (query or "").lower()))
+    if not words & _OWN_CAPABILITY_WORDS:
+        return ""
+    return (
+        "Image, video and speech generation are also Raven's own tools: raven_config describe shows whether "
+        "each is set up (tools.media.<kind>.model) and what switching it on takes."
+    )
+
+
+def _norm(text: object) -> str:
+    return "".join(ch for ch in str(text or "").lower() if ch.isalnum())
+
+
+def _same(query: str, *names: object) -> bool:
+    want = _norm(query)
+    return bool(want) and any(_norm(n) == want for n in names)
+
+
+def _elsewhere(query: str) -> str:
+    """Where a name that is not a plugin lives instead: a sub-agent preset or a chat channel.
+
+    "Connect openclaw" reads the same whichever kind openclaw is, and a plugin
+    search answers it with whatever is spelled alike (firecrawl, for "claw").
+    """
+    if not query:
+        return ""
+    try:
+        from raven.agent.subagent.presets import third_party_subagent_presets
+
+        for preset in third_party_subagent_presets():
+            if _same(query, preset.get("preset"), preset.get("name")):
+                return (
+                    f"{preset.get('name')} is an agent Raven can dispatch work to, not a plugin: connect it with "
+                    f'raven_config add subagents {{"preset": "{preset.get("preset")}"}}. There is nothing more '
+                    "to check here for it; the plugin list does not hold agents."
+                )
+        from raven.config.update_channels import channel_names
+
+        for name in channel_names():
+            if _same(query, name) or (_norm(query) == "wechat" and name == "weixin"):
+                return (
+                    f"{name} is a chat channel (talking to Raven from that app), not a plugin: "
+                    f"raven_config describe channels.{name} shows how to connect it. There is nothing more to "
+                    "check here for it; the plugin list does not hold channels."
+                )
+    except Exception:  # noqa: BLE001 - a pointer is a courtesy; the search result stands without it
+        return ""
+    return ""
 
 
 def _card(item: dict) -> str:
@@ -90,13 +151,16 @@ class PluginTool(Tool):
 
     timeout_seconds = _TOOL_TIMEOUT
 
-    def __init__(self, loop: "McpHost | None" = None) -> None:
+    def __init__(self, loop: "McpHost | None" = None, registry: "ToolRegistry | None" = None) -> None:
         # The loop through its MCP control face (paper: contracts/mcp_host.py):
         # the connection organ, ``apply_mcp_config`` and the executor provider a
         # sandboxed stdio server needs -- and nothing else of it. Held rather than
         # resolved per call because there is exactly one for the life of a loop,
         # and the tool is registered by that loop's own constructor.
         self._loop = loop
+        # The registry this tool is registered in, so a connect can let the
+        # tools it produced into the running turn (``admit_to_this_turn``).
+        self._registry = registry
 
     @property
     def name(self) -> str:
@@ -107,18 +171,17 @@ class PluginTool(Tool):
         return (
             "Connect third-party integrations (MCP plugins: Asana, Notion, Linear, "
             "GitHub, Stripe, Playwright, ...) from Raven's built-in plugin catalog, "
-            "and report what is connected. Use it when the user asks to connect, add, "
-            "install, re-authorize or check an integration.\n"
+            "and report what is connected: a service with an account (an agent or a chat app is "
+            "raven_config). Use it to connect, re-authorize or check one, or when a task involves one (a "
+            "GitHub link): if not connected, say so and offer to, even when a public page would do.\n"
             "Actions:\n"
             "- find: search the catalog. `query` is a name or a description "
             "('asana', 'issue tracker'). Returns each entry's id, what it needs to "
             "authenticate, and whether it is already installed.\n"
             "- connect: install the catalog entry whose id is `name`, and connect it. "
-            "For a plugin that uses OAuth this returns straight away with the "
-            "provider's authorization URL -- it opens no page and does NOT wait for "
-            "the user to finish, so give them the link and stop. If authorization "
-            "settles as failed the plugin is not installed at all, and the result says "
-            "so.\n"
+            "For an OAuth plugin this returns at once with the authorization URL -- it "
+            "opens no page and does NOT wait, so give the user the link and stop. If "
+            "authorization fails the plugin is not installed, and the result says so.\n"
             "- authorize: mint a fresh authorization link for an installed plugin that "
             "is awaiting it (state auth_required), or retry a connection that failed.\n"
             "- list: every installed plugin with its connection state and how many "
@@ -127,9 +190,8 @@ class PluginTool(Tool):
             "- remove: uninstall one. Only with confirm=true, and only when the user "
             "asked for that plugin to be removed in their own words -- never as "
             "cleanup of your own initiative.\n"
-            "Limits, so you do not try: only catalog entries can be installed -- there "
-            "is no way to point this at a URL, a package or a command line, and you "
-            "must not compose one. Never put an API key, token, password or account "
+            "Limits: only catalog entries can be installed -- not a URL, a package or a "
+            "command line, and you must not compose one. Never put an API key, token, password or account "
             "name in these arguments: a plugin that needs a secret is reported with "
             "the field's name, and the user enters it in the plugin panel. A newly "
             "connected plugin's tools appear in your tool list from the next step on, "
@@ -206,24 +268,35 @@ class PluginTool(Tool):
             items = await self._lookup(query, _FIND_LIMIT)
         except HubTrustError as e:
             return f"Error: the plugin catalog is misconfigured and was refused: {e}"
+        elsewhere = _elsewhere(query)
+        own = _own_capability(query)
         if not items:
-            return (
-                f"No plugin in the catalog matches {query!r}. Try a shorter word, or "
-                f"call plugin(action='find') with no query to see the whole catalog."
+            if elsewhere:
+                return f"No plugin is called {query!r}. {elsewhere}"
+            return f"No plugin in the catalog matches {query!r}. " + (
+                own or "Try a shorter word, or call plugin(action='find') with no query to see the whole catalog."
             )
+        if elsewhere and not any(_same(query, it.get("id"), it.get("name")) for it in items):
+            return f"No plugin is called {query!r} (the matches below only look alike). {elsewhere}"
         shown = items[:_FIND_LIMIT]
         head = f"{len(items)} catalog match(es)" + (f" for {query!r}" if query else "")
         if len(items) > len(shown):
             head += f"; showing {len(shown)}"
         lines = [_card(it) for it in shown]
-        return f"{head}:\n" + "\n".join(lines) + "\nConnect one with plugin(action='connect', name='<id>')."
+        also = f"\nAlso: {elsewhere} Ask which one the user means." if elsewhere else ""
+        also += f"\n{own}" if own else ""
+        return f"{head}:\n" + "\n".join(lines) + "\nConnect one with plugin(action='connect', name='<id>')." + also
 
     def _list(self) -> str:
         from raven.market.connect import installed_overview
 
         rows = installed_overview(self._loop)
+        tail = (
+            "If the task involves a service not listed here, it is not connected: tell the user so and offer "
+            "to connect it (plugin(action='find', query='...')), even if you can work around it."
+        )
         if not rows:
-            return "No plugins are installed. plugin(action='find', query='...') searches the catalog."
+            return f"No plugins are installed. {tail}"
         awaiting = [r["name"] for r in rows if r.get("awaiting_auth")]
         out = [f"{len(rows)} installed plugin(s):"] + [_row(r) for r in rows]
         if awaiting:
@@ -232,6 +305,7 @@ class PluginTool(Tool):
                 + ", ".join(awaiting)
                 + ". plugin(action='authorize', name='<name>') mints a fresh authorization link."
             )
+        out.append(tail)
         return "\n".join(out)
 
     async def _connect(self, name: str) -> str:
@@ -305,7 +379,7 @@ class PluginTool(Tool):
         snap = result.get("mcp") or {}
         state = snap.get("state") or "unknown"
         if state == "connected":
-            tools = self._tools_of(name)
+            tools = self._join_turn(name)
             named = f": {', '.join(tools)}" if tools else ""
             return (
                 f"Connected '{name}'. It registered {snap.get('tool_count') or len(tools)} tool(s){named}. "
@@ -370,9 +444,12 @@ class PluginTool(Tool):
         snap = out.get("mcp") or {}
         state = snap.get("state") or "unknown"
         if state == "connected":
-            tools = self._tools_of(name)
+            tools = self._join_turn(name)
             named = f": {', '.join(tools)}" if tools else ""
-            return f"'{name}' is authorized and connected, with {snap.get('tool_count') or len(tools)} tool(s){named}."
+            return (
+                f"'{name}' is authorized and connected, with {snap.get('tool_count') or len(tools)} tool(s){named}. "
+                f"They are in your tool list from the next step on."
+            )
         url = pending_url(name)
         if url:
             return (
@@ -445,6 +522,37 @@ class PluginTool(Tool):
         ``catalog_detail`` call that rejected it, so this cannot be the first
         reader of a refused hub."""
         return (await self._lookup(name, _NEAR_LIMIT))[:_NEAR_LIMIT]
+
+    def _join_turn(self, server: str) -> list[str]:
+        """The server's tools, let into the running turn.
+
+        Without this the turn freeze holds them back until the user sends
+        another message, and the result's "from the next step on" is a promise
+        the agent then fails to keep.
+        """
+        tools = self._tools_of(server)
+        if self._registry is not None:
+            self._registry.admit_to_this_turn([*tools, *self._meta_tools_of(server)])
+        return tools
+
+    def _meta_tools_of(self, server: str) -> list[str]:
+        """The resource / prompt meta-tools this server's connect may have added.
+
+        Registered by the loop without an origin, so ``_tools_of`` cannot see
+        them; a server that is the first to offer resources is otherwise
+        connected with its resources out of reach for the rest of the turn.
+        """
+        from raven.mcp.prompts import PROMPT_TOOL_NAMES
+        from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+        manager = getattr(self._loop, "mcp_manager", None) if self._loop is not None else None
+        if manager is None:
+            return []
+        names: list[str] = []
+        for primitive, group in (("resources", RESOURCE_TOOL_NAMES), ("prompts", PROMPT_TOOL_NAMES)):
+            if server in manager.servers_offering(primitive):
+                names.extend(sorted(group))
+        return names
 
     def _tools_of(self, server: str) -> list[str]:
         """Tool names the live registry holds for one server."""

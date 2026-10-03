@@ -449,7 +449,7 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     connected, and a row that could not be proved has to stay one Connect away
     rather than becoming a second thing to switch on.
     """
-    preset_name = params.get("preset")
+    preset_name = _preset_key(params.get("preset"))
     if preset_name not in THIRD_PARTY_SUBAGENT_PRESETS:
         raise SubagentNotFoundError(
             f"unknown preset: {preset_name!r}",
@@ -461,6 +461,12 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         entry["name"] = name
     if params.get("description"):
         entry["description"] = params["description"]
+    if (params.get("lend_key") or "").strip():
+        entry["lendKeys"] = _lend_keys(entry.get("preset"), [params["lend_key"]])
+    # A model the agent itself lists, so an add can be retried on another one
+    # when the agent's own default is the thing its provider refuses.
+    if isinstance(params.get("model"), str) and params["model"].strip():
+        entry["model"] = params["model"].strip()
     if params.get("api_key") is not None:
         entry["apiKey"] = params["api_key"]
     if params.get("mcps") is not None:
@@ -502,6 +508,47 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
     return {"added": True, "name": entry["name"]}
+
+
+def _lend_keys(preset: Any, providers: list[Any]) -> list[str]:
+    """``providers`` as a row's ``lendKeys``, refused unless the preset reads each and Raven holds its key."""
+    from raven.agent.subagent.presets import lendable_keys
+    from raven.config.self_surface import lookup, read_raw
+
+    readable = lendable_keys(preset if isinstance(preset, str) else None)
+    raw = read_raw()
+    out: list[str] = []
+    for provider in (str(p).strip() for p in providers):
+        if not provider or provider in out:
+            continue
+        if provider not in readable:
+            raise ConfigValidationError(
+                f"this agent cannot be started with Raven's {provider!r} key"
+                + (f"; it reads one for {sorted(readable)}" if readable else "; it reads none Raven can lend"),
+                data={"field": "lend_keys", "provider": provider},
+            )
+        _, key = lookup(raw, f"providers.{provider}.apiKey")
+        if not (isinstance(key, str) and key.strip()):
+            raise ConfigValidationError(
+                f"Raven holds no key for {provider!r} to lend", data={"field": "lend_keys", "provider": provider}
+            )
+        out.append(provider)
+    return out
+
+
+def _preset_key(asked: Any) -> Any:
+    """The preset a caller named, by its key or by the name it is shown under ("CodeBuddy").
+
+    Seen live: `{"preset": "CodeBuddy"}` was refused as an unknown preset, and
+    the caller went looking for the agent elsewhere.
+    """
+    if not isinstance(asked, str) or asked in THIRD_PARTY_SUBAGENT_PRESETS:
+        return asked
+    wanted = asked.strip().lower()
+    for key, preset in THIRD_PARTY_SUBAGENT_PRESETS.items():
+        if wanted in (key.lower(), str(preset.get("name") or "").lower()):
+            return key
+    return asked
 
 
 def _factory_description(name: str, preset_name: str | None) -> str:
@@ -698,9 +745,26 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         target["mcps"] = list(params["mcps"])
     if params.get("allow_mcp_secrets") is not None:
         target["allowMcpSecrets"] = params["allow_mcp_secrets"]
+    # Before the model: a key lent in the same call is what lets the agent list
+    # that provider's models, and the pick below is judged on that list.
+    if params.get("lend_keys") is not None:
+        if target.get("kind") != "acp":
+            raise ConfigFieldReadonlyError(
+                "only an acp agent can be started with Raven's keys", data={"field": "lend_keys", "name": name}
+            )
+        target["lendKeys"] = _lend_keys(target.get("preset"), list(params["lend_keys"]))
     if params.get("clear_model") or params.get("model") is not None:
         cfg_for_meta = _as_configs([target])[0]
         snapshot = acp_snapshot_for(cfg_for_meta) if cfg_for_meta.kind == "acp" else None
+        if snapshot is None and cfg_for_meta.kind == "acp" and params.get("model") is not None:
+            # Never measured is not "offers none": the menu is in the handshake,
+            # which spends nothing, so take it before judging the pick. Seen
+            # live: a connected agent never tested was told it had no models,
+            # and the caller launched a whole run to make it record some.
+            try:
+                snapshot = await record_capabilities(cfg_for_meta)
+            except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as before
+                logger.debug("subagents: {!r} menu not measured for a model pick: {}", name, exc)
         meta = agent_meta(cfg_for_meta, snapshot=snapshot)
         rule = _model_rule(cfg_for_meta, snapshot, meta)
         if rule == "fixed":
@@ -967,6 +1031,21 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
     data: dict[str, Any] = {"name": name, "field": "enabled", "detail": detail}
     if result.remedy is not None:
         data["remedy"] = result.remedy.to_wire()
+        if result.remedy.kind in {"model", "quota", "billing"} and getattr(cfg, "kind", None) == "acp":
+            # A refusal about the model is answered by another one, and the
+            # agent names its menu in the handshake the ping already got past:
+            # without it the caller ran the agent's CLI four or five times to
+            # learn what it could switch to.
+            try:
+                snapshot = await record_capabilities(cfg)
+                models = [c.value for c in getattr(snapshot, "model_choices", ()) or ()] or list(
+                    getattr(snapshot, "available_models", ()) or ()
+                )
+            except Exception as exc:  # noqa: BLE001 - the refusal stands without the menu
+                logger.debug("subagents: {!r} menu not read after a model refusal: {}", name, exc)
+                models = []
+            if models:
+                data["models"] = models[:20]
     raise SubagentNotReadyError(detail, data=data)
 
 

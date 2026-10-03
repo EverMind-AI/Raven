@@ -1,11 +1,14 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
 import * as confirmStore from '../../state/confirm'
+import * as detail from '../../state/detail'
+import * as lang from '../../state/lang'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
+import { CHANNELS } from './catalogue'
 import { ConnectionsApp } from './ConnectionsPage'
 import * as store from './store'
 
@@ -61,7 +64,9 @@ function install(rows: ConnChannel[], over: Partial<ConnectionsSource> = {}) {
   fn()
   })
   setSources({ connections: source })
-  document.body.innerHTML = '<div id="connectionsBody"></div><div id="menu" data-open="false"></div>'
+  document.body.innerHTML =
+    '<div id="connectionsBody"></div><div id="menu" data-open="false"></div>' +
+    '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>'
   return { source, calls, shellCalls }
 }
 
@@ -75,71 +80,79 @@ function typeInto(box: HTMLInputElement, value: string): void {
   box.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-/* The section as the dialog hosts it: the island in its own box, and the fetch
-   arriving at the section costs (features/connections/store.ts's `enter`, which
-   state/settings.ts spends -- here it is called by hand, because the dialog is
-   not what this file is about). */
+/* The page as the rail opens it: the island in its own box, and the fetch
+   opening it costs (features/connections/store.ts's `open`, minus the page
+   switch, which is not what this file is about). */
 async function mount() {
   const view = render(<ConnectionsApp />, { container: document.getElementById('connectionsBody')! })
   await act(async () => {
-    store.closeChannel()
     await store.refresh(true)
   })
   return view
 }
 
-/* The two columns. Every list query is scoped to the left one, because the
-   picked channel carries the same name in its own header. */
-const side = (): HTMLElement => document.querySelector('.two-pane-side') as HTMLElement
-const main = (): HTMLElement => document.querySelector('.two-pane-main') as HTMLElement
-const rowsOf = (): HTMLElement[] => [...side().querySelectorAll<HTMLElement>('.two-pane-row')]
+/* The page, and the sheet the shared drawer holds. Every card query is scoped
+   to the page, because the picked channel carries the same name in its head. */
+const side = (): HTMLElement => document.getElementById('connectionsBody')!
+const main = (): HTMLElement => store.detailHost()
+const sheetUp = (): boolean => detail.get().open
+const rowsOf = (): HTMLElement[] => [...side().querySelectorAll<HTMLElement>('.su-card:not(.su-wcard)')]
 const rowNamed = (name: string): HTMLElement =>
-  rowsOf().find((r) => r.querySelector('.nm')!.textContent === name)!
-const groupOf = (name: string): string | null => {
-  const row = rowNamed(name)
-  let at: Element | null = row.previousElementSibling
-  while (at && !at.classList.contains('two-pane-grp')) at = at.previousElementSibling
-  return at ? at.textContent : null
+  rowsOf().find((r) => r.querySelector('.su-t')!.textContent === name)!
+const tab = (key: string): HTMLElement =>
+  [...side().querySelectorAll<HTMLElement>('.su-tab')].find((b) => b.firstChild?.textContent === key)!
+/* Which of the two groups a card is in: whether the Connected tab shows it. */
+const groupOf = (name: string): string => {
+  act(() => tab('gui.conn.tab_on').click())
+  const on = !!rowNamed(name)
+  act(() => tab('gui.conn.tab_all').click())
+  return on ? 'gui.conn.g_on' : 'gui.conn.g_off'
 }
-const groups = (): Array<string | null> =>
-  [...side().querySelectorAll('.two-pane-grp')].map((g) => g.textContent)
-const subOf = (name: string): string | null => rowNamed(name).querySelector('.ds')?.textContent ?? null
-const toneOf = (name: string): string => rowNamed(name).querySelector('.ds')!.className
-/* The row's own switch, which is the one control it carries. */
-const rowSwitch = (name: string): HTMLButtonElement => rowNamed(name).querySelector('.two-pane-swi')!
-/* Opening a channel is clicking its name. */
-const openRow = (name: string): void => { within(side()).getByText(name).click() }
+const countOf = (key: string): string => tab(key).querySelector('.su-tn')!.textContent!
+/* What a card says about itself: a reason where one is owed, else the line
+   under its name. */
+const subOf = (name: string): string | null => {
+  const foot = rowNamed(name).querySelector('.su-foot')!
+  return foot.classList.contains('su-foot-quiet') ? rowNamed(name).querySelector('.su-one')!.textContent : foot.textContent
+}
+const footOf = (name: string): string => rowNamed(name).querySelector('.su-foot')!.textContent!
+const lineOf = (name: string): string => rowNamed(name).querySelector('.su-one')!.textContent!
+const ledOf = (name: string): string => rowNamed(name).querySelector('.su-nm > span:last-child:not(.su-t)')?.className ?? ''
+/* Opening a channel is pressing its card. */
+const openRow = (name: string): void => { rowNamed(name).click() }
 /* The steps' own state, which is what draws the tick and the current mark --
    the titles alone read the same whether or not the sequence advances. */
 const wizStates = (): Array<string | null> =>
   [...main().querySelectorAll('.suwiz .step')].map((s) => s.getAttribute('data-state'))
-/* The pane's header and the row its verb sits on. */
-const paneHead = (): HTMLElement => main().querySelector('.two-pane-head')!
+/* The sheet's head and the row its verb sits on. */
+const paneHead = (): HTMLElement => main().querySelector('.su-head')!
 const paneFoot = (): HTMLElement => main().querySelector('.sufoot')!
 
+/* The drawer is closed, not reset: a close schedules the card's drop for after
+   the fade, and that drop asks whether the drawer was opened since by its open
+   count. Resetting the count to zero let the next case's first open read as
+   the same open, and the last case's drop emptied its sheet mid-test. */
 afterEach(() => {
-  act(() => {
-    store.closeChannel()
-  })
+  act(() => detail.close())
   cleanup()
+  store._resetForTests()
   vi.restoreAllMocks()
   resetSources()
 })
 
 describe('connections island', () => {
-  it('waits as the rows it becomes rather than as an empty column', async () => {
+  it('waits as the cards it becomes rather than as an empty grid', async () => {
     /* `!loaded && !rows.length` used to draw nothing, so the seconds before the
        adapters answered looked exactly like "there are no channels". */
     let land: ((r: ConnChannel[]) => void) | null = null
     install([], { rows: () => new Promise((resolve) => { land = resolve }) })
     render(<ConnectionsApp />, { container: document.getElementById('connectionsBody')! })
     await act(async () => { void store.refresh(true); await Promise.resolve() })
-    const wait = side().querySelector('.two-pane-wait')!
-    expect(wait.getAttribute('aria-busy')).toBe('true')
-    expect(wait.querySelectorAll('.two-pane-row').length).toBe(7)
+    const wait = side().querySelector('.su-grid[aria-busy="true"]')!
+    expect(wait.querySelectorAll('.su-wcard').length).toBe(CHANNELS.length)
 
     await act(async () => { land!([chan()]); await Promise.resolve() })
-    expect(document.querySelector('.two-pane-wait')).toBeNull()
+    expect(side().querySelector('[aria-busy="true"]')).toBeNull()
     expect(rowNamed('Slack')).toBeTruthy()
   })
 
@@ -165,16 +178,16 @@ describe('connections island', () => {
       chan({ id: 'email', key: 'gui.chan.email', fields: [
         { key: 'imap_host', required: true }, { key: 'imap_user', required: true },
         { key: 'smtp_host', required: true }, { key: 'smtp_user', required: true },
-      ] }),
-      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }] }),
+      ], missing: ['imap_host', 'imap_user', 'smtp_host', 'smtp_user'] }),
+      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] }),
       chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true }),
     ])
     await mount()
-    expect(rowsOf().map((r) => r.querySelector('.nm')!.textContent))
+    expect(rowsOf().map((r) => r.querySelector('.su-t')!.textContent))
       .toEqual(['gui.chan.weixin', 'Telegram', 'gui.chan.email'])
-    expect(subOf('gui.chan.weixin')).toBe('gui.conn.cost_scan')
-    expect(subOf('Telegram')).toBe('gui.conn.cost_n {"n":"1"}')
-    expect(subOf('gui.chan.email')).toBe('gui.conn.cost_n {"n":"4"}')
+    expect(subOf('gui.chan.weixin')).toBe('gui.conn.line_scan')
+    expect(subOf('Telegram')).toBe('gui.conn.line_creds {"n":"1"}')
+    expect(subOf('gui.chan.email')).toBe('gui.conn.line_creds {"n":"4"}')
   })
 
   /* Whether a channel signs in by scanning is a static fact about it, but the
@@ -189,9 +202,9 @@ describe('connections island', () => {
     ])
     await mount()
     expect(await screen.findByText('gui.chan.weixin')).toBeTruthy()
-    expect(subOf('gui.chan.weixin')).toBe('gui.conn.cost_scan')
+    expect(subOf('gui.chan.weixin')).toBe('gui.conn.line_scan')
     /* And it sorts ahead of the cheapest form. */
-    expect(rowsOf().map((r) => r.querySelector('.nm')!.textContent)).toEqual(['gui.chan.weixin', 'Telegram'])
+    expect(rowsOf().map((r) => r.querySelector('.su-t')!.textContent)).toEqual(['gui.chan.weixin', 'Telegram'])
   })
 
   /* The row's second line, which is the whole of what a row says about itself:
@@ -200,31 +213,58 @@ describe('connections island', () => {
      two -- "the gateway could not be asked" is not "off", and "running but not
      paired" is not "receiving". */
   describe('what the row says about its own state', () => {
-    it('tells the five states apart, in words and in colour', async () => {
+    /* Five states underneath, three said: connected, not yet, and set up but
+       failed. Waiting on a code is not yet; nobody to ask is the page's
+       notice, not a card's. */
+    it('says three things for the five states underneath', async () => {
       install([
         chan({ id: 'a', key: 'A', on: true, running: true, connected: true, who: 'me' }),
         chan({ id: 'b', key: 'B', on: true, running: false }),
         chan({ id: 'c', key: 'C', on: true, running: true, connected: false, qrLogin: true }),
         chan({ id: 'd', key: 'D', on: true }),
         chan({ id: 'e', key: 'E', on: false }),
-      ])
+      ], { hostRunning: () => true })
       await mount()
-      expect(subOf('A')).toBe('gui.conn.as_you {"who":"me"}')
-      expect(toneOf('A')).toContain('live')
-      expect(subOf('B')).toBe('gui.conn.tag_down')
-      expect(toneOf('B')).toContain('bad')
-      expect(subOf('C')).toBe('gui.conn.st_unpaired')
-      expect(toneOf('C')).toContain('warn')
-      expect(subOf('D')).toBe('gui.conn.tag_unknown')
-      expect(toneOf('D')).toContain('warn')
-      expect(subOf('E')).toBe('gui.conn.cost_n {"n":"1"}')
-      expect(toneOf('E')).toBe('ds')
+      expect([footOf('A'), ledOf('A'), lineOf('A')]).toEqual(['gui.conn.foot_on', 'su-led', 'gui.conn.as_you {"who":"me"}'])
+      expect([footOf('B'), ledOf('B'), lineOf('B')]).toEqual(['gui.conn.foot_bad', 'su-led su-led-bad', 'gui.conn.line_bad_creds'])
+      for (const quiet of ['C', 'D', 'E']) {
+        expect([footOf(quiet), ledOf(quiet)], quiet).toEqual(['gui.conn.foot_off', ''])
+      }
+      /* Configured: switched off says so, switched on does not claim it is off. */
+      expect(lineOf('E')).toBe('gui.conn.line_ready')
+      expect(lineOf('D')).toBe('gui.conn.line_saved')
+    })
+
+    /* The sheet carries the gateway's reason, where there is one. */
+    it('names the reason in the sheet of an entrance that would not start', async () => {
+      install([chan({ on: true, running: false, refusal: 'gui.conn.out_bad_config' })], { hostRunning: () => true })
+      await mount()
+      await act(async () => { openRow('Slack') })
+      expect(paneHead().querySelector('.su-by')!.textContent).toBe('gui.conn.st_bad_why {"why":"gui.conn.out_bad_config"}')
+    })
+
+    it('asks a scan entrance that would not start to sign in again', async () => {
+      install([chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: false })], {
+        hostRunning: () => true,
+      })
+      await mount()
+      expect(lineOf('gui.chan.weixin')).toBe('gui.conn.line_bad_scan')
+    })
+
+    /* The one card asking for something leads the rest. */
+    it('puts a failed entrance ahead of the ones still to connect', async () => {
+      install([
+        chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] }),
+        chan({ on: true, running: false }),
+      ], { hostRunning: () => true })
+      await mount()
+      expect(rowsOf().map((r) => r.querySelector('.su-t')!.textContent)).toEqual(['Slack', 'gui.chan.weixin'])
     })
 
     it('says how many credentials are still missing, where some are', async () => {
       install([chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] })])
       await mount()
-      expect(subOf('Slack')).toBe('gui.conn.st_missing {"n":1}')
+      expect(subOf('Slack')).toBe('gui.conn.line_creds {"n":"1"}')
     })
   })
 
@@ -244,7 +284,7 @@ describe('connections island', () => {
         ;(paneFoot().querySelector('button') as HTMLElement).click()
       })
       expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_off')
-      expect(subOf('gui.chan.weixin')).toBe('gui.conn.tag_unknown')
+      expect(footOf('gui.chan.weixin')).toBe('gui.conn.foot_off')
     })
 
     /* And no group in between. An adapter up and waiting on a code is not in
@@ -256,7 +296,8 @@ describe('connections island', () => {
         chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: true, connected: false }),
       ])
       await mount()
-      expect(groups()).toEqual(['gui.conn.g_off'])
+      expect(groupOf('gui.chan.weixin')).toBe('gui.conn.g_off')
+      expect(countOf('gui.conn.tab_on')).toBe('0')
     })
 
     it('keeps an entrance with made-up credentials out of in service', async () => {
@@ -265,7 +306,7 @@ describe('connections island', () => {
       install([chan({ on: true, running: false, fields: [{ key: 'bot_token', required: true, set: true }] })])
       await mount()
       expect(groupOf('Slack')).toBe('gui.conn.g_off')
-      expect(subOf('Slack')).toBe('gui.conn.tag_down')
+      expect(footOf('Slack')).toBe('gui.conn.foot_bad')
     })
 
     it('keeps a scan entrance out of in service until it is paired', async () => {
@@ -315,7 +356,7 @@ describe('connections island', () => {
       await act(async () => {
         ;(paneFoot().querySelector('button.key') as HTMLElement).click()
       })
-      expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+      expect(sheetUp()).toBe(false)
       expect(groupOf('Slack')).toBe('gui.conn.g_on')
     })
 
@@ -342,7 +383,7 @@ describe('connections island', () => {
         written()
         await new Promise((resolve) => setTimeout(resolve, 0))
       })
-      expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+      expect(sheetUp()).toBe(false)
     })
 
     /* A rebuild that finishes before the status is re-read shows no down state
@@ -360,7 +401,7 @@ describe('connections island', () => {
         ;(paneFoot().querySelector('button.key') as HTMLElement).click()
         await new Promise((resolve) => setTimeout(resolve, 0))
       })
-      expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+      expect(sheetUp()).toBe(false)
     })
 
     /* And the reason the card exists: a correction the adapter could not start
@@ -410,17 +451,23 @@ describe('connections island', () => {
      saying that up front is what keeps the press from being the way to find
      out. */
   describe('when nothing is running that could host an adapter', () => {
-    it('names the reason on the row instead of calling the state unknown', async () => {
-      install([chan({ on: true })], { hostRunning: () => false })
+    /* Said once for the page, and no card claims it: every entrance is deaf
+       for the same reason, including one whose adapter reads as down. */
+    it('says it once over the grid, and leaves every card quiet', async () => {
+      install([chan({ on: true }), chan({ id: 'telegram', key: 'Telegram', on: true, running: false })], {
+        hostRunning: () => false,
+      })
       await mount()
-      expect(subOf('Slack')).toBe('gui.conn.tag_nohost')
+      expect(side().querySelector('.su-notice')!.textContent).toBe('gui.conn.host_down')
+      expect([footOf('Slack'), footOf('Telegram')]).toEqual(['gui.conn.foot_off', 'gui.conn.foot_off'])
     })
 
-    /* And where it genuinely cannot say, it says the honest thing. */
-    it('still says state unknown when the source cannot tell', async () => {
+    /* Where the source cannot say, it claims nothing either way. */
+    it('draws no notice when the source cannot tell', async () => {
       install([chan({ on: true })])
       await mount()
-      expect(subOf('Slack')).toBe('gui.conn.tag_unknown')
+      expect(side().querySelector('.su-notice')).toBeNull()
+      expect(footOf('Slack')).toBe('gui.conn.foot_off')
     })
 
     it('tells a scan pane there is no code coming before the press, not after', async () => {
@@ -431,8 +478,9 @@ describe('connections island', () => {
       await act(async () => { openRow('gui.chan.weixin') })
       const steps = [...main().querySelectorAll('.suwiz .step')]
       expect(steps[1]!.querySelector('.sd')!.textContent).toBe('gui.conn.w2_blocked')
-      /* Unpressed: the write has not happened, and the pane said so anyway. */
-      expect(steps[0]!.getAttribute('data-state')).toBe('idle')
+      /* Unpressed: the write has not happened, and the pane said so anyway.
+         Pressing connect is still the step the reader is on. */
+      expect(steps[0]!.getAttribute('data-state')).toBe('now')
     })
 
     /* One sentence for two states was wrong in the commoner one: "Raven is not
@@ -474,74 +522,6 @@ describe('connections island', () => {
     })
   })
 
-  /* The switch takes the entrance in and out of service, and that is all it
-     does. What it must not do is offer to switch on an entrance that has
-     nothing to switch on WITH: the way in for those is the pane beside the
-     list, where the credential is handed over. */
-  it('takes an entrance out of service straight from the row, with no dialog', async () => {
-    const { calls, shellCalls } = install([chan({ on: true, running: true })])
-    await mount()
-    expect(rowSwitch('Slack').getAttribute('aria-checked')).toBe('true')
-    await act(async () => {
-      rowSwitch('Slack').click()
-    })
-    expect(calls).toContainEqual(['toggle', false])
-    expect(shellCalls.filter((c) => c[0] === 'confirmAsk')).toEqual([])
-    expect(groupOf('Slack')).toBe('gui.conn.g_off')
-    expect(rowSwitch('Slack').getAttribute('aria-checked')).toBe('false')
-  })
-
-  /* The press is not the end of the errand: the source reads the status back,
-     and what it reads is what the row has to show. The row used to keep
-     whatever the section entry had loaded, so the same backend state drew
-     "not started" or "receiving" depending on when the reader arrived. */
-  it('redraws the row from what the write read back, not from the press', async () => {
-    install([chan({ on: false, running: false })], {
-      toggle: async (c, on) => {
-        c.on = on
-        /* After the await, the way a status read is: a paint that only happens
-           on the press cannot have this. */
-        await Promise.resolve()
-        c.running = on
-      },
-    })
-    await mount()
-    expect(groupOf('Slack')).toBe('gui.conn.g_off')
-    await act(async () => {
-      rowSwitch('Slack').click()
-    })
-    expect(groupOf('Slack')).toBe('gui.conn.g_on')
-  })
-
-  /* Where the code appears is the pane, and the list says nothing about that:
-     the owner had to be told to click the row. */
-  it('opens the card when a scan entrance is switched on from the list', async () => {
-    install([
-      chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] }),
-      chan({ on: true, running: true }),
-    ])
-    await mount()
-    await act(async () => {
-      rowSwitch('gui.chan.weixin').click()
-    })
-    expect(paneHead().querySelector('.nm')!.textContent).toBe('gui.chan.weixin')
-  })
-
-  it('opens nothing for an entrance whose way in is the form, or for a switch off', async () => {
-    install([
-      chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: true }),
-      chan({ on: false }),
-    ])
-    await mount()
-    await act(async () => {
-      rowSwitch('Slack').click()
-    })
-    expect(screen.getByText('gui.conn.pick')).toBeTruthy()
-    await act(async () => {
-      rowSwitch('gui.chan.weixin').click()
-    })
-    expect(screen.getByText('gui.conn.pick')).toBeTruthy()
-  })
 
   /* The page-level fact the write can change too: `host` was written only on
      section entry, so a gateway that came up since then left the pane telling
@@ -550,8 +530,9 @@ describe('connections island', () => {
     let up = false
     install([chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [], on: true, running: false })], {
       hostRunning: () => up,
-      toggle: async () => {
+      apply: async () => {
         up = true
+        return true
       },
     })
     await mount()
@@ -559,40 +540,10 @@ describe('connections island', () => {
     expect(main().querySelectorAll('.suwiz .step')[1]!.querySelector('.sd')!.textContent)
       .toBe('gui.conn.w2_blocked')
     await act(async () => {
-      rowSwitch('gui.chan.weixin').click()
+      ;[...paneFoot().querySelectorAll('button')].find((b) => b.textContent === 'gui.conn.w_retry')!.click()
     })
     expect(main().querySelectorAll('.suwiz .step')[1]!.querySelector('.sd')!.textContent)
       .toBe('gui.conn.w2_down')
-  })
-
-  it('leaves the switch unavailable while a credential is still missing', async () => {
-    install([
-      chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] }),
-      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true, set: true }], missing: [] }),
-    ])
-    await mount()
-    expect(rowSwitch('Slack').hasAttribute('disabled')).toBe(true)
-    expect(rowSwitch('Telegram').hasAttribute('disabled')).toBe(false)
-  })
-
-  it('takes the switch back when the source reverts and rejects handled', async () => {
-    install([chan({ on: true, running: true, connected: false })], {
-      /* What the live source does: optimistic flip now, revert on the rpc
-         failure, reject handled so the island only redraws. */
-      toggle: (c, on) => {
-        c.on = on
-        return Promise.resolve().then(() => {
-          c.on = !on
-          throw { handled: true }
-        })
-      },
-    })
-    await mount()
-    await act(async () => {
-      rowSwitch('Slack').click()
-    })
-    expect(rowSwitch('Slack').getAttribute('aria-checked')).toBe('true')
-    expect(groupOf('Slack')).toBe('gui.conn.g_off')
   })
 
   /* The row's press opens the pane, and does nothing else. It briefly did the
@@ -605,26 +556,15 @@ describe('connections island', () => {
       chan({ fields: [{ key: 'bot_token', required: true, set: true }], missing: [] }),
     ])
     await mount()
-    expect(screen.getByText('gui.conn.pick')).toBeTruthy()
+    expect(sheetUp()).toBe(false)
     await act(async () => { openRow('gui.chan.weixin') })
-    expect(paneHead().querySelector('.nm')!.textContent).toBe('gui.chan.weixin')
+    expect(paneHead().querySelector('.su-meta h3')!.textContent).toBe('gui.chan.weixin')
     expect(calls.filter((x) => x[0] === 'apply' || x[0] === 'toggle')).toEqual([])
     /* Including the entrance that has everything it needs: no write, no start,
        nothing claimed. */
     await act(async () => { openRow('Slack') })
-    expect(paneHead().querySelector('.nm')!.textContent).toBe('Slack')
+    expect(paneHead().querySelector('.su-meta h3')!.textContent).toBe('Slack')
     expect(calls.filter((x) => x[0] === 'apply' || x[0] === 'toggle')).toEqual([])
-  })
-
-  it('narrows the list by what is typed in the search', async () => {
-    install([chan(), chan({ id: 'telegram', key: 'Telegram' })])
-    await mount()
-    await screen.findByText('Slack')
-    const box = side().querySelector('input') as HTMLInputElement
-    await act(async () => {
-      fireEvent.change(box, { target: { value: 'tele' } })
-    })
-    expect(rowsOf().map((r) => r.querySelector('.nm')!.textContent)).toEqual(['Telegram'])
   })
 
   /* "Connect" is unavailable until there is something to connect WITH. Pressing
@@ -759,10 +699,33 @@ describe('connections island', () => {
     install([chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] })])
     await mount()
     await act(async () => { openRow('Telegram') })
-    const jump = main().querySelector<HTMLAnchorElement>('#connDlgBody a.jump')!
+    const jump = main().querySelector<HTMLAnchorElement>('#connDlgBody a.su-guide')!
     expect(jump.href).toBe('https://t.me/BotFather')
     expect(jump.target).toBe('_blank')
-    expect(main().querySelector('#connDlgBody .sucreds .n')!.textContent).toBe('0 / 1')
+    /* The name sits in the sentence with its own spaces only in a Chinese one;
+       the stand-in language here is not, so it is passed as it is. */
+    expect(jump.querySelector('.su-guide-t')!.textContent).toBe('gui.conn.guide {"name":"Telegram"}')
+  })
+
+  /* A Latin name inside a Chinese sentence takes a space either side; a
+     Chinese name takes none. The Chinese name is escaped: source added in a PR stays
+     ASCII (scripts/check_source_language.py). */
+  it('spaces a Latin name inside a Chinese sentence, and only there', async () => {
+    const FEISHU = '\u98de\u4e66'
+    install([
+      chan({ id: 'telegram', key: 'Telegram', fields: [{ key: 'token', required: true }], missing: ['token'] }),
+      chan({ id: 'feishu', key: FEISHU, fields: [{ key: 'app_id', required: true }], missing: ['app_id'] }),
+    ])
+    act(() => lang.set('zh'))
+    try {
+      await mount()
+      await act(async () => { openRow('Telegram') })
+      expect(main().querySelector('.su-guide-t')!.textContent).toBe('gui.conn.guide {"name":" Telegram "}')
+      await act(async () => { openRow(FEISHU) })
+      expect(main().querySelector('.su-guide-t')!.textContent).toBe(`gui.conn.guide {"name":"${FEISHU}"}`)
+    } finally {
+      act(() => lang._resetForTests())
+    }
   })
 
   it('has no link for a channel whose credentials are not issued anywhere', async () => {
@@ -879,35 +842,49 @@ describe('connections island', () => {
     expect(document.querySelector('.qrbox')).toBeNull()
   })
 
-  /* Nothing in service yet is the ordinary first run, and a heading over an
-     empty box saying so was the page explaining itself. */
-  it('leaves out the in-service group until something is in it', async () => {
+  /* Nothing connected yet is the ordinary first run: the tab still stands,
+     and says so in its own words rather than as an empty grid. */
+  it('says so on the Connected tab while nothing is connected', async () => {
     install([chan({ missing: ['bot_token'] })])
     await mount()
-    expect(await screen.findByText('Slack')).toBeTruthy()
-    expect(groups()).toEqual(['gui.conn.g_off'])
-    expect(side().querySelector('.empty-note')).toBeNull()
+    expect(countOf('gui.conn.tab_on')).toBe('0')
+    act(() => tab('gui.conn.tab_on').click())
+    expect(rowsOf()).toEqual([])
+    expect(side().querySelector('.su-empty')!.textContent).toBe('gui.conn.none_on')
   })
 
-  it('says so when nothing in the catalogue matches the search', async () => {
-    install([chan()])
-    await mount()
-    await screen.findByText('Slack')
-    await act(async () => {
-      fireEvent.change(side().querySelector('input') as HTMLInputElement, { target: { value: 'zzz' } })
-    })
-    expect(screen.getByText('gui.conn.none_match')).toBeTruthy()
-  })
-
-  /* One fact, once. The credential count is the form's own caption, so the
-     header does not print it a second line above -- it said "needs 1
-     credential" over a block already headed "credentials 0 / 1". */
-  it('leaves the credential count to the form that counts it', async () => {
+  /* One fact, once. The head counts what is missing, so the body carries no
+     second "credentials 0 / 1" caption over the same boxes. */
+  it('counts what is missing in the head alone', async () => {
     install([chan({ fields: [{ key: 'bot_token', required: true }], missing: ['bot_token'] })])
     await mount()
     await act(async () => { openRow('Slack') })
-    expect(paneHead().querySelector('.two-pane-meta')!.textContent).toBe('gui.conn.st_missing {"n":1}')
-    expect(main().querySelector('#connDlgBody .sucreds .n')!.textContent).toBe('0 / 1')
+    expect(paneHead().querySelector('.su-by')!.textContent).toBe('gui.conn.st_missing {"n":1}')
+    expect(main().querySelector('#connDlgBody .sucreds')).toBeNull()
+  })
+
+  /* "Set, leave blank to keep" is said once for the form, not in every box. */
+  it('says once that a saved box left blank is kept', async () => {
+    install([chan({ on: true, running: true, fields: [
+      { key: 'bot_token', required: true, set: true }, { key: 'app_token', required: true, set: true },
+    ] })])
+    await mount()
+    await act(async () => { openRow('Slack') })
+    expect(main().querySelectorAll('.su-keep')).toHaveLength(1)
+    /* A connected entrance is here to rotate a secret, not to learn where
+       secrets come from. */
+    expect(main().querySelector('.su-guide')).toBeNull()
+    expect([...main().querySelectorAll('input')].map((i) => i.placeholder)).toEqual(['gui.conn.field_set', 'gui.conn.field_set'])
+  })
+
+  /* Backing out and connecting sit at the two ends of the foot. */
+  it('keeps disconnect apart from the verb that connects', async () => {
+    install([chan({ on: true, running: true })])
+    await mount()
+    await act(async () => { openRow('Slack') })
+    const kids = [...paneFoot().children]
+    expect(kids[0]!.textContent).toBe('gui.conn.disconnect')
+    expect(kids.at(-1)!.className).toContain('key')
   })
 
   /* Scanning is the one way in the body does not spell out: the wizard has no
@@ -916,7 +893,7 @@ describe('connections island', () => {
     install([chan({ id: 'weixin', key: 'gui.chan.weixin', qrLogin: true, fields: [] })])
     await mount()
     await act(async () => { openRow('gui.chan.weixin') })
-    expect(paneHead().querySelector('.two-pane-meta')!.textContent).toBe('gui.conn.cost_scan_line')
+    expect(paneHead().querySelector('.su-by')!.textContent).toBe('gui.conn.cost_scan_line')
   })
 
   /* One fact, once, the other way round: what the row's own second line says is
@@ -925,7 +902,7 @@ describe('connections island', () => {
     install([chan({ on: true, running: true })])
     await mount()
     await act(async () => { openRow('Slack') })
-    expect(paneHead().querySelector('.two-pane-meta')!.textContent).toBe('gui.conn.st_live')
+    expect(paneHead().querySelector('.su-by')!.textContent).toBe('gui.conn.st_live')
     expect(main().querySelector('#connDlgBody .sustate')).toBeNull()
   })
 
@@ -937,13 +914,15 @@ describe('connections island', () => {
     expect(paneHead().querySelector('.channel-mark img')!.getAttribute('src')).toBe('assets/channels/slack.png')
   })
 
-  /* The note beside the save button used to be an empty span. */
-  it('says where the form stands, beside the button that acts on it', async () => {
+  /* The foot says only what the head cannot: that something typed is not
+     saved yet. The missing count is the head's, and is not said twice. */
+  it('says an edit is unsaved, and leaves the missing count to the head', async () => {
     install([chan({ fields: [{ key: 'bot_token', required: true, secret: true }], missing: ['bot_token'] })])
     await mount()
     await act(async () => { openRow('Slack') })
     const body = main().querySelector('#connDlgBody')!
-    expect(paneFoot().querySelector('.n')!.textContent).toBe('gui.conn.foot_need {"n":"1"}')
+    expect(paneHead().querySelector('.su-by')!.textContent).toBe('gui.conn.st_missing {"n":1}')
+    expect(paneFoot().querySelector('.n')!.textContent).toBe('')
     const box = body.querySelector<HTMLInputElement>('input[type="password"]')!
     await act(async () => {
       typeInto(box, 'tok')
@@ -1040,7 +1019,10 @@ describe('connections island', () => {
       'gui.conn.w2',
       'gui.conn.w3',
     ])
-    expect(wizStates()).toEqual(['idle', 'idle', 'idle'])
+    expect(wizStates()).toEqual(['now', 'idle', 'idle'])
+    /* The code's place is drawn before there is a code, and polls nothing. */
+    expect(body.querySelector('.su-qrph')!.textContent).toBe('gui.conn.qr_idle')
+    expect(body.querySelector('.qrbox')).toBeNull()
     expect(body.querySelector('.sufield')).toBeNull()
     /* The list's verb, not a third one: it read "turn the entry on", which is
        also what step 1 above it says. */
@@ -1084,7 +1066,20 @@ describe('connections island', () => {
     await mount()
     await act(async () => { openRow('gui.chan.weixin') })
     expect(main().querySelector('.suwiz')).toBeNull()
-    expect(paneHead().querySelector('.two-pane-meta')!.textContent).toBe('gui.conn.st_live')
+    expect(paneHead().querySelector('.su-by')!.textContent).toBe('gui.conn.st_live')
+  })
+
+  /* The corner is the card's one press, and it is the card's own press: it
+     opens the sheet and writes nothing, since getting in is a code or a
+     credential and both are in the sheet. A connected card has nothing to add. */
+  it('opens the sheet from the corner and writes nothing on the way', async () => {
+    const { calls } = install([chan(), chan({ id: 'telegram', key: 'Telegram', on: true, running: true })])
+    await mount()
+    expect(rowNamed('Telegram').querySelector('.su-cbtn')).toBeNull()
+    await act(async () => { (rowNamed('Slack').querySelector('.su-cbtn') as HTMLElement).click() })
+    expect(sheetUp()).toBe(true)
+    expect(paneHead().querySelector('.su-meta h3')!.textContent).toBe('Slack')
+    expect(calls).toEqual([])
   })
 
   it('keeps its rendered shape, list', async () => {

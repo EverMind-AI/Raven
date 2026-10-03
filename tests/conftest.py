@@ -323,6 +323,20 @@ def _spent(started: _Clocks, now: _Clocks) -> tuple[float, float, float]:
     return wall, wall - cpu - queued_s, queued_s
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
+    """Let a checkpoint warm-up the test started finish before its fixtures go.
+
+    A turn stages its working directory into the shadow repo on a thread of its
+    own (``CheckpointService.warm``), and a fixture removing that directory
+    under a git still writing into it fails the cleanup. Ahead of the fixture
+    finalizers, which run in the default teardown after this one.
+    """
+    for thread in threading.enumerate():
+        if thread.name == "raven-stage":
+            thread.join(30)
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
     item.stash[_CLOCKS] = _clocks()
@@ -966,6 +980,28 @@ def _unbind_the_acp_turn() -> Iterator[None]:
     finally:
         asker._TURN.reset(turn_token)
         asker._AUTOFILL.reset(autofill_token)
+
+
+@pytest.fixture(autouse=True)
+def _unbind_the_permission_turn() -> Iterator[None]:
+    """Put the permission turn's ContextVars back where the test found them.
+
+    The same leak as ``_unbind_the_acp_turn``, one module over: a sync test
+    that calls ``start_permission_turn`` binds a ``PermissionTurn`` into the
+    context every later test in the worker inherits. Later async tests then
+    append to that one shared object -- an unanswered ACP question among
+    them -- and a turn test further down files it as the last message of its
+    own request.
+    """
+    from raven.permissions import turn
+
+    turn_token = turn._TURN.set(turn._TURN.get())
+    call_token = turn._TOOL_CALL_ID.set(turn._TOOL_CALL_ID.get())
+    try:
+        yield
+    finally:
+        turn._TURN.reset(turn_token)
+        turn._TOOL_CALL_ID.reset(call_token)
 
 
 def wired_kwarg(kwargs: dict, name: str):

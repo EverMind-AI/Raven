@@ -12,10 +12,15 @@ Only arrivals are masked. The operator's off switch stays live per assembly
 mid-turn has no schema to serve anyway, and session-overlay tools enter with
 the turn that carries them. A registry that never enters the scope -- a
 sub-agent's, the curator's -- advertises everything, exactly as before.
+
+One arrival is let in on purpose: tools the turn's own call produced
+(``admit_to_this_turn``), so a plugin the agent just connected is usable
+without the user having to send another message.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from raven.agent.tools.registry import ToolRegistry
@@ -244,3 +249,73 @@ async def test_session_overlay_tools_stay_dispatchable_in_their_turn() -> None:
     reg.bind_session_tools("s1", {"session_tool": _Stub("session_tool")})
     with reg.turn_scope(), reg.session_scope_for("s1"):
         assert await reg.execute("session_tool", {}) == "ran"
+
+
+async def test_an_arrival_the_turn_asked_for_joins_it_from_the_next_step() -> None:
+    # The tool that connects runs in a copy of the turn's context (every
+    # ``asyncio`` task does), so the admission has to reach the loop's reads
+    # from there -- a ``ContextVar.set`` inside the task would not.
+    reg = _registry("read_file")
+    with reg.turn_scope():
+
+        async def connect() -> None:
+            reg.register(_Stub("mcp_svc_a"))
+            reg.admit_to_this_turn(["mcp_svc_a"])
+
+        await asyncio.create_task(connect())
+        assert _offered(reg) == {"read_file", "mcp_svc_a"}
+        assert await reg.execute("mcp_svc_a", {}) == "ran"
+
+
+def test_admission_lets_in_only_what_it_names() -> None:
+    reg = _registry("read_file")
+    with reg.turn_scope():
+        reg.register(_Stub("mcp_svc_a"))
+        reg.register(_Stub("mcp_background"))
+        reg.admit_to_this_turn(["mcp_svc_a", "never_registered"])
+        assert _offered(reg) == {"read_file", "mcp_svc_a"}
+
+
+def test_admission_does_not_outrank_the_off_switch() -> None:
+    reg = _registry("read_file")
+    reg.set_withheld_source(lambda: frozenset({"mcp_svc_a"}))
+    with reg.turn_scope():
+        reg.register(_Stub("mcp_svc_a"))
+        reg.admit_to_this_turn(["mcp_svc_a"])
+        assert _offered(reg) == {"read_file"}
+
+
+def test_admission_stays_with_the_turn_that_made_it() -> None:
+    # One gateway registry serves concurrent turns; the other turn gets the
+    # arrival on its own next turn, like any background arrival.
+    import contextvars
+
+    reg = _registry("read_file")
+    with reg.turn_scope():
+        other = contextvars.copy_context()
+    other_scope = other.run(lambda: reg.turn_scope())
+    other.run(other_scope.__enter__)
+    with reg.turn_scope():
+        reg.register(_Stub("mcp_svc_a"))
+        reg.admit_to_this_turn(["mcp_svc_a"])
+        assert "mcp_svc_a" in _offered(reg)
+        assert "mcp_svc_a" not in other.run(_offered, reg)
+    other.run(other_scope.__exit__, None, None, None)
+
+
+def test_admission_outside_a_turn_is_a_no_op() -> None:
+    reg = _registry("read_file")
+    reg.admit_to_this_turn(["read_file", "missing"])
+    assert _offered(reg) == {"read_file"}
+
+
+def test_admission_does_not_swap_in_a_same_name_replacement() -> None:
+    # The identity rule holds through admission too: the turn composed calls
+    # against the entry instance, so its replacement must not start answering
+    # to the name mid-turn just because a connect named it.
+    reg = _registry("mcp_svc_a")
+    with reg.turn_scope():
+        reg.register(_Stub("mcp_svc_a"))
+        reg.admit_to_this_turn(["mcp_svc_a"])
+        assert not reg.offers_by_name("mcp_svc_a")
+    assert reg.offers_by_name("mcp_svc_a")

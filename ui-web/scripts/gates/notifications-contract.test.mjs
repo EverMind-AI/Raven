@@ -1,7 +1,7 @@
 /* The notification table is the server's list, plus exactly one name.
  *
  * `rpc-schema/openrpc.json` declares calls, not pushes, so nothing generated
- * covers the eleven names in src/rpc/notifications.ts. A handler registered
+ * covers the thirteen names in src/rpc/notifications.ts. A handler registered
  * under a name the gateway never sends is not an error anywhere -- it is a
  * surface that silently stops working -- so the two ends are compared here
  * instead: the table against raven/acp/updates.py's SIDE_CHANNEL_METHODS,
@@ -43,7 +43,7 @@ function sideChannelMethods() {
 
 /* Where a push handler can be installed: the page's own wiring, which registers
    the seven that are not a turn's, and the session pipeline, which took the
-   subscription envelope and the five requests that block a turn. */
+   subscription envelope and the seven requests that block a turn. */
 const SITES = [
   'app/install.ts',
   'state/session/pipeline.ts',

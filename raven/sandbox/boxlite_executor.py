@@ -160,7 +160,6 @@ class BoxliteExecutor(SandboxExecutor):
         except Exception as exc:
             raise SandboxInitError(
                 f"Cannot initialise sandbox (image pre-pull failed): {exc}\n"
-                f"  • Ensure boxlite is installed:  pip install raven[sandbox]\n"
                 f"  • macOS: requires Apple Silicon M1+ and macOS 12+\n"
                 f"  • Linux: requires /dev/kvm accessible to the current user"
             ) from exc
@@ -197,7 +196,6 @@ class BoxliteExecutor(SandboxExecutor):
         except Exception as exc:
             raise SandboxInitError(
                 f"Cannot initialise sandbox: {exc}\n"
-                f"  • Ensure boxlite is installed:  pip install raven[sandbox]\n"
                 f"  • macOS: requires Apple Silicon M1+ and macOS 12+\n"
                 f"  • Linux: requires /dev/kvm accessible to the current user"
             ) from exc

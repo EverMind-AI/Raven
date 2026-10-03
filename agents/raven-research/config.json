@@ -138,6 +138,7 @@
       "deep_research",
       "deliver_files",
       "plugin",
+      "raven_config",
       "create_playbook",
       "load_playbook",
       "run_subagent_dag",

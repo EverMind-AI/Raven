@@ -35,7 +35,7 @@ import { load as loadLang } from '../state/lang/pick'
 import { load as lookLoad } from '../state/look'
 import { draw as drawPerm } from '../state/perm'
 import { set as setRail } from '../state/rail'
-import { replayPendingApprovals } from '../state/session/pipeline'
+import { replayPendingApprovals, replayPendingCredentials } from '../state/session/pipeline'
 import { switchTo, switchToDraft } from '../state/session/registry'
 import { landing, watch as watchSessionNote } from '../state/session/resume'
 import { open as sessionOpen, rows as sessionRows, sess } from '../state/session/rows'
@@ -138,6 +138,7 @@ async function sequence(): Promise<void> {
     /* After the conversation is up and the dock with it, so a question waiting
        in another conversation lights the line above the composer. */
     void replayPendingApprovals()
+    void replayPendingCredentials()
     /* A first run opens on the wizard: nothing can answer a turn until a
        provider is set, and the wizard is where one gets set. `setupState` is
        what the task actions read to send the reader to Models instead, for

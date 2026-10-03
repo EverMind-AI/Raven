@@ -2075,6 +2075,22 @@
           }
         },
         {
+          "name": "model",
+          "required": false,
+          "description": "A model the agent itself lists, used for the readiness ping and stored on the row.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "lend_key",
+          "required": false,
+          "description": "A Raven provider (e.g. openrouter) whose key the agent is started with, read from Raven's config at each start; refused unless the preset reads a key for it and Raven holds one.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
           "name": "api_key",
           "required": false,
           "schema": {
@@ -2184,6 +2200,17 @@
           "required": false,
           "schema": {
             "type": "boolean"
+          }
+        },
+        {
+          "name": "lend_keys",
+          "required": false,
+          "description": "The Raven providers whose key an acp agent is started with; [] lends none.",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         {
@@ -6542,6 +6569,149 @@
       }
     },
     {
+      "name": "credential.submit",
+      "summary": "The value the user typed into a credential card. Written by the host, never echoed.",
+      "params": [
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "value",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "The credential as typed. Not logged, not returned, not kept once written."
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "conversation_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Compatibility spelling of session_id."
+          }
+        }
+      ],
+      "result": {
+        "name": "CredentialSubmitResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "description": "True once the value is written; the waiting tool then resumes.",
+              "type": "boolean"
+            },
+            "error": {
+              "description": "Why it was not written, for the card to show; the request stays open.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "credential.skip",
+      "params": [
+        {
+          "name": "request_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "conversation_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Compatibility spelling of session_id."
+          }
+        }
+      ],
+      "result": {
+        "name": "CredentialSkipResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "ok": {
+              "description": "False for an unknown, answered or mis-bound request.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "credential.pending",
+      "summary": "The credential cards still open, for a page that lost them.",
+      "params": [
+        {
+          "name": "session_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "One conversation's requests; every conversation's when absent."
+          }
+        },
+        {
+          "name": "conversation_id",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "Compatibility spelling of session_id."
+          }
+        }
+      ],
+      "result": {
+        "name": "CredentialPendingResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "requests": {
+              "description": "Each open request's credential.request params, exactly as they were first sent.",
+              "items": {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "requests"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
       "name": "clarify.respond",
       "summary": "Answer a pending ask-user question.",
       "params": [
@@ -10349,6 +10519,11 @@
             "type": "boolean",
             "default": false,
             "description": "The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell."
+          },
+          "follows_main": {
+            "type": "boolean",
+            "default": false,
+            "description": "Nothing is pinned and the role runs on the main chat model, which it follows when that changes. Only the memory LLM does this."
           }
         },
         "required": [
@@ -12317,7 +12492,7 @@
         }
       },
       "FileWritten": {
-        "description": "One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before.",
+        "description": "One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before. What it changed from is known only when the working directory's shadow repo held a copy from just before the command; then the change rides along as counts and a unified diff. A file's text goes out only when the shadow repo's rules would store it: never for a file its excludes or the user's .gitignore keep out, even one the repo held a copy of before the rule named it. Such a created file carries its counts only, and such a rewrite neither.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -12344,6 +12519,27 @@
               "null"
             ],
             "description": "Lines in a created file, when it could be counted. Null, not absent: the key is always sent, and null says the count is unknown. Too large to read, not text, or a file that already existed, whose change therefore has no number."
+          },
+          "added": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Lines the command added to the file. Absent when the change could not be measured: not text, too large, or a rewrite whose previous contents were never captured."
+          },
+          "removed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Lines the command removed from the file. Absent exactly when added is."
+          },
+          "diff": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Unified diff of the change, when it was measured and small enough to carry. Absent past the event's budget even when the counts are present: a partial diff reads as a smaller change than the one that happened."
           }
         }
       },

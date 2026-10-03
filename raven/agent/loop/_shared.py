@@ -578,68 +578,27 @@ def _file_removed_payload(removals: Any) -> list[dict[str, Any]] | None:
     return out or None
 
 
-#: A file the listing found is counted in lines only when it is text this size
-#: or under. Past it the count is unknown rather than wrong: reading a gigabyte
-#: to number it would cost the turn more than the row it draws is worth.
-_FILE_WRITTEN_TEXT_MAX_BYTES = 256 * 1024
-
-
-def _file_written_payload(
-    created: Collection[str],
-    modified: Collection[str],
-    after: dict[str, tuple[int, int]] | None,
-    *,
-    already: Collection[str] = (),
-) -> list[dict[str, Any]] | None:
+def _file_written_payload(written: Any) -> list[dict[str, Any]] | None:
     """The files a command left behind, as plain mappings, or ``None`` for none.
 
     The other half of ``_file_change_payload``: a file tool reports what it
-    wrote, a command reports its output and nothing else, so this is read off
-    two listings of the working directory instead of off a result. Sizes and a
-    line count rather than contents -- one command can write a hundred files,
-    and what a row draws is that they were written and how big they are.
-
-    ``lines`` belongs to a created file alone, and ``None`` there means unknown:
-    too large to read, or not text. A rewritten file has no count at all, since
-    the listing never held the old content and a number against nothing would
-    read as a change nobody measured.
-
-    ``already`` are the paths this same call accounted for by name. The listing
-    sees those too, and reporting one again would draw a single write twice.
+    wrote, a command reports its output and nothing else, so the tool reads
+    these off its directory either side of the command (``command_writes``).
+    The change keys go only where the tool measured one, so an entry without
+    them still reads as "changed, by how much unknown".
     """
-    accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
     out: list[dict[str, Any]] = []
-    for path in created:
-        if os.path.realpath(path) in accounted:
+    for write in written or ():
+        path = getattr(write, "path", None)
+        if not isinstance(path, str) or not path:
             continue
-        size = (after or {}).get(path, (0, 0))[0]
-        out.append({"path": path, "created": True, "size": size, "lines": _text_line_count(path, size)})
-    for path in modified:
-        if os.path.realpath(path) in accounted:
-            continue
-        out.append({"path": path, "created": False, "size": (after or {}).get(path, (0, 0))[0], "lines": None})
+        entry: dict[str, Any] = {"path": path, "created": write.created, "size": write.size, "lines": write.lines}
+        if write.added is not None and write.removed is not None:
+            entry["added"], entry["removed"] = write.added, write.removed
+        if write.diff is not None:
+            entry["diff"] = write.diff
+        out.append(entry)
     return out or None
-
-
-def _text_line_count(path: str, size: int) -> int | None:
-    """Lines in a file the listing found, or ``None`` when it cannot be counted."""
-    if size > _FILE_WRITTEN_TEXT_MAX_BYTES:
-        return None
-    try:
-        return len(Path(path).read_text(encoding="utf-8").splitlines())
-    except (OSError, UnicodeDecodeError):
-        return None
-
-
-def _listing_removals(deleted: Collection[str], *, already: Collection[str] = ()) -> list[FileRemoval]:
-    """Files a listing says went, for the deletions no tool reported itself.
-
-    Without a body: the file was gone before anything read it, and the turn only
-    knows it was there when the command started. ``already`` are the removals
-    the call reported by name, which the listing sees as well.
-    """
-    accounted = {os.path.realpath(path) for path in already if isinstance(path, str) and path}
-    return [FileRemoval(path=path) for path in deleted if os.path.realpath(path) not in accounted]
 
 
 def monotonic() -> float:

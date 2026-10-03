@@ -684,6 +684,10 @@ describe('a task\'s own files, in the diff tab and not on the shelf', () => {
     const row = document.querySelector('.desk-diff-row') as HTMLElement
     expect(row.querySelector('.chgc')?.textContent).toBe('M')
     expect(row.querySelector('.desk-name')?.textContent).toBe('/w/deep/mod.py')
+    /* A task row has no directory/name split to draw, so its path stays plain:
+       `.desk-name b` is font-weight 500 for every desk row, and wrapping the
+       whole path in one would restyle text that has always been plain. */
+    expect(row.querySelector('.desk-name b')).toBeNull()
   })
 
   /* `edit_file` can only touch a file that is already there, so a pure
@@ -796,6 +800,78 @@ describe('a task\'s own files, in the diff tab and not on the shelf', () => {
     await act(async () => { desk.set({ tab: 'deliverables' }) })
 
     expect(bubble('diff')).toBeNull()
+  })
+})
+
+describe('a change with no diff to show, in the diff tab', () => {
+  const taskWithFile = (id: string, file: TaskFile): TaskRow => ({
+    ...task(id),
+    nodes: [{ node_id: 'n1', agent: 'raven', status: 'completed', depends_on: [], files: [file] }],
+  })
+
+  /* The suite's own `change()` seeds the whole path into `name`; the record
+     splits it the way a row draws it (record.ts's `labelFor`), and the split is
+     what a session row's markup is made of -- so these cases seed it split. */
+  const split = (key: string): WsChange => ({
+    ...change(key),
+    dir: key.slice(0, key.lastIndexOf('/') + 1),
+    name: key.slice(key.lastIndexOf('/') + 1),
+  })
+
+  const diffTab = async (): Promise<void> => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    await act(async () => { await tasksStore.refresh() })
+  }
+
+  /* A command reports the files its directory listing found, which is a count
+     and nothing else -- for a picture that is the whole account of it, and a
+     row here opens onto an empty pane. The session's own rows are filtered the
+     same way as a task's, because the reason has nothing to do with who wrote
+     the file. */
+  it('leaves a picture out of the session\'s own rows', async () => {
+    workspace.restore({
+      changes: [split('/w/out/diagram.png'), split('/w/out/plot.py')],
+      urls: [], file: null, turn: 1, unseen: 0, deliveries: [],
+    })
+    await diffTab()
+
+    const names = [...document.querySelectorAll('.desk-diff-row .desk-name')].map((n) => n.textContent)
+    expect(names).toEqual(['/w/out/plot.py'])
+    expect(document.querySelector('.desk-diff-row .desk-name b')?.textContent).toBe('plot.py')
+  })
+
+  it('leaves a deck out of a task\'s rows', async () => {
+    taskRows = [taskWithFile('t1', { path: '/w/deck.pptx', op: 'add', add: 0, del: 0, size: 900 })]
+    await diffTab()
+
+    expect(document.querySelector('.desk-diff-row')).toBeNull()
+    expect(document.querySelector('.desk-empty b')?.textContent).toBe('gui.ws.no_changes')
+  })
+
+  /* A deletion has nothing to show either: the row would open onto a file that
+     is gone and a patch the runtime never carried. */
+  it('leaves a deleted picture out as well', async () => {
+    const gone = { ...change('/w/out/old.png'), kind: 'delete' as const }
+    workspace.restore({ changes: [gone], urls: [], file: null, turn: 1, unseen: 0, deliveries: [] })
+    await diffTab()
+
+    expect(document.querySelector('.desk-diff-row')).toBeNull()
+  })
+
+  /* The tab's contents and the tab's bubble are the same list, so a file the
+     tab does not draw is not news either -- counting it would put a badge on a
+     tab with nothing behind it. */
+  it('does not count a hidden file in the diff bubble', async () => {
+    workspace.restore({
+      changes: [change('/w/out/diagram.png')],
+      urls: [], file: null, turn: 1, unseen: 0, deliveries: [],
+    })
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
+
+    expect(bubble('diff')).toBeNull()
+    expect(desk.diffEntries().map((e) => e.name)).toEqual([])
   })
 })
 

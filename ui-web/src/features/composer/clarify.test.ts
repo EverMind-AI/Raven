@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
+import { chordLabel } from '../../lib/platform'
 import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
@@ -33,6 +34,8 @@ const sheets = (): HTMLElement[] => [...rack().querySelectorAll<HTMLElement>('.c
 const opts = (): HTMLElement[] => [...rack().querySelectorAll<HTMLElement>('.opt')]
 const field = (): HTMLInputElement => rack().querySelector<HTMLInputElement>('.other input')!
 const submit = (): HTMLButtonElement => rack().querySelector<HTMLButtonElement>('.foot .btn.key')!
+/* The button's own words, without the key cap drawn after them. */
+const submitLabel = (): string => submit().firstChild!.textContent!
 /* Capture phase, because that is where the sheet listens. */
 const key = (k: string, over: Partial<KeyboardEventInit> = {}): void => {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, ...over }))
@@ -470,7 +473,7 @@ describe('the clarify sheet as a form', () => {
     expect(submit().disabled).toBe(true)
     expect(chips()[0]!.classList.contains('cp-done')).toBe(false)
     chips()[2]!.click()
-    expect(submit().textContent).toBe('gui.clarify.submit')
+    expect(submitLabel()).toBe('gui.clarify.submit')
     expect(submit().disabled).toBe(true)
     submit().click()
     expect(said).toEqual([])
@@ -542,7 +545,7 @@ describe('the clarify sheet as a form', () => {
     expect(chips().map((c) => c.textContent)).toEqual(['topic', 'length'])
     expect(opts()).toEqual([])
     expect(field().placeholder).toBe('gui.clarify.ph')
-    expect(submit().textContent).toBe('gui.clarify.next')
+    expect(submitLabel()).toBe('gui.clarify.next')
     expect(submit().disabled).toBe(true)
     type('   ')
     expect(submit().disabled).toBe(true)
@@ -553,7 +556,7 @@ describe('the clarify sheet as a form', () => {
 
     type('an investor deck')
     submit().click()
-    expect(submit().textContent).toBe('gui.clarify.submit')
+    expect(submitLabel()).toBe('gui.clarify.submit')
     expect(submit().disabled).toBe(true)
     type('ten slides')
     expect(submit().disabled).toBe(false)
@@ -569,7 +572,7 @@ describe('the clarify sheet as a form', () => {
     opts()[0]!.click()
 
     expect(rack().querySelector('.body .cp-hint')!.textContent).toBe('gui.clarify.multi_hint')
-    expect(submit().textContent).toBe('gui.clarify.next')
+    expect(submitLabel()).toBe('gui.clarify.next')
     expect(submit().disabled).toBe(true)
     opts()[0]!.click()
     opts()[1]!.click()
@@ -594,7 +597,7 @@ describe('the clarify sheet as a form', () => {
     opts()[0]!.click()
     submit().click()
 
-    expect(submit().textContent).toBe('gui.clarify.submit')
+    expect(submitLabel()).toBe('gui.clarify.submit')
     opts()[0]!.click()
 
     expect(said).toEqual([])
@@ -640,6 +643,58 @@ describe('the clarify sheet as a form', () => {
     expect(said).toEqual([])
   })
 
+  /* Next and Submit answer to Cmd+Enter, as a send does -- from the sheet and
+     from its own field, which stops its keys before the document sees them. */
+  it('moves on and submits on Cmd+Enter, from the sheet and from its field', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    field().blur()
+    key('1')
+    expect(asked()).toBe('which targets?')
+    key('1')
+    key('Enter', { metaKey: true })
+    expect(asked()).toBe('anything else?')
+    /* A pick with the caret in the empty field: a bare Enter there only sends
+       typed text, so the chord is the one key that submits. */
+    opts()[0]!.click()
+    field().focus()
+    field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(said).toEqual([])
+    field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }))
+    expect(said).toEqual([['debug', 'mac', 'no']])
+  })
+
+  it('does not move on from a step that has no answer yet', () => {
+    const said: string[][] = []
+    open(frame(), (a) => said.push(a))
+    field().blur()
+    key('Enter', { metaKey: true })
+    expect(asked()).toBe('which build?')
+    expect(said).toEqual([])
+  })
+
+  /* A question can dock above an approval still waiting (the approval is the
+     one sweep a question spares), and then the question on top owns the chord:
+     one Cmd+Enter must not also allow the command underneath. */
+  it('takes Cmd+Enter from an approval waiting below it', () => {
+    const answered: string[] = []
+    openApproval({ approvalId: 'ap-1', command: 'ls', description: '' }, {
+      onChoice: (c) => { answered.push(c) },
+    })
+    const said: string[] = []
+    open({ question: 'q' }, (a) => said.push(...a))
+    type('yes')
+    field().blur()
+    key('Enter', { metaKey: true })
+    expect(said).toEqual(['yes'])
+    expect(answered).toEqual([])
+  })
+
+  it('draws the chord on the button it presses', () => {
+    open(frame(), () => {})
+    expect(submit().querySelector('kbd')!.textContent).toBe(chordLabel())
+  })
+
   /* The composer is one element below the sheet, and a reader typing into it is
      not answering: an arrow key there moves their caret, not the form. */
   it('leaves the keys alone while any field has the caret', () => {
@@ -673,7 +728,7 @@ describe('the clarify sheet as a form', () => {
 
     expect(chips().map((c) => c.textContent)).toEqual(['1', '2', '3'])
     expect(chips().map((c) => c.disabled)).toEqual([true, false, true])
-    expect(submit().textContent).toBe('gui.clarify.submit')
+    expect(submitLabel()).toBe('gui.clarify.submit')
     type('later')
     submit().click()
 

@@ -13,6 +13,5 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
           svg
             path
       div#spanels.spanels
-      div#connectionsBody.spanels[data-for=channels]
       div#cronBody.spanels[data-for=cron]
       div#memoryBody.spanels[data-for=memory]

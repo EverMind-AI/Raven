@@ -15,7 +15,7 @@ import { Fragment, useSyncExternalStore } from 'react'
 
 import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
-import { argPath, firstErrLine, phraseOf, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
+import { actName, argPath, firstErrLine, phraseOf, splitMcp, verbIngOf, verbOf } from '../../lib/actVerbs'
 import { copy } from '../../lib/clipboard'
 import { formatDuration } from '../../lib/duration'
 import { fromEdit, fromWrite } from '../../lib/hunks'
@@ -419,7 +419,7 @@ function CallRow({ call, nodeKey, foldKey, running }: {
       <Glyph d={bad ? ACT_ICO.bad as string : actIco(bare)} cls="tkic" />
       <span className="tkvb">
         {srv ? <span className="tksrv">{`[${srv}] `}</span> : null}
-        {busy ? verbIngOf(bare) : verbOf(bare)}
+        {busy ? verbIngOf(actName(bare, args)) : verbOf(actName(bare, args))}
       </span>
       {kind !== 'plain' ? <span className="tkar">{label}</span> : null}
       {/* Only once the call has returned: the counts come off its own
@@ -482,7 +482,7 @@ function CallsBlock({ calls, nodeKey, foldKey, running }: {
             aria-expanded={open} onClick={() => store.setFold(nodeKey, foldKey, !open)}
           >
             <Glyph d={oneKind ? actIco(bareNames[0] as string) : ACT_ICO.dot as string} cls="tkic" />
-            <span className="tkar">{phraseOf(bareNames.map((name) => ({ name })))}</span>
+            <span className="tkar">{phraseOf(calls.map((c, i) => ({ name: bareNames[i] as string, args: c.args })))}</span>
             {bad ? <span className="tkbadchip">{t('gui.tasks.call_failed_n', { n: bad })}</span> : null}
             {noResult ? <span className="tknoresultchip">{t('gui.tasks.call_no_result_n', { n: noResult })}</span> : null}
             <Glyph d={ACT_ICO.chev as string} cls="tkcv" />

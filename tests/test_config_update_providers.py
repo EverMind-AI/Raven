@@ -1074,6 +1074,60 @@ def test_an_overlay_merges_into_the_row_it_already_had(cfg_path: Path) -> None:
     assert row["capabilities"] == ["reasoning"]
 
 
+@pytest.mark.parametrize(
+    ("existing", "incoming"),
+    [("team-model", "hosted-vllm/team-model"), ("hosted-vllm/team-model", "team-model")],
+)
+@pytest.mark.parametrize(
+    "patch",
+    [{"capabilities": ["reasoning"]}, {"label": ""}, {"capabilities": []}],
+)
+def test_overlay_updates_match_model_identity(cfg_path: Path, existing: str, incoming: str, patch: dict) -> None:
+    original = {"label": "Team model", "description": "Keep this description", "capabilities": ["function-call"]}
+    add_provider_model("hosted_vllm", existing, overlay=original, config_path=cfg_path)
+    add_provider_model("hosted_vllm", "other-model", overlay={"label": "Other model"}, config_path=cfg_path)
+
+    models = add_provider_model("hosted_vllm", incoming, overlay=patch, config_path=cfg_path)
+
+    overlays = _read(cfg_path)["providers"]["hosted_vllm"]["modelOverlay"]
+    assert models == [existing, "other-model"]
+    assert set(overlays) == {incoming, "other-model"}
+    for field, value in (original | patch).items():
+        assert overlays[incoming][field] == value
+    assert overlays["other-model"]["label"] == "Other model"
+
+
+@pytest.mark.parametrize("clear", [False, True])
+def test_overlay_alias_cleanup_preserves_effective_row(cfg_path: Path, clear: bool) -> None:
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "hosted_vllm": {
+                        "models": ["team-model"],
+                        "modelOverlay": {
+                            "hosted-vllm/team-model": {"label": "Stale name", "description": "Stale description"},
+                            "team-model": {"label": "Current name", "description": ""},
+                        },
+                    }
+                }
+            }
+        )
+    )
+
+    patch = {"label": ""} if clear else {"capabilities": ["reasoning"]}
+    add_provider_model("hosted_vllm", "hosted-vllm/team-model", overlay=patch, config_path=cfg_path)
+
+    overlays = _read(cfg_path)["providers"]["hosted_vllm"]["modelOverlay"]
+    if clear:
+        assert overlays == {}
+    else:
+        assert list(overlays) == ["hosted-vllm/team-model"]
+        assert overlays["hosted-vllm/team-model"]["label"] == "Current name"
+        assert overlays["hosted-vllm/team-model"]["description"] == ""
+        assert overlays["hosted-vllm/team-model"]["capabilities"] == ["reasoning"]
+
+
 def test_re_adding_corrects_the_field_it_names(cfg_path: Path) -> None:
     """Merging must not turn a correction into an append: re-adding is how a
     person fixes a tag they got wrong, so a restated field replaces."""
@@ -2234,3 +2288,142 @@ class TestNamingTheProviderThatServesAnAddress:
             assert provider_serving_at("https://nobody.example/v1", config_path=path) is None
         finally:
             raven_home.set_config_path(None)
+
+
+# ---------------------------------------------------------------------------
+# test_provider — the headers a relay needs (issue #823)
+# ---------------------------------------------------------------------------
+
+
+def _tenant_relay(seen: list[str | None]) -> httpx.MockTransport:
+    """A relay that answers only a request carrying its tenant header."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("X-Tenant"))
+        if request.headers.get("X-Tenant") != "test-tenant":
+            return httpx.Response(401, json={"error": "missing tenant header"})
+        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+
+    return _mock_transport(handler)
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        pytest.param(
+            {"apiKey": "sk-test", "apiBase": "https://relay.test/v1", "extraHeaders": {"X-Tenant": "test-tenant"}},
+            id="flat",
+        ),
+        pytest.param(
+            {
+                "endpoints": [
+                    {
+                        "label": "primary",
+                        "apiKey": "sk-test",
+                        "apiBase": "https://relay.test/v1",
+                        "extraHeaders": {"X-Tenant": "test-tenant"},
+                    }
+                ]
+            },
+            id="endpoint",
+        ),
+        pytest.param(
+            {
+                "apiBase": "https://relay.test/v1",
+                "extraHeaders": {"X-Tenant": "test-tenant"},
+                "endpoints": [{"label": "primary", "apiKey": "sk-test"}],
+            },
+            id="inherited",
+        ),
+    ],
+)
+def test_the_probe_sends_the_headers_the_endpoint_resolved(cfg_path: Path, section: dict) -> None:
+    """A relay that needs a header of its own is not a refused key.
+
+    The request path forwards each endpoint's resolved ``extra_headers``
+    (providers/factory.py), so a section configured for such a relay works in
+    chat while the probe -- building its headers from the key alone -- was
+    refused and reported as ``invalid_key``. The three shapes are one fact read
+    three ways: ``provider_endpoints`` resolves flat headers, an endpoint's own,
+    and a section's inherited by an endpoint that declares none.
+    """
+    cfg_path.write_text(json.dumps({"providers": {"custom": section}}), encoding="utf-8")
+    seen: list[str | None] = []
+
+    result = probe_provider("custom", config_path=cfg_path, transport=_tenant_relay(seen))
+
+    assert seen == ["test-tenant"]
+    assert result["status"] == "valid"
+    assert result["ok"] is True
+
+
+def test_a_section_with_no_headers_sends_the_same_request_it_always_did(cfg_path: Path) -> None:
+    """The forwarding adds the configured headers and nothing else: a section
+    without any is the request every provider shipped today already sends."""
+    set_provider_fields("custom", {"api_key": "sk-test", "api_base": "https://relay.test/v1"}, config_path=cfg_path)
+    sent: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(dict(request.headers))
+        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+
+    result = probe_provider("custom", config_path=cfg_path, transport=_mock_transport(handler))
+    assert result["status"] == "valid"
+    assert sent[0].get("authorization") == "Bearer sk-test"
+    assert "x-tenant" not in sent[0]
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [pytest.param("Authorization", id="exact"), pytest.param("authorization", id="lower")],
+)
+def test_a_configured_header_does_not_displace_the_key(cfg_path: Path, spelling: str) -> None:
+    """Authorization is the probe's own to send: a section that also names it
+    must not be able to answer the credential question with a different key.
+
+    By either spelling, because a header name means the same thing capitalized
+    or not and this dict does not: a section spelling it `authorization` kept
+    its own entry beside the probe's, and httpx sent both values -- which a
+    relay requiring one bearer reads as neither.
+    """
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "custom": {
+                        "apiKey": "sk-real",
+                        "apiBase": "https://relay.test/v1",
+                        "extraHeaders": {spelling: "Bearer sk-other"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    sent: list[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append([v for k, v in request.headers.multi_items() if k.lower() == "authorization"])
+        return httpx.Response(200, json={"data": [{"id": "m1"}]})
+
+    probe_provider("custom", config_path=cfg_path, transport=_mock_transport(handler))
+    assert sent == [["Bearer sk-real"]]
+
+
+def test_a_differently_cased_tenant_header_still_reaches_the_relay(cfg_path: Path) -> None:
+    """The forwarding is not the probe's to respell: a configured header the
+    probe has no opinion about goes out exactly as written."""
+    set_provider_fields(
+        "custom",
+        {
+            "api_key": "sk-test",
+            "api_base": "https://relay.test/v1",
+            "extra_headers": {"x-tenant": "test-tenant"},
+        },
+        config_path=cfg_path,
+    )
+    seen: list[str | None] = []
+
+    result = probe_provider("custom", config_path=cfg_path, transport=_tenant_relay(seen))
+    assert result["status"] == "valid"
+    assert seen == ["test-tenant"]

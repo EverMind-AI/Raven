@@ -2573,6 +2573,26 @@ describe('transcript island, tool episodes', () => {
     expect(row.nextElementSibling?.classList.contains('dtl')).toBe(false)
   })
 
+  /* Seen live: the default branch took any `path` argument for a file, so a
+     settings path like `tools.media.image.model` rendered as a link that opened
+     nothing. */
+  it('titles a raven_config call by its action and setting, and links no file', () => {
+    expect(store.actLabel('raven_config', { action: 'get', path: 'tools.media.image.model' }))
+      .toBe('get tools.media.image.model')
+    act(() => {
+      const st = mount.step()
+      st.tool('raven_config', { action: 'get', path: 'tools.media.image.model' }).done(true, '{}', 5)
+      st.tool('raven_config', { action: 'describe' }).done(true, '{}', 5)
+      st.seal()
+    })
+    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    const row = $$('.wkin .wrow')[0] as HTMLElement
+    act(() => { row.click() })
+    const dtl = row.nextElementSibling as HTMLElement
+    expect(dtl.querySelector('.dhd .nm')?.textContent).toBe('get tools.media.image.model')
+    expect(dtl.querySelector('.dhd .pth')).toBeNull()
+  })
+
   /* The chip's click is the island's own, and has to be: React's
      stopPropagation -- which the chip needs so the row underneath does not
      toggle -- stops the native event too, so state/proseChips.ts never sees it.

@@ -298,7 +298,7 @@ export interface TranscriptFileRemoval {
   del: number;
 }
 /**
- * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before.
+ * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before. What it changed from is known only when the working directory's shadow repo held a copy from just before the command; then the change rides along as counts and a unified diff. A file's text goes out only when the shadow repo's rules would store it: never for a file its excludes or the user's .gitignore keep out, even one the repo held a copy of before the rule named it. Such a created file carries its counts only, and such a rewrite neither.
  *
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "FileWritten".
@@ -320,6 +320,18 @@ export interface FileWritten {
    * Lines in a created file, when it could be counted. Null, not absent: the key is always sent, and null says the count is unknown. Too large to read, not text, or a file that already existed, whose change therefore has no number.
    */
   lines?: number | null;
+  /**
+   * Lines the command added to the file. Absent when the change could not be measured: not text, too large, or a rewrite whose previous contents were never captured.
+   */
+  added?: number | null;
+  /**
+   * Lines the command removed from the file. Absent exactly when added is.
+   */
+  removed?: number | null;
+  /**
+   * Unified diff of the change, when it was measured and small enough to carry. Absent past the event's budget even when the counts are present: a partial diff reads as a smaller change than the one that happened.
+   */
+  diff?: string | null;
 }
 /**
  * Why a turn's transcript stops where it does.
@@ -572,6 +584,10 @@ export interface EverosSection {
    * The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell.
    */
   env_managed?: boolean;
+  /**
+   * Nothing is pinned and the role runs on the main chat model, which it follows when that changes. Only the memory LLM does this.
+   */
+  follows_main?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3514,6 +3530,8 @@ export interface SubagentsAddParams {
   preset: string;
   name?: string;
   description?: string;
+  model?: string;
+  lend_key?: string;
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
@@ -3538,6 +3556,7 @@ export interface SubagentsUpdateParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
+  lend_keys?: string[];
   model?: string;
   /**
    * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.
@@ -5475,6 +5494,84 @@ export interface ApprovalPendingParams {
 export interface ApprovalPendingResult {
   /**
    * Each open request's approval.request params, exactly as they were first sent.
+   */
+  requests: {
+    [k: string]: JsonValue;
+  }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialSubmitParams".
+ */
+export interface CredentialSubmitParams {
+  request_id: string;
+  /**
+   * The credential as typed. Not logged, not returned, not kept once written.
+   */
+  value: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialSubmitResult".
+ */
+export interface CredentialSubmitResult {
+  /**
+   * True once the value is written; the waiting tool then resumes.
+   */
+  ok: boolean;
+  /**
+   * Why it was not written, for the card to show; the request stays open.
+   */
+  error?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialSkipParams".
+ */
+export interface CredentialSkipParams {
+  request_id: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialSkipResult".
+ */
+export interface CredentialSkipResult {
+  /**
+   * False for an unknown, answered or mis-bound request.
+   */
+  ok: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialPendingParams".
+ */
+export interface CredentialPendingParams {
+  /**
+   * One conversation's requests; every conversation's when absent.
+   */
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "CredentialPendingResult".
+ */
+export interface CredentialPendingResult {
+  /**
+   * Each open request's credential.request params, exactly as they were first sent.
    */
   requests: {
     [k: string]: JsonValue;

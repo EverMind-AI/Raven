@@ -84,6 +84,7 @@ TRUNK_HELD_OUT = {
     "hub",
     "load_playbook",
     "plugin",
+    "raven_config",
     "run_subagent_dag",
 }
 

@@ -219,6 +219,17 @@ class TestBuildExecutor:
             with pytest.raises(SandboxInitError, match="No sandbox backend available"):
                 build_executor(SandboxConfig(backend="boxlite"), tmp_path, sandbox_dir=_test_sandbox_dir)
 
+    def test_backend_boxlite_without_boxlite_advises_the_running_environment(self, tmp_path):
+        """The install advice must not send the user to a package index for
+        ``raven``: that name there belongs to another project, and boxlite has
+        to land in this interpreter's environment, not the system one."""
+        with patch.dict("sys.modules", {"boxlite": None}):
+            with pytest.raises(SandboxInitError) as exc_info:
+                build_executor(SandboxConfig(backend="boxlite"), tmp_path, sandbox_dir=_test_sandbox_dir)
+        message = str(exc_info.value)
+        assert "uv pip install --python" in message
+        assert "raven[sandbox]" not in message
+
     def test_unknown_backend_raises(self, tmp_path):
         cfg = SandboxConfig.model_construct(backend="unknown")  # bypass validator
         with pytest.raises(SandboxInitError, match="Unknown sandbox backend"):
@@ -260,6 +271,67 @@ class TestBuildExecutor:
         asyncio.run(executor._cleanup_box())
 
         assert seen == [tmp_path / "vm-home"]
+
+
+# ---------------------------------------------------------------------------
+# boxlite install advice
+# ---------------------------------------------------------------------------
+
+
+class TestBoxliteInstallHint:
+    """boxlite_install_hint() must name this interpreter and boxlite's pinned
+    spec: the ``raven`` distribution name does not resolve to this project on
+    a package index, so the extra cannot be named in the command."""
+
+    def test_targets_the_running_interpreter_with_the_pinned_spec(self):
+        from raven.sandbox import boxlite_install_hint
+
+        hint = boxlite_install_hint()
+        assert hint.startswith("uv pip install --python")
+        assert sys.executable in hint
+        assert "boxlite==" in hint
+
+    def test_falls_back_to_the_bare_name_without_installed_metadata(self, monkeypatch):
+        import importlib.metadata as metadata_mod
+
+        from raven.sandbox import boxlite_install_hint
+
+        def _missing(name):
+            raise metadata_mod.PackageNotFoundError(name)
+
+        monkeypatch.setattr(metadata_mod, "requires", _missing)
+        assert boxlite_install_hint().endswith(" boxlite")
+
+
+class TestInitFailureAdvice:
+    """The boxlite-installed-but-failing paths must not advise a reinstall:
+    by the time they run, the import already succeeded."""
+
+    async def test_pre_pull_failure_keeps_platform_advice_without_install_hint(self, monkeypatch, tmp_path):
+        fake_boxlite = MagicMock()
+        fake_boxlite.SimpleBox = MagicMock(side_effect=RuntimeError("no KVM"))
+        monkeypatch.setitem(sys.modules, "boxlite", fake_boxlite)
+
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        with pytest.raises(SandboxInitError) as exc_info:
+            await executor._pull_image()
+
+        message = str(exc_info.value)
+        assert "Cannot initialise sandbox (image pre-pull failed)" in message
+        assert "pip install" not in message
+        assert "/dev/kvm" in message
+
+    async def test_verify_failure_keeps_platform_advice_without_install_hint(self, tmp_path):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        broken_box = MagicMock()
+        broken_box.exec = MagicMock(side_effect=RuntimeError("vmm crash"))
+
+        with pytest.raises(SandboxInitError) as exc_info:
+            await executor._verify(broken_box)
+
+        message = str(exc_info.value)
+        assert "pip install" not in message
+        assert "/dev/kvm" in message
 
 
 async def _stop_holder(pid: int) -> None:
@@ -1877,8 +1949,8 @@ class TestConnectOneMcpServer:
             async def initialize(self):
                 return SimpleNamespace(capabilities=SimpleNamespace(tools=object()))
 
-            async def list_tools(self):
-                return SimpleNamespace(tools=[])
+            async def list_tools(self, *, params=None):
+                return SimpleNamespace(tools=[], nextCursor=None)
 
         monkeypatch.setattr(httpx, "AsyncClient", fake_http_client)
         monkeypatch.setattr(mcp, "ClientSession", FakeSession)

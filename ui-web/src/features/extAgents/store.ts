@@ -1,5 +1,6 @@
 import { t } from '../../i18n/t'
 import * as detail from '../../state/detail'
+import * as hub from '../../state/hub'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -106,6 +107,20 @@ export function set(patch: Partial<ExtAgentsState>): void {
 
 export const source = (): ExtAgentsSource => ds('extAgents')
 
+/* Handing a failure to Raven opens a conversation with its first message
+   written. The verb belongs to the composer, so the app lends it here at boot
+   rather than this domain reaching into a sibling's module. */
+type AskRaven = (promptKey: string, name: string, vars: Record<string, string>) => void
+let askRaven: AskRaven | null = null
+
+export function lendAskRaven(fn: AskRaven | null): void {
+  askRaven = fn
+}
+
+export function handToRaven(promptKey: string, name: string, vars: Record<string, string>): void {
+  askRaven?.(promptKey, name, vars)
+}
+
 /* What to show a reader when a call fails. The server's own sentence first: a
    rejected rpc frame carries `message` as the error's *code name*
    ("subagent_not_found") and the reason, when there is one, under `data.detail`.
@@ -143,6 +158,7 @@ export function open(): void {
   page.show('extAgentsPage')
   void load(true)
 }
+hub.onOpen('agents', open)
 
 export function close(): void {
   page.show(null)

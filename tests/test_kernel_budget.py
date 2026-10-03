@@ -251,6 +251,32 @@ lines of dataclass, two fields and their prose.
 
 Measured at 3,593.
 
+
+And once more, 3,620 -> 3,660 (2026-09-29), for ``FileWrite`` on the tool
+paper: the files a command created or rewrote, the other half of the record
+``FileRemoval`` started. The shell tool lists its directory either side of the
+command and, where the checkpoint's shadow repo covers it, reads what each file
+held from a tree staged just before; the paper only names what travels back --
+a path, whether it is new, its size, and the line counts and diff when the
+change could be measured -- and gives ``ToolResult`` and ``ToolOutput`` one
+``written`` tuple each, empty for every other call. 34 lines, a dataclass and
+its prose. The same change gives ``FileRemoval`` a ``withheld`` flag, set when
+the shell tool kept a removed file's text back on purpose, so nothing else may
+fill it in: five more lines.
+
+Measured at 3,632.
+
+
+And once more, 3,660 -> 3,700 (2026-09-30), for the credential card on the
+asking paper: ``CredentialAsker``, the turn-scoped capability that asks the
+user to type a secret into a masked field the model never reads, beside
+``ApprovalResponder`` which asks them to allow a call, and the two carriers
+it trades -- ``CredentialRequest`` (where the value goes, what the card calls
+it) and ``CredentialOutcome`` (saved or skipped, never the value). 50 lines,
+all of them this addition: without it the package stands at 3,632.
+
+Measured at 3,682.
+
 """
 
 from __future__ import annotations
@@ -261,7 +287,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_620
+CONTRACTS_LINE_CEILING = 3_700
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

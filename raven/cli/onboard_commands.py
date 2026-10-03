@@ -65,6 +65,7 @@ from raven.providers.registry import (
     auth_shape,
 )
 from raven.providers.wire import stored_model_id
+from raven.sandbox import boxlite_install_hint
 
 if TYPE_CHECKING:
     from raven.plugins import OnboardStep, OnboardUI
@@ -1838,10 +1839,10 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
             console.print(
                 t(
                     "  [yellow]✗ Sandbox runtime (boxlite) isn't installed.[/yellow]\n"
-                    "  [dim]Install it, then choose “Retry after install”:  "
-                    "pip install 'raven\\[sandbox]'[/dim]"
+                    "  [dim]Install it, then choose “Retry after install”:[/dim]"
                 )
             )
+            console.print(f"  [dim]  {boxlite_install_hint()}[/dim]", soft_wrap=True)
         else:  # reason == "error": importable but failed to initialize
             console.print(
                 t(

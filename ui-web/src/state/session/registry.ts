@@ -65,6 +65,17 @@ export const switchToken = (): number => switches
 
 const nextToken = (): number => { switches += 1; return switches }
 
+/* A change the agent made to its own settings (raven_config) can move what the
+   open conversation runs on -- its model, its permission mode -- and nothing
+   else tells the page: the chips read those only when a conversation opens or
+   the reader picks. Under the current ticket, not a new one, so the view is
+   not reset and a reader who has since left keeps the page they moved to. */
+export function rereadChips(): void {
+  const sid = sessionCurrent()
+  void loadProviders(sid, switches)
+  void loadPermMode(sid, switches)
+}
+
 export function draft(): SessionRuntime {
   if (!draftRt) draftRt = new SessionRuntime(null)
   return draftRt

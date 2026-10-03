@@ -2,16 +2,16 @@
  *
  * rpc-schema/openrpc.json declares calls, not pushes, so the generated client
  * knows nothing about these and a handler registered under a misspelt name is
- * simply never called -- silently, for the life of the tab. The eleven names
+ * simply never called -- silently, for the life of the tab. The thirteen names
  * below are the whole of what this page listens for besides the subscription
  * envelope.
  *
- * Ten are raven/acp/updates.py's SIDE_CHANNEL_METHODS, and
+ * Twelve are raven/acp/updates.py's SIDE_CHANNEL_METHODS, and
  * scripts/gates/notifications-contract.test.mjs reads that frozenset directly
- * rather than trusting this copy of it. The eleventh, `browser.frame`, is not
+ * rather than trusting this copy of it. The thirteenth, `browser.frame`, is not
  * on the server's list: it is the base64 screencast an older gateway pushes
  * instead of a binary frame, and it is the only name that gate allows here
- * beyond the server's ten.
+ * beyond the server's twelve.
  *
  * The params are hand-written from the emitting sites, each named in its doc
  * comment. They are not generated and the contract is not changed to carry
@@ -19,13 +19,15 @@
  * the two ends of.
  */
 
-/** The eleven, in the order the parts that handle them install. */
+/** The thirteen, in the order the parts that handle them install. */
 export const NOTIFICATION_METHODS = [
   'confirm.request',
   'approval.request',
   'approval.closed',
   'clarify.request',
   'clarify.closed',
+  'credential.request',
+  'credential.closed',
   'system.update_available',
   'memory.health',
   'mcp.status',
@@ -38,7 +40,7 @@ export const NOTIFICATION_METHODS = [
 export type NotificationMethod = (typeof NOTIFICATION_METHODS)[number]
 
 /**
- * A name `gateway().on(...)` accepts: the eleven, plus the subscription
+ * A name `gateway().on(...)` accepts: the thirteen, plus the subscription
  * envelope. Anything else is a compile error, and
  * scripts/gates/notifications-contract.test.mjs holds this list equal to the
  * gateway's own.
@@ -78,6 +80,25 @@ export interface ApprovalRequestParams {
  */
 export interface ApprovalClosedParams {
   approval_id: string
+  conversation_id: ConversationId
+  reason: string
+}
+
+/** raven/rpc/credential_broker.py: a secret for the user to type on its own
+    card. Where the value is written is not on the wire -- the host keeps it --
+    so the page shows what to ask for and sends back only what was typed. */
+export interface CredentialRequestParams {
+  request_id: string
+  conversation_id: ConversationId
+  turn_id: string
+  label: string
+  note: string
+  replaces: boolean
+}
+
+/** raven/rpc/credential_broker.py: every card's end -- saved, skipped, timeout, cancelled. */
+export interface CredentialClosedParams {
+  request_id: string
   conversation_id: ConversationId
   reason: string
 }
@@ -200,6 +221,8 @@ export interface PushParams extends Record<PushMethod, object> {
   'approval.closed': ApprovalClosedParams
   'clarify.request': ClarifyRequestParams
   'clarify.closed': ClarifyClosedParams
+  'credential.request': CredentialRequestParams
+  'credential.closed': CredentialClosedParams
   'system.update_available': SystemUpdateAvailableParams
   'memory.health': MemoryHealthParams
   'mcp.status': McpStatusParams

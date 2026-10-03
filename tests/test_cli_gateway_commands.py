@@ -228,6 +228,20 @@ class TestWorkInFlight:
         scheduler = SimpleNamespace(has_running=lambda: True)
         assert _work_in_flight(self._agent(), [], scheduler) is not None
 
+    def test_a_page_turn_counts_though_it_holds_neither_the_lock_nor_the_scheduler(self) -> None:
+        """Seen live: a reload asked from a page turn swapped two seconds later,
+        mid-answer, because the page's turn ran on the page's own spine."""
+        from raven.cli.gateway_commands import _work_in_flight
+        from raven.rpc.methods import turn
+
+        assert _work_in_flight(self._agent(), [], None, lambda: True) is not None
+        assert _work_in_flight(self._agent(), [], None, lambda: False) is None
+        turn._active_turns["tui:x"] = object()  # type: ignore[assignment]
+        try:
+            assert turn.any_turn_in_flight()
+        finally:
+            turn._active_turns.pop("tui:x")
+
 
 def test_the_swap_and_the_upgrade_refuse_on_one_busy_answer() -> None:
     """Both cut off in-flight turns, sub-agents and pending questions. Two
@@ -934,6 +948,27 @@ def test_unbinding_a_generation_retires_it_through_dispose() -> None:
     src = inspect.getsource(gateway_commands.register)
     unbind = src.split("async def _unbind_generation", 1)[1].split("async def _request_swap", 1)[0]
     assert "runtime.dispose()" in unbind
+
+
+def test_gateway_turns_run_with_a_checkpoint() -> None:
+    """Gateway turns are interactive, so the default checkpoint policy covers them.
+
+    ``exec`` measures a command's writes against the turn's shadow repo; with
+    the gateway built non-interactive there was none, and a file written from
+    the page reached the desk diff with counts and no diff. Both the first
+    generation and a reload's are built interactive. Read off the source for
+    the reason the /stop test above gives.
+    """
+    import inspect
+
+    from raven.agent.loop.turn_path import TurnPathMixin
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    policies = src.split("TurnPolicy(")[1:]
+    assert len(policies) == 2
+    assert all(p.split("now_fn=", 1)[0].count("interactive=True,") == 1 for p in policies)
+    assert TurnPathMixin._checkpoint_active("interactive", True) is True
 
 
 def test_cron_config_notify_missed_defaults_on() -> None:

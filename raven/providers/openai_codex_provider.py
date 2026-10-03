@@ -37,7 +37,7 @@ from raven.providers.first_byte import (
     stream_first_byte_budget,
 )
 from raven.providers.tool_names import normalized_tool_name
-from raven.providers.usage import merge_usage
+from raven.providers.usage import merge_usage, responses_usage
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
@@ -122,28 +122,45 @@ class OpenAICodexProvider(LLMProvider):
         # cost the whole of it before anyone noticed.
         first_byte = stream_first_byte_budget(self.generation)
         caps = httpx_timeout(self.generation) or timeout
+        raw_usage: dict[str, Any] = {}
         try:
             try:
                 content, tool_calls, finish_reason = await _request_codex(
-                    url, headers, body, verify=True, timeout=caps, idle_timeout=idle_timeout, first_byte=first_byte
+                    url,
+                    headers,
+                    body,
+                    verify=True,
+                    timeout=caps,
+                    idle_timeout=idle_timeout,
+                    first_byte=first_byte,
+                    usage_sink=raw_usage,
                 )
             except Exception as e:
                 if "CERTIFICATE_VERIFY_FAILED" not in str(e):
                     raise
                 logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
                 content, tool_calls, finish_reason = await _request_codex(
-                    url, headers, body, verify=False, timeout=caps, idle_timeout=idle_timeout, first_byte=first_byte
+                    url,
+                    headers,
+                    body,
+                    verify=False,
+                    timeout=caps,
+                    idle_timeout=idle_timeout,
+                    first_byte=first_byte,
+                    usage_sink=raw_usage,
                 )
             return LLMResponse(
                 content=content,
                 tool_calls=tool_calls,
                 finish_reason=finish_reason,
+                usage=responses_usage(raw_usage),
             )
         except Exception as e:
             classification = self.classify_error(e)
             return LLMResponse(
                 content=format_llm_error(e, classification, provider="openai_codex"),
                 finish_reason="error",
+                usage=responses_usage(raw_usage),
                 error_classification=classification,
             )
 
@@ -183,6 +200,7 @@ async def _request_codex(
     timeout: Any,
     idle_timeout: float | None = None,
     first_byte: float = 0.0,
+    usage_sink: dict[str, Any] | None = None,
 ) -> tuple[str, list[ToolCallRequest], str]:
     """One Codex request. ``timeout`` bounds the call; ``idle_timeout`` (the
     stream-idle budget, defaulting to the call budget) bounds the silence
@@ -197,7 +215,7 @@ async def _request_codex(
                 raise ProviderHTTPError(
                     response.status_code, _friendly_error(response.status_code, text.decode("utf-8", "ignore"))
                 )
-            return await _consume_sse(response, idle_timeout or timeout, first_byte=first_byte)
+            return await _consume_sse(response, idle_timeout or timeout, usage_sink=usage_sink, first_byte=first_byte)
 
 
 def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

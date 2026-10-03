@@ -31,6 +31,7 @@ from typing import Any
 from loguru import logger
 
 from raven.config.schema import PermissionsConfig
+from raven.config.self_surface import change_line, only_asks_for_secrets, touches_sensitive, unwritable_target
 from raven.config.update import allow_exec_pattern
 from raven.contracts.permissions import (
     Allow,
@@ -44,8 +45,14 @@ from raven.contracts.permissions import (
 )
 from raven.contracts.tool import PARSE_RETRY_INSTRUCTION, STOP_RETRY_INSTRUCTION, Continuation, Tool, ToolResult
 from raven.permissions.builtin import BuiltinRulings, action_digest, action_line, session_keys
-from raven.permissions.judge import review
-from raven.permissions.rules import default_tier, exec_approval_shape, user_tier, validate_exec_pattern
+from raven.permissions.judge import JudgeOutcome, review
+from raven.permissions.rules import (
+    default_tier,
+    exec_approval_shape,
+    self_config_tier,
+    user_tier,
+    validate_exec_pattern,
+)
 from raven.permissions.session import remember_allowed, session_allows, session_mode
 from raven.permissions.turn import current_tool_call_id, current_turn, note_refusal
 from raven.tracing import trace
@@ -122,6 +129,54 @@ class PermissionGate:
                 reason="This call is blocked by a deny rule in your permissions config",
                 source=DecisionSource.USER_DENY,
             )
+        own = self_config_tier(tool_name, params)
+        if own is not None and (target := unwritable_target(params)):
+            # Refused here rather than by the tool, so a value at a path the tool
+            # will not write (a credential in an MCP server's URL) reaches neither
+            # the card nor the reviewer on its way to that refusal.
+            return Deny(
+                reason=f"{target} is not something raven_config changes; describe lists what it can",
+                source=DecisionSource.DEFAULT,
+            )
+        if own is Tier.DENY:
+            return Deny(
+                reason=(
+                    "A key or token never goes through a tool call. Name the secret with an empty value and a "
+                    "card asks the user to type it; tell them a key pasted into the chat should be rotated"
+                ),
+                source=DecisionSource.DEFAULT,
+            )
+        if own is Tier.ALLOW:
+            return Allow(source=DecisionSource.DEFAULT)
+        if own is Tier.ASK:
+            # The user's own allow rule, full access and the smart-mode reviewer
+            # are honoured, but only in a turn someone is at (one with a
+            # responder, a channel user's included): a cron job is not the owner
+            # reconfiguring Raven. A grant "for
+            # this session" never carries a change through. The reviewer sees
+            # the call and not the conversation, so it cannot tell a change the
+            # user asked for from one an injected instruction asked for; the
+            # settings the catalog marks sensitive stay with the user.
+            attended = self._allow_ask and current_turn().responder is not None
+            if attended and only_asks_for_secrets(params):
+                # The credential card that follows is where the user decides.
+                return Allow(source=DecisionSource.DEFAULT)
+            if attended and user_tier(tool_name, params, cfg.tools) is Tier.ALLOW:
+                return Allow(source=DecisionSource.USER_ALLOW)
+            if attended and mode is PermissionMode.FULL:
+                return Allow(source=DecisionSource.MODE)
+            if attended and mode is PermissionMode.SMART and not touches_sensitive(params):
+                outcome = await self._review(tool_name, params, cfg)
+                if outcome is not None and outcome.allow:
+                    return Allow(source=DecisionSource.JUDGE)
+            return NeedsApproval(
+                reason="Changing Raven's own configuration needs the user's approval",
+                description=change_line(params),
+                digest=action_digest(tool_name, params),
+                family="",
+                session_keys=(),
+                suggested_pattern="",
+            )
         tier = user_tier(tool_name, params, cfg.tools)
         if tier is Tier.ALLOW:
             return Allow(source=DecisionSource.USER_ALLOW)
@@ -148,27 +203,9 @@ class PermissionGate:
         # shipped executor provides today.
         digest = action_digest(tool_name, params)
         description = described.description if described else f"Approve this action: {action_line(tool_name, params)}"
-        if mode is PermissionMode.SMART and self._judge_provider_for is not None:
-            provider = self._judge_provider_for()
-            if provider is not None:
-                await self._notify_review("started", tool_name)
-                try:
-                    outcome = await review(
-                        provider,
-                        tool_name=tool_name,
-                        params=params,
-                        model=cfg.judge_model or None,
-                        timeout_s=cfg.judge_timeout_seconds,
-                    )
-                finally:
-                    await self._notify_review("ended", tool_name)
-                self._annotate(
-                    {
-                        "permission.judge.decision": "allow" if outcome.allow else "escalate",
-                        "permission.judge.reason": outcome.reason,
-                        "permission.judge.failed": outcome.failed,
-                    }
-                )
+        if mode is PermissionMode.SMART:
+            outcome = await self._review(tool_name, params, cfg)
+            if outcome is not None:
                 if outcome.allow:
                     return Allow(source=DecisionSource.JUDGE)
                 return NeedsApproval(
@@ -248,7 +285,11 @@ class PermissionGate:
                 turn_id=turn.turn_id,
                 tool_call_id=current_tool_call_id(),
                 command=action_line(tool_name, params),
-                description=decision.description,
+                # The tool's own account where it gives one: it knows what a
+                # call resolves to (which restart a bare `restart` runs).
+                description=str(evidence.get("change") or decision.description)
+                if kind == "config.change"
+                else decision.description,
                 suggested_pattern=decision.suggested_pattern,
                 kind=kind,
                 family=decision.family,
@@ -418,6 +459,31 @@ class PermissionGate:
         span = trace.current_span()
         if span is not None:
             span.set(attributes)
+
+    async def _review(self, tool_name: str, params: dict[str, Any], cfg: PermissionsConfig) -> JudgeOutcome | None:
+        """The smart-mode reviewer's verdict, recorded on the span; None when no reviewer is configured."""
+        provider = self._judge_provider_for() if self._judge_provider_for is not None else None
+        if provider is None:
+            return None
+        await self._notify_review("started", tool_name)
+        try:
+            outcome = await review(
+                provider,
+                tool_name=tool_name,
+                params=params,
+                model=cfg.judge_model or None,
+                timeout_s=cfg.judge_timeout_seconds,
+            )
+        finally:
+            await self._notify_review("ended", tool_name)
+        self._annotate(
+            {
+                "permission.judge.decision": "allow" if outcome.allow else "escalate",
+                "permission.judge.reason": outcome.reason,
+                "permission.judge.failed": outcome.failed,
+            }
+        )
+        return outcome
 
     @staticmethod
     async def _notify_review(phase: str, tool_name: str) -> None:

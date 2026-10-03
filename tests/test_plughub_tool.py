@@ -16,6 +16,8 @@ import pytest
 
 from raven.agent.loop.bundles import TurnPolicy
 from raven.agent.tools.plughub import PluginTool
+from raven.agent.tools.registry import ToolRegistry
+from raven.contracts.tool import Tool
 from raven.market import install as install_mod
 from raven.market import ledger as ledger_mod
 from raven.market.ledger import read_ledger
@@ -72,6 +74,7 @@ class _FakeManager:
         self.tools = tools or []
         self.dropped: list[str] = []
         self.interactive: bool | None = None
+        self.offers: set[str] = set()
 
     def status(self) -> list[dict]:
         return [
@@ -88,6 +91,9 @@ class _FakeManager:
 
     def tool_map(self) -> dict[str, str]:
         return {t: self.name for t in self.tools} if self.state == "connected" else {}
+
+    def servers_offering(self, primitive: str) -> list[str]:
+        return [self.name] if self.state == "connected" and primitive in self.offers else []
 
     async def disconnect(self, name: str, *, drop: bool = False) -> None:
         self.dropped.append(name)
@@ -164,6 +170,28 @@ async def test_find_falls_back_to_near_matches_on_a_typo() -> None:
 async def test_find_says_so_when_nothing_is_close() -> None:
     out = await PluginTool().execute(action="find", query="zzzqqq-not-a-product")
     assert "No plugin in the catalog matches" in out
+
+
+async def test_find_names_an_agent_or_a_channel_that_is_not_a_plugin() -> None:
+    """Seen live: "connect openclaw" searched the plugin catalog ten times --
+    down to single letters -- because "claw" matched firecrawl and nothing said
+    OpenClaw is an agent Raven dispatches to."""
+    agent = await PluginTool().execute(action="find", query="openclaw")
+    assert "No plugin is called 'openclaw'" in agent
+    assert 'raven_config add subagents {"preset": "openclaw"}' in agent
+    channel = await PluginTool().execute(action="find", query="wechat")
+    assert "raven_config describe channels.weixin" in channel
+    assert "raven_config" not in await PluginTool().execute(action="find", query="asana")
+
+
+async def test_find_for_a_generation_tool_says_raven_has_its_own_and_hides_nothing() -> None:
+    """Asked whether it could generate images, the agent searched the plugin catalog twice before looking
+    at its own image tool. The pointer is added, never swapped in: a plugin may
+    carry such a tool too."""
+    image = await PluginTool().execute(action="find", query="image generation")
+    assert "tools.media.<kind>.model" in image and "catalog match" in image
+    brave = await PluginTool().execute(action="find", query="brave search")
+    assert "brave-search" in brave and "raven_config" not in brave
 
 
 # ── connect ────────────────────────────────────────────────────────
@@ -326,6 +354,17 @@ async def test_list_reports_state_and_tool_count(_isolated, monkeypatch) -> None
     assert "state connected" in out
     assert "1 tools" in out
     assert "mcp_svc_a" in out
+    assert "not connected: tell the user" in out
+
+
+async def test_an_empty_list_tells_the_agent_to_say_so_rather_than_work_around_it(_isolated, monkeypatch) -> None:
+    """Seen live: told only "no plugins", the agent read a GitHub PR through the
+    browser and never mentioned that GitHub was not connected."""
+    monkeypatch.setattr("raven.market.connect.installed_overview", lambda loop: [])
+    out = await PluginTool(loop=_FakeLoop("svc", "connected", [])).execute(action="list")
+
+    assert out.startswith("No plugins are installed.")
+    assert "tell the user so and offer to connect it" in out
 
 
 async def test_list_points_at_authorize_for_a_parked_plugin(_isolated) -> None:
@@ -360,6 +399,81 @@ async def test_authorize_reconnects_and_names_the_tools(_isolated) -> None:
 
     assert "authorized and connected" in out
     assert "mcp_svc_a" in out
+
+
+class _Named(Tool):
+    def __init__(self, name: str) -> None:
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def description(self) -> str:
+        return "stub"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs) -> str:
+        return "ran"
+
+
+def _offered(reg: ToolRegistry) -> set[str]:
+    return {d["function"]["name"] for d in reg.get_definitions()}
+
+
+@pytest.mark.parametrize("action", ["connect", "authorize"])
+async def test_the_tools_a_call_connects_are_usable_in_the_same_turn(_isolated, monkeypatch, action) -> None:
+    """The result says "from the next step on", and the turn freeze used to make
+    that false: the agent saw the tools named and could not call them until the
+    user sent another message."""
+    _patch_catalog(monkeypatch, _entry("none"))
+    if action == "authorize":
+        _isolated["cfg_path"].write_text(
+            json.dumps({"tools": {"mcpServers": {"svc": {"type": "streamableHttp", "url": "https://svc.example/mcp"}}}})
+        )
+    reg = ToolRegistry()
+    loop = _FakeLoop("svc", "connected" if action == "connect" else "auth_required", ["mcp_svc_a"])
+    tool = PluginTool(loop=loop, registry=reg)
+    reg.register(tool)
+
+    with reg.turn_scope():
+        reg.register(_Named("mcp_svc_a"))
+        assert "mcp_svc_a" not in _offered(reg)
+        out = await reg.execute("plugin", {"action": action, "name": "svc"})
+        assert "mcp_svc_a" in out
+        assert "mcp_svc_a" in _offered(reg)
+        assert await reg.execute("mcp_svc_a", {}) == "ran"
+
+
+@pytest.mark.parametrize("offers", [set(), {"resources"}, {"prompts"}])
+async def test_a_connect_admits_the_meta_tools_its_server_brought(monkeypatch, offers) -> None:
+    """The resource and prompt meta-tools register without an origin, so a
+    server that is the first to offer resources would otherwise be connected
+    with its resources unreachable for the rest of the turn."""
+    from raven.mcp.prompts import PROMPT_TOOL_NAMES
+    from raven.mcp.resources import RESOURCE_TOOL_NAMES
+
+    _patch_catalog(monkeypatch, _entry("none"))
+    reg = ToolRegistry()
+    loop = _FakeLoop("svc", "connected", ["mcp_svc_a"])
+    loop.mcp_manager.offers = offers
+    reg.register(PluginTool(loop=loop, registry=reg))
+    meta = set(RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES)
+
+    with reg.turn_scope():
+        for name in ["mcp_svc_a", *sorted(meta)]:
+            reg.register(_Named(name))
+        await reg.execute("plugin", {"action": "connect", "name": "svc"})
+        expected = set()
+        if "resources" in offers:
+            expected |= RESOURCE_TOOL_NAMES
+        if "prompts" in offers:
+            expected |= PROMPT_TOOL_NAMES
+        assert _offered(reg) & meta == expected
 
 
 async def test_authorize_from_a_turn_does_not_take_this_hosts_browser(_isolated) -> None:
@@ -448,5 +562,6 @@ def test_a_real_loop_registers_the_tool(tmp_path) -> None:
     loop = AgentLoop(provider=_Stub(), workspace=tmp_path, model="stub", policy=TurnPolicy(max_iterations=1))
     tool = loop.tools.get("plugin")
     assert isinstance(tool, PluginTool)
+    assert tool._registry is loop.tools, "a connect could not let its tools into the running turn"
     assert tool._loop is loop
     assert tool.blocking_interaction is False, "a tool that waits on a human would hold the turn open"

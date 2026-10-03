@@ -117,7 +117,10 @@ class CronTool(Tool):
                     "enum": ["add", "list", "remove"],
                     "description": "Action to perform",
                 },
-                "message": {"type": "string", "description": "Reminder message (for add)"},
+                "message": {
+                    "type": "string",
+                    "description": "Required for add: the instruction Raven runs when it fires, a task or a reminder",
+                },
                 "every_seconds": {
                     "type": "integer",
                     "description": (
@@ -205,7 +208,11 @@ class CronTool(Tool):
         topic_tag: str | None = None,
     ) -> str:
         if not message:
-            return "Error: message is required for add"
+            return (
+                "Error: nothing was scheduled -- add needs `message`, the instruction Raven runs when the job "
+                "fires (e.g. message='Search today's gold price and send me a short summary'). Call add again "
+                "with it."
+            )
         if not self._channel or not self._chat_id:
             return "Error: no session context (channel/chat_id)"
         # tz anchors a cron expression's wall-clock recurrence and a naive `at`

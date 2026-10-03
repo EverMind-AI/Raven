@@ -80,9 +80,11 @@ It takes the current unowned tab or gets a fresh one. Subsequent calls stay
 bound to that tab even if the panel displays another one.
 
 An agent action brings its tab forward; a read alone does not. Another owner's
-tab is marked held and cannot be activated or closed by that agent. Bindings
-expire after ten idle minutes or when the tab closes. User panel interactions
-are not restricted to a model's owner binding.
+tab is marked held and cannot be activated or closed by that agent. A tab with
+no owner is the user's and may hold a login they were asked to finish: an agent
+closes it only after activating it, a switch the panel shows. Bindings expire
+after ten idle minutes or when the tab closes. User panel interactions are not
+restricted to a model's owner binding.
 
 This shares one process's browser, not every browser in the deployment.
 External ACP/CLI processes may have their own browser state. Do not promise
@@ -98,6 +100,8 @@ that an external Claude Code session, for example, uses the panel's Chromium.
 Check the effective [permission mode](permissions.md): `full` skips ordinary
 ask-tier prompts. Site-scoped consent is broader than one button, and the
 approval may show a ref and site rather than a human-readable element label.
+An action that would open a fresh tab has no site yet: its prompt names none,
+and a session grant for it covers only an identical call.
 Disable tools through `tools.disabledTools` or explicit permission rules when
 they must not be available.
 

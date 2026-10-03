@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 
 import pytest
+from rich.style import Style
 
 from raven.cli import _theme
 
@@ -18,15 +19,24 @@ from raven.cli import _theme
 _REAL_CAN_PROBE = _theme._can_probe
 
 
+def _reset_rich_style_cache():
+    # Style.render() memoizes its ANSI onto the shared, lru_cache'd Style
+    # instance and never redoes it for a later, different color_system (#339).
+    Style.parse.cache_clear()
+    Style._add.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _reset_theme_cache(monkeypatch):
     _theme._cache = None
+    _reset_rich_style_cache()
     for var in ("RAVEN_THEME", "RAVEN_TERM_BACKGROUND", "COLORFGBG", "CI", "SSH_CONNECTION", "SSH_TTY"):
         monkeypatch.delenv(var, raising=False)
     # keep detection deterministic: never actually probe the terminal in tests
     monkeypatch.setattr(_theme, "_can_probe", lambda: False)
     yield
     _theme._cache = None
+    _reset_rich_style_cache()
 
 
 def _wcag_contrast(hex_fg: str, hex_bg: str) -> float:
@@ -304,6 +314,17 @@ def test_no_compound_markup_mixes_theme_key():
         if len(words) > 1 and _THEME_KEYS & set(words):
             bad.add(tag)
     assert not bad, f"compound markup mixes a theme key with another word (renders unstyled): {bad}"
+
+
+def test_bold_accent_survives_a_downgraded_render_elsewhere():
+    """Regression for #339: rendering the same markup through a lower-fidelity
+    console (as any other test in the suite could, whenever xdist schedules it
+    first) must not leave the next truecolor render stuck at that depth."""
+    from rich.console import Console
+
+    Console(theme=_theme.build_rich_theme("dark"), file=io.StringIO(), force_terminal=True, color_system="256").print(
+        "[bold][accent]X[/accent][/bold]", end=""
+    )
 
 
 def test_bold_accent_renders_styled_not_bare():

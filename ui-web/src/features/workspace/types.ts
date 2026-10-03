@@ -22,6 +22,10 @@ export interface WsChange {
      edited -- either way nothing here can say what the file holds. Read only
      when the file is removed and the runtime caught none of its contents. */
   body?: string | null
+  /* Made by a command's listing rather than by a file tool. Said outright
+     because the hunk no longer tells them apart: a listing that could measure
+     the change carries one too. */
+  listed?: boolean
   turn: number
   open: boolean
   auto?: boolean
@@ -43,6 +47,9 @@ export interface WsFile {
   err: string | null
   size: number | null
   loading: boolean
+  /* Set once a `bin` file's head has been read (store.sniffFile), so an
+     answer that left it the note is not asked for again on every paint. */
+  sniffed?: boolean
   /* Island-only identity: two opens of the same path are two fresh views. */
   seq?: number
 }

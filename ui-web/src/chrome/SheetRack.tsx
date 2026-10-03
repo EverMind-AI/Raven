@@ -40,16 +40,24 @@ export interface SheetOptionRow {
   readonly run: () => void
   /** The default answer, which the sheet marks. */
   readonly go?: boolean
+  /** The key that answers it, drawn as a cap after the label. */
+  readonly keys?: string
+}
+
+/** A key cap: the shortcut beside the control it presses. */
+export function KeyCap({ keys }: { keys: string }): JSX.Element {
+  return <kbd className="chrome-keycap">{keys}</kbd>
 }
 
 export function SheetOption(
-  { n, row, cls, children }: { n: number; row: SheetOptionRow; cls?: string; children?: ReactNode },
+  { n, row, cls, children }: { n?: number; row: SheetOptionRow; cls?: string; children?: ReactNode },
 ): JSX.Element {
   return (
     <button className={`opt${row.go ? ' go' : ''}${cls ? ` ${cls}` : ''}`} onClick={row.run}>
-      <span className="n">{n}</span>
+      {n != null ? <span className="n">{n}</span> : null}
       <span>{row.label}</span>
       {children}
+      {row.keys ? <KeyCap keys={row.keys} /> : null}
     </button>
   )
 }

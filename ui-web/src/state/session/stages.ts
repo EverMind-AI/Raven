@@ -34,7 +34,7 @@ import { ds, sources } from '../sources'
 import { show as toast } from '../toast'
 import { ask, noteRow, unask } from './conversation'
 import { namingEnded, settleNaming } from './naming'
-import { viewRuntime } from './registry'
+import { rereadChips, viewRuntime } from './registry'
 import {
   drain, duration, ensureStep, finishTurn, flushSay, reset, send, softStop,
 } from './runtime'
@@ -64,6 +64,14 @@ function arm<T extends EventType>(
 /* A stage that exists to say the page draws nothing for these, which is a
    different statement from a frame no arm names. */
 const unhandled = (handles: readonly EventType[]): Stage => ({ handles, run: () => {} })
+
+/* A raven_config call that wrote something. A read cannot move a chip, and a
+   refused one (the reader said no) wrote nothing. */
+const changesSettings = (name: string | undefined, args: unknown): boolean => {
+  if (name !== 'raven_config' || !args || typeof args !== 'object') return false
+  const action = (args as Record<string, unknown>).action
+  return action === 'set' || action === 'unset'
+}
 
 /* The stages, in the order the page has always taken them. A frame carries one
    type, so the order is the table rather than a pipeline the frame runs down --
@@ -218,6 +226,7 @@ export const STAGES: readonly Stage[] = [
     if (typeof wsOnToolDone === 'function') {
       wsOnToolDone(o.name, o.args, ok, preview, took, p.diff, p.file_change, p.file_removed, p.file_written)
     }
+    if (ok && changesSettings(o.name, o.args)) rereadChips()
   }),
 
   /* Our own cancel already folded and reset the visible turn. The server can

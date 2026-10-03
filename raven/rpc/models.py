@@ -656,8 +656,13 @@ class FileWritten(_Strict):
     Neither a :class:`FileChange` nor a :class:`FileRemoval`: a command reports
     its output and nothing else, so what is known of the file is what two
     listings of the directory said about it -- that it is there, how big it is,
-    and whether it was there before. No contents either way, because one command
-    can write a hundred files and a row draws none of their text.
+    and whether it was there before. What it changed from is known only when the
+    working directory's shadow repo held a copy from just before the command;
+    then the change itself rides along as counts and a unified diff. A file's
+    text goes out only when the shadow repo's rules would store it: never for a
+    file its excludes or the user's .gitignore keep out, even one the repo held a
+    copy of before the rule named it. Such a created file carries its counts
+    only, and such a rewrite neither.
     """
 
     path: str = Field(description="Absolute path of the file the command wrote.")
@@ -675,6 +680,25 @@ class FileWritten(_Strict):
             "always sent, and null says the count is unknown -- too large to read, not text, or "
             "a file that already existed, whose old contents the listing never held and whose "
             "change therefore has no number."
+        ),
+    )
+    added: int | None = Field(
+        default=None,
+        description=(
+            "Lines the command added to the file. Absent when the change could not be measured: "
+            "not text, too large, or a rewrite whose previous contents were never captured."
+        ),
+    )
+    removed: int | None = Field(
+        default=None,
+        description="Lines the command removed from the file. Absent exactly when added is.",
+    )
+    diff: str | None = Field(
+        default=None,
+        description=(
+            "Unified diff of the change, when it was measured and small enough to carry. "
+            "Absent past the event's budget even when the counts are present: a partial "
+            "diff reads as a smaller change than the one that happened."
         ),
     )
 
@@ -2587,6 +2611,17 @@ class SubagentsAddParams(_Strict):
     preset: str
     name: str | None = None
     description: str | None = None
+    model: str | None = Field(
+        default=None,
+        description="A model the agent itself lists, used for the readiness ping and stored on the row.",
+    )
+    lend_key: str | None = Field(
+        default=None,
+        description=(
+            "A Raven provider (e.g. openrouter) whose key the agent is started with, read from Raven's config at "
+            "each start; refused unless the preset reads a key for it and Raven holds one."
+        ),
+    )
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
@@ -2608,6 +2643,10 @@ class SubagentsUpdateParams(_Strict):
     api_key: str | None = None
     mcps: list[str] | None = None
     allow_mcp_secrets: bool | None = None
+    lend_keys: list[str] | None = Field(
+        default=None,
+        description="The Raven providers whose key an acp agent is started with; [] lends none.",
+    )
     model: str | None = None
     provider: str | None = Field(
         default=None,
@@ -3706,6 +3745,13 @@ class EverosSection(_Strict):
             "The slot is read-only: raven cannot edit a shell."
         ),
     )
+    follows_main: bool = Field(
+        default=False,
+        description=(
+            "Nothing is pinned and the role runs on the main chat model, which it follows when that "
+            "changes. Only the memory LLM does this."
+        ),
+    )
 
 
 class SettingsEverosParams(_Strict):
@@ -4166,6 +4212,47 @@ class ApprovalPendingParams(_Strict):
 class ApprovalPendingResult(_Strict):
     requests: list[dict[str, Any]] = Field(
         ..., description="Each open request's approval.request params, exactly as they were first sent."
+    )
+
+
+class CredentialSubmitParams(_Strict):
+    """The value the user typed into a credential card. Written by the host, never echoed."""
+
+    request_id: str
+    value: str = Field(..., description="The credential as typed. Not logged, not returned, not kept once written.")
+    session_id: str | None = None
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class CredentialSubmitResult(_Strict):
+    ok: bool = Field(..., description="True once the value is written; the waiting tool then resumes.")
+    error: str | None = Field(
+        default=None, description="Why it was not written, for the card to show; the request stays open."
+    )
+
+
+class CredentialSkipParams(_Strict):
+    request_id: str
+    session_id: str | None = None
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class CredentialSkipResult(_Strict):
+    ok: bool = Field(..., description="False for an unknown, answered or mis-bound request.")
+
+
+class CredentialPendingParams(_Strict):
+    """The credential cards still open, for a page that lost them."""
+
+    session_id: str | None = Field(
+        default=None, description="One conversation's requests; every conversation's when absent."
+    )
+    conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
+
+
+class CredentialPendingResult(_Strict):
+    requests: list[dict[str, Any]] = Field(
+        ..., description="Each open request's credential.request params, exactly as they were first sent."
     )
 
 
@@ -5475,6 +5562,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),
     "approval.pending": (ApprovalPendingParams, ApprovalPendingResult),
+    "credential.submit": (CredentialSubmitParams, CredentialSubmitResult),
+    "credential.skip": (CredentialSkipParams, CredentialSkipResult),
+    "credential.pending": (CredentialPendingParams, CredentialPendingResult),
     "clarify.respond": (ClarifyRespondParams, ClarifyRespondResult),
     "confirm.respond": (ConfirmRespondParams, ConfirmRespondResult),
     # slash routing and completion

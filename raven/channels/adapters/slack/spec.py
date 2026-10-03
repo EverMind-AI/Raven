@@ -25,17 +25,41 @@ SPEC = ChannelSpec(
         "webhook_path": {"type": "string", "default": "/slack/events"},
         "bot_token": {"type": "string", "default": "", "required": True, "secret": True},
         "app_token": {"type": "string", "default": "", "required": True, "secret": True},
-        "user_token_read_only": {"type": "boolean", "default": True},
+        "user_token_read_only": {
+            "type": "boolean",
+            "default": True,
+            "sensitive": "turning it off lets Raven act as you on Slack",
+        },
         "reply_in_thread": {"type": "boolean", "default": True},
         "react_emoji": {"type": "string", "default": "eyes"},
-        "group_policy": {"type": "string", "default": "mention"},
-        "group_allow_from": {"type": "array", "default": []},
+        "group_policy": {
+            "type": "string",
+            "default": "mention",
+            "sensitive": "widening it lets more people instruct Raven",
+        },
+        "group_allow_from": {
+            "type": "array",
+            "default": [],
+            "sensitive": "widening it lets more people instruct Raven",
+        },
         "dm": {
             "type": "object",
             "fields": {
-                "enabled": {"type": "boolean", "default": True},
-                "policy": {"type": "string", "default": "open"},
-                "allow_from": {"type": "array", "default": []},
+                "enabled": {
+                    "type": "boolean",
+                    "default": True,
+                    "sensitive": "widening it lets more people instruct Raven",
+                },
+                "policy": {
+                    "type": "string",
+                    "default": "open",
+                    "sensitive": "widening it lets more people instruct Raven",
+                },
+                "allow_from": {
+                    "type": "array",
+                    "default": [],
+                    "sensitive": "widening it lets more people instruct Raven",
+                },
             },
         },
     },

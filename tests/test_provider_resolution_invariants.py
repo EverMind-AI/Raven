@@ -856,6 +856,23 @@ def test_no_surface_writes_the_default_model_without_naming_its_provider():
                     offenders.append(f"{path.relative_to(root.parent)}:{node.lineno} (set_default_model)")
                 continue
 
+            if name == "Setting":
+                # A self-configuration catalog entry names a path and the writer
+                # that owns it. For the default model that writer must be the
+                # pair-writing `config.set model`, never the raw key writer.
+                declared = [a.value for a in node.args if isinstance(a, ast.Constant)]
+                writer = next(
+                    (
+                        kw.value.value
+                        for kw in node.keywords
+                        if kw.arg == "writer" and isinstance(kw.value, ast.Constant)
+                    ),
+                    "raw",
+                )
+                if "agents.defaults.model" in declared and writer != "config.model":
+                    offenders.append(f"{path.relative_to(root.parent)}:{node.lineno} (catalog entry, writer {writer})")
+                continue
+
             if name in {"get", "_get_nested", "get_nested"}:
                 # A read of the key is not a write of it. LiveConfig.get in
                 # provider_stack reads the default model as the router's live

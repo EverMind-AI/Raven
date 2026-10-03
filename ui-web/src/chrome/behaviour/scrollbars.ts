@@ -102,6 +102,9 @@ function thumb(el: HTMLElement, b: Bars, axis: Axis): HTMLElement {
   const t = document.createElement('div')
   t.className = 'sbar'
   t.dataset.axis = axis
+  /* The lightbox is the one overlay above this layer that scrolls; page.css
+     lifts the layer over it while it is open and shows only these there. */
+  if (el.closest('.lightbox')) t.dataset.over = 'lightbox'
   layer().appendChild(t)
   b[axis] = t
   owners.add(el)

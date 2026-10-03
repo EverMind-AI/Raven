@@ -1891,17 +1891,17 @@ async def test_oauth_login_hands_the_pair_from_the_starter(fake_home: Path, monk
     }
 
 
-async def test_oauth_login_refuses_a_key_provider_and_a_second_start(fake_home: Path, monkeypatch) -> None:
+async def test_oauth_login_refuses_a_key_provider_and_a_failed_start(fake_home: Path, monkeypatch) -> None:
     from raven.providers import oauth_login
     from raven.rpc.methods.model import model_oauth_login
 
     with pytest.raises(NotSupportedError):
         await model_oauth_login({"slug": "deepseek"})
 
-    async def busy(slug: str) -> dict:
-        raise RuntimeError("already waiting")
+    async def refused(slug: str) -> dict:
+        raise RuntimeError("vendor refused the device code")
 
-    monkeypatch.setattr(oauth_login, "start", busy)
+    monkeypatch.setattr(oauth_login, "start", refused)
     with pytest.raises(ConfigValidationError):
         await model_oauth_login({"slug": "openai_codex"})
 
@@ -1939,7 +1939,7 @@ async def test_add_models_and_set_fields_name_an_unknown_provider(fake_home: Pat
     ("raised", "expected", "text"),
     [
         (LookupError("no device flow"), NotSupportedError, "no device flow"),
-        (RuntimeError("already waiting"), ConfigValidationError, "already waiting"),
+        (RuntimeError("vendor refused the device code"), ConfigValidationError, "vendor refused"),
         (ValueError("vendor said no"), ConfigValidationError, "could not start"),
     ],
 )
@@ -2042,3 +2042,25 @@ class TestEverosFollowsACredentialChange:
         monkeypatch.setattr(builtins, "__import__", no_everos)
         result = await model_save_key({"slug": "deepseek", "api_key": "new-key"})
         assert result["provider"]["slug"] == "deepseek"
+
+
+async def test_add_model_preserves_metadata_under_a_bare_id(fake_home: Path) -> None:
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "hosted_vllm": {
+                    "apiBase": "http://localhost:9999/v1",
+                    "models": ["team-model"],
+                    "modelOverlay": {"team-model": {"label": "Team model", "description": "Keep this description"}},
+                }
+            }
+        },
+    )
+
+    result = await model_add_model({"slug": "hosted_vllm", "model": "team-model", "capabilities": ["reasoning"]})
+
+    row = result["provider"]["model_labels"]["team-model"]
+    assert row["label"] == "Team model"
+    assert row["description"] == "Keep this description"
+    assert row["capabilities"] == ["reasoning"]

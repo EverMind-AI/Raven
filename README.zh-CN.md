@@ -4,12 +4,13 @@
 
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
-  <a href="https://huggingface.co/EverMind-AI"><img src="https://img.shields.io/badge/HuggingFace-EverMind-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face"></a>
+  <a href="https://arxiv.org/abs/2609.33439"><img src="https://img.shields.io/badge/arXiv-2609.33439-B31B1B?labelColor=gray&style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv"></a>
+  <a href="https://huggingface.co/papers/2609.33439"><img src="https://img.shields.io/badge/HuggingFace-Paper-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face"></a>
   <a href="https://discord.gg/gYep5nQRZJ"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FgYep5nQRZJ%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
-[技术报告](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf) · [官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
+[官网](https://raven.evermind.ai) · [文档](https://evermind-ai.github.io/Raven/zh/) · [English](README.md)
 
 </div>
 
@@ -36,80 +37,6 @@ Raven 构建于 EverMind 的自进化 harness 引擎之上，由 [EverOS](https:
 </p>
 
 <p align="center"><em>Raven 在多 Agent 编排基准测试上的表现</em></p>
-
-## ❯❯ 内置 Agent
-
-Raven 采用模块化架构，专为 harness 自进化与子 Agent 创建而设计。四个内置 Agent 将可复用的 harness 组件与各领域专用的工具、技能和 Agent 循环相结合，在各自领域均达到**业界领先（SOTA）水平**。Raven 既可以把单一任务委派给某个 Agent，也可以在同一工作流中编排多个 Agent 协作。这些 Agent 共用的 harness 由 **Raven Evolver** 改进。Evolver 是一个独立工具，以库的形式调用 Raven，并在基准测试上评估候选的 harness 改动；它服务于 Agent 的研发过程，并不运行在 Agent 内部。
-
-> 四个 Agent 均已内置，开箱即可参与编排。
-
-### ❯ Raven-Research
-
-**Raven-Research** 为复杂问题、文献综述与技术分析提供**自主深度研究**能力。它输出清晰、结构化且来源可追溯的研究报告，帮助用户了解陌生领域、比较不同方案，做出有据可依的决策。
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02"><img src="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
-</p>
-
-<p align="center"><em>Raven-Research 在 DeepResearch Mixed 基准测试中的表现</em></p>
-
-### ❯ Raven-Code
-
-**Raven-Code** 提供 **Agent 驱动的软件开发**能力，把需求转化为可运行、经过测试的代码。它覆盖功能实现、调试、重构、数据处理与数据分析，在遵循项目既有规范的前提下，帮助用户开发新功能、修复问题并提升代码质量。
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e"><img src="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Code 在编程基准测试中的表现</em></p>
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Code 在数据分析任务的 DataAgentBench 上排名第一（2026-08-24 Live）</em></p>
-
-### ❯ Raven-Design
-
-**Raven-Design** 提供**视觉设计**能力，把想法与内容转化为精美的视觉作品。它可以制作 PowerPoint 演示文稿、品牌素材、图表、示意图和网页界面，并优化布局、字体与视觉一致性，帮助用户清晰传达信息、让创意落地。
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Design 在 PresentBench 幻灯片生成测试中排名第一</em></p>
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46"><img src="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
-</p>
-
-<p align="center"><em>Raven-Design 在视觉设计基准测试中的表现</em></p>
-
-### ❯ Raven-Oncall
-
-**Raven-Oncall** 为实验、调优与持续监控提供**无人值守的流程自动化**能力。它自主推进工作流从启动到完成的全过程，可连续运行数小时乃至通宵并交付结果，只在需要人工判断时才请用户介入。
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="95%"></a>
-</p>
-
-<p align="center"><em>在 AI4AI 任务上，Raven-Oncall 的质量与成本均显著优于 Claude Code</em></p>
-
-<p align="center">
-  <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="95%"></a>
-</p>
-
-<p align="center"><em>在 AI4S 任务上，Raven-Oncall 的成功率与成本均显著优于 Claude Code</em></p>
-
-## ❯❯ 运行时自进化
-
-**Raven 从架构设计之初就支持运行时自进化。** 它将 Agent 的运行循环拆分为四个相互解耦的策略模块——**Memory** 决定本轮能看到什么，**Planning** 决定如何着手，**Capability** 决定本轮开放哪些工具，**Action** 决定做什么并在执行前加以判断。**Curator** 正是在这四个位置上持续改写：可以是一项配置变更，也可以是为该 Agent 编写的一段判断逻辑。改动仅作用于对应的 Agent，装配完成后即按新的实现运行。
-
-**Curator 改写的不止是提示词。** 它所使用的工具与外部服务、所遵循的技能与流程、在每个环节上的判断，都可以被替换。改写按轮次进行：你使用它完成工作，指出不足，它据此改写后再来一轮，直到你认可、它判断已无可改之处，或轮次预算用尽。质量由两点保障：装配前必须通过校验，未通过则返工；常规轮次的信号在交给它之前会剥掉参考答案，以减少答案的直接暴露。Curator 目前仍是实验性的：它随仓库提供，不包含在安装包中。
-
-**数字人是它构建的第一个成果。** 只需描述你想要什么样的助手，Curator 就会为你构建：由一个主角色负责与你沟通，再从已有的 Agent 中选择合适的成员分工协作。你的需求会完整落实到助手的 **harness** 中，成为具体的职责分工、工具使用范围和行动前的检查规则。
-
-> 描述你的需求，Raven 会为你创建助手，并在使用中持续改进。之后，只需一句话，就能让它再次为你工作。
 
 ## ❯❯ 案例展示
 
@@ -195,6 +122,80 @@ https://github.com/user-attachments/assets/dd186b6d-3752-4c59-89c7-eeea5c6fa962
 </table>
 
 **[更多案例](docs/showcase.zh-CN.md)**
+
+## ❯❯ 内置 Agent
+
+Raven 采用模块化架构，专为 harness 自进化与子 Agent 创建而设计。四个内置 Agent 将可复用的 harness 组件与各领域专用的工具、技能和 Agent 循环相结合，在各自领域均达到**业界领先（SOTA）水平**。Raven 既可以把单一任务委派给某个 Agent，也可以在同一工作流中编排多个 Agent 协作。这些 Agent 共用的 harness 由 **Raven Evolver** 改进。Evolver 是一个独立工具，以库的形式调用 Raven，并在基准测试上评估候选的 harness 改动；它服务于 Agent 的研发过程，并不运行在 Agent 内部。
+
+> 四个 Agent 均已内置，开箱即可参与编排。
+
+### ❯ Raven-Research
+
+**Raven-Research** 为复杂问题、文献综述与技术分析提供**自主深度研究**能力。它输出清晰、结构化且来源可追溯的研究报告，帮助用户了解陌生领域、比较不同方案，做出有据可依的决策。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02"><img src="https://github.com/user-attachments/assets/9dbc1aaa-3477-4871-b3fd-a42405c6ef02" alt="DeepResearch Mixed: Accuracy, Input Tokens, Output Tokens, and Cost" width="100%"></a>
+</p>
+
+<p align="center"><em>Raven-Research 在 DeepResearch Mixed 基准测试中的表现</em></p>
+
+### ❯ Raven-Code
+
+**Raven-Code** 提供 **Agent 驱动的软件开发**能力，把需求转化为可运行、经过测试的代码。它覆盖功能实现、调试、重构、数据处理与数据分析，在遵循项目既有规范的前提下，帮助用户开发新功能、修复问题并提升代码质量。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e"><img src="https://github.com/user-attachments/assets/a516ebc2-f0b4-47d4-b970-7dfd492adc0e" alt="Coding Benchmarks: SWE-bench Pro, SWE-bench Verified, WorkBuddy-Code Reward, and SWE-Refactor" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Code 在编程基准测试中的表现</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0"><img src="https://github.com/user-attachments/assets/75f60aa2-3e2f-42fb-aa51-aa111bf078d0" alt="DataAgentBench (2026-08-24 Live): Raven-Code with Opus-5 achieves 0.8762 Pass@1" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Code 在数据分析任务的 DataAgentBench 上排名第一（2026-08-24 Live）</em></p>
+
+### ❯ Raven-Design
+
+**Raven-Design** 提供**视觉设计**能力，把想法与内容转化为精美的视觉作品。它可以制作 PowerPoint 演示文稿、品牌素材、图表、示意图和网页界面，并优化布局、字体与视觉一致性，帮助用户清晰传达信息、让创意落地。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9"><img src="https://github.com/user-attachments/assets/c42ff722-8aab-40ec-82e3-0655a859a9d9" alt="PresentBench: Raven-Design, Claude Code, and public leaderboard scores" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Design 在 PresentBench 幻灯片生成测试中排名第一</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46"><img src="https://github.com/user-attachments/assets/103c49f8-f31d-4735-8bfd-84cae9baee46" alt="Visual Design: Raven-Design, Claude Code, and Hermes on ArtifactsBench Dashboard, ArtifactsBench SVG, and GDPVal" width="95%"></a>
+</p>
+
+<p align="center"><em>Raven-Design 在视觉设计基准测试中的表现</em></p>
+
+### ❯ Raven-Oncall
+
+**Raven-Oncall** 为实验、调优与持续监控提供**无人值守的流程自动化**能力。它自主推进工作流从启动到完成的全过程，可连续运行数小时乃至通宵并交付结果，只在需要人工判断时才请用户介入。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d"><img src="https://github.com/user-attachments/assets/bffd0fa2-e750-4f09-b74a-09452765a99d" alt="AI4AI (Nanochat 50M Pretraining): Bits Per Byte (BPB), Runtime, Tokens, and Cost" width="95%"></a>
+</p>
+
+<p align="center"><em>在 AI4AI 任务上，Raven-Oncall 的质量与成本均显著优于 Claude Code</em></p>
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9"><img src="https://github.com/user-attachments/assets/aafe30ca-6693-4d30-956e-73debf3ef2c9" alt="AI4S Internal Benchmark: Success Rate, Average Total Runtime, Average Total Tokens, and Average Cost" width="95%"></a>
+</p>
+
+<p align="center"><em>在 AI4S 任务上，Raven-Oncall 的成功率与成本均显著优于 Claude Code</em></p>
+
+## ❯❯ 运行时自进化
+
+**Raven 从架构设计之初就支持运行时自进化。** 它将 Agent 的运行循环拆分为四个相互解耦的策略模块——**Memory** 决定本轮能看到什么，**Planning** 决定如何着手，**Capability** 决定本轮开放哪些工具，**Action** 决定做什么并在执行前加以判断。**Curator** 正是在这四个位置上持续改写：可以是一项配置变更，也可以是为该 Agent 编写的一段判断逻辑。改动仅作用于对应的 Agent，装配完成后即按新的实现运行。
+
+**Curator 改写的不止是提示词。** 它所使用的工具与外部服务、所遵循的技能与流程、在每个环节上的判断，都可以被替换。改写按轮次进行：你使用它完成工作，指出不足，它据此改写后再来一轮，直到你认可、它判断已无可改之处，或轮次预算用尽。质量由两点保障：装配前必须通过校验，未通过则返工；常规轮次的信号在交给它之前会剥掉参考答案，以减少答案的直接暴露。Curator 目前仍是实验性的：它随仓库提供，不包含在安装包中。
+
+**数字人是它构建的第一个成果。** 只需描述你想要什么样的助手，Curator 就会为你构建：由一个主角色负责与你沟通，再从已有的 Agent 中选择合适的成员分工协作。你的需求会完整落实到助手的 **harness** 中，成为具体的职责分工、工具使用范围和行动前的检查规则。
+
+> 描述你的需求，Raven 会为你创建助手，并在使用中持续改进。之后，只需一句话，就能让它再次为你工作。
 
 ## ❯❯ 连接第三方 Agent
 
@@ -391,15 +392,16 @@ raven web
 
 ## ❯❯ 引用
 
-如果你在研究中使用了 Raven，请引用我们的[技术报告](https://github.com/EverMind-AI/Raven/releases/download/tech-report-v1/technical-report.pdf)：
+如果你在研究中使用了 Raven，请引用我们的[技术报告](https://arxiv.org/abs/2609.33439)：
 
 ```bibtex
-@techreport{evermind2026raven,
-  title       = {{Raven: The Harness of Harnesses for Composable Agentic Intelligence}},
-  author      = {{EverMind AI}},
-  institution = {EverMind AI},
-  year        = {2026},
-  month       = sep,
-  url         = {https://github.com/EverMind-AI/Raven/releases/tag/tech-report-v1}
+@misc{evermind2026raven,
+  title         = {{Raven: The Harness of Harnesses for Composable Agentic Intelligence}},
+  author        = {{EverMind AI}},
+  year          = {2026},
+  eprint        = {2609.33439},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  url           = {https://arxiv.org/abs/2609.33439}
 }
 ```
