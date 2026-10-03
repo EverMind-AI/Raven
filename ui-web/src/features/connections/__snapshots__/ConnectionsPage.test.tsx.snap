@@ -4,6 +4,7 @@ exports[`connections island > keeps its rendered shape, list 1`] = `
 "div.hub-head
   button.hub-head-tab
   button.hub-head-tab
+p.hub-head-sub
 div.su-tabs
   button.su-tab
     span.su-tn

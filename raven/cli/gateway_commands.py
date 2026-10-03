@@ -562,7 +562,11 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             policy=TurnPolicy(
                 max_iterations=config.agents.defaults.max_tool_iterations,
                 empty_recovery=limits_from_defaults(config.agents.defaults),
-                interactive=False,
+                # The page and the chat apps hold multi-turn conversations, so
+                # the default checkpoint policy covers them: exec measures what
+                # a command wrote against the turn's shadow repo, and without
+                # one a written file reaches the desk with counts and no diff.
+                interactive=True,
                 now_fn=parse_fake_now(fake_now),
             ),
             host=HostWiring(
@@ -1035,7 +1039,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                         policy=TurnPolicy(
                             max_iterations=new_config.agents.defaults.max_tool_iterations,
                             empty_recovery=limits_from_defaults(new_config.agents.defaults),
-                            interactive=False,
+                            interactive=True,
                             now_fn=parse_fake_now(fake_now),
                         ),
                         host=HostWiring(

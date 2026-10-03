@@ -24,6 +24,14 @@ describe('the hub header', () => {
     expect(tabs().map((b) => b.getAttribute('aria-selected'))).toEqual(['false', 'true'])
   })
 
+  /* The line under the tabs belongs to the module on screen, not the hub. */
+  it('says what the module on screen is for', () => {
+    const { rerender } = render(<HubHead current="agents" />)
+    expect(document.querySelector('.hub-head-sub')!.textContent).toBe('gui.page.agents_sub')
+    rerender(<HubHead current="channels" />)
+    expect(document.querySelector('.hub-head-sub')!.textContent).toBe('gui.page.conn_sub')
+  })
+
   /* The current tab is a title, not a control: pressing it would reopen the
      page it is on and re-fetch its rows for nothing. */
   it('opens the other module, and does nothing for the current one', () => {

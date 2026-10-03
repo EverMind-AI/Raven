@@ -23,6 +23,7 @@ import { Board } from '../dag/Board'
 import { DagGraph } from '../dag/DagGraph'
 import { layout } from '../dag/graph'
 import * as desk from '../desk/store'
+import { hasDiffBody } from '../workspace/store'
 import * as workspace from '../workspace/store'
 import { BoardCard } from './BoardCard'
 import { fitChips } from './chipFit'
@@ -1077,8 +1078,14 @@ function TaskHead({ row, node, now, paneId, onBack }: {
 /* The pane's own resolution of a node's write / edit file into something to
    open. A diff's actual patch body is not on the wire: it is read from this
    node's own tool calls, every one that touched the path, in order
-   (`diffs.ts`), which is what the folded chip's counts add up. */
+   (`diffs.ts`), which is what the folded chip's counts add up.
+
+   An edit to a file with no text in it has no patch to build: the hunks would
+   come back empty and the pane would open onto nothing, so the file itself is
+   what the chip opens -- the same door a written file's chip uses, and the
+   only view of a picture that exists. */
 async function openNodeDiff(row: TaskRow, node: TaskNode, file: TaskFile): Promise<void> {
+  if (!hasDiffBody(file.path)) { workspace.openPath(file.path); return }
   desk.openDeskDiff(await store.fileDiffChange(row, node, file))
 }
 
@@ -1100,13 +1107,18 @@ const DiffGlyph = (): JSX.Element => (
    two lists separately (`taskFiles` then `taskDiffs`) rather than
    interleaving them in node order. Files the node removed come last, and go
    with the changes rather than the writes: there is no file left to open, so
-   the chip opens the patch the way an edit's does. */
+   the chip opens the patch the way an edit's does.
+
+   A removal of a file with no text in it draws no chip at all: it has no patch
+   to build and no file left to open, so the chip could only lead somewhere
+   empty. The counts still say the run removed something (`productsOf`, and the
+   node's own steps), which is the same nothing a change row gets in the desk. */
 function Chips({ row }: { row: TaskRow }): JSX.Element | null {
   const all: Array<{ node: TaskNode; file: TaskFile }> = []
   row.nodes.forEach((n) => n.files.forEach((f) => all.push({ node: n, file: f })))
   const writes = all.filter(({ file }) => file.op === 'write' || file.op === 'add')
   const edits = all.filter(({ file }) => file.op === 'edit')
-  const gone = all.filter(({ file }) => file.op === 'delete')
+  const gone = all.filter(({ file }) => file.op === 'delete' && hasDiffBody(file.path))
   const chips: JSX.Element[] = [
     ...writes.map(({ node, file }) => (
       <button className="wchip" key={node.node_id + ':' + file.path} onClick={() => workspace.openPath(file.path)}>

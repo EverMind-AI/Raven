@@ -209,6 +209,24 @@ const BIN_EXT = new Set(['7z', 'a', 'aac', 'ai', 'avi', 'bin', 'bz2', 'ckpt', 'c
   'pth', 'pyc', 'rar', 'safetensors', 'so', 'sqlite', 'tar', 'tgz', 'tif', 'tiff', 'ttf', 'wasm', 'wav',
   'webm', 'woff', 'woff2', 'xz', 'zip', 'zst'])
 
+/* Whether a change to this path can be shown as a diff at all.
+
+   A file tool hands over its own patch, but a command hands over only a
+   before-and-after listing of its directory (`file_written` /
+   `file_removed`), so what the panel can draw for one of those is a count and
+   nothing else. That is true of every file a listing found, and it matters
+   only for the ones with no text in them: a picture or a deck has no lines to
+   number, so a reader who opens it gets an empty pane, while a script the
+   same command wrote can be shown in full.
+
+   Composed from the three extension tables the viewer already keeps rather
+   than a fourth list of its own -- the question is the same one `BIN_EXT` was
+   written for, so a format added there is known here too. */
+export const NON_TEXT_EXT = new Set([...IMG_EXT, ...OFFICE_EXT, ...BIN_EXT, 'pdf'])
+
+export const hasDiffBody = (p: string): boolean =>
+  !NON_TEXT_EXT.has((String(p).split('.').pop() || '').toLowerCase())
+
 export function fileKind(p: string): string {
   const ext = (String(p).split('.').pop() || '').toLowerCase()
   if (ext === 'md' || ext === 'mdx' || ext === 'markdown') return 'md'

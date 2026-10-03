@@ -1205,7 +1205,10 @@ def change_line(params: dict[str, Any]) -> str:
             named = "; ".join(_agent_added(i) for i in items)
             noun = "sub-agents" if len(items) > 1 else "sub-agent"
             each = "each runs" if len(items) > 1 else "it runs"
-            return f"Connect {noun}: {named} ({each} once now to check it answers, on that agent's own quota)"
+            if not any(i.get("lend_key") for i in items):
+                return f"Connect {noun}: {named} ({each} once now to check it answers, on that agent's own quota)"
+            # A lent key pays for that first run too, so "its own quota" would be wrong.
+            return f"Connect {noun}: {named} ({each} once now to check it answers). Note: {sensitive_reason(_LENT)}"
         return f"Add to Raven's configuration at {path}: {_shown(path, params.get('value'))}"
     if action == "test":
         return f"Run {path} once to check it works (it spends that agent's own quota) and record the result"
@@ -1218,6 +1221,21 @@ def change_line(params: dict[str, Any]) -> str:
             return f"Clear {path} so that {found[0].unset_means}{tail}"
         return f"Reset {path} to its default{tail}"
     return f"Change {path} to {_shown(path, params.get('value'))}{tail}"
+
+
+#: The catalog entry a lend is, wherever it is spelled: ``lend_key`` on an add
+#: hands over the same credential ``subagents.*.lendKeys`` does.
+_LENT = "subagents.*.lendKeys"
+
+
+def _agent_view(item: dict[str, Any]) -> dict[str, str]:
+    """One agent an add connects, as fields a card lays out itself."""
+    view = {
+        key: str(item[key]) for key in ("name", "preset", "lend_key") if isinstance(item.get(key), str) and item[key]
+    }
+    if item.get("model"):
+        view["model"] = _shown("subagents.*.model", item["model"])
+    return view
 
 
 def _agent_added(item: dict[str, Any]) -> str:
@@ -1304,6 +1322,16 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
         return view
     if action == "test":
         return view
+    if action == "add" and path == "subagents":
+        added = _decoded(params.get("value"))
+        items = added if isinstance(added, list) else [added]
+        if items and all(isinstance(item, dict) for item in items):
+            # Who is connected and on what, not the subagents table before and
+            # after: a card that answers about the arguments hides the lend.
+            view["agents"] = [_agent_view(item) for item in items]
+            if any(item.get("lend_key") for item in items):
+                view["sensitive"] = sensitive_reason(_LENT)
+            return view
     if action != "unset":
         view["value"] = _shown(path, params.get("value"))
     found = find(path)

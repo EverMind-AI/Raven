@@ -11,12 +11,13 @@ import { instanceState } from '../subagents/history'
 import * as agents from '../subagents/store'
 import * as tasks from '../tasks/store'
 import * as deliveries from '../workspace/deliveries'
+import { hasDiffBody } from '../workspace/store'
 import * as workspace from '../workspace/store'
 import * as palette from './palette'
 import * as seen from './seen'
 
 import type { AgentRow, InstanceRow } from '../subagents/types'
-import type { TaskRow } from '../tasks/types'
+import type { TaskFile, TaskNode, TaskRow } from '../tasks/types'
 import type { WsChange } from '../workspace/types'
 import type { DeskDuo, DeskPane, DeskSplits, DeskState, DeskTab } from './types'
 
@@ -148,30 +149,93 @@ const TABS: readonly DeskTab[] = ['deliverables', 'tasks', 'diff']
    the turn that made it, a delivery is its path, an instance is its handle
    under its agent. */
 export function idsOf(tab: DeskTab): string[] {
-  if (tab === 'diff') {
-    return [
-      ...workspace.shared().changes.map((c) => `${c.key}:${c.turn}`),
-      ...taskChangeIds(),
-    ]
-  }
+  if (tab === 'diff') return diffEntries().map((e) => e.id)
   if (tab === 'deliverables') return deliveries.paths()
   /* `kind:id`, never bare `id`: a spawn's record id and a dag's run id share
      no namespace and can collide. */
   return tasks.rows().map((r) => `${r.kind}:${r.id}`)
 }
 
-/* What a task's nodes wrote or edited, in the diff tab beside the session's
-   own rows -- a sub-agent's writes never reach the session's change list, and
-   the tab that counts changes has to count those too or its badge disagrees
-   with what the reader then sees on it.
+/* One row of the diff tab, whichever half it comes from, under the id the tab
+   counts it by and the change it opens. The two halves differ in when their
+   change is built -- see `diffEntries` -- so an entry carries the row for one
+   and the promise for the other.
 
-   Turn zero because that is the turn `tasks.fileDiffChange` builds the change
-   with, and `openDeskDiff` marks an item read under `${key}:${turn}`: an id
-   spelled any other way here would be counted forever and never read. */
-function taskChangeIds(): string[] {
-  const out: string[] = []
+   `dir` and `bold` are the shape the half draws its path in, and they are per
+   entry rather than per component because the two halves are not the same
+   sentence. A session row splits the path the way the record stores it and
+   bolds the tail, so a long path's end is what the eye lands on. A task row
+   has no split to offer -- its key is the node's own spelling, absolute and
+   whole -- and it has always drawn that path plain, so it says so here rather
+   than relying on an empty `dir` to draw the same thing. */
+export interface DeskDiffEntry {
+  id: string
+  dir: string
+  name: string
+  bold: boolean
+  kind: WsChange['kind']
+  add: number
+  del: number
+  /* A session row, ready to draw. */
+  change?: WsChange
+  /* A task's file: its row is assembled on open, because the patch body is
+     read from the node's own tool calls rather than held in the list. */
+  open?: () => Promise<WsChange>
+}
+
+/* Everything the diff tab holds, as one list both the badge and the list
+   itself read -- so what the tab counts and what it draws are the same fact,
+   and neither can drift from the other.
+
+   A change with no body to show is left out. Only a file tool hands over a
+   patch; a command reports the files its listing found, which is a count and
+   nothing else, so a picture or a deck among them opens onto an empty pane.
+   `hasDiffBody` is that test, by extension -- the one thing known about a file
+   nothing has read.
+
+   The session's own changes first, then a task's files, which is the order the
+   tab has always drawn them in. */
+export function diffEntries(): DeskDiffEntry[] {
+  const out: DeskDiffEntry[] = []
+  workspace.shared().changes.forEach((c) => {
+    if (!hasDiffBody(c.key)) return
+    out.push({ id: `${c.key}:${c.turn}`, dir: c.dir, name: c.name, bold: true, kind: c.kind, add: c.add, del: c.del, change: c })
+  })
+  taskFileEntries().forEach(({ row, node, file }) => {
+    if (!hasDiffBody(file.path)) return
+    out.push({
+      /* Turn zero because that is the turn `tasks.fileDiffChange` builds the
+         change with, and `openDeskDiff` marks an item read under
+         `${key}:${turn}`: an id spelled any other way here would be counted
+         forever and never read. */
+      id: `${tasks.taskChangeKey(row, node, file)}:0`,
+      dir: '',
+      name: file.path,
+      bold: false,
+      kind: tasks.taskChangeKind(file),
+      add: file.add,
+      del: file.del,
+      open: () => tasks.fileDiffChange(row, node, file),
+    })
+  })
+  return out
+}
+
+/* Every file a task's nodes touched, across every task -- beside the session's
+   own rows rather than instead of them: a sub-agent's writes never reach the
+   session's own change list, and they are changes to the same working
+   directory. Not the shelf: what a task wrote is not what the conversation
+   handed over, which only `deliver_files` decides.
+
+   Unfiltered, because `diffEntries` is not its only reader: the task pane lists
+   the same files as chips of its own, where an image is worth opening as the
+   file it is. */
+interface TaskFileEntry { row: TaskRow; node: TaskNode; file: TaskFile }
+
+function taskFileEntries(): TaskFileEntry[] {
+  const out: TaskFileEntry[] = []
   tasks.rows().forEach((row) => row.nodes.forEach((node) => node.files.forEach((file) => {
-    out.push(`${tasks.taskChangeKey(row, node, file)}:0`)
+    out.push({ row, node, file })
   })))
   return out
 }

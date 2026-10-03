@@ -950,6 +950,27 @@ def test_unbinding_a_generation_retires_it_through_dispose() -> None:
     assert "runtime.dispose()" in unbind
 
 
+def test_gateway_turns_run_with_a_checkpoint() -> None:
+    """Gateway turns are interactive, so the default checkpoint policy covers them.
+
+    ``exec`` measures a command's writes against the turn's shadow repo; with
+    the gateway built non-interactive there was none, and a file written from
+    the page reached the desk diff with counts and no diff. Both the first
+    generation and a reload's are built interactive. Read off the source for
+    the reason the /stop test above gives.
+    """
+    import inspect
+
+    from raven.agent.loop.turn_path import TurnPathMixin
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    policies = src.split("TurnPolicy(")[1:]
+    assert len(policies) == 2
+    assert all(p.split("now_fn=", 1)[0].count("interactive=True,") == 1 for p in policies)
+    assert TurnPathMixin._checkpoint_active("interactive", True) is True
+
+
 def test_cron_config_notify_missed_defaults_on() -> None:
     from raven.config.schema import CronConfig
 

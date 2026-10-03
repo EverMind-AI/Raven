@@ -17,10 +17,17 @@ read from the driver bundled with playwright 1.62:
 
 Only the home directory needs correcting: the two environment variables are
 not sandboxed, so where one is set Playwright already finds the cache.
+
+A browser in the cache is not yet one this host can run -- a missing system
+library stops it at launch -- so ``chromium_launch_failure`` starts one and
+names the library it could not load.
 """
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
+import functools
 import os
 import sys
 
@@ -90,6 +97,57 @@ def chromium_installed(where: str | None = None) -> bool:
         return False
 
 
+def _bare_launch() -> None:
+    """Start and stop a headless Chromium with Playwright alone; raises on failure.
+
+    On a worker thread with a loop of its own, because a caller may already be
+    inside a running event loop, where ``asyncio.run`` refuses to start.
+    """
+    from playwright.async_api import async_playwright
+
+    async def launch() -> None:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            await browser.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(lambda: asyncio.run(launch())).result()
+
+
+@functools.cache
+def chromium_launch_failure() -> str | None:
+    """The system library this host lacks for a headless Chromium, or None.
+
+    A directory in the cache says a browser was downloaded, not that this host
+    can run it: one missing a system library it links against fails every test
+    at launch, and no change to the code under test can fix that. Any other
+    failure answers None, so the suites run and fail on it loudly -- an older
+    build left in the cache (see ``chromium_installed``) or a launch that
+    failed under load is not something this host lacks. Started with Playwright
+    alone, not through raven's driver, so what it finds is the host's by
+    construction. Asked once per process, since it costs a browser start, and
+    aimed at the cache the suites' own fixture will point at, because this runs
+    before that fixture does.
+    """
+    from raven.browser.driver import _host_library_gap
+
+    target = browsers_dir()
+    if target is None:
+        return None
+    saved = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = target
+    try:
+        _bare_launch()
+    except Exception as exc:  # noqa: BLE001 - a host's lack is named, anything else is no reason to skip
+        return _host_library_gap(str(exc))
+    finally:
+        if saved is None:
+            os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+        else:
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = saved
+    return None
+
+
 def point_at_login_cache(monkeypatch) -> None:
     """Fixture body: aim Playwright at the login's cache, unless already aimed."""
     if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
@@ -102,6 +160,7 @@ def point_at_login_cache(monkeypatch) -> None:
 __all__ = [
     "browsers_dir",
     "chromium_installed",
+    "chromium_launch_failure",
     "login_home",
     "playwright_cache",
     "point_at_login_cache",

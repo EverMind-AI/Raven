@@ -543,6 +543,28 @@ async def test_restart_with_nothing_pending_does_nothing(config_file):
     assert await _run(tool, action="restart", value="reload") == "reload"
 
 
+def test_an_add_card_names_who_is_connected_and_what_is_lent(config_file):
+    """An add is laid out as the agents it connects, not as the subagents table before and after.
+
+    Seen live: the card showed the whole subagents block as the old value and
+    the call's JSON as the new one, with no word that a key was being lent.
+    """
+    tool = RavenConfigTool()
+    lend = tool.approval_evidence({"action": "add", "value": '{"preset": "pi", "lend_key": "openrouter"}'})
+    assert lend["agents"] == [{"preset": "pi", "lend_key": "openrouter", "title": "Pi"}]
+    assert "was" not in lend and "value" not in lend
+    assert "billed to that key" in lend["sensitive"]
+    assert "own quota" not in lend["change"] and "billed to that key" in lend["change"]
+    plain = tool.approval_evidence(
+        {"action": "add", "value": [{"preset": "codex", "name": "Codex2", "model": "gpt-5"}, {"preset": "pi"}]}
+    )
+    assert plain["agents"] == [
+        {"name": "Codex2", "preset": "codex", "model": "gpt-5", "title": "Codex2"},
+        {"preset": "pi", "title": "Pi"},
+    ]
+    assert "sensitive" not in plain and "own quota" in plain["change"]
+
+
 def test_redaction_reaches_nested_credentials():
     from raven.config.self_surface import redacted
 

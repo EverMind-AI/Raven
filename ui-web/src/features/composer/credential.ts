@@ -19,6 +19,7 @@
 import { createElement } from 'react'
 
 import { t } from '../../i18n/t'
+import { ESC_LABEL, chordLabel, sendChord } from '../../lib/platform'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { sparePendingApproval } from './approve'
 import { CredentialSheet } from './CredentialSheet'
@@ -122,9 +123,12 @@ export function openCredential(req: CredentialReq, handlers: CredentialHandlers,
       },
     )
   }
+  /* Laid out and answered as the approval sheets are (approve.ts): the way out
+     first with Escape, the action last with the send chord. Not digits -- a
+     key is mostly digits. */
   const opts = (): SheetOptionRow[] => [
-    { label: busy ? t('gui.confirm.cred.saving') : t('gui.confirm.cred.save'), run: save, go: true },
-    { label: words.skip, run: skip },
+    { label: words.skip, run: skip, keys: ESC_LABEL },
+    { label: busy ? t('gui.confirm.cred.saving') : t('gui.confirm.cred.save'), run: save, go: true, keys: chordLabel() },
   ]
   function paint(): void {
     if (done) return
@@ -144,10 +148,9 @@ export function openCredential(req: CredentialReq, handlers: CredentialHandlers,
        (state/escapeOrder.ts, on the document's bubble phase) must not also
        interrupt it. */
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); skip(); return }
-    /* Digits typed into the field are the key, not an answer. */
+    /* In the field, Enter with or without the chord is the field's own save. */
     if (inField(e)) return
-    if (e.key === '1') { e.preventDefault(); save() }
-    if (e.key === '2') { e.preventDefault(); skip() }
+    if (sendChord(e) === 'plain') { e.preventDefault(); save() }
   }
   document.addEventListener('keydown', onKey, true)
   openCredentials.set(req.requestId, withdraw)

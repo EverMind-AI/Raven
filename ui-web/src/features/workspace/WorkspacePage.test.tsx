@@ -282,11 +282,30 @@ describe('workspace island', () => {
     expect(asked).not.toHaveBeenCalled()
   })
 
+  /* What a change to this path would show: a file tool hands over its own
+     patch, a listing hands over a count and nothing else, so a file with no
+     text in it can only ever open an empty pane. Read by extension, because
+     nothing has read the file -- which is why a format the viewer already
+     calls non-text is non-text here, and a kind it merely cannot draw (a
+     `.csv`, an `.xml`) still counts as showing a diff. */
+  it('knows which files have no diff to show', () => {
+    for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'avif', 'pdf', 'pptx',
+      'docx', 'xlsx', 'zip', 'gz', 'tar', 'mp3', 'mp4', 'mov', 'ttf', 'woff2', 'so',
+      'pyc', 'wasm', 'sqlite', 'onnx', 'safetensors', 'parquet']) {
+      expect(store.hasDiffBody(`/repo/out/a.${ext}`)).toBe(false)
+    }
+    expect(store.hasDiffBody('/repo/out/SHOT.PNG')).toBe(false)
+    for (const p of ['/repo/src/main.py', '/repo/notes.md', '/repo/data.csv', '/repo/config.yaml',
+      '/repo/icon.svg', '/repo/page.html', '/repo/Makefile', '/repo/out/report.tex',
+      '/repo/run.sh', '/repo/noext']) {
+      expect(store.hasDiffBody(p)).toBe(true)
+    }
+  })
+
   /* Every Office source the gateway's LibreOffice renders is one kind: the page
      cannot draw any of them, but the gateway can render each as a PDF, and the
      viewer draws that. The list is raven/rpc/pdf_preview.py's. */
-  it('classifies what the gateway renders as a PDF as one kind', () => {
-    for (const ext of ['ppt', 'pptx', 'doc', 'docx', 'xls', 'xlsx', 'odp', 'odt', 'ods', 'rtf']) {
+  it('classifies what the gateway renders as a PDF as one kind', () => {    for (const ext of ['ppt', 'pptx', 'doc', 'docx', 'xls', 'xlsx', 'odp', 'odt', 'ods', 'rtf']) {
       expect(store.fileKind(`/repo/out/a.${ext}`)).toBe('office')
     }
     expect(store.fileKind('/repo/out/DECK.PPTX')).toBe('office')

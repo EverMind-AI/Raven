@@ -3503,6 +3503,10 @@
       "en": "Channels",
       "zh": "入口"
     },
+    "gui.page.conn_sub": {
+      "en": "Raven joins the chat apps you already use, so you can hand it work and get results back from WeChat, Feishu, Telegram and more.",
+      "zh": "Raven 可以接入你常用的聊天应用，在微信、飞书、Telegram 里也能直接给它派活、收结果"
+    },
     "gui.page.cron": {
       "en": "Schedules",
       "zh": "定时"
@@ -6106,6 +6110,18 @@
     "gui.confirm.cfg.test": {
       "en": "Run {name} once to check that it works. It spends that agent's own quota.",
       "zh": "试运行 {name} 一次，检查它能否工作（会用掉它自己的额度）"
+    },
+    "gui.confirm.cfg.add": {
+      "en": "Connect {name}",
+      "zh": "接入 {name}"
+    },
+    "gui.confirm.cfg.add_lend": {
+      "en": "Connect {name}, started with Raven's {key} key",
+      "zh": "接入 {name}，用 Raven 的 {key} key 启动"
+    },
+    "gui.confirm.cfg.add_model": {
+      "en": "Model: {model}",
+      "zh": "模型：{model}"
     },
     "gui.confirm.cfg.reload": {
       "en": "Reload Raven so the pending changes take effect. The process stays up; running work finishes first.",

@@ -58,10 +58,66 @@ PACKAGE_INSTALL_HINT = (
     f"reinstall raven via {'install.ps1' if sys.platform == 'win32' else 'install.sh'} "
     "(engines carry the browser library); from a source checkout: uv sync --all-extras"
 )
+# When the browser is on disk but the host lacks the system libraries it links
+# against: Playwright's own command, which installs them with apt as root.
+CHROMIUM_DEPS_HINT = f"{_quote_interpreter(sys.executable)} -m playwright install-deps chromium"
+
+
+def _host_library_gap(text: str) -> str | None:
+    """What a launch failure says this host lacks, when that is what it says.
+
+    Two Linux shapes, and nothing else:
+
+    - the dynamic loader's refusal as the browser starts, naming the first
+      library it could not load -- what a host without one reports whenever
+      Playwright's own dependency check has not caught it first;
+    - that check's report, which suggests ``playwright install-deps`` and so
+      would otherwise read as a browser that is not installed at all. Where it
+      cannot map a library to a package it suggests nothing and lists the
+      libraries instead, so those are named.
+
+    Playwright's Windows check is neither: its report reads "missing
+    dependencies!" rather than "... to run browsers." and carries remedies of
+    its own -- a Visual C++ runtime among them, which no install-deps line
+    brings -- so it is left for the caller to pass through whole.
+    """
+    loader = re.search(r"error while loading shared libraries: ([^\s:]+)", text)
+    if loader:
+        return f"the system library {loader.group(1)} is missing"
+    if "Host system is missing dependencies to run browsers" not in text:
+        return None
+    listed = re.findall(r"\S+\.so(?:\.\S+)?", text.partition("Missing libraries:")[2])
+    if len(listed) == 1:
+        return f"the system library {listed[0]} is missing"
+    if listed:
+        return f"the system libraries {', '.join(listed)} are missing"
+    return "the host is missing system libraries it needs"
+
+
+def _cannot_start_at_all(text: str) -> bool:
+    """Whether a launch failure stops the browser under any profile, so that a
+    throwaway one cannot get past it. Three such failures, and only these:
+
+    - a host missing a system library, in either shape Linux reports it
+      (``_host_library_gap``);
+    - Playwright's own host check on any platform -- the Windows report is
+      not a Linux shape, but no profile supplies a Visual C++ runtime either;
+    - no browser at the path Playwright resolved.
+    """
+    return (
+        _host_library_gap(text) is not None
+        or "Host system is missing dependencies" in text
+        or "Executable doesn't exist" in text
+    )
+
 
 # One profile on disk: logins survive restarts, and -- because pop-out is a
-# relaunch -- they survive the panel/window switch too.
-PROFILE_DIR = Path.home() / ".raven" / "browser-profile"
+# relaunch -- they survive the panel/window switch too. Read at launch rather
+# than at import: a process that moves HOME after importing this module (the
+# test suite gives every test its own) must not open the profile it left.
+def _profile_dir() -> Path:
+    return Path.home() / ".raven" / "browser-profile"
+
 
 DEFAULT_VIEWPORT = (1280, 800)
 NAV_TIMEOUT_MS = 30_000
@@ -218,12 +274,6 @@ class Browser:
         # moment two callers are most likely to collide. Separate from
         # `_s.lock`, which the navigation methods take after calling `_ensure`.
         self._launch_lock = asyncio.Lock()
-        # Told the name of every owner this driver stops binding to a page, so
-        # whatever a caller keeps per owner can drop its copy on the same event
-        # instead of on a second, independently drifting clock. Held here
-        # rather than in `_State`, which close() replaces: the store listening
-        # outlives any one browser session, as the launch lock above does.
-        self.on_owner_released: Any = None
 
     # ---- lifecycle ---------------------------------------------------------
 
@@ -290,18 +340,26 @@ class Browser:
             self._s.playwright = await async_playwright().start()
             context = None
             try:
-                PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                profile = _profile_dir()
+                profile.mkdir(parents=True, exist_ok=True)
                 context = await self._s.playwright.chromium.launch_persistent_context(
-                    str(PROFILE_DIR), **launch, **ctx_opts
+                    str(profile), **launch, **ctx_opts
                 )
             except Exception as exc:
                 # Another Raven (an old TUI, a second serve) may hold the
                 # profile's singleton lock; browsing must still work, just
-                # without the shared cookie jar.
+                # without the shared cookie jar. Chromium words that failure per
+                # platform and per locale, and only its English Linux words are
+                # known here, so every failure gets the one relaunch except
+                # those no profile can fix, where it would only bury the first
+                # error under the same one again.
                 text = str(exc)
-                if "SingletonLock" not in text and "profile" not in text.lower():
+                if _cannot_start_at_all(text):
                     raise
-                logger.warning("browser: profile is busy, using a throwaway one ({})", text.splitlines()[0])
+                logger.warning(
+                    "browser: launch with the profile failed, retrying with a throwaway one ({})",
+                    text.partition("\n")[0] or type(exc).__name__,
+                )
             if context is None:
                 self._s.browser = await self._s.playwright.chromium.launch(**launch)
                 context = await self._s.browser.new_context(**ctx_opts)
@@ -324,6 +382,14 @@ class Browser:
         except Exception as exc:
             await self.close()
             hint = f"{exc}"
+            # Ahead of the not-installed test: Playwright's dependency report
+            # suggests `playwright install-deps`, which that test also matches.
+            gap = _host_library_gap(hint)
+            if gap is not None:
+                raise BrowserUnavailableError(
+                    f"Chromium is installed but cannot start here: {gap}. Installing system "
+                    f"libraries needs root, so it is the user's step: on Debian or Ubuntu, {CHROMIUM_DEPS_HINT}"
+                ) from None
             if "Executable doesn't exist" in hint or "playwright install" in hint:
                 # "Not installed" is the right reading only when nothing is on
                 # disk. The same error comes back when a browser is installed
@@ -505,14 +571,9 @@ class Browser:
             closed = True
         return not closed and now - rec.seen < OWNER_IDLE_S
 
-    def _reap_owners(self, now: float) -> list[str]:
-        """The owners whose bindings have just died. Removal is the caller's.
-
-        Names rather than removal, because every way a binding ends has to be
-        announced in one place: ``_drop_owners`` does the removing and the
-        telling, so a reap and an explicit release cannot drift apart.
-        """
-        return [k for k, rec in self._s.owners.items() if not self._owner_live(rec, now)]
+    def _reap_owners(self, now: float) -> None:
+        for key in [k for k, rec in self._s.owners.items() if not self._owner_live(rec, now)]:
+            del self._s.owners[key]
 
     def owner_of(self, page: Any) -> str | None:
         """Which live owner holds this page, if any."""
@@ -572,7 +633,7 @@ class Browser:
             if act:
                 self._s.touched = now
             return active
-        self._drop_owners(self._reap_owners(now))
+        self._reap_owners(now)
         rec = self._s.owners.get(owner)
         if rec is not None:
             rec.seen = now
@@ -611,25 +672,7 @@ class Browser:
 
     def release(self, owner: str) -> None:
         """Forget an owner's binding; its tab stays open for whoever claims it next."""
-        self._drop_owners([owner])
-
-    def _drop_owners(self, owners: list[str]) -> None:
-        """Remove these bindings, and tell the listener about the ones there were.
-
-        Whatever ends a binding -- a reap, an explicit release, the tab it was
-        on closing, the browser closing -- goes through here, so the listener
-        is told once per owner under one rule rather than at each call site. An
-        owner that was never bound is not announced: there is nothing to have
-        lost.
-        """
-        gone = [owner for owner in owners if self._s.owners.pop(owner, None) is not None]
-        if self.on_owner_released is None:
-            return
-        for owner in gone:
-            try:
-                self.on_owner_released(owner)
-            except Exception as exc:  # noqa: BLE001 - a listener must not take a binding drop down
-                logger.debug("browser: owner-release listener failed for {}: {}", owner, exc)
+        self._s.owners.pop(owner, None)
 
     # ---- tabs ----------------------------------------------------------------
 
@@ -740,7 +783,8 @@ class Browser:
             await victim.close()
         except Exception:
             pass
-        self._drop_owners([k for k, rec in self._s.owners.items() if rec.page is victim])
+        for key in [k for k, rec in self._s.owners.items() if rec.page is victim]:
+            del self._s.owners[key]
         rest = self._pages()
         if not rest:
             await self.close()
@@ -802,11 +846,6 @@ class Browser:
                 await s.playwright.stop()
             except Exception:
                 pass
-        # Announced before the state is replaced: closing ends every binding it
-        # held, and a per-owner store keyed against them outlives the state --
-        # the pop-out flow is close-and-relaunch, and a relaunch continues the
-        # same owners. A fresh `_State` would otherwise strand those keys.
-        self._drop_owners(list(s.owners))
         self._s = _State()
         logger.info("browser: closed")
 

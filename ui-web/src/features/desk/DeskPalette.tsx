@@ -19,7 +19,6 @@ import {
 } from './geometry'
 import * as desk from './store'
 
-import type { TaskFile, TaskNode, TaskRow } from '../tasks/types'
 import type { DeliveryRow, WsChange } from '../workspace/types'
 import type { DeskGeometry, DeskTab } from './types'
 import type { CSSProperties, JSX, PointerEvent as ReactPointerEvent } from 'react'
@@ -72,13 +71,6 @@ function DeskEmpty({ kind, title }: { kind: DeskTab; title: string }): JSX.Eleme
   )
 }
 
-/* Every file a task's nodes wrote or edited, across every task -- beside the
-   session's own rows rather than instead of them: a sub-agent's writes never
-   reach the session's own change list, and they are changes to the same working
-   directory. Not the shelf: what a task wrote is not what the conversation
-   handed over, which only `deliver_files` decides. */
-interface TaskFileEntry { row: TaskRow; node: TaskNode; file: TaskFile }
-
 /* Git's own three letters (`git status --short`), over both halves of the list:
    a file that was added, one that was deleted, and one that was modified --
    whether edited in place or written whole. Letters, because the file-level
@@ -86,55 +78,55 @@ interface TaskFileEntry { row: TaskRow; node: TaskNode; file: TaskFile }
    right is lines, and a `+` on the left read as more of the same. */
 const diffGlyph = (kind: WsChange['kind']): string => (kind === 'delete' ? 'D' : kind === 'add' ? 'A' : 'M')
 
-function taskFileEntries(): TaskFileEntry[] {
-  const out: TaskFileEntry[] = []
-  tasksStore.rows().forEach((row) => row.nodes.forEach((node) => node.files.forEach((file) => {
-    out.push({ row, node, file })
-  })))
-  return out
+/* One row: the glyph, the path, the counts. Both halves of the list draw the
+   same one, which is why it is a component rather than a branch inside the
+   map -- the two differ only in what a click opens (the caller's line) and in
+   how the path is spelled (`entry.bold`, which the entry decides). */
+function DiffRow({ entry, onClick }: { entry: desk.DeskDiffEntry; onClick: () => void }): JSX.Element {
+  const path = entry.dir + entry.name
+  /* Only the bolded half wraps its name: `.desk-name b` is `font-weight: 500`
+     for every desk row, so bolding a task's whole path would restyle text that
+     has always been plain. */
+  const name = entry.bold ? <b>{entry.name}</b> : entry.name
+  return (
+    <button className="desk-row desk-diff-row" onClick={onClick}>
+      <i className={`chgc ${entry.kind}`}>{diffGlyph(entry.kind)}</i>
+      <span className="desk-name" title={path}>{entry.dir}{name}</span>
+      <span className="chgs">
+        {entry.add ? <i className="a">+{entry.add}</i> : null}
+        {entry.del ? <i className="d">−{entry.del}</i> : null}
+      </span>
+    </button>
+  )
 }
 
+/* What the tab holds, read from the store's own list rather than assembled
+   here: the badge counts that list, so a row this drew and the badge did not
+   count -- or the other way round -- is exactly the drift one source of truth
+   closes. The session's own changes come first and a task's files follow under
+   their own heading, which is the split the entries keep by carrying a
+   ready-made change for the first kind and a promise for the second. */
 function DiffNav(): JSX.Element {
   useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
-  const changes = workspace.shared().changes
-  const taskDiffs = taskFileEntries()
-  if (!changes.length && !taskDiffs.length) {
+  const entries = desk.diffEntries()
+  if (!entries.length) {
     return (
       <DeskEmpty kind="diff" title={t('gui.ws.no_changes')} />
     )
   }
+  const mine = entries.filter((e) => e.change)
+  const theirs = entries.filter((e) => e.open)
   return (
     <div className="desk-list">
-      {changes.map((change) => (
-        <button key={`${change.key}:${change.turn}`} className="desk-row desk-diff-row" onClick={() => desk.openDeskDiff(change)}>
-          <i className={`chgc ${change.kind}`}>{diffGlyph(change.kind)}</i>
-          <span className="desk-name" title={change.key}>{change.dir}<b>{change.name}</b></span>
-          <span className="chgs">
-            {change.add ? <i className="a">+{change.add}</i> : null}
-            {change.del ? <i className="d">−{change.del}</i> : null}
-          </span>
-        </button>
+      {mine.map((entry) => (
+        <DiffRow key={entry.id} entry={entry} onClick={() => desk.openDeskDiff(entry.change!)} />
       ))}
-      {taskDiffs.length ? (
+      {theirs.length ? (
         <>
           <div className="desk-grp">{t('gui.ws.task_changes')}</div>
-          {taskDiffs.map(({ row, node, file }) => {
-            const kind = tasksStore.taskChangeKind(file)
-            return (
-              <button
-                key={tasksStore.taskChangeKey(row, node, file)}
-                className="desk-row desk-diff-row"
-                onClick={() => { void tasksStore.fileDiffChange(row, node, file).then(desk.openDeskDiff) }}
-              >
-                <i className={`chgc ${kind}`}>{diffGlyph(kind)}</i>
-                <span className="desk-name" title={file.path}>{file.path}</span>
-                <span className="chgs">
-                  {file.add ? <i className="a">+{file.add}</i> : null}
-                  {file.del ? <i className="d">−{file.del}</i> : null}
-                </span>
-              </button>
-            )
-          })}
+          {theirs.map((entry) => (
+            <DiffRow key={entry.id} entry={entry} onClick={() => { void entry.open!().then(desk.openDeskDiff) }} />
+          ))}
         </>
       ) : null}
     </div>

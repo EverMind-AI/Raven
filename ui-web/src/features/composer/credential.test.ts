@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
+import { ESC_LABEL, chordLabel } from '../../lib/platform'
 import { _resetForTests as sessionReset, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
@@ -79,7 +80,7 @@ describe('the credential card', () => {
     const h = handlers()
     openCredential(REQ, h)
     field().value = '  tvly-typed  '
-    opts()[0]!.click()
+    opts()[1]!.click()
     expect(field()?.value ?? '').toBe('')
     await tick()
     expect(h.sent).toEqual(['tvly-typed'])
@@ -90,7 +91,7 @@ describe('the credential card', () => {
     const h = handlers({ ok: false, error: 'That does not look like a Tavily key.' })
     openCredential(REQ, h)
     field().value = 'nope'
-    opts()[0]!.click()
+    opts()[1]!.click()
     await tick()
     expect(sheets().length).toBe(1)
     expect(rack().querySelector('[role="alert"]')!.textContent).toBe('That does not look like a Tavily key.')
@@ -100,7 +101,7 @@ describe('the credential card', () => {
   it('says it was not sent when the call never got there', async () => {
     openCredential(REQ, handlers(new Error('socket closed')))
     field().value = 'tvly-typed'
-    opts()[0]!.click()
+    opts()[1]!.click()
     await tick()
     expect(rack().querySelector('[role="alert"]')!.textContent).toBe('gui.confirm.cred.unsent')
   })
@@ -108,10 +109,37 @@ describe('the credential card', () => {
   it('sends nothing for an empty field', async () => {
     const h = handlers()
     openCredential(REQ, h)
-    opts()[0]!.click()
+    opts()[1]!.click()
     await tick()
     expect(h.sent).toEqual([])
     expect(sheets().length).toBe(1)
+  })
+
+  /* The approval sheets' keys, drawn as caps: no row is numbered, and a digit
+     answers nothing, in the field or out of it. */
+  it('shows its keys as caps, not numbers, and answers no digit', async () => {
+    const h = handlers()
+    openCredential(REQ, h)
+    expect(rack().querySelector('.opt .n')).toBeNull()
+    expect(rack().querySelector('.body .opt')).toBeNull()
+    expect(rack().querySelectorAll('.cp-acts .opt').length).toBe(2)
+    expect(opts().map((o) => o.querySelector('kbd')?.textContent)).toEqual([ESC_LABEL, chordLabel()])
+    field().value = 'tvly-typed'
+    key('1')
+    key('2')
+    await tick()
+    expect(h.sent).toEqual([])
+    expect(h.skipped).toBe(0)
+    expect(sheets().length).toBe(1)
+  })
+
+  it('saves on the send chord pressed outside the field', async () => {
+    const h = handlers()
+    openCredential(REQ, h)
+    field().value = 'tvly-typed'
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true }))
+    await tick()
+    expect(h.sent).toEqual(['tvly-typed'])
   })
 
   it('skips on the skip row, on Escape, and never saves on a digit typed into the field', async () => {
@@ -127,7 +155,7 @@ describe('the credential card', () => {
 
     const again = handlers()
     openCredential({ ...REQ, requestId: 'cr-2' }, again)
-    opts()[1]!.click()
+    opts()[0]!.click()
     await tick()
     expect(again.skipped).toBe(1)
   })

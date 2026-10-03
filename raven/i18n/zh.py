@@ -228,7 +228,7 @@ MESSAGES: dict[str, str] = {
     "Host (direct) — simplest, runs right on your machine": "本机直接运行 — 最简单,直接在你的电脑上执行",
     "Sandbox isolation (boxlite) — isolated in a lightweight VM, safer (needs platform support)": "沙箱隔离(boxlite)— 用轻量虚拟机隔离,更安全,需环境支持",
     "  [green]✓ Sandbox available. Using default resources (2 CPU / 2 GB / network); tune in the config file if needed.[/green]": "  [green]✓ 沙箱可用。将使用默认资源(2 CPU / 2 GB / 联网);如需调整可改配置文件。[/green]",
-    "  [yellow]✗ Sandbox runtime (boxlite) isn't installed.[/yellow]\n  [dim]Install it, then choose “Retry after install”:  pip install 'raven\\[sandbox]'[/dim]": "  [yellow]✗ 未安装沙箱运行时(boxlite)。[/yellow]\n  [dim]先安装,再选「安装后重试」:  pip install 'raven\\[sandbox]'[/dim]",
+    "  [yellow]✗ Sandbox runtime (boxlite) isn't installed.[/yellow]\n  [dim]Install it, then choose “Retry after install”:[/dim]": "  [yellow]✗ 未安装沙箱运行时(boxlite)。[/yellow]\n  [dim]先安装,再选「安装后重试」:[/dim]",
     "  [yellow]✗ Sandbox runtime (boxlite) is installed but failed to start.[/yellow]\n  [dim]Your machine may lack the required virtualization support. Fall back to host, or check the boxlite setup docs.[/dim]": "  [yellow]✗ 沙箱运行时(boxlite)已安装,但启动失败。[/yellow]\n  [dim]可能本机缺少所需的虚拟化支持。可退回本机运行,或查阅 boxlite 安装文档。[/dim]",
     "[bold green]🎉 Setup complete![/bold green]": "[bold green]🎉 配置完成![/bold green]",
     "Would you like to import conversation history from other AI tools? (Claude Code, Codex, etc.)": "是否要从其他 AI 工具（Claude Code、Codex 等）导入对话历史？",

@@ -405,6 +405,14 @@ class RavenConfigTool(Tool):
         for row in view.get("changes") or [view]:
             if row.get("setting") == "session.model" and (now := self._conversation_model()) is not None:
                 row["was"] = now
+        if view.get("agents"):
+            from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
+
+            # The name the agents page shows a preset under ("Pi", not "pi"),
+            # where the call did not name the agent itself.
+            for agent in view["agents"]:
+                preset = THIRD_PARTY_SUBAGENT_PRESETS.get(agent.get("preset", ""), {})
+                agent["title"] = agent.get("name") or str(preset.get("name") or agent.get("preset") or "")
         return view
 
     @property
