@@ -46,6 +46,7 @@ def _emit_cron_event(
     detail: str,
     *,
     failed: bool,
+    explicit_reply: bool = False,
 ) -> None:
     """Enqueue a cron outcome event and request an early heartbeat tick.
 
@@ -55,6 +56,10 @@ def _emit_cron_event(
     is stale by then and should not drive a user-facing follow-up — it
     remains in the cron service's error log (a successful retry resets
     ``last_error``).
+
+    An explicit reply already used the spine's delivery path and clears any
+    earlier silent completion. Only silent successes need a completion event;
+    otherwise heartbeat can send the same reminder again.
 
     Best-effort like the ledger write: an emit failure must neither
     mask the original cron error (failure path re-raises it) nor turn a
@@ -70,6 +75,9 @@ def _emit_cron_event(
             context_key = f"cron:{job.id}:fail"
         else:
             system_events.discard(f"cron:{job.id}:fail")
+            if explicit_reply:
+                system_events.discard(f"cron:{job.id}")
+                return
             text = f"Cron job '{job.name}' completed. Result: {detail}"
             context_key = f"cron:{job.id}"
         system_events.enqueue(SystemEvent(text=text, source="cron", context_key=context_key))
@@ -138,8 +146,9 @@ def make_on_cron_job(
     trigger-time resolution, forwarding, or broadcast.
 
     ``readback_texts`` is build_gateway's per-conversation reply-text map, the
-    spine read-back channel for the system event: a CRON turn submits, then this
-    reads back its reply from ``readback_texts[cron:<job_id>]`` (the runner stored
+    spine read-back channel for the return value and silent completion event:
+    a CRON turn submits, then this reads back its reply from
+    ``readback_texts[cron:<job_id>]`` (the runner stored
     it before result() resolved) and pops it. The submitter cannot pass run_turn's
     text_sink itself — text_sink is a runner-set per-call param, and cron is a
     submitter — so the gateway's capturing runner bridges it. Required whenever
@@ -159,10 +168,11 @@ def make_on_cron_job(
     fires AND Sentinel proactively reminds at 5/22).
 
     ``system_events`` / ``wake`` are optional. When wired (gateway path),
-    each completed or failed cron run enqueues a system event and requests
-    an early heartbeat tick, so the main heartbeat session learns what
+    each silent completion or failed cron run enqueues a system event and
+    requests an early heartbeat tick, so the main heartbeat session learns what
     happened in the isolated ``cron:<job_id>`` session and can decide on
-    follow-ups.
+    follow-ups. A successful turn that explicitly replied clears its pending
+    failure and completion events without waking heartbeat again.
     Only effective for jobs executed in this process — a CLI test-fire
     runs in its own process and cannot reach the gateway's queue.
 
@@ -268,7 +278,7 @@ def make_on_cron_job(
                 detail = failure_detail or f"{type(exc).__name__}: {exc}"
                 _emit_cron_event(system_events, wake, job, detail, failed=True)
             raise
-        # Read the reply back (for the system event) from the gateway runner's
+        # Read the reply back from the gateway runner's
         # capture, stored before result() resolved, and pop it so the
         # long-running map does not accumulate. Keyed on the conversation the
         # request actually used -- a direct wake runs on the instance's lane.
@@ -317,10 +327,17 @@ def make_on_cron_job(
         if sentinel_runner is not None:
             _record_cron_dispatch_to_ledger(sentinel_runner, job)
 
-        # Event wake: let the main heartbeat session learn what this isolated cron
-        # run produced (and end its sleep early).
+        # An explicit reply is already on the delivery path; only a silent
+        # completion needs heartbeat to decide whether to notify the user.
         if system_events is not None and wake is not None:
-            _emit_cron_event(system_events, wake, job, (response or "(no response)").strip(), failed=False)
+            _emit_cron_event(
+                system_events,
+                wake,
+                job,
+                (response or "(no response)").strip(),
+                failed=False,
+                explicit_reply=outcome.explicit_reply,
+            )
 
         return response
 

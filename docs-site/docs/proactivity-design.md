@@ -292,6 +292,13 @@ with a structured model decision and runs agent work only on a `run` result.
 `wake.py` coalesces early wake requests, rate-limits them, and defers them
 while user work is busy. Wake drives Heartbeat, not Sentinel's tick loop.
 
+A successful Cron turn that explicitly replies uses the Spine's delivery
+path and does not enqueue a completion event or wake Heartbeat to repeat the
+reminder. Silent completions and failures still wake Heartbeat, as do missed
+reminders and automatic disabling. A successful retry clears its pending
+failure event; an explicit reply also clears any earlier silent completion.
+Unrelated events stay queued.
+
 The Spine's Scheduler routes turns into per-conversation Lanes and origin
 concurrency pools; DeliveryHub routes output to outlets. User-inbound and
 response-modifier hooks distinguish genuine user turns from system-origin
