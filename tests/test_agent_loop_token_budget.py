@@ -118,7 +118,14 @@ def test_a_ceiling_as_large_as_the_window_still_leaves_room_for_history(workspac
     # A loose bound is the right shape for it -- `reserved_system` embeds the
     # workspace path, so this figure moves with the length of a temp directory:
     # measured 129_090 / 129_060 / 129_035 at path lengths 22 / 62 / 121.
-    assert budget.available_history > 127_000, "an honest ceiling must not squeeze history toward zero"
+    #
+    # Lowered from 127_000 (measured 127_067, ~70 to spare once the tool surface
+    # below had grown) when the host prompt gained its `## How you reply`
+    # section: ~240 tokens, measured 126_847 here. What was trimmed first: the
+    # first draft cost ~390; its worked examples went, and so did a rule the
+    # Raven Guidelines above it already state. Still loose, as this bound is
+    # meant to be: the regression it guards is history at zero.
+    assert budget.available_history > 126_000, "an honest ceiling must not squeeze history toward zero"
     # `reserved_tools` is what the old 129_000 bound was really watching, and it
     # is invariant across those same three paths: paid on every turn of every
     # conversation. Asserted directly so a grown tool description trips it for
