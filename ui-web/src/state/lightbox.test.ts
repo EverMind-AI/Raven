@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
@@ -74,5 +76,64 @@ describe('the lightbox', () => {
     wire()
     expect(() => close()).not.toThrow()
     expect(isOpen()).toBe(false)
+  })
+
+})
+
+/* happy-dom lays nothing out, so these read what page.css cascades onto the
+ * overlay -- the mechanism, not the geometry. Only a browser can show the
+ * image scrolling.
+ */
+describe('the lightbox, styled', () => {
+  let sheet: HTMLStyleElement | null = null
+
+  function styled(): void {
+    wire()
+    sheet = document.createElement('style')
+    sheet.textContent = readFileSync('src/styles/page.css', 'utf8') as string
+    document.head.append(sheet)
+  }
+
+  afterEach(() => {
+    sheet?.remove()
+    sheet = null
+  })
+
+  /* Auto tracks rather than a cell fixed to the window, for the reason page.css
+     gives: a fixed cell puts the overflow on both sides of the image's centre,
+     and the part above and to the left out of reach of any scroll. */
+  it('shows the image at its own size and scrolls both ways to reach all of it', () => {
+    styled()
+    open('x')
+    const box = getComputedStyle(overlay()!)
+    expect(box.overflow).toBe('auto')
+    for (const tracks of [box.gridTemplateRows, box.gridTemplateColumns]) expect(tracks).not.toMatch(/fr|%|px/)
+    const img = getComputedStyle(overlay()!.querySelector('img')!)
+    expect([img.width, img.height]).toEqual(['auto', 'auto'])
+    for (const cap of [img.maxWidth, img.maxHeight]) expect(cap).not.toMatch(/%/)
+  })
+
+  /* The marking half is chrome/behaviour/scrollbars.test.ts's. */
+  it('lifts the scrollbar layer over itself and shows only its own thumbs there', () => {
+    styled()
+    const layer = document.createElement('div')
+    layer.className = 'sbars'
+    const own = document.createElement('div')
+    own.className = 'sbar'
+    own.dataset.over = 'lightbox'
+    const behind = document.createElement('div')
+    behind.className = 'sbar'
+    layer.append(own, behind)
+    document.body.append(layer)
+    const z = (n: Element): string => getComputedStyle(n).zIndex
+    const under = z(layer)
+    open('x')
+    expect(Number(under)).toBeLessThan(Number(z(overlay()!)))
+    /* happy-dom resolves the var() and leaves the calc() as written. */
+    expect(z(layer)).toBe(`calc(${z(overlay()!)} + 1)`)
+    expect(getComputedStyle(own).display).not.toBe('none')
+    expect(getComputedStyle(behind).display).toBe('none')
+    close()
+    expect(getComputedStyle(behind).display).not.toBe('none')
   })
 })

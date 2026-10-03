@@ -1799,16 +1799,29 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .pile .cnt::before { content: '\00d7'; margin-right: 1px; opacity: .7; }
 
-/* one way to look at an image, wherever it was clicked from */
+/* one way to look at an image, wherever it was clicked from: at its own size,
+   scrolling both ways inside the overlay when it is bigger than the window.
+   The tracks stay auto, so a big image grows its own track and it is the grid
+   that overflows -- toward the end, where scrolling reaches it. A cell fixed
+   to the window would leave the image overflowing around its centre, and the
+   part above and to the left past where any scroll can go. */
 .lightbox {
   position: fixed; inset: 0; z-index: var(--z-lightbox); display: grid; place-items: center; padding: 32px;
+  overflow: auto;
   background: color-mix(in oklab, var(--ink) 82%, transparent); backdrop-filter: blur(4px);
   cursor: zoom-out; border: 0;
 }
 .lightbox img {
-  max-width: 100%; max-height: 100%; width: auto; height: auto;
+  width: auto; height: auto;
   border-radius: 12px; box-shadow: var(--shadow);
 }
+/* The scrollbar layer sits under every overlay, and the lightbox is the one
+   above it that scrolls. While it is open the layer stands over it, showing
+   only the thumbs chrome/behaviour/scrollbars.ts marks as the lightbox's own:
+   the rest would be lifted over the image too -- the transcript's, scrolled a
+   moment before the image was clicked, or a reply's still streaming in. */
+body:has(> .lightbox) .sbars { z-index: calc(var(--z-lightbox) + 1); }
+body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .achip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 240px;
   background: var(--ink); border: 1px solid var(--line); border-radius: 8px;
