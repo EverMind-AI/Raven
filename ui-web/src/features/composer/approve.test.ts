@@ -491,6 +491,11 @@ describe('the permission approval sheet', () => {
     expect(document.querySelector('.cp-add')!.textContent).toBe('+ gui.confirm.cfg.reset')
     expect(document.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive')
 
+    setTranslator((k, vars) => (vars ? `${k}(${Object.values(vars).join(',')})` : k))
+    openApproval(fresh({ ...cfg, evidence: { action: 'set', setting: 'x', value: '1', sensitive: 'loosens', sensitive_key: 'permissions.mode' } }), handlers())
+    expect(document.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive(gui.confirm.cfg.why.permissions.mode)')
+    setTranslator((key) => key)
+
     openApproval(fresh({ ...cfg, evidence: { action: 'test', setting: 'subagents.Raven-Research', change: 'Run it' } }), handlers())
     expect(document.querySelector('.cp-ev')!.textContent).toBe('gui.confirm.cfg.test')
 
@@ -511,7 +516,7 @@ describe('the permission approval sheet', () => {
       evidence: {
         action: 'add', setting: 'subagents', change: 'Connect sub-agent: pi',
         agents: [{ preset: 'pi', lend_key: 'openrouter', title: 'Pi' }, { preset: 'codex', model: 'gpt-5' }],
-        sensitive: 'billed to that key',
+        sensitive: 'billed to that key', sensitive_key: 'subagents.*.lendKeys',
       },
     }
     openApproval(fresh(add), handlers())
@@ -520,7 +525,7 @@ describe('the permission approval sheet', () => {
     expect(card.textContent).toContain('gui.confirm.cfg.add_lend(Pi,openrouter)')
     expect(card.textContent).toContain('gui.confirm.cfg.add(codex)')
     expect(card.querySelector('.cp-cfg-note')!.textContent).toBe('gui.confirm.cfg.add_model(gpt-5)')
-    expect(card.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive(billed to that key)')
+    expect(card.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive(gui.confirm.cfg.why.subagents.*.lendKeys)')
   })
 
   /* Seen live: asked to switch the search vendor and set its key, the agent
