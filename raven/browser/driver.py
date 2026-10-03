@@ -58,10 +58,10 @@ PACKAGE_INSTALL_HINT = (
     f"reinstall raven via {'install.ps1' if sys.platform == 'win32' else 'install.sh'} "
     "(engines carry the browser library); from a source checkout: uv sync --all-extras"
 )
-
 # One profile on disk: logins survive restarts, and -- because pop-out is a
 # relaunch -- they survive the panel/window switch too.
 PROFILE_DIR = Path.home() / ".raven" / "browser-profile"
+
 
 DEFAULT_VIEWPORT = (1280, 800)
 NAV_TIMEOUT_MS = 30_000
@@ -218,12 +218,6 @@ class Browser:
         # moment two callers are most likely to collide. Separate from
         # `_s.lock`, which the navigation methods take after calling `_ensure`.
         self._launch_lock = asyncio.Lock()
-        # Told the name of every owner this driver stops binding to a page, so
-        # whatever a caller keeps per owner can drop its copy on the same event
-        # instead of on a second, independently drifting clock. Held here
-        # rather than in `_State`, which close() replaces: the store listening
-        # outlives any one browser session, as the launch lock above does.
-        self.on_owner_released: Any = None
 
     # ---- lifecycle ---------------------------------------------------------
 
@@ -505,14 +499,9 @@ class Browser:
             closed = True
         return not closed and now - rec.seen < OWNER_IDLE_S
 
-    def _reap_owners(self, now: float) -> list[str]:
-        """The owners whose bindings have just died. Removal is the caller's.
-
-        Names rather than removal, because every way a binding ends has to be
-        announced in one place: ``_drop_owners`` does the removing and the
-        telling, so a reap and an explicit release cannot drift apart.
-        """
-        return [k for k, rec in self._s.owners.items() if not self._owner_live(rec, now)]
+    def _reap_owners(self, now: float) -> None:
+        for key in [k for k, rec in self._s.owners.items() if not self._owner_live(rec, now)]:
+            del self._s.owners[key]
 
     def owner_of(self, page: Any) -> str | None:
         """Which live owner holds this page, if any."""
@@ -572,7 +561,7 @@ class Browser:
             if act:
                 self._s.touched = now
             return active
-        self._drop_owners(self._reap_owners(now))
+        self._reap_owners(now)
         rec = self._s.owners.get(owner)
         if rec is not None:
             rec.seen = now
@@ -611,25 +600,7 @@ class Browser:
 
     def release(self, owner: str) -> None:
         """Forget an owner's binding; its tab stays open for whoever claims it next."""
-        self._drop_owners([owner])
-
-    def _drop_owners(self, owners: list[str]) -> None:
-        """Remove these bindings, and tell the listener about the ones there were.
-
-        Whatever ends a binding -- a reap, an explicit release, the tab it was
-        on closing, the browser closing -- goes through here, so the listener
-        is told once per owner under one rule rather than at each call site. An
-        owner that was never bound is not announced: there is nothing to have
-        lost.
-        """
-        gone = [owner for owner in owners if self._s.owners.pop(owner, None) is not None]
-        if self.on_owner_released is None:
-            return
-        for owner in gone:
-            try:
-                self.on_owner_released(owner)
-            except Exception as exc:  # noqa: BLE001 - a listener must not take a binding drop down
-                logger.debug("browser: owner-release listener failed for {}: {}", owner, exc)
+        self._s.owners.pop(owner, None)
 
     # ---- tabs ----------------------------------------------------------------
 
@@ -740,7 +711,8 @@ class Browser:
             await victim.close()
         except Exception:
             pass
-        self._drop_owners([k for k, rec in self._s.owners.items() if rec.page is victim])
+        for key in [k for k, rec in self._s.owners.items() if rec.page is victim]:
+            del self._s.owners[key]
         rest = self._pages()
         if not rest:
             await self.close()
@@ -802,11 +774,6 @@ class Browser:
                 await s.playwright.stop()
             except Exception:
                 pass
-        # Announced before the state is replaced: closing ends every binding it
-        # held, and a per-owner store keyed against them outlives the state --
-        # the pop-out flow is close-and-relaunch, and a relaunch continues the
-        # same owners. A fresh `_State` would otherwise strand those keys.
-        self._drop_owners(list(s.owners))
         self._s = _State()
         logger.info("browser: closed")
 

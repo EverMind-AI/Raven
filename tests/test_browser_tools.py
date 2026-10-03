@@ -605,6 +605,65 @@ async def test_the_readers_touch_is_reported_until_the_owner_acts_again(monkeypa
     assert note not in after.model_text
 
 
+@pytest.mark.parametrize("ending", ["the owner closes its tab", "the reader closes it", "the binding idles out"])
+async def test_the_readers_touch_is_reported_however_the_owners_binding_ended(
+    monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    """The note is owed until the owner acts again, and the end of a binding
+    is not the end of its owner: after its tab closes or its binding idles
+    out, the owner reads again, and the reader's touch is still compared with
+    the owner's last act."""
+    b = get_browser()
+    _running(b, [_FakePage("https://a.test/", "A"), _FakePage("https://b.test/", "B")])
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "run:x")
+    tabs = BrowserTabsTool()
+    assert (await tabs.execute(action="activate", index=1)).ok
+    if ending == "the owner closes its tab":
+        assert (await tabs.execute(action="close", index=1)).ok
+    acted = tools_mod._BrowserTool._acted
+    assert "run:x" in acted, "the owner's last act is on record"
+    # A second between that act and the reader's touch, so their order does
+    # not rest on the clock's resolution.
+    acted["run:x"] -= 1.0
+    if ending == "the reader closes it":
+        await b.tab_close(1)
+    else:
+        b._s.touched = time.monotonic()
+    if ending == "the binding idles out":
+        b._s.owners["run:x"] = _Owner(b._s.owners["run:x"].page, time.monotonic() - driver_module.OWNER_IDLE_S - 1)
+        await b._page_for("run:y")
+    assert "run:x" not in b._s.owners
+
+    _stub_actions(b, [], {"url": "https://a.test/", "title": "A", "started": True})
+    monkeypatch.setattr(type(b), "started", property(lambda self: True))
+    read = await BrowserSnapshotTool().execute()
+
+    assert "the user interacted with the browser" in read.model_text
+
+
+async def test_closing_its_tab_is_an_act_that_answers_the_readers_touch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The note is owed until the owner acts again, and closing the tab it
+    holds is an act: a touch the owner's reads still report is not reported
+    once the owner has closed its tab after it."""
+    b = get_browser()
+    _running(b, [_FakePage("https://a.test/", "A"), _FakePage("https://b.test/", "B")])
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "run:x")
+    tabs = BrowserTabsTool()
+    assert (await tabs.execute(action="activate", index=1)).ok
+    tools_mod._BrowserTool._acted["run:x"] -= 1.0
+    b._s.touched = time.monotonic()
+    _stub_actions(b, [], {"url": "https://a.test/", "title": "A", "started": True})
+    monkeypatch.setattr(type(b), "started", property(lambda self: True))
+    note = "the user interacted with the browser"
+
+    before = await BrowserSnapshotTool().execute()
+    assert (await tabs.execute(action="close", index=1)).ok
+    after = await BrowserSnapshotTool().execute()
+
+    assert note in before.model_text
+    assert note not in after.model_text
+
+
 async def test_snapshot_and_screenshot_do_not_start_a_browser() -> None:
     assert "No page is open" in (await BrowserSnapshotTool().execute()).model_text
     assert "No page is open" in (await BrowserScreenshotTool().execute()).model_text
@@ -771,31 +830,9 @@ def test_site_keyed_permission_set_matches_the_acting_tool_hierarchy() -> None:
     assert acting == set(BROWSER_SITE_KEYED_TOOLS)
 
 
-def test_the_stamp_store_is_pruned_by_the_driver_once_it_holds_an_entry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The store registers with the driver from the only place that adds a
-    stamp, so an owner that holds one is an owner the driver will prune -- and
-    not at import, where reaching for the driver would build the process-wide
-    browser. This drives the release a run's end would cause and asserts the
-    stamp is gone; an unregistered store would keep it for the life of the
-    process."""
-    b = get_browser()
-    page = _FakePage("https://a.test/")
-    _running(b, [page])
-    assert b.on_owner_released is None, "nothing has reached the driver yet"
-
-    BrowserPressTool()._mark("run:r1")
-    b._s.owners["run:r1"] = _Owner(page, time.monotonic())
-
-    assert b.on_owner_released == tools_mod._BrowserTool._forget_owner
-    b.release("run:r1")
-    assert "run:r1" not in tools_mod._BrowserTool._acted
-
-
 def test_the_stamp_store_keeps_the_owners_that_acted_most_recently(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An owner the driver never drops is still evicted once the store is
-    full, least recent first, and acting again moves an owner to the back."""
+    """Owners are evicted once the store is full, least recent first, and
+    acting again moves an owner to the back."""
     monkeypatch.setattr(tools_mod, "_ACTED_MAX", 3)
     _running(get_browser(), [_FakePage("https://a.test/")])
     tool = BrowserPressTool()

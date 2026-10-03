@@ -39,9 +39,9 @@ MAX_REFS_SHOWN = 120
 
 # How many owners' stamps ``_acted`` keeps, most recent first. The stamps only
 # answer "did the reader touch the page since this owner last acted", which the
-# owners acting lately can answer as well as all of them. The driver prunes an
-# owner when it drops that owner's binding; the cap is for the owners it never
-# drops, so one key per delegated run cannot accumulate for the process's life.
+# owners acting lately can answer as well as all of them, so the cap is what
+# bounds the map: one key per delegated run cannot accumulate for the
+# process's life.
 _ACTED_MAX = 512
 
 # Carried by browser_navigate alone. Every tool's description is paid for on
@@ -185,10 +185,12 @@ class _BrowserTool(Tool):
     timeout_seconds = 90.0
 
     # The last time this owner acted, so a readback can say whether a hand
-    # other than the model's touched the browser in between. Bounded, and
-    # pruned when the driver drops the matching tab binding: the key is a
-    # delegated run's uid, and a run that has ended never acts again, so an
-    # unbounded map grows one entry per run for the life of the process.
+    # other than the model's touched the browser in between. Bounded by
+    # ``_ACTED_MAX`` and by nothing else: the end of an owner's tab binding is
+    # not the end of the owner -- a reap, its tab closing and the browser
+    # closing all leave an owner that reads again, and its next readback must
+    # still be able to say whether the reader touched the page since its last
+    # act.
     _acted: dict[str, float] = {}
 
     @staticmethod
@@ -207,29 +209,12 @@ class _BrowserTool(Tool):
         # and no tie to break between two stamps one clock tick apart.
         acted.pop(owner, None)
         acted[owner] = time.monotonic()
-        self._bind_to_driver()
         while len(acted) > _ACTED_MAX:
             acted.pop(next(iter(acted)))
 
     def _touched(self, owner: str) -> bool:
         last = _BrowserTool._acted.get(owner)
         return last is not None and _browser().touched_since(last)
-
-    @classmethod
-    def _forget_owner(cls, owner: str) -> None:
-        cls._acted.pop(owner, None)
-
-    def _bind_to_driver(self) -> None:
-        """Have the driver tell the stamp map when it drops an owner's binding.
-
-        Called from ``_mark``, the only place that adds a stamp, so no owner
-        can hold one before the driver knows to prune it. Not at import: reaching for
-        the driver is what builds the process-wide browser, and importing this
-        module must not construct one as a side effect. The driver is the one
-        place that knows when an owner's binding ends, so the map is pruned on
-        that event rather than on a second clock of its own.
-        """
-        _browser().on_owner_released = _BrowserTool._forget_owner
 
     async def _readback(self, owner: str, state: dict[str, Any], *, acted: bool) -> ToolResult:
         """State plus a compact snapshot; the snapshot is skipped on an error
