@@ -1658,3 +1658,12 @@ def test_package_manager_queries_read_only_and_their_installs_still_ask():
         assert exec_reads_only(command), command
     for command in ("npm i -g x", "npm config set a b", "npm exec x", "npm --prefix /x view y", "brew install x"):
         assert not exec_reads_only(command), command
+    # A global option that takes a value put a read-only word where the verb is
+    # read: npm runs `install evil` with `--prefix ls`.
+    for command in (
+        "npm --prefix ls install evil",
+        "pip --log show install evil",
+        "yarn --cwd info add evil",
+        "docker -H ps run evil",
+    ):
+        assert not exec_reads_only(command), command

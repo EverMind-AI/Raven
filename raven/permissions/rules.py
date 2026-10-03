@@ -529,6 +529,10 @@ def _redirection_writes_nothing(operator: str, target: str | None) -> bool:
     return operator in _INPUT_REDIRECTIONS or target is None or target == "/dev/null"
 
 
+#: Global flags that take no value, allowed before a read-only subcommand.
+_VALUELESS_GLOBAL_FLAGS = frozenset({"-g", "--global", "--json"})
+
+
 def _segment_reads_only_tokens(tokens: tuple[str, ...]) -> bool:
     if not tokens:
         return False
@@ -538,14 +542,22 @@ def _segment_reads_only_tokens(tokens: tuple[str, ...]) -> bool:
     if "/" in name:
         return False
     if name in READ_ONLY_SUBCOMMANDS:
-        if name == "git":
-            args = _git_args_after_global_options(args)
-            if args is None:
-                return False
+        if name != "git":
+            # The subcommand comes first, after flags known to take no value:
+            # these tools take global options with one (`npm --prefix ls install
+            # x`, `docker -H ps run x`), so the first argument that is not a flag
+            # can be an option's value rather than the verb.
+            rest = list(args)
+            while rest and rest[0] in _VALUELESS_GLOBAL_FLAGS:
+                rest.pop(0)
+            return bool(rest) and rest[0] in READ_ONLY_SUBCOMMANDS[name]
+        args = _git_args_after_global_options(args)
+        if args is None:
+            return False
         positional = [arg for arg in args if not arg.startswith("-")]
         if not positional or positional[0] not in READ_ONLY_SUBCOMMANDS[name]:
             return False
-        return name != "git" or _git_query_only_lists(positional, args)
+        return _git_query_only_lists(positional, args)
     if name in READ_ONLY_ZERO_ARG:
         return not args
     if name not in READ_ONLY_COMMANDS:

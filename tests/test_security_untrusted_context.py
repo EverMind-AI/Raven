@@ -417,3 +417,52 @@ def test_a_failed_sub_agents_error_record_keeps_no_key(tmp_path: Path, monkeypat
     record = SpawnRecord.open(tmp_path / "s", task_id="t1", task="ask", meta={"agent": "Pi"})
     record.finish(status="failed", error=f"agent exited: OPENROUTER_API_KEY={_HELD}")
     assert _HELD not in record.file("error.md").read_text(encoding="utf-8")
+
+
+def test_an_ordinary_header_value_is_left_alone_in_tool_output(tmp_path: Path, monkeypatch) -> None:
+    """Every header counted as held, so `application/json` came back as a placeholder
+    in any file the model read, and an edit built from it failed to match."""
+    import json
+
+    from raven.config import held_secrets
+
+    config = tmp_path / "config.json"
+    headers = {"Content-Type": "application/json", "Authorization": "Bearer tok-0123456789"}
+    raw = {
+        "tools": {"mcpServers": {"x": {"command": "npx", "headers": headers}}},
+        "providers": {
+            "openrouter": {"extraHeaders": {"HTTP-Referer": "https://raven.example", "APP-Code": "app-0123456"}}
+        },
+    }
+    config.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
+    monkeypatch.setattr(held_secrets, "_cache", None)
+
+    text = 'fetch(url, {headers: {"Content-Type": "application/json"}}) // https://raven.example'
+    assert held_secrets.scrub_held_secrets(text) == text
+    scrubbed = held_secrets.scrub_held_secrets("Bearer tok-0123456789 app-0123456")
+    assert "tok-0123456789" not in scrubbed and "app-0123456" not in scrubbed
+
+
+def test_ravens_own_home_is_not_read_as_another_programs_settings() -> None:
+    """The default workspace and the channels' scratch directories sit under
+    Raven's home, and a coding turn there reads its own source."""
+    import os
+
+    from raven.home import raven_home
+    from raven.security.redact import redact_home_config_read
+
+    source = "token = self.get_token(request)\napi_key=config.api_key_value\n"
+    own = raven_home()
+    # The real layout: Raven's home is a dot-directory of the home, so the
+    # matcher would otherwise fire on it.
+    assert str(own.parent) == os.path.expanduser("~").rstrip("/") and own.name.startswith(".")
+    for arguments in (
+        {"path": str(own / "workspace" / "app.py")},
+        {"path": str(own / "tmp" / "x.py")},
+        {"command": f"cat {own}/workspace/app.py"},
+    ):
+        assert redact_home_config_read(arguments, source) == source, arguments
+    settings = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
+    qwen = os.path.join(os.path.expanduser("~"), ".qwen", "settings.json")
+    assert "0123456789abcdef0123456789abcdef" not in redact_home_config_read({"path": qwen}, settings)

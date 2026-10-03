@@ -110,8 +110,22 @@ def redact(text: str) -> str:
 
 
 def _home_config() -> re.Pattern[str]:
-    home = re.escape(os.path.expanduser("~").rstrip("/"))
-    return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")/\.[A-Za-z0-9_-]")
+    """A path into a dot-directory of the home, Raven's own home excepted.
+
+    Raven's home holds the default workspace and the channels' scratch
+    directories, where a coding turn reads its own source; rewriting that
+    source's ``token = ...`` lines breaks every edit built from them. Raven's
+    own keys are taken out by the exact-match pass in ``held_secrets`` instead.
+    """
+    from raven.home import raven_home
+
+    home_dir = os.path.expanduser("~").rstrip("/")
+    home = re.escape(home_dir)
+    own = raven_home()
+    skip = ""
+    if str(own.parent) == home_dir and own.name.startswith("."):
+        skip = r"(?!" + re.escape(own.name[1:]) + r"(?:/|\\|$|[\"'\s]))"
+    return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")/\." + skip + r"[A-Za-z0-9_-]")
 
 
 def redact_home_config_read(arguments: Any, text: str) -> str:

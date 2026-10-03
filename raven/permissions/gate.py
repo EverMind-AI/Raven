@@ -150,8 +150,9 @@ class PermissionGate:
             return Allow(source=DecisionSource.DEFAULT)
         if own is Tier.ASK:
             # The user's own allow rule, full access and the smart-mode reviewer
-            # are honoured, but only in a turn someone is at: a cron job or a
-            # channel message is not the owner reconfiguring Raven. A grant "for
+            # are honoured, but only in a turn someone is at (one with a
+            # responder, a channel user's included): a cron job is not the owner
+            # reconfiguring Raven. A grant "for
             # this session" never carries a change through. The reviewer sees
             # the call and not the conversation, so it cannot tell a change the
             # user asked for from one an injected instruction asked for; the

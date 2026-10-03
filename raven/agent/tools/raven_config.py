@@ -109,6 +109,40 @@ def _conversation() -> str:
     return current_turn().conversation_id
 
 
+def _check_subagent_value(path: str, value: Any) -> None:
+    """Refuse a value ``subagents.<name>.<field>`` cannot take, before anything is written."""
+    field_name = path.rsplit(".", 1)[-1]
+    if field_name == "enabled" and not isinstance(value, bool):
+        raise ValueError(f"{path} takes true or false")
+    if field_name == "description" and not (isinstance(value, str) and value.strip()):
+        raise ValueError(f"{path} takes a non-empty string")
+    if field_name == "lendKeys" and not (isinstance(value, list) and all(isinstance(p, str) for p in value)):
+        raise ValueError(f'{path} takes a list of Raven providers, e.g. ["openrouter"]; [] lends none')
+    if field_name not in ("enabled", "description", "model", "lendKeys"):
+        raise LookupError(f"sub-agents expose description, enabled, model and lendKeys; not {field_name!r}")
+
+
+def _with_mode_note(reply: str, paths: list[str]) -> str:
+    """``reply``, plus what a default approval mode means for a conversation that set its own.
+
+    ``permissions.mode`` is the default; a conversation whose picker chose a mode
+    keeps it, so "takes effect from the next turn" was wrong for this one --
+    and wrong in the unsafe direction when the user asked to go back to ask.
+    """
+    if "permissions.mode" not in paths or reply.startswith("Error"):
+        return reply
+    from raven.permissions.session import session_mode
+
+    own = session_mode(_conversation()) if _conversation() else None
+    if not own:
+        return reply
+    return (
+        f"{reply}\nThis conversation has its own approval mode ({own}), which this does not change: only "
+        "conversations without their own mode follow the default. Tell the user to switch this one in the "
+        "composer's mode picker."
+    )
+
+
 def _dump(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
@@ -419,10 +453,10 @@ class RavenConfigTool(Tool):
                 return await self._get(path, value)
             if action == "set":
                 if not path and isinstance(value, dict):
-                    return await self._set_many(value)
-                return await self._set(path, value)
+                    return _with_mode_note(await self._set_many(value), [surface.canonical_path(p) for p in value])
+                return _with_mode_note(await self._set(path, value), [path])
             if action == "unset":
-                return await self._unset(path)
+                return _with_mode_note(await self._unset(path), [path])
             if action == "test":
                 return await self._test(path)
             if action == "add":
@@ -888,17 +922,30 @@ class RavenConfigTool(Tool):
             plan.append((path, setting, bound, value))
         for name, fields in channels.items():
             self._channel_plan(name, fields)
-        lines = []
-        for path, setting, bound, value in plan:
-            if setting.secret:
-                lines.append(await self._secret_outcome(path, setting, value))
-                continue
-            previous = await self._write(setting, path, bound, value)
-            lines.append(self._report(path, setting.effect, previous, value) + self._unknown_tools(path, value))
-        for name, fields in channels.items():
-            lines.append(await self._set_channel_fields(name, fields))
         for path, value in agents:
-            lines.append(await self._set_subagent(path, value))
+            _check_subagent_value(path, value)
+        if (channels or agents) and self._call is None:
+            raise ValueError(
+                "channels and sub-agents are changed through Raven's services, which this process does not serve; "
+                "nothing was changed"
+            )
+        lines: list[str] = []
+        try:
+            for path, setting, bound, value in plan:
+                if setting.secret:
+                    lines.append(await self._secret_outcome(path, setting, value))
+                    continue
+                previous = await self._write(setting, path, bound, value)
+                lines.append(self._report(path, setting.effect, previous, value) + self._unknown_tools(path, value))
+            for name, fields in channels.items():
+                lines.append(await self._set_channel_fields(name, fields))
+            for path, value in agents:
+                lines.append(await self._set_subagent(path, value))
+        except (ValueError, KeyError, LookupError) as exc:
+            # What a service refused only once it was asked; say what already took.
+            if lines:
+                raise type(exc)(f"{exc}; applied before it: " + " ".join(lines)) from exc
+            raise
         return "\n".join(lines)
 
     async def _secret_outcome(self, path: str, setting: Setting, value: Any) -> str:
@@ -1096,13 +1143,10 @@ class RavenConfigTool(Tool):
                 f"{name} is a preset that is not added yet, so it has no settings to change. "
                 f'Connect it with add subagents {{"preset": "{preset}"}}; it is on once added.'
             )
+        _check_subagent_value(path, value)
         if field_name == "enabled":
-            if not isinstance(value, bool):
-                raise ValueError(f"{path} takes true or false")
             await self._rpc("subagents.toggle", {"name": name, "enabled": value})
         elif field_name == "description":
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"{path} takes a non-empty string")
             await self._rpc("subagents.update", {"name": name, "description": value})
         elif field_name == "model":
             if value is None:
@@ -1113,12 +1157,8 @@ class RavenConfigTool(Tool):
                 if provider:
                     params["provider"] = provider
                 await self._rpc("subagents.update", params)
-        elif field_name == "lendKeys":
-            if not isinstance(value, list) or not all(isinstance(p, str) for p in value):
-                raise ValueError(f'{path} takes a list of Raven providers, e.g. ["openrouter"]; [] lends none')
-            await self._rpc("subagents.update", {"name": name, "lend_keys": value})
         else:
-            raise LookupError(f"sub-agents expose description, enabled, model and lendKeys; not {field_name!r}")
+            await self._rpc("subagents.update", {"name": name, "lend_keys": value})
         said = f"Set {path} to {json.dumps(value, ensure_ascii=False)} ({EFFECT_TEXT[Effect.IMMEDIATE]})."
         if field_name == "model" and value is not None:
             said += " " + _model_check(str(value), await self._subagent_row(name))

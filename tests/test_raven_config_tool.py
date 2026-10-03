@@ -1574,3 +1574,61 @@ def test_the_card_carries_the_note_of_a_field_inside_an_object_and_names_a_bare_
     assert view["sensitive"] == "widening it lets more people instruct Raven"
     added = surface.change_line({"action": "add", "value": '{"preset": "claude-code", "lend_key": "anthropic"}'})
     assert added.startswith("Connect sub-agent") and "started with Raven's anthropic key" in added
+
+
+@pytest.mark.asyncio
+async def test_changing_the_default_mode_says_this_conversation_keeps_its_own(config_file):
+    """The reply said the change takes effect next turn while the gate kept reading
+    this conversation's own `full` -- wrong in the unsafe direction."""
+    from raven.permissions.session import set_session_mode
+
+    calls = Calls({"settings.set": {"applied": True, "previous": "full"}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    start_permission_turn(_Responder(), conversation_id="c-own", turn_id="t-1")
+    set_session_mode("c-own", "full")
+    try:
+        reply = await _run(tool, action="set", path="permissions.mode", value='"ask"')
+    finally:
+        set_session_mode("c-own", None)
+    assert "has its own approval mode (full)" in reply
+    plain = await _run(tool, action="set", path="permissions.mode", value='"ask"')
+    assert "its own approval mode" not in plain
+
+
+@pytest.mark.asyncio
+async def test_a_batch_is_checked_whole_before_any_of_it_is_written(config_file):
+    """A sub-agent field was checked only when its turn came, after the settings
+    before it were already written, and the reply named only the error."""
+    calls = Calls()
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    batch = {"agents.defaults.temperature": 0.5, "subagents.codex.enabled": "yes"}
+    reply = await _run(tool, action="set", value=json.dumps(batch))
+    assert reply.startswith("Error") and "takes true or false" in reply
+    assert "agents" not in json.loads(config_file.read_text()) and calls.calls == []
+
+    offline = RavenConfigTool()
+    reply = await _run(
+        offline,
+        action="set",
+        value=json.dumps({"agents.defaults.temperature": 0.5, "channels.telegram.replyToMessage": True}),
+    )
+    assert "nothing was changed" in reply and "agents" not in json.loads(config_file.read_text())
+
+
+@pytest.mark.asyncio
+async def test_a_write_refused_partway_names_what_already_took(config_file):
+    class _RefusesAgents(Calls):
+        async def __call__(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "subagents.toggle":
+                raise ValueError("the agent is busy")
+            if method == "subagents.list":
+                return {"rows": [{"name": "codex", "configured": True, "enabled": True, "kind": "acp"}]}
+            return await super().__call__(method, params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(_RefusesAgents())
+    batch = {"agents.defaults.temperature": 0.5, "subagents.codex.enabled": False}
+    reply = await _run(tool, action="set", value=json.dumps(batch))
+    assert reply.startswith("Error") and "applied before it" in reply and "agents.defaults.temperature" in reply

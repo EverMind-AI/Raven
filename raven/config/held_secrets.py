@@ -12,6 +12,7 @@ match on the values Raven actually holds has no false positives.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -40,12 +41,26 @@ def _collect(node: Any, prefix: str, out: list[tuple[str, str]]) -> None:
     for path, item in children:
         if isinstance(item, str):
             value = item.strip()
-            if len(value) >= _MIN_LEN and value not in _PLACEHOLDERS and is_secret_path(path):
+            if len(value) >= _MIN_LEN and value not in _PLACEHOLDERS and is_secret_path(path) and _worth_holding(path):
                 out.append((value, path))
             elif "://" in value:
                 out.extend((part, f"{path} (in its URL)") for part in url_credentials(value))
         else:
             _collect(item, path, out)
+
+
+#: Header names that carry a credential. Every header counts as secret to the
+#: gate and the card, which only decide what is shown; held values are replaced
+#: in every tool result, so ``Content-Type: application/json`` must not be one.
+_CREDENTIAL_HEADER = re.compile(r"(?i)(?:auth|cookie|key|token|secret|sig|session|code|pass)")
+_HEADER_MAPS = frozenset({"headers", "extraheaders", "extra_headers"})
+
+
+def _worth_holding(path: str) -> bool:
+    parts = path.split(".")
+    if len(parts) >= 2 and parts[-2].lower() in _HEADER_MAPS:
+        return bool(_CREDENTIAL_HEADER.search(parts[-1]))
+    return True
 
 
 def held_secrets() -> tuple[tuple[str, str], ...]:
