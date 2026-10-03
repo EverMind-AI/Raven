@@ -1041,6 +1041,15 @@
           "schema": {
             "type": "string"
           }
+        },
+        {
+          "name": "include_providers",
+          "required": false,
+          "description": "Return the provider catalogue. When false, return only the current selection with an empty providers list.",
+          "schema": {
+            "type": "boolean",
+            "default": true
+          }
         }
       ],
       "result": {

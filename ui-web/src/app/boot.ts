@@ -18,7 +18,7 @@ import { goPaint } from '../features/composer/mount'
 import { warm as warmCron } from '../features/cron/store'
 import { refresh as refreshImportSync } from '../features/importSync/store'
 import { loadExt } from '../features/installed/source'
-import { setupState } from '../features/model/source'
+import { loadSelection, setupState } from '../features/model/source'
 import { open as openOnboard } from '../features/onboard/store'
 import { loadSessions, sessionsSource } from '../features/rail/source'
 import { draw as sessionDraw, hold as holdRail, release as releaseRail } from '../features/rail/store'
@@ -101,6 +101,7 @@ async function sequence(): Promise<void> {
   try {
     const hello = await gateway().call('system.hello', { client_version: '0.1.0', surface: surface() })
     if (hello && hello.platform) hostPlatformSet(hello.platform)
+    void loadSelection(null)
     // Before the first paint of anything data-driven: config.language decides
     // what every label below says.
     await loadLang()
