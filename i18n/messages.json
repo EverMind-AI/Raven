@@ -2823,6 +2823,30 @@
       "en": "A model id the catalogue lacks",
       "zh": "目录里没有的 model id，手动加"
     },
+    "gui.model.loading": {
+      "en": "Loading model...",
+      "zh": "正在加载模型..."
+    },
+    "gui.model.load_failed": {
+      "en": "Model unavailable",
+      "zh": "模型加载失败"
+    },
+    "gui.model.retry_load": {
+      "en": "Click to retry loading the model",
+      "zh": "点击重试加载模型"
+    },
+    "gui.model.choose": {
+      "en": "Choose a model",
+      "zh": "选择模型"
+    },
+    "gui.model.catalogue_loading": {
+      "en": "The model list is still loading. Try again shortly.",
+      "zh": "模型列表正在加载，请稍后重试。"
+    },
+    "gui.model.catalogue_failed": {
+      "en": "Could not load the model list. Click the model to retry.",
+      "zh": "模型列表加载失败，点击模型重试。"
+    },
     "gui.model.base_ph": {
       "en": "API base (optional, for your own gateway)",
       "zh": "API Base（可选，自建网关才填）"

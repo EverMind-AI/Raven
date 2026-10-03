@@ -14,6 +14,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import * as store from '../features/model/store'
+import { t } from '../i18n/t'
 import { resetSources, setSources } from '../state/sources'
 import { ModelChip } from './ModelChip'
 
@@ -45,6 +46,36 @@ afterEach(() => {
 })
 
 describe('the model chip', () => {
+  it('shows a disabled loading state until the real selection arrives', () => {
+    install([])
+    mount()
+    const chip = document.getElementById('modelChip') as HTMLButtonElement
+    expect(name()).toBe(t('gui.model.loading'))
+    expect(chip.disabled).toBe(true)
+    expect(chip.getAttribute('aria-busy')).toBe('true')
+    act(() => { store.setCurrent('deepseek/deepseek-chat', 'deepseek') })
+    expect(name()).toBe('deepseek-chat')
+    expect(chip.disabled).toBe(false)
+    expect(chip.getAttribute('aria-busy')).toBe('false')
+  })
+
+  it('shows a retry hint when the selection fails', () => {
+    install([])
+    store.failLoad()
+    mount()
+    const chip = document.getElementById('modelChip') as HTMLButtonElement
+    expect(name()).toBe(t('gui.model.load_failed'))
+    expect(chip.title).toBe(t('gui.model.retry_load'))
+    expect(chip.disabled).toBe(false)
+  })
+
+  it('invites a model choice when the backend has no selection', () => {
+    install([])
+    store.setCurrent('')
+    mount()
+    expect(name()).toBe(t('gui.model.choose'))
+  })
+
   it('marks the account that serves the model when both spell it the same way', () => {
     install([{ id: 'openrouter', name: 'OpenRouter', on: true, models: ['my-model'], configured: ['my-model'] }])
     store.setCurrent('my-model')
