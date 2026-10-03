@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { hide, show } from '../chrome/behaviour/scrollbars'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
@@ -113,27 +114,45 @@ describe('the lightbox, styled', () => {
     for (const cap of [img.maxWidth, img.maxHeight]) expect(cap).not.toMatch(/%/)
   })
 
-  /* The marking half is chrome/behaviour/scrollbars.test.ts's. */
+  /* The thumbs are the real ones: chrome/behaviour/scrollbars.ts draws and
+     marks them and this stylesheet reads the mark, so a change to either side
+     fails here rather than leaving the two to agree on a spelling. */
   it('lifts the scrollbar layer over itself and shows only its own thumbs there', () => {
     styled()
-    const layer = document.createElement('div')
-    layer.className = 'sbars'
-    const own = document.createElement('div')
-    own.className = 'sbar'
-    own.dataset.over = 'lightbox'
-    const behind = document.createElement('div')
-    behind.className = 'sbar'
-    layer.append(own, behind)
-    document.body.append(layer)
+    const behind = scrolls(document.createElement('div'))
+    document.body.append(behind)
+    show(behind)
+    const layer = document.querySelector('.sbars')!
     const z = (n: Element): string => getComputedStyle(n).zIndex
     const under = z(layer)
     open('x')
-    expect(Number(under)).toBeLessThan(Number(z(overlay()!)))
-    /* happy-dom resolves the var() and leaves the calc() as written. */
-    expect(z(layer)).toBe(`calc(${z(overlay()!)} + 1)`)
-    expect(getComputedStyle(own).display).not.toBe('none')
-    expect(getComputedStyle(behind).display).toBe('none')
-    close()
-    expect(getComputedStyle(behind).display).not.toBe('none')
+    const box = scrolls(overlay()!)
+    show(box)
+    try {
+      expect(Number(under)).toBeLessThan(Number(z(box)))
+      /* happy-dom resolves the var() and leaves the calc() as written. */
+      expect(z(layer)).toBe(`calc(${z(box)} + 1)`)
+      const thumbs = [...layer.querySelectorAll('.sbar')]
+      expect(thumbs).toHaveLength(2)
+      const [theirs, own] = thumbs as [Element, Element]
+      expect(getComputedStyle(own).display).not.toBe('none')
+      expect(getComputedStyle(theirs).display).toBe('none')
+      close()
+      expect(getComputedStyle(theirs).display).not.toBe('none')
+    } finally {
+      hide(behind)
+      hide(box)
+    }
   })
 })
+
+/* happy-dom lays nothing out, so a scroller's geometry is stated: a 300x200 box
+   over 1000px of content, which is what the scrollbar module needs to draw a
+   thumb. */
+function scrolls<T extends HTMLElement>(el: T): T {
+  const size = { clientHeight: 200, scrollHeight: 1000, clientWidth: 300, scrollWidth: 300 }
+  for (const [k, v] of Object.entries(size)) Object.defineProperty(el, k, { value: v, configurable: true })
+  el.getBoundingClientRect = () =>
+    ({ top: 0, left: 0, bottom: 200, right: 300, width: 300, height: 200, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+  return el
+}
