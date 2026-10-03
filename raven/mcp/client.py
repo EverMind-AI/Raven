@@ -13,6 +13,7 @@ from raven.agent.tools import media
 from raven.agent.tools.registry import ToolRegistry
 from raven.contracts.tool import Tool, ToolResult
 from raven.mcp.naming import MCPToolRef, tool_name
+from raven.mcp.paging import walk_tools
 from raven.sandbox import SandboxInitError
 
 if TYPE_CHECKING:
@@ -249,7 +250,7 @@ async def _mcp_server_connection(
     cancels the turn that was connecting.
     """
     async with AsyncExitStack() as stack:
-        from mcp import ClientSession, types
+        from mcp import ClientSession
 
         read, write = await stack.enter_async_context(
             open_mcp_transport(cfg, transport_type, executor, http_auth=http_auth)
@@ -258,17 +259,7 @@ async def _mcp_server_connection(
         # The handshake result is the only place a server states which primitives
         # it offers, and it is stated once -- there is no way to ask again later.
         handshake = await session.initialize()
-        tools = []
-        cursor = None
-        seen_cursors = set()
-        while True:
-            page = await session.list_tools(params=types.PaginatedRequestParams(cursor=cursor))
-            tools.extend(page.tools)
-            cursor = page.nextCursor
-            # A server that keeps returning the same cursor would page forever.
-            if not cursor or cursor in seen_cursors:
-                break
-            seen_cursors.add(cursor)
+        tools = await walk_tools(session)
         yield session, handshake, tools
 
 
