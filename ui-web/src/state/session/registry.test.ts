@@ -654,7 +654,10 @@ describe('the live session switch', () => {
     await h.settle('a')
     h.startDraft()
 
-    expect(h.asked('model.options')).toEqual([{ session_id: 'a' }, {}])
+    expect(h.asked('model.options')).toEqual([
+      { session_id: 'a', include_providers: false }, { session_id: 'a' },
+      { include_providers: false }, {},
+    ])
   })
 
   it('drops a tier staged for a draft that was abandoned', async () => {
@@ -759,6 +762,9 @@ describe('the live session switch', () => {
     h.openLiveSession({ id: 'b', title: 'Beta' })
     await h.settle('b')
 
-    expect(h.asked('model.options').map((p) => (p as { session_id?: string }).session_id)).toEqual(['a', 'b'])
+    expect(h.asked('model.options')).toEqual([
+      { session_id: 'a', include_providers: false }, { session_id: 'a' },
+      { session_id: 'b', include_providers: false }, { session_id: 'b' },
+    ])
   })
 })
