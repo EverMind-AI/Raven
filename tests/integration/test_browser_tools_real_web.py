@@ -33,7 +33,7 @@ from raven.agent.tools.browser import (
 )
 from raven.browser import get_browser
 from raven.browser.driver import Browser
-from tests._browser_cache import chromium_installed, point_at_login_cache
+from tests._browser_cache import chromium_installed, chromium_launch_failure, point_at_login_cache
 
 # Both halves matter: the package can import with no browser downloaded, and a
 # skip that only asks about the package reports that as failures rather than as
@@ -80,6 +80,16 @@ def _browsers_from_the_real_home(monkeypatch: pytest.MonkeyPatch) -> None:
     browsers elsewhere is untouched.
     """
     point_at_login_cache(monkeypatch)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _chromium_can_start() -> None:
+    """A browser that is downloaded but cannot start here -- a host missing a
+    system library it links against -- can run none of these tests. Skip them
+    with its reason instead of failing each one at launch."""
+    why = chromium_launch_failure()
+    if why is not None:
+        pytest.skip(f"Chromium cannot start here: {why}")
 
 
 @pytest.fixture
