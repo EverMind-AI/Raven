@@ -360,6 +360,79 @@ async def test_launch_reports_missing_chromium_with_the_interpreter_command(monk
     assert "\n" not in why, "the panel shows this in one block, where a newline collapses to a space"
 
 
+# Playwright's report when the browser process cannot load a library, trimmed
+# from a real launch against a binary built to need one that is absent. Its
+# logged command line carries the profile path, as every launch failure's does.
+_LOADER_FAILURE = (
+    "BrowserType.launch_persistent_context: Target page, context or browser has been closed\n"
+    "Browser logs:\n\n"
+    "<launching> /cache/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell "
+    "--disable-field-trial-config --user-data-dir=/home/u/.raven/browser-profile --remote-debugging-pipe\n"
+    "<launched> pid=4242\n"
+    "[pid=4242][err] /cache/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell: "
+    "error while loading shared libraries: libatk-1.0.so.0: cannot open shared object file: No such file or directory\n"
+    "Call log:\n"
+    "  - [pid=4242] <process did exit: exitCode=127, signal=null>\n"
+)
+
+
+def _playwright_whose_persistent_launch_fails(
+    monkeypatch: pytest.MonkeyPatch, text: str, calls: list[str], profiles: list[str] | None = None
+) -> None:
+    """A playwright module whose persistent launch raises ``text``, and whose
+    throwaway relaunch is recorded and then fails too. ``profiles``, when
+    given, collects the directory each persistent launch was handed."""
+    import sys
+    import types
+
+    class _Chromium:
+        async def launch_persistent_context(self, user_data_dir: str, *args: Any, **kwargs: Any) -> Any:
+            calls.append("persistent")
+            if profiles is not None:
+                profiles.append(user_data_dir)
+            raise RuntimeError(text)
+
+        async def launch(self, **kwargs: Any) -> Any:
+            calls.append("throwaway")
+            raise RuntimeError("the throwaway relaunch failed as well")
+
+    class _Playwright:
+        chromium = _Chromium()
+
+        async def stop(self) -> None:
+            pass
+
+    class _Starter:
+        async def start(self) -> _Playwright:
+            return _Playwright()
+
+    fake_api = types.ModuleType("playwright.async_api")
+    fake_api.async_playwright = _Starter
+    fake_pkg = types.ModuleType("playwright")
+    fake_pkg.async_api = fake_api
+    monkeypatch.setitem(sys.modules, "playwright", fake_pkg)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", fake_api)
+
+
+async def test_the_profile_is_the_one_under_the_home_in_effect_at_launch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The suite hands every test its own HOME after this module is imported,
+    so a profile path fixed at import was the runner's own: each real-browser
+    test wrote its cookies into the profile its runner browses with, and
+    parallel workers opened that one directory at once."""
+    calls: list[str] = []
+    profiles: list[str] = []
+    _playwright_whose_persistent_launch_fails(monkeypatch, _LOADER_FAILURE, calls, profiles)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    with pytest.raises(BrowserUnavailableError):
+        await get_browser()._ensure()
+
+    assert profiles == [str(home / ".raven" / "browser-profile")]
+
+
 # ── tabs ────────────────────────────────────────────────────────────────
 
 

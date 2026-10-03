@@ -58,9 +58,14 @@ PACKAGE_INSTALL_HINT = (
     f"reinstall raven via {'install.ps1' if sys.platform == 'win32' else 'install.sh'} "
     "(engines carry the browser library); from a source checkout: uv sync --all-extras"
 )
+
+
 # One profile on disk: logins survive restarts, and -- because pop-out is a
-# relaunch -- they survive the panel/window switch too.
-PROFILE_DIR = Path.home() / ".raven" / "browser-profile"
+# relaunch -- they survive the panel/window switch too. Read at launch rather
+# than at import: a process that moves HOME after importing this module (the
+# test suite gives every test its own) must not open the profile it left.
+def _profile_dir() -> Path:
+    return Path.home() / ".raven" / "browser-profile"
 
 
 DEFAULT_VIEWPORT = (1280, 800)
@@ -284,9 +289,10 @@ class Browser:
             self._s.playwright = await async_playwright().start()
             context = None
             try:
-                PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                profile = _profile_dir()
+                profile.mkdir(parents=True, exist_ok=True)
                 context = await self._s.playwright.chromium.launch_persistent_context(
-                    str(PROFILE_DIR), **launch, **ctx_opts
+                    str(profile), **launch, **ctx_opts
                 )
             except Exception as exc:
                 # Another Raven (an old TUI, a second serve) may hold the
