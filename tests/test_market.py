@@ -129,6 +129,18 @@ async def test_install_missing_required_field_fails_clean(_isolated):
     assert read_ledger("firecrawl") is None
 
 
+async def test_install_python_plugin_explains_market_limitation(_isolated):
+    entry = {"id": "python-tool", "version": "1.0.0", "contributes": [{"kind": "python"}]}
+
+    with pytest.raises(PlugInstallError) as exc:
+        await install_plugin(entry)
+
+    message = str(exc.value)
+    assert "Python plugins cannot be installed from the market yet." in message
+    assert "pip install" not in message
+    assert "uv tool install raven" not in message
+
+
 async def test_install_twice_rejected(_isolated):
     await install_plugin(ENTRY_NONE)
     with pytest.raises(PlugInstallError, match="already installed"):

@@ -140,7 +140,7 @@ def ensure_bridge_dir() -> Path:
     if not source:
         if built:
             return install_dir  # nothing to compare it against, and nothing to rebuild from
-        raise RuntimeError("WhatsApp bridge source not found. Try reinstalling: pip install --force-reinstall raven")
+        raise RuntimeError("WhatsApp bridge source not found. Reinstall Raven with the official installer.")
 
     fingerprint = source_fingerprint(source)
     if built:
