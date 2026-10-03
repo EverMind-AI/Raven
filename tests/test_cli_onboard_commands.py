@@ -1354,6 +1354,32 @@ def test_sandbox_boxlite_missing_advises_the_running_environment(
     assert "raven\\[sandbox]" not in out
 
 
+def test_sandbox_boxlite_hint_survives_long_interpreter_paths(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The install hint stays on one line even when the interpreter path pushes it
+    past the console width, so copy-paste yields a single runnable command."""
+    import questionary
+
+    answers = iter(["boxlite"])
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
+    monkeypatch.setattr("sys.executable", "/home/someone/.local/share/uv/tools/raven/bin/python")
+    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "skip")
+
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+
+    assert onboard_commands.boxlite_install_hint() in capsys.readouterr().out
+
+
 def test_sandbox_host_decline_reasks_submenu_without_reprobe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Declining the host confirm inside the failure submenu returns to the
     submenu directly: no second boxlite probe, no reprinted failure banner."""

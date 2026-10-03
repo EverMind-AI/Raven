@@ -1842,7 +1842,7 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
                     "  [dim]Install it, then choose “Retry after install”:[/dim]"
                 )
             )
-            console.print(f"  [dim]  {boxlite_install_hint()}[/dim]")
+            console.print(f"  [dim]  {boxlite_install_hint()}[/dim]", soft_wrap=True)
         else:  # reason == "error": importable but failed to initialize
             console.print(
                 t(
