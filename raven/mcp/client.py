@@ -249,7 +249,7 @@ async def _mcp_server_connection(
     cancels the turn that was connecting.
     """
     async with AsyncExitStack() as stack:
-        from mcp import ClientSession
+        from mcp import ClientSession, types
 
         read, write = await stack.enter_async_context(
             open_mcp_transport(cfg, transport_type, executor, http_auth=http_auth)
@@ -262,7 +262,7 @@ async def _mcp_server_connection(
         cursor = None
         seen_cursors = set()
         while True:
-            page = await session.list_tools(cursor=cursor)
+            page = await session.list_tools(params=types.PaginatedRequestParams(cursor=cursor))
             tools.extend(page.tools)
             cursor = page.nextCursor
             # A server that keeps returning the same cursor would page forever.

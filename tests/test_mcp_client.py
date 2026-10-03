@@ -105,7 +105,8 @@ def _paged_session(pages: dict):
         async def initialize(self):
             return SimpleNamespace(capabilities=SimpleNamespace(tools=True))
 
-        async def list_tools(self, cursor=None):
+        async def list_tools(self, *, params=None):
+            cursor = params.cursor if params else None
             asked.append(cursor)
             return pages[cursor]
 

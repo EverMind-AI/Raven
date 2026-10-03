@@ -1801,7 +1801,7 @@ class TestConnectOneMcpServer:
             async def initialize(self):
                 return SimpleNamespace(capabilities=SimpleNamespace(tools=object()))
 
-            async def list_tools(self, cursor=None):
+            async def list_tools(self, *, params=None):
                 return SimpleNamespace(tools=[], nextCursor=None)
 
         monkeypatch.setattr(httpx, "AsyncClient", fake_http_client)

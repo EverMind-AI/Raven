@@ -278,7 +278,7 @@ async def test_a_failed_transport_does_not_cancel_the_following_server(monkeypat
                 await asyncio.Event().wait()
             return SimpleNamespace(capabilities=SimpleNamespace(tools=True))
 
-        async def list_tools(self, cursor=None):
+        async def list_tools(self, *, params=None):
             return SimpleNamespace(
                 tools=[SimpleNamespace(name="ping", description="", inputSchema={})], nextCursor=None
             )
