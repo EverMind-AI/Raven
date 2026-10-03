@@ -1331,6 +1331,7 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             view["agents"] = [_agent_view(item) for item in items]
             if any(item.get("lend_key") for item in items):
                 view["sensitive"] = sensitive_reason(_LENT)
+                view["sensitive_key"] = _LENT
             return view
     if action != "unset":
         view["value"] = _shown(path, params.get("value"))
@@ -1349,14 +1350,22 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             view["was_default"] = True
     if found is not None:
         view["effect"] = found[0].effect.value
-    if reason := _reason_within(path, params.get("value")):
-        view["sensitive"] = reason
+    if leaf_reason := _sensitive_leaf_within(path, params.get("value")):
+        view["sensitive"] = leaf_reason[1]
+        view["sensitive_key"] = leaf_reason[0]
     return view
 
 
 def _reason_within(path: str, value: Any) -> str:
     """The sensitive reason for ``path``, or for the first field below it an object sets."""
     return next((reason for leaf, _ in _leaves(path, _decoded(value)) if (reason := sensitive_reason(leaf))), "")
+
+
+def _sensitive_leaf_within(path: str, value: Any) -> tuple[str, str] | None:
+    """The first leaf an object set under ``path`` carries a sensitive reason for, with that reason."""
+    return next(
+        ((leaf, reason) for leaf, _ in _leaves(path, _decoded(value)) if (reason := sensitive_reason(leaf))), None
+    )
 
 
 def _short(value: Any) -> str:

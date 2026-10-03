@@ -276,7 +276,13 @@ function wordsFor(req: ApprovalReq): GateWords {
       keyNoField: t('gui.confirm.cfg.key_no_field'),
       rows: configRows(ev).map((row) => ({
         effect: str(row.effect) ? t('gui.confirm.cfg.effect.' + str(row.effect), {}, '') : '',
-        sensitive: str(row.sensitive) ? t('gui.confirm.cfg.sensitive', { note: str(row.sensitive) }) : '',
+        sensitive: str(row.sensitive)
+          ? t('gui.confirm.cfg.sensitive', {
+            note: str(row.sensitive_key)
+              ? t('gui.confirm.cfg.why.' + str(row.sensitive_key), null, str(row.sensitive))
+              : str(row.sensitive),
+          })
+          : '',
         unsetTo: str(row.unset_to) ? t('gui.confirm.cfg.unset_to.' + str(row.unset_to), {}, '') : '',
         test: str(row.action) === 'test'
           ? t('gui.confirm.cfg.test', { name: str(row.setting).replace(/^subagents\./, '') })
