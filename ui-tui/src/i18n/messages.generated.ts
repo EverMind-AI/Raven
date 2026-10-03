@@ -1065,6 +1065,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.page.agents_sub':
       'Raven coordinates the agents you connect: it delegates tasks, orchestrates the work and brings the results together.',
     'gui.page.conn': 'Channels',
+    'gui.page.conn_sub':
+      'Raven joins the chat apps you already use, so you can hand it work and get results back from WeChat, Feishu, Telegram and more.',
     'gui.page.cron': 'Schedules',
     'gui.page.set': 'Settings',
     'gui.perm.ask': 'Approve each step',
@@ -1758,6 +1760,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.unset_to.main_model': '(follows the main model)',
     'gui.confirm.cfg.unset_to.off': '(off)',
     'gui.confirm.cfg.test': "Run {name} once to check that it works. It spends that agent's own quota.",
+    'gui.confirm.cfg.add': 'Connect {name}',
+    'gui.confirm.cfg.add_lend': "Connect {name}, started with Raven's {key} key",
+    'gui.confirm.cfg.add_model': 'Model: {model}',
     'gui.confirm.cfg.reload':
       'Reload Raven so the pending changes take effect. The process stays up; running work finishes first.',
     'gui.confirm.cfg.restart':
@@ -3664,6 +3669,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.page.agents': '智能体连接',
     'gui.page.agents_sub': 'Raven 可以统一调度已连接的智能体，委派任务、协调执行、整合结果',
     'gui.page.conn': '入口',
+    'gui.page.conn_sub': 'Raven 可以接入你常用的聊天应用，在微信、飞书、Telegram 里也能直接给它派活、收结果',
     'gui.page.cron': '定时',
     'gui.page.set': '设置',
     'gui.perm.ask': '逐项审批',
@@ -4346,6 +4352,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.unset_to.main_model': '（跟随主模型）',
     'gui.confirm.cfg.unset_to.off': '（关闭）',
     'gui.confirm.cfg.test': '试运行 {name} 一次，检查它能否工作（会用掉它自己的额度）',
+    'gui.confirm.cfg.add': '接入 {name}',
+    'gui.confirm.cfg.add_lend': '接入 {name}，用 Raven 的 {key} key 启动',
+    'gui.confirm.cfg.add_model': '模型：{model}',
     'gui.confirm.cfg.reload': '重新加载 Raven，让待生效的改动生效。进程不中断，正在跑的任务会先跑完。',
     'gui.confirm.cfg.restart': '重启整个 Raven 进程，让待生效的改动生效。渠道会断开几秒后重连。',
     'gui.confirm.cfg.key_field': '允许后会单独弹出一张卡片让你填这个 key，直接保存，不经过 Raven',

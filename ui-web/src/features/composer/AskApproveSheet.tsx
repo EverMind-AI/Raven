@@ -38,6 +38,16 @@ export interface ApproveProps {
   readonly opts: readonly SheetOptionRow[]
 }
 
+/* The answers along a sheet's foot, each with the key that gives it. Shared by
+   the sheets that dock above the composer so their feet read alike. */
+export function SheetActs({ opts }: { opts: readonly SheetOptionRow[] }): JSX.Element {
+  return (
+    <div className="cp-acts">
+      {opts.map((row, i) => <SheetOption key={i} row={row} />)}
+    </div>
+  )
+}
+
 /* The same card as the permission gate's (GateSheet.tsx): the question, the
    request in the evidence box, the answers along the foot, and no corner
    cross -- refusing is Deny and Esc. */
@@ -50,9 +60,7 @@ export function AskApproveSheet({ title, prompt, opts }: ApproveProps): JSX.Elem
       <div className="body">
         <div className="what">{prompt}</div>
       </div>
-      <div className="cp-acts">
-        {opts.map((row, i) => <SheetOption key={i} row={row} />)}
-      </div>
+      <SheetActs opts={opts} />
     </>
   )
 }

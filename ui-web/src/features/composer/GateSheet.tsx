@@ -52,6 +52,13 @@ export interface ConfigRowWords {
   readonly sensitive: string
   readonly unsetTo?: string
   readonly test?: string
+  /* An add's agents, one sentence each, in place of a before and after. */
+  readonly agents?: readonly ConfigAgentWords[]
+}
+
+export interface ConfigAgentWords {
+  readonly said: string
+  readonly model: string
 }
 
 /* A change to Raven's own configuration as the card lays it out: one row per
@@ -66,6 +73,19 @@ function ConfigRow({ row, words, line }: {
   const setting = str(row.setting)
   if (action === 'restart') return <div>{str(row.target) === 'restart' ? words.restart : words.reload}</div>
   if (action === 'test') return <div>{line?.test || str(row.change)}</div>
+  if (action === 'add' && line?.agents?.length) {
+    return (
+      <div className="cp-ev">
+        {line.agents.map((agent, i) => (
+          <div key={i}>
+            <div>{agent.said}</div>
+            {agent.model ? <div className="cp-cfg-note">{agent.model}</div> : null}
+          </div>
+        ))}
+        {line.sensitive ? <div className="cp-cfg-warn">{line.sensitive}</div> : null}
+      </div>
+    )
+  }
   /* No field here: the value is typed on a card of its own once this change
      is allowed (features/composer/credential.ts), so this card only says so. */
   if (row.secret === true) {

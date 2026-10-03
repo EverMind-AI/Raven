@@ -501,6 +501,28 @@ describe('the permission approval sheet', () => {
     expect(document.querySelector('.cp-del')!.textContent).toBe('- gui.confirm.cfg.unset_to.main_model\n')
   })
 
+  /* Seen live: connecting Pi on Raven's openrouter key showed the whole
+     subagents table as the old value, the call's JSON as the new one, and no
+     word about the lend. An add says who is connected and on whose key. */
+  it('lays out an add as the agents it connects, with the lend and its warning', () => {
+    setTranslator((k, vars) => (vars ? `${k}(${Object.values(vars).join(',')})` : k))
+    const add = {
+      ...base, approvalId: 'ap-add', command: "raven_config action='add'", kind: 'config.change', family: '',
+      evidence: {
+        action: 'add', setting: 'subagents', change: 'Connect sub-agent: pi',
+        agents: [{ preset: 'pi', lend_key: 'openrouter', title: 'Pi' }, { preset: 'codex', model: 'gpt-5' }],
+        sensitive: 'billed to that key',
+      },
+    }
+    openApproval(fresh(add), handlers())
+    const card = document.querySelector('.csheet .cp-ev')!
+    expect(card.querySelector('.cp-diff')).toBeNull()
+    expect(card.textContent).toContain('gui.confirm.cfg.add_lend(Pi,openrouter)')
+    expect(card.textContent).toContain('gui.confirm.cfg.add(codex)')
+    expect(card.querySelector('.cp-cfg-note')!.textContent).toBe('gui.confirm.cfg.add_model(gpt-5)')
+    expect(card.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive(billed to that key)')
+  })
+
   /* Seen live: asked to switch the search vendor and set its key, the agent
      changed the vendor, then told the reader to go to Settings for the key.
      One card now carries both; the key itself is typed on the credential card

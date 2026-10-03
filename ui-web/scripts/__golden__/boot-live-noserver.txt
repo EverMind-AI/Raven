@@ -208,6 +208,7 @@ section#connectionsPage.page[data-open=false]
       div.hub-head
         button.hub-head-tab
         button.hub-head-tab
+      p.hub-head-sub
       div.su-tabs
         button.su-tab
           span.su-wbar.su-wtn

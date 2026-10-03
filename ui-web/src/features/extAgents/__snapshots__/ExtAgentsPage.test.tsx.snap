@@ -4,6 +4,7 @@ exports[`the sheet > keeps its rendered shape, grid 1`] = `
 "div.hub-head
   button.hub-head-tab
   button.hub-head-tab
+p.hub-head-sub
 div.extAgents-tabs
   button.extAgents-tab
     span.extAgents-tn

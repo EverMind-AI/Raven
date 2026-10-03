@@ -10,7 +10,7 @@
  * cleared as it is read, so it lives in the page no longer than the round trip
  * and never in React state that a devtools snapshot or a re-render could keep.
  */
-import { SheetHead } from './AskApproveSheet'
+import { SheetActs, SheetHead } from './AskApproveSheet'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
 import type { JSX } from 'react'
@@ -68,15 +68,8 @@ export function CredentialSheet(
           <div className="cp-cfg-note">{replaces ? words.replaces : words.hint}</div>
           {error ? <div className="cp-cfg-warn" role="alert">{error}</div> : null}
         </div>
-        {/* The rack's own row markup (chrome/SheetRack.tsx's SheetOption), drawn
-            here rather than imported: a domain does not reach up into chrome. */}
-        {opts.map((row, i) => (
-          <button key={i} className={`opt${row.go ? ' go' : ''}`} onClick={row.run}>
-            <span className="n">{i + 1}</span>
-            <span>{row.label}</span>
-          </button>
-        ))}
       </div>
+      <SheetActs opts={opts} />
     </>
   )
 }

@@ -38,7 +38,7 @@ import { configRows, GateSheet, LandedSheet } from './GateSheet'
 import { composing } from './store'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
-import type { Evidence, GateWords, LandedProps, LandedWords } from './GateSheet'
+import type { ConfigAgentWords, Evidence, GateWords, LandedProps, LandedWords } from './GateSheet'
 
 /* The permission gate's approval, keyed so approval.closed can withdraw the
    exact request it retires (a teardown, an answer from another surface)
@@ -193,6 +193,18 @@ const landings = new Set<ReturnType<typeof setTimeout>>()
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
+/* The agents an add connects, each as the card says it: who, and whose key it
+   starts with when it borrows Raven's. */
+const agentsAdded = (row: Evidence): ConfigAgentWords[] =>
+  (Array.isArray(row.agents) ? (row.agents as Evidence[]) : []).map((agent) => {
+    const name = str(agent.title) || str(agent.name) || str(agent.preset)
+    const key = str(agent.lend_key)
+    return {
+      said: key ? t('gui.confirm.cfg.add_lend', { name, key }) : t('gui.confirm.cfg.add', { name }),
+      model: str(agent.model) ? t('gui.confirm.cfg.add_model', { model: str(agent.model) }) : '',
+    }
+  })
+
 /* A key pressed into a field is the field's, not an answer: the composer sits
    under every sheet, and its own Cmd+Enter sends a message -- it must not allow
    a command, or worse, save a rule. Escape is not guarded: leaving a field and
@@ -269,6 +281,7 @@ function wordsFor(req: ApprovalReq): GateWords {
         test: str(row.action) === 'test'
           ? t('gui.confirm.cfg.test', { name: str(row.setting).replace(/^subagents\./, '') })
           : '',
+        agents: agentsAdded(row),
       })),
     }
     : undefined

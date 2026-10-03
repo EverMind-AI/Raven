@@ -3378,6 +3378,7 @@ details[open] summary { margin-bottom: 8px; }
   content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px; background: var(--text);
 }
 .hub-head-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 4px; }
+.hub-head-sub { margin: -4px 0 16px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
 .pmchips { display: flex; gap: 7px; flex-wrap: wrap; margin: 14px 0 18px; }
 .pmcard { cursor: pointer; }
 .pmcard.dim { opacity: .68; }
