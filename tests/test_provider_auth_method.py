@@ -466,15 +466,6 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         # and `has_credential` both ask the tools, which is where each family's
         # rule already lives, so this file cannot become a second opinion.
         "raven/agent/tools/capabilities.py",
-        # The launcher library deciding whether a host config, read as raw
-        # JSON, carries any provider key worth inheriting wholesale
-        # (inherit_llm). No verdict on a specific Raven provider is made: the
-        # block is copied as-is precisely because two providers spelled the
-        # same can be two different endpoints, and the empty answer refuses
-        # the product launch rather than ruling any provider unconfigured.
-        # Asking auth would mean parsing the host's file into a RavenConfig a
-        # launcher deliberately treats as opaque, possibly newer, JSON.
-        "raven/config/product_render.py",
         "raven/config/update_providers.py",
         "raven/providers/litellm_provider.py",
         "raven/providers/factory.py",
@@ -523,24 +514,11 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/subagent/backends/openai_api.py",
         "raven/agent/subagent/probe.py",
         "raven/rpc/methods/subagents.py",
-        # Two reads, neither an opinion on whether a Raven provider is set up.
-        # One copies this raven's OpenRouter key into a sub-agent's own `.env`, so
+        # Copies this raven's OpenRouter key into a sub-agent's own `.env`, so
         # a user who configured one in step 1 is not asked for a second copy; the
         # verdict that the provider is usable comes from `_configured_providers`
-        # (which rules through auth) before that value is touched at all. The
-        # other mirrors `inherit_llm` in the launchers, which are stdlib-only
-        # scripts outside this package: they cannot import auth and accept only a
-        # literal key, so an OAuth host is configured by auth's rule and has
-        # nothing to lend by theirs. That question is "will inherit_llm return
-        # non-empty", and only inherit_llm's own rule answers it.
+        # (which rules through auth) before that value is touched at all.
         "raven/cli/subagent_setup.py",
-        # Where that same `inherit_llm` question moved to. The agent layer now
-        # asks it too, because it decides whether a discovered vendored agent
-        # reaches the roster at all -- and the roster must not offer one whose
-        # launcher will then find nothing to inherit. Same reasoning as above,
-        # same file the launcher itself reads: two readers of one credential that
-        # disagreed would advertise an agent that dies at its first dispatch.
-        "raven/agent/subagent/vendored_agents.py",
         # The skill hub's endpoint credential, read to store or forward it.
         "raven/config/update_skills.py",
     }
@@ -573,10 +551,10 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         return found
 
     offenders = sorted(
-        f"{path.relative_to(root.parent)}:{line}"
+        f"{path.relative_to(root.parent).as_posix()}:{line}"
         for path in root.rglob("*.py")
-        if str(path.relative_to(root.parent)) not in allowed
-        for line in key_reads(ast.parse(path.read_text()))
+        if path.relative_to(root.parent).as_posix() not in allowed
+        for line in key_reads(ast.parse(path.read_text(encoding="utf-8")))
     )
     assert not offenders, "decide configuredness through providers.auth.credential_status: " + ", ".join(offenders)
 

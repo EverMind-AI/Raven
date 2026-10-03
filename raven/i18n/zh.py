@@ -405,7 +405,7 @@ MESSAGES: dict[str, str] = {
     "  [green]Built.[/green]": "  [green]构建完成。[/green]",
     "  [dim]No sub-agent tree in this installation. A release wheel carries one; reinstall from a release, or run from a source checkout.[/dim]": "  [dim]本次安装没有子代理目录。发布版 wheel 自带子代理;可重装发布版,或改用源码检出运行。[/dim]",
     "  [dim]No sub-agent folders found.[/dim]": "  [dim]没有找到子代理目录。[/dim]",
-    "  [dim]This raven has no provider key to lend (an OAuth sign-in is not one): an agent tuned for its own model needs a key of its own, and one that runs on this raven's LLM is not ready until a provider is configured.[/dim]": "  [dim]本机 raven 没有可借出的 provider key(OAuth 登录不算):为自己的模型调优的 agent 需要自己的 key,使用本机 raven LLM 的 agent 在配置 provider 之前不会就绪。[/dim]",
+    "  [dim]This raven has no usable model provider to inherit: an agent tuned for its own model needs a key of its own, and one that runs on this raven's LLM is not ready until a provider is configured.[/dim]": "  [dim]本机 raven 没有可继承的可用模型服务:为自己的模型调优的 agent 需要自己的 key,使用本机 raven LLM 的 agent 在配置 provider 之前不会就绪。[/dim]",
     "Recommended: {a0} via OpenRouter (reusing this raven's OpenRouter key)": "推荐: {a0},经 OpenRouter(复用本机 raven 的 OpenRouter key)",
     "\n  {set_up} sub-agent(s) ready.": "\n  {set_up} 个子代理已就绪。",
     "Recommended: {a0} via OpenRouter (needs an OpenRouter key)": "推荐: {a0},经 OpenRouter(需要一个 OpenRouter key)",

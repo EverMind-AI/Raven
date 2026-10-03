@@ -478,13 +478,7 @@ class TestOnTheTable:
 
 
 def test_the_lending_test_reads_the_file_the_launcher_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """One credential, one answer.
-
-    The launchers' ``inherit_llm`` accepts exactly one shape: a literal
-    ``apiKey`` on some provider section of the host's ``config.json``. Asking
-    ``providers.auth`` instead would call an OAuth-signed-in host lendable and
-    advertise an agent that dies at its first dispatch.
-    """
+    """Setup reads the same host credentials as the launcher."""
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
 
     assert va.host_can_lend_a_key() is False
@@ -494,6 +488,24 @@ def test_the_lending_test_reads_the_file_the_launcher_reads(tmp_path: Path, monk
 
     (tmp_path / "config.json").write_text(json.dumps({"providers": {"custom": {"apiKey": "sk-x"}}}), encoding="utf-8")
     assert va.host_can_lend_a_key() is True, "any provider section, not openrouter specifically"
+
+
+@pytest.mark.parametrize("signed_in", [False, True])
+def test_the_lending_test_uses_stored_oauth_credentials(tmp_path, monkeypatch, signed_in):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    host = {
+        "providers": {"openai_codex": {}, "openrouter": {"apiKey": "synthetic-other-key"}},
+        "agents": {"defaults": {"provider": "openai_codex", "model": "openai-codex/gpt-5.6-sol"}},
+    }
+    (tmp_path / "config.json").write_text(json.dumps(host), encoding="utf-8")
+    if signed_in:
+        token_dir = tmp_path / "oauth" / "chatgpt"
+        token_dir.mkdir(parents=True)
+        (token_dir / "auth.json").write_text(json.dumps({"refresh_token": "synthetic-token"}), encoding="utf-8")
+
+    assert va.host_can_lend_a_key() is signed_in
 
 
 def test_the_interpreter_is_this_one_unless_the_environment_names_another() -> None:
@@ -736,11 +748,21 @@ class TestTheEdgesThatDegrade:
 
         assert va.host_can_lend_a_key() is False
 
-    def test_a_host_config_that_is_not_an_object_is_nothing_to_lend(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "host",
+        [
+            [],
+            {"providers": "not-a-mapping"},
+            {"agents": "not-a-mapping"},
+            {"agents": {"defaults": "not-a-mapping"}},
+            {"providers": {"openrouter": {"apiKey": 42}}},
+        ],
+    )
+    def test_an_invalid_host_config_is_nothing_to_lend(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host: object
     ) -> None:
         monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
-        (tmp_path / "config.json").write_text('{"providers": "not-a-mapping"}', encoding="utf-8")
+        (tmp_path / "config.json").write_text(json.dumps(host), encoding="utf-8")
 
         assert va.host_can_lend_a_key() is False
 

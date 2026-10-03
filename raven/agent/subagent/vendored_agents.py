@@ -384,34 +384,23 @@ def _folder_addresses_openrouter(folder: Path) -> bool:
 def host_can_lend_a_key() -> bool:
     """Whether ``inherit_llm`` in the launchers would find anything to inherit.
 
-    A folder with no key of its own is not stranded: each launcher reads the
-    host raven's ``config.json`` (through ``raven.config.product_render``) and
-    copies its whole provider block, so the common case needs no credential
-    anywhere near the tree.
-
-    Mirrors ``inherit_llm``'s own test rather than asking ``providers.auth``,
-    and the difference is the whole point. ``inherit_llm`` accepts exactly one
-    shape -- a literal ``apiKey`` on some provider section. A host signed in
-    through OAuth is configured by auth's rule and has nothing to lend by the
-    launcher's, because those credentials live under ``~/.raven/oauth/``.
-    Asking auth here would advertise an agent that dies at the first dispatch.
-
-    The same file the launcher reads (``$RAVEN_HOME`` or ``~/.raven``), for
-    the same reason: two readers of one credential that disagree would have
-    the roster offer what the launcher then refuses.
+    Read the same host file and use the launcher's own inheritance decision,
+    including OAuth credentials, so setup cannot offer a model the launcher
+    refuses or withhold one it accepts. Invalid host settings leave nothing
+    to inherit rather than preventing the setup wizard from opening.
     """
-    from raven.contracts.path_policy import CONFIG_FILENAME
-    from raven.home import raven_home
+    from raven.config.product_render import host_config, inherit_llm
 
-    config = raven_home() / CONFIG_FILENAME
+    raw = host_config()
+    if not isinstance(raw, dict) or not isinstance(raw.get("providers", {}), dict):
+        return False
+    agents = raw.get("agents") or {}
+    if not isinstance(agents, dict) or not isinstance(agents.get("defaults") or {}, dict):
+        return False
     try:
-        raw = json.loads(config.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return bool(inherit_llm({}, raw))
+    except (OSError, TypeError, ValueError):
         return False
-    providers = raw.get("providers") if isinstance(raw, dict) else None
-    if not isinstance(providers, dict):
-        return False
-    return any(isinstance(p, dict) and str(p.get("apiKey") or "").strip() for p in providers.values())
 
 
 def _resolved_python() -> str:

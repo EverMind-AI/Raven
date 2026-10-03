@@ -127,8 +127,9 @@ def inherit_llm(config: dict, host: dict) -> str:
     brains are reachable, which one is chosen, how a model name routes, and
     the host's reasoning effort; deliberately not the rest of
     ``agents.defaults``, which are the product's own operating limits. ``""``
-    when the host has no provider key to lend, which the caller treats as a
-    refusal to launch.
+    when the inherited model binding has no usable credentials, which the
+    caller treats as a refusal to launch. Only the LLM settings are parsed for
+    that check; the original sections are copied so newer fields survive.
 
     ``RAVEN_PARENT_MODEL`` / ``RAVEN_PARENT_REASONING_EFFORT`` are honoured
     on this branch, the fork launchers' own riders: the trunk cli dispatcher
@@ -139,13 +140,12 @@ def inherit_llm(config: dict, host: dict) -> str:
     per-turn form was a cli-lane property; ledgered, D3). On the own-key
     branch the riders are deliberately ignored, as they always were.
     """
+    from raven.config.schema import Config
+    from raven.providers.auth import MissingCredentialsError
+    from raven.providers.factory import check_provider_credentials
+
     providers = host.get("providers") or {}
-    if not any(isinstance(p, dict) and p.get("apiKey") for p in providers.values()):
-        return ""
-    for key in ("providers", "routing"):
-        if key in host:
-            config[key] = host[key]
-    defaults = config.setdefault("agents", {}).setdefault("defaults", {})
+    defaults = dict((config.get("agents") or {}).get("defaults") or {})
     host_defaults = (host.get("agents") or {}).get("defaults") or {}
     for key in ("provider", "model", "reasoningEffort"):
         if key in host_defaults:
@@ -172,6 +172,22 @@ def inherit_llm(config: dict, host: dict) -> str:
 
             head = split_model_id(model)[0]
             defaults["provider"] = head if head in providers else host_defaults.get("provider", "")
+    inherited = Config.model_validate(
+        {
+            "providers": providers,
+            "agents": {
+                "defaults": {key: defaults[key] for key in ("provider", "model", "reasoningEffort") if key in defaults}
+            },
+        }
+    )
+    try:
+        check_provider_credentials(inherited)
+    except MissingCredentialsError:
+        return ""
+    for key in ("providers", "routing"):
+        if key in host:
+            config[key] = host[key]
+    config.setdefault("agents", {}).setdefault("defaults", {}).update(defaults)
     if parent_protocol := os.environ.get("RAVEN_PARENT_PROTOCOL", "").strip():
         provider = providers.get(defaults.get("provider") or "")
         if isinstance(provider, dict) and parent_model:

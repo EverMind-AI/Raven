@@ -6,6 +6,13 @@ Five shipped agents today: `raven-code`, `raven-design`, `raven-oncall`,
 -- the scaffold command that instantiates this whole shape into a fresh
 folder; `BUILDING.md` in this directory is the from-zero guide.
 
+Agents that have no model key of their own inherit the host's model binding,
+provider configuration, routing and reasoning effort. Inheritance uses the
+same credential check as the host runtime, including stored OAuth sign-ins
+such as OpenAI Codex. The child reads OAuth credentials from the host's
+`RAVEN_HOME` (or the provider's configured token-directory override); tokens
+stay in that credential store rather than the rendered agent config.
+
 What one agent directory carries:
 
 - `run.py` -- a stdlib-only launcher: render the agent's config (secret
