@@ -100,9 +100,9 @@ private ranges.
 
 - Tested in one `raven serve`-shaped process (loop + RPC + Chromium). A
   sub-agent that runs as a *separate process* (the ACP / cli-agent lanes) has
-  its own `Browser` singleton and would start its own Chromium on a throwaway
-  profile; the browser tools are registered only for in-process
-  (`raven-loop`) sub-agents.
+  its own `Browser` singleton and would start a second Chromium on the same
+  profile, which the headless shell does not lock; the browser tools are
+  registered only for in-process (`raven-loop`) sub-agents.
 - The panel was exercised at the RPC layer (`browser.state` / `browser.frame`),
   not by clicking in the web UI.
 - A popup opened by a JavaScript handler (not a declared `target=_blank`) is
