@@ -41,7 +41,7 @@ const STEPS = [
  * `connect` returns a promise nothing resolves, so the sequence parks at its
  * first await and the rest of it cannot interleave with what is being measured.
  */
-async function harness(rows = []) {
+async function harness(rows = [], { connected = false } = {}) {
   const calls = []
   const step = (name) => (...args) => calls.push([name, ...args])
   const part = await loadPart(() => import('../../src/app/boot'), {
@@ -62,7 +62,13 @@ async function harness(rows = []) {
       'src/app/install': { installPage: step('installPage') },
       'src/rpc/gateway': {
         gateway: () => ({
-          connect: () => { calls.push(['connect']); return new Promise(() => {}) },
+          connect: () => { calls.push(['connect']); return connected ? Promise.resolve(true) : new Promise(() => {}) },
+          call: (method, params) => {
+            calls.push(['rpc', method, params])
+            if (method === 'system.hello') return Promise.resolve({})
+            if (method === 'model.options') return Promise.resolve({ model: 'deepseek/deepseek-chat', provider: 'deepseek', providers: [] })
+            return new Promise(() => {})
+          },
         }),
       },
       'src/features/onboard/store': {
@@ -85,6 +91,20 @@ async function harness(rows = []) {
 }
 
 describe('the page boot order', () => {
+  it('reads the selection before waiting for language, version or session history', async () => {
+    const { part, calls } = await harness([], { connected: true })
+    const model = await import('../../src/features/model/store')
+    part.boot()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls.filter(([name]) => name === 'rpc')).toEqual([
+      ['rpc', 'system.hello', { client_version: '0.1.0', surface: 'page' }],
+      ['rpc', 'model.options', { include_providers: false }],
+      ['rpc', 'config.get', { keys: ['language'] }],
+    ])
+    expect(model.current()).toBe('deepseek/deepseek-chat')
+    expect(model.loadStatus()).toBe('ready')
+  })
+
   it('draws the first frame from what the page already holds, in order', async () => {
     const row = { id: 'fixture' }
     const { part, calls } = await harness([row])

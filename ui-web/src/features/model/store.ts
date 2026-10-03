@@ -49,7 +49,9 @@ const CLOSED: OpenAt = { host: null, after: null, footer: false, scope: 'session
 
 let at: OpenAt = CLOSED
 let epoch = 0
-let selected = 'minimax-m3'
+let selected = ''
+let status: 'loading' | 'ready' | 'empty' | 'error' = 'loading'
+let selectionRead = 0
 /* The account the conversation is on. A pick names one, and two accounts can
    list the same id, so the model alone cannot say which row is the one in
    force. Empty means nothing has said -- the served frame, and a page that has
@@ -88,6 +90,20 @@ export const isOpen = (): boolean => !!at.host
    control. */
 export const openedFrom = (el: Element | null): boolean => !!el && at.host === el
 export const current = (): string => selected
+export const loadStatus = (): typeof status => status
+export const loadToken = (): number => selectionRead
+
+export function beginLoad(): number {
+  selectionRead += 1
+  status = 'loading'
+  announce()
+  return selectionRead
+}
+
+export function failLoad(): void {
+  status = 'error'
+  announce()
+}
 
 /** The account serving `current`, or '' while nothing has said which. */
 export const currentProvider = (): string => selectedAt
@@ -97,9 +113,13 @@ export const currentProvider = (): string => selectedAt
    marking the account the reader just left. An omitted account is "not known"
    rather than "unchanged", so a caller that has one always states it. */
 export function setCurrent(model: string, provider = ''): void {
-  if (selected === model && selectedAt === provider) return
+  // A local pick also supersedes a pending read of the same model.
+  selectionRead += 1
+  const next = model ? 'ready' : 'empty'
+  if (selected === model && selectedAt === provider && status === next) return
   selected = model
   selectedAt = provider
+  status = next
   announce()
 }
 
@@ -107,6 +127,10 @@ export function setCurrent(model: string, provider = ''): void {
    settings button can both be reached while a picker is up. */
 export function open(anchor?: HTMLElement | null, after?: () => void, marked?: string, offer: Offer = DEFAULT_OFFER): void {
   if (!installed()) return
+  if (source().loading?.()) {
+    toast(t('gui.model.catalogue_loading'))
+    return
+  }
   const rows = listed(offer)
   if (!rows.length) {
     /* Nothing to open onto is now one dead end, not two: a provider connected
@@ -284,7 +308,9 @@ const detail = (e: unknown): string => {
 export function _resetForTests(): void {
   at = CLOSED
   epoch = 0
-  selected = 'minimax-m3'
+  selected = ''
   selectedAt = ''
+  status = 'loading'
+  selectionRead = 0
   subs.clear()
 }

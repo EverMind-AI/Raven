@@ -2868,6 +2868,7 @@ export interface SkillUnpinResult {
 }
 export interface ModelOptionsParams {
   session_id?: string;
+  include_providers?: boolean;
 }
 export interface ModelOptionsResult {
   model: string;

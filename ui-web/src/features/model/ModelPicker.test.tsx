@@ -47,6 +47,7 @@ interface Harness {
 }
 
 function install(over: Partial<ModelSource> = {}, providers = PROVIDERS): Harness {
+  if (!store.current()) store.setCurrent('minimax-m3')
   const h: Harness = {
     toasts: [], persisted: [], persistedProviders: [], persistedScopes: [],
     local: [], settings: 0, providerSettings: [], added: [], after: 0, model: store.current,

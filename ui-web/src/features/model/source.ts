@@ -11,9 +11,10 @@ import { current as sessionCurrent } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
+import { show as toast } from '../../state/toast'
 import { openModels, openProviderModels } from '../settings/store'
 import { remember } from './recent'
-import { current, currentProvider, open as openPickerAt, setCurrent, statedTags } from './store'
+import { beginLoad, current, currentProvider, failLoad, loadStatus, loadToken, open as openPickerAt, setCurrent, statedTags } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { TierReply, TierSource } from '../../state/tier'
@@ -23,6 +24,9 @@ import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
 type ProviderWire = ResultOf<'model.options'>['providers'][number]
 
 let providersLive: Provider[] = []
+let providersLoading = false
+let providersFailed = false
+let providerRead = 0
 let defaultProvidersLive: Provider[] = []
 let defaultModelLive = ''
 let defaultProviderLive = ''
@@ -93,8 +97,20 @@ export function openPicker(anchor: HTMLElement, offer: Offer, after?: () => void
 export function openModelsForMissingProvider(): boolean {
   const connected = providersLive.some((p) => p.on)
   const knownMissing = setupState.providerConfigured === false || providersLive.length > 0
-  if (connected || !knownMissing) return false
-  void openModels()
+  if (!connected && knownMissing) {
+    void openModels()
+    return true
+  }
+  if (loadStatus() === 'loading' || loadStatus() === 'error') {
+    toast(loadStatus() === 'loading' ? t('gui.model.loading') : t('gui.model.load_failed'))
+    return true
+  }
+  return false
+}
+
+export function retryFailedLoad(): boolean {
+  if (loadStatus() !== 'error' && !providersFailed) return false
+  void loadProviders()
   return true
 }
 
@@ -165,6 +181,25 @@ function readOptions(params: ParamsOf<'model.options'>): Promise<ResultOf<'model
   return read
 }
 
+export async function loadSelection(sid?: string | null, gen?: number): Promise<void> {
+  const target = sid !== undefined ? sid : sessionCurrent()
+  const ticket = gen !== undefined ? gen : generation()
+  if (ticket !== generation()) return
+  const read = beginLoad()
+  const staged = !target ? staging().model : null
+  if (staged) {
+    showModel(staged.model, staged.provider)
+    return
+  }
+  try {
+    const mo = await readOptions({ ...(target ? { session_id: target } : {}), include_providers: false })
+    if (ticket !== generation() || read !== loadToken()) return
+    showModel(mo.model, mo.provider || '')
+  } catch {
+    if (ticket === generation() && read === loadToken()) failLoad()
+  }
+}
+
 export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
   // The model is per conversation, so ask for the visible one's -- model.options
   // stars the row that conversation actually runs, not agents.defaults. Omit the
@@ -177,13 +212,27 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   // generation it captured then -- the answer is about that older view, and a
   // ticket taken here would read as current.
   const ticket = gen !== undefined ? gen : generation()
-  const mo = await readOptions(target ? { session_id: target } : {})
-  // model.options does its catalogue work off-thread, so responses can land out
-  // of click order. A refresh keyed to a superseded view must not repaint the
-  // page the reader has since moved to.
   if (ticket !== generation()) return
-  providersLive = rowsOf(mo.providers || [])
-  if (mo.model) showModel(mo.model, mo.provider || '')
+  const read = ++providerRead
+  providersLoading = true
+  providersFailed = false
+  const selection = loadSelection(target, ticket)
+  const catalogue = readOptions(target ? { session_id: target } : {})
+  try {
+    const mo = await catalogue
+    if (ticket !== generation() || read !== providerRead) return
+    providersLive = rowsOf(mo.providers || [])
+  } catch {
+    if (ticket !== generation() || read !== providerRead) return
+    providersFailed = true
+    toast(t('gui.model.catalogue_failed'))
+  } finally {
+    if (read === providerRead) {
+      providersLoading = false
+      paintChip()
+    }
+  }
+  await selection
 }
 
 /* provider is required -- a bare model id does not name whose credential serves
@@ -252,6 +301,7 @@ export async function persistModel(
 
 export const modelSource: ModelSource = {
   providers: () => providersLive,
+  loading: () => providersLoading,
   persist: persistModel,
   addModel: async (m: string, provider: string, kind?: Kind) => {
     await gateway().call('model.add_model', { slug: provider, model: m, ...statedTags(kind ?? 'text') })
@@ -311,6 +361,11 @@ export function stagedTier(): string | null {
    registered, are both the module's. */
 export function _resetForTests(): void {
   providersLive = []
+  providersLoading = false
+  providersFailed = false
+  providerRead = 0
+  inFlight.clear()
+  setupState.providerConfigured = null
   defaultProvidersLive = []
   defaultModelLive = ''
   defaultProviderLive = ''
