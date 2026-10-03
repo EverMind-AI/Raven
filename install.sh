@@ -9,6 +9,8 @@
 # Set RAVEN_MINIMAL=1 to skip the chromium download and the LibreOffice offer;
 # the wheel install itself is unchanged. Set RAVEN_NO_LAUNCH=1 to skip the
 # closing `raven web` (CI, Dockerfiles), so the script returns.
+# Set RAVEN_NODE_MIRROR=<base-url> to download Node.js from a mirror instead of
+# https://nodejs.org/dist (useful in regions where nodejs.org is slow or blocked).
 #
 # Goal: a clean machine ends up able to run `raven` / `raven tui` from any
 # directory with no manual steps. The script is idempotent -- it detects what
@@ -97,9 +99,10 @@ system_node_ok() {
 
 # Resolve the latest v22 LTS version string (e.g. v22.20.0) from nodejs.org,
 # without requiring jq/python. Falls back to a pinned version if the index
-# can't be reached.
+# can't be reached. Respects RAVEN_NODE_MIRROR for the index lookup.
 latest_node_v22() {
-  idx="$(curl -fsSL https://nodejs.org/dist/index.json 2>/dev/null || true)"
+  base="${RAVEN_NODE_MIRROR:-https://nodejs.org/dist}"
+  idx="$(curl -fsSL "${base}/index.json" 2>/dev/null || true)"
   ver="$(printf '%s' "$idx" | tr ',' '\n' | grep -o '"version":"v22\.[0-9.]*"' \
          | head -n1 | sed 's/.*"v/v/; s/"$//')"
   [ -n "$ver" ] && printf '%s' "$ver" || printf 'v22.20.0'
@@ -141,7 +144,8 @@ ensure_node() {
 provision_private_node() {
   ver="$(latest_node_v22)"
   pkg="node-${ver}-${NODE_OS}-${NODE_ARCH}"
-  url="https://nodejs.org/dist/${ver}/${pkg}.tar.gz"
+  base="${RAVEN_NODE_MIRROR:-https://nodejs.org/dist}"
+  url="${base}/${ver}/${pkg}.tar.gz"
   mkdir -p "$NODE_RUNTIME_DIR"
   tmp="$(mktemp -d)"
   info "  $url"
@@ -150,7 +154,7 @@ provision_private_node() {
   # Supply-chain integrity: verify the tarball against the official
   # SHASUMS256.txt before extracting/executing it. Node publishes this file
   # next to every release.
-  if curl -fsSL "https://nodejs.org/dist/${ver}/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt" 2>/dev/null; then
+  if curl -fsSL "${base}/${ver}/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt" 2>/dev/null; then
     expected="$(awk -v f="${pkg}.tar.gz" '$2==f {print $1}' "$tmp/SHASUMS256.txt")"
     if [ -n "$expected" ]; then
       if have shasum; then
