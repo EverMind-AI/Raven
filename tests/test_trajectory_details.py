@@ -1228,3 +1228,100 @@ def test_derived_blocks_keep_source_failures(state, monkeypatch):
     descriptor = _describe(index, state, _entry(index, "curate", "io.input"))
     request_block = next(b for b in descriptor.blocks if b.id == "request")
     assert (request_block.availability, request_block.reason) == (tdet.AVAILABLE, tdet.REASON_NOT_LOADED)
+
+
+def test_generic_json_with_odd_messages_fields_does_not_crash(state):
+    spans = [_turn(state, "t", "turn", start=0, end=100)]
+    for name, value in (("num", 1), ("flag", True), ("none", None), ("obj", {"a": 1}), ("list", [1, {"$msg": "x"}])):
+        spans.append(
+            _span(
+                "t",
+                name,
+                "foo.bar",
+                parent="turn",
+                start=1,
+                end=2,
+                attrs={f"foo.{name}.artifact_path": _artifact(state, {"messages": value, "k": 1}, f"odd-{name}")},
+            )
+        )
+    _append(state, spans)
+    index = _ready(state)
+    for name in ("num", "flag", "none", "obj", "list"):
+        entry = _entry(index, name, f"artifact:foo.{name}")
+        descriptor = _describe(index, state, entry)
+        content = next(b for b in descriptor.blocks if b.id == "content")
+        assert (content.availability, content.renderer) == (tdet.AVAILABLE, tdet.JSON), name
+        body = _block(index, state, entry, "content")
+        assert body.data["value"]["k"] == 1, name
+        assert "integrity" not in _ids(descriptor), name
+
+
+def test_bad_json_blob_is_reported_by_the_integrity_block(state):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _llm(state, "t", "llm", "turn", start=1, end=2, v2_count=5, output={"content": "a"}),
+        ],
+    )
+    index = _ready(state)
+    entry = _entry(index, "llm", "llm.input")
+    shell = json.loads(Path(tidx.tstore._span_attrs(index.span("t", "llm"))["llm.input.artifact_path"]).read_text())
+    artifact_v2.message_path(state / "logs" / "audit-artifacts", shell["messages"][0]["$msg"]).write_text(
+        "{bad json", encoding="utf-8"
+    )
+    descriptor = _describe(index, state, entry)
+    assert "blob_missing" in descriptor.integrity and "integrity" in _ids(descriptor)
+    integrity = next(b for b in descriptor.blocks if b.id == "integrity")
+    assert integrity.preview == list(descriptor.integrity)[:3]
+    body = _block(index, state, entry, "integrity")
+    assert body.data["items"] == list(descriptor.integrity) and body.data["complete"] is True
+    assert not body.truncated
+    page = _block(index, state, entry, "messages")
+    assert "blob_missing" in page.integrity and page.data["items"][0]["content"].startswith("[message blob missing")
+
+
+def test_integrity_read_is_bounded_and_marks_partial_results(state, monkeypatch):
+    opens = {"n": 0}
+    original = tconv._read_artifact
+
+    def counting(state_dir, path, limit=tconv._ARTIFACT_LIMIT):
+        opens["n"] += 1
+        return original(state_dir, path, limit)
+
+    monkeypatch.setattr(tconv, "_read_artifact", counting)
+    many = {f"foo.k{i:02d}.artifact_path": _artifact(state, {"k": i}, f"many-{i}") for i in range(30)}
+    many["foo.k05.artifact_path"] = str(state / "logs" / "audit-artifacts" / "absent.json")
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _span("t", "many", "foo.bar", parent="turn", start=1, end=2, attrs=many),
+        ],
+    )
+    index = _ready(state)
+    entry = _entry(index, "many", "artifact:foo.k00")
+    opens["n"] = 0
+    descriptor = _describe(index, state, entry)
+    assert opens["n"] <= tdet.DESCRIBE_ARTIFACTS
+    assert "integrity" not in _ids(descriptor)
+    missing_entry = _entry(index, "many", "artifact:foo.k05")
+    opens["n"] = 0
+    body = _block(index, state, missing_entry, "integrity")
+    assert opens["n"] <= tdet.DESCRIBE_ARTIFACTS
+    assert "artifact_missing" in body.data["items"]
+    gone_out = _tool(state, "t", "tool", "turn", start=3, end=4)
+    gone_out["attributes"]["tool.output.artifact_path"] = str(state / "logs" / "audit-artifacts" / "gone-out.json")
+    _append(state, [gone_out])
+    index.refresh_sync(None)
+    tool_out = _entry(index, "tool", "tool.output")
+    monkeypatch.setattr(tdet, "DESCRIBE_ARTIFACTS", 1)
+    monkeypatch.setattr(tdet, "DESCRIBE_BLOBS", 0)
+    opens["n"] = 0
+    partial = _block(index, state, tool_out, "integrity")
+    assert opens["n"] <= 1
+    assert "artifact_missing" in partial.data["items"]
+    assert partial.data["complete"] is False and partial.truncated
+    with pytest.raises(tdet.UnknownBlockError):
+        monkeypatch.setattr(tdet, "DESCRIBE_ARTIFACTS", 0)
+        _block(index, state, entry, "integrity")

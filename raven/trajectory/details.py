@@ -73,6 +73,9 @@ PREVIEW_JSON_KEYS = 6
 DESCRIBE_ARTIFACTS = 16
 DESCRIBE_BLOBS = 4
 DESCRIBE_BYTES_LIMIT = 4 * 1024 * 1024
+READ_BLOCK_ARTIFACTS = 8
+READ_BLOCK_BLOBS = MESSAGES_PAGE + 4
+READ_BLOCK_BYTES_LIMIT = 16 * 1024 * 1024
 
 REASON_NOT_LOADED = "not_loaded"
 REASON_SCHEMA_UNPROVEN = "schema_unproven"
@@ -404,6 +407,7 @@ class _Reader:
         self.artifacts = 0
         self.blobs = 0
         self.bytes = 0
+        self.exhausted = False
         self.cache: dict[str, tuple[str | None, str | None]] = {}
 
     def _allowed(self, is_blob: bool) -> bool:
@@ -418,6 +422,7 @@ class _Reader:
         if path in self.cache:
             return self.cache[path]
         if not self._allowed(is_blob):
+            self.exhausted = True
             return None
         text, reason = _conv._read_artifact(self.state, path, ARTIFACT_LIMIT)
         if is_blob:
@@ -1123,50 +1128,6 @@ def _preview_for(evaluated: _Evaluated, reader: _Reader) -> tuple[Any, tuple[str
 # ── public API ────────────────────────────────────────────────────────
 
 
-def _blob_integrity(view: EntryView, loaded: _Loader, state: Path) -> list[str]:
-    """Existence and size of every referenced message blob, by stat alone."""
-    codes: list[str] = []
-    attrs = tstore._span_attrs(view.span or {})
-    for key in sorted(k for k in attrs if isinstance(k, str) and k.endswith(".artifact_path")):
-        load = loaded(key[: -len(".artifact_path")])
-        if not load.loaded or not isinstance(load.payload, dict):
-            continue
-        refs = []
-        for item in load.payload.get("messages") or []:
-            sha1 = artifact_v2.ref_sha1(item)
-            if sha1 is not None:
-                refs.append(sha1)
-        for field in artifact_v2.TEXT_FIELDS:
-            sha1 = artifact_v2.ref_sha1(load.payload.get(field))
-            if sha1 is not None:
-                refs.append(sha1)
-        for sha1 in dict.fromkeys(refs):
-            path = artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)
-            try:
-                size = path.stat().st_size
-            except OSError:
-                if "blob_missing" not in codes:
-                    codes.append("blob_missing")
-                continue
-            if size > ARTIFACT_LIMIT and "blob_truncated" not in codes:
-                codes.append("blob_truncated")
-    return codes
-
-
-def _integrity_block(
-    view: EntryView, evaluated: Sequence[_Evaluated], loaded: _Loader, state: Path
-) -> _Evaluated | None:
-    """The integrity block: the entry's codes plus everything this read found."""
-    codes = list(view.entry.integrity)
-    for block in evaluated:
-        codes.extend(code for code in block.integrity if code not in codes)
-    codes.extend(code for code in _blob_integrity(view, loaded, state) if code not in codes)
-    if not codes:
-        return None
-    spec = next(s for s in _TAIL if s.id == "integrity")
-    return _Evaluated(spec, AVAILABLE, None, {"items": codes, "offset": 0}, (), len(codes), True)
-
-
 def _blocks_for(view: EntryView, reader: _Reader) -> list[_Evaluated]:
     loaded = _loader(view, reader)
     specs = (*_kind_specs(view.entry), *_TAIL)
@@ -1182,11 +1143,46 @@ def _blocks_for(view: EntryView, reader: _Reader) -> list[_Evaluated]:
         if spec.id in _OPTIONAL_DEPENDENT and not evaluated.loaded:
             evaluated.reason = REASON_NOT_LOADED
         out.append(evaluated)
-    integrity = _integrity_block(view, out, loaded, reader.state)
-    if integrity is not None:
-        raw_index = next((i for i, b in enumerate(out) if b.spec.id == "raw"), len(out))
-        out.insert(raw_index, integrity)
     return out
+
+
+def _descriptor_of(block: _Evaluated, preview: Any) -> BlockDescriptor:
+    return BlockDescriptor(
+        id=block.spec.id,
+        renderer=block.spec.renderer,
+        availability=block.availability,
+        preview=preview,
+        total_items=block.total_items,
+        related_operation=block.spec.related,
+        reason=block.reason,
+    )
+
+
+def _describe_pass(view: EntryView, reader: _Reader) -> tuple[list[_Evaluated], list[BlockDescriptor], list[str]]:
+    """Blocks, their overview descriptors and the integrity codes one bounded pass found.
+
+    The integrity block is built last, from the entry's own codes plus every
+    code the pass produced while loading artifacts and resolving the preview
+    references -- the same reads, so the descriptor's integrity list and the
+    block's items are one list. Its ``complete`` flag says whether the pass
+    ran out of read budget before checking everything it would have.
+    """
+    blocks = _blocks_for(view, reader)
+    descriptors: list[BlockDescriptor] = []
+    codes = list(view.entry.integrity)
+    for block in blocks:
+        _text_prepare(block, reader)
+        preview, found = _preview_for(block, reader) if block.loaded else (None, ())
+        codes.extend(code for code in (*block.integrity, *found) if code not in codes)
+        descriptors.append(_descriptor_of(block, preview))
+    if codes:
+        spec = next(s for s in _TAIL if s.id == "integrity")
+        data = {"items": codes, "offset": 0, "complete": not reader.exhausted}
+        integrity = _Evaluated(spec, AVAILABLE, None, data, (), len(codes), True)
+        raw_index = next((i for i, b in enumerate(blocks) if b.spec.id == "raw"), len(blocks))
+        blocks.insert(raw_index, integrity)
+        descriptors.insert(raw_index, _descriptor_of(integrity, list(codes[:PREVIEW_ITEMS])))
+    return blocks, descriptors, codes
 
 
 def _text_prepare(evaluated: _Evaluated, reader: _Reader) -> None:
@@ -1205,6 +1201,10 @@ def _text_prepare(evaluated: _Evaluated, reader: _Reader) -> None:
                 evaluated.integrity = tuple(dict.fromkeys((*evaluated.integrity, *integrity)))
 
 
+def _describe_reader(state: Path) -> _Reader:
+    return _Reader(state, max_artifacts=DESCRIBE_ARTIFACTS, max_blobs=DESCRIBE_BLOBS, max_bytes=DESCRIBE_BYTES_LIMIT)
+
+
 def describe(
     index: SessionIndex, entry_id: str, *, state: Path, expected_revision: int | None = None
 ) -> Descriptor | None:
@@ -1212,32 +1212,15 @@ def describe(
     view = index.capture(entry_id)
     if view is None:
         return None
-    reader = _Reader(state, max_artifacts=DESCRIBE_ARTIFACTS, max_blobs=DESCRIBE_BLOBS, max_bytes=DESCRIBE_BYTES_LIMIT)
-    evaluated = _blocks_for(view, reader)
-    descriptors: list[BlockDescriptor] = []
-    extra_integrity: list[str] = []
-    for block in evaluated:
-        _text_prepare(block, reader)
-        preview, integrity = _preview_for(block, reader) if block.loaded else (None, ())
-        extra_integrity.extend(code for code in (*block.integrity, *integrity) if code not in extra_integrity)
-        descriptors.append(
-            BlockDescriptor(
-                id=block.spec.id,
-                renderer=block.spec.renderer,
-                availability=block.availability,
-                preview=preview,
-                total_items=block.total_items,
-                related_operation=block.spec.related,
-                reason=block.reason,
-            )
-        )
+    reader = _describe_reader(state)
+    _, descriptors, codes = _describe_pass(view, reader)
     entry = view.entry
     notes: list[str] = []
     if NOTE_OUTER_ONLY in entry.status_evidence:
         notes.append(NOTE_OUTER_ONLY)
     if tstore._span_attrs(view.span or {}).get("turn.in_progress") is True:
         notes.append(NOTE_IN_PROGRESS)
-    integrity = tuple(dict.fromkeys((*entry.integrity, *extra_integrity)))
+    integrity = tuple(codes)
     if integrity:
         notes.append(NOTE_INCOMPLETE)
     descriptor = Descriptor(
@@ -1324,7 +1307,9 @@ def read_block(
     if view.epoch != epoch or view.entry.revision != entry_revision:
         raise RevisionChangedError(view.entry.revision, view.epoch)
     offset = _decode_cursor(cursor, entry_id, entry_revision, epoch) if cursor is not None else 0
-    reader = _Reader(state, max_artifacts=None, max_blobs=None, max_bytes=None)
+    reader = _Reader(
+        state, max_artifacts=READ_BLOCK_ARTIFACTS, max_blobs=READ_BLOCK_BLOBS, max_bytes=READ_BLOCK_BYTES_LIMIT
+    )
     loaded = _loader(view, reader)
     specs = (*_kind_specs(view.entry), *_TAIL)
     spec = next((s for s in specs if s.id == block_id), None)
@@ -1332,11 +1317,17 @@ def read_block(
         raise UnknownBlockError(block_id)
     if spec.id == "error" and view.entry.operation_status != _entries.STATUS_ERROR:
         raise UnknownBlockError(block_id)
+    partial = False
     if spec.id == "integrity":
-        found = next((b for b in _blocks_for(view, reader) if b.spec.id == "integrity"), None)
+        # The same bounded pass the overview ran, so the tab lists exactly
+        # what the descriptor declared; a pass that ran out of budget says so.
+        reader = _describe_reader(state)
+        blocks, _, _ = _describe_pass(view, reader)
+        found = next((b for b in blocks if b.spec.id == "integrity"), None)
         if found is None:
             raise UnknownBlockError(block_id)
         evaluated = found
+        partial = reader.exhausted
     else:
         evaluated = _evaluate(spec, view, reader, loaded)
     if evaluated is None:
@@ -1346,7 +1337,7 @@ def read_block(
     budget = RESPONSE_LIMIT - RESPONSE_RESERVE
     data = evaluated.data
     next_cursor = None
-    truncated = False
+    truncated = partial
     integrity = list(evaluated.integrity)
     availability = evaluated.availability
     if data is not None:
@@ -1369,7 +1360,7 @@ def read_block(
                 integrity.extend(code for code in blob_integrity if code not in integrity)
             fitted, end, truncated = _fit_items(window, 0, page, budget)
             end_offset = offset + end
-            data = {"items": fitted, "offset": offset}
+            data = {**data, "items": fitted, "offset": offset}
             if end_offset < len(items):
                 next_cursor = _encode_cursor(entry_id, entry_revision, epoch, end_offset)
         elif spec.renderer == KEY_VALUES:
@@ -1377,7 +1368,7 @@ def read_block(
             data = {"items": fitted}
     if evaluated.source_span_id is not None and isinstance(data, dict):
         data = {**data, "source_span_id": evaluated.source_span_id}
-    truncated = truncated or availability == TRUNCATED
+    truncated = truncated or partial or availability == TRUNCATED
     return BlockBody(
         entry_id=entry_id,
         entry_revision=entry_revision,
