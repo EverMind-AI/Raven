@@ -336,7 +336,8 @@ def test_fingerprint_mismatch_means_generation_change(state, clock, monkeypatch)
     index = _index(state, clock)
     _refresh_until_ready(index, clock)
     epoch = index.epoch
-    monkeypatch.setattr(tidx.SpanLogScanner, "_fingerprint", staticmethod(lambda path: "different"))
+    monkeypatch.setattr(tidx.SpanLogScanner, "_fingerprint", staticmethod(lambda handle: "different"))
+    _append(state, [_turn("t", "b", start=2, end=3)])
     index.refresh_sync(None)
     assert index.epoch != epoch
 
@@ -881,3 +882,109 @@ def test_policy_defaults_and_replacement():
     assert tpol.TrajectoryPolicy.fixed(True).enabled() is True
     policy.replace_source(lambda: True)
     assert policy.enabled() is True and policy.revision == 1
+
+
+# ── review regressions ────────────────────────────────────────────────
+
+
+def _run_with_timeout(fn, seconds: float = 5.0) -> None:
+    import threading
+
+    worker = threading.Thread(target=fn, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), "refresh did not terminate"
+
+
+def test_broken_multi_slot_record_is_trimmed_without_looping(state, clock):
+    attrs = {"session.key": SESSION, "tool.name": "x", "tool.args_preview": "{}", "tool.result_preview": "ok"}
+    broken = {
+        "traceId": "t",
+        "spanId": None,
+        "name": "tool.call",
+        "startTime": _ts(0),
+        "endTime": _ts(1),
+        "attributes": attrs,
+    }
+    no_trace = {"spanId": "s", "name": "tool.call", "startTime": _ts(2), "endTime": _ts(3), "attributes": attrs}
+    _append(state, [broken, no_trace, _turn("t", "later", start=10, end=11)])
+    index = _index(state, clock, entries=1)
+    _run_with_timeout(lambda: index.refresh_sync(None))
+    entries = index.entries()
+    assert len(entries) <= 1
+    assert not any(e.entry_id.startswith("broken:") for e in entries)
+    assert index.index_state().head_truncated >= 4
+    assert not any(key[0] == "" for key in index.spans)
+
+
+def test_trim_stall_terminates_with_warning(state, clock, monkeypatch, caplog):
+    _append(state, [_turn("t", f"s{i}", start=i, end=i) for i in range(6)])
+    index = _index(state, clock, entries=2)
+    monkeypatch.setattr(index, "_trim_span", lambda key: None)
+    with caplog.at_level("WARNING", logger="raven.trajectory.index"):
+        _run_with_timeout(lambda: index.refresh_sync(None))
+    assert "made no progress" in caplog.text
+    assert len(index.entries()) == 12
+    assert index.index_state().head_truncated == 0
+
+
+def test_rotation_between_listing_and_open_loses_nothing(state, clock, monkeypatch):
+    _append(state, [_turn("t", "old", start=0, end=1)])
+    index = _index(state, clock)
+    original = tidx.SpanLogScanner._read
+    armed = {"fire": True}
+
+    def racing_read(self, cursor, budget, batch):
+        if armed["fire"] and cursor.path == _log(state):
+            armed["fire"] = False
+            _rotate(state)
+            _append(state, [_turn("t", "new", start=2, end=3)])
+        return original(self, cursor, budget, batch)
+
+    monkeypatch.setattr(tidx.SpanLogScanner, "_read", racing_read)
+    rounds = 0
+    while rounds < 10:
+        rounds += 1
+        index.refresh_sync(None)
+        if index.index_state().phase == tidx.PHASE_READY and len(index.entries()) == 4:
+            break
+    assert [e.span_id for e in index.entries() if e.slot == "turn.input"] == ["old", "new"]
+    assert len(index.entries()) == 4
+    assert index.index_state().scanned_bytes == index.index_state().total_bytes
+
+
+def test_reads_stay_consistent_while_a_refresh_runs(state, clock):
+    import threading
+
+    _append(state, [_turn("t", f"s{i}", start=i, end=i) for i in range(50)])
+    index = _index(state, clock)
+    index.refresh_sync(None)
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def reader():
+        try:
+            while not stop.is_set():
+                index.index_state()
+                page = index.list_page(None, 20)
+                batch = index.changes(page.epoch, 0, 1000)
+                assert not batch.reset_required
+                for entry in page.entries:
+                    index.span(entry.trace_id, entry.span_id)
+                    index.entry(entry.entry_id)
+        except BaseException as exc:  # noqa: BLE001 — the test records any reader failure
+            errors.append(exc)
+
+    thread = threading.Thread(target=reader)
+    thread.start()
+    try:
+        for i in range(30):
+            _append(state, [_turn("t", f"n{i}", start=100 + i, end=100 + i, extra={"turn.in_progress": i % 2 == 0})])
+            index.refresh_sync(None)
+    finally:
+        stop.set()
+        thread.join(5)
+    assert errors == []
+    published = index.entries()
+    assert all(index.span(e.trace_id, e.span_id) is not None for e in published)
+    assert {e.revision for e in published} == {e.revision for e in index.changes(index.epoch, 0, 10_000).upserts}

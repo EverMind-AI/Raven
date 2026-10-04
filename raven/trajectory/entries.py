@@ -175,11 +175,17 @@ class ReadBudget:
 
 @dataclass
 class SpanCache:
-    """Compact records for one span plus how far its artifact slots were read."""
+    """Compact records for one span plus how far its artifact slots were read.
+
+    ``pending`` holds the half-finished two-phase read of a v2 ``llm.input``
+    (shell parsed, prompt blob not yet read) so the next pass resumes at the
+    blob instead of re-reading the shell.
+    """
 
     records: list[dict[str, Any]] = field(default_factory=list)
     complete: bool = False
     cursor: int = 0
+    pending: dict[str, Any] | None = None
 
 
 def preview_text(text: str) -> str:
@@ -651,6 +657,49 @@ def _loaded_record(record: dict[str, Any], preview: str, *, capped: bool, payloa
     return out
 
 
+def _targets(info: _conv._SpanInfo, records: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    out: list[tuple[int, str]] = []
+    for index, record in enumerate(records):
+        if record["slot"] == SLOT_THINKING:
+            continue
+        key = _artifact_key(info.name, record["slot"])
+        if key is not None and f"{key}.artifact_path" in info.attrs:
+            out.append((index, key))
+    return out
+
+
+def _failed_record(record: dict[str, Any], reason: str) -> dict[str, Any]:
+    """The skeleton record carrying the reader's reason, so integrity stays visible."""
+    out = dict(record)
+    if record.get("preview_text") is not None:
+        out["degraded"] = f"{reason} — truncated preview"
+    else:
+        out["degraded"] = f"content unavailable — {reason}"
+    return out
+
+
+def _finish_llm_input(record: dict[str, Any], message: Any, note: str | None, *, capped: bool) -> dict[str, Any]:
+    source = _conv._display(message.get("content")) if isinstance(message, dict) else _conv._display(message)
+    out = _loaded_record(record, preview_text(source), capped=capped, payload=None)
+    if note is not None:
+        out["degraded"] = note
+    return out
+
+
+def _read_blob(state: Path, sha1: str) -> tuple[Any, str | None, bool]:
+    """(message, degraded note, capped) for one referenced message blob."""
+    path = artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)
+    text, reason = _conv._read_artifact(state, str(path), PREVIEW_READ_LIMIT)
+    if text is None:
+        return artifact_v2.placeholder(sha1), "1 message blob(s) missing — placeholders shown", False
+    if reason is not None:
+        return {"role": "unknown", "content": text}, None, True
+    parsed, ok = _conv._parse_json(text)
+    if not ok:
+        return artifact_v2.placeholder(sha1), "1 message blob(s) missing — placeholders shown", False
+    return parsed, None, False
+
+
 def preview_records(
     span: dict[str, Any], *, state: Path, budget: ReadBudget, cache: SpanCache | None = None
 ) -> SpanCache:
@@ -660,9 +709,12 @@ def preview_records(
     bytes each, one ``budget.take`` per read) whatever preview attributes it
     already carries -- an ``llm.output`` with a recorded preview still has
     to be opened to discover ``thinking_blocks``. A v2 ``llm.input`` shell
-    resolves only its ``prompt`` reference (one more bounded read). The
-    returned cache keeps the compact records produced so far and the slot
-    cursor to resume from when the budget ran out.
+    resolves only its ``prompt`` reference (one more bounded read); when the
+    budget runs out between the two reads the parsed shell is kept in
+    ``cache.pending`` so the next pass reads only the blob. A read that
+    fails keeps the recorded preview but carries the reader's reason, so
+    integrity codes survive into the projection. Reads capped at the
+    preview limit are marked NOT_LOADED, not as data problems.
     """
     infos = _conv._build_infos([span])
     info = infos[0]
@@ -673,15 +725,19 @@ def preview_records(
             cache.complete = True
             return cache
     records = cache.records
-    targets = [
-        (index, _artifact_key(info.name, record["slot"]))
-        for index, record in enumerate(records)
-        if record["slot"] != SLOT_THINKING
-        and _artifact_key(info.name, record["slot"]) is not None
-        and f"{_artifact_key(info.name, record['slot'])}.artifact_path" in info.attrs
-    ]
+    if cache.pending is not None:
+        pending = cache.pending
+        if not budget.take(PREVIEW_READ_LIMIT):
+            return cache
+        message, note, capped = _read_blob(state, pending["sha1"])
+        records[pending["index"]] = _finish_llm_input(records[pending["index"]], message, note, capped=capped)
+        cache.pending = None
+        cache.cursor += 1
     position = cache.cursor
-    while position < len(targets):
+    while True:
+        targets = _targets(info, records)
+        if position >= len(targets):
+            break
         index, key = targets[position]
         record = records[index]
         pointer = _conv._str(info.attrs.get(f"{key}.artifact_path"))
@@ -692,28 +748,37 @@ def preview_records(
             break
         text, reason = _conv._read_artifact(state, pointer, PREVIEW_READ_LIMIT)
         if text is None:
+            records[index] = _failed_record(record, reason or "artifact missing")
             position += 1
             continue
         capped = reason is not None
         obj, ok = _conv._parse_json(text) if not capped else (None, False)
         if record["slot"] == "llm.input" and isinstance(obj, dict) and artifact_v2.is_v2(obj):
             sha1 = _last_message_ref(obj)
-            if sha1 is not None:
-                if not budget.take(PREVIEW_READ_LIMIT):
-                    break
-                blob_text, blob_reason = _conv._read_artifact(
-                    state, str(artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)), PREVIEW_READ_LIMIT
-                )
-                message, parsed = _conv._parse_json(blob_text) if blob_text and blob_reason is None else (None, False)
-                obj = {"prompt": message if parsed else artifact_v2.placeholder(sha1)}
-            else:
-                obj = {"prompt": "", "messages": obj.get("messages")}
-        source = _preview_source(record["slot"], obj if ok or record["slot"] == "llm.input" else None, text)
-        preview = preview_text(source)
+            if sha1 is None:
+                records[index] = _loaded_record(record, "", capped=capped, payload=None)
+                position += 1
+                continue
+            if not budget.take(PREVIEW_READ_LIMIT):
+                cache.pending = {"index": index, "sha1": sha1}
+                cache.cursor = position
+                return cache
+            message, note, blob_capped = _read_blob(state, sha1)
+            records[index] = _finish_llm_input(record, message, note, capped=capped or blob_capped)
+            position += 1
+            continue
+        if not capped and not ok:
+            source = text
+            loaded = _loaded_record(record, preview_text(source), capped=False, payload=None)
+            loaded["degraded"] = "artifact is not valid JSON — shown raw"
+            records[index] = loaded
+            position += 1
+            continue
+        source = _preview_source(record["slot"], obj if ok else None, text)
         payload = None
         if record["slot"] in _TOOL_RESULT_SLOTS and isinstance(obj, dict) and isinstance(obj.get("result"), str):
             payload = {"result": obj["result"][:16]}
-        records[index] = _loaded_record(record, preview, capped=capped, payload=payload)
+        records[index] = _loaded_record(record, preview_text(source), capped=capped, payload=payload)
         if record["slot"] == "llm.output" and isinstance(obj, dict):
             thinking = _conv._thinking_text(obj)
             existing = next((i for i, r in enumerate(records) if r["slot"] == SLOT_THINKING), None)
@@ -731,7 +796,7 @@ def preview_records(
                 records[existing] = _loaded_record(records[existing], preview_text(thinking), capped=True, payload=None)
         position += 1
     cache.cursor = position
-    cache.complete = position >= len(targets)
+    cache.complete = cache.pending is None and position >= len(_targets(info, records))
     return cache
 
 

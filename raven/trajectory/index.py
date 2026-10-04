@@ -37,6 +37,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
+import os
 import secrets
 import threading
 import time
@@ -83,6 +85,8 @@ _OUTPUT_SLOTS = ("turn.output", "llm.output", "tool.output", "io.output")
 
 FileKey = tuple[int, int]
 SpanKey = tuple[str, str]
+
+_log = logging.getLogger("raven.trajectory.index")
 
 
 class CursorExpiredError(Exception):
@@ -262,12 +266,12 @@ class SpanLogScanner:
         return archive + active
 
     @staticmethod
-    def _fingerprint(path: Path) -> str | None:
-        try:
-            with path.open("rb") as handle:
-                head = handle.read(FINGERPRINT_BYTES)
-        except OSError:
-            return None
+    def _fingerprint(handle: Any) -> str | None:
+        """sha1 of the first FINGERPRINT_BYTES of an open file, or None when it is shorter."""
+        position = handle.tell()
+        handle.seek(0)
+        head = handle.read(FINGERPRINT_BYTES)
+        handle.seek(position)
         if len(head) < FINGERPRINT_BYTES:
             return None
         return hashlib.sha1(head).hexdigest()
@@ -300,18 +304,13 @@ class SpanLogScanner:
             if cursor is None:
                 cursor = self.cursors[key] = FileCursor(key=key, path=path)
             cursor.path = path
-            cursor.size_seen = size
-            if size >= FINGERPRINT_BYTES:
-                fingerprint = self._fingerprint(path)
-                if fingerprint is not None:
-                    if cursor.fingerprint is None:
-                        cursor.fingerprint = fingerprint
-                    elif cursor.fingerprint != fingerprint:
-                        batch.generation_changed = True
-                        return batch
+            cursor.size_seen = max(cursor.size_seen, size)
             if size <= cursor.offset:
                 continue
-            if not self._read(cursor, size, budget, batch):
+            outcome = self._read(cursor, budget, batch)
+            if outcome != "ok":
+                if outcome == "generation":
+                    batch.generation_changed = True
                 batch.scanned_bytes = sum(c.offset for c in self.cursors.values())
                 return batch
         if catalog and catalog[-1][0] == self._active_path:
@@ -320,16 +319,39 @@ class SpanLogScanner:
         batch.scanned_bytes = sum(c.offset for c in self.cursors.values())
         return batch
 
-    def _read(self, cursor: FileCursor, size: int, budget: ScanBudget, batch: ScanBatch) -> bool:
+    def _read(self, cursor: FileCursor, budget: ScanBudget, batch: ScanBatch) -> str:
+        """Read ``cursor``'s file forward; "ok", "stop" (budget), "retry" or "generation".
+
+        Identity, size and fingerprint all come from the descriptor that is
+        actually read: a rotation between the directory listing and the open
+        hands back a different file at the same path, which must not be
+        charged to the old cursor ("retry": the next pass re-lists), and a
+        reused inode whose first bytes changed is a different log
+        ("generation").
+        """
         assembler = _LineAssembler(cursor, self.max_line_bytes)
         try:
             with cursor.path.open("rb") as handle:
+                stat_result = os.fstat(handle.fileno())
+                if _file_key(stat_result) != cursor.key:
+                    return "retry"
+                size = stat_result.st_size
+                if size < cursor.offset:
+                    return "generation"
+                cursor.size_seen = size
+                if size >= FINGERPRINT_BYTES:
+                    fingerprint = self._fingerprint(handle)
+                    if fingerprint is not None:
+                        if cursor.fingerprint is None:
+                            cursor.fingerprint = fingerprint
+                        elif cursor.fingerprint != fingerprint:
+                            return "generation"
                 handle.seek(cursor.offset)
                 while cursor.offset < size:
                     want = min(SCAN_CHUNK, size - cursor.offset, budget.remaining())
                     if not budget.allow(want):
                         batch.oversized_dropped += assembler.oversized
-                        return False
+                        return "stop"
                     chunk = handle.read(want)
                     if not chunk:
                         break
@@ -341,9 +363,9 @@ class SpanLogScanner:
                         if span is not None:
                             batch.records.append(RawRecord(cursor.key, offset, _stamp(span, cursor.key, offset)))
         except OSError:
-            return True
+            return "ok"
         batch.oversized_dropped += assembler.oversized
-        return True
+        return "ok"
 
     def rescan(self, task: RecoveryTask, budget: ScanBudget) -> tuple[list[RawRecord], bool]:
         """Records of ``task.trace_id`` from the task's position to the chain end."""
@@ -361,6 +383,10 @@ class SpanLogScanner:
             assembler = _LineAssembler(task, self.max_line_bytes)
             try:
                 with path.open("rb") as handle:
+                    stat_result = os.fstat(handle.fileno())
+                    if _file_key(stat_result) != key:
+                        return records, False
+                    size = stat_result.st_size
                     handle.seek(task.offset)
                     while task.offset < size:
                         want = min(SCAN_CHUNK, size - task.offset, budget.remaining())
@@ -533,11 +559,14 @@ class SessionIndex:
         self.scanned_bytes = 0
         self.total_bytes = 0
         self._dirty = False
+        self._published_spans: dict[SpanKey, dict[str, Any]] = {}
+        self._published_state = self._compute_state()
 
     def mark_failed(self, exc: BaseException) -> None:
         with self._lock:
             self.phase = PHASE_FAILED
             self.failure = type(exc).__name__
+            self._published_state = replace(self._published_state, phase=PHASE_FAILED, failure=self.failure)
 
     # -- refresh (worker thread) ------------------------------------------
 
@@ -564,11 +593,15 @@ class SessionIndex:
         self._fill_previews(deadline)
         projection = self._reproject() if self._dirty else None
         ready = batch.done and not self.recovery_queue
+        self.phase = PHASE_READY if ready else PHASE_SCANNING
+        self.failure = None
+        state = self._compute_state()
+        spans_view = dict(self.spans) if projection is not None else None
         with self._lock:
             if projection is not None:
                 self._publish(projection)
-            self.phase = PHASE_READY if ready else PHASE_SCANNING
-            self.failure = None
+                self._published_spans = spans_view or {}
+            self._published_state = state
         self._dirty = False
 
     def _apply(self, record: RawRecord) -> None:
@@ -718,20 +751,28 @@ class SessionIndex:
             extra_turns=self._extra_turns(),
         )
 
+    @staticmethod
+    def _span_key_of(entry: _entries.TrajectoryEntry) -> SpanKey:
+        if entry.entry_id.startswith("broken:"):
+            return ("", entry.entry_id.split(":", 2)[1])
+        return (entry.trace_id, entry.span_id)
+
     def _reproject(self) -> _entries.Projection:
         projection = self._project()
         while len(projection.entries) > self.limits.entries:
             excess = len(projection.entries) - self.limits.entries
             victims: dict[SpanKey, None] = {}
             for entry in projection.entries[:excess]:
-                victims[(entry.trace_id, entry.span_id)] = None
-            if not victims:
-                break
-            dropped = sum(1 for e in projection.entries if (e.trace_id, e.span_id) in victims)
+                victims[self._span_key_of(entry)] = None
+            before = len(projection.entries)
+            dropped = sum(1 for e in projection.entries if self._span_key_of(e) in victims)
             for key in victims:
                 self._trim_span(key)
-            self.head_truncated += dropped
             projection = self._project()
+            if len(projection.entries) >= before:
+                _log.warning("trajectory index %s: entry limit trim made no progress", self.session_key)
+                break
+            self.head_truncated += dropped
         return projection
 
     def _has_children(self, key: SpanKey) -> bool:
@@ -798,7 +839,8 @@ class SessionIndex:
 
     # -- reads (any thread) -------------------------------------------------
 
-    def _state_locked(self) -> IndexState:
+    def _compute_state(self) -> IndexState:
+        """Built by the worker from its own containers; readers see the published copy."""
         pending_previews = sum(
             1
             for key, span in self.spans.items()
@@ -820,7 +862,7 @@ class SessionIndex:
 
     def index_state(self) -> IndexState:
         with self._lock:
-            return self._state_locked()
+            return self._published_state
 
     def entry(self, entry_id: str) -> _entries.TrajectoryEntry | None:
         with self._lock:
@@ -828,7 +870,7 @@ class SessionIndex:
 
     def span(self, trace_id: str, span_id: str) -> dict[str, Any] | None:
         with self._lock:
-            return self.spans.get((trace_id, span_id))
+            return self._published_spans.get((trace_id, span_id))
 
     def entries(self) -> tuple[_entries.TrajectoryEntry, ...]:
         with self._lock:
@@ -863,11 +905,11 @@ class SessionIndex:
             next_cursor = None if complete else _encode_cursor(self.session_key, self.epoch, snapshot.snapshot_id, end)
             if complete:
                 self._snapshot = None
-            return ListPage(self.epoch, snapshot.revision, page, next_cursor, self._state_locked(), complete)
+            return ListPage(self.epoch, snapshot.revision, page, next_cursor, self._published_state, complete)
 
     def changes(self, epoch: str, after_revision: int, limit: int) -> ChangeBatch:
         with self._lock:
-            state = self._state_locked()
+            state = self._published_state
             window_lost = len(self._removed) == self._removed.maxlen and self._removed[0].revision > after_revision + 1
             if epoch != self.epoch or window_lost:
                 return ChangeBatch(self.epoch, after_revision, after_revision, (), (), False, True, state)

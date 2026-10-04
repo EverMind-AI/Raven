@@ -908,3 +908,88 @@ def test_extra_turns_and_skeletons_shape_numbering_without_entries(state):
     assert tool.turn_span_id == "turn" and tool.turn_number == 1 and "turn_unknown" not in tool.integrity
     sub_tool = _one(projection.entries, "sub-tool", "tool.output")
     assert sub_tool.origin == "subagent" and sub_tool.turn_number == 3
+
+
+def test_preview_records_keep_failure_reasons_and_cap_marker(state, tmp_path):
+    attrs = {
+        "turn.input_preview": "ask",
+        "turn.input.artifact_path": str(state / "logs" / "audit-artifacts" / "nowhere.json"),
+        "turn.output.artifact_path": str(tmp_path / "outside.json"),
+    }
+    (tmp_path / "outside.json").write_text("{}", encoding="utf-8")
+    span = _span("t", "turn", "session.turn", start=0, end=1, attrs=attrs)
+    cache = tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7))
+    assert cache.complete
+    entries = tent.project_entries([span], state=state, cached_records={("t", "turn"): cache.records}).entries
+    inp = _one(entries, "turn", "turn.input")
+    assert inp.preview == "ask" and "artifact_missing" in inp.integrity
+    out = _one(entries, "turn", "turn.output")
+    assert out.preview is None and "artifact_outside_store" in out.integrity
+
+
+def test_preview_records_bad_json_dir_and_capped_reads(state):
+    folder = state / "logs" / "audit-artifacts" / "folder"
+    folder.mkdir(parents=True)
+    attrs = {
+        "foo.raw.artifact_path": _artifact(state, "not json at all", "raw"),
+        "foo.dir.artifact_path": str(folder),
+        "foo.big.artifact_path": _artifact(state, {"pad": "x" * (100 * 1024)}, "big"),
+    }
+    span = _span("t", "foo", "foo.bar", start=0, end=1, attrs=attrs)
+    cache = tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7))
+    entries = tent.project_entries([span], state=state, cached_records={("t", "foo"): cache.records}).entries
+    raw = _one(entries, "foo", "artifact:foo.raw")
+    assert raw.preview == "not json at all" and "artifact_unreadable" in raw.integrity
+    folder_entry = _one(entries, "foo", "artifact:foo.dir")
+    assert "artifact_unreadable" in folder_entry.integrity
+    big = _one(entries, "foo", "artifact:foo.big")
+    assert big.preview is not None and big.preview.startswith('{ "pad"')
+    assert "artifact_truncated" not in big.integrity
+    assert next(r for r in cache.records if r["slot"] == "artifact:foo.big")["degraded"] == tconv.NOT_LOADED
+
+
+def test_preview_records_missing_blob_is_reported(state):
+    from raven.tracing import artifact_v2
+
+    shell = {
+        "artifactFormat": artifact_v2.ARTIFACT_FORMAT,
+        "messages": [{"$msg": "a" * 40}],
+        "prompt": {"$msg": "a" * 40},
+    }
+    span = _span(
+        "t", "llm", "llm.call", start=0, end=1, attrs={"llm.input.artifact_path": _artifact(state, shell, "shell")}
+    )
+    cache = tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7))
+    entry = _one(
+        tent.project_entries([span], state=state, cached_records={("t", "llm"): cache.records}).entries,
+        "llm",
+        "llm.input",
+    )
+    assert "blob_missing" in entry.integrity
+    assert entry.preview is not None and "missing" in entry.preview
+
+
+def test_preview_records_resume_v2_blob_with_single_read_budgets(state, monkeypatch):
+    reads = {"n": 0}
+    original = tconv._read_artifact
+
+    def counting(state_dir, path, limit=tconv._ARTIFACT_LIMIT):
+        reads["n"] += 1
+        return original(state_dir, path, limit)
+
+    monkeypatch.setattr(tconv, "_read_artifact", counting)
+    span = _span("t", "llm", "llm.call", start=0, end=1, attrs={"llm.input.artifact_path": _v2_shell(state, "two", 3)})
+    cache = None
+    rounds = 0
+    while cache is None or not cache.complete:
+        rounds += 1
+        cache = tent.preview_records(span, state=state, budget=tent.ReadBudget(1, 10**7), cache=cache)
+        assert rounds <= 3
+    assert rounds == 2 and reads["n"] == 2
+    assert cache.pending is None and cache.cursor == 1
+    entry = _one(
+        tent.project_entries([span], state=state, cached_records={("t", "llm"): cache.records}).entries,
+        "llm",
+        "llm.input",
+    )
+    assert entry.preview == "message 2"
