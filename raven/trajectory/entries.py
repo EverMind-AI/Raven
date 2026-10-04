@@ -23,19 +23,29 @@ that this module adds what the Web view needs and the text preview does not:
 - a summary entry for base spans that expand to nothing, and an error entry
   for a failed span that has no completion slot, so every attributable
   record has a row and every failure has exactly one carrier.
+
+Two inputs let an index feed the projection without re-reading files:
+``cached_records`` (compact per-span records produced by
+:func:`preview_records` under a :class:`ReadBudget`) and *skeleton* spans
+(``SKELETON_KEY``), which take part in ancestry, turn numbering and origin but
+produce no entries, so trimmed ancestors keep their descendants attributed.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import time
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from raven.tracing import artifact_v2
 from raven.trajectory import conversation as _conv
 
 POSITION_KEY = "__position__"
+SKELETON_KEY = "__skeleton__"
 PREVIEW_LIMIT = 200
+PREVIEW_READ_LIMIT = 64 * 1024
 
 STATUS_RUNNING = "running"
 STATUS_OK = "ok"
@@ -62,6 +72,9 @@ _EVIDENCE_SLOTS = ("malformed", "unreadable")
 _OUTER_ONLY_PREFIXES = ("memory.feedback", "memory.enqueue", "personalize.")
 _TOOL_RESULT_SPANS = ("tool.call", "skill.read")
 _TOOL_RESULT_SLOTS = ("tool.output", "skill.read")
+
+_IO_PAIR_SPANS = ("skill.rewrite", "skill.gate", "context.curate")
+_COMPACT_KEYS = ("slot", "phase", "degraded", "error", "preview_text", "text", "payload")
 
 _INTEGRITY_RULES = (
     ("outside the trace store", "artifact_outside_store"),
@@ -120,6 +133,53 @@ class TurnInfo:
 class Projection:
     entries: tuple[TrajectoryEntry, ...]
     turns: tuple[TurnInfo, ...]
+
+
+class ReadBudget:
+    """Reads and bytes one preview pass may spend, with a shared deadline.
+
+    ``take`` reserves a read before it happens and refuses once the read or
+    byte allowance is gone, or once the deadline has passed -- except for
+    the first ``minimum_reads`` reads, so every pass makes progress.
+    """
+
+    def __init__(
+        self,
+        max_reads: int,
+        max_bytes: int,
+        deadline: float | None = None,
+        *,
+        now: Callable[[], float] = time.monotonic,
+        minimum_reads: int = 1,
+    ) -> None:
+        self.max_reads = max_reads
+        self.max_bytes = max_bytes
+        self.deadline = deadline
+        self.now = now
+        self.minimum_reads = minimum_reads
+        self.reads = 0
+        self.bytes = 0
+        self.exhausted = False
+
+    def take(self, nbytes: int) -> bool:
+        if self.reads >= self.max_reads or self.bytes + nbytes > self.max_bytes:
+            self.exhausted = True
+            return False
+        if self.reads >= self.minimum_reads and self.deadline is not None and self.now() >= self.deadline:
+            self.exhausted = True
+            return False
+        self.reads += 1
+        self.bytes += nbytes
+        return True
+
+
+@dataclass
+class SpanCache:
+    """Compact records for one span plus how far its artifact slots were read."""
+
+    records: list[dict[str, Any]] = field(default_factory=list)
+    complete: bool = False
+    cursor: int = 0
 
 
 def preview_text(text: str) -> str:
@@ -354,17 +414,23 @@ def _subagent_traces(infos: Sequence[_conv._SpanInfo]) -> set[str]:
     }
 
 
-def _turns(infos: Sequence[_conv._SpanInfo]) -> tuple[TurnInfo, ...]:
-    roots = sorted((i for i in infos if i.name == "session.turn" and i.span_id), key=lambda i: (i.start, i.span_id))
+def _turns(
+    infos: Sequence[_conv._SpanInfo], extra: Sequence[tuple[str, str, str]] | None = None
+) -> tuple[TurnInfo, ...]:
+    roots = [
+        (i.start, i.span_id, i.trace_id, i.attrs.get("turn.in_progress") is True)
+        for i in infos
+        if i.name == "session.turn" and i.span_id
+    ]
+    known = {span_id for _, span_id, _, _ in roots}
+    for turn_span_id, trace_id, start in extra or ():
+        if turn_span_id and turn_span_id not in known:
+            known.add(turn_span_id)
+            roots.append((start, turn_span_id, trace_id, False))
+    roots.sort(key=lambda r: (r[0], r[1]))
     return tuple(
-        TurnInfo(
-            turn_span_id=info.span_id,
-            trace_id=info.trace_id,
-            number=number,
-            start=info.start,
-            in_progress=info.attrs.get("turn.in_progress") is True,
-        )
-        for number, info in enumerate(roots, start=1)
+        TurnInfo(turn_span_id=span_id, trace_id=trace_id, number=number, start=start, in_progress=in_progress)
+        for number, (start, span_id, trace_id, in_progress) in enumerate(roots, start=1)
     )
 
 
@@ -464,21 +530,44 @@ def _span_entries(
     return entries
 
 
-def project_entries(spans: Sequence[dict[str, Any]], *, state: Path, read: bool = False) -> Projection:
+def project_entries(
+    spans: Sequence[dict[str, Any]],
+    *,
+    state: Path,
+    read: bool = False,
+    cached_records: Mapping[tuple[str, str], Sequence[dict[str, Any]]] | None = None,
+    extra_turns: Sequence[tuple[str, str, str]] | None = None,
+) -> Projection:
     """Ordered trajectory entries for ``spans`` (physical records, any order).
 
     ``read=True`` loads artifact bodies through the conversation layer's
     bounded reader so previews come from full content; ``read=False`` uses
-    recorded preview attributes only and touches no file.
+    recorded preview attributes only and touches no file. A span found in
+    ``cached_records`` uses those records instead of being expanded. Spans
+    marked with ``SKELETON_KEY`` and the ``(turn_span_id, trace_id, start)``
+    triples in ``extra_turns`` shape ancestry and turn numbering without
+    producing entries.
     """
-    infos = _conv._build_infos(merge_snapshots(spans))
-    turns = _turns(infos)
+    merged = merge_snapshots(spans)
+    skeleton_keys = {
+        (_conv._str(span.get("traceId")) or "", _conv._str(span.get("spanId")) or "")
+        for span in merged
+        if span.get(SKELETON_KEY) is True
+    }
+    infos = _conv._build_infos(merged)
+    turns = _turns(infos, extra_turns)
     turn_numbers = {turn.turn_span_id: turn.number for turn in turns}
     subagent_traces = _subagent_traces(infos)
     blob_cache: dict[str, tuple[Any, str]] = {}
     entries: list[TrajectoryEntry] = []
     for info in infos:
-        records = _conv.span_records(info, state, None, blob_cache, read=read, dedup=False)
+        key = (info.trace_id, info.span_id)
+        if key in skeleton_keys:
+            continue
+        if cached_records is not None and key in cached_records and not _broken(info):
+            records = [dict(record) for record in cached_records[key]]
+        else:
+            records = _conv.span_records(info, state, None, blob_cache, read=read, dedup=False)
         entries.extend(_span_entries(info, records, turn_numbers=turn_numbers, subagent_traces=subagent_traces))
     entries.sort(key=lambda entry: entry.sort_key)
     seen_turns: set[str] = set()
@@ -490,13 +579,174 @@ def project_entries(spans: Sequence[dict[str, Any]], *, state: Path, read: bool 
     return Projection(entries=tuple(entries), turns=turns)
 
 
+def _artifact_key(span_name: str, slot: str) -> str | None:
+    """The artifact attribute key a slot's body lives under, or None."""
+    if slot in ("turn.input", "turn.output", "llm.input", "llm.output", "tool.input", "tool.output", "skill.inject"):
+        return slot
+    if slot == "skill.read":
+        return "tool.output"
+    if slot in ("io.input", "io.output"):
+        base = "personalize" if span_name.startswith("personalize.") else span_name
+        return f"{base}.{slot.split('.', 1)[1]}"
+    if slot.startswith("artifact:"):
+        return slot[len("artifact:") :]
+    return None
+
+
+def _compact(record: dict[str, Any]) -> dict[str, Any]:
+    out = {key: record.get(key) for key in _COMPACT_KEYS}
+    text = out.get("text")
+    out["text"] = preview_text(text) if isinstance(text, str) and text else (text or "")
+    payload = out.get("payload")
+    result = payload.get("result") if isinstance(payload, dict) else None
+    out["payload"] = {"result": result[:16]} if isinstance(result, str) else None
+    return out
+
+
+def _preview_source(slot: str, obj: Any, text: str) -> str:
+    if slot in ("turn.input", "turn.output"):
+        return _conv._payload_field(obj, text, "content")
+    if slot == "tool.input":
+        return _conv._payload_field(obj, text, "params")
+    if slot in _TOOL_RESULT_SLOTS:
+        return _conv._payload_field(obj, text, "result")
+    if slot == "llm.output" and isinstance(obj, dict):
+        lines = []
+        content = _conv._display(obj.get("content"))
+        if content:
+            lines.append(content)
+        tool_calls = obj.get("tool_calls")
+        if isinstance(tool_calls, list):
+            lines.extend(_conv._tool_call_line(tc) for tc in tool_calls)
+        return "\n".join(lines)
+    if slot == "llm.input" and isinstance(obj, dict):
+        prompt = obj.get("prompt")
+        if isinstance(prompt, str):
+            return prompt
+        if isinstance(prompt, dict):
+            return _conv._display(prompt.get("content"))
+        messages = obj.get("messages")
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            return _conv._display(last.get("content")) if isinstance(last, dict) else _conv._compact(last)
+        return text
+    return text if obj is None else _conv._compact(obj)
+
+
+def _last_message_ref(obj: dict[str, Any]) -> str | None:
+    sha1 = artifact_v2.ref_sha1(obj.get("prompt"))
+    if sha1 is None:
+        messages = obj.get("messages")
+        if isinstance(messages, list) and messages:
+            sha1 = artifact_v2.ref_sha1(messages[-1])
+    return sha1
+
+
+def _loaded_record(record: dict[str, Any], preview: str, *, capped: bool, payload: Any) -> dict[str, Any]:
+    out = dict(record)
+    out["text"] = preview
+    out["preview_text"] = preview
+    out["degraded"] = _conv.NOT_LOADED if capped else None
+    out["payload"] = payload
+    return out
+
+
+def preview_records(
+    span: dict[str, Any], *, state: Path, budget: ReadBudget, cache: SpanCache | None = None
+) -> SpanCache:
+    """Bounded preview reads for one span, resumable across budget passes.
+
+    Every artifact-bearing slot is inspected once (``PREVIEW_READ_LIMIT``
+    bytes each, one ``budget.take`` per read) whatever preview attributes it
+    already carries -- an ``llm.output`` with a recorded preview still has
+    to be opened to discover ``thinking_blocks``. A v2 ``llm.input`` shell
+    resolves only its ``prompt`` reference (one more bounded read). The
+    returned cache keeps the compact records produced so far and the slot
+    cursor to resume from when the budget ran out.
+    """
+    infos = _conv._build_infos([span])
+    info = infos[0]
+    if cache is None:
+        skeleton = _conv.span_records(info, state, None, {}, read=False, dedup=False)
+        cache = SpanCache(records=[_compact(r) for r in skeleton], complete=False, cursor=0)
+        if _broken(info):
+            cache.complete = True
+            return cache
+    records = cache.records
+    targets = [
+        (index, _artifact_key(info.name, record["slot"]))
+        for index, record in enumerate(records)
+        if record["slot"] != SLOT_THINKING
+        and _artifact_key(info.name, record["slot"]) is not None
+        and f"{_artifact_key(info.name, record['slot'])}.artifact_path" in info.attrs
+    ]
+    position = cache.cursor
+    while position < len(targets):
+        index, key = targets[position]
+        record = records[index]
+        pointer = _conv._str(info.attrs.get(f"{key}.artifact_path"))
+        if pointer is None:
+            position += 1
+            continue
+        if not budget.take(PREVIEW_READ_LIMIT):
+            break
+        text, reason = _conv._read_artifact(state, pointer, PREVIEW_READ_LIMIT)
+        if text is None:
+            position += 1
+            continue
+        capped = reason is not None
+        obj, ok = _conv._parse_json(text) if not capped else (None, False)
+        if record["slot"] == "llm.input" and isinstance(obj, dict) and artifact_v2.is_v2(obj):
+            sha1 = _last_message_ref(obj)
+            if sha1 is not None:
+                if not budget.take(PREVIEW_READ_LIMIT):
+                    break
+                blob_text, blob_reason = _conv._read_artifact(
+                    state, str(artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)), PREVIEW_READ_LIMIT
+                )
+                message, parsed = _conv._parse_json(blob_text) if blob_text and blob_reason is None else (None, False)
+                obj = {"prompt": message if parsed else artifact_v2.placeholder(sha1)}
+            else:
+                obj = {"prompt": "", "messages": obj.get("messages")}
+        source = _preview_source(record["slot"], obj if ok or record["slot"] == "llm.input" else None, text)
+        preview = preview_text(source)
+        payload = None
+        if record["slot"] in _TOOL_RESULT_SLOTS and isinstance(obj, dict) and isinstance(obj.get("result"), str):
+            payload = {"result": obj["result"][:16]}
+        records[index] = _loaded_record(record, preview, capped=capped, payload=payload)
+        if record["slot"] == "llm.output" and isinstance(obj, dict):
+            thinking = _conv._thinking_text(obj)
+            existing = next((i for i, r in enumerate(records) if r["slot"] == SLOT_THINKING), None)
+            if thinking and existing is None:
+                records.insert(
+                    index,
+                    _loaded_record(
+                        {**record, "slot": SLOT_THINKING, "error": None},
+                        preview_text(thinking),
+                        capped=True,
+                        payload=None,
+                    ),
+                )
+            elif thinking and existing is not None:
+                records[existing] = _loaded_record(records[existing], preview_text(thinking), capped=True, payload=None)
+        position += 1
+    cache.cursor = position
+    cache.complete = position >= len(targets)
+    return cache
+
+
 __all__ = [
     "POSITION_KEY",
     "PREVIEW_LIMIT",
+    "PREVIEW_READ_LIMIT",
+    "SKELETON_KEY",
     "Projection",
+    "ReadBudget",
+    "SpanCache",
     "TrajectoryEntry",
     "TurnInfo",
     "merge_snapshots",
+    "preview_records",
     "preview_text",
     "project_entries",
 ]

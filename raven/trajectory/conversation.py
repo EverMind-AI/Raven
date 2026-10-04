@@ -131,13 +131,13 @@ def _kind(name: str) -> str:
     return _KIND_BY_DOMAIN.get(name.split(".", 1)[0], "other")
 
 
-def _read_artifact(state: Path, path: str) -> tuple[str | None, str | None]:
+def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tuple[str | None, str | None]:
     """(text, degraded reason); (None, reason) means unreadable.
 
-    Reads at most ``_ARTIFACT_LIMIT + 1`` bytes — the cap bounds actual I/O and
-    memory, not just the returned text, because the pointer may name any file
-    under ``logs/`` (a rotated multi-GB log included). Non-regular files (a
-    FIFO would block the read) are rejected outright.
+    Reads at most ``limit + 1`` bytes — the cap bounds actual I/O and memory,
+    not just the returned text, because the pointer may name any file under
+    ``logs/`` (a rotated multi-GB log included). Non-regular files (a FIFO
+    would block the read) are rejected outright.
     """
     try:
         logs_root = (state / "logs").resolve()
@@ -147,11 +147,11 @@ def _read_artifact(state: Path, path: str) -> tuple[str | None, str | None]:
         if target.exists() and not target.is_file():
             return None, "artifact is not a regular file"
         with target.open("rb") as handle:
-            data = handle.read(_ARTIFACT_LIMIT + 1)
+            data = handle.read(limit + 1)
     except OSError:
         return None, "artifact missing"
-    if len(data) > _ARTIFACT_LIMIT:
-        return data[:_ARTIFACT_LIMIT].decode("utf-8", errors="replace"), "content over 512 KiB — truncated"
+    if len(data) > limit:
+        return data[:limit].decode("utf-8", errors="replace"), f"content over {limit // 1024} KiB — truncated"
     return data.decode("utf-8", errors="replace"), None
 
 

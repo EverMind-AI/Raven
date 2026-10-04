@@ -37,6 +37,12 @@ into trajectories — addressable, labeled, retained units of agent work:
   operation status with evidence, integrity codes, and one Timing Owner per
   span — the data layer behind the Web trajectory view, sharing per-span
   expansion with ``conversation``.
+- ``index``    — the per-session incremental index: scans the span log chain
+  under a byte/time budget, decides trace membership (own session key or a
+  proven sub-agent dispatch link), projects member spans into entries and
+  serves consistent list snapshots plus per-change revisions.
+- ``policy``   — whether this process serves the trajectory view at all; a
+  launch flag today, replaceable without touching the readers.
 
 The address unit is the **attempt**: one task try, possibly spanning several
 turns. At read time an attempt id equals the trace id unless a definition in
@@ -56,6 +62,8 @@ from raven.trajectory.entries import (
     merge_snapshots,
     project_entries,
 )
+from raven.trajectory.index import SessionIndex, TrajectoryIndexer, indexer_for
+from raven.trajectory.policy import TrajectoryPolicy
 from raven.trajectory.redact import (
     KnownSecret,
     RedactionReport,
@@ -128,7 +136,10 @@ __all__ = [
     "ReplayState",
     "ReplayToolRegistry",
     "ResidualFinding",
+    "SessionIndex",
     "TrajectoryEntry",
+    "TrajectoryIndexer",
+    "TrajectoryPolicy",
     "TurnInfo",
     "Uploader",
     "Verdict",
@@ -139,6 +150,7 @@ __all__ = [
     "collect_known_secrets",
     "definitions",
     "get_uploader",
+    "indexer_for",
     "is_pinned",
     "iter_spans",
     "load_expectation",

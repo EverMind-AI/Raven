@@ -771,3 +771,140 @@ def test_sort_key_normalizes_timezones(state):
     entries = tent.project_entries(spans, state=state).entries
     assert [e.span_id for e in entries if e.slot == "tool.input"] == ["a", "b"]
     assert _one(entries, "a", "tool.input").sort_key[0] == "2026-09-01T10:00:00+00:00"
+
+
+# ── budgeted preview reads, caches, skeletons ─────────────────────────
+
+
+def _v2_shell(state: Path, name: str, count: int) -> str:
+    import hashlib
+
+    from raven.tracing import artifact_v2
+
+    refs = []
+    for i in range(count):
+        message = {"role": "user", "content": f"message {i}"}
+        sha1 = hashlib.sha1(json.dumps(message, ensure_ascii=False, default=str).encode()).hexdigest()
+        path = artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(message), encoding="utf-8")
+        refs.append({"$msg": sha1})
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs, "prompt": refs[-1], "tools": []}
+    return _artifact(state, shell, name)
+
+
+def test_preview_records_reads_each_slot_once_with_slot_specific_sources(state, monkeypatch):
+    reads: list[str] = []
+    original = tconv._read_artifact
+
+    def counting(state_dir, path, limit=tconv._ARTIFACT_LIMIT):
+        reads.append(path)
+        return original(state_dir, path, limit)
+
+    monkeypatch.setattr(tconv, "_read_artifact", counting)
+    output = {
+        "content": "final",
+        "tool_calls": [{"id": "1", "name": "f", "arguments": "{}"}],
+        "thinking_blocks": [{"thinking": "ponder"}],
+    }
+    attrs = {
+        "llm.output_preview": "final",
+        "llm.output.artifact_path": _artifact(state, output, "p-out"),
+        "llm.input.artifact_path": _v2_shell(state, "p-in", 50),
+    }
+    span = _span("t", "llm", "llm.call", start=0, end=1, attrs=attrs)
+    budget = tent.ReadBudget(max_reads=10, max_bytes=10 * 1024 * 1024)
+    cache = tent.preview_records(span, state=state, budget=budget)
+    assert cache.complete and cache.cursor == 2
+    assert len(reads) == 3  # input shell, one prompt blob, output
+    by_slot = {r["slot"]: r for r in cache.records}
+    assert by_slot["llm.input"]["preview_text"] == "message 49"
+    assert by_slot["llm.output"]["preview_text"] == "final → tool call f#1({})"
+    assert by_slot["llm.thinking"]["preview_text"] == "ponder"
+    assert [r["slot"] for r in cache.records] == ["llm.input", "llm.thinking", "llm.output"]
+    assert all(
+        set(r) == {"slot", "phase", "degraded", "error", "preview_text", "text", "payload"} for r in cache.records
+    )
+    entries = tent.project_entries([span], state=state, cached_records={("t", "llm"): cache.records}).entries
+    assert [e.slot for e in entries] == ["llm.input", "llm.thinking", "llm.output"]
+    assert _one(entries, "llm", "llm.thinking").preview == "ponder"
+
+
+def test_preview_records_stops_when_budget_is_taken_and_resumes(state):
+    attrs = {f"foo.k{i}.artifact_path": _artifact(state, {"k": i}, f"pr-{i}") for i in range(5)}
+    span = _span("t", "foo", "foo.bar", start=0, end=1, attrs=attrs)
+    first = tent.preview_records(span, state=state, budget=tent.ReadBudget(max_reads=2, max_bytes=10**7))
+    assert not first.complete and first.cursor == 2
+    loaded = [r for r in first.records if r["degraded"] is None]
+    assert len(loaded) == 2 and loaded[0]["preview_text"] == '{"k": 0}'
+    second = tent.preview_records(span, state=state, budget=tent.ReadBudget(max_reads=10, max_bytes=10**7), cache=first)
+    assert second is first and second.complete and second.cursor == 5
+    denied = tent.preview_records(span, state=state, budget=tent.ReadBudget(max_reads=0, max_bytes=0, minimum_reads=0))
+    assert not denied.complete and denied.cursor == 0
+
+
+def test_preview_records_tool_result_payload_keeps_error_evidence(state):
+    attrs = _tool_attrs(state, "t1", {"x": 1}, "Error: nope")
+    attrs.pop("tool.result_preview")
+    span = _span("t", "t1", "tool.call", start=0, end=1, attrs=attrs)
+    cache = tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7))
+    output = next(r for r in cache.records if r["slot"] == "tool.output")
+    assert output["payload"] == {"result": "Error: nope"[:16]}
+    entries = tent.project_entries([span], state=state, cached_records={("t", "t1"): cache.records}).entries
+    out = _one(entries, "t1", "tool.output")
+    assert out.operation_status == "error" and out.status_evidence == ("tool_result_error",) and out.failure_entry
+
+
+def test_cached_records_skip_span_expansion(state, monkeypatch):
+    attrs = _tool_attrs(state, "t2", {"x": 1}, "ok")
+    span = _span("t", "t2", "tool.call", start=0, end=1, attrs=attrs)
+    cache = tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7))
+    calls = {"n": 0}
+    original = tconv.span_records
+
+    def counting(*args, **kwargs):
+        calls["n"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(tconv, "span_records", counting)
+    entries = tent.project_entries([span], state=state, cached_records={("t", "t2"): cache.records}).entries
+    assert calls["n"] == 0
+    assert _one(entries, "t2", "tool.output").preview == "ok"
+    direct = tent.project_entries([span], state=state, read=True).entries
+    assert [(e.entry_id, e.preview) for e in entries] == [(e.entry_id, e.preview) for e in direct]
+
+
+def test_extra_turns_and_skeletons_shape_numbering_without_entries(state):
+    skeleton = {
+        "traceId": "t",
+        "spanId": "turn",
+        "parentSpanId": None,
+        "name": "session.turn",
+        "startTime": _ts(0),
+        "endTime": _ts(9),
+        "status": {"code": "OK", "message": ""},
+        "attributes": {"session.key": "s"},
+        tent.SKELETON_KEY: True,
+    }
+    sub_skeleton = {
+        **skeleton,
+        "traceId": "S",
+        "spanId": "sub",
+        "attributes": {"trace.dispatched_in_trace_id": "t"},
+        "startTime": _ts(2),
+    }
+    spans = [
+        skeleton,
+        sub_skeleton,
+        _span("t", "tool", "tool.call", parent="turn", start=1, end=2, attrs=_tool_attrs(state, "tool", {}, "ok")),
+        _span(
+            "S", "sub-tool", "tool.call", parent="sub", start=3, end=4, attrs=_tool_attrs(state, "sub-tool", {}, "ok")
+        ),
+    ]
+    projection = tent.project_entries(spans, state=state, extra_turns=[("gone", "t", _ts(1)), ("turn", "t", _ts(0))])
+    assert [(t.turn_span_id, t.number) for t in projection.turns] == [("turn", 1), ("gone", 2), ("sub", 3)]
+    assert not any(e.span_id in ("turn", "sub") for e in projection.entries)
+    tool = _one(projection.entries, "tool", "tool.output")
+    assert tool.turn_span_id == "turn" and tool.turn_number == 1 and "turn_unknown" not in tool.integrity
+    sub_tool = _one(projection.entries, "sub-tool", "tool.output")
+    assert sub_tool.origin == "subagent" and sub_tool.turn_number == 3
