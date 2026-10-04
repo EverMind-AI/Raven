@@ -139,6 +139,7 @@ class FileCursor:
     path: Path
     offset: int = 0
     size_seen: int = 0
+    mtime_seen: int = -1
     fingerprint: str | None = None
     partial: bytearray = field(default_factory=bytearray)
     partial_start: int = 0
@@ -253,15 +254,15 @@ class SpanLogScanner:
         self.active_key: FileKey | None = None
         self._active_path = state_dir / "logs" / "audit-spans.log"
 
-    def _catalog(self) -> list[tuple[Path, FileKey, int]]:
-        archive: list[tuple[Path, FileKey, int]] = []
-        active: list[tuple[Path, FileKey, int]] = []
+    def _catalog(self) -> list[tuple[Path, FileKey, int, int]]:
+        archive: list[tuple[Path, FileKey, int, int]] = []
+        active: list[tuple[Path, FileKey, int, int]] = []
         for path in tstore.span_log_paths(self.state_dir):
             try:
                 stat_result = path.stat()
             except OSError:
                 continue
-            item = (path, _file_key(stat_result), stat_result.st_size)
+            item = (path, _file_key(stat_result), stat_result.st_size, stat_result.st_mtime_ns)
             (active if path == self._active_path else archive).append(item)
         return archive + active
 
@@ -276,8 +277,8 @@ class SpanLogScanner:
             return None
         return hashlib.sha1(head).hexdigest()
 
-    def _generation_changed(self, catalog: Sequence[tuple[Path, FileKey, int]]) -> bool:
-        present = {key: size for _, key, size in catalog}
+    def _generation_changed(self, catalog: Sequence[tuple[Path, FileKey, int, int]]) -> bool:
+        present = {key: size for _, key, size, _ in catalog}
         for key, cursor in list(self.cursors.items()):
             if key not in present:
                 if cursor.offset < cursor.size_seen or cursor.partial:
@@ -295,19 +296,26 @@ class SpanLogScanner:
     def scan(self, budget: ScanBudget) -> ScanBatch:
         batch = ScanBatch()
         catalog = self._catalog()
-        batch.total_bytes = sum(size for _, _, size in catalog)
+        batch.total_bytes = sum(size for _, _, size, _ in catalog)
         if self._generation_changed(catalog):
             batch.generation_changed = True
             return batch
-        for path, key, size in catalog:
+        for path, key, size, mtime_ns in catalog:
             cursor = self.cursors.get(key)
             if cursor is None:
                 cursor = self.cursors[key] = FileCursor(key=key, path=path)
             cursor.path = path
             cursor.size_seen = max(cursor.size_seen, size)
             if size <= cursor.offset:
-                continue
-            outcome = self._read(cursor, budget, batch)
+                # Nothing new to read, but a same-size rewrite must still be
+                # caught. Kernel timestamps are coarse, so the active file (the
+                # one a writer rewrites) is re-fingerprinted every pass -- one
+                # open and 64 bytes; archive files are immutable after rotation
+                # and only re-checked when their mtime moves.
+                unchanged = mtime_ns == cursor.mtime_seen and path != self._active_path
+                outcome = "ok" if unchanged else self._verify(cursor)
+            else:
+                outcome = self._read(cursor, budget, batch)
             if outcome != "ok":
                 if outcome == "generation":
                     batch.generation_changed = True
@@ -318,6 +326,27 @@ class SpanLogScanner:
         batch.done = True
         batch.scanned_bytes = sum(c.offset for c in self.cursors.values())
         return batch
+
+    def _verify(self, cursor: FileCursor) -> str:
+        """Re-check an unchanged-size file's identity and first bytes; "ok", "retry" or "generation"."""
+        try:
+            with cursor.path.open("rb") as handle:
+                stat_result = os.fstat(handle.fileno())
+                if _file_key(stat_result) != cursor.key:
+                    return "retry"
+                if stat_result.st_size < cursor.offset:
+                    return "generation"
+                if stat_result.st_size >= FINGERPRINT_BYTES:
+                    fingerprint = self._fingerprint(handle)
+                    if fingerprint is not None:
+                        if cursor.fingerprint is None:
+                            cursor.fingerprint = fingerprint
+                        elif cursor.fingerprint != fingerprint:
+                            return "generation"
+                cursor.mtime_seen = stat_result.st_mtime_ns
+        except OSError:
+            return "ok"
+        return "ok"
 
     def _read(self, cursor: FileCursor, budget: ScanBudget, batch: ScanBatch) -> str:
         """Read ``cursor``'s file forward; "ok", "stop" (budget), "retry" or "generation".
@@ -339,6 +368,7 @@ class SpanLogScanner:
                 if size < cursor.offset:
                     return "generation"
                 cursor.size_seen = size
+                cursor.mtime_seen = stat_result.st_mtime_ns
                 if size >= FINGERPRINT_BYTES:
                     fingerprint = self._fingerprint(handle)
                     if fingerprint is not None:
@@ -370,12 +400,12 @@ class SpanLogScanner:
     def rescan(self, task: RecoveryTask, budget: ScanBudget) -> tuple[list[RawRecord], bool]:
         """Records of ``task.trace_id`` from the task's position to the chain end."""
         catalog = self._catalog()
-        keys = [key for _, key, _ in catalog]
+        keys = [key for _, key, _, _ in catalog]
         if task.key not in keys:
             return [], True
         records: list[RawRecord] = []
         start_index = keys.index(task.key)
-        for path, key, size in catalog[start_index:]:
+        for path, key, size, _ in catalog[start_index:]:
             if key != task.key:
                 task.key, task.offset = key, 0
                 task.partial.clear()

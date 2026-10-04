@@ -988,3 +988,45 @@ def test_reads_stay_consistent_while_a_refresh_runs(state, clock):
     published = index.entries()
     assert all(index.span(e.trace_id, e.span_id) is not None for e in published)
     assert {e.revision for e in published} == {e.revision for e in index.changes(index.epoch, 0, 10_000).upserts}
+
+
+def test_same_size_rewrite_is_detected_without_new_bytes(state, clock):
+    old = json.dumps(_turn("t", "old", start=0, end=1)) + "\n"
+    _log(state).write_text(old, encoding="utf-8")
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    epoch = index.epoch
+    page = index.list_page(None, 10)
+    assert [e.span_id for e in page.entries] == ["old", "old"]
+    new = old.replace('"old"', '"new"')
+    assert len(new) == len(old)
+    os.utime(_log(state), ns=(1, 1))
+    _log(state).write_text(new, encoding="utf-8")
+    _refresh_until_ready(index, clock)
+    assert index.epoch != epoch
+    assert [e.span_id for e in index.entries() if e.slot == "turn.input"] == ["new"]
+    assert index.changes(epoch, page.snapshot_revision, 10).reset_required
+
+
+def test_unchanged_archive_file_is_not_reopened(state, clock, monkeypatch):
+    _append(state, [_turn("t", "a", start=0, end=1)])
+    archived = _rotate(state)
+    _append(state, [_turn("t", "b", start=2, end=3)])
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    opens = {"archive": 0, "active": 0}
+    original = Path.open
+
+    def counting_open(self, *args, **kwargs):
+        if self == archived:
+            opens["archive"] += 1
+        elif self == _log(state):
+            opens["active"] += 1
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", counting_open)
+    index.refresh_sync(None)
+    index.refresh_sync(None)
+    assert opens["archive"] == 0
+    assert opens["active"] == 2
+    assert len(index.entries()) == 4
