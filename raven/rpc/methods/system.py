@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 # raven_version: the raven package version (from installed metadata).
 SERVER_VERSION = "0.1.0"
 SCHEMA_VERSION = "0.1.0"
-SERVER_CAPABILITIES = ["jsonrpc-2.0", "subscriptions", "cli-dispatch"]
+SERVER_CAPABILITIES = ["jsonrpc-2.0", "subscriptions", "cli-dispatch", "trajectory-v1"]
 
 # Lenient semver: <major>.<minor>.<patch> with optional `-prerelease` / `+build`.
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")

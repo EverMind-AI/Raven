@@ -60,6 +60,12 @@ export function resetCapabilities(): void {
 const field = (holder: unknown, name: string): unknown =>
   holder !== null && typeof holder === 'object' ? (holder as Record<string, unknown>)[name] : undefined
 
+/**
+ * The gateway implements the `trajectory.*` methods. Whether the view is
+ * enabled for this process is a separate, live question (`trajectory.state`).
+ */
+export const servesTrajectory = (): boolean => serves('trajectory-v1')
+
 /* ── the eleven version tolerances, each one site's own condition ────── */
 
 /**

@@ -575,8 +575,11 @@ def _refuse_incomplete_install(label: str = "raven serve") -> None:
     raise typer.Exit(INCOMPLETE_INSTALL_EXIT)
 
 
-def _run(port: int, open_browser: bool) -> None:
+def _run(port: int, open_browser: bool, dev: bool = False) -> None:
+    from raven.trajectory import policy as trajectory_policy
+
     _refuse_incomplete_install()
+    trajectory_policy.arm(dev)
     try:
         bounded_asyncio.run(_serve_main(port, open_browser))
     except KeyboardInterrupt:
@@ -640,6 +643,53 @@ def _attached_url() -> Optional[str]:
     if recorded is None:
         return None
     return asyncio.run(_attach(*recorded))
+
+
+async def _health(base: str) -> Optional[dict]:
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=2)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"{base}/health") as health:
+                if health.status != 200:
+                    return None
+                body = await health.json()
+                return body if isinstance(body, dict) else None
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        return None
+
+
+def _health_facts(url: str) -> Optional[dict]:
+    """What the service behind an attach URL says about itself, or None.
+
+    Asked of the host in the URL itself, not of the port this command was
+    given: the two differ whenever a running gateway kept its own port.
+    """
+    base = url.split("/auth#")[0]
+    return asyncio.run(_health(base))
+
+
+def _check_attached(url: str, dev: bool) -> None:
+    """Refuse to open a service that cannot do what ``--dev`` asked for.
+
+    Every URL that is about to be opened passes through here -- the one a
+    first probe found, the one a recovering supervisor's gateway came back
+    on, the one a foreground child bound -- because a page opened against a
+    service without the trajectory view would present a working UI with the
+    feature the user asked for silently missing. The service is left running:
+    stopping it is the user's call (``raven web --stop``).
+    """
+    facts = _health_facts(url)
+    view = facts.get("trajectory_view") if facts else None
+    base = url.split("/auth#")[0]
+    if dev and view is not True:
+        typer.echo(
+            f"error: the web service at {base} has no trajectory view; run `raven web --stop`, then `raven --dev`"
+        )
+        raise typer.Exit(1)
+    if not dev and view is True:
+        typer.echo("note: the running web service has the trajectory view enabled")
 
 
 def _gateway_hosted_page() -> Optional[tuple[int, str]]:
@@ -782,7 +832,7 @@ def _gateway_holds_the_lock() -> bool:
         return True
 
 
-def _gateway_argv(port: int) -> list[str]:
+def _gateway_argv(port: int, dev: bool = False) -> list[str]:
     """The command that serves the page, and what the supervisor re-runs.
 
     ``gateway`` rather than ``serve`` where it can be. Both serve the page -- the
@@ -822,12 +872,13 @@ def _gateway_argv(port: int) -> list[str]:
     """
     import sys
 
+    flag = ["--dev"] if dev else []
     if _gateway_holds_the_lock():
-        return [sys.executable, "-P", "-m", "raven", "serve", "--port", str(port)]
-    return [sys.executable, "-P", "-m", "raven", "gateway", "--page-port", str(port)]
+        return [sys.executable, "-P", "-m", "raven", "serve", "--port", str(port), *flag]
+    return [sys.executable, "-P", "-m", "raven", "gateway", "--page-port", str(port), *flag]
 
 
-def _spawn_supervisor(port: int) -> None:
+def _spawn_supervisor(port: int, dev: bool = False) -> None:
     """Start the detached supervisor, with its output going to ``web.log``.
 
     ``start_new_session`` is what makes it resident: without its own session the
@@ -845,7 +896,17 @@ def _spawn_supervisor(port: int) -> None:
     handle = open(log, "a", encoding="utf-8")  # noqa: SIM115 - handed to the child, closed with it
     try:
         subprocess.Popen(  # noqa: S603 - argv is this interpreter plus literals
-            [sys.executable, "-P", "-m", "raven", "web", "--supervise", "--port", str(port)],
+            [
+                sys.executable,
+                "-P",
+                "-m",
+                "raven",
+                "web",
+                "--supervise",
+                "--port",
+                str(port),
+                *(["--dev"] if dev else []),
+            ],
             stdout=handle,
             stderr=handle,
             stdin=subprocess.DEVNULL,
@@ -880,7 +941,7 @@ def _bound_port_of(proc: object, timeout_s: float = 15.0) -> Optional[int]:
     return None
 
 
-def _supervise(port: int) -> None:
+def _supervise(port: int, dev: bool = False) -> None:
     """Run the gateway, and keep running it, until it exits cleanly or is stopped.
 
     A zero exit is a decision, not a fault: ``system.upgrade`` shuts the gateway
@@ -923,7 +984,7 @@ def _supervise(port: int) -> None:
             started = time.monotonic()
             try:
                 proc = subprocess.Popen(  # noqa: S603 - see _gateway_argv
-                    _gateway_argv(target),
+                    _gateway_argv(target, dev),
                     # A session of its own, so the tree is the gateway's to keep
                     # and this supervisor's to end. Sharing one group, the only
                     # group-wide signal available to the cleanup below is the one
@@ -1332,7 +1393,9 @@ def _await_attach(
     return None
 
 
-def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: bool = False) -> None:
+def _web(
+    port: int, *, foreground: bool = False, stop: bool = False, supervise: bool = False, dev: bool = False
+) -> None:
     """``raven web`` -- open the page against a gateway that stays up."""
     if stop:
         if _stop_resident():
@@ -1346,7 +1409,7 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         raise typer.Exit(1)
 
     if supervise:
-        _supervise(port)
+        _supervise(port, dev)
         return
 
     try:
@@ -1356,6 +1419,7 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         raise typer.Exit(1) from None
 
     if url is not None:
+        _check_attached(url, dev)
         typer.echo(f"attaching to the gateway already running: {url.split('/auth#')[0]}")
         _open(url)
         return
@@ -1369,7 +1433,7 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         # that has no ChannelManager, so the page it opened was the inert
         # entrances page this change exists to fix -- with the fix applying only
         # to the detached path, which is not the one anybody debugging uses.
-        _run_foreground(port)
+        _run_foreground(port, dev)
         return
 
     # A supervisor with no gateway answering means the gateway is between
@@ -1388,7 +1452,7 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
                 "run `raven web --stop`, then `raven web`"
             )
             raise typer.Exit(1)
-        _spawn_supervisor(port)
+        _spawn_supervisor(port, dev)
     try:
         url = _await_attach()
     except PermissionError as exc:
@@ -1397,11 +1461,14 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
     if url is None:
         typer.echo(f"the gateway did not come up; see {_web_log_path()}")
         raise typer.Exit(1)
+    # Checked here as well: a supervisor that was already running came back
+    # with whatever flags it was started with, not the ones asked for now.
+    _check_attached(url, dev)
     typer.echo(f"raven is running at {url.split('/auth#')[0]} (stop it with `raven web --stop`)")
     _open(url)
 
 
-def _run_foreground(port: int) -> None:
+def _run_foreground(port: int, dev: bool = False) -> None:
     """Hold the terminal while the page's own child engine runs.
 
     Foreground semantics are the child's, and they survive being a child: its
@@ -1414,7 +1481,7 @@ def _run_foreground(port: int) -> None:
 
     _refuse_incomplete_install()
     try:
-        proc = subprocess.Popen(_gateway_argv(port))  # noqa: S603 - see _gateway_argv
+        proc = subprocess.Popen(_gateway_argv(port, dev))  # noqa: S603 - see _gateway_argv
     except OSError as exc:
         typer.echo(f"could not start the engine: {exc}")
         raise typer.Exit(1) from None
@@ -1427,6 +1494,13 @@ def _run_foreground(port: int) -> None:
         if url is None and proc.poll() is None:
             typer.echo("the engine did not come up")
         elif url is not None:
+            try:
+                _check_attached(url, dev)
+            except typer.Exit:
+                # The child keeps running (Ctrl-C is still the user's); only
+                # the browser is withheld from a service that cannot serve it.
+                proc.wait()
+                raise
             _open(url)
         proc.wait()
     except KeyboardInterrupt:
@@ -1454,6 +1528,7 @@ def register(app: typer.Typer) -> None:
     def serve(
         port: int = typer.Option(18792, "--port", help="Preferred port; probes forward if taken."),
         open_browser: bool = typer.Option(False, "--open", help="Open the served page in a browser."),
+        dev: bool = typer.Option(False, "--dev", help="Developer launch: serve the trajectory view in the page."),
     ) -> None:
         """Run the headless Raven gateway (WebSocket RPC, plus a page when one is built)."""
         # A `raven gateway` with the page mounted is already this engine, and
@@ -1469,12 +1544,13 @@ def register(app: typer.Typer) -> None:
                 typer.echo(f"error: {exc}; stop the gateway or remove {_state_path()}, then retry")
                 raise typer.Exit(1) from None
             if url is not None:
+                _check_attached(url, dev)
                 base = url.split("/auth#")[0]
                 typer.echo(f"the running raven gateway already hosts the page at {base}; not starting a second engine")
                 if open_browser:
                     _open(url)
                 return
-        _run(port, open_browser)
+        _run(port, open_browser, dev)
 
     @app.command("web")
     def web(
@@ -1495,9 +1571,10 @@ def register(app: typer.Typer) -> None:
             hidden=True,
             help="Internal: be the supervisor. `raven web` starts this for you, detached.",
         ),
+        dev: bool = typer.Option(False, "--dev", help="Developer launch: enable the trajectory view in the page."),
     ) -> None:
         """Open Raven in a browser, on a gateway that stays up after you close the terminal."""
-        _web(port, foreground=foreground, stop=stop, supervise=supervise)
+        _web(port, foreground=foreground, stop=stop, supervise=supervise, dev=dev)
 
 
 __all__ = ["SERVE", "register", "resolve_ui_dist"]

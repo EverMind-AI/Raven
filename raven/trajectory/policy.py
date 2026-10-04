@@ -31,4 +31,26 @@ class TrajectoryPolicy:
         return cls(enabled_getter=lambda: enabled)
 
 
-__all__ = ["TrajectoryPolicy"]
+POLICY = TrajectoryPolicy()
+"""The process-wide policy, armed once by the hosting entrance at launch.
+
+Same shape as :data:`raven.rpc.serve_control.SERVE`: the command that starts
+the process says whether the view is enabled, and every reader -- the RPC
+handlers, the health endpoint -- consults this one object.
+"""
+
+
+def arm(enabled: bool) -> None:
+    POLICY.replace_source(lambda: enabled)
+
+
+def current() -> TrajectoryPolicy:
+    return POLICY
+
+
+def _reset_for_tests() -> None:
+    POLICY.enabled_getter = lambda: False
+    POLICY.revision = 0
+
+
+__all__ = ["POLICY", "TrajectoryPolicy", "arm", "current"]

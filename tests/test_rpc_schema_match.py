@@ -570,6 +570,10 @@ EXPECTED_ERROR_CODES = {
     -32017: "subagent_not_found",
     -32018: "session_title_too_long",
     -32019: "subagent_not_ready",
+    -32020: "trajectory_disabled",
+    -32021: "entry_not_found",
+    -32022: "cursor_expired",
+    -32023: "revision_changed",
 }
 
 
