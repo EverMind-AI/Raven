@@ -43,6 +43,9 @@ into trajectories — addressable, labeled, retained units of agent work:
   serves consistent list snapshots plus per-change revisions.
 - ``policy``   — whether this process serves the trajectory view at all; a
   launch flag today, replaceable without touching the readers.
+- ``details``  — the detail pane's data: a descriptor (status, notes, one
+  bounded summary per block) and per-block bodies for one entry, read from a
+  single consistent capture of the index under byte and read budgets.
 
 The address unit is the **attempt**: one task try, possibly spanning several
 turns. At read time an attempt id equals the trace id unless a definition in
@@ -55,6 +58,13 @@ from __future__ import annotations
 
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
 from raven.trajectory.cassette import CassetteReport, minimize_bundle
+from raven.trajectory.details import (
+    BlockBody,
+    BlockDescriptor,
+    Descriptor,
+    describe,
+    read_block,
+)
 from raven.trajectory.entries import (
     Projection,
     TrajectoryEntry,
@@ -62,7 +72,7 @@ from raven.trajectory.entries import (
     merge_snapshots,
     project_entries,
 )
-from raven.trajectory.index import SessionIndex, TrajectoryIndexer, indexer_for
+from raven.trajectory.index import EntryView, SessionIndex, TrajectoryIndexer, indexer_for
 from raven.trajectory.policy import TrajectoryPolicy
 from raven.trajectory.redact import (
     KnownSecret,
@@ -120,10 +130,14 @@ from raven.trajectory.verdict import (
 __all__ = [
     "BUNDLE_FORMAT_VERSION",
     "VERDICT_STATUSES",
+    "BlockBody",
+    "BlockDescriptor",
     "CassetteReport",
     "Check",
+    "Descriptor",
     "Divergence",
     "DivergenceExpectation",
+    "EntryView",
     "KnownSecret",
     "LocalTarballUploader",
     "Mismatch",
@@ -149,6 +163,7 @@ __all__ = [
     "collect_bundle",
     "collect_known_secrets",
     "definitions",
+    "describe",
     "get_uploader",
     "indexer_for",
     "is_pinned",
@@ -165,6 +180,7 @@ __all__ = [
     "pin_attempt",
     "pins",
     "project_entries",
+    "read_block",
     "read_verdicts",
     "record_verdict",
     "redact_bundle",

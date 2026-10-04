@@ -471,6 +471,21 @@ class Snapshot:
 
 
 @dataclass(frozen=True)
+class EntryView:
+    """One entry and everything the details layer needs about it, captured
+    under a single lock acquisition so no field can come from a later refresh.
+    """
+
+    epoch: str
+    entry: _entries.TrajectoryEntry
+    span: dict[str, Any] | None
+    siblings: tuple[_entries.TrajectoryEntry, ...]
+    turn: _entries.TurnInfo | None
+    parent_llm_calls: tuple[dict[str, Any], ...]
+    owner: _entries.TrajectoryEntry | None
+
+
+@dataclass(frozen=True)
 class ListPage:
     epoch: str
     snapshot_revision: int
@@ -533,6 +548,17 @@ def _skeleton_of(span: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _llm_by_parent(spans: dict[SpanKey, dict[str, Any]]) -> dict[tuple[str, str], tuple[dict[str, Any], ...]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for (trace, _), span in spans.items():
+        if span.get("name") != "llm.call":
+            continue
+        parent = tstore._str_value(span.get("parentSpanId"))
+        if trace and parent:
+            grouped.setdefault((trace, parent), []).append(span)
+    return {key: tuple(items) for key, items in grouped.items()}
+
+
 def _has_artifacts(span: dict[str, Any]) -> bool:
     attrs = tstore._span_attrs(span)
     return any(isinstance(key, str) and key.endswith(".artifact_path") for key in attrs)
@@ -590,6 +616,9 @@ class SessionIndex:
         self.total_bytes = 0
         self._dirty = False
         self._published_spans: dict[SpanKey, dict[str, Any]] = {}
+        self._published_llm_by_parent: dict[tuple[str, str], tuple[dict[str, Any], ...]] = {}
+        self._published_turns: dict[str, _entries.TurnInfo] = {}
+        self._entries_by_span: dict[SpanKey, tuple[str, ...]] = {}
         self._published_state = self._compute_state()
 
     def mark_failed(self, exc: BaseException) -> None:
@@ -627,10 +656,13 @@ class SessionIndex:
         self.failure = None
         state = self._compute_state()
         spans_view = dict(self.spans) if projection is not None else None
+        llm_by_parent = _llm_by_parent(spans_view) if spans_view is not None else None
         with self._lock:
             if projection is not None:
                 self._publish(projection)
                 self._published_spans = spans_view or {}
+                self._published_llm_by_parent = llm_by_parent or {}
+                self._published_turns = {turn.turn_span_id: turn for turn in projection.turns}
             self._published_state = state
         self._dirty = False
 
@@ -866,8 +898,28 @@ class SessionIndex:
             order.append(entry.entry_id)
         self._entries = published
         self._order = tuple(order)
+        by_span: dict[SpanKey, list[str]] = {}
+        for entry_id in order:
+            entry = published[entry_id]
+            by_span.setdefault(self._span_key_of(entry), []).append(entry_id)
+        self._entries_by_span = {key: tuple(ids) for key, ids in by_span.items()}
 
     # -- reads (any thread) -------------------------------------------------
+
+    def capture(self, entry_id: str) -> EntryView | None:
+        """The entry plus its raw span, siblings, turn, same-parent LLM calls and owner, all from one publish."""
+        with self._lock:
+            entry = self._entries.get(entry_id)
+            if entry is None:
+                return None
+            key = self._span_key_of(entry)
+            span = self._published_spans.get(key)
+            siblings = tuple(self._entries[other] for other in self._entries_by_span.get(key, ()) if other != entry_id)
+            parent = tstore._str_value(span.get("parentSpanId")) if span is not None else None
+            llm_calls = self._published_llm_by_parent.get((entry.trace_id, parent), ()) if parent else ()
+            owner = self._entries.get(entry.duration_owner) if entry.duration_owner else None
+            turn = self._published_turns.get(entry.turn_span_id) if entry.turn_span_id else None
+            return EntryView(self.epoch, entry, span, siblings, turn, llm_calls, owner)
 
     def _compute_state(self) -> IndexState:
         """Built by the worker from its own containers; readers see the published copy."""
@@ -1039,6 +1091,7 @@ def _reset_for_tests() -> None:
 __all__ = [
     "ChangeBatch",
     "CursorExpiredError",
+    "EntryView",
     "IndexState",
     "Limits",
     "ListPage",

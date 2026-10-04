@@ -1030,3 +1030,54 @@ def test_unchanged_archive_file_is_not_reopened(state, clock, monkeypatch):
     assert opens["archive"] == 0
     assert opens["active"] == 2
     assert len(index.entries()) == 4
+
+
+def test_capture_returns_one_consistent_view(state, clock):
+    import threading
+
+    _append(
+        state,
+        [
+            _turn("t", "turn", start=0, end=100),
+            _span("t", "llm", "llm.call", parent="turn", start=1, end=2, attrs={"llm.output_preview": "o"}),
+            _tool("t", "tool", "turn", start=3, end=4),
+            _tool("t", "tool2", "turn", start=5, end=6),
+        ],
+    )
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    view = index.capture("t:tool:tool.input")
+    assert view is not None and view.epoch == index.epoch
+    assert view.entry.entry_id == "t:tool:tool.input" and view.span["spanId"] == "tool"
+    assert [s.entry_id for s in view.siblings] == ["t:tool:tool.output"]
+    assert view.turn is not None and view.turn.number == 1
+    assert [s["spanId"] for s in view.parent_llm_calls] == ["llm"]
+    assert view.owner is not None and view.owner.entry_id == "t:tool:tool.output"
+    assert index.capture("missing") is None
+    stop = threading.Event()
+    mismatches: list[str] = []
+
+    def reader():
+        while not stop.is_set():
+            captured = index.capture("t:turn:turn.input")
+            if captured is None:
+                continue
+            published = index.entry("t:turn:turn.input")
+            if captured.span is None or captured.entry.revision > (published.revision if published else -1):
+                mismatches.append("span/entry drift")
+            if (
+                captured.span.get("attributes", {}).get("turn.in_progress") is True
+                and captured.entry.operation_status != "running"
+            ):
+                mismatches.append("in_progress span paired with non-running entry")
+
+    thread = threading.Thread(target=reader)
+    thread.start()
+    try:
+        for i in range(20):
+            _append(state, [_turn("t", "turn", start=0, end=100 + i, in_progress=i % 2 == 0)])
+            index.refresh_sync(None)
+    finally:
+        stop.set()
+        thread.join(5)
+    assert mismatches == []
