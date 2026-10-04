@@ -6,12 +6,18 @@ Five shipped agents today: `raven-code`, `raven-design`, `raven-oncall`,
 -- the scaffold command that instantiates this whole shape into a fresh
 folder; `BUILDING.md` in this directory is the from-zero guide.
 
-Agents that have no model key of their own inherit the host's model binding,
-provider configuration, routing and reasoning effort. Inheritance uses the
-same credential check as the host runtime, including stored OAuth sign-ins
-such as OpenAI Codex. The child reads OAuth credentials from the host's
-`RAVEN_HOME` (or the provider's configured token-directory override); tokens
-stay in that credential store rather than the rendered agent config.
+Agents that have no model key of their own inherit the host's model
+binding, provider configuration, routing and reasoning effort.
+Inheritance uses the same credential check as the host runtime,
+including stored OAuth sign-ins such as OpenAI Codex. The child reads
+OAuth credentials from the host's `RAVEN_HOME`; tokens stay in that
+credential store rather than the rendered agent config. An agent is
+spawned with the login shell's environment plus `RAVEN_HOME` -- raven's
+own environment only when that shell cannot be captured -- so a
+token-location override (`CHATGPT_TOKEN_DIR`, `CHATGPT_AUTH_FILE`)
+reaches it when the login profile exports it, when the agent's stored
+row carries it in `env` (a stored row replaces the discovered one
+whole), or in that fallback.
 
 What one agent directory carries:
 
