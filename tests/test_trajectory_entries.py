@@ -314,12 +314,63 @@ def test_broken_records_get_positional_identity(state):
     ]
     entries = tent.project_entries(spans, state=state).entries
     broken = [e for e in entries if e.entry_id.startswith("broken:")]
-    assert len(broken) == 1 and broken[0].entry_id == "broken:0"
+    assert len(broken) == 1 and broken[0].entry_id == "broken:0:summary"
     assert broken[0].kind == "tool.call.summary"
+    assert "malformed_span" in broken[0].integrity
     corrupt = _one(entries, "corrupt", "malformed")
     assert "malformed_span" in corrupt.integrity and corrupt.kind == "span.malformed"
     stamped = tent.merge_snapshots(spans)[0]
     assert stamped[tent.POSITION_KEY] == 0
+
+
+def test_broken_record_with_several_slots_keeps_unique_ids(state):
+    attrs = {"tool.name": "x", "tool.args_preview": "{}", "tool.result_preview": "ok"}
+    spans = [
+        {
+            "traceId": "t",
+            "spanId": None,
+            "name": "tool.call",
+            "startTime": _ts(0),
+            "endTime": _ts(1),
+            "attributes": attrs,
+        },
+        {
+            "spanId": "s",
+            "name": "tool.call",
+            "startTime": _ts(0),
+            "endTime": _ts(1),
+            "attributes": attrs,
+            "status": "bad",
+        },
+    ]
+    entries = tent.project_entries(spans, state=state).entries
+    ids = [e.entry_id for e in entries]
+    assert len(ids) == len(set(ids)), ids
+    assert sorted(ids) == [
+        "broken:0:tool.input",
+        "broken:0:tool.output",
+        "broken:1:malformed",
+        "broken:1:tool.input",
+        "broken:1:tool.output",
+    ]
+    for entry in entries:
+        assert "malformed_span" in entry.integrity
+    assert _one([e for e in entries if e.entry_id.startswith("broken:0")], "", "tool.input").duration_owner == (
+        "broken:0:tool.output"
+    )
+
+
+def test_merge_snapshots_never_collides_with_stamped_positions():
+    base = {"name": "memory.enqueue", "startTime": _ts(0), "endTime": _ts(1), "attributes": {}}
+    kept = {**base, tent.POSITION_KEY: 1}
+    fresh = {**base}
+    merged = tent.merge_snapshots([kept, fresh])
+    assert len(merged) == 2
+    assert [m[tent.POSITION_KEY] for m in merged] == [1, 0]
+    reversed_merge = tent.merge_snapshots([fresh, {**base, tent.POSITION_KEY: 0}])
+    assert [m[tent.POSITION_KEY] for m in reversed_merge] == [1, 0]
+    again = tent.merge_snapshots([*merged, {**base}])
+    assert [m[tent.POSITION_KEY] for m in again] == [1, 0, 2]
 
 
 # ── turns and origin ───────────────────────────────────────────────────
@@ -540,6 +591,41 @@ def test_kinds_slots_and_owners_across_span_types(state):
     assert gate.charged_ms is None and gate.timing_basis == "unknown" and gate.duration_owner is None
     assert _one(entries, "sub", "subagent.run").meta == {"label": "helper", "task_id": "k1"}
     assert _one(entries, "read", "skill.read").meta == {"skill": "pdf"}
+
+
+def test_generic_owner_prefers_output_phase_over_key_order(state):
+    both = {
+        "foo.output.artifact_path": _artifact(state, {"o": 1}, "g-out"),
+        "z.input.artifact_path": _artifact(state, {"i": 1}, "g-in"),
+    }
+    only_input = {"z.input.artifact_path": _artifact(state, {"i": 1}, "g-in2")}
+    spans = [
+        _span("t", "both", "foo.bar", start=0, end=2, attrs=both),
+        _span("t", "input", "foo.bar", start=0, end=2, attrs=only_input),
+        _span("t", "failed", "foo.bar", start=0, end=3, attrs=only_input, status={"code": "ERROR", "message": "x"}),
+    ]
+    entries = tent.project_entries(spans, state=state).entries
+    out = _one(entries, "both", "artifact:foo.output")
+    inp = _one(entries, "both", "artifact:z.input")
+    assert (out.charged_ms, out.timing_basis) == (2000, "span_full")
+    assert (inp.charged_ms, inp.timing_basis) == (0, "zero") and inp.duration_owner == out.entry_id
+    lonely = _one(entries, "input", "artifact:z.input")
+    assert lonely.charged_ms is None and lonely.timing_basis == "unknown" and lonely.duration_owner is None
+    assert _slots(entries, "failed") == ["artifact:z.input", "error"]
+    err = _one(entries, "failed", "error")
+    assert err.failure_entry and err.charged_ms == 3000
+    assert not _one(entries, "failed", "artifact:z.input").failure_entry
+
+
+def test_in_progress_snapshot_with_error_keeps_unknown_duration(state):
+    attrs = {**_turn_attrs(state, "turn", content_out=None), "turn.in_progress": True}
+    span = _span("t", "turn", "session.turn", start=0, end=2, attrs=attrs, status={"code": "ERROR", "message": "boom"})
+    entries = tent.project_entries([span], state=state).entries
+    assert _slots(entries, "turn") == ["turn.input", "error"]
+    err = _one(entries, "turn", "error")
+    assert err.operation_status == "error" and err.status_evidence == ("span_error",)
+    assert err.duration_ms is None and err.charged_ms is None and err.timing_basis == "unknown"
+    assert err.failure_entry and err.duration_owner == err.entry_id
 
 
 def test_base_spans_get_a_summary_entry(state):

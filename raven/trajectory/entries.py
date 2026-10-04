@@ -144,6 +144,8 @@ def merge_snapshots(spans: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     running one. Records without a usable identity are kept as they are and
     addressed by position (``POSITION_KEY``, stamped here when absent).
     """
+    spans = list(spans)
+    taken = {span.get(POSITION_KEY) for span in spans if isinstance(span.get(POSITION_KEY), int)}
     logical: dict[tuple[str, Any], dict[str, Any]] = {}
     order: list[tuple[str, Any]] = []
     position = 0
@@ -158,9 +160,11 @@ def merge_snapshots(spans: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         else:
             stamped = span.get(POSITION_KEY)
             if not isinstance(stamped, int):
+                while position in taken:
+                    position += 1
                 stamped = position
+                taken.add(stamped)
                 span = {**span, POSITION_KEY: stamped}
-            position += 1
             key = ("", stamped)
         if key not in logical:
             order.append(key)
@@ -257,7 +261,9 @@ def _status_of(info: _conv._SpanInfo, records: list[dict[str, Any]]) -> tuple[st
     return STATUS_UNKNOWN, ()
 
 
-def _owner_slot(slots: Sequence[str]) -> str | None:
+def _owner_slot(records: Sequence[dict[str, Any]]) -> str | None:
+    """The slot charged the span's duration; an input-phase slot never is."""
+    slots = [r["slot"] for r in records]
     for slot in _OUTPUT_OWNER_SLOTS:
         if slot in slots:
             return slot
@@ -266,7 +272,9 @@ def _owner_slot(slots: Sequence[str]) -> str | None:
     single = [slot for slot in slots if slot in _SINGLE_EVENT_SLOTS]
     if single:
         return single[0]
-    artifacts = sorted(slot for slot in slots if slot.startswith("artifact:"))
+    artifacts = sorted(
+        r["slot"] for r in records if r["slot"].startswith("artifact:") and r["phase"] == _conv._PHASE_OUTPUT
+    )
     if artifacts:
         return artifacts[-1]
     if SLOT_SUMMARY in slots:
@@ -318,14 +326,19 @@ def _error_record(info: _conv._SpanInfo, evidence: Sequence[str]) -> dict[str, A
     return records[0]
 
 
-def _timing(info: _conv._SpanInfo, status: str) -> tuple[int | None, list[str]]:
-    """(duration_ms, integrity codes) for the span's own clock."""
+def _timing(info: _conv._SpanInfo) -> tuple[int | None, list[str]]:
+    """(duration_ms, integrity codes) for the span's own clock.
+
+    An in-progress checkpoint's endTime is the snapshot time, not the end of
+    the operation, so it never yields a duration -- whatever status the span
+    displays (an ERROR snapshot is still an unfinished turn).
+    """
     codes: list[str] = []
     start = _parse_ts(info.start)
     end = _parse_ts(info.end)
     if (info.start and start is None) or (info.end and end is None):
         codes.append("bad_timestamp")
-    if start is None or end is None or status == STATUS_RUNNING:
+    if start is None or end is None or info.attrs.get("turn.in_progress") is True:
         return None, codes
     if end < start:
         codes.append("clock_skew")
@@ -355,10 +368,14 @@ def _turns(infos: Sequence[_conv._SpanInfo]) -> tuple[TurnInfo, ...]:
     )
 
 
+def _broken(info: _conv._SpanInfo) -> bool:
+    return not info.span_id or not info.trace_id
+
+
 def _entry_id(info: _conv._SpanInfo, slot: str) -> str:
-    if not info.span_id or not info.trace_id:
+    if _broken(info):
         position = info.raw.get(POSITION_KEY) if isinstance(info.raw, dict) else None
-        return f"broken:{position}"
+        return f"broken:{position}:{slot}"
     return f"{info.trace_id}:{info.span_id}:{slot}"
 
 
@@ -372,11 +389,11 @@ def _span_entries(
     if not records:
         records = [_summary_record(info)]
     status, evidence = _status_of(info, records)
-    owner = _owner_slot([r["slot"] for r in records])
+    owner = _owner_slot(records)
     if status == STATUS_ERROR and owner is None:
         records = [*records, _error_record(info, evidence)]
         owner = SLOT_ERROR
-    duration, timing_codes = _timing(info, status)
+    duration, timing_codes = _timing(info)
     owner_id = _entry_id(info, owner) if owner is not None else None
     turn_number = turn_numbers.get(info.turn_span_id or "")
     origin = ORIGIN_SUBAGENT if info.trace_id in subagent_traces else ORIGIN_MAIN
@@ -401,7 +418,10 @@ def _span_entries(
         event_raw = info.start if is_input else (info.end or info.start)
         event_dt = start_dt if is_input else (end_dt or start_dt)
         depth = info.depth if is_input else -info.depth
-        integrity = _integrity_of(record) + [c for c in timing_codes if c not in _integrity_of(record)]
+        integrity = _integrity_of(record)
+        integrity.extend(code for code in timing_codes if code not in integrity)
+        if _broken(info) and "malformed_span" not in integrity:
+            integrity.append("malformed_span")
         if turn_number is None:
             integrity.append("turn_unknown")
         entries.append(
