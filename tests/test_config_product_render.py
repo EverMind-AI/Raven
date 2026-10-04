@@ -7,6 +7,7 @@ so the next product inherits tested parts rather than a copy of run.py.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import stat
@@ -295,6 +296,103 @@ def test_launchers_own_keys_do_not_require_host_oauth(oauth_host, oauth_launcher
     assert loaded.get_provider_name() != "openai_codex"
     assert loaded.get_api_key() == "synthetic-own-key"
     check_provider_credentials(loaded)
+
+
+@pytest.mark.parametrize(
+    "variant, reason",
+    [
+        ("signed-in", ""),
+        ("signed-out", "raven provider login openai-codex"),
+        ("signed-out with an OpenRouter key", "raven provider login openai-codex"),
+        ("API key", ""),
+    ],
+)
+def test_inherit_refusal_names_what_inherit_llm_refuses_on(oauth_host, variant, reason):
+    host, token = oauth_host
+    if variant.startswith("signed-out"):
+        token.unlink()
+    if variant.endswith("OpenRouter key"):
+        host["providers"]["openrouter"] = {"apiKey": "synthetic-other-key"}
+    if variant == "API key":
+        host["providers"] = {"openrouter": {"apiKey": "synthetic-key"}}
+        host["agents"]["defaults"].update(provider="openrouter", model="openrouter/openai/gpt-5.6-sol")
+    config = {"agents": {"defaults": {"maxToolIterations": 20}}}
+
+    refusal = render.inherit_refusal(copy.deepcopy(config), copy.deepcopy(host))
+    taken = render.inherit_llm(copy.deepcopy(config), copy.deepcopy(host))
+
+    assert bool(refusal) == (taken == "")
+    if reason:
+        assert reason in refusal
+    else:
+        assert refusal == ""
+
+
+@pytest.mark.parametrize("name", ["openaiCodex", "openai-codex"])
+def test_inherit_refusal_agrees_with_inherit_llm_on_an_aliased_section(oauth_host, name):
+    host, _ = oauth_host
+    host["providers"][name] = host["providers"].pop("openai_codex")
+    host["agents"]["defaults"]["provider"] = name
+
+    assert render.inherit_refusal({}, copy.deepcopy(host)) == ""
+    assert render.inherit_llm({}, copy.deepcopy(host))
+
+
+def test_inherit_refusal_changes_neither_argument(oauth_host, monkeypatch):
+    host, _ = oauth_host
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "openai-codex/gpt-5.6-sol")
+    monkeypatch.setenv("RAVEN_PARENT_PROVIDER", "openai_codex")
+    monkeypatch.setenv("RAVEN_PARENT_PROTOCOL", "responses")
+    config = {"agents": {"defaults": {"maxToolIterations": 20}}}
+    config_before, host_before = copy.deepcopy(config), copy.deepcopy(host)
+
+    assert render.inherit_refusal(config, host) == ""
+    assert (config, host) == (config_before, host_before)
+    render.inherit_llm(config, host)
+    assert "modelProtocols" in host["providers"]["openai_codex"], "the write inherit_refusal must not make"
+
+
+def test_inherit_refusal_explains_the_riders_binding_not_the_host_default(oauth_host, monkeypatch):
+    host, _ = oauth_host
+    host["providers"]["openrouter"] = {"apiKey": ""}
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "openrouter/openai/gpt-5.6-sol")
+    monkeypatch.setenv("RAVEN_PARENT_PROVIDER", "openrouter")
+
+    assert render.inherit_llm({}, copy.deepcopy(host)) == ""
+    assert "raven provider set openrouter" in render.inherit_refusal({}, host)
+
+
+def test_an_empty_credential_summary_still_refuses_with_a_reason(oauth_host, monkeypatch):
+    from raven.providers import factory
+    from raven.providers.auth import MissingCredentialsError
+
+    def refuse(_config, model=None):
+        raise MissingCredentialsError("")
+
+    monkeypatch.setattr(factory, "check_provider_credentials", refuse)
+    host, _ = oauth_host
+
+    assert render.inherit_llm({}, copy.deepcopy(host)) == ""
+    assert render.inherit_refusal({}, host) == "the inherited model has no usable credentials"
+
+
+def test_a_host_with_no_providers_gets_a_one_line_reason(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    for name in ("MODEL", "PROVIDER", "PROTOCOL", "REASONING_EFFORT"):
+        monkeypatch.delenv(f"RAVEN_PARENT_{name}", raising=False)
+
+    reason = render.inherit_refusal({}, {})
+
+    assert reason
+    assert "\n" not in reason, "raven agents new reads a launcher's refusal one line at a time"
+
+
+def test_inherit_llm_refuses_a_non_string_model_through_config_validation(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    host = {"providers": {"openrouter": {"apiKey": "synthetic-key"}}, "agents": {"defaults": {"model": 42}}}
+
+    with pytest.raises(ValueError):
+        render.inherit_llm({}, host)
 
 
 def test_inherit_llm_honours_the_parent_riders_on_the_inheritance_branch(monkeypatch):
