@@ -2103,6 +2103,34 @@ unreadable expected payload always yields a record.
 _Avoid_: confusing with the session's conversation history — a Conversation
 Record derives from trace spans, not from session messages.
 
+**Trajectory Entry** (`raven/trajectory/entries.py`):
+One row of the trajectory view, projected by `project_entries` from a logical
+span (`traceId + spanId`, checkpoints merged last-write-wins, an in-progress
+snapshot never overriding a terminal record) at a stable slot (`llm.input`,
+`tool.output`, `artifact:<key>`, `summary`, `error`, …). Its id is
+`trace:span:slot` — never a sequence number, array index or text hash — so it
+survives re-reads, late inputs and checkpoint upgrades. It carries the owning
+operation's status (`running` / `ok` / `error` / `cancelled` / `unknown`) with the
+evidence codes that produced it, data-integrity codes kept separate from status,
+and the span's clock with a Timing Owner. A base span that expands to nothing
+gets a `summary` entry; a failed span with no completion slot gets an `error`
+entry, so exactly one entry per failed span is the `failure_entry`.
+_Avoid_: calling a Conversation Record an entry — that is the CLI's text
+projection, without identity, structured status or timing.
+
+**Timing Owner** (`raven/trajectory/entries.py`):
+The single Trajectory Entry charged a logical span's whole `end - start`
+duration (`charged_ms`, `timing_basis="span_full"`): the output slot when there
+is one, else the `error` entry, else the span's single event or last artifact
+slot, else its `summary`. Inputs and turn markers are charged zero
+(`"zero"`), `llm.thinking` is `"not_recorded"` (no independent timing exists in
+the record), other artifact slots of the same span are `"shared"`, and a span
+without a trustworthy end time charges `None` (`"unknown"`, never zero). A span's
+time is therefore counted at most once, while parent and child spans each keep
+their own, so the duration bar sums charged time, not wall-clock time.
+_Avoid_: reading `tool.duration_ms` or usage fields as the owner's charge — they
+are diagnostics, not the span clock.
+
 ### Workspace & Onboarding
 
 **Agent home** (`get_workspace_path()`, `raven/config/paths.py`):

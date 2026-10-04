@@ -32,6 +32,11 @@ into trajectories — addressable, labeled, retained units of agent work:
 - ``regression`` — the regression-case layer: ``expect.yaml`` expectations
   (where the replay must diverge, what the live side must do there) evaluated
   against a cassette replay, driving ``tests/trajectories/``.
+- ``entries``  — the structured projection. Turns a logical-span collection
+  into trajectory entries with a stable ``trace:span:slot`` identity, an
+  operation status with evidence, integrity codes, and one Timing Owner per
+  span — the data layer behind the Web trajectory view, sharing per-span
+  expansion with ``conversation``.
 
 The address unit is the **attempt**: one task try, possibly spanning several
 turns. At read time an attempt id equals the trace id unless a definition in
@@ -44,6 +49,13 @@ from __future__ import annotations
 
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
 from raven.trajectory.cassette import CassetteReport, minimize_bundle
+from raven.trajectory.entries import (
+    Projection,
+    TrajectoryEntry,
+    TurnInfo,
+    merge_snapshots,
+    project_entries,
+)
 from raven.trajectory.redact import (
     KnownSecret,
     RedactionReport,
@@ -107,6 +119,7 @@ __all__ = [
     "KnownSecret",
     "LocalTarballUploader",
     "Mismatch",
+    "Projection",
     "Recording",
     "RedactionReport",
     "RegressionExpectation",
@@ -115,6 +128,8 @@ __all__ = [
     "ReplayState",
     "ReplayToolRegistry",
     "ResidualFinding",
+    "TrajectoryEntry",
+    "TurnInfo",
     "Uploader",
     "Verdict",
     "attempt_alias_ids",
@@ -129,6 +144,7 @@ __all__ = [
     "load_expectation",
     "load_recording",
     "merge_attempts",
+    "merge_snapshots",
     "minimize_bundle",
     "new_attempt_id",
     "owning_attempt",
@@ -136,6 +152,7 @@ __all__ = [
     "pin",
     "pin_attempt",
     "pins",
+    "project_entries",
     "read_verdicts",
     "record_verdict",
     "redact_bundle",

@@ -51,6 +51,10 @@ _log = logging.getLogger("raven.trajectory.conversation")
 _ARTIFACT_LIMIT = 512 * 1024
 _DEPTH_LIMIT = 64
 
+# Degradation marker for a slot whose body was deliberately not read
+# (``read=False``): a body-state flag, not a data-integrity problem.
+NOT_LOADED = "content not loaded"
+
 _PHASE_INPUT = 0
 _PHASE_OUTPUT = 1
 
@@ -152,22 +156,25 @@ def _read_artifact(state: Path, path: str) -> tuple[str | None, str | None]:
 
 
 def _slot(
-    state: Path, attrs: dict[str, Any], key: str, preview_key: str | None = None
+    state: Path, attrs: dict[str, Any], key: str, preview_key: str | None = None, *, read: bool = True
 ) -> tuple[str, str | None] | None:
     """Load one input/output slot: (text, degraded), degraded None = complete.
 
     ``None`` means the span carries no evidence the slot ever existed (no
     artifact pointer and no preview attribute) — only then may a record be
     omitted. A pointer or preview that cannot be read yields an empty-text
-    placeholder with the reason, never silence.
+    placeholder with the reason, never silence. With ``read=False`` no file
+    is touched: a pointer yields the preview text (or "") marked NOT_LOADED.
     """
     pointer = _str(attrs.get(f"{key}.artifact_path"))
     read_reason = None
-    if pointer is not None:
+    if pointer is not None and read:
         text, read_reason = _read_artifact(state, pointer)
         if text is not None:
             return text, read_reason
     preview = _str(attrs.get(preview_key)) if preview_key else None
+    if pointer is not None and not read:
+        return preview or "", NOT_LOADED
     if preview is not None:
         return preview, f"{read_reason or 'artifact missing'} — truncated preview"
     # Evidence is judged on key presence, not value shape: a type-corrupt
@@ -185,7 +192,7 @@ def _parse_json(text: str) -> tuple[Any, bool]:
 
 
 def _slot_payload(
-    state: Path, attrs: dict[str, Any], key: str, preview_key: str | None = None
+    state: Path, attrs: dict[str, Any], key: str, preview_key: str | None = None, *, read: bool = True
 ) -> tuple[Any, str, str | None] | None:
     """(parsed payload or None, display text, degraded) for one slot.
 
@@ -193,7 +200,7 @@ def _slot_payload(
     degraded — degraded content is excluded from dedup references and from
     the LLM prefix-comparison state.
     """
-    slot = _slot(state, attrs, key, preview_key)
+    slot = _slot(state, attrs, key, preview_key, read=read)
     if slot is None:
         return None
     text, degraded = slot
@@ -209,6 +216,15 @@ def _payload_field(obj: Any, text: str, field: str) -> str:
     if isinstance(obj, dict) and field in obj:
         return _display(obj.get(field))
     return text
+
+
+def _preview_attr(attrs: dict[str, Any], key: str | None) -> str | None:
+    """The recorded preview for ``key``: None when the attribute is absent,
+    "" when present but not a string, so presence and emptiness stay distinct."""
+    if key is None or key not in attrs:
+        return None
+    value = attrs.get(key)
+    return value if isinstance(value, str) else ""
 
 
 def _tool_call_line(tc: Any) -> str:
@@ -331,19 +347,25 @@ class _SpanInfo:
     attrs: dict[str, Any]
     error: str | None
     malformed: bool
+    raw: dict[str, Any] | None = None
 
 
-def _emit(info: _SpanInfo, records: list[dict[str, Any]], label: str, phase: int, text: str, **kw: Any) -> None:
+def _emit(
+    info: _SpanInfo, records: list[dict[str, Any]], label: str, phase: int, text: str, *, slot: str, **kw: Any
+) -> None:
     records.append(
         {
             "label": label,
             "kind": kw.get("kind") or _kind(info.name),
             "text": text,
             "phase": phase,
+            "slot": slot,
             "info": info,
             "degraded": kw.get("degraded"),
             "error": kw.get("error"),
             "meta": kw.get("meta"),
+            "preview_text": kw.get("preview_text"),
+            "payload": kw.get("payload"),
             "complete": kw.get("degraded") is None,
         }
     )
@@ -359,28 +381,62 @@ def _emit_slot(
     preview_key: str | None = None,
     field: str | None = None,
     meta: str | None = None,
+    *,
+    slot: str,
+    read: bool = True,
 ) -> None:
-    payload = _slot_payload(state, info.attrs, key, preview_key)
+    payload = _slot_payload(state, info.attrs, key, preview_key, read=read)
     if payload is None:
         return
     obj, text, degraded = payload
     if field is not None:
         text = _payload_field(obj, text, field)
-    _emit(info, records, label, phase, text, degraded=degraded, meta=meta)
+    _emit(
+        info,
+        records,
+        label,
+        phase,
+        text,
+        slot=slot,
+        degraded=degraded,
+        meta=meta,
+        preview_text=_preview_attr(info.attrs, preview_key),
+        payload=obj,
+    )
 
 
-def _emit_turn(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
+def _emit_turn(info: _SpanInfo, records: list[dict[str, Any]], state: Path, *, read: bool = True) -> None:
     before = len(records)
-    _emit_slot(info, records, state, "User input", _PHASE_INPUT, "turn.input", "turn.input_preview", field="content")
+    _emit_slot(
+        info,
+        records,
+        state,
+        "User input",
+        _PHASE_INPUT,
+        "turn.input",
+        "turn.input_preview",
+        field="content",
+        slot="turn.input",
+        read=read,
+    )
     has_input = len(records) > before
     _emit_slot(
-        info, records, state, "Agent reply", _PHASE_OUTPUT, "turn.output", "turn.output_preview", field="content"
+        info,
+        records,
+        state,
+        "Agent reply",
+        _PHASE_OUTPUT,
+        "turn.output",
+        "turn.output_preview",
+        field="content",
+        slot="turn.output",
+        read=read,
     )
     # A turn's start must stay addressable whatever the root carries: without
     # an input-phase record (empty body, or an output-only root) the renderer
     # could not place the turn's own start time, so a marker stands in.
     if not has_input:
-        _emit(info, records, "Turn", _PHASE_INPUT, "")
+        _emit(info, records, "Turn", _PHASE_INPUT, "", slot="turn.marker")
 
 
 def _oversize_placeholder(sha1: str) -> dict[str, str]:
@@ -452,25 +508,34 @@ def _emit_llm(
     info: _SpanInfo,
     records: list[dict[str, Any]],
     state: Path,
-    chains: _ChainState,
+    chains: _ChainState | None,
     blob_cache: dict[str, tuple[Any, str]],
+    *,
+    read: bool = True,
 ) -> None:
+    """``chains=None`` renders every input in full: the history-prefix
+    omission is the CLI preview's display policy, not part of the data."""
     meta = _llm_meta(info.attrs)
     chain = (info.trace_id, info.parent_id)
-    payload = _slot_payload(state, info.attrs, "llm.input")
+    payload = _slot_payload(state, info.attrs, "llm.input", read=read)
     if payload is not None:
         obj, text, degraded = payload
         obj, blob_note = _resolve_v2(obj, state, blob_cache)
         messages = obj.get("messages") if isinstance(obj, dict) else None
         if degraded is None and isinstance(messages, list):
-            is_main = info.turn_span_id is not None and info.parent_id == info.turn_span_id
-            text, degraded = chains.render_input(chain, is_main, messages)
-        else:
+            if chains is None:
+                text = _render_messages(messages)
+            else:
+                is_main = info.turn_span_id is not None and info.parent_id == info.turn_span_id
+                text, degraded = chains.render_input(chain, is_main, messages)
+        elif chains is not None:
             chains.mark_unreadable(chain)
         if blob_note:
             degraded = f"{degraded}; {blob_note}" if degraded else blob_note
-        _emit(info, records, "LLM input", _PHASE_INPUT, text, degraded=degraded, meta=meta)
-    payload = _slot_payload(state, info.attrs, "llm.output", "llm.output_preview")
+        _emit(
+            info, records, "LLM input", _PHASE_INPUT, text, slot="llm.input", degraded=degraded, meta=meta, payload=obj
+        )
+    payload = _slot_payload(state, info.attrs, "llm.output", "llm.output_preview", read=read)
     if payload is None:
         return
     obj, text, degraded = payload
@@ -485,8 +550,32 @@ def _emit_llm(
         text = "\n".join(lines)
         thinking = _thinking_text(obj)
         if thinking:
-            _emit(info, records, "LLM thinking", _PHASE_OUTPUT, thinking, meta=meta)
-    _emit(info, records, "LLM output", _PHASE_OUTPUT, text, degraded=degraded, meta=meta)
+            _emit(info, records, "LLM thinking", _PHASE_OUTPUT, thinking, slot="llm.thinking", meta=meta)
+    elif not read and "llm.reasoning_preview" in info.attrs:
+        reasoning = _preview_attr(info.attrs, "llm.reasoning_preview")
+        _emit(
+            info,
+            records,
+            "LLM thinking",
+            _PHASE_OUTPUT,
+            reasoning or "",
+            slot="llm.thinking",
+            degraded=NOT_LOADED,
+            meta=meta,
+            preview_text=reasoning,
+        )
+    _emit(
+        info,
+        records,
+        "LLM output",
+        _PHASE_OUTPUT,
+        text,
+        slot="llm.output",
+        degraded=degraded,
+        meta=meta,
+        preview_text=_preview_attr(info.attrs, "llm.output_preview"),
+        payload=obj,
+    )
 
 
 def _thinking_text(obj: dict[str, Any]) -> str:
@@ -511,14 +600,24 @@ def _thinking_text(obj: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
-def _emit_tool(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
+def _emit_tool(info: _SpanInfo, records: list[dict[str, Any]], state: Path, *, read: bool = True) -> None:
     meta = _str(info.attrs.get("tool.name"))
     if meta is None:
-        payload = _slot_payload(state, info.attrs, "tool.input")
+        payload = _slot_payload(state, info.attrs, "tool.input", read=read)
         if payload is not None and isinstance(payload[0], dict):
             meta = _str(payload[0].get("name"))
     _emit_slot(
-        info, records, state, "Tool input", _PHASE_INPUT, "tool.input", "tool.args_preview", field="params", meta=meta
+        info,
+        records,
+        state,
+        "Tool input",
+        _PHASE_INPUT,
+        "tool.input",
+        "tool.args_preview",
+        field="params",
+        meta=meta,
+        slot="tool.input",
+        read=read,
     )
     _emit_slot(
         info,
@@ -530,10 +629,12 @@ def _emit_tool(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> N
         "tool.result_preview",
         field="result",
         meta=meta,
+        slot="tool.output",
+        read=read,
     )
 
 
-def _emit_skill_read(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
+def _emit_skill_read(info: _SpanInfo, records: list[dict[str, Any]], state: Path, *, read: bool = True) -> None:
     meta = _str(info.attrs.get("skill.name")) or _str(info.attrs.get("skill.id"))
     _emit_slot(
         info,
@@ -545,11 +646,13 @@ def _emit_skill_read(info: _SpanInfo, records: list[dict[str, Any]], state: Path
         "skill.result_preview",
         field="result",
         meta=meta,
+        slot="skill.read",
+        read=read,
     )
 
 
-def _emit_skill_inject(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
-    payload = _slot_payload(state, info.attrs, "skill.inject")
+def _emit_skill_inject(info: _SpanInfo, records: list[dict[str, Any]], state: Path, *, read: bool = True) -> None:
+    payload = _slot_payload(state, info.attrs, "skill.inject", read=read)
     if payload is not None:
         obj, text, degraded = payload
         if isinstance(obj, dict):
@@ -563,11 +666,18 @@ def _emit_skill_inject(info: _SpanInfo, records: list[dict[str, Any]], state: Pa
             if detail:
                 lines.append(detail)
             text = "\n".join(lines)
-        _emit(info, records, "Skill inject", _PHASE_OUTPUT, text, degraded=degraded)
+        _emit(info, records, "Skill inject", _PHASE_OUTPUT, text, slot="skill.inject", degraded=degraded, payload=obj)
         return
     names = info.attrs.get("skill.inject.names")
     if isinstance(names, list) and names:
-        _emit(info, records, "Skill inject", _PHASE_OUTPUT, f"skills: {', '.join(str(n) for n in names)}")
+        _emit(
+            info,
+            records,
+            "Skill inject",
+            _PHASE_OUTPUT,
+            f"skills: {', '.join(str(n) for n in names)}",
+            slot="skill.inject",
+        )
 
 
 def _emit_subagent(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
@@ -575,7 +685,9 @@ def _emit_subagent(info: _SpanInfo, records: list[dict[str, Any]], state: Path) 
     text = task if task is not None else _domain_summary(info.attrs, info.name)
     if text is None:
         return
-    _emit(info, records, "Subagent", _PHASE_INPUT, text, meta=_str(info.attrs.get("subagent.label")))
+    _emit(
+        info, records, "Subagent", _PHASE_INPUT, text, slot="subagent.run", meta=_str(info.attrs.get("subagent.label"))
+    )
 
 
 def _domain_summary(attrs: dict[str, Any], name: str) -> str | None:
@@ -588,15 +700,21 @@ def _domain_summary(attrs: dict[str, Any], name: str) -> str | None:
     return _pretty(keep) if keep else None
 
 
-def _emit_io_pair(info: _SpanInfo, records: list[dict[str, Any]], state: Path, base_key: str) -> bool:
+def _emit_io_pair(
+    info: _SpanInfo, records: list[dict[str, Any]], state: Path, base_key: str, *, read: bool = True
+) -> bool:
     label_base = _label(info.name)
     before = len(records)
-    _emit_slot(info, records, state, f"{label_base} input", _PHASE_INPUT, f"{base_key}.input")
-    _emit_slot(info, records, state, f"{label_base} output", _PHASE_OUTPUT, f"{base_key}.output")
+    _emit_slot(
+        info, records, state, f"{label_base} input", _PHASE_INPUT, f"{base_key}.input", slot="io.input", read=read
+    )
+    _emit_slot(
+        info, records, state, f"{label_base} output", _PHASE_OUTPUT, f"{base_key}.output", slot="io.output", read=read
+    )
     return len(records) > before
 
 
-def _emit_generic(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -> None:
+def _emit_generic(info: _SpanInfo, records: list[dict[str, Any]], state: Path, *, read: bool = True) -> None:
     keys = sorted(
         k[: -len(".artifact_path")] for k in info.attrs if isinstance(k, str) and k.endswith(".artifact_path")
     )
@@ -607,51 +725,62 @@ def _emit_generic(info: _SpanInfo, records: list[dict[str, Any]], state: Path) -
             label, phase = _label(key[: -len(".output")]) + " output", _PHASE_OUTPUT
         else:
             label, phase = _label(key), _PHASE_OUTPUT
-        _emit_slot(info, records, state, label, phase, key)
+        _emit_slot(info, records, state, label, phase, key, slot=f"artifact:{key}", read=read)
     if keys:
         return
     summary = _domain_summary(info.attrs, info.name)
     if summary is not None:
-        _emit(info, records, _label(info.name), _PHASE_OUTPUT, summary)
+        _emit(info, records, _label(info.name), _PHASE_OUTPUT, summary, slot="summary")
 
 
 def _emit_span(
     info: _SpanInfo,
     records: list[dict[str, Any]],
     state: Path,
-    chains: _ChainState,
+    chains: _ChainState | None,
     blob_cache: dict[str, tuple[Any, str]],
+    *,
+    read: bool = True,
 ) -> None:
     name = info.name
     if name == "session.turn":
-        _emit_turn(info, records, state)
+        _emit_turn(info, records, state, read=read)
     elif name == "llm.call":
-        _emit_llm(info, records, state, chains, blob_cache)
+        _emit_llm(info, records, state, chains, blob_cache, read=read)
     elif name == "tool.call":
-        _emit_tool(info, records, state)
+        _emit_tool(info, records, state, read=read)
     elif name == "skill.read":
-        _emit_skill_read(info, records, state)
+        _emit_skill_read(info, records, state, read=read)
     elif name == "skill.inject":
-        _emit_skill_inject(info, records, state)
+        _emit_skill_inject(info, records, state, read=read)
     elif name == "subagent.run":
         _emit_subagent(info, records, state)
     elif name in ("skill.rewrite", "skill.gate", "context.curate"):
-        if not _emit_io_pair(info, records, state, name):
-            _emit_generic(info, records, state)
+        if not _emit_io_pair(info, records, state, name, read=read):
+            _emit_generic(info, records, state, read=read)
     elif name.startswith("personalize."):
-        if not _emit_io_pair(info, records, state, "personalize"):
-            _emit_generic(info, records, state)
+        if not _emit_io_pair(info, records, state, "personalize", read=read):
+            _emit_generic(info, records, state, read=read)
     elif name in ("memory.recall", "memory.store"):
-        payload = _slot_payload(state, info.attrs, name)
+        payload = _slot_payload(state, info.attrs, name, read=read)
         if payload is not None:
-            _obj, text, degraded = payload
-            _emit(info, records, _label(name), _PHASE_OUTPUT, text, degraded=degraded)
+            obj, text, degraded = payload
+            _emit(
+                info,
+                records,
+                _label(name),
+                _PHASE_OUTPUT,
+                text,
+                slot=f"artifact:{name}",
+                degraded=degraded,
+                payload=obj,
+            )
         else:
             summary = _domain_summary(info.attrs, name)
             if summary is not None:
-                _emit(info, records, _label(name), _PHASE_OUTPUT, summary)
+                _emit(info, records, _label(name), _PHASE_OUTPUT, summary, slot="summary")
     else:
-        _emit_generic(info, records, state)
+        _emit_generic(info, records, state, read=read)
 
 
 def _dedup_span_records(records: list[dict[str, Any]]) -> None:
@@ -736,10 +865,68 @@ def _build_infos(spans: list[dict[str, Any]]) -> list[_SpanInfo]:
                 error=_span_error(span),
                 malformed=(attrs is not None and not isinstance(attrs, dict))
                 or (status is not None and not isinstance(status, dict)),
+                raw=span,
             )
         )
     infos.sort(key=lambda i: (i.start, i.span_id, i.trace_id))
     return infos
+
+
+def span_records(
+    info: _SpanInfo,
+    state: Path,
+    chains: _ChainState | None,
+    blob_cache: dict[str, tuple[Any, str]],
+    *,
+    read: bool = True,
+    dedup: bool = True,
+) -> list[dict[str, Any]]:
+    """Every record one logical span expands to, with its evidence rows.
+
+    The shared per-span step behind the CLI preview and the structured
+    trajectory projection: emission, the unreadable-span fallback, the
+    malformed-record evidence row, and ERROR attribution. ``dedup`` applies
+    the preview's identical-text collapse; ``read=False`` touches no file.
+    """
+    records: list[dict[str, Any]] = []
+    try:
+        _emit_span(info, records, state, chains, blob_cache, read=read)
+        if dedup:
+            _dedup_span_records(records)
+    except Exception as exc:  # noqa: BLE001 — one bad span must stay visible, not sink the preview
+        _log.debug("conversation: span %s/%s unreadable", info.trace_id, info.span_id, exc_info=True)
+        records = []
+        _emit(
+            info,
+            records,
+            _label(info.name),
+            _PHASE_OUTPUT,
+            "",
+            slot="unreadable",
+            degraded=f"span unreadable — {type(exc).__name__}",
+        )
+    if info.malformed:
+        # Always a separate evidence record: readable payloads must not
+        # make a span with a corrupt status/attributes read as fully OK.
+        _emit(
+            info,
+            records,
+            _label(info.name),
+            _PHASE_OUTPUT,
+            "",
+            slot="malformed",
+            degraded="span record malformed — original status/attributes unreadable",
+        )
+    if info.error:
+        # An ERROR is a completion event: it belongs to the span's last
+        # output-phase record (endTime), never to an input record or the
+        # Turn start marker; without one, a completion placeholder stands.
+        target = next((r for r in reversed(records) if r["phase"] == _PHASE_OUTPUT), None)
+        if target is not None:
+            target["error"] = info.error
+        else:
+            _emit(info, records, _label(info.name), _PHASE_OUTPUT, "", slot="error", error=info.error)
+    return records
 
 
 def attempt_conversation(traces: Sequence[str], state_dir: Path | None = None) -> list[ConversationRecord]:
@@ -750,37 +937,7 @@ def attempt_conversation(traces: Sequence[str], state_dir: Path | None = None) -
     blob_cache: dict[str, tuple[Any, str]] = {}
     all_records: list[dict[str, Any]] = []
     for info in infos:
-        records: list[dict[str, Any]] = []
-        try:
-            _emit_span(info, records, state, chains, blob_cache)
-            _dedup_span_records(records)
-        except Exception as exc:  # noqa: BLE001 — one bad span must stay visible, not sink the preview
-            _log.debug("conversation: span %s/%s unreadable", info.trace_id, info.span_id, exc_info=True)
-            records = []
-            _emit(
-                info, records, _label(info.name), _PHASE_OUTPUT, "", degraded=f"span unreadable — {type(exc).__name__}"
-            )
-        if info.malformed:
-            # Always a separate evidence record: readable payloads must not
-            # make a span with a corrupt status/attributes read as fully OK.
-            _emit(
-                info,
-                records,
-                _label(info.name),
-                _PHASE_OUTPUT,
-                "",
-                degraded="span record malformed — original status/attributes unreadable",
-            )
-        if info.error:
-            # An ERROR is a completion event: it belongs to the span's last
-            # output-phase record (endTime), never to an input record or the
-            # Turn start marker; without one, a completion placeholder stands.
-            target = next((r for r in reversed(records) if r["phase"] == _PHASE_OUTPUT), None)
-            if target is not None:
-                target["error"] = info.error
-            else:
-                _emit(info, records, _label(info.name), _PHASE_OUTPUT, "", error=info.error)
-        all_records.extend(records)
+        all_records.extend(span_records(info, state, chains, blob_cache))
 
     def _key(record: dict[str, Any]) -> tuple:
         info: _SpanInfo = record["info"]
@@ -818,4 +975,4 @@ def attempt_conversation(traces: Sequence[str], state_dir: Path | None = None) -
     return out
 
 
-__all__ = ["ConversationRecord", "attempt_conversation"]
+__all__ = ["NOT_LOADED", "ConversationRecord", "attempt_conversation", "span_records"]
