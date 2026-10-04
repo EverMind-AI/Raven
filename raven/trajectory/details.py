@@ -434,7 +434,12 @@ class _Reader:
 
 @dataclass
 class _Loaded:
-    """One artifact as the detail layer sees it."""
+    """One artifact as the detail layer sees it.
+
+    ``json_ok`` says whether the body parsed as JSON. A body that did not is
+    still a readable artifact for a text consumer; only a consumer that needs
+    structure reports it as unreadable (see :func:`_structured_problem`).
+    """
 
     availability: str
     reason: str | None
@@ -442,6 +447,18 @@ class _Loaded:
     text: str | None
     integrity: tuple[str, ...]
     loaded: bool
+    json_ok: bool = True
+
+
+def _structured_problem(load: _Loaded) -> tuple[str, str] | None:
+    """(availability, integrity code) when a structured consumer cannot use ``load``."""
+    if not load.loaded or load.availability in (AVAILABLE, NOT_RECORDED) and load.json_ok:
+        return None
+    if load.availability == AVAILABLE and not load.json_ok:
+        return UNREADABLE, "artifact_unreadable"
+    if load.availability in (MISSING, UNREADABLE, TRUNCATED):
+        return load.availability, load.reason or load.availability
+    return None
 
 
 _REASON_RULES = (
@@ -468,7 +485,7 @@ def _load(reader: _Reader, attrs: dict[str, Any], key: str) -> _Loaded:
         return _Loaded(TRUNCATED, "artifact_truncated", None, text, ("artifact_truncated",), True)
     payload, ok = _conv._parse_json(text)
     if not ok:
-        return _Loaded(UNREADABLE, "artifact_unreadable", None, text, ("artifact_unreadable",), True)
+        return _Loaded(AVAILABLE, None, None, text, (), True, json_ok=False)
     return _Loaded(AVAILABLE, None, payload, text, (), True)
 
 
@@ -642,6 +659,27 @@ def _kv_block(
     return (AVAILABLE if items else NOT_RECORDED), {"items": _kv(items)}, integrity, reason
 
 
+def _kv_from(load: _Loaded, items: list[tuple[str, Any, str]]) -> _Derived:
+    """A key-value block fed by ``load`` plus attribute fallbacks.
+
+    A source that was recorded but could not be used (missing, out of store,
+    truncated, not JSON) is reported as such -- with the attribute items when
+    there are any, so the block still shows what it can, and as the failure
+    alone when there are none. ``not_recorded`` is reserved for a source that
+    was never recorded.
+    """
+    if not load.loaded:
+        return (AVAILABLE if items else AVAILABLE), {"items": _kv(items)} if items else None, (), REASON_NOT_LOADED
+    problem = _structured_problem(load)
+    if problem is None:
+        return _kv_block(items, load.integrity)
+    availability, code = problem
+    integrity = tuple(dict.fromkeys((*load.integrity, code)))
+    if items:
+        return AVAILABLE, {"items": _kv(items)}, integrity, code
+    return availability, None, integrity, code
+
+
 def _fields(loaded: _Loaded, keys: Sequence[str]) -> list[tuple[str, Any, str]]:
     return [(key, _field(loaded, key)[1], "artifact") for key in keys if _field(loaded, key)[0]]
 
@@ -653,17 +691,14 @@ def _attr_pairs(attrs: dict[str, Any], keys: Sequence[str]) -> list[tuple[str, A
 def _from_payload_and_attrs(load_key: str, fields: Sequence[str], attr_keys: Sequence[str]) -> Callable[..., _Derived]:
     def build(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
         load = loaded(load_key)
-        items = _fields(load, fields) + _attr_pairs(attrs, attr_keys)
-        return _kv_block(items, load.integrity, _not_loaded(load))
+        return _kv_from(load, _fields(load, fields) + _attr_pairs(attrs, attr_keys))
 
     return build
 
 
 def _d_turn_origin(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
     load = loaded("turn.input")
-    return _kv_block(
-        _fields(load, ("channel", "chat_id")) + _attr_pairs(attrs, ("channel", "surface", "chat_id")), load.integrity
-    )
+    return _kv_from(load, _fields(load, ("channel", "chat_id")) + _attr_pairs(attrs, ("channel", "surface", "chat_id")))
 
 
 def _d_turn(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
@@ -696,13 +731,20 @@ def _d_llm_usage(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _De
     if present and value is not None:
         items.append(("usage", value, "artifact"))
     items += _attr_pairs(attrs, sorted(k for k in attrs if isinstance(k, str) and k.startswith("llm.usage.")))
-    return _kv_block(items, out.integrity, _not_loaded(out))
+    return _kv_from(out, items)
 
 
 def _d_llm_response(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
     out = loaded("llm.output")
     present, value = _field(out, "call")
     extra = {key: attrs[key] for key in ("llm.http_status", "llm.served_by", "llm.response_id") if key in attrs}
+    problem = _structured_problem(out)
+    if problem is not None:
+        availability, code = problem
+        integrity = tuple(dict.fromkeys((*out.integrity, code)))
+        if extra:
+            return AVAILABLE, {"value": extra}, integrity, code
+        return availability, None, integrity, code
     if not present and not extra:
         return NOT_RECORDED, None, out.integrity, _not_loaded(out)
     return AVAILABLE, {"value": {"call": value, **extra}}, out.integrity, _not_loaded(out)
@@ -954,13 +996,27 @@ def _evaluate(spec: BlockSpec, view: EntryView, reader: _Reader, loaded: Callabl
     if not load.loaded:
         return _Evaluated(spec, AVAILABLE, REASON_NOT_LOADED, None, (), None, False)
     if load.availability != AVAILABLE:
-        if spec.renderer == TEXT and load.text is not None and spec.field is None:
-            return _Evaluated(spec, load.availability, load.reason, {"text": load.text}, load.integrity, None, True)
-        if spec.renderer == TEXT and load.availability == UNREADABLE and load.text is not None:
-            return _Evaluated(spec, AVAILABLE, None, {"text": load.text}, (), None, True)
-        if spec.renderer == TEXT and load.availability == TRUNCATED and load.text is not None:
-            return _Evaluated(spec, TRUNCATED, load.reason, {"text": load.text}, load.integrity, None, True)
+        if (
+            load.availability == TRUNCATED
+            and load.text is not None
+            and spec.field is None
+            and spec.renderer in (TEXT, JSON)
+        ):
+            # The readable prefix of a whole-body artifact is still worth
+            # showing; cut mid-JSON it can only be shown as text.
+            text_spec = replace(spec, renderer=TEXT)
+            return _Evaluated(text_spec, TRUNCATED, load.reason, {"text": load.text}, load.integrity, None, True)
         return _Evaluated(spec, load.availability, load.reason, None, load.integrity, None, True)
+    if not load.json_ok:
+        # A readable body that is not JSON: whole-body consumers show it as
+        # text (the generic content block picks the text renderer for it);
+        # a consumer that needs a field or a structure cannot use it.
+        if spec.field is None and spec.renderer in (TEXT, JSON):
+            text_spec = replace(spec, renderer=TEXT)
+            return _Evaluated(text_spec, AVAILABLE, None, {"text": load.text or ""}, load.integrity, None, True)
+        return _Evaluated(
+            spec, UNREADABLE, "artifact_unreadable", None, (*load.integrity, "artifact_unreadable"), None, True
+        )
     present, value = _field(load, spec.field)
     if not present:
         if not spec.required:
@@ -1067,6 +1123,50 @@ def _preview_for(evaluated: _Evaluated, reader: _Reader) -> tuple[Any, tuple[str
 # ── public API ────────────────────────────────────────────────────────
 
 
+def _blob_integrity(view: EntryView, loaded: _Loader, state: Path) -> list[str]:
+    """Existence and size of every referenced message blob, by stat alone."""
+    codes: list[str] = []
+    attrs = tstore._span_attrs(view.span or {})
+    for key in sorted(k for k in attrs if isinstance(k, str) and k.endswith(".artifact_path")):
+        load = loaded(key[: -len(".artifact_path")])
+        if not load.loaded or not isinstance(load.payload, dict):
+            continue
+        refs = []
+        for item in load.payload.get("messages") or []:
+            sha1 = artifact_v2.ref_sha1(item)
+            if sha1 is not None:
+                refs.append(sha1)
+        for field in artifact_v2.TEXT_FIELDS:
+            sha1 = artifact_v2.ref_sha1(load.payload.get(field))
+            if sha1 is not None:
+                refs.append(sha1)
+        for sha1 in dict.fromkeys(refs):
+            path = artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)
+            try:
+                size = path.stat().st_size
+            except OSError:
+                if "blob_missing" not in codes:
+                    codes.append("blob_missing")
+                continue
+            if size > ARTIFACT_LIMIT and "blob_truncated" not in codes:
+                codes.append("blob_truncated")
+    return codes
+
+
+def _integrity_block(
+    view: EntryView, evaluated: Sequence[_Evaluated], loaded: _Loader, state: Path
+) -> _Evaluated | None:
+    """The integrity block: the entry's codes plus everything this read found."""
+    codes = list(view.entry.integrity)
+    for block in evaluated:
+        codes.extend(code for code in block.integrity if code not in codes)
+    codes.extend(code for code in _blob_integrity(view, loaded, state) if code not in codes)
+    if not codes:
+        return None
+    spec = next(s for s in _TAIL if s.id == "integrity")
+    return _Evaluated(spec, AVAILABLE, None, {"items": codes, "offset": 0}, (), len(codes), True)
+
+
 def _blocks_for(view: EntryView, reader: _Reader) -> list[_Evaluated]:
     loaded = _loader(view, reader)
     specs = (*_kind_specs(view.entry), *_TAIL)
@@ -1074,7 +1174,7 @@ def _blocks_for(view: EntryView, reader: _Reader) -> list[_Evaluated]:
     for spec in specs:
         if spec.id == "error" and view.entry.operation_status != _entries.STATUS_ERROR:
             continue
-        if spec.id == "integrity" and not view.entry.integrity:
+        if spec.id == "integrity":
             continue
         evaluated = _evaluate(spec, view, reader, loaded)
         if evaluated is None:
@@ -1082,6 +1182,10 @@ def _blocks_for(view: EntryView, reader: _Reader) -> list[_Evaluated]:
         if spec.id in _OPTIONAL_DEPENDENT and not evaluated.loaded:
             evaluated.reason = REASON_NOT_LOADED
         out.append(evaluated)
+    integrity = _integrity_block(view, out, loaded, reader.state)
+    if integrity is not None:
+        raw_index = next((i for i, b in enumerate(out) if b.spec.id == "raw"), len(out))
+        out.insert(raw_index, integrity)
     return out
 
 
@@ -1228,11 +1332,16 @@ def read_block(
         raise UnknownBlockError(block_id)
     if spec.id == "error" and view.entry.operation_status != _entries.STATUS_ERROR:
         raise UnknownBlockError(block_id)
-    if spec.id == "integrity" and not view.entry.integrity:
-        raise UnknownBlockError(block_id)
-    evaluated = _evaluate(spec, view, reader, loaded)
+    if spec.id == "integrity":
+        found = next((b for b in _blocks_for(view, reader) if b.spec.id == "integrity"), None)
+        if found is None:
+            raise UnknownBlockError(block_id)
+        evaluated = found
+    else:
+        evaluated = _evaluate(spec, view, reader, loaded)
     if evaluated is None:
         evaluated = _Evaluated(spec, NOT_RECORDED, NOT_RECORDED, None, (), None, True)
+    spec = evaluated.spec
     _text_prepare(evaluated, reader)
     budget = RESPONSE_LIMIT - RESPONSE_RESERVE
     data = evaluated.data

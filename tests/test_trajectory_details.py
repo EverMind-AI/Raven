@@ -566,12 +566,14 @@ def test_availability_states_and_real_values(state, tmp_path):
     assert (content.availability, content.reason) == (tdet.UNREADABLE, "artifact_unreadable")
     bad_entry = _entry(index, "bad", "artifact:foo.raw")
     content = next(b for b in _describe(index, state, bad_entry).blocks if b.id == "content")
-    assert content.availability == tdet.UNREADABLE
+    assert (content.availability, content.renderer) == (tdet.AVAILABLE, tdet.TEXT)
+    assert _block(index, state, bad_entry, "content").data == {"text": "not json"}
     big_entry = _entry(index, "big", "artifact:foo.big")
     content = next(b for b in _describe(index, state, big_entry).blocks if b.id == "content")
     assert (content.availability, content.reason) == (tdet.TRUNCATED, "artifact_truncated")
     body = _block(index, state, big_entry, "content")
-    assert body.availability == tdet.TRUNCATED and body.data is None
+    assert body.availability == tdet.TRUNCATED and body.renderer == tdet.TEXT and body.truncated
+    assert body.data["text"].startswith('{"pad"') and "artifact_truncated" in body.integrity
     zero = _block(index, state, _entry(index, "zero", "tool.output"), "result")
     assert zero.availability == tdet.AVAILABLE and zero.data == {"text": ""}
     false_result = _block(index, state, _entry(index, "pz", "io.output"), "result")
@@ -724,7 +726,7 @@ def test_response_budget_degrades_every_renderer(state, monkeypatch):
     for _ in range(12):
         deep = {"n": deep}
     huge_text = "t" * (600 * 1024)
-    big_item = {"content": "é" * (700 * 1024)}
+    big_item = {"content": "é" * (150 * 1024)}
     big_attr = {"blob": "z" * (100 * 1024)}
     spans = [
         _turn(state, "t", "turn", start=0, end=100, content_in=huge_text),
@@ -764,18 +766,31 @@ def test_response_budget_degrades_every_renderer(state, monkeypatch):
             end=8,
             attrs={**{f"subagent.external.frames.{i}": f"f{i}" for i in range(120)}, "subagent.external.agent": "a"},
         ),
+        _span(
+            "t",
+            "note",
+            "foo.bar",
+            parent="turn",
+            start=9,
+            end=10,
+            attrs={"foo.note.artifact_path": _artifact(state, "n" * (600 * 1024), "long-note")},
+        ),
     ]
     _append(state, spans)
     index = _ready(state)
     text = _block(index, state, _entry(index, "turn", "turn.input"), "content")
-    assert text.truncated and text.availability == tdet.TRUNCATED
-    assert len(text.data["text"].encode()) < tdet.RESPONSE_LIMIT
+    assert text.truncated and text.availability == tdet.TRUNCATED and text.data is None
+    note = _block(index, state, _entry(index, "note", "artifact:foo.note"), "content")
+    assert note.truncated and note.availability == tdet.TRUNCATED
+    assert len(note.data["text"].encode()) <= tdet.ARTIFACT_LIMIT
     deep_body = _block(index, state, _entry(index, "deep", "artifact:foo.deep"), "content")
     assert deep_body.truncated and "$depth_truncated" in json.dumps(deep_body.data)
     monkeypatch.setattr(tdet, "RESPONSE_LIMIT", 200 * 1024)
     items_entry = _entry(index, "items", "artifact:foo.list")
     body = _block(index, state, items_entry, "content")
-    assert body.renderer == tdet.JSON
+    assert body.renderer == tdet.JSON and body.truncated and body.availability == tdet.TRUNCATED
+    assert tdet._size(body.data) <= 200 * 1024 - tdet.RESPONSE_RESERVE
+    assert "$depth_truncated" in json.dumps(body.data) or body.data["value"].get("$oversize") is True
     monkeypatch.setattr(tdet, "RESPONSE_LIMIT", 1024 * 1024)
     monkeypatch.setattr(tdet, "VALUE_LIMIT", 1024)
     attrs_body = _block(index, state, _entry(index, "attrs", "summary"), "operation")
@@ -1074,3 +1089,142 @@ def test_page_cursor_is_bound_to_revision_and_epoch(state):
                 epoch=first.epoch,
                 cursor=first.next_cursor,
             )
+
+
+# ── review regressions ────────────────────────────────────────────────
+
+
+def test_plain_text_artifacts_are_available_text(state):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _span(
+                "t",
+                "ext",
+                "subagent.external",
+                parent="turn",
+                start=1,
+                end=2,
+                attrs={
+                    "subagent.external.agent": "codex",
+                    "subagent.external.transcript.artifact_path": _artifact(state, "plain transcript", "tr"),
+                },
+            ),
+            _span(
+                "t",
+                "foo",
+                "foo.bar",
+                parent="turn",
+                start=3,
+                end=4,
+                attrs={"foo.note.artifact_path": _artifact(state, "just a note", "note")},
+            ),
+        ],
+    )
+    index = _ready(state)
+    ext = _entry(index, "ext", "artifact:subagent.external.transcript")
+    descriptor = _describe(index, state, ext)
+    transcript = next(b for b in descriptor.blocks if b.id == "transcript")
+    assert (transcript.availability, transcript.reason, transcript.renderer) == (tdet.AVAILABLE, None, tdet.TEXT)
+    assert descriptor.integrity == () and "integrity" not in _ids(descriptor)
+    body = _block(index, state, ext, "transcript")
+    assert body.availability == tdet.AVAILABLE and body.data == {"text": "plain transcript"} and body.integrity == ()
+    note = _entry(index, "foo", "artifact:foo.note")
+    content = next(b for b in _describe(index, state, note).blocks if b.id == "content")
+    assert (content.renderer, content.availability) == (tdet.TEXT, tdet.AVAILABLE)
+    assert _block(index, state, note, "content").data == {"text": "just a note"}
+
+
+def test_integrity_block_covers_problems_found_while_reading(state):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _llm(state, "t", "llm", "turn", start=1, end=2, v2_count=6, output={"content": "a"}),
+            _tool(state, "t", "tool", "turn", start=3, end=4),
+        ],
+    )
+    index = _ready(state)
+    llm_in = _entry(index, "llm", "llm.input")
+    tool_out = _entry(index, "tool", "tool.output")
+    assert llm_in.integrity == () and tool_out.integrity == ()
+    shell = json.loads(Path(tidx.tstore._span_attrs(index.span("t", "llm"))["llm.input.artifact_path"]).read_text())
+    artifact_v2.message_path(state / "logs" / "audit-artifacts", shell["messages"][1]["$msg"]).unlink()
+    Path(tidx.tstore._span_attrs(index.span("t", "tool"))["tool.output.artifact_path"]).unlink()
+    descriptor = _describe(index, state, llm_in)
+    assert "blob_missing" in descriptor.integrity and "integrity" in _ids(descriptor)
+    body = _block(index, state, llm_in, "integrity")
+    assert "blob_missing" in body.data["items"]
+    tool_descriptor = _describe(index, state, tool_out)
+    assert "artifact_missing" in tool_descriptor.integrity and "integrity" in _ids(tool_descriptor)
+    assert "artifact_missing" in _block(index, state, tool_out, "integrity").data["items"]
+    assert _ids(tool_descriptor).index("integrity") == _ids(tool_descriptor).index("raw") - 1
+
+
+def test_derived_blocks_keep_source_failures(state, monkeypatch):
+    big = {"turn_id": "x", "session_key": SESSION, "pad": "x" * (600 * 1024)}
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _span(
+                "t",
+                "curate",
+                "context.curate",
+                parent="turn",
+                start=1,
+                end=2,
+                attrs={"context.curate.input.artifact_path": str(state / "logs" / "audit-artifacts" / "gone.json")},
+            ),
+            _span(
+                "t",
+                "big",
+                "context.curate",
+                parent="turn",
+                start=3,
+                end=4,
+                attrs={"context.curate.input.artifact_path": _artifact(state, big, "big-curate")},
+            ),
+            _span(
+                "t",
+                "raw",
+                "context.curate",
+                parent="turn",
+                start=5,
+                end=6,
+                attrs={"context.curate.input.artifact_path": _artifact(state, "not json", "raw-curate")},
+            ),
+            _llm(
+                state,
+                "t",
+                "llm",
+                "turn",
+                start=7,
+                end=8,
+                output={"content": "a", "usage": {"input_tokens": 1}},
+                extra={"llm.usage.input_tokens": 1, "llm.http_status": 200},
+            ),
+        ],
+    )
+    index = _ready(state)
+    Path(tidx.tstore._span_attrs(index.span("t", "llm"))["llm.output.artifact_path"]).unlink()
+    request = _block(index, state, _entry(index, "curate", "io.input"), "request")
+    assert (request.availability, request.reason) == (tdet.MISSING, "artifact_missing") and request.data is None
+    assert "artifact_missing" in request.integrity
+    big_request = _block(index, state, _entry(index, "big", "io.input"), "request")
+    assert (big_request.availability, big_request.reason) == (tdet.TRUNCATED, "artifact_truncated")
+    raw_request = _block(index, state, _entry(index, "raw", "io.input"), "request")
+    assert (raw_request.availability, raw_request.reason) == (tdet.UNREADABLE, "artifact_unreadable")
+    usage = _block(index, state, _entry(index, "llm", "llm.output"), "usage")
+    assert usage.availability == tdet.AVAILABLE and usage.reason == "artifact_missing"
+    assert {item["key"] for item in usage.data["items"]} == {
+        "llm.usage.input_tokens"
+    } and "artifact_missing" in usage.integrity
+    response = _block(index, state, _entry(index, "llm", "llm.output"), "response")
+    assert response.availability == tdet.AVAILABLE and response.reason == "artifact_missing"
+    assert response.data["value"] == {"llm.http_status": 200}
+    monkeypatch.setattr(tdet, "DESCRIBE_ARTIFACTS", 0)
+    descriptor = _describe(index, state, _entry(index, "curate", "io.input"))
+    request_block = next(b for b in descriptor.blocks if b.id == "request")
+    assert (request_block.availability, request_block.reason) == (tdet.AVAILABLE, tdet.REASON_NOT_LOADED)

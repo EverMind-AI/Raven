@@ -768,9 +768,11 @@ def preview_records(
             position += 1
             continue
         if not capped and not ok:
-            source = text
-            loaded = _loaded_record(record, preview_text(source), capped=False, payload=None)
-            loaded["degraded"] = "artifact is not valid JSON — shown raw"
+            # A generic artifact slot takes the body whole, so plain text is a
+            # valid body; a slot that expects a structured payload cannot use it.
+            loaded = _loaded_record(record, preview_text(text), capped=False, payload=None)
+            if not record["slot"].startswith("artifact:"):
+                loaded["degraded"] = "artifact is not valid JSON — shown raw"
             records[index] = loaded
             position += 1
             continue

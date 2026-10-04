@@ -939,7 +939,16 @@ def test_preview_records_bad_json_dir_and_capped_reads(state):
     cache = tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7))
     entries = tent.project_entries([span], state=state, cached_records={("t", "foo"): cache.records}).entries
     raw = _one(entries, "foo", "artifact:foo.raw")
-    assert raw.preview == "not json at all" and "artifact_unreadable" in raw.integrity
+    assert raw.preview == "not json at all" and "artifact_unreadable" not in raw.integrity
+    tool_attrs = {"tool.name": "t", "tool.output.artifact_path": _artifact(state, "not json either", "raw-tool")}
+    tool_span = _span("t", "tool", "tool.call", start=0, end=1, attrs=tool_attrs)
+    tool_cache = tent.preview_records(tool_span, state=state, budget=tent.ReadBudget(10, 10**7))
+    tool_out = _one(
+        tent.project_entries([tool_span], state=state, cached_records={("t", "tool"): tool_cache.records}).entries,
+        "tool",
+        "tool.output",
+    )
+    assert "artifact_unreadable" in tool_out.integrity and tool_out.preview == "not json either"
     folder_entry = _one(entries, "foo", "artifact:foo.dir")
     assert "artifact_unreadable" in folder_entry.integrity
     big = _one(entries, "foo", "artifact:foo.big")
