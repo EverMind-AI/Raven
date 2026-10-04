@@ -167,7 +167,10 @@ def render_config(source: Path) -> Path:
     config.pop("routing", None)
     taken = render.inherit_llm(config, deepcopy(host))
     if not taken:
-        raise SystemExit("error: configure a model provider in the host Raven settings before starting Design")
+        raise SystemExit(
+            "error: configure a model provider in the host Raven settings before starting Design "
+            f"({render.inherit_refusal(config, host)})"
+        )
     log(f"[run] llm: inherited from the host ({taken})")
 
     # The pooled loop reads identity, sessions, transcripts and the skill pool

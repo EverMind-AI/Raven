@@ -413,9 +413,9 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
         taken = render.inherit_llm(config, host)
         if not taken:
             raise SystemExit(
-                f"error: {llm_key} is not set and the host config has no provider key to "
-                f"inherit from; put the key in {HERE / '.env'} (see .env.example), export "
-                f"it, or configure a provider in the host raven"
+                f"error: {llm_key} is not set and the host's model cannot be inherited "
+                f"({render.inherit_refusal(config, host)}); put the key in {HERE / '.env'} "
+                f"(see .env.example), export it, or configure a provider in the host raven"
             )
         log(f"[run] llm: inherited from the host ({taken})")
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import py_compile
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -353,6 +354,7 @@ def test_gold_a_keyless_world_reports_the_fail_closed_refusal(raven_home: Path, 
     assert "readiness=ready" in r.output
     assert "fail-closed" in r.output
     assert "DEMO_AGENT_API_KEY is not set" in r.output
+    assert re.search(r"cannot be inherited \([^)]+\); put the key in", r.output), r.output
     assert "handshake GREEN" not in r.output
 
 
