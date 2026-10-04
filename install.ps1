@@ -182,22 +182,26 @@ function Install-PrivateNode {
         Write-Info "  $url"
         Invoke-WebRequest $url -OutFile $zipPath
 
+        # A zip that cannot be verified is treated like one that fails
+        # verification: it is never extracted. Fail raises under this script's
+        # ErrorActionPreference, so only the fetch sits inside the try below; a
+        # Fail inside it would be caught there and the zip extracted anyway.
+        $hint = "Install Node.js >= $MinNodeMajor with npm yourself and re-run; the installer then uses it instead of downloading one."
         try {
-            $sums = (Invoke-WebRequest "https://nodejs.org/dist/$version/SHASUMS256.txt").Content
-            $line = ($sums -split "`n") | Where-Object { $_ -match "\s+$([regex]::Escape("$pkg.zip"))$" } | Select-Object -First 1
-            if ($line) {
-                $expected = (($line.Trim()) -split "\s+")[0].ToLowerInvariant()
-                $actual = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($expected -ne $actual) {
-                    Fail "Node checksum mismatch (expected $expected, got $actual)."
-                }
-                Write-Ok "Node zip SHA256 verified"
-            } else {
-                Write-Warn "SHASUMS256.txt did not list $pkg.zip; skipping checksum verification"
-            }
+            $sums = (Invoke-WebRequest "https://nodejs.org/dist/$version/SHASUMS256.txt" -UseBasicParsing).Content
         } catch {
-            Write-Warn "Could not verify Node checksum; continuing"
+            Fail "Could not fetch SHASUMS256.txt for Node $version, so the download cannot be verified. $hint"
         }
+        $line = ($sums -split "`n") | Where-Object { $_ -match "\s+$([regex]::Escape("$pkg.zip"))$" } | Select-Object -First 1
+        if (-not $line) {
+            Fail "SHASUMS256.txt for Node $version does not list $pkg.zip, so the download cannot be verified. $hint"
+        }
+        $expected = (($line.Trim()) -split "\s+")[0].ToLowerInvariant()
+        $actual = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($expected -ne $actual) {
+            Fail "Node checksum mismatch (expected $expected, got $actual)."
+        }
+        Write-Ok "Node zip SHA256 verified"
 
         Expand-Archive $zipPath -DestinationPath $tmp -Force
         $src = Join-Path $tmp $pkg

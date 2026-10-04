@@ -401,6 +401,260 @@ def test_resolve_node_dir_answers_each_case_it_exists_for(tmp_path: Path) -> Non
     assert not node_dir and blocker == "No usable node found", "ensure_node owns the no-node case"
 
 
+# --- The private Node runtime is verified before it is extracted -------------
+# provision_private_node downloads a binary the installer then runs, so every
+# way of failing to verify it has to end where a mismatch does: nothing is
+# extracted. Each case runs the real function against a fake nodejs.org that
+# publishes one release and answers only that release's exact URLs.
+
+_NODE_STEP = ("sha256_of", "latest_node_v22", "provision_private_node")
+_NODE_PKG = "node-v22.99.0-linux-x64"
+# The same package as .tar.xz sits first: a lookup that matches a prefix
+# instead of the whole name reads the wrong digest.
+_OTHER_ENTRIES = f"{'1' * 64}  {_NODE_PKG}.tar.xz\n{'2' * 64}  node-v22.99.0-darwin-arm64.tar.gz\n"
+
+
+def _have(hidden: tuple[str, ...] = ()) -> str:
+    """A shell `have` that reports the named tools as missing."""
+    if not hidden:
+        return 'have() { command -v "$1" >/dev/null 2>&1; }\n'
+    return f'have() {{ case "$1" in {"|".join(hidden)}) return 1 ;; esac; command -v "$1" >/dev/null 2>&1; }}\n'
+
+
+def _node_release(tmp_path: Path) -> tuple[Path, str]:
+    """Publish v22.99.0 the way nodejs.org lays a release out; return the
+    directory serving it and the tarball's digest."""
+    import hashlib
+    import io
+    import tarfile
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.json").write_text('[{"version":"v22.99.0","lts":"Jod"}]', encoding="utf-8")
+    node = b"#!/bin/sh\necho v22.99.0\n"
+    entry = tarfile.TarInfo(f"{_NODE_PKG}/bin/node")
+    entry.size, entry.mode, entry.mtime = len(node), 0o755, int(time.time())
+    with tarfile.open(dist / "node.tar.gz", "w:gz") as tar:
+        tar.addfile(entry, io.BytesIO(node))
+    return dist, hashlib.sha256((dist / "node.tar.gz").read_bytes()).hexdigest()
+
+
+def _run_node_step(tmp_path: Path, dist: Path, listing: str | None, *, hidden: tuple[str, ...] = ()):
+    """Run provision_private_node with `listing` as the release's SHASUMS256.txt
+    (None: the file cannot be fetched). Returns the result, the runtime
+    directory, and the directory its downloads are staged in."""
+    if listing is not None:
+        (dist / "SHASUMS256.txt").write_text(listing, encoding="utf-8")
+    text = INSTALL_SH.read_text(encoding="utf-8")
+    bodies = [re.search(rf"^{name}\(\) \{{.*?^\}}$", text, re.S | re.M).group(0) for name in _NODE_STEP]
+    harness = tmp_path / "node-step.sh"
+    harness.write_text(
+        "set -eu\n"
+        "info() { :; }\n"
+        "ok() { printf 'OK %s\\n' \"$1\"; }\n"
+        "warn() { printf 'WARN %s\\n' \"$1\" >&2; }\n"
+        "die() { printf 'DIE %s\\n' \"$1\" >&2; exit 1; }\n"
+        + _have(hidden)
+        + re.search(r"^MIN_NODE_MAJOR=.*$", text, re.M).group(0)
+        + "\n"
+        + "\n".join(bodies)
+        + "\nprovision_private_node\n",
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    base = "https://nodejs.org/dist"
+    (bin_dir / "curl").write_text(
+        "#!/bin/sh\n"
+        'out=""\n'
+        'while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; http*) url="$1"; shift ;; *) shift ;; esac; done\n'
+        'case "$url" in\n'
+        f"  {base}/index.json) src='{dist}/index.json' ;;\n"
+        f"  {base}/v22.99.0/SHASUMS256.txt) src='{dist}/SHASUMS256.txt' ;;\n"
+        f"  {base}/v22.99.0/{_NODE_PKG}.tar.gz) src='{dist}/node.tar.gz' ;;\n"
+        "  *) exit 22 ;;\n"
+        "esac\n"
+        '[ -f "$src" ] || exit 22\n'
+        'if [ -n "$out" ]; then cp "$src" "$out"; else cat "$src"; fi\n',
+        encoding="utf-8",
+    )
+    (bin_dir / "curl").chmod(0o755)
+    runtime, staging = tmp_path / "runtime", tmp_path / "staging"
+    staging.mkdir()
+    result = subprocess.run(
+        ["sh", str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "HOME": str(tmp_path),
+            "TMPDIR": str(staging),
+            "NODE_RUNTIME_DIR": str(runtime),
+            "NODE_OS": "linux",
+            "NODE_ARCH": "x64",
+        },
+    )
+    return result, runtime, staging
+
+
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="POSIX sh only")
+def test_a_node_download_that_matches_its_published_digest_is_installed(tmp_path: Path) -> None:
+    dist, digest = _node_release(tmp_path)
+    result, runtime, staging = _run_node_step(tmp_path, dist, _OTHER_ENTRIES + f"{digest}  {_NODE_PKG}.tar.gz\n")
+
+    assert result.returncode == 0, result.stderr
+    node = runtime / _NODE_PKG / "bin" / "node"
+    assert node.is_file() and os.access(node, os.X_OK)
+    assert list(staging.iterdir()) == [], "the download is not left behind"
+
+
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="POSIX sh only")
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("digest-mismatch", "mismatch"),
+        ("checksums-unreachable", "SHASUMS256.txt"),
+        ("package-not-listed", f"{_NODE_PKG}.tar.gz"),
+        ("no-hash-tool", "sha256sum"),
+    ],
+)
+def test_a_node_download_that_cannot_be_verified_is_never_extracted(tmp_path: Path, case: str, reason: str) -> None:
+    """A missing checksum file, a missing entry, and a missing hash tool each
+    leave the download unverified, and an unverified binary is one the
+    installer must not run. Each stops the install with its own reason."""
+    dist, digest = _node_release(tmp_path)
+    listing = {
+        "digest-mismatch": _OTHER_ENTRIES + f"{'0' * 64}  {_NODE_PKG}.tar.gz\n",
+        "checksums-unreachable": None,
+        "package-not-listed": _OTHER_ENTRIES,
+        "no-hash-tool": _OTHER_ENTRIES + f"{digest}  {_NODE_PKG}.tar.gz\n",
+    }[case]
+    hidden = ("sha256sum", "shasum") if case == "no-hash-tool" else ()
+    result, runtime, staging = _run_node_step(tmp_path, dist, listing, hidden=hidden)
+
+    assert result.returncode != 0 and "DIE " in result.stderr, result.stdout + result.stderr
+    assert reason in result.stderr
+    assert list(runtime.iterdir()) == [], "nothing unverified is extracted"
+    assert list(staging.iterdir()) == [], "the download is not left behind"
+
+
+# The Windows twin runs the real Install-PrivateNode and the real Fail, parsed
+# out of install.ps1, against the same kind of fake release. Fail raises under
+# the script's ErrorActionPreference, so a Fail inside a try is caught by that
+# try's own catch -- the mismatch case is the one that sees it.
+
+_PS1_PKG = "node-v22.99.0-win-x64"
+_PS1_NODE_STEP = r"""
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($Ps1, [ref]$null, [ref]$null)
+foreach ($name in @("Fail", "Install-PrivateNode")) {
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    Invoke-Expression $fn.Extent.Text
+}
+function Write-Info([string]$Message) { }
+function Write-Ok([string]$Message) { }
+function Write-Warn([string]$Message) { [Console]::Out.WriteLine("WARN $Message") }
+function Get-NodeArch { "x64" }
+function Get-LatestNodeV22 { "v22.99.0" }
+function Test-NodeOk([string]$Path) { Test-Path $Path }
+function Add-ProcessPath([string]$PathToAdd) { }
+function Invoke-WebRequest {
+    param([Parameter(Position = 0)][string]$Uri, [string]$OutFile, [switch]$UseBasicParsing)
+    $release = "https://nodejs.org/dist/v22.99.0"
+    $file = @{ "$release/node-v22.99.0-win-x64.zip" = "node.zip"; "$release/SHASUMS256.txt" = "SHASUMS256.txt" }[$Uri]
+    if (-not $file -or -not (Test-Path (Join-Path $Dist $file))) { throw "404 Not Found: $Uri" }
+    if ($OutFile) { Copy-Item (Join-Path $Dist $file) $OutFile; return }
+    [pscustomobject]@{ Content = (Get-Content -Raw (Join-Path $Dist $file)) }
+}
+$NodeRuntimeDir = $Runtime
+$null = Install-PrivateNode
+"""
+
+
+def _ps1_node_release(tmp_path: Path) -> tuple[Path, str]:
+    import hashlib
+    import zipfile
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    with zipfile.ZipFile(dist / "node.zip", "w") as archive:
+        archive.writestr(f"{_PS1_PKG}/node.exe", "a node.exe that is not really one")
+    return dist, hashlib.sha256((dist / "node.zip").read_bytes()).hexdigest()
+
+
+def _run_ps1_node_step(tmp_path: Path, dist: Path, listing: str | None):
+    if listing is not None:
+        (dist / "SHASUMS256.txt").write_text(listing, encoding="utf-8")
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    settings = [
+        re.search(rf"^\${name} = .*$", text, re.M).group(0) for name in ("ErrorActionPreference", "MinNodeMajor")
+    ]
+    harness = tmp_path / "node-step.ps1"
+    harness.write_text(
+        "param([string]$Ps1, [string]$Dist, [string]$Runtime)\n" + "\n".join(settings) + _PS1_NODE_STEP,
+        encoding="utf-8",
+    )
+    runtime, staging = tmp_path / "runtime", tmp_path / "staging"
+    runtime.mkdir()
+    staging.mkdir()
+    result = subprocess.run(
+        [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(harness)]
+        + ["-Ps1", str(INSTALL_PS1), "-Dist", str(dist), "-Runtime", str(runtime)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(tmp_path),
+            "TMPDIR": str(staging),
+            "TMP": str(staging),
+            "TEMP": str(staging),
+            # pwsh phones home on startup unless told not to; the suite stays offline.
+            "POWERSHELL_TELEMETRY_OPTOUT": "1",
+            "POWERSHELL_UPDATECHECK": "Off",
+        },
+    )
+    return result, runtime, staging
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="needs PowerShell")
+def test_a_windows_node_download_that_matches_its_published_digest_is_installed(tmp_path: Path) -> None:
+    dist, digest = _ps1_node_release(tmp_path)
+    result, runtime, staging = _run_ps1_node_step(tmp_path, dist, f"{digest}  {_PS1_PKG}.zip\n")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (runtime / _PS1_PKG / "node.exe").is_file()
+    assert list(staging.iterdir()) == [], "the download is not left behind"
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="needs PowerShell")
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("digest-mismatch", "mismatch"),
+        ("checksums-unreachable", "SHASUMS256.txt"),
+        ("package-not-listed", f"{_PS1_PKG}.zip"),
+    ],
+)
+def test_a_windows_node_download_that_cannot_be_verified_is_never_extracted(
+    tmp_path: Path, case: str, reason: str
+) -> None:
+    dist, digest = _ps1_node_release(tmp_path)
+    listing = {
+        "digest-mismatch": f"{digest}  {_PS1_PKG}.7z\n{'0' * 64}  {_PS1_PKG}.zip\n",
+        "checksums-unreachable": None,
+        "package-not-listed": f"{digest}  {_PS1_PKG}.7z\n",
+    }[case]
+    result, runtime, staging = _run_ps1_node_step(tmp_path, dist, listing)
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert reason in result.stdout + result.stderr
+    assert list(runtime.iterdir()) == [], "nothing unverified is extracted"
+    assert list(staging.iterdir()) == [], "the download is not left behind"
+
+
 def test_the_office_prompt_and_sudo_both_read_the_tty() -> None:
     text = INSTALL_SH.read_text(encoding="utf-8")
     assert "read -r answer < /dev/tty" in text
@@ -569,7 +823,7 @@ _FONT_STEP = (
 )
 
 
-def _font_step_harness(tmp_path: Path, *, office: bool = True, **overrides: str) -> Path:
+def _font_step_harness(tmp_path: Path, *, office: bool = True, hidden: tuple[str, ...] = (), **overrides: str) -> Path:
     text = INSTALL_SH.read_text(encoding="utf-8")
     bodies = []
     for name in _FONT_STEP:
@@ -584,12 +838,7 @@ def _font_step_harness(tmp_path: Path, *, office: bool = True, **overrides: str)
         "info() { :; }\n"
         "ok() { printf 'OK %s\\n' \"$1\"; }\n"
         "warn() { printf 'WARN %s\\n' \"$1\" >&2; }\n"
-        'have() { command -v "$1" >/dev/null 2>&1; }\n'
-        + (
-            ""
-            if office
-            else 'have() { case "$1" in soffice|libreoffice) return 1 ;; esac; command -v "$1" >/dev/null 2>&1; }\n'
-        )
+        + _have(hidden if office else (*hidden, "soffice", "libreoffice"))
         + "\n".join(settings)
         + "\n"
         + "\n".join(bodies)
@@ -691,6 +940,17 @@ def test_a_download_that_does_not_match_its_digest_is_not_installed(tmp_path: Pa
     assert list(fonts_dir.iterdir()) == [], "neither the face nor its partial download is left behind"
     assert "package: fonts-noto-cjk" in result.stderr, "the hint names the package, not one distro's command"
     assert "apt-get" not in result.stderr
+    assert cached.is_file()
+
+
+def test_a_download_that_cannot_be_hashed_is_not_installed(tmp_path: Path) -> None:
+    """With neither sha256sum nor shasum there is no digest to compare, and an
+    unchecked download is the truncated face this step exists to keep out."""
+    harness = _font_step_harness(tmp_path, hidden=("sha256sum", "shasum"), **_published_face(tmp_path))
+    result, _calls, cached, home = _run_font_step(tmp_path, harness, os_name="linux", tools=("soffice",))
+
+    assert result.returncode == 0, "a skipped face is a warning, not the end of the install"
+    assert list((home / "share" / "fonts").iterdir()) == [], "an unchecked face is not installed"
     assert cached.is_file()
 
 
@@ -892,8 +1152,8 @@ def test_the_pinned_face_by_name_counts_as_a_han_face(tmp_path: Path) -> None:
 
 
 def test_the_helpers_are_defined_before_the_sections_that_use_them() -> None:
-    """The file reads top-down; sha256_of is first called from the LibreOffice
-    step, so it lives with the other helpers."""
+    """The file reads top-down; sha256_of is first called from the Node step,
+    so it lives with the other helpers."""
     text = INSTALL_SH.read_text(encoding="utf-8")
     assert text.index("sha256_of() {") < text.index("install_libreoffice_dmg() {")
     assert text.index("sha256_of() {") < text.index("# --- 0. platform detection")
