@@ -32,6 +32,7 @@ import * as chips from './proseChips'
 import * as selection from './selection'
 import * as shellWindow from './shellWindow'
 import * as tip from './tooltip'
+import * as visibility from './visibility'
 
 /* One row per listener: target, event, phase, the handler itself where another
    module owns it, and who it belongs to in words.
@@ -71,6 +72,8 @@ const ORDER: ReadonlyArray<readonly [string, string, string, unknown, string]> =
   ['document', 'keydown', 'bubble', null, 'the settings shortcut'],
   ['window', 'load', 'bubble', boot.onLoad, 'the boot\'s load handler (app/boot)'],
   ['document', 'visibilitychange', 'bubble', updates.onVisible, 'the build watch (app/updates)'],
+  ['document', 'visibilitychange', 'bubble', visibility.fire, 'the one visibility slot an island fills (state/visibility)'],
+  ['window', 'focus', 'bubble', visibility.fire, 'the same slot, on the window coming to the front'],
 ] as const
 
 type Row = [string, string, string, boolean, unknown]
@@ -106,7 +109,7 @@ afterEach(() => {
 })
 
 describe('the page\'s document and window listeners', () => {
-  it('registers twenty-one, in one order, nothing twice', () => {
+  it('registers twenty-three, in one order, nothing twice', () => {
     const rows = record()
     expect(rows.map(([target, type, phase]) => [target, type, phase]))
       .toEqual(ORDER.map(([target, type, phase]) => [target, type, phase]))

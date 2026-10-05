@@ -51,6 +51,16 @@ export function has(name: string): boolean {
   return !absent.has(name)
 }
 
+/**
+ * Take one name back off the absent list. A refusal is remembered for the
+ * gateway that gave it, and a reconnect may land on a newer one; the caller
+ * that knows the new handshake announced the surface forgets exactly that
+ * name, so every other memory stands.
+ */
+export function forget(name: string): void {
+  absent.delete(name)
+}
+
 /** Back to the state a fresh page starts in. For tests. */
 export function resetCapabilities(): void {
   absent.clear()

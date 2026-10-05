@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   absorb,
+  forget,
   gone,
   has,
   hasBinaryFrames,
@@ -26,6 +27,14 @@ beforeEach(() => {
 describe('the absent-method registry', () => {
   it('answers for a name nothing has refused', () => {
     expect(has('subagent')).toBe(true)
+  })
+
+  it('forgets one refusal at a time, leaving the others in place', () => {
+    gone('trajectory', { code: -32601, message: 'no such method' })
+    gone('subagent', { code: -32601, message: 'no such method' })
+    forget('trajectory')
+    expect(has('trajectory')).toBe(true)
+    expect(has('subagent')).toBe(false)
   })
 
   it('records a name only when the gateway said -32601', () => {

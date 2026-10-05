@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { resetCapabilities, serves } from './capabilities'
 import { FixtureTransport } from './fixtureTransport'
 import { RpcError } from './transport'
 
@@ -29,6 +30,21 @@ describe('FixtureTransport', () => {
       'session.list': async () => ({ sessions: [] }),
     })
     await expect(t.call('session.list', {})).resolves.toEqual({ sessions: [] })
+  })
+
+  it('records the handshake\'s capabilities the way the socket does', async () => {
+    resetCapabilities()
+    const t = new FixtureTransport({
+      'system.hello': {
+        server_version: '0.1.0',
+        server_capabilities: ['jsonrpc-2.0', 'trajectory-v1'],
+        session: { default_channel: 'gui', default_session_key: 'gui:demo' },
+      },
+    })
+    expect(serves('trajectory-v1')).toBe(false)
+    await t.call('system.hello', { client_version: '0.1.0' })
+    expect(serves('trajectory-v1')).toBe(true)
+    resetCapabilities()
   })
 
   it('rejects an unrecorded method with the -32601 an engine would send', async () => {

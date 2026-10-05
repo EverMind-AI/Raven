@@ -305,6 +305,7 @@ const LEGACY_LOCAL = {
      Up to 71 with the dag renderer's default node box gone: `.tm` was
      shared with it, and the timestamp on a folded turn's own head is this
      domain's alone now. */
+  trajectory: 0,
   transcript: 60,
   /* Up from 37 with the playbooks page gone: `.t` was shared with it. Down
      to 33 with the binary-file note's rules moved into its own sheet. */
@@ -343,6 +344,7 @@ const LEGACY_EXPR = {
   subagents: 6,
   /* Down from 24 with the node panel: `.tpl`, written only from inside a
      `className={...}` expression, left with it. */
+  trajectory: 0,
   transcript: 20,
   workspace: 7,
 }

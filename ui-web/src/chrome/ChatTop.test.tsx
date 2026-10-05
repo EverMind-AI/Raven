@@ -18,7 +18,11 @@ import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as rail from '../features/rail/store'
+import * as trajectory from '../features/trajectory/store'
+import { absorb, resetCapabilities } from '../rpc/capabilities'
 import * as lang from '../state/lang'
+import { _resetFreshForTests, pitch, unpitch } from '../state/session/conversation'
+import { resetSources, setSources } from '../state/sources'
 import { mountPageRoot } from '../test/pageRoot'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -91,7 +95,7 @@ describe('the chat column chrome', () => {
 
   it('renders every id the chrome, the islands and the writers reach for, once each', () => {
     render()
-    for (const id of ['title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage']) {
+    for (const id of ['title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage', 'trajHost']) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
   })
@@ -153,6 +157,111 @@ describe('the chat column chrome', () => {
       el('title').click()
     })
     expect(renames.n).toBe(2)
+  })
+})
+
+/* The trajectory toggle and the box its island fills. The store decides when
+   the toggle may show; this file answers for what the header does with that
+   decision: the button's presence, the scroller's parking and the composer's
+   indifference to either. */
+describe('the chat column chrome and the trajectory view', () => {
+  const trajectorySource = {
+    state: async () => ({ enabled: true, policy_revision: 1, recording_enabled: true }),
+    list: async () => ({
+      epoch: 'e', snapshot_revision: 0, entries: [], next_cursor: null, complete: true,
+      index_state: {
+        phase: 'ready' as const, scanned_bytes: 0, total_bytes: 0, head_truncated: 0, recovering_traces: 0,
+        unresolved_traces: 0, unresolved_dropped: 0, oversized_lines_dropped: 0, preview_pending: 0, failure: null,
+      },
+    }),
+    changes: async (_k: string, epoch: string, after: number) => ({
+      epoch, from_revision: after, to_revision: after, upserts: [], removed: [], has_more: false, reset_required: false,
+      index_state: {
+        phase: 'ready' as const, scanned_bytes: 0, total_bytes: 0, head_truncated: 0, recovering_traces: 0,
+        unresolved_traces: 0, unresolved_dropped: 0, oversized_lines_dropped: 0, preview_pending: 0, failure: null,
+      },
+    }),
+  }
+
+  beforeEach(() => {
+    trajectory._resetForTests()
+    resetCapabilities()
+    _resetFreshForTests()
+    setSources({ trajectory: trajectorySource })
+  })
+
+  afterEach(() => {
+    trajectory._resetForTests()
+    resetSources()
+    resetCapabilities()
+  })
+
+  /* Everything the store needs to offer the view: the surface announced and
+     on, a conversation open, content in it. */
+  const offer = async (): Promise<void> => {
+    absorb(['trajectory-v1'])
+    trajectory.install()
+    await act(async () => { await trajectory.refreshState() })
+    act(() => {
+      unpitch()
+      trajectory.sessionChanged('gui:a')
+    })
+  }
+
+  it('renders no toggle and a hidden box until the store offers the view', () => {
+    render()
+    expect(document.getElementById('trajBtn')).toBeNull()
+    expect(el('trajHost').hidden).toBe(true)
+    expect(el('trajHost').childNodes).toHaveLength(0)
+    expect(el('scroll').hasAttribute('data-parked')).toBe(false)
+  })
+
+  it('hides the toggle on a draft and on an empty conversation, and shows it once there is content', async () => {
+    render()
+    absorb(['trajectory-v1'])
+    trajectory.install()
+    await act(async () => { await trajectory.refreshState() })
+    expect(document.getElementById('trajBtn')).toBeNull()
+    act(() => { trajectory.sessionChanged('gui:a') })
+    /* Key set, column still in its empty state: no toggle. */
+    expect(document.getElementById('trajBtn')).toBeNull()
+    act(() => { unpitch() })
+    expect(document.getElementById('trajBtn')).not.toBeNull()
+    act(() => { pitch() })
+    expect(document.getElementById('trajBtn')).toBeNull()
+  })
+
+  it('parks the scroller and shows the box on a click, and puts them back on the next', async () => {
+    render()
+    await offer()
+    const btn = el('trajBtn')
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(Array.from(top().children).map((child) => child.id || child.className)).toEqual([
+      'title', 'wdTag', 'spacer', 'wsBtn', 'trajBtn',
+    ])
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    ta.value = 'half a thought'
+    const rack = el('sheetRack')
+    const racked = document.createElement('div')
+    rack.appendChild(racked)
+    act(() => { btn.click() })
+    expect(trajectory.get().view).toBe('trajectory')
+    expect(el('scroll').getAttribute('data-parked')).toBe('')
+    expect(el('trajHost').hidden).toBe(false)
+    expect(document.getElementById('backpill')).not.toBeNull()
+    expect(el('trajBtn').getAttribute('aria-pressed')).toBe('true')
+    expect(ta.value).toBe('half a thought')
+    expect(rack.firstElementChild).toBe(racked)
+    act(() => { el('trajBtn').click() })
+    expect(trajectory.get().view).toBe('chat')
+    expect(el('scroll').hasAttribute('data-parked')).toBe(false)
+    expect(el('trajHost').hidden).toBe(true)
+    expect(ta.value).toBe('half a thought')
+  })
+
+  it('reaches for no element of its own: the toggle is drawn from the store alone', () => {
+    const text = source('chrome/ChatTop.tsx')
+    expect(text).not.toMatch(/getElementById|querySelector\(/)
   })
 })
 

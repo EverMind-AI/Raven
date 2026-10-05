@@ -2659,6 +2659,24 @@ textarea:focus, textarea:focus-visible,
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #wdTag { visibility: hidden; }
+/* The trajectory view (features/trajectory/). The scroller is parked, not
+   removed: out of the flow at the size it had, invisible and deaf to the
+   pointer, so its scroll position survives and the transcript keeps streaming
+   into it underneath. The 52px is .top's height, so the parked box still
+   starts where the live one did. The trajectory's box takes the flex space
+   and reserves --lift below, the same inset .col reserves, so its last row
+   clears the composer the way the last message does. The pill belongs to the
+   scroller and goes with it. */
+.scroll[data-parked] { position: absolute; inset: 52px 0 0; visibility: hidden; pointer-events: none; }
+.scroll[data-parked] ~ .backpill { display: none; }
+#trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: var(--lift, 96px); }
+#trajHost[hidden] { display: none; }
+/* The header's view toggle is a word beside its glyph, unlike the icon-only
+   panel toggle it sits next to, because "trajectory" is not a shape a reader
+   already knows. */
+.chrome-traj { width: auto; padding: 0 10px 0 8px; gap: 6px; font-size: 12px; }
+.chrome-traj[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--hover)); }
+.chrome-traj-word { white-space: nowrap; }
 /* The landing page does not move the composer. It used to float it up to the
    centre at 640px with a hero lockup over it and five characters perched on
    it; the composer then jumped down and widened the moment the first message

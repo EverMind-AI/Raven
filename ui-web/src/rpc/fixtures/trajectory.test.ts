@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { absorb, resetCapabilities, servesTrajectory } from '../capabilities'
+import { resetCapabilities, servesTrajectory } from '../capabilities'
 import { FixtureTransport } from '../fixtureTransport'
 import { demoFixtures } from './index'
 
@@ -12,9 +12,9 @@ const transport = () => new FixtureTransport(demoFixtures, { now: () => 17890000
 
 describe('the offline trajectory library', () => {
   it('is announced by the offline handshake, so the entry can appear', async () => {
-    const hello = await transport().call('system.hello', { client_version: '0.1.0' })
     expect(servesTrajectory()).toBe(false)
-    absorb(hello.server_capabilities)
+    const hello = await transport().call('system.hello', { client_version: '0.1.0' })
+    expect(hello.server_capabilities).toContain('trajectory-v1')
     expect(servesTrajectory()).toBe(true)
     const state = await transport().call('trajectory.state', {})
     expect(state.enabled).toBe(true)

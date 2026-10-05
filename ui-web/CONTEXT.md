@@ -142,6 +142,20 @@ is why the transcript's store keeps a listener set per lane -- a token appended
 to the open step re-renders that leaf and nothing else -- and why a resident
 conversation keeps the detached host its lane is mounted in.
 
+**Trajectory View**:
+The chat column's second view: the conversation's trace entries as a list, in
+place of the transcript, drawn by `features/trajectory/` into `#trajHost` -- the
+box `src/chrome/ChatTop.tsx` renders beside `#scroll` and hands over empty.
+Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
+hidden, its size and scroll position kept) rather than unmounting it, so the
+transcript goes on streaming underneath and comes back exactly where it was.
+The header's toggle (`#trajBtn`) appears only when the gateway announced
+`trajectory-v1`, `trajectory.state` says the view is on, a conversation is open
+and that conversation is not in its empty state (`state/session/conversation.ts`'s
+flag); the store's `available` is that one condition.
+_Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
+records, the trajectory is how this page reads it back.
+
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order
 `src/state/portals.ts`'s `BOOT_BODY_ORDER` declares: `div.app`, the collapse's

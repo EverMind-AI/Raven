@@ -1,0 +1,112 @@
+/* The trajectory domain's own rules.
+ *
+ * One file per domain, imported by that domain's App and collected by Vite into
+ * one CSS asset that build.py inlines after page.css (`cssFileName` in
+ * vite.config.ts) -- so the page still ships one <style> block. Every class
+ * below carries this domain's prefix; the only rules outside this sheet are
+ * the two in styles/page.css that park the scroller and size `#trajHost`,
+ * which are the chat column's and not this island's.
+ *
+ * Colours are pairs of custom properties per kind, `-bg` for the row's tag and
+ * `-fg` for its text -- the duration bar reads the same `-fg` later, so a tool
+ * call is one purple in the row and in the bar. Input and output of one
+ * actor share a hue at two strengths; thinking stands apart in amber; every
+ * kind the palette does not know is one neutral grey. Both themes are set
+ * here, on the same attribute state/look.ts writes.
+ */
+
+:root {
+  --trajectory-c-user-input-bg: #e3efdc;  --trajectory-c-user-input-fg: #2f6a1f;
+  --trajectory-c-agent-reply-bg: #cfe4c4; --trajectory-c-agent-reply-fg: #245317;
+  --trajectory-c-llm-input-bg: #dde8f7;   --trajectory-c-llm-input-fg: #2c5aa0;
+  --trajectory-c-llm-output-bg: #c6d8f2;  --trajectory-c-llm-output-fg: #1f4480;
+  --trajectory-c-llm-thinking-bg: #f3e8c8; --trajectory-c-llm-thinking-fg: #8a6a12;
+  --trajectory-c-tool-input-bg: #ebe0f5;  --trajectory-c-tool-input-fg: #6a3fa0;
+  --trajectory-c-tool-output-bg: #dccbee; --trajectory-c-tool-output-fg: #512a84;
+  --trajectory-c-other-bg: #ececec;       --trajectory-c-other-fg: #5c5c5c;
+}
+html[data-theme="dark"] {
+  --trajectory-c-user-input-bg: #243a1c;  --trajectory-c-user-input-fg: #9fd48a;
+  --trajectory-c-agent-reply-bg: #2d4a22; --trajectory-c-agent-reply-fg: #b6e3a3;
+  --trajectory-c-llm-input-bg: #22314a;   --trajectory-c-llm-input-fg: #9dbdf0;
+  --trajectory-c-llm-output-bg: #2a3f63;  --trajectory-c-llm-output-fg: #b7d0f7;
+  --trajectory-c-llm-thinking-bg: #46391a; --trajectory-c-llm-thinking-fg: #e8cf6a;
+  --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
+  --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
+  --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+}
+
+/* ── the island ─────────────────────────────────────────────────── */
+
+.trajectory-root { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+
+/* One quiet line above the list for what the index wants the reader to know:
+   a scan still running, a head cut off, a failure. Absent when nothing is. */
+.trajectory-status {
+  flex: none; display: flex; flex-wrap: wrap; gap: 4px 14px;
+  padding: 6px 20px 4px; font-size: 11.5px; color: var(--muted);
+}
+.trajectory-status-bad { color: var(--clay); }
+
+/* ── the list ───────────────────────────────────────────────────── */
+
+/* The scroller. Its rows are positioned inside `.trajectory-rows`, which is
+   as tall as every row would be, so the scrollbar speaks for the whole list
+   while only the rows in view exist. */
+.trajectory-list {
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  position: relative; outline: 0; scrollbar-gutter: stable;
+  --trajectory-cols: 72px 14px 176px minmax(0, 1fr);
+}
+.trajectory-list:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
+.trajectory-list[data-narrow] { --trajectory-cols: 48px 14px 120px minmax(0, 1fr); }
+.trajectory-rows { position: relative; width: 100%; }
+
+/* Fixed 32px rows, one grid each: turn, failure mark, kind, content. */
+.trajectory-row {
+  position: absolute; left: 0; right: 0; height: 32px;
+  display: grid; grid-template-columns: var(--trajectory-cols); align-items: center; gap: 8px;
+  padding: 0 20px 0 16px; box-sizing: border-box; cursor: default;
+  font-size: 12.5px; color: var(--text); border-bottom: 1px solid var(--line-soft);
+}
+.trajectory-row:hover { background: var(--hover); }
+.trajectory-row-on, .trajectory-row-on:hover { background: var(--selected, var(--raised)); }
+
+.trajectory-turn {
+  font-family: var(--mono); font-size: 11px; color: var(--faint);
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
+}
+.trajectory-turn-sub::after { content: '\\2022'; margin-left: 4px; color: var(--sky); }
+
+.trajectory-fail { width: 14px; height: 14px; display: grid; place-items: center; }
+.trajectory-fail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--chat-danger, var(--clay)); }
+
+/* The kind tag: right-aligned so the column's ragged edge is on the left,
+   away from the content it introduces. */
+.trajectory-kind { display: flex; justify-content: flex-end; min-width: 0; }
+.trajectory-tag {
+  display: inline-block; max-width: 100%; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--trajectory-c-other-bg); color: var(--trajectory-c-other-fg);
+}
+.trajectory-k-user-input { background: var(--trajectory-c-user-input-bg); color: var(--trajectory-c-user-input-fg); }
+.trajectory-k-agent-reply { background: var(--trajectory-c-agent-reply-bg); color: var(--trajectory-c-agent-reply-fg); }
+.trajectory-k-llm-input { background: var(--trajectory-c-llm-input-bg); color: var(--trajectory-c-llm-input-fg); }
+.trajectory-k-llm-output { background: var(--trajectory-c-llm-output-bg); color: var(--trajectory-c-llm-output-fg); }
+.trajectory-k-llm-thinking { background: var(--trajectory-c-llm-thinking-bg); color: var(--trajectory-c-llm-thinking-fg); }
+.trajectory-k-tool-input { background: var(--trajectory-c-tool-input-bg); color: var(--trajectory-c-tool-input-fg); }
+.trajectory-k-tool-output { background: var(--trajectory-c-tool-output-bg); color: var(--trajectory-c-tool-output-fg); }
+.trajectory-k-other { background: var(--trajectory-c-other-bg); color: var(--trajectory-c-other-fg); }
+
+.trajectory-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trajectory-text-none { color: var(--faint); font-style: italic; }
+
+.trajectory-empty {
+  flex: 1; display: grid; place-items: center; padding: 24px;
+  font-size: 12.5px; color: var(--muted); text-align: center;
+}
+
+/* ── the bar's place ────────────────────────────────────────────── */
+
+/* Reserved for the duration bar; a strip of the list's own height. */
+.trajectory-bar { flex: none; height: 32px; border-top: 1px solid var(--line-soft); }

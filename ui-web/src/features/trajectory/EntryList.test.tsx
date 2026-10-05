@@ -1,0 +1,201 @@
+// @vitest-environment happy-dom
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+
+import { resetTranslator, setTranslator } from '../../i18n/t'
+import { absorb, resetCapabilities } from '../../rpc/capabilities'
+import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
+import { resetSources, setSources } from '../../state/sources'
+import { EntryList, FOLLOW_SLACK, OVERSCAN, ROW_HEIGHT, windowOf } from './EntryList'
+import * as store from './store'
+
+import type { TrajectoryEntry, TrajectoryIndexState, TrajectoryListResult, TrajectorySource } from './types'
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const READY: TrajectoryIndexState = {
+  phase: 'ready', scanned_bytes: 10, total_bytes: 10, head_truncated: 0, recovering_traces: 0,
+  unresolved_traces: 0, unresolved_dropped: 0, oversized_lines_dropped: 0, preview_pending: 0, failure: null,
+}
+
+const entry = (id: string, at: number, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry => ({
+  entry_id: id, revision: 1, kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', trace_id: 't',
+  span_id: id, parent_span_id: null, turn_span_id: 'turn', turn_number: 1, turn_start: false, origin: 'main',
+  sort_key: [String(at).padStart(6, '0'), 0], event_time: '2026-01-01T00:00:00Z', preview: `preview of ${id}`,
+  operation_status: 'ok', status_evidence: [], failure_entry: false, integrity: [], operation_start: null,
+  operation_end: null, duration_ms: null, charged_ms: null, timing_basis: 'not_recorded', duration_owner: null,
+  meta: {},
+  ...over,
+})
+
+let rows: TrajectoryEntry[] = []
+let indexState: TrajectoryIndexState = READY
+
+const source: TrajectorySource = {
+  state: async () => ({ enabled: true, policy_revision: 1, recording_enabled: true }),
+  list: async (): Promise<TrajectoryListResult> => ({
+    epoch: 'e1', snapshot_revision: 100, entries: rows, next_cursor: null, index_state: indexState, complete: true,
+  }),
+  changes: async (_k, epoch, after) => ({
+    epoch, from_revision: after, to_revision: after, upserts: [], removed: [], has_more: false,
+    reset_required: false, index_state: indexState,
+  }),
+}
+
+/* The box's geometry, which happy-dom does not lay out. */
+function size(el: HTMLElement, height: number, scrollHeight: number): void {
+  Object.defineProperty(el, 'clientHeight', { value: height, configurable: true })
+  Object.defineProperty(el, 'clientWidth', { value: 800, configurable: true })
+  Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true })
+}
+
+const list = (): HTMLElement => document.querySelector('.trajectory-list') as HTMLElement
+
+async function draw(): Promise<void> {
+  render(<EntryList />)
+  await act(async () => { await store.load() })
+}
+
+beforeEach(() => {
+  rows = []
+  indexState = READY
+  store._resetForTests()
+  resetCapabilities()
+  _resetFreshForTests()
+  absorb(['trajectory-v1'])
+  setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
+  setSources({ trajectory: source })
+  document.body.innerHTML = '<div class="chat"></div>'
+  store.install()
+  unpitch()
+  store.sessionChanged('gui:a')
+})
+
+afterEach(() => {
+  cleanup()
+  resetSources()
+  resetTranslator()
+  document.body.innerHTML = ''
+})
+
+describe('windowOf', () => {
+  it('bounds the rows drawn to the viewport plus the overscan on each side', () => {
+    expect(windowOf(0, 320, 1000)).toEqual({ first: 0, last: 10 + OVERSCAN })
+    expect(windowOf(ROW_HEIGHT * 500, 320, 1000)).toEqual({ first: 500 - OVERSCAN, last: 500 + 10 + OVERSCAN })
+    expect(windowOf(ROW_HEIGHT * 995, 320, 1000)).toEqual({ first: 995 - OVERSCAN, last: 1000 })
+    /* An unmeasured box still shows something. */
+    expect(windowOf(0, 0, 3).last).toBe(3)
+  })
+})
+
+describe('the entry list', () => {
+  it('draws a window of a thousand rows, never all of them', async () => {
+    rows = Array.from({ length: 1000 }, (_, k) => entry(`r${k}`, k))
+    await draw()
+    const drawn = document.querySelectorAll('.trajectory-row').length
+    expect(drawn).toBeGreaterThan(0)
+    expect(drawn).toBeLessThanOrEqual(20 + 2 * OVERSCAN)
+    expect((document.querySelector('.trajectory-rows') as HTMLElement).style.height).toBe(`${1000 * ROW_HEIGHT}px`)
+    const first = document.querySelector('.trajectory-row') as HTMLElement
+    expect(first.getAttribute('aria-setsize')).toBe('1000')
+    expect(first.getAttribute('aria-posinset')).toBe('1')
+  })
+
+  it('shows the turn only where a turn starts, the mark only on a failure, and the kind and preview', async () => {
+    rows = [
+      entry('a', 0, { kind: 'user.input', turn_start: true, turn_number: 3 }),
+      entry('b', 1, { kind: 'tool.output', failure_entry: true, preview: null }),
+      entry('c', 2, { kind: 'browser.frame', span_name: 'browser.action', origin: 'subagent' }),
+    ]
+    await draw()
+    const drawn = [...document.querySelectorAll('.trajectory-row')] as HTMLElement[]
+    expect(drawn.map((r) => r.querySelector('.trajectory-turn')?.textContent)).toEqual(['3', '', ''])
+    expect(drawn.map((r) => !!r.querySelector('.trajectory-fail-dot'))).toEqual([false, true, false])
+    expect(drawn[1]!.querySelector('.trajectory-fail-dot')?.getAttribute('aria-label')).toBe('gui.trajectory.failed')
+    expect(drawn.map((r) => r.querySelector('.trajectory-tag')?.className)).toEqual([
+      'trajectory-tag trajectory-k-user-input',
+      'trajectory-tag trajectory-k-tool-output',
+      'trajectory-tag trajectory-k-other',
+    ])
+    expect(drawn[0]!.querySelector('.trajectory-tag')?.textContent).toBe('gui.trajectory.kind.user_input')
+    expect(drawn[2]!.querySelector('.trajectory-tag')?.textContent).toBe('browser.frame')
+    expect(drawn[2]!.querySelector('.trajectory-tag')?.getAttribute('title')).toBe('browser.action')
+    expect(drawn[2]!.querySelector('.trajectory-turn')?.className).toBe('trajectory-turn trajectory-turn-sub')
+    expect(drawn[0]!.querySelector('.trajectory-text')?.textContent).toBe('preview of a')
+    expect(drawn[1]!.querySelector('.trajectory-text')?.textContent).toBe('gui.trajectory.no_preview')
+  })
+
+  it('selects through the store on a click and on the arrow keys, and only there', async () => {
+    rows = [entry('a', 0), entry('b', 1), entry('c', 2)]
+    await draw()
+    expect(store.get().selectedId).toBeNull()
+    act(() => { fireEvent.click(document.querySelector('[data-entry="b"]') as HTMLElement) })
+    expect(store.get().selectedId).toBe('b')
+    expect(document.querySelector('[data-entry="b"]')?.className).toBe('trajectory-row trajectory-row-on')
+    expect(list().getAttribute('aria-activedescendant')).toBe('trajectory-row-1')
+    act(() => { fireEvent.keyDown(list(), { key: 'ArrowDown' }) })
+    expect(store.get().selectedId).toBe('c')
+    act(() => { fireEvent.keyDown(list(), { key: 'ArrowDown' }) })
+    expect(store.get().selectedId).toBe('c')
+    act(() => { fireEvent.keyDown(list(), { key: 'Home' }) })
+    expect(store.get().selectedId).toBe('a')
+    act(() => { fireEvent.keyDown(list(), { key: 'End' }) })
+    expect(store.get().selectedId).toBe('c')
+    act(() => { fireEvent.keyDown(list(), { key: 'ArrowUp' }) })
+    expect(store.get().selectedId).toBe('b')
+    /* Rows arriving do not move it. */
+    act(() => {
+      store.applyChanges({
+        epoch: 'e1', from_revision: 100, to_revision: 101, upserts: [entry('d', 3)], removed: [],
+        has_more: false, reset_required: false, index_state: READY,
+      })
+    })
+    expect(store.get().selectedId).toBe('b')
+  })
+
+  it('follows the tail while the reader is near it, and holds an anchored row otherwise', async () => {
+    rows = Array.from({ length: 50 }, (_, k) => entry(`r${k}`, k))
+    await draw()
+    const el = list()
+    size(el, 320, 50 * ROW_HEIGHT)
+    /* Near the bottom: following. */
+    el.scrollTop = 50 * ROW_HEIGHT - 320 - FOLLOW_SLACK
+    act(() => { fireEvent.scroll(el) })
+    expect(store.get().follow).toBe(true)
+    act(() => {
+      store.applyChanges({
+        epoch: 'e1', from_revision: 100, to_revision: 101, upserts: [entry('r50', 50)], removed: [],
+        has_more: false, reset_required: false, index_state: READY,
+      })
+    })
+    expect(el.scrollTop).toBe(el.scrollHeight)
+    /* Scrolled up: anchored on the row at the top, with its offset. */
+    el.scrollTop = 10 * ROW_HEIGHT + 5
+    act(() => { fireEvent.scroll(el) })
+    expect(store.get().follow).toBe(false)
+    expect(store.get().anchor).toEqual({ id: 'r10', offset: 5 })
+    /* Two rows inserted above: the same row stays under the eye. */
+    act(() => {
+      store.applyChanges({
+        epoch: 'e1', from_revision: 101, to_revision: 102, upserts: [entry('r-1', -1), entry('r-2', -2)], removed: [],
+        has_more: false, reset_required: false, index_state: READY,
+      })
+    })
+    expect(store.get().index.r10).toBe(12)
+    expect(el.scrollTop).toBe(12 * ROW_HEIGHT + 5)
+  })
+
+  it('says why the list is empty: scanning, or nothing recorded', async () => {
+    indexState = { ...READY, phase: 'scanning', scanned_bytes: 1024 * 1024, total_bytes: 4 * 1024 * 1024 }
+    await draw()
+    expect(document.querySelector('.trajectory-empty')?.textContent).toBe('gui.trajectory.scanning {"done":"1.0","total":"4.0"}')
+    cleanup()
+    store._resetForTests()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    indexState = READY
+    await draw()
+    expect(document.querySelector('.trajectory-empty')?.textContent).toBe('gui.trajectory.empty')
+  })
+})

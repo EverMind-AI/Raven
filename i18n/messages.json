@@ -10850,6 +10850,90 @@
     "gui.conn.none_off": {
       "en": "Every channel is connected",
       "zh": "所有渠道都已接入"
+    },
+    "gui.trajectory.show": {
+      "en": "Trajectory",
+      "zh": "轨迹"
+    },
+    "gui.trajectory.back": {
+      "en": "Conversation",
+      "zh": "会话"
+    },
+    "gui.trajectory.empty": {
+      "en": "No trajectory entries yet",
+      "zh": "还没有轨迹条目"
+    },
+    "gui.trajectory.scanning": {
+      "en": "Scanning {done} / {total} MiB",
+      "zh": "正在扫描 {done} / {total} MiB"
+    },
+    "gui.trajectory.truncated": {
+      "en": "{n} earliest entries not shown",
+      "zh": "最早的 {n} 条未显示"
+    },
+    "gui.trajectory.failure": {
+      "en": "Index failed: {detail}",
+      "zh": "索引失败：{detail}"
+    },
+    "gui.trajectory.fault": {
+      "en": "Live update failed: {detail}",
+      "zh": "实时更新失败：{detail}"
+    },
+    "gui.trajectory.not_recording": {
+      "en": "Tracing is off; the list will not grow",
+      "zh": "采集已关闭，列表不会增长"
+    },
+    "gui.trajectory.no_preview": {
+      "en": "(no preview)",
+      "zh": "（无预览）"
+    },
+    "gui.trajectory.col_turn": {
+      "en": "Turn",
+      "zh": "轮次"
+    },
+    "gui.trajectory.col_type": {
+      "en": "Type",
+      "zh": "类型"
+    },
+    "gui.trajectory.col_content": {
+      "en": "Content",
+      "zh": "内容"
+    },
+    "gui.trajectory.failed": {
+      "en": "failed",
+      "zh": "失败"
+    },
+    "gui.trajectory.list_label": {
+      "en": "Trajectory entries",
+      "zh": "轨迹条目"
+    },
+    "gui.trajectory.kind.user_input": {
+      "en": "User input",
+      "zh": "用户输入"
+    },
+    "gui.trajectory.kind.agent_reply": {
+      "en": "Agent reply",
+      "zh": "回复"
+    },
+    "gui.trajectory.kind.llm_input": {
+      "en": "LLM input",
+      "zh": "模型输入"
+    },
+    "gui.trajectory.kind.llm_thinking": {
+      "en": "Thinking",
+      "zh": "思考"
+    },
+    "gui.trajectory.kind.llm_output": {
+      "en": "LLM output",
+      "zh": "模型输出"
+    },
+    "gui.trajectory.kind.tool_input": {
+      "en": "Tool input",
+      "zh": "工具输入"
+    },
+    "gui.trajectory.kind.tool_output": {
+      "en": "Tool output",
+      "zh": "工具输出"
     }
   }
 }
