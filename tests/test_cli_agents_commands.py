@@ -358,6 +358,31 @@ def test_gold_a_keyless_world_reports_the_fail_closed_refusal(raven_home: Path, 
     assert "handshake GREEN" not in r.output
 
 
+def test_a_scaffold_still_refuses_in_words_on_a_raven_without_inherit_refusal(raven_home: Path, monkeypatch) -> None:
+    """A generated folder is not refreshed when raven changes version, so it can
+    run on a raven that predates ``inherit_refusal``: that one refuses without
+    the reason instead of raising AttributeError."""
+    import importlib.util
+
+    from raven.config import product_render
+
+    r = runner.invoke(app, ["agents", "new", "demo-agent", "--no-smoke"])
+    assert r.exit_code == 0, r.output
+    target = raven_home / "agents" / "demo-agent"
+    monkeypatch.delenv("DEMO_AGENT_API_KEY", raising=False)
+    spec = importlib.util.spec_from_file_location("older_raven_generated_run", target / "run.py")
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
+
+    with pytest.raises(SystemExit, match=r"cannot be inherited \([^)]+\); put the key in"):
+        run.render_config(target / "config.json")
+    monkeypatch.delattr(product_render, "inherit_refusal")
+    with pytest.raises(
+        SystemExit, match=r"DEMO_AGENT_API_KEY is not set and the host's model cannot be inherited; put"
+    ):
+        run.render_config(target / "config.json")
+
+
 # ---------------------------------------------------------------------------
 # doctor and smoke failure shapes
 # ---------------------------------------------------------------------------
