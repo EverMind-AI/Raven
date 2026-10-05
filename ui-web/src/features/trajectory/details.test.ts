@@ -310,7 +310,9 @@ describe('the budget', () => {
   const big = (mib: number): string => 'x'.repeat(Math.ceil(mib * 1024 * 1024))
 
   it('measures bytes as UTF-8 and keeps the whole cache under eight mebibytes', async () => {
-    expect(details.bytesOf('aé中')).toBe(JSON.stringify('aé中').length + 1 + 2)
+    /* One two-byte and one three-byte character beside an ASCII one: the
+       count is UTF-8's, not the string's length. */
+    expect(details.bytesOf('a\u00e9\u20ac')).toBe(JSON.stringify('a\u00e9\u20ac').length + 1 + 2)
     await ready()
     list.select('r1', { source: 'click' })
     void details.loadDescriptor()
