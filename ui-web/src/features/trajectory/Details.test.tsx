@@ -8,8 +8,8 @@ import { RpcError } from '../../rpc/transport'
 import { dispatch as escape } from '../../state/escapeOrder'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
-import * as details from './details'
 import { shortName } from './Details'
+import * as details from './detailStore'
 import * as list from './store'
 import { TrajectoryApp } from './TrajectoryApp'
 
@@ -84,6 +84,7 @@ async function draw(): Promise<void> {
   render(<TrajectoryApp />)
   await act(async () => {
     await list.refreshState()
+    list.setView('trajectory')
     await list.load()
   })
 }
@@ -109,7 +110,6 @@ beforeEach(() => {
   details.install()
   unpitch()
   list.sessionChanged('gui:a')
-  list.setView('trajectory')
 })
 
 afterEach(() => {
@@ -291,6 +291,59 @@ describe('the details pane', () => {
     await answerDetail(descriptor('r0', [block({ id: 'result' })]))
     expect(q('.trajectory-fault')).toBeNull()
     expect(tabs()).toHaveLength(2)
+  })
+})
+
+describe('the details pane when it must wait', () => {
+  it('asks once for a descriptor the list has not reached, says it is waiting, and asks again when the list arrives', async () => {
+    await draw()
+    await pick('r0')
+    expect(detailQueue).toHaveLength(1)
+    await answerDetail(descriptor('r0', [block({ id: 'result' })], { epoch: 'e2' }))
+    expect(details.get().waitingEpoch).toBe('e2')
+    expect(q('.trajectory-sec-note')?.textContent).toBe('gui.trajectory.details.waiting_list')
+    await flush()
+    await flush()
+    expect(detailQueue).toHaveLength(0)
+    /* The list reaches the epoch: the wait ends and the descriptor is read again. */
+    act(() => { list.set({ ...list.get(), epoch: 'e2', revision: 1 }) })
+    await flush()
+    expect(details.get().waitingEpoch).toBeNull()
+    expect(detailQueue).toHaveLength(1)
+    await answerDetail(descriptor('r0', [block({ id: 'result' })], { epoch: 'e2' }))
+    expect(tabs()).toHaveLength(2)
+  })
+
+  it('asks for nothing while the conversation view is up, and picks up again on return', async () => {
+    await draw()
+    await pick('r0')
+    await answerDetail(descriptor('r0', [block({ id: 'result' })]))
+    act(() => { fireEvent.click(q('#trajectory-h-result') as HTMLElement) })
+    await flush()
+    const pending = blockQueue.shift()!
+    act(() => { list.setView('chat') })
+    await act(async () => { pending.resolve(body('r0', 'result', { text: 'landed late' })) })
+    await flush()
+    await flush()
+    expect(blockCalls).toEqual(['result'])
+    expect(details.get().open).toBe(true)
+    act(() => { list.setView('trajectory') })
+    await flush()
+    /* The body that landed is held, so coming back asks for nothing either. */
+    expect(blockCalls).toEqual(['result'])
+    expect(q('.trajectory-block .trajectory-text-body')?.textContent).toBe('landed late')
+  })
+
+  it('asks for nothing once the switch is off, and keeps what it had for when it is on again', async () => {
+    await draw()
+    await pick('r0')
+    await answerDetail(descriptor('r0', [block({ id: 'result' }), block({ id: 'params', renderer: 'json' })]))
+    act(() => { list.disabledByServer() })
+    expect(list.get().view).toBe('chat')
+    act(() => { details.setTab('r0', 'params') })
+    await flush()
+    expect(blockCalls).toEqual([])
+    expect(details.descriptor()).not.toBeNull()
   })
 })
 

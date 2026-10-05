@@ -95,12 +95,12 @@ export function onDeskEscape(layer: EscapeLayer): void {
 }
 
 /* The trajectory details pane's own layer, registered the same way by
-   features/trajectory/details.ts. It answers open only while the pane holds
+   features/trajectory/detailStore.ts. It answers open only while the pane holds
    the focus, so an Escape meant for a sheet or a popover above it is never
    spent on the pane, and one pressed in the composer never closes it. */
 let trajectoryLayer: EscapeLayer | null = null
 
-/** Registers the trajectory pane's layer. features/trajectory/details.ts calls this at its own module evaluation. */
+/** Registers the trajectory pane's layer. features/trajectory/detailStore.ts calls this at its own module evaluation. */
 export function onTrajectoryEscape(layer: EscapeLayer): void {
   trajectoryLayer = layer
 }

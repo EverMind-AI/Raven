@@ -18,7 +18,7 @@
 import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
-import * as details from './details'
+import * as details from './detailStore'
 import { isKnownKind, kindClass, kindLabel } from './palette'
 import * as store from './store'
 

@@ -8,7 +8,7 @@ import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import { get as toasts } from '../../state/toast'
 import { BlockView, copyText, JsonView, KeyValuesView } from './BlockView'
-import * as details from './details'
+import * as details from './detailStore'
 import * as list from './store'
 
 import type {
@@ -214,6 +214,32 @@ describe('a block tab', () => {
     expect(q('.trajectory-fault')).toBeNull()
     expect(q('.trajectory-tool-note')?.textContent).toBe('gui.trajectory.reason.artifact_missing')
     expect(q('.trajectory-copy')).toBeNull()
+  })
+
+  it('asks for nothing while the pane is marked unstable, until the reader retries', async () => {
+    await ready()
+    details.setTab('r0', 'messages')
+    details.set({ ...details.get(), unstable: true })
+    render(<BlockView block={descriptor.blocks[0]!} />)
+    await flush()
+    await flush()
+    expect(blockCalls).toEqual([])
+    /* The reader's own reload is allowed through. */
+    act(() => { void details.reloadBlock('messages') })
+    await flush()
+    expect(blockCalls).toEqual([null])
+  })
+
+  it('asks for nothing while the conversation view is up', async () => {
+    await ready()
+    details.setTab('r0', 'messages')
+    list.setView('chat')
+    render(<BlockView block={descriptor.blocks[0]!} />)
+    await flush()
+    expect(blockCalls).toEqual([])
+    act(() => { list.setView('trajectory') })
+    await flush()
+    expect(blockCalls).toEqual([null])
   })
 
   it('copies text as text and JSON as pretty JSON', () => {

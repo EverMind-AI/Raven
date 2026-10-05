@@ -12,7 +12,7 @@
 
 import { t } from '../../i18n/t'
 import { blockTitleKey } from './blocks'
-import * as details from './details'
+import * as details from './detailStore'
 
 import type { TrajectoryBlockDescriptor } from './types'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'

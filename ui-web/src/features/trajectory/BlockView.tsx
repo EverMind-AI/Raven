@@ -20,7 +20,7 @@ import { t } from '../../i18n/t'
 import { copy } from '../../lib/clipboard'
 import { formatDuration } from '../../lib/duration'
 import { availabilityKey, basisKey, integrityKey, reasonKey, timingLabelKey } from './blocks'
-import * as details from './details'
+import * as details from './detailStore'
 
 import type { JsonValue, TrajectoryBlockDescriptor } from './types'
 import type { JSX } from 'react'
@@ -349,9 +349,10 @@ export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.
   useWindowAnchor(record?.droppedBefore ?? 0, box)
 
   const identityKey = s.current ? details.descriptorKey(s.current) : null
+  const permitted = details.mayRead(s)
   useEffect(() => {
-    if (!record && !loading && !fault && identityKey !== null) void details.loadBlock(block.id)
-  }, [record, loading, fault, identityKey, block.id])
+    if (!record && !loading && !fault && identityKey !== null && permitted) void details.loadBlock(block.id)
+  }, [record, loading, fault, identityKey, permitted, block.id])
 
   let body: JSX.Element | null = null
   if (record) {

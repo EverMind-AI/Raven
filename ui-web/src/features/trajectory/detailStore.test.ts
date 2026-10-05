@@ -5,7 +5,7 @@ import { absorb, has, resetCapabilities } from '../../rpc/capabilities'
 import { RpcError } from '../../rpc/transport'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
-import * as details from './details'
+import * as details from './detailStore'
 import * as list from './store'
 
 import type {
@@ -421,7 +421,7 @@ describe('a changed revision', () => {
     expect(details.block('messages')).toBeNull()
   })
 
-  it('leaves an epoch the list has not reached to the list', async () => {
+  it('leaves an epoch the list has not reached to the list, and waits', async () => {
     await ready()
     list.select('r1', { source: 'click' })
     void details.loadDescriptor()
@@ -429,14 +429,48 @@ describe('a changed revision', () => {
     list.applyChanges(batch({ upserts: [entry('r1', 1, 2)] }))
     void details.loadDescriptor()
     await answerDetail(descriptor('r1', 2, ['result'], { epoch: 'e2' }))
-    /* An epoch the list does not know yet: not taken, and the pane waits. */
+    /* An epoch the list does not know yet: not taken, and the pane waits --
+       for the list, not for its own next ask. */
     expect(details.get().current?.epoch).toBe('e1')
     expect(details.get().current?.revision).toBe(1)
     expect(Object.keys(details.get().descriptors)).toHaveLength(1)
-    expect(details.get().stale).toBe(true)
+    expect(details.get().waitingEpoch).toBe('e2')
+    expect(details.mayRead(details.get(), { what: 'descriptor' })).toBe(false)
+    void details.loadDescriptor()
+    void details.loadBlock('result')
+    expect(detailCalls).toHaveLength(2)
+    expect(blockCalls).toHaveLength(0)
+    /* A page answering with the same foreign epoch waits the same way. */
+    details.set({ ...details.get(), waitingEpoch: null, stale: false })
     void details.loadBlock('result')
     await failBlock(new RpcError(-32023, 'moved', { current_revision: 1, current_epoch: 'e2' }))
+    expect(details.get().waitingEpoch).toBe('e2')
     expect(detailCalls).toHaveLength(2)
+    /* The list arrives at the epoch: the wait ends and the descriptor is stale. */
+    list.set({ ...list.get(), epoch: 'e2' })
+    expect(details.get().waitingEpoch).toBeNull()
+    expect(details.get().stale).toBe(true)
+    expect(details.mayRead(details.get(), { what: 'descriptor' })).toBe(true)
+    expect(details.mayRead(details.get())).toBe(false)
+  })
+
+  it('reads nothing while the view, the switch or the snapshot is away, and moves the ticket when they change', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['result']))
+    const t0 = details.ticket()
+    list.setView('chat')
+    expect(details.ticket()).toBeGreaterThan(t0)
+    expect(details.mayRead()).toBe(false)
+    void details.loadBlock('result')
+    expect(blockCalls).toHaveLength(0)
+    list.setView('trajectory')
+    expect(details.mayRead()).toBe(true)
+    list.disabledByServer()
+    expect(details.mayRead()).toBe(false)
+    expect(details.get().open).toBe(true)
+    expect(details.descriptor()).not.toBeNull()
   })
 
   it('gives up following revisions after three hops inside one reader action', async () => {

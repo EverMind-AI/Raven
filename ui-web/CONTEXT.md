@@ -153,7 +153,7 @@ The header's toggle (`#trajBtn`) appears only when the gateway announced
 `trajectory-v1`, `trajectory.state` says the view is on, a conversation is open
 and that conversation is not in its empty state (`state/session/conversation.ts`'s
 flag); the store's `available` is that one condition. Picking a row opens the
-details pane beside the list (`features/trajectory/details.ts`): a descriptor
+details pane beside the list (`features/trajectory/detailStore.ts`): a descriptor
 read through `trajectory.detail` and block bodies read through
 `trajectory.block`, each filed under its whole identity (session, epoch,
 entry, revision, block) and shown only under the ticket it was asked with.

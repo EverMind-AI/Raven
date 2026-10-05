@@ -39,6 +39,7 @@ import {
   byKey as taskByKey, onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus,
   refresh as refreshTasks, reset as resetTasks,
 } from '../features/tasks/store'
+import * as trajectoryDetails from '../features/trajectory/detailStore'
 import * as trajectoryPoll from '../features/trajectory/poll'
 import { trajectorySource } from '../features/trajectory/source'
 import * as trajectoryStore from '../features/trajectory/store'
@@ -368,6 +369,7 @@ export function installActions(): void {
      and the tab coming back to the front spends the page's one visibility
      slot on a fresh beat of both. */
   trajectoryStore.install()
+  trajectoryDetails.install()
   trajectoryPoll.install()
   onSessionChange(() => { trajectoryStore.sessionChanged(sessionCurrent()) })
   visibility.onVisibleAgain(() => { trajectoryPoll.sync() })

@@ -13,7 +13,7 @@ import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import { BlockView } from './BlockView'
-import * as details from './details'
+import * as details from './detailStore'
 import { Overview } from './Overview'
 import { kindClass, kindLabel } from './palette'
 import * as list from './store'
@@ -112,7 +112,8 @@ export function Details(): JSX.Element | null {
 
   /* The descriptor, read when the pane opens on an entry and again when the
      list says the entry moved on. Nothing is asked while an answer is out. */
-  const needs = s.open && entryId !== null && (value === null || s.stale) && !loading && !fault
+  const permitted = details.mayRead(s, { what: 'descriptor' })
+  const needs = permitted && entryId !== null && (value === null || s.stale) && !loading && !fault
   const identityKey = s.current ? details.descriptorKey(s.current) : null
   useLayoutEffect(() => {
     if (needs) void details.loadDescriptor()
@@ -136,7 +137,13 @@ export function Details(): JSX.Element | null {
         </button>
       </div>
       {value ? <Tabs entryId={entryId} blocks={value.blocks} /> : null}
-      {s.unstable ? <p className="trajectory-fault" role="status">{t('gui.trajectory.details.unstable')}</p> : null}
+      {s.unstable ? (
+        <p className="trajectory-fault" role="status">
+          {t('gui.trajectory.details.unstable')}
+          {' '}
+          <button className="trajectory-link" onClick={() => { void details.retryDescriptor() }}>{t('gui.trajectory.details.retry')}</button>
+        </p>
+      ) : null}
       {value
         ? <Pane entryId={entryId} value={value} />
         : fault
@@ -144,10 +151,12 @@ export function Details(): JSX.Element | null {
             <p className="trajectory-fault" role="alert">
               {t('gui.trajectory.details.failed', { detail: fault })}
               {' '}
-              <button className="trajectory-link" onClick={() => { void details.loadDescriptor({ fresh: true }) }}>{t('gui.trajectory.details.retry')}</button>
+              <button className="trajectory-link" onClick={() => { void details.retryDescriptor() }}>{t('gui.trajectory.details.retry')}</button>
             </p>
           )
-          : (
+          : s.waitingEpoch !== null
+            ? <p className="trajectory-sec-note" role="status">{t('gui.trajectory.details.waiting_list')}</p>
+            : (
             <div className="trajectory-skel" aria-busy="true" aria-label={t('gui.trajectory.details.loading')}>
               <div className="trajectory-skel-line" /><div className="trajectory-skel-line" /><div className="trajectory-skel-line trajectory-skel-short" />
             </div>

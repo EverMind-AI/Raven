@@ -88,6 +88,10 @@ export interface DetailsState {
   stale: boolean
   /** Consecutive revision changes inside one reader action went past the limit. */
   unstable: boolean
+  /** The gateway answered for an epoch the list has not reached; reads wait for the list. */
+  waitingEpoch: string | null
+  /** The list is not in a state the pane may read in (view, switch or snapshot away); mirrored so the pane redraws when it changes. */
+  paused: boolean
   tabByEntry: Record<string, Tab>
   /** Scroll offsets by entry and tab: an intention, kept across revisions. */
   scrollByEntryTab: Record<string, number>
@@ -117,6 +121,8 @@ const initial: DetailsState = {
   current: null,
   stale: false,
   unstable: false,
+  waitingEpoch: null,
+  paused: true,
   tabByEntry: {},
   scrollByEntryTab: {},
   descriptors: {},
@@ -223,6 +229,24 @@ const live = (t: number, g: number, entryId: string): boolean =>
 const currentEpoch = (sessionKey: string, epoch: string): boolean => {
   const s = list.get()
   return s.sessionKey === sessionKey && s.epoch === epoch
+}
+
+/* Whether the pane may ask the gateway anything right now: the trajectory
+   is on screen for a conversation the toggle may show, the list holds a
+   whole snapshot to name an epoch, the pane is open, and nothing has told
+   it to wait -- not an epoch the list has yet to reach, not a descriptor
+   being read again, not a run of revision changes past the limit. The
+   reader's own retry (`force`) overrides the last two; only a new list
+   identity lifts the first. */
+export function mayRead(s: DetailsState = store.get(), opts: { force?: boolean; what?: 'descriptor' | 'block' } = {}): boolean {
+  const l = list.get()
+  if (!s.open || l.view !== 'trajectory' || !list.available(l) || !l.snapshotReady || l.sessionKey === null) return false
+  if (s.waitingEpoch !== null) return false
+  if (!opts.force && s.unstable) return false
+  /* A stale descriptor is read again; a block waits for that read, since the
+     new descriptor decides which blocks there are and at which revision. */
+  if (!opts.force && s.stale && opts.what !== 'descriptor') return false
+  return true
 }
 
 /* ── the view ─────────────────────────────────────────────────────────── */
@@ -379,7 +403,14 @@ function accept(result: TrajectoryDetailResult, t: number, g: number, mark: stri
     sessionKey: result.session_key, epoch: result.epoch, entryId: result.entry_id, revision: result.entry_revision,
   }
   const s = mark === null ? store.get() : unmarked(store.get(), mark, token)
-  if (!currentEpoch(id.sessionKey, id.epoch)) { if (s !== store.get()) store.set(s); return }
+  if (!currentEpoch(id.sessionKey, id.epoch)) {
+    /* The gateway is ahead of the list. Nothing to show from this, and
+       nothing to ask again until the list brings that epoch. */
+    const waiting = live(t, g, id.entryId) && list.get().sessionKey === id.sessionKey
+    if (waiting) store.set({ ...s, waitingEpoch: id.epoch })
+    else if (s !== store.get()) store.set(s)
+    return
+  }
   const key = descriptorKey(id)
   let next: DetailsState = {
     ...s,
@@ -416,10 +447,10 @@ function accept(result: TrajectoryDetailResult, t: number, g: number, mark: stri
    had moved on and was filed anyway -- unless the caller knows the entry has
    moved past what the list says (`fresh`), in which case only the gateway
    can say where it is now. */
-export async function loadDescriptor(opts: { fresh?: boolean } = {}): Promise<void> {
+export async function loadDescriptor(opts: { fresh?: boolean; force?: boolean } = {}): Promise<void> {
   const src = list.source()
   const id = listed()
-  if (!src || !id || !store.get().open) return
+  if (!src || !id || !mayRead(store.get(), { force: opts.force, what: 'descriptor' })) return
   if (!opts.fresh) {
     const cached = store.get().descriptors[descriptorKey(id)]
     if (cached) { accept(cached.value, gen, list.gen()); return }
@@ -503,10 +534,10 @@ function filePage(
   commit(next)
 }
 
-async function read(blockId: string, cursor: string | null, continuing: boolean): Promise<void> {
+async function read(blockId: string, cursor: string | null, continuing: boolean, force = false): Promise<void> {
   const src = list.source()
   const id = store.get().current
-  if (!src || !id || !store.get().open) return
+  if (!src || !id || !mayRead(store.get(), { force })) return
   const key = blockKey(id, blockId)
   const mark = keyOf('block', key, continuing ? 'more' : 'first')
   if (inflight.has(mark)) return
@@ -533,7 +564,7 @@ async function read(blockId: string, cursor: string | null, continuing: boolean)
       /* The entry moved on: not the same block again at a guessed revision,
          but the descriptor, which brings the revision and the tabs with it.
          An epoch the list has not reached yet is the list's to bring. */
-      if (moved.epoch !== id.epoch) { store.set(s); return }
+      if (moved.epoch !== id.epoch) { store.set({ ...s, waitingEpoch: moved.epoch }); return }
       if (revisionHops >= REVISION_RETRIES) { store.set({ ...s, unstable: true }); return }
       store.set({ ...s, stale: true })
       void loadDescriptor({ fresh: true })
@@ -562,7 +593,7 @@ export function loadMore(blockId: string): Promise<void> {
   return read(blockId, have.nextCursor, true)
 }
 
-/** Drops what is held for a block and reads it from its first page. */
+/** The reader's own retry: drops what is held for a block and reads it from its first page. */
 export function reloadBlock(blockId: string): Promise<void> {
   const id = store.get().current
   if (id) {
@@ -570,7 +601,17 @@ export function reloadBlock(blockId: string): Promise<void> {
     const s = store.get()
     store.set({ ...s, blocks: without(s.blocks, key), faults: without(s.faults, keyOf('block', key, 'first')) })
   }
-  return read(blockId, null, false)
+  return read(blockId, null, false, true)
+}
+
+/* The reader's own retry of the descriptor: the run of revision changes that
+   stopped the pane is forgiven, and the gateway is asked where the entry is
+   now. */
+export function retryDescriptor(): Promise<void> {
+  revisionHops = 0
+  const s = store.get()
+  store.set({ ...s, unstable: false, faults: without(s.faults, keyOf('descriptor', s.current?.entryId ?? list.get().selectedId ?? '')) })
+  return loadDescriptor({ fresh: true, force: true })
 }
 
 /* Whether what is held for a block is less than the whole: the gateway cut
@@ -597,37 +638,69 @@ export const fault = (what: 'descriptor' | { blockId: string; more?: boolean }, 
 
 /* ── following the list ───────────────────────────────────────────────── */
 
-let seen = { sessionKey: null as string | null, epoch: null as string | null, selectedId: null as string | null, revision: null as number | null, selectedBy: null as string | null }
+interface Seen {
+  sessionKey: string | null
+  epoch: string | null
+  selectedId: string | null
+  revision: number | null
+  selectedBy: string | null
+  /** The trajectory is on screen for a conversation the toggle may show, over a whole snapshot. */
+  permitted: boolean
+}
+
+const nothingSeen: Seen = { sessionKey: null, epoch: null, selectedId: null, revision: null, selectedBy: null, permitted: false }
+
+const seenNow = (): Seen => {
+  const s = list.get()
+  const entry = s.selectedId !== null ? list.entry(s.selectedId) : null
+  return {
+    sessionKey: s.sessionKey, epoch: s.epoch, selectedId: s.selectedId,
+    revision: entry ? entry.revision : null, selectedBy: s.selectedBy,
+    permitted: s.view === 'trajectory' && list.available(s) && s.snapshotReady,
+  }
+}
+
+let seen: Seen = nothingSeen
 
 /* The list's own writes drive this pane: a new conversation clears
    everything; a new selection moves the ticket and opens the pane (unless the
    selection was the list's own migration); the selected row's revision
    moving marks the descriptor stale. */
 function follow(): void {
-  const s = list.get()
-  const entry = s.selectedId !== null ? list.entry(s.selectedId) : null
-  const now = {
-    sessionKey: s.sessionKey, epoch: s.epoch, selectedId: s.selectedId,
-    revision: entry ? entry.revision : null, selectedBy: s.selectedBy,
-  }
+  const now = seenNow()
   const was = seen
   seen = now
   if (now.sessionKey !== was.sessionKey) {
     bump()
     inflight.clear()
     revisionHops = 0
-    store.set({ ...initial, width: store.get().width, areaWidth: store.get().areaWidth })
+    store.set({ ...initial, paused: !now.permitted, width: store.get().width, areaWidth: store.get().areaWidth })
     return
+  }
+  /* The view left or came back, the switch flipped, the snapshot was let go:
+     whatever was in the air is about a pane that is not asking any more, and
+     a pane that may ask again starts afresh. The switch and the bodies stay;
+     the mirror flips so the pane's components look again. */
+  if (now.permitted !== was.permitted) {
+    bump()
+    patch({ paused: !now.permitted })
   }
   if (now.selectedId !== was.selectedId) {
     bump()
     revisionHops = 0
     const d = store.get()
     const open = now.selectedId === null ? false : (now.selectedBy !== 'migrate' ? true : d.open)
-    patch({ open, current: null, stale: false, unstable: false })
+    patch({ open, current: null, stale: false, unstable: false, waitingEpoch: null })
     return
   }
-  if (now.selectedId !== null && (now.revision !== was.revision || now.epoch !== was.epoch) && store.get().current !== null) {
+  if (now.epoch !== was.epoch) {
+    /* The list reached a new epoch: whatever the pane was waiting for, this
+       is the answer, and what it shows is to be read again under it. */
+    const d = store.get()
+    if (d.waitingEpoch !== null || d.current !== null) patch({ waitingEpoch: null, stale: d.current !== null })
+    return
+  }
+  if (now.selectedId !== null && now.revision !== was.revision && store.get().current !== null) {
     patch({ stale: true })
   }
 }
@@ -635,11 +708,8 @@ function follow(): void {
 /** Wire the pane to the list's store, once. */
 export function install(): void {
   if (unfollow) return
-  const s = list.get()
-  seen = {
-    sessionKey: s.sessionKey, epoch: s.epoch, selectedId: s.selectedId,
-    revision: s.selectedId !== null ? (list.entry(s.selectedId)?.revision ?? null) : null, selectedBy: s.selectedBy,
-  }
+  seen = seenNow()
+  if (store.get().paused === seen.permitted) patch({ paused: !seen.permitted })
   unfollow = list.subscribe(follow)
 }
 
@@ -660,5 +730,5 @@ export function _resetForTests(): void {
   revisionHops = 0
   inflight.clear()
   if (unfollow) { unfollow(); unfollow = null }
-  seen = { sessionKey: null, epoch: null, selectedId: null, revision: null, selectedBy: null }
+  seen = nothingSeen
 }

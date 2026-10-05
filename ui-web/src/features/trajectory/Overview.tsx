@@ -12,7 +12,7 @@
 import { t } from '../../i18n/t'
 import { availabilityKey, evidenceKey, noteKey, previewSummary, reasonKey, statusKey } from './blocks'
 import { PreviewView } from './BlockView'
-import * as details from './details'
+import * as details from './detailStore'
 import { kindClass, kindLabel } from './palette'
 import { blockTitle, panelId, tabId } from './Tabs'
 
