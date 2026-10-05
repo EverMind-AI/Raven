@@ -120,6 +120,9 @@ export function toSegments(entries: readonly TrajectoryEntry[]): Segment[] {
 
 const positive = (s: Segment): boolean => s.charged !== null && s.charged > 0
 
+/* A duration nobody recorded. A zero-length mark recorded as such is known. */
+const unknown = (s: Segment): boolean => s.charged === null && s.basis !== 'zero'
+
 /* ── slots ────────────────────────────────────────────────────────────── */
 
 /* The proportion `a` (pixels per millisecond) at which the positive entries,
@@ -208,8 +211,7 @@ export function denseLayout(segments: readonly Segment[], width: number): Layout
   const base = fitLayout(merged, width)
   const blocks = base.blocks.map((b, i) => {
     const g = groups[i]!
-    const known = g.filter(positive)
-    return { ...b, charged: sums[i]! > 0 ? sums[i]! : null, ids: g.map((s) => s.id), sum: sums[i]!, unknown: g.length - known.length }
+    return { ...b, charged: sums[i]! > 0 ? sums[i]! : null, ids: g.map((s) => s.id), sum: sums[i]!, unknown: g.filter(unknown).length }
   })
   const dividers: number[] = []
   groups.forEach((g, i) => {
@@ -222,12 +224,25 @@ export function denseLayout(segments: readonly Segment[], width: number): Layout
 
 /* ── the one entry point the bar draws from ───────────────────────────── */
 
+/* The proportion the durations are drawn at before any zoom: the fit's own
+   unit when the fit can give every entry its slot, and -- when there are
+   more entries than minimum widths, so that no fit of them exists and a
+   bisection would only find zero -- the plain share of the bar each recorded
+   millisecond would have with no floors at all. Zero when nothing has a
+   duration. */
+export function referenceUnit(segments: readonly Segment[], width: number): number {
+  if (!segments.length || width < MIN_W) return 0
+  if (segments.length <= capacity(width)) return fitLayout(segments, width).unit
+  const total = segments.filter(positive).reduce((n, s) => n + (s.charged as number), 0)
+  return total > 0 ? width / total : 0
+}
+
 /* The unit a spread layout uses: the one frozen on the first zoom, or --
-   while no entry had a duration to freeze one on -- the fit's unit of the
-   rows as they stand, so the first duration to arrive takes its proportion
-   rather than the minimum width forever. */
+   while no entry had a duration to freeze one on -- the reference unit of
+   the rows as they stand, so the first duration to arrive takes its
+   proportion rather than the minimum width forever. */
 export const unitFor = (segments: readonly Segment[], view: Viewport): number =>
-  view.frozenUnit ?? fitLayout(segments, view.width).unit
+  view.frozenUnit ?? referenceUnit(segments, view.width)
 
 /* The unit to freeze when leaving the fit: the fit's own, unless there is
    none yet (no positive duration), in which case nothing is frozen and the
@@ -373,7 +388,7 @@ export function summarize(segments: readonly Segment[]): Summary {
   const turnsWithReply = new Set<number>()
   const turnsWithInner = new Set<number>()
   for (const s of segments) {
-    if (s.charged === null) { if (s.basis !== 'zero') unknownCount += 1; continue }
+    if (s.charged === null) { if (unknown(s)) unknownCount += 1; continue }
     known += s.charged
     if (s.charged > 0 && s.turn !== null) {
       if (s.kind === 'agent.reply') turnsWithReply.add(s.turn)

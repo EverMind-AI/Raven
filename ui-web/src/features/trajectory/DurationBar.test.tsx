@@ -8,15 +8,19 @@ import { dispatch as escape } from '../../state/escapeOrder'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import * as details from './detailStore'
-import { DurationBar } from './DurationBar'
-import { DBL_MS, MIN_W, capacity } from './geometry'
+import { BUCKET_MAX_H, DurationBar } from './DurationBar'
+import { DBL_MS, GAP, MIN_W, capacity, hitTest, layoutFor, toSegments } from './geometry'
 import * as store from './store'
 
 import type { TrajectoryEntry, TrajectoryIndexState, TrajectorySource } from './types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+/* The canvas is narrower than the bar it sits in: the bar also holds the
+   sum and the tools. Every layout here is the canvas's. */
 const WIDTH = 600
+const BAR_W = 760
+let canvasWidth = WIDTH
 
 const READY: TrajectoryIndexState = {
   phase: 'ready', scanned_bytes: 10, total_bytes: 10, head_truncated: 0, recovering_traces: 0,
@@ -54,17 +58,44 @@ const source: TrajectorySource = {
 const q = (sel: string): HTMLElement | null => document.querySelector<HTMLElement>(sel)
 const canvas = (): HTMLCanvasElement => q('.trajectory-canvas') as HTMLCanvasElement
 
-/* happy-dom lays nothing out and captures no pointers: the bar is given a
-   width, and the capture calls somewhere to land. */
+/* happy-dom lays nothing out, captures no pointers and observes no sizes:
+   the canvas and the bar are given widths of their own, the capture calls
+   somewhere to land, and a size observer the test drives by hand. */
 const proto = HTMLElement.prototype as unknown as Record<string, unknown>
 let widthDescriptor: PropertyDescriptor | undefined
+const widths = (): void => {
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+    get(this: HTMLElement) { return this.tagName === 'CANVAS' ? canvasWidth : BAR_W },
+    configurable: true,
+  })
+}
+
+interface Observed { cb: ResizeObserverCallback; targets: Element[] }
+const observers: Observed[] = []
+class FakeResizeObserver {
+  private readonly rec: Observed
+  constructor(cb: ResizeObserverCallback) {
+    this.rec = { cb, targets: [] }
+    observers.push(this.rec)
+  }
+  observe(el: Element): void { this.rec.targets.push(el) }
+  unobserve(el: Element): void { this.rec.targets = this.rec.targets.filter((x) => x !== el) }
+  disconnect(): void { this.rec.targets = [] }
+}
+const resizeCanvasTo = (w: number): void => {
+  canvasWidth = w
+  act(() => {
+    for (const o of observers) if (o.targets.length) o.cb([], o as unknown as ResizeObserver)
+  })
+}
 
 beforeAll(() => {
   widthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
-  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get() { return WIDTH }, configurable: true })
+  widths()
   proto.setPointerCapture = () => {}
   proto.releasePointerCapture = () => {}
   proto.hasPointerCapture = () => false
+  vi.stubGlobal('ResizeObserver', FakeResizeObserver)
 })
 
 afterAll(() => {
@@ -73,6 +104,7 @@ afterAll(() => {
   delete proto.setPointerCapture
   delete proto.releasePointerCapture
   delete proto.hasPointerCapture
+  vi.unstubAllGlobals()
 })
 
 async function ready(): Promise<void> {
@@ -91,6 +123,12 @@ const later = async (ms: number): Promise<void> => { await act(async () => { awa
 
 const pointer = (type: string, clientX: number, pointerId = 1): void => {
   act(() => { fireEvent(canvas(), new PointerEvent(type, { clientX, clientY: 10, pointerId, button: 0, bubbles: true })) })
+}
+/* happy-dom's WheelEvent carries no pointer position; the browser's does. */
+const wheel = (deltaY: number, clientX: number): WheelEvent => {
+  const ev = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true })
+  Object.defineProperty(ev, 'clientX', { value: clientX })
+  return ev
 }
 const click = async (clientX: number): Promise<void> => {
   pointer('pointerdown', clientX)
@@ -112,6 +150,8 @@ function countSelections(): () => number {
 beforeEach(() => {
   vi.useFakeTimers()
   rows = THREE
+  canvasWidth = WIDTH
+  observers.length = 0
   store._resetForTests()
   details._resetForTests()
   resetCapabilities()
@@ -269,9 +309,10 @@ describe('the duration bar', () => {
     await ready()
     render(<DurationBar />)
     await flush()
-    const ev = new WheelEvent('wheel', { deltaY: -200, clientX: 300, bubbles: true, cancelable: true })
+    const ev = wheel(-200, 300)
     act(() => { canvas().dispatchEvent(ev) })
     expect(ev.defaultPrevented).toBe(true)
+    expect(Number.isFinite(store.get().timeline.offset)).toBe(true)
     expect(store.get().timeline.fit).toBe(false)
     expect(store.get().timeline.scale).toBeGreaterThan(1)
     const elsewhere = new WheelEvent('wheel', { deltaY: -200, bubbles: true, cancelable: true })
@@ -335,6 +376,72 @@ describe('the duration bar', () => {
     expect(store.get().timeline.offset).toBe(zoomed.offset)
   })
 
+  it('lays out, hit-tests and zooms in the canvas\'s own pixels, not the wider bar\'s, and follows the canvas as it resizes', async () => {
+    rows = [entry('a', 0, { kind: 'tool.output', charged_ms: 1000 }), entry('b', 1, { kind: 'llm.output', charged_ms: 1000 })]
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    expect(observers.some((o) => o.targets.includes(canvas()))).toBe(true)
+    expect(observers.some((o) => o.targets.includes(q('.trajectory-bar') as Element))).toBe(false)
+    const kindUnder = (x: number): string => {
+      pointer('pointermove', x)
+      return q('.trajectory-hover .trajectory-tag')?.textContent ?? ''
+    }
+    /* Two equal durations: the seam is at the canvas's middle, 300, not the bar's, 380. */
+    expect(kindUnder(340)).toBe('gui.trajectory.kind.llm_output')
+    expect(kindUnder(290)).toBe('gui.trajectory.kind.tool_output')
+    /* The canvas grows -- the sum beside it got shorter -- and the seam moves with it. */
+    resizeCanvasTo(800)
+    expect(kindUnder(340)).toBe('gui.trajectory.kind.tool_output')
+    expect(kindUnder(420)).toBe('gui.trajectory.kind.llm_output')
+    /* A zoom about the canvas's right edge keeps that edge's entry under the pointer. */
+    act(() => { canvas().dispatchEvent(wheel(-400, 790)) })
+    const view = { ...store.get().timeline, width: 800 }
+    const layout = layoutFor(toSegments(store.get().entries), view)
+    expect(hitTest(layout, view.offset + 790)?.id).toBe('b')
+    expect(view.offset + 800).toBeLessThanOrEqual(layout.contentWidth + 1e-6)
+  })
+
+  it('keeps a dragged view where the reader left it when rows append, rows arrive in front, or the canvas resizes', async () => {
+    rows = Array.from({ length: 12 }, (_, k) => entry(`r${k}`, k, { charged_ms: 1000 * (1 + (k % 4)) }))
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    act(() => { fireEvent.click(q('.trajectory-bar-tool[aria-label="gui.trajectory.bar.zoom_in"]') as HTMLElement) })
+    act(() => { fireEvent.click(q('.trajectory-bar-tool[aria-label="gui.trajectory.bar.zoom_in"]') as HTMLElement) })
+    const zoomed = store.get().timeline
+    pointer('pointerdown', 300)
+    pointer('pointermove', 280)
+    pointer('pointermove', 200)
+    pointer('pointerup', 200)
+    await flush()
+    const dragged = store.get().timeline
+    expect(dragged.offset).toBeGreaterThan(zoomed.offset)
+    expect(dragged.anchor).not.toEqual(zoomed.anchor)
+    const atLeftEdge = (): string | undefined => {
+      const s = store.get()
+      return hitTest(layoutFor(toSegments(s.entries), { ...s.timeline, width: canvasWidth }), s.timeline.offset + 0.5)?.id
+    }
+    const edge = atLeftEdge()
+    expect(edge).toBe(dragged.anchor!.id)
+    /* Rows appended at the tail: nothing before them moves, so neither does the view. */
+    const s1 = store.get()
+    act(() => { store.set({ ...s1, entries: [...s1.entries, entry('tail', 20, { charged_ms: 3000 })], index: { ...s1.index, tail: s1.entries.length } }) })
+    expect(store.get().timeline.offset).toBeCloseTo(dragged.offset, 6)
+    expect(atLeftEdge()).toBe(edge)
+    /* A row in front: the view slides by its slot, so the same entry stays at the edge. */
+    const s2 = store.get()
+    const early = entry('early', 0, { charged_ms: 2000 })
+    act(() => { store.set({ ...s2, entries: [early, ...s2.entries], index: Object.fromEntries([early, ...s2.entries].map((e, i) => [e.entry_id, i])) }) })
+    const slot = Math.max(MIN_W, dragged.frozenUnit! * dragged.scale * 2000) + GAP
+    expect(store.get().timeline.offset).toBeCloseTo(dragged.offset + slot, 6)
+    expect(atLeftEdge()).toBe(edge)
+    /* The canvas narrows: the edge holds. */
+    resizeCanvasTo(400)
+    expect(atLeftEdge()).toBe(edge)
+    expect(store.get().timeline.scale).toBe(dragged.scale)
+  })
+
   it('does nothing without a width', async () => {
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get() { return 0 }, configurable: true })
     try {
@@ -347,7 +454,7 @@ describe('the duration bar', () => {
       await later(DBL_MS * 2)
       expect(store.get().selectedId).toBeNull()
     } finally {
-      Object.defineProperty(HTMLElement.prototype, 'clientWidth', { get() { return WIDTH }, configurable: true })
+      widths()
     }
   })
 })
@@ -362,6 +469,8 @@ describe('a dense block', () => {
     await flush()
     pointer('pointermove', 1)
     expect(q('.trajectory-hover-line')?.textContent).toContain('gui.trajectory.bar.dense ')
+    /* Recorded zeros are known: this block has none unknown. */
+    expect(q('.trajectory-hover-line')?.textContent).toContain('"unknown":0')
     await click(1)
     await later(DBL_MS)
     const bucket = store.get().timeline.bucket
@@ -387,6 +496,54 @@ describe('a dense block', () => {
     expect(store.get().timeline.bucket).toBeNull()
     expect(store.get().timeline.fit).toBe(false)
     expect(store.get().timeline.scale).toBeGreaterThanOrEqual(1)
+  })
+
+  it('says how many of a block\'s entries have no recorded duration', async () => {
+    rows = many.map((e, k) => (k % 3 === 1 ? { ...e, charged_ms: null, timing_basis: 'not_recorded' as const } : e))
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    pointer('pointermove', 1)
+    const text = q('.trajectory-hover-line')?.textContent ?? ''
+    const n = Number(/"n":(\d+)/.exec(text)![1])
+    const unknown = Number(/"unknown":(\d+)/.exec(text)![1])
+    /* The first block holds the first n rows; every third of them, from the second, is unrecorded. */
+    expect(unknown).toBe([...Array(n).keys()].filter((k) => k % 3 === 1).length)
+    expect(unknown).toBeGreaterThan(0)
+    expect(unknown).toBeLessThan(n)
+  })
+
+  it('opens its pick list below the bar when the window has room there, above it otherwise, and never taller than the room', async () => {
+    rows = many
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    /* The bar's place and the window's height, then a re-render for the list to read them. */
+    const place = (top: number, viewportHeight: number): CSSStyleDeclaration => {
+      canvas().getBoundingClientRect = () => ({ left: 0, right: WIDTH, top, bottom: top + 32, width: WIDTH, height: 32, x: 0, y: top, toJSON: () => ({}) })
+      Object.defineProperty(document.documentElement, 'clientHeight', { get: () => viewportHeight, configurable: true })
+      act(() => { store.setTimeline({ bucket: { ...store.get().timeline.bucket! } }) })
+      return (q('.trajectory-bucket') as HTMLElement).style
+    }
+    try {
+      /* The bar at the bottom of a tall window: the list opens above it, at its full height. */
+      await click(1)
+      await later(DBL_MS)
+      expect(store.get().timeline.bucket).not.toBeNull()
+      let style = place(760, 800)
+      expect(style.top).toBe(`${760 - 4 - BUCKET_MAX_H}px`)
+      expect(style.maxHeight).toBe(`${BUCKET_MAX_H}px`)
+      /* The bar near the top of a short window: below, but no taller than what is left. */
+      style = place(100, 300)
+      expect(style.top).toBe('136px')
+      expect(style.maxHeight).toBe(`${300 - 4 - 136}px`)
+      /* Room on neither side for the whole list: the larger side, clipped to it. */
+      style = place(100, 200)
+      expect(style.maxHeight).toBe('92px')
+      expect(style.top).toBe(`${96 - 92}px`)
+    } finally {
+      delete (document.documentElement as unknown as Record<string, unknown>).clientHeight
+    }
   })
 
   it('closes on Escape through the page\'s order, and when the conversation changes', async () => {

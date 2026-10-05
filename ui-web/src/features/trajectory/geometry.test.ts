@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  GAP, MAX_SCALE, MIN_W, anchorOf, capacity, expand, fitLayout, hitTest, initialViewport, layoutFor, locate, pan,
-  position, restoreAnchor, summarize, toSegments, zoomAt,
+  GAP, MAX_SCALE, MIN_W, anchorOf, capacity, denseLayout, expand, fitLayout, hitTest, initialViewport, layoutFor, locate, pan,
+  position, referenceUnit, restoreAnchor, summarize, toSegments, zoomAt,
 } from './geometry'
 
 import type { Segment, Viewport } from './geometry'
@@ -94,6 +94,47 @@ describe('the fit', () => {
     expect(tiny.blocks[0]!.ids).toEqual(['a', 'b', 'c'])
     expect(tiny.blocks[0]!.w).toBe(MIN_W)
     expect(tiny.contentWidth).toBe(MIN_W)
+  })
+})
+
+describe('a dense fit', () => {
+  /* Four hundred entries at two hundred pixels: fifty blocks of eight. */
+  const width = 200
+  const eight = (i: number): number | null => (i % 8 < 3 ? 0 : i % 8 < 5 ? null : 100 * (i % 8))
+
+  it('counts a block\'s unknowns the way the sum does: the durations not recorded, never the recorded zeros', () => {
+    const segments = Array.from({ length: 400 }, (_, i) => seg(`s${i}`, eight(i)))
+    const dense = denseLayout(segments, width)
+    expect(dense.blocks).toHaveLength(50)
+    for (const b of dense.blocks) {
+      expect(b.ids).toHaveLength(8)
+      expect(b.unknown).toBe(2)
+      expect(b.sum).toBe(500 + 600 + 700)
+      expect(b.charged).toBe(500 + 600 + 700)
+    }
+    expect(dense.blocks.reduce((n, b) => n + b.unknown!, 0)).toBe(summarize(segments).unknownCount)
+    const zeros = denseLayout(segments.map((s) => ({ ...s, charged: 0, basis: 'zero' as const })), width)
+    for (const b of zeros.blocks) {
+      expect(b.unknown).toBe(0)
+      expect(b.sum).toBe(0)
+      expect(b.charged).toBeNull()
+    }
+    const nulls = denseLayout(segments.map((s) => ({ ...s, charged: null, basis: 'unknown' as const })), width)
+    for (const b of nulls.blocks) expect(b.unknown).toBe(b.ids!.length)
+    expect(nulls.blocks.reduce((n, b) => n + b.unknown!, 0)).toBe(400)
+  })
+
+  it('has a unit of its own when no fit of the raw rows exists: the bar\'s share of each recorded millisecond', () => {
+    const segments = Array.from({ length: 400 }, (_, i) => seg(`s${i}`, i % 10 === 0 ? 60_000 : 100))
+    expect(fitLayout(segments, width).unit).toBe(0)
+    const total = 40 * 60_000 + 360 * 100
+    expect(near(referenceUnit(segments, width), width / total)).toBe(true)
+    expect(referenceUnit(segments.map((s) => ({ ...s, charged: null, basis: 'unknown' as const })), width)).toBe(0)
+    expect(referenceUnit([], width)).toBe(0)
+    expect(referenceUnit(segments, MIN_W - 1)).toBe(0)
+    /* Few enough rows for a fit: the fit's own unit, as before. */
+    const few = segments.slice(0, 20)
+    expect(referenceUnit(few, width)).toBe(fitLayout(few, width).unit)
   })
 })
 
@@ -294,6 +335,62 @@ describe('zoom', () => {
     expect(spread.contentWidth).toBeGreaterThan(width)
   })
 
+  it('zooms dense rows of recorded durations in proportion, so the long ones grow while the short stay marks', () => {
+    const width = 200
+    const segments = Array.from({ length: 400 }, (_, i) => seg(`s${i}`, i % 10 === 0 ? 60_000 : 100))
+    expect(layoutFor(segments, initialViewport(width)).dense).toBe(true)
+    const unit = referenceUnit(segments, width)
+    const zoomed = zoomAt(initialViewport(width), 100, MAX_SCALE, segments)
+    expect(zoomed.frozenUnit).toBe(unit)
+    const spread = layoutFor(segments, zoomed)
+    expect(spread.dense).toBe(false)
+    const long = spread.blocks.find((b) => b.id === 's0')!
+    const short = spread.blocks.find((b) => b.id === 's1')!
+    expect(near(long.w, unit * MAX_SCALE * 60_000)).toBe(true)
+    expect(long.w).toBeGreaterThan(MIN_W)
+    expect(short.w).toBe(MIN_W)
+    /* A second zoom multiplies the same unit; the proportion between two recorded durations holds. */
+    const again = zoomAt(zoomAt(initialViewport(width), 100, 4, segments), 100, 4, segments)
+    const twice = layoutFor(segments, again)
+    const a = twice.blocks.find((b) => b.id === 's0')!
+    const b = twice.blocks.find((b) => b.id === 's10')!
+    expect(near(a.w, b.w)).toBe(true)
+    expect(near(a.w, unit * 16 * 60_000)).toBe(true)
+  })
+
+  it('zooms mixed dense rows with the recorded ones in proportion and the marks at the minimum times the scale', () => {
+    const width = 200
+    const segments = randomSegments(rng(23), 400)
+    expect(layoutFor(segments, initialViewport(width)).dense).toBe(true)
+    const zoomed = zoomAt(initialViewport(width), 50, 8, segments)
+    expect(zoomed.frozenUnit).toBe(referenceUnit(segments, width))
+    expect(zoomed.frozenUnit).toBeGreaterThan(0)
+    const spread = layoutFor(segments, zoomed)
+    const bySeg = new Map(segments.map((s) => [s.id, s]))
+    for (const b of spread.blocks) {
+      const s = bySeg.get(b.id)!
+      if (s.charged !== null && s.charged > 0) expect(near(b.w, Math.max(MIN_W, zoomed.frozenUnit! * 8 * s.charged))).toBe(true)
+      else expect(near(b.w, MIN_W * 8)).toBe(true)
+    }
+  })
+
+  it('gives dense rows that had no duration their proportion when the first recorded one arrives, keeping the place', () => {
+    const width = 200
+    const zeros = randomSegments(rng(31), 400, true)
+    const zoomed = zoomAt(initialViewport(width), 100, 4, zeros)
+    expect(zoomed.frozenUnit).toBeNull()
+    const anchored = { ...zoomed, anchor: anchorOf(layoutFor(zeros, zoomed), zoomed) }
+    expect(anchored.anchor).not.toBeNull()
+    const grown = [...zeros, seg('late', 5000), seg('later', 50_000)]
+    const relaid = layoutFor(grown, anchored)
+    const restored = restoreAnchor(relaid, anchored)
+    expect(restored.frozenUnit).toBe(referenceUnit(grown, width))
+    expect(restored.frozenUnit).toBeGreaterThan(0)
+    const later = relaid.blocks.find((b) => b.id === 'later')!
+    expect(near(later.w, Math.max(MIN_W, restored.frozenUnit! * 4 * 50_000))).toBe(true)
+    expect(near(restored.offset, Math.min(position(relaid, anchored.anchor!)!, relaid.contentWidth - width))).toBe(true)
+  })
+
   it('gives the first duration to arrive under a zoom its proportion, freezing the unit then and keeping the anchor', () => {
     const width = 300
     const zeros = Array.from({ length: 10 }, (_, i) => seg(`z${i}`, 0))
@@ -382,6 +479,29 @@ describe('spreading a dense block out', () => {
       /* The span fills the viewport, unless the scale ceiling or the floors stopped it short of exact. */
       expect(span).toBeLessThanOrEqual(width + ids.length * MIN_W + 1e-6)
     }
+  })
+
+  it('spreads a dense block of recorded durations out in proportion, not as equal marks', () => {
+    const width = 200
+    const segments = Array.from({ length: 400 }, (_, i) => seg(`s${i}`, 100 * (1 + (i % 8))))
+    const view = initialViewport(width)
+    const dense = layoutFor(segments, view)
+    const bucket = dense.blocks[2]!
+    expect(bucket.ids).toHaveLength(8)
+    const opened = expand(view, bucket, segments)
+    expect(opened.frozenUnit).toBe(referenceUnit(segments, width))
+    const spread = layoutFor(segments, opened)
+    const members = bucket.ids!.map((id) => spread.blocks.find((b) => b.id === id)!)
+    expect(near(members[0]!.x, opened.offset)).toBe(true)
+    expect(members[7]!.charged).toBe(800)
+    expect(members[7]!.w).toBeGreaterThan(MIN_W)
+    expect(near(members[7]!.w, opened.frozenUnit! * opened.scale * 800)).toBe(true)
+    expect(members[0]!.w).toBe(MIN_W)
+    /* Zooming on from there keeps growing the recorded ones. */
+    const further = zoomAt(opened, 0, 4, segments)
+    const grown = layoutFor(segments, further).blocks.find((b) => b.id === bucket.ids![7])!
+    expect(near(grown.w, members[7]!.w * 4) || further.scale === MAX_SCALE).toBe(true)
+    expect(grown.w).toBeGreaterThan(members[7]!.w)
   })
 
   it('at the ceiling, still leaves every entry its own slot and the block\'s first at the edge', () => {

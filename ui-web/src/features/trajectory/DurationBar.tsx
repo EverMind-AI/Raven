@@ -28,7 +28,7 @@ import { t } from '../../i18n/t'
 import { formatDuration } from '../../lib/duration'
 import * as details from './detailStore'
 import {
-  BAR_H, DBL_MS, DRAG_PX, GAP, MIN_W, expand, hitTest, layoutFor, pan, restoreAnchor, summarize, toSegments, zoomAt,
+  BAR_H, DBL_MS, DRAG_PX, GAP, MIN_W, anchorOf, expand, hitTest, layoutFor, pan, restoreAnchor, summarize, toSegments, zoomAt,
 } from './geometry'
 import { BarHover } from './Hover'
 import { kindClass, kindLabel, kindSlug } from './palette'
@@ -40,6 +40,10 @@ import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPoi
 
 /* A wheel notch's zoom, kept within a halving and a doubling per event. */
 const wheelFactor = (deltaY: number): number => Math.max(0.5, Math.min(2, Math.exp(-deltaY * 0.0015)))
+
+/** The dense block's pick list: its width, and the most height it takes. */
+export const BUCKET_W = 320
+export const BUCKET_MAX_H = 280
 
 /* The world the bar was in when a gesture began. A delayed action compares
    this against the world when it fires. */
@@ -161,8 +165,8 @@ export function paint(ctx: CanvasRenderingContext2D, layout: Layout, view: Viewp
    the block out instead. Escape reaches it through the trajectory layer in
    the page's Escape order (detailStore.ts), so a sheet or a popover above it
    is taken back first. */
-function Bucket({ ids, left, top, onPick, onExpand }: {
-  ids: string[]; left: number; top: number; onPick: (id: string) => void; onExpand: () => void
+function Bucket({ ids, left, top, maxHeight, onPick, onExpand }: {
+  ids: string[]; left: number; top: number; maxHeight: number; onPick: (id: string) => void; onExpand: () => void
 }): JSX.Element {
   const box = useRef<HTMLDivElement>(null)
   const s = useSyncExternalStore(store.subscribe, store.get)
@@ -178,7 +182,7 @@ function Bucket({ ids, left, top, onPick, onExpand }: {
     options[next]?.focus()
   }
   return (
-    <div className="trajectory-bucket" ref={box} role="listbox" aria-label={t('gui.trajectory.bar.pick_one')} style={{ left, top }} onKeyDown={onKeyDown}>
+    <div className="trajectory-bucket" ref={box} role="listbox" aria-label={t('gui.trajectory.bar.pick_one')} style={{ left, top, maxHeight }} onKeyDown={onKeyDown}>
       <div className="trajectory-bucket-head">
         <span>{t('gui.trajectory.bar.pick_one')}</span>
         <button className="trajectory-link" onClick={onExpand}>{t('gui.trajectory.bar.expand')}</button>
@@ -217,11 +221,14 @@ export function DurationBar(): JSX.Element {
   const layout = useMemo(() => layoutFor(segments, view), [segments, view])
   const sum = useMemo(() => summarize(segments), [segments])
 
-  /* The bar's width, from the box as it is and again whenever it changes. */
-  const attach = useCallback((el: HTMLDivElement | null): void => {
+  /* The canvas's own width -- not the bar's, which also holds the sum and
+     the tools -- measured as it is and again whenever it changes, so the
+     layout, the hit test and the zoom all speak in the pixels the canvas is
+     drawn at. A longer sum narrows the canvas, and the observer sees that. */
+  const attachCanvas = useCallback((el: HTMLCanvasElement | null): void => {
     observer.current?.disconnect()
     observer.current = null
-    root.current = el
+    canvas.current = el
     if (!el) return
     const measure = (): void => { setWidth(el.clientWidth) }
     measure()
@@ -368,7 +375,9 @@ export function DurationBar(): JSX.Element {
       if (d.moved) {
         const next = pan(view, e.clientX - d.lastX, layout.contentWidth)
         d.lastX = e.clientX
-        if (next.offset !== view.offset) store.setTimeline({ offset: next.offset })
+        /* The anchor moves with the view: it is what rows arriving later
+           are restored against, and a stale one would undo the drag. */
+        if (next.offset !== view.offset) store.setTimeline({ offset: next.offset, anchor: anchorOf(layout, next) })
         return
       }
     }
@@ -405,12 +414,21 @@ export function DurationBar(): JSX.Element {
   }
 
   const bucket = timeline.bucket
-  const bucketPlace = (): { left: number; top: number } => {
+  /* Below the bar when the window has room for the list there, above it
+     otherwise -- the bar sits at the bottom of the column, so above is the
+     usual case -- and never wider than the window. */
+  const bucketPlace = (): { left: number; top: number; maxHeight: number } => {
     const rect = canvas.current?.getBoundingClientRect()
+    const vw = document.documentElement.clientWidth || 1000
+    const vh = document.documentElement.clientHeight || 800
     const left = (rect?.left ?? 0) + (bucket ? bucket.x - view.offset : 0)
-    const top = (rect?.bottom ?? BAR_H) + 4
-    const vw = typeof document !== 'undefined' ? document.documentElement.clientWidth || 1000 : 1000
-    return { left: Math.max(4, Math.min(vw - 324, left)), top }
+    const below = (rect?.bottom ?? BAR_H) + 4
+    const above = (rect?.top ?? 0) - 4
+    const roomBelow = vh - 4 - below
+    const roomAbove = above - 4
+    const wantHeight = Math.min(BUCKET_MAX_H, Math.max(roomBelow, roomAbove))
+    const top = roomBelow >= wantHeight ? below : Math.max(4, above - wantHeight)
+    return { left: Math.max(4, Math.min(vw - BUCKET_W - 4, left)), top, maxHeight: wantHeight }
   }
 
   const onPick = (id: string): void => {
@@ -442,10 +460,10 @@ export function DurationBar(): JSX.Element {
   const label = t('gui.trajectory.bar.canvas_label', { n: entries.length, known: formatDuration(sum.known) })
   const rect = canvas.current?.getBoundingClientRect()
   return (
-    <div className="trajectory-bar" ref={attach} tabIndex={-1} data-fit={timeline.fit ? '' : undefined}>
+    <div className="trajectory-bar" ref={root} tabIndex={-1} data-fit={timeline.fit ? '' : undefined}>
       <canvas
         className="trajectory-canvas"
-        ref={canvas}
+        ref={attachCanvas}
         role="img"
         aria-label={label}
         style={{ width: '100%', height: BAR_H }}
