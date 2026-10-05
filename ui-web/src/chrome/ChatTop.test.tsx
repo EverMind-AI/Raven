@@ -259,6 +259,18 @@ describe('the chat column chrome and the trajectory view', () => {
     expect(ta.value).toBe('half a thought')
   })
 
+  it('comes back to the conversation when it is cleared under the trajectory', async () => {
+    render()
+    await offer()
+    act(() => { el('trajBtn').click() })
+    expect(el('scroll').getAttribute('data-parked')).toBe('')
+    act(() => { pitch() })
+    expect(document.getElementById('trajBtn')).toBeNull()
+    expect(el('scroll').hasAttribute('data-parked')).toBe(false)
+    expect(el('trajHost').hidden).toBe(true)
+    expect(trajectory.get().view).toBe('chat')
+  })
+
   it('reaches for no element of its own: the toggle is drawn from the store alone', () => {
     const text = source('chrome/ChatTop.tsx')
     expect(text).not.toMatch(/getElementById|querySelector\(/)

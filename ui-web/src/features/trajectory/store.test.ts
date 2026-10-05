@@ -144,6 +144,32 @@ describe('available', () => {
     expect(store.available()).toBe(false)
   })
 
+  it('leaves the trajectory view when the conversation is cleared under it, and drops the walk', async () => {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    store.setView('trajectory')
+    const walk = store.load()
+    await flush()
+    const g = store.gen()
+    pitch()
+    expect(store.available()).toBe(false)
+    expect(store.get().view).toBe('chat')
+    expect(store.get().listing).toBe(false)
+    expect(store.gen()).toBeGreaterThan(g)
+    /* The page that was in the air lands on nothing. */
+    await answer(page([entry('r0', 0)], null))
+    await walk
+    expect(store.get().entries).toEqual([])
+    expect(store.get().snapshotReady).toBe(false)
+    /* Content again: the toggle is back, the view stays where the reader left it. */
+    unpitch()
+    expect(store.available()).toBe(true)
+    expect(store.get().view).toBe('chat')
+  })
+
   it('goes with the switch and comes back with it, in the conversation view', async () => {
     serve(false)
     store.install()

@@ -15,7 +15,7 @@
  * `select`, and the list only draws what it says.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import { isKnownKind, kindClass, kindLabel } from './palette'
@@ -88,22 +88,29 @@ function Row({ entry, at, selected, total }: {
 export function EntryList(): JSX.Element {
   const state = useSyncExternalStore(store.subscribe, store.get)
   const { entries, selectedId, follow, anchor, listing, indexState } = state
-  const box = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLDivElement | null>(null)
+  const observer = useRef<ResizeObserver | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const count = entries.length
 
-  /* The viewport's size, from the browser when it says and from the box
-     itself otherwise (happy-dom has no ResizeObserver, and the embedded pane
-     reports no resizes). */
-  useEffect(() => {
-    const el = box.current
+  /* The viewport's size, measured the moment the scroller exists and again
+     whenever the browser says it changed. Bound to the node rather than to
+     the component's mount: the island is mounted at boot and shows its empty
+     state first, so the scroller comes and goes with the data, and a measure
+     taken once at mount would never see it. Where there is no ResizeObserver
+     (happy-dom, the embedded pane) the one measure at attach is what there is. */
+  const attach = useCallback((el: HTMLDivElement | null): void => {
+    observer.current?.disconnect()
+    observer.current = null
+    box.current = el
     if (!el) return
     const measure = (): void => { setSize({ width: el.clientWidth, height: el.clientHeight }) }
     measure()
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
-    ro?.observe(el)
-    return () => ro?.disconnect()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    observer.current = ro
   }, [])
 
   /* After the rows change: follow the tail, or put the anchored row back
@@ -177,7 +184,7 @@ export function EntryList(): JSX.Element {
   return (
     <div
       className="trajectory-list"
-      ref={box}
+      ref={attach}
       role="listbox"
       tabIndex={0}
       aria-label={t('gui.trajectory.list_label')}

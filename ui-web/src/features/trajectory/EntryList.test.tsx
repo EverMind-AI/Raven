@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { absorb, resetCapabilities } from '../../rpc/capabilities'
@@ -75,8 +75,26 @@ afterEach(() => {
   cleanup()
   resetSources()
   resetTranslator()
+  vi.unstubAllGlobals()
   document.body.innerHTML = ''
 })
+
+/* A ResizeObserver the test drives: which nodes were observed, and a way to
+   say "the box changed" after its geometry has been written. */
+function stubObserver(): { observed: Element[]; fire: () => void } {
+  const observed: Element[] = []
+  let callback: (() => void) | null = null
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(cb: () => void) { callback = cb }
+    observe(el: Element): void { observed.push(el) }
+    disconnect(): void {}
+  })
+  return { observed, fire: () => { callback?.() } }
+}
+
+const feed = (list: TrajectoryEntry[]): void => {
+  store.set({ ...store.get(), entries: list, index: Object.fromEntries(list.map((e, i) => [e.entry_id, i])), snapshotReady: true, epoch: 'e1' })
+}
 
 describe('windowOf', () => {
   it('bounds the rows drawn to the viewport plus the overscan on each side', () => {
@@ -89,6 +107,41 @@ describe('windowOf', () => {
 })
 
 describe('the entry list', () => {
+  it('measures the scroller the moment it exists, however many times it comes and goes', () => {
+    const ro = stubObserver()
+    render(<EntryList />)
+    expect(document.querySelector('.trajectory-list')).toBeNull()
+    expect(ro.observed).toHaveLength(0)
+    act(() => { feed(Array.from({ length: 100 }, (_, k) => entry(`r${k}`, k))) })
+    const first = list()
+    expect(first).not.toBeNull()
+    expect(ro.observed).toEqual([first])
+    act(() => { feed([]) })
+    expect(document.querySelector('.trajectory-list')).toBeNull()
+    act(() => { feed(Array.from({ length: 3 }, (_, k) => entry(`s${k}`, k))) })
+    /* React keeps the div across the two states, so the node may be the same
+       one; what matters is that it was observed again after the empty state
+       let it go. */
+    const second = list()
+    expect(ro.observed).toHaveLength(2)
+    expect(ro.observed[1]).toBe(second)
+  })
+
+  it('narrows its columns under 480px and fills a tall viewport, once measured', () => {
+    const ro = stubObserver()
+    render(<EntryList />)
+    act(() => { feed(Array.from({ length: 200 }, (_, k) => entry(`r${k}`, k))) })
+    const el = list()
+    expect(el.hasAttribute('data-narrow')).toBe(false)
+    const before = document.querySelectorAll('.trajectory-row').length
+    expect(before).toBe(20 + OVERSCAN)
+    Object.defineProperty(el, 'clientWidth', { value: 400, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 2000, configurable: true })
+    act(() => { ro.fire() })
+    expect(el.getAttribute('data-narrow')).toBe('')
+    expect(document.querySelectorAll('.trajectory-row').length).toBe(Math.ceil(2000 / ROW_HEIGHT) + OVERSCAN)
+  })
+
   it('draws a window of a thousand rows, never all of them', async () => {
     rows = Array.from({ length: 1000 }, (_, k) => entry(`r${k}`, k))
     await draw()

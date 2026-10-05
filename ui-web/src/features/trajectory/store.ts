@@ -153,13 +153,18 @@ export const available = (s: TrajectoryState = store.get()): boolean =>
 
 /* ── wiring ───────────────────────────────────────────────────────────── */
 
-/** Mirrors the chat column's empty-state flag. Called once by src/app/install.ts. */
+/* Mirrors the chat column's empty-state flag. Called once by
+   src/app/install.ts. A conversation cleared while its trajectory was up has
+   nothing left to show a trajectory of, and the toggle that would bring the
+   reader back is gone with the content, so the column goes back to the
+   conversation view itself. */
 export function install(): void {
   if (unwatchFresh) return
   patch({ fresh: isFresh() })
   unwatchFresh = onFresh(() => {
     const fresh = isFresh()
     if (fresh !== store.get().fresh) patch({ fresh })
+    if (!available()) leaveView()
   })
 }
 
