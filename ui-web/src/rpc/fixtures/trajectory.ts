@@ -118,44 +118,101 @@ const TAIL: TrajectoryBlockDescriptor[] = [
   { id: 'raw', renderer: 'json', availability: 'available', preview: null, total_items: null, related_operation: null, reason: null },
 ]
 
-const OWN: Record<string, TrajectoryBlockDescriptor[]> = {
-  'user.input': [
-    { id: 'content', renderer: 'text', availability: 'available', preview: 'Summarise the open issues in this repository.', total_items: null, related_operation: null, reason: null },
-    { id: 'origin', renderer: 'key_values', availability: 'available', preview: [{ key: 'channel', value: 'gui' }], total_items: 1, related_operation: null, reason: null },
-  ],
-  'agent.reply': [
-    { id: 'content', renderer: 'text', availability: 'available', preview: 'Two open issues; the tracker call timed out, so this is from the one issue I could read.', total_items: null, related_operation: null, reason: null },
-    { id: 'capabilities', renderer: 'key_values', availability: 'available', preview: [{ key: 'turn.tool_count', value: 2 }], total_items: 1, related_operation: null, reason: null },
-  ],
-  'llm.input': [
-    { id: 'messages', renderer: 'messages', availability: 'available', preview: [{ role: 'system', content: 'You are a careful assistant.' }, { role: 'user', content: 'Summarise the open issues in this repository.' }], total_items: 2, related_operation: null, reason: null },
-    { id: 'model', renderer: 'key_values', availability: 'available', preview: [{ key: 'model', value: 'demo-model' }], total_items: 1, related_operation: null, reason: null },
-    { id: 'tools', renderer: 'items', availability: 'available', preview: ['list_issues', 'read_issue'], total_items: 2, related_operation: null, reason: null },
-  ],
-  'llm.thinking': [
-    { id: 'thinking', renderer: 'text', availability: 'available', preview: 'The user wants a summary; list the issues first, then read the two that look related.', total_items: null, related_operation: 'llm.output', reason: null },
-  ],
-  'llm.output': [
-    { id: 'content', renderer: 'text', availability: 'available', preview: '', total_items: null, related_operation: null, reason: null },
-    { id: 'toolCalls', renderer: 'items', availability: 'available', preview: ['list_issues#1', 'read_issue#2'], total_items: 2, related_operation: null, reason: null },
-    { id: 'finish', renderer: 'key_values', availability: 'available', preview: [{ key: 'finish_reason', value: 'tool_calls' }], total_items: 1, related_operation: null, reason: null },
-    { id: 'usage', renderer: 'key_values', availability: 'available', preview: [{ key: 'input_tokens', value: 812 }, { key: 'output_tokens', value: 96 }], total_items: 2, related_operation: null, reason: null },
-  ],
-  'tool.input': [
-    { id: 'tool', renderer: 'key_values', availability: 'available', preview: [{ key: 'name', value: 'list_issues' }], total_items: 1, related_operation: null, reason: null },
-    { id: 'params', renderer: 'json', availability: 'available', preview: { state: 'open' }, total_items: null, related_operation: null, reason: null },
-    { id: 'schema', renderer: 'json', availability: 'not_recorded', preview: null, total_items: null, related_operation: 'llm.input', reason: 'schema_unproven' },
-  ],
-  'tool.output': [
-    { id: 'result', renderer: 'text', availability: 'available', preview: 'Error: the issue tracker is unreachable (timeout after 600 ms)', total_items: null, related_operation: null, reason: null },
-    { id: 'tool', renderer: 'key_values', availability: 'available', preview: [{ key: 'name', value: 'list_issues' }], total_items: 1, related_operation: null, reason: null },
-    { id: 'params', renderer: 'json', availability: 'available', preview: { state: 'open' }, total_items: null, related_operation: 'tool.input', reason: null },
-    { id: 'schema', renderer: 'json', availability: 'not_recorded', preview: null, total_items: null, related_operation: 'llm.input', reason: 'schema_unproven' },
-  ],
+const block = (
+  id: string,
+  renderer: TrajectoryBlockDescriptor['renderer'],
+  preview: JsonValue,
+  extra: Partial<TrajectoryBlockDescriptor> = {},
+): TrajectoryBlockDescriptor => ({
+  id, renderer, availability: 'available', preview, total_items: null, related_operation: null, reason: null, ...extra,
+})
+
+const SCHEMA_UNPROVEN: TrajectoryBlockDescriptor = {
+  id: 'schema', renderer: 'json', availability: 'not_recorded', preview: null, total_items: null, related_operation: 'llm.input', reason: 'schema_unproven',
+}
+
+/* One entry's own blocks, and the bodies that say more than the descriptor's
+   preview does. Keyed by entry id rather than by kind: the two tool results
+   on the list are different calls with different parameters and outcomes,
+   and a tab opened on the successful one must not show the failed one's
+   error. */
+interface Own {
+  blocks: TrajectoryBlockDescriptor[]
+  bodies?: Record<string, JsonValue>
+}
+
+const ASK = 'Summarise the open issues in this repository.'
+const REPLY = 'Two open issues; the tracker call timed out, so this is from the one issue I could read.'
+const TRACKER_ERROR = 'Error: the issue tracker is unreachable (timeout after 600 ms)'
+const ISSUE_42 = [
+  '# Issue 42: flaky retry on the sync path',
+  '',
+  'The sync path retries a failed upload three times with no backoff, so a slow',
+  'mirror sees three requests inside one second and rejects the last two.',
+  'Linked from issue 40, which reports the same symptom from the other side.',
+].join('\n')
+
+const OWN: Record<string, Own> = {
+  't:turn:turn.input': {
+    blocks: [
+      block('content', 'text', ASK),
+      block('origin', 'key_values', [{ key: 'channel', value: 'gui' }], { total_items: 1 }),
+    ],
+  },
+  't:llm:llm.input': {
+    blocks: [
+      block('messages', 'messages', [{ role: 'system', content: 'You are a careful assistant.' }, { role: 'user', content: ASK }], { total_items: 2 }),
+      block('model', 'key_values', [{ key: 'model', value: 'demo-model' }], { total_items: 1 }),
+      block('tools', 'items', ['list_issues', 'read_issue'], { total_items: 2 }),
+    ],
+  },
+  't:llm:llm.thinking': {
+    blocks: [
+      block('thinking', 'text', 'The user wants a summary; list the issues first, then read the two that look related.', { related_operation: 'llm.output' }),
+    ],
+  },
+  't:llm:llm.output': {
+    blocks: [
+      block('content', 'text', ''),
+      block('toolCalls', 'items', ['list_issues#1', 'read_issue#2'], { total_items: 2 }),
+      block('finish', 'key_values', [{ key: 'finish_reason', value: 'tool_calls' }], { total_items: 1 }),
+      block('usage', 'key_values', [{ key: 'input_tokens', value: 812 }, { key: 'output_tokens', value: 96 }], { total_items: 2 }),
+    ],
+  },
+  't:tool1:tool.input': {
+    blocks: [
+      block('tool', 'key_values', [{ key: 'name', value: 'list_issues' }], { total_items: 1 }),
+      block('params', 'json', { state: 'open' }),
+      SCHEMA_UNPROVEN,
+    ],
+  },
+  't:tool1:tool.output': {
+    blocks: [
+      block('result', 'text', TRACKER_ERROR),
+      block('tool', 'key_values', [{ key: 'name', value: 'list_issues' }], { total_items: 1 }),
+      block('params', 'json', { state: 'open' }, { related_operation: 'tool.input' }),
+      SCHEMA_UNPROVEN,
+    ],
+  },
+  't:tool2:tool.output': {
+    blocks: [
+      block('result', 'text', '# Issue 42: flaky retry on the sync path ...'),
+      block('tool', 'key_values', [{ key: 'name', value: 'read_issue' }], { total_items: 1 }),
+      block('params', 'json', { id: 42 }, { related_operation: 'tool.input' }),
+      SCHEMA_UNPROVEN,
+    ],
+    bodies: { result: { text: ISSUE_42 } },
+  },
+  't:turn:turn.output': {
+    blocks: [
+      block('content', 'text', REPLY),
+      block('capabilities', 'key_values', [{ key: 'turn.tool_count', value: 2 }], { total_items: 1 }),
+    ],
+  },
 }
 
 function blocksFor(row: Row): TrajectoryBlockDescriptor[] {
-  const own = OWN[row.kind] ?? []
+  const own = OWN[row.id]?.blocks ?? []
   const error: TrajectoryBlockDescriptor[] =
     row.status === 'error'
       ? [{ id: 'error', renderer: 'key_values', availability: 'available', preview: [{ key: 'evidence', value: row.evidence }], total_items: 2, related_operation: null, reason: null }]
@@ -164,6 +221,8 @@ function blocksFor(row: Row): TrajectoryBlockDescriptor[] {
 }
 
 function body(row: Row, descriptor: TrajectoryBlockDescriptor, base: number): JsonValue {
+  const own = OWN[row.id]?.bodies?.[descriptor.id]
+  if (own !== undefined) return own
   switch (descriptor.renderer) {
     case 'text':
       return { text: typeof descriptor.preview === 'string' ? descriptor.preview : row.preview }
@@ -212,10 +271,12 @@ function body(row: Row, descriptor: TrajectoryBlockDescriptor, base: number): Js
 }
 
 export function createTrajectory(env: FixtureEnv): TrajectoryFixture {
-  /* The recorded turn ended ten minutes before the page opened; the clock is
-     the env's so two passes over these fixtures agree byte for byte. */
-  const base = () => env.now() - 10 * 60 * SEC
-  const entries = () => ROWS.map((row, index) => entry(row, base(), index + 1))
+  /* The recorded turn ended ten minutes before the library was built, read
+     off the env's clock once: a finished entry keeps its revision, so its
+     times must not move between a list and the timing tab opened a minute
+     later. Two libraries born on the same instant still agree byte for byte. */
+  const base = env.now() - 10 * 60 * SEC
+  const entries = () => ROWS.map((row, index) => entry(row, base, index + 1))
   /* Total on purpose: a gate probes every responder with whatever params it
      has, and a demo page answering an unknown id with the first row is more
      useful than one that throws. */
@@ -275,7 +336,7 @@ export function createTrajectory(env: FixtureEnv): TrajectoryFixture {
           renderer: descriptor.renderer,
           availability: descriptor.availability,
           reason: descriptor.reason ?? null,
-          data: descriptor.availability === 'available' ? body(row, descriptor, base()) : null,
+          data: descriptor.availability === 'available' ? body(row, descriptor, base) : null,
           next_cursor: null,
           total_items: descriptor.total_items ?? null,
           integrity: [],

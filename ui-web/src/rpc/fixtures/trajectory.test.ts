@@ -63,4 +63,54 @@ describe('the offline trajectory library', () => {
     const unknown = await t.call('trajectory.detail', { session_key: 'gui:any', entry_id: 'nope' })
     expect(unknown.entry_id).toBe(page.entries[0]?.entry_id)
   })
+
+  it('keeps each tool result on its own call, parameters and outcome', async () => {
+    const t = transport()
+    const page = await t.call('trajectory.list', { session_key: 'gui:any' })
+    const read = async (entryId: string, blockId: string) => {
+      const row = page.entries.find((e) => e.entry_id === entryId)!
+      const body = await t.call('trajectory.block', {
+        session_key: 'gui:any', entry_id: entryId, entry_revision: row.revision, epoch: page.epoch, block_id: blockId,
+      })
+      return body.data as Record<string, unknown>
+    }
+    const failed = await t.call('trajectory.detail', { session_key: 'gui:any', entry_id: 't:tool1:tool.output' })
+    expect(failed.operation_status).toBe('error')
+    expect(failed.blocks.map((b) => b.id)).toContain('error')
+    expect(failed.blocks.find((b) => b.id === 'tool')?.preview).toEqual([{ key: 'name', value: 'list_issues' }])
+    expect(failed.blocks.find((b) => b.id === 'params')?.preview).toEqual({ state: 'open' })
+    expect((await read('t:tool1:tool.output', 'result')).text).toMatch(/unreachable/)
+    expect((await read('t:tool1:tool.output', 'params')).value).toEqual({ state: 'open' })
+
+    const ok = await t.call('trajectory.detail', { session_key: 'gui:any', entry_id: 't:tool2:tool.output' })
+    expect(ok.operation_status).toBe('ok')
+    expect(ok.blocks.map((b) => b.id)).not.toContain('error')
+    expect(ok.blocks.find((b) => b.id === 'tool')?.preview).toEqual([{ key: 'name', value: 'read_issue' }])
+    expect(ok.blocks.find((b) => b.id === 'params')?.preview).toEqual({ id: 42 })
+    const result = await read('t:tool2:tool.output', 'result')
+    expect(result.text).toMatch(/^# Issue 42: flaky retry on the sync path\n/)
+    expect(result.text).not.toMatch(/unreachable/)
+    expect((await read('t:tool2:tool.output', 'params')).value).toEqual({ id: 42 })
+    expect((await read('t:tool2:tool.output', 'tool')).items).toEqual([{ key: 'name', value: 'read_issue', source: 'artifact' }])
+  })
+
+  it('keeps a finished entry at its times while the clock moves on', async () => {
+    let now = 1789000000000
+    const t = new FixtureTransport(demoFixtures, { now: () => now, timer: (_ms, fn) => fn() })
+    const first = await t.call('trajectory.list', { session_key: 'gui:any' })
+    now += 60_000
+    const later = await t.call('trajectory.list', { session_key: 'gui:any' })
+    expect(later).toEqual(first)
+    const row = first.entries[0]!
+    const timing = await t.call('trajectory.block', {
+      session_key: 'gui:any', entry_id: row.entry_id, entry_revision: row.revision, epoch: first.epoch, block_id: 'timing',
+    })
+    const items = (timing.data as { items: Array<{ key: string; value: unknown }> }).items
+    expect(items.find((i) => i.key === 'event_time')?.value).toBe(row.event_time)
+    expect(items.find((i) => i.key === 'operation_start')?.value).toBe(row.operation_start)
+    expect(items.find((i) => i.key === 'operation_end')?.value).toBe(row.operation_end)
+    const feed = await t.call('trajectory.changes', { session_key: 'gui:any', epoch: first.epoch, after_revision: first.snapshot_revision })
+    expect(feed.upserts).toEqual([])
+    expect(feed.to_revision).toBe(first.snapshot_revision)
+  })
 })
