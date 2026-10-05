@@ -21,7 +21,9 @@ curl -fsSL https://raven.evermind.ai/install.sh | bash
 irm https://raven.evermind.ai/install.ps1 | iex
 ```
 
-If Windows PowerShell 5.1 rejects the redirect, use the direct installer URL:
+Windows PowerShell 5.1, the version built into Windows, cannot follow that URL's
+redirect and stops with `(308) Permanent Redirect`. If you see that error, use the
+direct installer URL:
 
 ```powershell
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex

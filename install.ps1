@@ -228,11 +228,14 @@ function Install-PrivateNode {
 function Resolve-RavenLatestVersion {
     $target = ""
     try {
-        $response = Invoke-WebRequest "https://github.com/EverMind-AI/Raven/releases/latest" -MaximumRedirection 0 -UseBasicParsing -ErrorAction Stop
+        # Windows PowerShell 5.1 hands back the unfollowed redirect as the
+        # response and reports the exceeded redirect count as an error with no
+        # response attached, so that error is ignored rather than caught.
+        $response = Invoke-WebRequest "https://github.com/EverMind-AI/Raven/releases/latest" -MaximumRedirection 0 -UseBasicParsing -ErrorAction Ignore
         $target = [string]$response.Headers.Location
     } catch {
-        # Windows PowerShell raises on an unfollowed redirect; the Location header
-        # still rides on the exception's response.
+        # PowerShell 7 raises on an unfollowed redirect whatever -ErrorAction
+        # says; the Location header rides on the exception's response.
         $failed = $_.Exception.Response
         if ($failed) {
             try { $target = [string]$failed.Headers.Location } catch { $target = "" }

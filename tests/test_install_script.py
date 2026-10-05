@@ -714,8 +714,38 @@ def test_the_ci_gate_installs_the_latest_release_the_way_users_do() -> None:
     assert 'raven.exe" --version' in job and '"$UV_TOOL_BIN_DIR/raven" --version' in job
 
 
+def test_the_ci_gate_runs_the_windows_install_under_both_powershells() -> None:
+    """Windows PowerShell 5.1 is the shell every Windows ships with, pwsh is the
+    one CI reaches for, and their web cmdlets fail differently. A release
+    lookup that only worked the pwsh way passed this gate while every install
+    from the stock shell failed, so the gate runs both -- each into its own
+    tool directory, so that each version check answers for its own install."""
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    job = workflow[workflow.index("  installer:") :]
+    job = job[: job.index("\n  windows-upgrade:")]
+    steps = [step for step in job.split("\n      - ") if "Get-Content install.ps1 -Raw | Invoke-Expression" in step]
+    assert sorted(re.search(r"\n        shell: (\S+)", step).group(1) for step in steps) == ["powershell", "pwsh"]
+    assert len({re.search(r"\n          UV_TOOL_DIR: (.+)", step).group(1) for step in steps}) == 2
+
+
 def test_the_windows_installer_is_where_this_tripwire_thinks_it_is() -> None:
     assert INSTALL_PS1.is_file()
+
+
+def test_the_windows_release_lookup_reads_the_redirect_in_both_powershells() -> None:
+    """The lookup stops at the release page redirect and reads its Location.
+    Windows PowerShell 5.1 returns that redirect as the response and reports
+    the exceeded redirect count as an error with no response attached, so the
+    error has to be ignored: raised and caught instead, it left the catch
+    nothing to read, and every install from the stock shell ended in "Could not
+    resolve the latest Raven release wheel". pwsh raises whatever -ErrorAction
+    says, so the catch still reads the exception's response."""
+    text = INSTALL_PS1.read_text(encoding="utf-8")
+    lookup = text[text.index("function Resolve-RavenLatestVersion") : text.index("function Resolve-RavenWheel")]
+    probe = next(line for line in lookup.splitlines() if "-MaximumRedirection 0" in line)
+    assert "-ErrorAction Ignore" in probe
+    assert "$target = [string]$response.Headers.Location" in lookup
+    assert "$failed = $_.Exception.Response" in lookup
 
 
 def test_the_windows_capability_steps_exist_and_are_skippable() -> None:

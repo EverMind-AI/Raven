@@ -325,7 +325,7 @@ jobs:
           cat install.sh | sh
           "$UV_TOOL_BIN_DIR/raven" --version
 
-      - name: Install the latest release with install.ps1, piped
+      - name: Install the latest release with install.ps1 under pwsh, piped
         if: steps.changed.outputs.run == 'true' && runner.os == 'Windows'
         shell: pwsh
         env:
@@ -335,6 +335,24 @@ jobs:
           UV_TOOL_BIN_DIR: ${{ runner.temp }}\bin
           UV_CACHE_DIR: ${{ runner.temp }}\cache
           RAVEN_HOME: ${{ runner.temp }}\home
+        run: |
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          & "$env:UV_TOOL_BIN_DIR\raven.exe" --version
+
+      # Windows PowerShell 5.1 is the shell every Windows ships with, and its web
+      # cmdlets report failures differently from pwsh's, so a script that passes
+      # under one can fail under the other. Its own tool, bin and home
+      # directories keep the version check answering for this install alone.
+      - name: Install the latest release with install.ps1 under Windows PowerShell 5.1, piped
+        if: steps.changed.outputs.run == 'true' && runner.os == 'Windows'
+        shell: powershell
+        env:
+          RAVEN_MINIMAL: "1"
+          RAVEN_NO_LAUNCH: "1"
+          UV_TOOL_DIR: ${{ runner.temp }}\tools-ps51
+          UV_TOOL_BIN_DIR: ${{ runner.temp }}\bin-ps51
+          UV_CACHE_DIR: ${{ runner.temp }}\cache
+          RAVEN_HOME: ${{ runner.temp }}\home-ps51
         run: |
           Get-Content install.ps1 -Raw | Invoke-Expression
           & "$env:UV_TOOL_BIN_DIR\raven.exe" --version
