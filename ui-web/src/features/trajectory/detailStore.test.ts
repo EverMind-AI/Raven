@@ -454,6 +454,36 @@ describe('a changed revision', () => {
     expect(details.mayRead(details.get())).toBe(false)
   })
 
+  it('drops a revision bound from the epoch before when the index is rebuilt, and takes the new epoch\'s descriptor once', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['result']))
+    details.setTab('r1', 'result')
+    void details.loadBlock('result')
+    /* The page says the entry is far ahead in this epoch... */
+    await failBlock(new RpcError(-32023, 'moved', { current_revision: 50, current_epoch: 'e1' }))
+    expect(details.get().pending).toEqual({ epoch: 'e1', revision: 50 })
+    /* ...but the gateway answers from a rebuilt index, counting from one again. */
+    await answerDetail(descriptor('r1', 1, ['result'], { epoch: 'e2' }))
+    expect(details.get().waitingEpoch).toBe('e2')
+    expect(details.get().current?.epoch).toBe('e1')
+    /* The list arrives at the new epoch: the old bound means nothing now. */
+    list.set({ ...list.get(), epoch: 'e2', revision: 1 })
+    expect(details.get().waitingEpoch).toBeNull()
+    expect(details.get().pending).toBeNull()
+    expect(details.get().stale).toBe(true)
+    void details.loadDescriptor()
+    expect(detailCalls).toHaveLength(3)
+    await answerDetail(descriptor('r1', 1, ['result'], { epoch: 'e2' }))
+    expect(details.get().current).toEqual({ sessionKey: 'gui:a', epoch: 'e2', entryId: 'r1', revision: 1 })
+    expect(details.get().stale).toBe(false)
+    /* Taken once: asking again is answered from the cache, not the gateway. */
+    void details.loadDescriptor()
+    expect(detailCalls).toHaveLength(3)
+    expect(details.mayRead()).toBe(true)
+  })
+
   it('reads nothing while the view, the switch or the snapshot is away, and moves the ticket when they change', async () => {
     await ready()
     list.select('r1', { source: 'click' })

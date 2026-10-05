@@ -90,8 +90,11 @@ export interface DetailsState {
   unstable: boolean
   /** The gateway answered for an epoch the list has not reached; reads wait for the list. */
   waitingEpoch: string | null
-  /** A page said the entry is at this revision already; a descriptor older than it cannot end the wait. */
-  pendingRevision: number | null
+  /* A page said the entry is already at this revision of this epoch; a
+     descriptor of the same epoch older than it cannot end the wait. Bound to
+     the epoch because a rebuilt index counts revisions from the start again,
+     so a bound from the epoch before says nothing about the one after. */
+  pending: { epoch: string; revision: number } | null
   /** The list is not in a state the pane may read in (view, switch or snapshot away); mirrored so the pane redraws when it changes. */
   paused: boolean
   tabByEntry: Record<string, Tab>
@@ -124,7 +127,7 @@ const initial: DetailsState = {
   stale: false,
   unstable: false,
   waitingEpoch: null,
-  pendingRevision: null,
+  pending: null,
   paused: true,
   tabByEntry: {},
   scrollByEntryTab: {},
@@ -420,10 +423,11 @@ function accept(result: TrajectoryDetailResult, t: number, g: number, mark: stri
     descriptors: { ...s.descriptors, [key]: { identity: id, value: result, bytes: bytesOf(result), at: touch() } },
   }
   if (!live(t, g, id.entryId)) { commit(next); return }
-  /* A page already said the entry is further on than this: filed, but it is
-     not the descriptor the pane is waiting for, and the wait goes on. */
-  if (s.pendingRevision !== null && id.revision < s.pendingRevision) { commit(next); return }
-  next = { ...next, faults: without(next.faults, keyOf('descriptor', id.entryId)), stale: false, pendingRevision: null }
+  /* A page already said the entry is further on than this, in this very
+     epoch: filed, but it is not the descriptor the pane is waiting for, and
+     the wait goes on. A bound from another epoch has nothing to say. */
+  if (s.pending !== null && s.pending.epoch === id.epoch && id.revision < s.pending.revision) { commit(next); return }
+  next = { ...next, faults: without(next.faults, keyOf('descriptor', id.entryId)), stale: false, pending: null }
   const was = s.current
   if (!sameIdentity(was, id)) {
     bump()
@@ -457,8 +461,9 @@ export async function loadDescriptor(opts: { fresh?: boolean; force?: boolean } 
   const src = list.source()
   const id = listed()
   if (!src || !id || !mayRead(store.get(), { force: opts.force, what: 'descriptor' })) return
-  const pending = store.get().pendingRevision
-  if (!opts.fresh && (pending === null || id.revision >= pending)) {
+  const pending = store.get().pending
+  const behind = pending !== null && pending.epoch === id.epoch && id.revision < pending.revision
+  if (!opts.fresh && !behind) {
     const cached = store.get().descriptors[descriptorKey(id)]
     if (cached) { accept(cached.value, gen, list.gen()); return }
   }
@@ -577,7 +582,8 @@ async function read(blockId: string, cursor: string | null, continuing: boolean,
          subscriber that asks for the descriptor on this very notification
          cannot be answered from the cache at the list's older revision, so
          the first read anyone starts is the fresh one. */
-      store.set({ ...s, stale: true, pendingRevision: Math.max(s.pendingRevision ?? 0, moved.revision) })
+      const floor = s.pending !== null && s.pending.epoch === moved.epoch ? Math.max(s.pending.revision, moved.revision) : moved.revision
+      store.set({ ...s, stale: true, pending: { epoch: moved.epoch, revision: floor } })
       void loadDescriptor({ fresh: true })
       return
     }
@@ -701,14 +707,18 @@ function follow(): void {
     revisionHops = 0
     const d = store.get()
     const open = now.selectedId === null ? false : (now.selectedBy !== 'migrate' ? true : d.open)
-    patch({ open, current: null, stale: false, unstable: false, waitingEpoch: null, pendingRevision: null })
+    patch({ open, current: null, stale: false, unstable: false, waitingEpoch: null, pending: null })
     return
   }
   if (now.epoch !== was.epoch) {
     /* The list reached a new epoch: whatever the pane was waiting for, this
-       is the answer, and what it shows is to be read again under it. */
+       is the answer, and what it shows is to be read again under it. The
+       revision bound and the hop count were about the epoch before. */
+    revisionHops = 0
     const d = store.get()
-    if (d.waitingEpoch !== null || d.current !== null) patch({ waitingEpoch: null, stale: d.current !== null })
+    if (d.waitingEpoch !== null || d.pending !== null || d.current !== null) {
+      patch({ waitingEpoch: null, pending: null, unstable: false, stale: d.current !== null })
+    }
     return
   }
   if (now.selectedId !== null && now.revision !== was.revision && store.get().current !== null) {
