@@ -362,6 +362,16 @@ def test_inherit_refusal_explains_the_riders_binding_not_the_host_default(oauth_
     assert "raven provider set openrouter" in render.inherit_refusal({}, host)
 
 
+def test_inherit_refusal_reads_the_config_when_the_host_names_no_provider(oauth_host):
+    host, _ = oauth_host
+    del host["agents"]["defaults"]["provider"]
+    configured = {"agents": {"defaults": {"provider": "openrouter"}}}
+
+    assert render.inherit_refusal({}, copy.deepcopy(host)) == ""
+    assert render.inherit_llm(copy.deepcopy(configured), copy.deepcopy(host)) == ""
+    assert "raven provider set openrouter" in render.inherit_refusal(configured, host)
+
+
 def test_an_empty_credential_summary_still_refuses_with_a_reason(oauth_host, monkeypatch):
     from raven.providers import factory
     from raven.providers.auth import MissingCredentialsError
