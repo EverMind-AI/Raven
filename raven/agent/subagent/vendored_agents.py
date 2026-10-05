@@ -386,18 +386,18 @@ def host_can_lend_a_key() -> bool:
 
     Asks ``inherit_llm`` itself, on the host file the launchers read, so an
     OAuth sign-in counts exactly when a launcher would accept it. An agent
-    reaches a sign-in stored under the host's OAuth directory because it is
-    spawned with the host's ``RAVEN_HOME``.
+    reaches a sign-in stored under the host's OAuth directory because it
+    resolves the same home: it is spawned with the host's ``RAVEN_HOME`` when
+    the host has one set, and with none set both fall back to ``~/.raven``.
 
     It can still answer True for a launch that is then refused, in two cases.
-    An agent is spawned with the login shell's environment plus
-    ``RAVEN_HOME``, and with raven's own environment only when that shell
-    cannot be captured, so a token-location override (``CHATGPT_TOKEN_DIR``,
-    ``CHATGPT_AUTH_FILE``) set only in this process's environment reaches it
-    only in that fallback. And a host config that names no
-    ``agents.defaults.provider`` leaves an agent's own pinned provider in
-    force, which this check, reading only the host file, does not see;
-    ``raven onboard`` writes the provider before it asks.
+    An agent is spawned with the login shell's environment, and with raven's
+    own environment only when that shell cannot be captured, so a
+    token-location override (``CHATGPT_TOKEN_DIR``, ``CHATGPT_AUTH_FILE``) set
+    only in this process's environment reaches it only in that fallback. And a
+    host config that names no ``agents.defaults.provider`` leaves an agent's
+    own pinned provider in force, which this check, reading only the host
+    file, does not see; ``raven onboard`` writes the provider before it asks.
 
     Invalid host settings leave nothing to inherit rather than preventing the
     setup wizard from opening.
