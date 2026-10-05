@@ -347,6 +347,57 @@ describe('the details pane when it must wait', () => {
   })
 })
 
+describe('the details pane when the entry moves on', () => {
+  it('reads the new descriptor first and the new revision\'s block after, never the old block again', async () => {
+    await draw()
+    await pick('r0')
+    await answerDetail(descriptor('r0', [block({ id: 'result' })]))
+    act(() => { fireEvent.click(q('#trajectory-h-result') as HTMLElement) })
+    await flush()
+    expect(blockCalls).toEqual(['result'])
+    const moved = new RpcError(-32023, 'moved', { current_revision: 2, current_epoch: 'e1' })
+    await act(async () => { blockQueue.shift()!.reject(moved) })
+    await flush()
+    await flush()
+    /* The new descriptor is in the air; no block is asked for meanwhile. */
+    expect(detailQueue).toHaveLength(1)
+    expect(blockCalls).toEqual(['result'])
+    expect(details.get().stale).toBe(true)
+    expect(details.get().pendingRevision).toBe(2)
+    await answerDetail(descriptor('r0', [block({ id: 'result' })], { entry_revision: 2 }))
+    expect(details.get().current?.revision).toBe(2)
+    expect(details.get().stale).toBe(false)
+    expect(blockCalls).toEqual(['result', 'result'])
+    await answerBlock({ ...body('r0', 'result', { text: 'at two' }), entry_revision: 2 })
+    expect(q('.trajectory-block .trajectory-text-body')?.textContent).toBe('at two')
+  })
+
+  it('keeps the requests bounded when the entry keeps moving, and stops at the limit', async () => {
+    await draw()
+    await pick('r0')
+    await answerDetail(descriptor('r0', [block({ id: 'result' })]))
+    act(() => { fireEvent.click(q('#trajectory-h-result') as HTMLElement) })
+    await flush()
+    let revision = 1
+    for (let hop = 0; hop < details.REVISION_RETRIES + 2; hop += 1) {
+      if (!blockQueue.length) break
+      revision += 1
+      await act(async () => { blockQueue.shift()!.reject(new RpcError(-32023, 'moved', { current_revision: revision, current_epoch: 'e1' })) })
+      await flush()
+      if (detailQueue.length) await answerDetail(descriptor('r0', [block({ id: 'result' })], { entry_revision: revision }))
+    }
+    expect(details.get().unstable).toBe(true)
+    expect(detailQueue).toHaveLength(0)
+    expect(blockQueue).toHaveLength(0)
+    /* One descriptor and one block per accepted hop, and then nothing. */
+    expect(blockCalls.length).toBeLessThanOrEqual(details.REVISION_RETRIES + 2)
+    await flush()
+    await flush()
+    expect(blockCalls.length).toBeLessThanOrEqual(details.REVISION_RETRIES + 2)
+    expect(q('.trajectory-fault')?.textContent).toContain('gui.trajectory.details.unstable')
+  })
+})
+
 describe('shortName', () => {
   it('prefers the tool, skill, model or plugin name a block carries over the span name', () => {
     expect(shortName(descriptor('x', [block({ id: 'tool', renderer: 'key_values', preview: [{ key: 'name', value: 'read_file' }] })]))).toBe('read_file')
