@@ -181,6 +181,8 @@ describe('the chat column chrome and the trajectory view', () => {
         unresolved_traces: 0, unresolved_dropped: 0, oversized_lines_dropped: 0, preview_pending: 0, failure: null,
       },
     }),
+    detail: () => Promise.reject(new Error('not scripted')),
+    block: () => Promise.reject(new Error('not scripted')),
   }
 
   beforeEach(() => {

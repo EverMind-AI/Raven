@@ -152,7 +152,11 @@ transcript goes on streaming underneath and comes back exactly where it was.
 The header's toggle (`#trajBtn`) appears only when the gateway announced
 `trajectory-v1`, `trajectory.state` says the view is on, a conversation is open
 and that conversation is not in its empty state (`state/session/conversation.ts`'s
-flag); the store's `available` is that one condition.
+flag); the store's `available` is that one condition. Picking a row opens the
+details pane beside the list (`features/trajectory/details.ts`): a descriptor
+read through `trajectory.detail` and block bodies read through
+`trajectory.block`, each filed under its whole identity (session, epoch,
+entry, revision, block) and shown only under the ticket it was asked with.
 _Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
 records, the trajectory is how this page reads it back.
 

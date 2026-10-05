@@ -9,7 +9,10 @@
 
 import type {
   JsonValue,
+  TrajectoryBlockDescriptor,
+  TrajectoryBlockResult,
   TrajectoryChangesResult,
+  TrajectoryDetailResult,
   TrajectoryEntry,
   TrajectoryIndexState,
   TrajectoryListResult,
@@ -19,13 +22,20 @@ import type {
 
 export type {
   JsonValue,
+  TrajectoryBlockDescriptor,
+  TrajectoryBlockResult,
   TrajectoryChangesResult,
+  TrajectoryDetailResult,
   TrajectoryEntry,
   TrajectoryIndexState,
   TrajectoryListResult,
   TrajectoryRemoved,
   TrajectoryStateResult,
 }
+
+export type Availability = TrajectoryBlockDescriptor['availability']
+export type Renderer = TrajectoryBlockDescriptor['renderer']
+export type OperationStatus = TrajectoryDetailResult['operation_status']
 
 /** The chat column shows the conversation, or the trajectory of it. */
 export type View = 'chat' | 'trajectory'
@@ -35,10 +45,14 @@ export type View = 'chat' | 'trajectory'
    detail link) can tell its own selection from the reader's click. */
 export type SelectSource = 'click' | 'keyboard' | 'bar' | 'link' | 'migrate'
 
-/* The seam the island reads. Three reads and nothing else: the view is a
+/* The seam the island reads. Five reads and nothing else: the view is a
    mirror of the session's trace store and writes nothing back. */
 export interface TrajectorySource {
   state(): Promise<TrajectoryStateResult>
   list(sessionKey: string, cursor?: string | null): Promise<TrajectoryListResult>
   changes(sessionKey: string, epoch: string, afterRevision: number): Promise<TrajectoryChangesResult>
+  detail(sessionKey: string, entryId: string, revision?: number | null): Promise<TrajectoryDetailResult>
+  block(
+    sessionKey: string, entryId: string, revision: number, epoch: string, blockId: string, cursor?: string | null,
+  ): Promise<TrajectoryBlockResult>
 }

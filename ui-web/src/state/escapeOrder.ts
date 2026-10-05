@@ -94,6 +94,17 @@ export function onDeskEscape(layer: EscapeLayer): void {
   deskLayer = layer
 }
 
+/* The trajectory details pane's own layer, registered the same way by
+   features/trajectory/details.ts. It answers open only while the pane holds
+   the focus, so an Escape meant for a sheet or a popover above it is never
+   spent on the pane, and one pressed in the composer never closes it. */
+let trajectoryLayer: EscapeLayer | null = null
+
+/** Registers the trajectory pane's layer. features/trajectory/details.ts calls this at its own module evaluation. */
+export function onTrajectoryEscape(layer: EscapeLayer): void {
+  trajectoryLayer = layer
+}
+
 /* Back to the value this module starts at, before anything has registered.
    Nothing calls it today -- a test wanting the desk's own layer back would
    have to re-trigger features/desk/store.ts's module evaluation, which
@@ -101,6 +112,7 @@ export function onDeskEscape(layer: EscapeLayer): void {
    one, the way every other module-level `let` on this page carries one. */
 export function _resetForTests(): void {
   deskLayer = null
+  trajectoryLayer = null
 }
 
 /* And what lies beneath every page: the settings dialog, which is a flag rather
@@ -123,12 +135,20 @@ const BELOW: readonly EscapeLayer[] = [
   { id: '#permPop', isOpen: flagged('permPop'), close: () => perm.close() },
   { id: '#plusPop', isOpen: flagged('plusPop'), close: () => plus.close() },
   { id: '#wdPop', isOpen: flagged('wdPop'), close: () => workdir.close() },
+  /* The trajectory details pane, under the three popovers (they stand over
+     it) and above the turn: a reader whose focus is in the pane means to
+     close the pane, not stop the work behind it. */
+  {
+    id: 'trajectory.escapeOpen()',
+    isOpen: () => trajectoryLayer?.isOpen() ?? false,
+    close: () => trajectoryLayer?.close(),
+  },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The eleven, in the order Escape reaches them. */
+/** The twelve, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

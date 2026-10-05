@@ -10934,6 +10934,510 @@
     "gui.trajectory.kind.tool_output": {
       "en": "Tool output",
       "zh": "工具输出"
+    },
+    "gui.trajectory.details.overview": {
+      "en": "Overview",
+      "zh": "概述"
+    },
+    "gui.trajectory.details.close": {
+      "en": "Close details",
+      "zh": "关闭详情"
+    },
+    "gui.trajectory.details.back": {
+      "en": "Back to list",
+      "zh": "返回列表"
+    },
+    "gui.trajectory.details.see_all": {
+      "en": "See all",
+      "zh": "查看全部"
+    },
+    "gui.trajectory.details.see_all_n": {
+      "en": "See all ({n})",
+      "zh": "查看全部（{n}）"
+    },
+    "gui.trajectory.details.copy": {
+      "en": "Copy",
+      "zh": "复制"
+    },
+    "gui.trajectory.details.copied": {
+      "en": "Copied",
+      "zh": "已复制"
+    },
+    "gui.trajectory.details.copied_partial": {
+      "en": "Copied the loaded part",
+      "zh": "已复制已加载部分"
+    },
+    "gui.trajectory.details.partial": {
+      "en": "Only part is shown",
+      "zh": "仅展示部分"
+    },
+    "gui.trajectory.details.loading": {
+      "en": "Loading",
+      "zh": "加载中"
+    },
+    "gui.trajectory.details.retry": {
+      "en": "Retry",
+      "zh": "重试"
+    },
+    "gui.trajectory.details.failed": {
+      "en": "Could not load: {detail}",
+      "zh": "加载失败：{detail}"
+    },
+    "gui.trajectory.details.empty_string": {
+      "en": "(empty string)",
+      "zh": "（空字符串）"
+    },
+    "gui.trajectory.details.empty_list": {
+      "en": "(empty list)",
+      "zh": "（空列表）"
+    },
+    "gui.trajectory.details.load_more": {
+      "en": "Load more",
+      "zh": "继续加载"
+    },
+    "gui.trajectory.details.from_operation": {
+      "en": "From the owning call: {op}",
+      "zh": "来自所属调用：{op}"
+    },
+    "gui.trajectory.details.frames_body_unavailable": {
+      "en": "Frame bodies are not available in this version; references only",
+      "zh": "本版本不提供帧正文，仅显示引用"
+    },
+    "gui.trajectory.details.type_label": {
+      "en": "Type",
+      "zh": "类型"
+    },
+    "gui.trajectory.details.status_label": {
+      "en": "Status",
+      "zh": "状态"
+    },
+    "gui.trajectory.details.source_derived": {
+      "en": "derived",
+      "zh": "推导"
+    },
+    "gui.trajectory.details.source_attribute": {
+      "en": "attribute",
+      "zh": "属性"
+    },
+    "gui.trajectory.details.source_artifact": {
+      "en": "artifact",
+      "zh": "记录"
+    },
+    "gui.trajectory.details.omitted_n": {
+      "en": "{n} more not shown",
+      "zh": "还有 {n} 项未显示"
+    },
+    "gui.trajectory.details.oversize": {
+      "en": "Too large to show ({bytes} bytes)",
+      "zh": "过大未显示（{bytes} 字节）"
+    },
+    "gui.trajectory.details.depth_truncated": {
+      "en": "Deeper levels not shown",
+      "zh": "更深层级未显示"
+    },
+    "gui.trajectory.details.more_keys": {
+      "en": "{n} more keys",
+      "zh": "还有 {n} 个键"
+    },
+    "gui.trajectory.details.resize": {
+      "en": "Resize details",
+      "zh": "调整详情宽度"
+    },
+    "gui.trajectory.details.region": {
+      "en": "Entry details",
+      "zh": "条目详情"
+    },
+    "gui.trajectory.details.gone": {
+      "en": "This entry is no longer in the index",
+      "zh": "该条目已不在索引中"
+    },
+    "gui.trajectory.details.tabs": {
+      "en": "Detail tabs",
+      "zh": "详情标签页"
+    },
+    "gui.trajectory.block.content": {
+      "en": "Content",
+      "zh": "内容"
+    },
+    "gui.trajectory.block.media": {
+      "en": "Attachments",
+      "zh": "附件"
+    },
+    "gui.trajectory.block.origin": {
+      "en": "Origin",
+      "zh": "来源"
+    },
+    "gui.trajectory.block.capabilities": {
+      "en": "Capabilities",
+      "zh": "能力"
+    },
+    "gui.trajectory.block.turn": {
+      "en": "Turn",
+      "zh": "轮次"
+    },
+    "gui.trajectory.block.messages": {
+      "en": "Messages",
+      "zh": "消息"
+    },
+    "gui.trajectory.block.system": {
+      "en": "System prompt",
+      "zh": "系统提示"
+    },
+    "gui.trajectory.block.prompt": {
+      "en": "User input",
+      "zh": "当前用户输入"
+    },
+    "gui.trajectory.block.model": {
+      "en": "Model and parameters",
+      "zh": "模型与参数"
+    },
+    "gui.trajectory.block.tools": {
+      "en": "Tool definitions",
+      "zh": "工具定义"
+    },
+    "gui.trajectory.block.request": {
+      "en": "Request",
+      "zh": "请求"
+    },
+    "gui.trajectory.block.thinking": {
+      "en": "Thinking",
+      "zh": "思考内容"
+    },
+    "gui.trajectory.block.thinkingBlocks": {
+      "en": "Thinking blocks",
+      "zh": "结构化思考块"
+    },
+    "gui.trajectory.block.toolCalls": {
+      "en": "Tool calls",
+      "zh": "工具调用要求"
+    },
+    "gui.trajectory.block.finish": {
+      "en": "Finish",
+      "zh": "结束信息"
+    },
+    "gui.trajectory.block.usage": {
+      "en": "Usage",
+      "zh": "用量"
+    },
+    "gui.trajectory.block.response": {
+      "en": "Response diagnostics",
+      "zh": "响应诊断"
+    },
+    "gui.trajectory.block.tool": {
+      "en": "Tool",
+      "zh": "工具信息"
+    },
+    "gui.trajectory.block.params": {
+      "en": "Parameters",
+      "zh": "参数"
+    },
+    "gui.trajectory.block.schema": {
+      "en": "Schema",
+      "zh": "Schema"
+    },
+    "gui.trajectory.block.result": {
+      "en": "Result",
+      "zh": "结果"
+    },
+    "gui.trajectory.block.skill": {
+      "en": "Skill",
+      "zh": "技能信息"
+    },
+    "gui.trajectory.block.skills": {
+      "en": "Skills",
+      "zh": "技能"
+    },
+    "gui.trajectory.block.stats": {
+      "en": "Statistics",
+      "zh": "统计"
+    },
+    "gui.trajectory.block.query": {
+      "en": "Query",
+      "zh": "查询"
+    },
+    "gui.trajectory.block.decision": {
+      "en": "Decision",
+      "zh": "检索判断"
+    },
+    "gui.trajectory.block.task": {
+      "en": "Task",
+      "zh": "任务"
+    },
+    "gui.trajectory.block.candidates": {
+      "en": "Candidates",
+      "zh": "候选技能"
+    },
+    "gui.trajectory.block.agent": {
+      "en": "Agent",
+      "zh": "代理"
+    },
+    "gui.trajectory.block.settings": {
+      "en": "Settings",
+      "zh": "设置"
+    },
+    "gui.trajectory.block.hits": {
+      "en": "Hits",
+      "zh": "命中项"
+    },
+    "gui.trajectory.block.injected": {
+      "en": "Injected skills",
+      "zh": "注入技能"
+    },
+    "gui.trajectory.block.used": {
+      "en": "Used skills",
+      "zh": "使用技能"
+    },
+    "gui.trajectory.block.position": {
+      "en": "Position",
+      "zh": "整理位置"
+    },
+    "gui.trajectory.block.operation": {
+      "en": "Operation",
+      "zh": "操作信息"
+    },
+    "gui.trajectory.block.qa": {
+      "en": "Question and answer",
+      "zh": "问答"
+    },
+    "gui.trajectory.block.summary": {
+      "en": "Reply summary",
+      "zh": "回复摘要"
+    },
+    "gui.trajectory.block.plugin": {
+      "en": "Plugin",
+      "zh": "插件信息"
+    },
+    "gui.trajectory.block.contribution": {
+      "en": "Contribution",
+      "zh": "贡献类型"
+    },
+    "gui.trajectory.block.transcript": {
+      "en": "Transcript",
+      "zh": "转录"
+    },
+    "gui.trajectory.block.frames": {
+      "en": "Frame references",
+      "zh": "帧记录引用"
+    },
+    "gui.trajectory.block.attributes": {
+      "en": "Attributes",
+      "zh": "领域属性"
+    },
+    "gui.trajectory.block.error": {
+      "en": "Error",
+      "zh": "错误"
+    },
+    "gui.trajectory.block.timing": {
+      "en": "Timing",
+      "zh": "计时"
+    },
+    "gui.trajectory.block.relations": {
+      "en": "Relations",
+      "zh": "关联"
+    },
+    "gui.trajectory.block.integrity": {
+      "en": "Data integrity",
+      "zh": "数据完整性"
+    },
+    "gui.trajectory.block.raw": {
+      "en": "Raw record",
+      "zh": "原始记录"
+    },
+    "gui.trajectory.avail.empty": {
+      "en": "Recorded, but empty",
+      "zh": "已记录，但为空"
+    },
+    "gui.trajectory.avail.not_recorded": {
+      "en": "Not recorded",
+      "zh": "未记录"
+    },
+    "gui.trajectory.avail.missing": {
+      "en": "The recorded file is missing",
+      "zh": "记录文件缺失"
+    },
+    "gui.trajectory.avail.truncated": {
+      "en": "Over the read limit; only part is shown",
+      "zh": "超过读取上限，仅展示部分"
+    },
+    "gui.trajectory.avail.unreadable": {
+      "en": "The recorded file could not be read",
+      "zh": "记录文件无法读取"
+    },
+    "gui.trajectory.avail.unsupported": {
+      "en": "Not supported for this entry",
+      "zh": "此条目不支持"
+    },
+    "gui.trajectory.reason.not_loaded": {
+      "en": "Not loaded in the overview pass; open the tab to read it",
+      "zh": "概述未加载，打开标签页读取"
+    },
+    "gui.trajectory.reason.schema_unproven": {
+      "en": "No confirmable historical schema was recorded",
+      "zh": "未记录可确认的历史 Schema"
+    },
+    "gui.trajectory.reason.preview_dropped": {
+      "en": "Preview omitted to keep the overview small",
+      "zh": "为控制概述大小已省略预览"
+    },
+    "gui.trajectory.reason.not_recorded": {
+      "en": "Not recorded",
+      "zh": "未记录"
+    },
+    "gui.trajectory.reason.artifact_missing": {
+      "en": "The recorded file is missing",
+      "zh": "记录文件缺失"
+    },
+    "gui.trajectory.reason.artifact_unreadable": {
+      "en": "The recorded file could not be read",
+      "zh": "记录文件无法读取"
+    },
+    "gui.trajectory.reason.artifact_outside_store": {
+      "en": "The recorded path points outside the trace store",
+      "zh": "记录路径指向轨迹存储之外"
+    },
+    "gui.trajectory.reason.artifact_truncated": {
+      "en": "The recorded file is over the read limit",
+      "zh": "记录文件超过读取上限"
+    },
+    "gui.trajectory.integrity.artifact_outside_store": {
+      "en": "A recorded path points outside the trace store",
+      "zh": "记录路径指向轨迹存储之外"
+    },
+    "gui.trajectory.integrity.artifact_missing": {
+      "en": "A recorded file is missing",
+      "zh": "记录文件缺失"
+    },
+    "gui.trajectory.integrity.artifact_unreadable": {
+      "en": "A recorded file could not be read",
+      "zh": "记录文件无法读取"
+    },
+    "gui.trajectory.integrity.artifact_truncated": {
+      "en": "A recorded file is over the read limit",
+      "zh": "记录文件超过读取上限"
+    },
+    "gui.trajectory.integrity.blob_missing": {
+      "en": "A message blob is missing",
+      "zh": "消息 blob 缺失"
+    },
+    "gui.trajectory.integrity.blob_truncated": {
+      "en": "A message blob is over the read limit",
+      "zh": "消息 blob 超过读取上限"
+    },
+    "gui.trajectory.note.outer_only": {
+      "en": "Success here means the outer call completed; no backend confirmation was recorded",
+      "zh": "此处成功只表示外层调用完成，未记录后端确认"
+    },
+    "gui.trajectory.note.in_progress_snapshot": {
+      "en": "The record is still being written; this is a snapshot",
+      "zh": "记录仍在写入，这是一个快照"
+    },
+    "gui.trajectory.note.data_incomplete": {
+      "en": "Some recorded data is missing or truncated",
+      "zh": "部分记录数据缺失或被截断"
+    },
+    "gui.trajectory.status.running": {
+      "en": "Running",
+      "zh": "进行中"
+    },
+    "gui.trajectory.status.ok": {
+      "en": "Succeeded",
+      "zh": "成功"
+    },
+    "gui.trajectory.status.error": {
+      "en": "Failed",
+      "zh": "失败"
+    },
+    "gui.trajectory.status.cancelled": {
+      "en": "Cancelled",
+      "zh": "已取消"
+    },
+    "gui.trajectory.status.unknown": {
+      "en": "Unknown",
+      "zh": "未知"
+    },
+    "gui.trajectory.evidence.span_error": {
+      "en": "the span recorded an error",
+      "zh": "span 记录了错误"
+    },
+    "gui.trajectory.evidence.tool_error": {
+      "en": "the tool reported an error",
+      "zh": "工具报告了错误"
+    },
+    "gui.trajectory.evidence.tool_result_error": {
+      "en": "the tool result carries an error",
+      "zh": "工具结果含错误"
+    },
+    "gui.trajectory.evidence.outer_only": {
+      "en": "outer call only",
+      "zh": "仅外层调用"
+    },
+    "gui.trajectory.basis.zero": {
+      "en": "This entry is charged 0 ms",
+      "zh": "本条计入 0 ms"
+    },
+    "gui.trajectory.basis.span_full": {
+      "en": "This entry carries the whole call's duration",
+      "zh": "本条承载整次调用耗时"
+    },
+    "gui.trajectory.basis.shared": {
+      "en": "No separate duration was recorded; not charged twice",
+      "zh": "独立耗时未单独记录，未重复计入"
+    },
+    "gui.trajectory.basis.not_recorded": {
+      "en": "No duration was recorded",
+      "zh": "未记录耗时"
+    },
+    "gui.trajectory.basis.unknown": {
+      "en": "Duration unknown",
+      "zh": "耗时未知"
+    },
+    "gui.trajectory.timing.event_time": {
+      "en": "Event time",
+      "zh": "事件时间"
+    },
+    "gui.trajectory.timing.operation_start": {
+      "en": "Call started",
+      "zh": "调用开始"
+    },
+    "gui.trajectory.timing.operation_end": {
+      "en": "Call ended",
+      "zh": "调用结束"
+    },
+    "gui.trajectory.timing.duration": {
+      "en": "Call duration",
+      "zh": "调用耗时"
+    },
+    "gui.trajectory.timing.charged": {
+      "en": "Charged in the bar",
+      "zh": "条中计入耗时"
+    },
+    "gui.trajectory.timing.owner": {
+      "en": "Charged to",
+      "zh": "计入条目"
+    },
+    "gui.trajectory.timing.overlap": {
+      "en": "Nested calls overlap; the bar does not add them twice",
+      "zh": "父子调用时间重叠，条中不重复相加"
+    },
+    "gui.trajectory.details.unstable": {
+      "en": "The entry keeps changing; try again in a moment",
+      "zh": "条目仍在变化，请稍后重试"
+    },
+    "gui.trajectory.details.earlier_unloaded": {
+      "en": "{n} earlier items were unloaded to save memory",
+      "zh": "较早的 {n} 项已卸载以节省内存"
+    },
+    "gui.trajectory.details.reload_from_start": {
+      "en": "Read again from the start",
+      "zh": "从头重新读取"
+    },
+    "gui.trajectory.details.waiting_list": {
+      "en": "Waiting for the list to catch up",
+      "zh": "等待列表同步"
+    },
+    "gui.trajectory.details.pick_one": {
+      "en": "Pick an entry to see its details",
+      "zh": "选择一个条目查看详情"
     }
   }
 }

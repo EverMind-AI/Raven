@@ -86,6 +86,8 @@ const source: TrajectorySource = {
     return d.promise
   },
   changes: () => Promise.reject(new Error('not scripted')),
+  detail: () => Promise.reject(new Error('not scripted')),
+  block: () => Promise.reject(new Error('not scripted')),
 }
 
 const flush = async (): Promise<void> => { for (let i = 0; i < 8; i += 1) await Promise.resolve() }

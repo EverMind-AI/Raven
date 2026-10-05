@@ -41,6 +41,8 @@ const source: TrajectorySource = {
     epoch, from_revision: after, to_revision: after, upserts: [], removed: [], has_more: false,
     reset_required: false, index_state: indexState,
   }),
+  detail: () => Promise.reject(new Error('not scripted')),
+  block: () => Promise.reject(new Error('not scripted')),
 }
 
 const status = (): string[] => [...document.querySelectorAll('.trajectory-status > span')].map((s) => s.textContent ?? '')
@@ -79,7 +81,8 @@ describe('the trajectory island', () => {
   it('draws the list between an absent status line and the bar\'s strip', async () => {
     await draw()
     const root = document.querySelector('.trajectory-root') as HTMLElement
-    expect([...root.children].map((c) => c.className)).toEqual(['trajectory-list', 'trajectory-bar'])
+    expect([...root.children].map((c) => c.className)).toEqual(['trajectory-body', 'trajectory-bar'])
+    expect([...root.querySelector('.trajectory-body')!.children].map((c) => c.className)).toEqual(['trajectory-list'])
     expect(document.querySelectorAll('.trajectory-row')).toHaveLength(1)
   })
 

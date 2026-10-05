@@ -110,3 +110,140 @@ html[data-theme="dark"] {
 
 /* Reserved for the duration bar; a strip of the list's own height. */
 .trajectory-bar { flex: none; height: 32px; border-top: 1px solid var(--line-soft); }
+
+/* ── the list and the pane ──────────────────────────────────────── */
+
+/* Side by side, the list taking what the pane leaves; over the list when the
+   area is narrow, where the pane covers the body and the list stays beneath
+   for the way back. */
+.trajectory-body { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
+.trajectory-body > .trajectory-list, .trajectory-body > .trajectory-empty { flex: 1; min-width: 0; }
+.trajectory-details {
+  flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  border-left: 1px solid var(--line-soft); background: var(--paper, var(--ink));
+}
+.trajectory-details-over { position: absolute; inset: 0; width: auto; border-left: 0; z-index: 1; }
+
+/* The seam: a 6px grab area drawn as a hairline, lit while dragged. */
+.trajectory-grip {
+  flex: none; width: 6px; margin: 0 -3px; cursor: col-resize; position: relative; z-index: 2; outline: 0;
+}
+.trajectory-grip::after { content: ''; position: absolute; inset: 0 2px; background: transparent; transition: background .12s; }
+.trajectory-grip:hover::after, .trajectory-grip[data-drag]::after, .trajectory-grip:focus-visible::after { background: var(--amber); }
+
+/* ── the pane's head and tabs ───────────────────────────────────── */
+
+.trajectory-head {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; min-height: 40px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.trajectory-head-name { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trajectory-close {
+  flex: none; height: 26px; min-width: 26px; padding: 0 8px; border-radius: 7px; color: var(--muted);
+  font-size: 12px; display: grid; place-items: center;
+}
+.trajectory-close:hover { color: var(--text); background: var(--hover); }
+
+.trajectory-tabs {
+  flex: none; display: flex; gap: 2px; padding: 4px 8px 0; overflow-x: auto; overflow-y: hidden; white-space: nowrap;
+  border-bottom: 1px solid var(--line-soft); scrollbar-width: none;
+}
+.trajectory-tab {
+  flex: none; padding: 6px 10px 7px; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0; display: inline-flex; align-items: center; gap: 5px;
+}
+.trajectory-tab:hover { color: var(--text); background: var(--hover); }
+.trajectory-tab-on, .trajectory-tab-on:hover { color: var(--text); border-bottom-color: var(--amber); background: transparent; }
+.trajectory-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.trajectory-tab-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+
+/* ── the pane's body ────────────────────────────────────────────── */
+
+.trajectory-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 14px 20px; font-size: 12.5px; }
+.trajectory-overview { display: flex; flex-direction: column; gap: 20px; }
+
+/* Info: two borderless rows, a 72px label, the value free to wrap. */
+.trajectory-info { margin: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 6px 10px; }
+.trajectory-info-row { display: contents; }
+.trajectory-info dt { color: var(--muted); }
+.trajectory-info dd { margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.trajectory-info-sub { color: var(--muted); font-size: 11.5px; }
+.trajectory-status-error { color: var(--clay); }
+.trajectory-status-running { color: var(--amber); }
+.trajectory-status-cancelled, .trajectory-status-unknown { color: var(--muted); }
+.trajectory-notes { margin: 0; padding: 0 0 0 16px; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+
+.trajectory-sec { min-width: 0; }
+.trajectory-h-row { margin: 0 0 8px; display: flex; align-items: baseline; gap: 10px; font-size: 16px; font-weight: 600; }
+.trajectory-h { font: inherit; color: var(--text); text-align: left; border-radius: 4px; }
+.trajectory-h:hover { text-decoration: underline; }
+.trajectory-h:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.trajectory-h-from { font-size: 11px; font-weight: 400; color: var(--faint); }
+.trajectory-sec-note, .trajectory-tool-note { margin: 0; color: var(--muted); font-size: 11.5px; }
+.trajectory-sec-body { min-width: 0; }
+.trajectory-link { color: var(--link); font-size: 12px; text-align: left; border-radius: 4px; }
+.trajectory-link:hover { text-decoration: underline; }
+.trajectory-link:disabled { color: var(--faint); text-decoration: none; }
+.trajectory-see-all { margin-top: 6px; }
+
+/* One tab's body: the toolbar, then the rendered block. */
+.trajectory-block { min-width: 0; }
+
+/* The tab's toolbar: what is known about the body, and the copy button. */
+.trajectory-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.trajectory-tool-notes { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.trajectory-tool-warn { color: var(--gold); }
+.trajectory-copy {
+  flex: none; height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; color: var(--muted);
+  border: 1px solid var(--line); background: var(--ink);
+}
+.trajectory-copy:hover { color: var(--text); background: var(--hover); }
+.trajectory-fault { margin: 0 0 8px; color: var(--clay); font-size: 12px; }
+.trajectory-more { margin-top: 10px; display: flex; gap: 10px; align-items: center; }
+
+/* Text as written, wrapped; code may scroll inside its own box but never
+   pushes the pane wider. */
+.trajectory-text-body {
+  margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--text);
+}
+.trajectory-v { overflow-wrap: anywhere; }
+.trajectory-v-none { color: var(--faint); font-style: italic; }
+.trajectory-v-bool, .trajectory-v-num { font-family: var(--mono); color: var(--sky); }
+.trajectory-ph { color: var(--faint); font-style: italic; font-size: 11.5px; }
+
+/* JSON as a tree of rows, two spaces deep per level. */
+.trajectory-json { font-family: var(--mono); font-size: 12px; line-height: 1.55; overflow-x: auto; }
+.trajectory-json-row { white-space: pre-wrap; overflow-wrap: anywhere; }
+.trajectory-json-kids { padding-left: 16px; }
+.trajectory-json-k { color: var(--muted); margin-right: 6px; }
+.trajectory-json-k::after { content: ':'; }
+.trajectory-json-fold { font: inherit; color: inherit; text-align: left; border-radius: 3px; display: inline-flex; gap: 4px; align-items: baseline; }
+.trajectory-json-fold:hover { background: var(--hover); }
+.trajectory-json-caret { color: var(--faint); width: 10px; display: inline-block; }
+.trajectory-json-shape { color: var(--faint); }
+
+/* Key-values: no borders, label left, value beside it. */
+.trajectory-kv { margin: 0; display: grid; grid-template-columns: minmax(96px, 160px) minmax(0, 1fr); gap: 5px 12px; }
+.trajectory-kv-row { display: contents; }
+.trajectory-kv-k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trajectory-kv-v { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.trajectory-kv-src { margin-left: 8px; color: var(--faint); font-size: 10.5px; }
+.trajectory-kv-note { margin-left: 8px; color: var(--muted); }
+
+/* Messages and lists. */
+.trajectory-msgs { display: flex; flex-direction: column; gap: 10px; }
+.trajectory-msg { padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 8px; min-width: 0; }
+.trajectory-msg-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.trajectory-items { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.trajectory-item { padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: 6px; min-width: 0; }
+.trajectory-item-head { font-weight: 500; margin-bottom: 2px; }
+.trajectory-ref { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px; font-family: var(--mono); font-size: 11.5px; }
+.trajectory-ref-k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.trajectory-ref-v { overflow-wrap: anywhere; }
+.trajectory-ref-kind { color: var(--faint); }
+
+/* Three grey lines while a body is on its way. */
+.trajectory-skel { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.trajectory-skel-line { height: 10px; border-radius: 5px; background: var(--raised); }
+.trajectory-skel-short { width: 40%; }

@@ -1,16 +1,20 @@
 /* The trajectory island: what `#trajHost` shows while the trajectory view is
- * up. A status line for what the index wants said, the list, and the strip
- * the duration bar will take.
+ * up. A status line for what the index wants said, the list with the details
+ * pane beside it, and the strip the duration bar will take.
  *
  * The root subscribes to the language itself, like every island, and to the
- * store for the few facts the status line reads; the list has its own
- * subscription so a scroll does not redraw the frame around it.
+ * store for the few facts the status line reads; the list and the pane have
+ * their own subscriptions so a scroll in one does not redraw the other. The
+ * root also measures its own width for the pane: how wide the pane may be,
+ * and whether the area is too narrow for two columns at all.
  */
 
-import { useSyncExternalStore } from 'react'
+import { useCallback, useRef, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
+import * as details from './details'
+import { Details, Grip } from './Details'
 import { EntryList, mib } from './EntryList'
 import * as store from './store'
 import './styles.css'
@@ -40,12 +44,40 @@ function Status(): JSX.Element | null {
   return <div className="trajectory-status" role="status">{lines}</div>
 }
 
+/* The list and the pane side by side, or the pane over the list when the
+   area is narrow. Open or not is the details store's; the width it is given
+   is the store's clamp of the reader's own number against the area measured
+   here. */
+function Body(): JSX.Element {
+  const d = useSyncExternalStore(details.subscribe, details.get)
+  const observer = useRef<ResizeObserver | null>(null)
+  const attach = useCallback((el: HTMLDivElement | null): void => {
+    observer.current?.disconnect()
+    observer.current = null
+    if (!el) return
+    const measure = (): void => { details.setAreaWidth(el.clientWidth) }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    observer.current = ro
+  }, [])
+  const narrow = details.narrow(d)
+  return (
+    <div className="trajectory-body" ref={attach} data-details={d.open ? '' : undefined} data-narrow={narrow ? '' : undefined}>
+      <EntryList />
+      {d.open && !narrow ? <Grip /> : null}
+      <Details />
+    </div>
+  )
+}
+
 export function TrajectoryApp(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <div className="trajectory-root">
       <Status />
-      <EntryList />
+      <Body />
       <div className="trajectory-bar" aria-hidden="true" />
     </div>
   )

@@ -40,6 +40,8 @@ const source: TrajectorySource = {
     epoch, from_revision: after, to_revision: after, upserts: [], removed: [], has_more: false,
     reset_required: false, index_state: indexState,
   }),
+  detail: () => Promise.reject(new Error('not scripted')),
+  block: () => Promise.reject(new Error('not scripted')),
 }
 
 /* The box's geometry, which happy-dom does not lay out. */

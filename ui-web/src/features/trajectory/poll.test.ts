@@ -71,6 +71,8 @@ const source: TrajectorySource = {
     changesQueue.push(d)
     return d.promise
   },
+  detail: () => Promise.reject(new Error('not scripted')),
+  block: () => Promise.reject(new Error('not scripted')),
 }
 
 /* Promise settlement under fake timers: a few microtask turns. */

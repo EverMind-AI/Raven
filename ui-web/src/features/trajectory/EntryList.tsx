@@ -18,6 +18,7 @@
 import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import * as details from './details'
 import { isKnownKind, kindClass, kindLabel } from './palette'
 import * as store from './store'
 
@@ -65,7 +66,7 @@ function Row({ entry, at, selected, total }: {
       aria-posinset={at + 1}
       data-entry={entry.entry_id}
       style={{ top: at * ROW_HEIGHT }}
-      onClick={() => store.select(entry.entry_id, { source: 'click' })}
+      onClick={() => { store.select(entry.entry_id, { source: 'click' }); details.openDetails() }}
     >
       <span className={turnClass}>
         {entry.turn_start && entry.turn_number !== null && entry.turn_number !== undefined ? entry.turn_number : ''}
@@ -93,6 +94,26 @@ export function EntryList(): JSX.Element {
   const [scrollTop, setScrollTop] = useState(0)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const count = entries.length
+  const paneOpen = useSyncExternalStore(details.subscribe, details.get).open
+  const wasOpen = useRef(paneOpen)
+
+  /* The pane closing hands the focus back to the list, on the row that was
+     selected, brought into view first when the window has scrolled past it. */
+  useLayoutEffect(() => {
+    const closed = wasOpen.current && !paneOpen
+    wasOpen.current = paneOpen
+    if (!closed) return
+    const el = box.current
+    if (!el) return
+    if (selectedId !== null) {
+      const at = state.index[selectedId]
+      if (at !== undefined) {
+        const top = at * ROW_HEIGHT
+        if (top < el.scrollTop || top + ROW_HEIGHT > el.scrollTop + el.clientHeight) el.scrollTop = top
+      }
+    }
+    el.focus()
+  }, [paneOpen, selectedId, state.index])
 
   /* The viewport's size, measured the moment the scroller exists and again
      whenever the browser says it changed. Bound to the node rather than to
