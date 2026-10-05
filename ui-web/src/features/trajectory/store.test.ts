@@ -559,6 +559,33 @@ describe('sessionChanged', () => {
     expect(store.get().anchor).toBeNull()
   })
 
+  it('keeps the bar\'s zoom per conversation, but never an open pick list', async () => {
+    store.sessionChanged('gui:a')
+    store.setView('trajectory')
+    const walk = store.load()
+    await flush()
+    await answerAll(3, 3)
+    await walk
+    store.setTimeline({ scale: 4, offset: 120, fit: false, frozenUnit: 0.5, anchor: { id: 'r1', frac: 0.25 } })
+    store.openBucket(['r0', 'r1'], 10)
+    expect(store.get().timeline.bucket).toEqual({ ids: ['r0', 'r1'], x: 10 })
+    store.sessionChanged('gui:b')
+    expect(store.get().timeline).toEqual(store.initialTimeline)
+    store.sessionChanged('gui:a')
+    expect(store.get().timeline).toEqual({ scale: 4, offset: 120, fit: false, frozenUnit: 0.5, anchor: { id: 'r1', frac: 0.25 }, bucket: null })
+    /* Leaving the view, or losing it, closes the list too. */
+    store.setView('trajectory')
+    store.openBucket(['r0'], 0)
+    store.setView('chat')
+    expect(store.get().timeline.bucket).toBeNull()
+    store.setView('trajectory')
+    store.openBucket(['r0'], 0)
+    store.disabledByServer()
+    expect(store.get().timeline.bucket).toBeNull()
+    store.openBucket([], 0)
+    expect(store.get().timeline.bucket).toBeNull()
+  })
+
   it('comes back to the conversation view only while the toggle may show', () => {
     store.sessionChanged('gui:a')
     store.setView('trajectory')

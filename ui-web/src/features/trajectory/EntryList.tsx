@@ -97,23 +97,34 @@ export function EntryList(): JSX.Element {
   const paneOpen = useSyncExternalStore(details.subscribe, details.get).open
   const wasOpen = useRef(paneOpen)
 
+  /* The selected row, brought into view when the window has scrolled past it. */
+  const index = state.index
+  const reveal = useCallback((): void => {
+    const el = box.current
+    if (!el || selectedId === null) return
+    const at = index[selectedId]
+    if (at === undefined) return
+    const top = at * ROW_HEIGHT
+    if (top < el.scrollTop || top + ROW_HEIGHT > el.scrollTop + el.clientHeight) el.scrollTop = top
+  }, [selectedId, index])
+
   /* The pane closing hands the focus back to the list, on the row that was
-     selected, brought into view first when the window has scrolled past it. */
+     selected, brought into view first. */
   useLayoutEffect(() => {
     const closed = wasOpen.current && !paneOpen
     wasOpen.current = paneOpen
     if (!closed) return
-    const el = box.current
-    if (!el) return
-    if (selectedId !== null) {
-      const at = state.index[selectedId]
-      if (at !== undefined) {
-        const top = at * ROW_HEIGHT
-        if (top < el.scrollTop || top + ROW_HEIGHT > el.scrollTop + el.clientHeight) el.scrollTop = top
-      }
-    }
-    el.focus()
-  }, [paneOpen, selectedId, state.index])
+    reveal()
+    box.current?.focus()
+  }, [paneOpen, reveal])
+
+  /* A selection made elsewhere -- on the duration bar, or a link in the
+     details -- brings its row into view too; a click here already has it. The
+     follow flag is the reader's and is left alone. */
+  const selectedBy = state.selectedBy
+  useLayoutEffect(() => {
+    if (selectedBy === 'bar' || selectedBy === 'link') reveal()
+  }, [selectedBy, reveal])
 
   /* The viewport's size, measured the moment the scroller exists and again
      whenever the browser says it changed. Bound to the node rather than to

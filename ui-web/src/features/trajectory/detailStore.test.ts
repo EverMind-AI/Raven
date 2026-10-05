@@ -164,6 +164,27 @@ describe('the pane', () => {
   })
 })
 
+describe('the Escape layer', () => {
+  it('answers for an open pick list first, then for the pane while it holds the focus', async () => {
+    await ready()
+    const { ESCAPE_ORDER } = await import('../../state/escapeOrder')
+    const layer = ESCAPE_ORDER.find((l) => l.id === 'trajectory.escapeOpen()')!
+    list.select('r1', { source: 'click' })
+    expect(details.get().open).toBe(true)
+    document.body.innerHTML = '<div class="chat"></div><div class="trajectory-details"><button id="f"></button></div>'
+    expect(layer.isOpen()).toBe(false)
+    document.getElementById('f')!.focus()
+    expect(layer.isOpen()).toBe(true)
+    list.openBucket(['r0'], 0)
+    layer.close()
+    expect(list.get().timeline.bucket).toBeNull()
+    expect(details.get().open).toBe(true)
+    layer.close()
+    expect(details.get().open).toBe(false)
+    expect(layer.isOpen()).toBe(false)
+  })
+})
+
 /* ── identities and tickets ───────────────────────────────────────── */
 
 describe('identities', () => {

@@ -157,6 +157,10 @@ details pane beside the list (`features/trajectory/detailStore.ts`): a descripto
 read through `trajectory.detail` and block bodies read through
 `trajectory.block`, each filed under its whole identity (session, epoch,
 entry, revision, block) and shown only under the ticket it was asked with.
+Under both sits the duration bar (`features/trajectory/DurationBar.tsx`,
+arithmetic in `geometry.ts`): every entry as a block as wide as what it is
+charged, zoomed about the pointer and dragged, dense blocks where the fit has
+no room, a click on a block being one more door to the same `select`.
 _Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
 records, the trajectory is how this page reads it back.
 

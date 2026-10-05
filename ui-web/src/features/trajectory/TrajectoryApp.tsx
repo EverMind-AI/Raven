@@ -1,6 +1,6 @@
 /* The trajectory island: what `#trajHost` shows while the trajectory view is
  * up. A status line for what the index wants said, the list with the details
- * pane beside it, and the strip the duration bar will take.
+ * pane beside it, and the duration bar under both.
  *
  * The root subscribes to the language itself, like every island, and to the
  * store for the few facts the status line reads; the list and the pane have
@@ -15,6 +15,7 @@ import { t } from '../../i18n/t'
 import * as lang from '../../state/lang'
 import { Details, Grip } from './Details'
 import * as details from './detailStore'
+import { DurationBar } from './DurationBar'
 import { EntryList, mib } from './EntryList'
 import * as store from './store'
 import './styles.css'
@@ -78,7 +79,7 @@ export function TrajectoryApp(): JSX.Element {
     <div className="trajectory-root">
       <Status />
       <Body />
-      <div className="trajectory-bar" aria-hidden="true" />
+      <DurationBar />
     </div>
   )
 }

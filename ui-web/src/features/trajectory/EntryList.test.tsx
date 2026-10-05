@@ -240,6 +240,23 @@ describe('the entry list', () => {
     expect(el.scrollTop).toBe(12 * ROW_HEIGHT + 5)
   })
 
+  it('brings a row selected from the bar into view without touching the follow flag', async () => {
+    rows = Array.from({ length: 200 }, (_, k) => entry(`r${k}`, k))
+    await draw()
+    const el = list()
+    size(el, 320, 200 * ROW_HEIGHT)
+    el.scrollTop = 0
+    act(() => { fireEvent.scroll(el) })
+    expect(store.get().follow).toBe(false)
+    act(() => { store.select('r150', { source: 'bar' }) })
+    expect(el.scrollTop).toBe(150 * ROW_HEIGHT)
+    expect(store.get().follow).toBe(false)
+    /* A click in the list itself does not scroll it. */
+    el.scrollTop = 0
+    act(() => { store.select('r120', { source: 'click' }) })
+    expect(el.scrollTop).toBe(0)
+  })
+
   it('says why the list is empty: scanning, or nothing recorded', async () => {
     indexState = { ...READY, phase: 'scanning', scanned_bytes: 1024 * 1024, total_bytes: 4 * 1024 * 1024 }
     await draw()

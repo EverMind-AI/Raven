@@ -11438,6 +11438,74 @@
     "gui.trajectory.details.pick_one": {
       "en": "Pick an entry to see its details",
       "zh": "选择一个条目查看详情"
+    },
+    "gui.trajectory.bar.zoom_in": {
+      "en": "Zoom in",
+      "zh": "放大"
+    },
+    "gui.trajectory.bar.zoom_out": {
+      "en": "Zoom out",
+      "zh": "缩小"
+    },
+    "gui.trajectory.bar.reset": {
+      "en": "Fit the whole conversation",
+      "zh": "复位到整条会话"
+    },
+    "gui.trajectory.bar.sum_known": {
+      "en": "{dur} charged",
+      "zh": "计入 {dur}"
+    },
+    "gui.trajectory.bar.sum_unknown": {
+      "en": "{n} entries of unknown duration",
+      "zh": "另有 {n} 条耗时未知"
+    },
+    "gui.trajectory.bar.sum_overlap": {
+      "en": "nested calls overlap",
+      "zh": "含父子调用重叠"
+    },
+    "gui.trajectory.bar.event_at": {
+      "en": "At {t}",
+      "zh": "时刻 {t}"
+    },
+    "gui.trajectory.bar.span": {
+      "en": "{from} to {to}",
+      "zh": "{from} 至 {to}"
+    },
+    "gui.trajectory.bar.span_unknown": {
+      "en": "Start and end unknown",
+      "zh": "起止未知"
+    },
+    "gui.trajectory.bar.thinking_range": {
+      "en": "Within the call above; its own time was not recorded",
+      "zh": "所属调用范围内，独立时间未记录"
+    },
+    "gui.trajectory.bar.dense": {
+      "en": "{n} entries, {dur} known, {unknown} unknown",
+      "zh": "{n} 条，已知累计 {dur}，未知 {unknown} 条"
+    },
+    "gui.trajectory.bar.dense_hint": {
+      "en": "Dense view: zoom in or spread this out to see each entry",
+      "zh": "密集视图：放大或展开此段查看各条目"
+    },
+    "gui.trajectory.bar.expand": {
+      "en": "Spread this out",
+      "zh": "展开此段"
+    },
+    "gui.trajectory.bar.pick_one": {
+      "en": "Pick an entry",
+      "zh": "选择条目"
+    },
+    "gui.trajectory.bar.close": {
+      "en": "Close",
+      "zh": "关闭"
+    },
+    "gui.trajectory.bar.canvas_label": {
+      "en": "Duration bar: {n} entries, {known} charged",
+      "zh": "耗时构成条：{n} 条，计入 {known}"
+    },
+    "gui.trajectory.bar.failed": {
+      "en": "failed",
+      "zh": "失败"
     }
   }
 }

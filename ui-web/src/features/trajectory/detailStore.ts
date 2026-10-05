@@ -741,7 +741,17 @@ export const hasFocus = (): boolean => {
   return !!pane && pane.contains(document.activeElement)
 }
 
-onTrajectoryEscape({ id: 'trajectory.escapeOpen()', isOpen: () => store.get().open && hasFocus(), close: closeDetails })
+/* The one layer the two surfaces share: the dense block's pick list, which
+   is open or not, and the pane, which counts only while it holds the focus.
+   The list goes first, being the thing on top. */
+onTrajectoryEscape({
+  id: 'trajectory.escapeOpen()',
+  isOpen: () => list.get().timeline.bucket !== null || (store.get().open && hasFocus()),
+  close: () => {
+    if (list.get().timeline.bucket !== null) list.closeBucket()
+    else closeDetails()
+  },
+})
 
 export function _resetForTests(): void {
   store._resetForTests()

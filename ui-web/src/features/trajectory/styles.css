@@ -106,10 +106,55 @@ html[data-theme="dark"] {
   font-size: 12.5px; color: var(--muted); text-align: center;
 }
 
-/* ── the bar's place ────────────────────────────────────────────── */
+/* ── the duration bar ───────────────────────────────────────────── */
 
-/* Reserved for the duration bar; a strip of the list's own height. */
-.trajectory-bar { flex: none; height: 32px; border-top: 1px solid var(--line-soft); }
+/* One row the height of a list row: the canvas takes the width, the sum and
+   the three tools sit after it. */
+.trajectory-bar {
+  flex: none; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 0;
+  border-top: 1px solid var(--line-soft); position: relative; outline: 0;
+}
+.trajectory-canvas { flex: 1; min-width: 0; height: 32px; display: block; cursor: crosshair; touch-action: none; }
+.trajectory-bar[data-fit] .trajectory-canvas { cursor: pointer; }
+.trajectory-bar[data-drag] .trajectory-canvas { cursor: grabbing; }
+.trajectory-bar-sum { flex: none; display: flex; gap: 10px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.trajectory-bar-tools { flex: none; display: flex; gap: 2px; }
+.trajectory-bar-tool {
+  width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 13px; line-height: 1;
+  display: grid; place-items: center;
+}
+.trajectory-bar-tool:hover { color: var(--text); background: var(--hover); }
+.trajectory-bar-tool:disabled { color: var(--faint); background: none; }
+.trajectory-bar-tool:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+
+/* The three-line card over the block under the pointer. */
+.trajectory-hover {
+  position: fixed; z-index: var(--z-tip); max-width: 360px; width: 320px; padding: 7px 10px; border-radius: 8px;
+  background: var(--text); color: var(--ink); font-size: 11.5px; line-height: 1.5; pointer-events: none;
+  box-shadow: var(--elev);
+}
+.trajectory-hover-line { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trajectory-hover-mono { font-family: var(--mono); font-size: 11px; }
+.trajectory-hover-muted { opacity: .8; }
+.trajectory-hover-fail { color: var(--chat-danger, var(--clay)); }
+
+/* The dense block's pick list. */
+.trajectory-bucket {
+  position: fixed; z-index: var(--z-pop); width: 320px; max-height: 280px; display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--ink); box-shadow: var(--elev); overflow: hidden;
+}
+.trajectory-bucket-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px;
+  font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line-soft);
+}
+.trajectory-bucket-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; }
+.trajectory-bucket-item {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; text-align: left;
+  font-size: 12px; color: var(--text);
+}
+.trajectory-bucket-item:hover, .trajectory-bucket-item:focus-visible { background: var(--hover); outline: 0; }
+.trajectory-bucket-item[aria-selected="true"] { background: var(--selected, var(--raised)); }
+.trajectory-bucket-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── the list and the pane ──────────────────────────────────────── */
 

@@ -48,6 +48,21 @@ export interface Anchor {
   offset: number
 }
 
+/* The duration bar's view of the entries: how far it is zoomed, where it is
+   scrolled to, whether it still fits the bar (and so re-fits as rows
+   arrive), the fit's unit it froze on the first zoom, the place at its left
+   edge, and the dense block the reader has opened a pick list for. */
+export interface Timeline {
+  scale: number
+  offset: number
+  fit: boolean
+  frozenUnit: number | null
+  anchor: { id: string; frac: number } | null
+  bucket: { ids: string[]; x: number } | null
+}
+
+export const initialTimeline: Timeline = { scale: 1, offset: 0, fit: true, frozenUnit: null, anchor: null, bucket: null }
+
 export interface TrajectoryState {
   /** The gateway announced the surface and has not refused it since. */
   served: boolean
@@ -85,6 +100,7 @@ export interface TrajectoryState {
   /** Within reach of the tail, so new rows pull the viewport down. */
   follow: boolean
   anchor: Anchor | null
+  timeline: Timeline
 }
 
 const initial: TrajectoryState = {
@@ -108,6 +124,7 @@ const initial: TrajectoryState = {
   selectedBy: null,
   follow: true,
   anchor: null,
+  timeline: initialTimeline,
 }
 
 const store = makeStore<TrajectoryState>(initial)
@@ -127,6 +144,7 @@ interface Remembered {
   selectedId: string | null
   follow: boolean
   anchor: Anchor | null
+  timeline: Timeline
 }
 
 /** How many conversations' places are kept; the oldest goes when a new one arrives. */
@@ -182,7 +200,7 @@ export function handshake(): void {
 function leaveView(): void {
   if (store.get().view === 'trajectory') {
     bump()
-    patch({ view: 'chat', listing: false })
+    patch({ view: 'chat', listing: false, timeline: { ...store.get().timeline, bucket: null } })
   }
 }
 
@@ -246,7 +264,7 @@ export function setView(view: View): void {
   if (s.view === view) return
   if (view === 'trajectory' && !available(s)) return
   bump()
-  patch({ view, listing: false })
+  patch({ view, listing: false, timeline: view === 'chat' ? { ...s.timeline, bucket: null } : s.timeline })
 }
 
 export const toggleView = (): void => { setView(store.get().view === 'trajectory' ? 'chat' : 'trajectory') }
@@ -268,12 +286,31 @@ export function setPlace(follow: boolean, anchor: Anchor | null): void {
   patch({ follow, anchor })
 }
 
+/* ── the duration bar's view ──────────────────────────────────────────── */
+
+/** The bar's zoom and scroll, written by the bar after every move. */
+export function setTimeline(next: Partial<Timeline>): void {
+  patch({ timeline: { ...store.get().timeline, ...next } })
+}
+
+/** A dense block's pick list is up, for these entries, at this content x. */
+export function openBucket(ids: string[], x: number): void {
+  if (!ids.length) return
+  setTimeline({ bucket: { ids, x } })
+}
+
+export function closeBucket(): void {
+  if (store.get().timeline.bucket !== null) setTimeline({ bucket: null })
+}
+
 /* ── the conversation on screen ───────────────────────────────────────── */
 
 function remember(key: string): void {
   const s = store.get()
   remembered.delete(key)
-  remembered.set(key, { view: s.view, selectedId: s.selectedId, follow: s.follow, anchor: s.anchor })
+  remembered.set(key, {
+    view: s.view, selectedId: s.selectedId, follow: s.follow, anchor: s.anchor, timeline: { ...s.timeline, bucket: null },
+  })
   while (remembered.size > REMEMBERED_MAX) {
     const oldest = remembered.keys().next().value as string
     remembered.delete(oldest)
@@ -306,6 +343,7 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     selectedBy: back?.selectedId ? 'migrate' : null,
     follow: back?.follow ?? true,
     anchor: back?.anchor ?? null,
+    timeline: back?.timeline ?? initialTimeline,
   })
   if (back?.view === 'trajectory' && !available()) patch({ view: 'chat' })
 }
