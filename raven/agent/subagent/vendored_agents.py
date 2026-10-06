@@ -387,21 +387,22 @@ def host_can_lend_a_key() -> bool:
     Asks ``inherit_llm`` itself, on the host file the launchers read, so an
     OAuth sign-in counts exactly when a launcher would accept it. An agent
     reaches a sign-in stored under the host's OAuth directory because it
-    resolves the same home: it is spawned with the host's ``RAVEN_HOME`` when
-    the host has one set, and with none set both normally fall back to
-    ``~/.raven``.
+    normally resolves the same home: it is spawned with the host's
+    ``RAVEN_HOME`` when the host has one set, and with none set both fall back
+    to ``~/.raven``.
 
-    It can still answer True for a launch that is then refused, in three
-    cases. An agent is spawned with the login shell's environment, and with
-    raven's own environment only when that shell cannot be captured, so a
-    token-location override (``CHATGPT_TOKEN_DIR``, ``CHATGPT_AUTH_FILE``) set
-    only in this process's environment reaches it only in that fallback. A
-    ``RAVEN_HOME`` that the login profile exports while this process has none
-    reaches it the same way, so it reads that home's config and sign-ins
-    instead of the host's. And a host config that names no
-    ``agents.defaults.provider`` leaves an agent's own configured provider in
-    force, which this check, reading only the host file, does not see;
-    ``raven onboard`` writes the provider before it asks.
+    It can still answer True for a launch that is then refused, because the
+    agent's environment and config are not this process's. It is spawned with
+    the login shell's environment, and with raven's own environment only when
+    that shell cannot be captured, so a token-location override
+    (``CHATGPT_TOKEN_DIR``, ``CHATGPT_AUTH_FILE``) set only in this process's
+    environment reaches it only in that fallback. A ``RAVEN_HOME`` that the
+    login profile exports while this process has none, or that the agent's
+    stored row carries in ``env`` (merged last, over the host's), sends it to
+    that home's config and sign-ins instead of the host's. And a host config
+    that names no ``agents.defaults.provider`` leaves an agent's own
+    configured provider in force, which this check, reading only the host
+    file, does not see; ``raven onboard`` writes the provider before it asks.
 
     Invalid host settings leave nothing to inherit rather than preventing the
     setup wizard from opening.

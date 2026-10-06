@@ -19,9 +19,9 @@ shell cannot be captured -- so a token-location override
 (`CHATGPT_TOKEN_DIR`, `CHATGPT_AUTH_FILE`) reaches it when the login
 profile exports it, when the agent's stored row carries it in `env` (a
 stored row replaces the discovered one whole), or in that fallback. A
-`RAVEN_HOME` the login profile exports while the host has none reaches
-the agent the same way, and the agent then reads that home instead of
-the host's.
+`RAVEN_HOME` reaches the agent the same ways: from the login profile
+while the host has none set, and from the agent's stored row even when
+it has. The agent then reads that home instead of the host's.
 
 What one agent directory carries:
 
