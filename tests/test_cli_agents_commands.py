@@ -957,7 +957,7 @@ def test_a_home_path_with_whitespace_registers_with_a_quoted_command(tmp_path: P
     home.mkdir(parents=True)
     monkeypatch.setenv("RAVEN_HOME", str(home))
 
-    r = runner.invoke(app, ["agents", "new", "demo-agent"])
+    r = runner.invoke(app, ["agents", "new", "demo-agent", "--register", "--no-smoke"])
 
     assert r.exit_code == 0, r.output
     assert (home / "agents" / "demo-agent").is_dir()
@@ -974,7 +974,7 @@ def test_a_spacey_working_directory_registers_in_here_mode(raven_home: Path, tmp
     checkout.mkdir()
     monkeypatch.chdir(checkout)
 
-    r = runner.invoke(app, ["agents", "new", "demo-agent", "--here"])
+    r = runner.invoke(app, ["agents", "new", "demo-agent", "--here", "--register", "--no-smoke"])
 
     assert r.exit_code == 0, r.output
     assert (checkout / "agents" / "demo-agent").is_dir()
@@ -1062,7 +1062,7 @@ def test_a_spacey_subagent_python_registers_with_a_quoted_command(
     spacey.symlink_to(sys.executable)
     monkeypatch.setenv("SUBAGENT_PYTHON", str(spacey))
 
-    r = runner.invoke(app, ["agents", "new", "demo-agent", "--no-smoke"])
+    r = runner.invoke(app, ["agents", "new", "demo-agent", "--register", "--no-smoke"])
 
     assert r.exit_code == 0, r.output
     from raven.config.update_subagents import get_agents
