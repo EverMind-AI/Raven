@@ -88,12 +88,6 @@ jobs:
     timeout-minutes: 20
     env:
       PYTHON_VERSION: ${{ matrix.python }}
-      # UTF-8 mode: the stock shell on a GBK-locale Windows machine reads and
-      # writes files in the locale code page, so any text I/O without an
-      # explicit encoding= can fail or mangle non-ASCII content. Setting this
-      # at the job level means pytest, coverage, and any subprocess all run
-      # in UTF-8 mode regardless of the runner OS.
-      PYTHONUTF8: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -264,7 +258,6 @@ jobs:
       - name: Replay committed regression cases
         env:
           RAVEN_REGRESSION_REPORT_DIR: ${{ runner.temp }}/trajectory-reports
-          PYTHONUTF8: "1"
         run: uv run pytest tests/test_trajectory_regressions.py -q
 
       - name: Validate case format, redaction review, and size budget
@@ -291,6 +284,12 @@ jobs:
     # that touch an installer pay for it; every push to main runs it.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
+    # Python opens text files in the locale encoding when no encoding= is
+    # passed. On a GBK-locale Windows runner, any step or subprocess doing
+    # such I/O can fail on non-ASCII content. UTF-8 mode removes that; on
+    # ubuntu-latest it is already the default encoding and has no effect.
+    env:
+      PYTHONUTF8: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -346,9 +345,9 @@ jobs:
           Get-Content install.ps1 -Raw | Invoke-Expression
           & "$env:UV_TOOL_BIN_DIR\raven.exe" --version
 
-      # Windows PowerShell 5.1 is the shell every Windows ships with, and its web
-      # cmdlets report failures differently from pwsh's, so a script that passes
-      # under one can fail under the other. Its own tool, bin and home
+      # Windows PowerShell 5.1 is the shell every Windows ships with, and its
+      # web cmdlets report failures differently from pwsh's, so a script that
+      # passes under one can fail under the other. Its own tool, bin and home
       # directories keep the version check answering for this install alone.
       - name: Install the latest release with install.ps1 under Windows PowerShell 5.1, piped
         if: steps.changed.outputs.run == 'true' && runner.os == 'Windows'
@@ -378,8 +377,6 @@ jobs:
         run: uv python install 3.12
 
       - name: Test real uv self-upgrade
-        env:
-          PYTHONUTF8: "1"
         # pytest-asyncio is needed even though this file has no async test: the
         # isolated interpreter still reads the project's pytest config, whose
         # --strict-config turns the then-unknown asyncio_mode into a hard error.

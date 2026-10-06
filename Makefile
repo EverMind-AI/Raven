@@ -13,6 +13,11 @@ DOCKER_IMAGE ?= raven:local
 COVERAGE_REPORT_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
 # One slice of the suite, K/N; the shard writes its .coverage data and no report.
 COVERAGE_SHARD ?= 1/1
+# Without an explicit encoding= Python opens text files in the locale encoding.
+# On a GBK-locale Windows checkout, the suite would read and write cp936
+# wherever a test forgot encoding=. The three pytest targets export it below; a
+# bare `uv run pytest` does not go through this file and stays exposed.
+PYTHONUTF8 = 1
 # Extra pytest flags for a shard; CI passes --idle-ceiling-strict, a local run stays warning-only.
 PYTEST_ARGS ?=
 COVERAGE_DATA_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=
@@ -101,13 +106,13 @@ test-ui:
 	npm test --prefix ui-web
 
 test-python:
-	uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q
+	PYTHONUTF8=$(PYTHONUTF8) uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q
 
 coverage:
-	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q $(COVERAGE_REPORT_ARGS)
+	TERM=dumb PYTHONUTF8=$(PYTHONUTF8) uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q $(COVERAGE_REPORT_ARGS)
 
 coverage-shard:
-	TERM=dumb uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q --shard $(COVERAGE_SHARD) --durations=25 $(PYTEST_ARGS) $(COVERAGE_DATA_ARGS)
+	TERM=dumb PYTHONUTF8=$(PYTHONUTF8) uv run --frozen --python $(PYTHON_VERSION) --all-extras pytest -q --shard $(COVERAGE_SHARD) --durations=25 $(PYTEST_ARGS) $(COVERAGE_DATA_ARGS)
 
 coverage-combine:
 	uv run --frozen --python $(PYTHON_VERSION) coverage combine --keep $(COVERAGE_DATA_DIR)
