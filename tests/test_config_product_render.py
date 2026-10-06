@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -418,8 +419,11 @@ def test_launchers_name_why_they_cannot_inherit(oauth_host, oauth_launcher, prod
 
     message = str(refused.value)
     assert "raven provider login openai-codex" in message
-    if product != "raven-design":
+    if product == "raven-design":
+        assert re.search(r"before starting Design \(.+\)$", message), message
+    else:
         assert f"{oauth_launcher.REQUIRED_SECRETS[0]} is not set" in message
+        assert re.search(r"cannot be inherited \(.+\); put the key in", message), message
 
 
 @pytest.mark.parametrize("product", ["raven-code", "raven-design", "raven-oncall", "raven-research", "raven-ppt"])
