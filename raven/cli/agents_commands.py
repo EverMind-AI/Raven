@@ -431,6 +431,8 @@ def _smoke_handshake(row: object) -> tuple[str, str]:
     import subprocess
     import threading
 
+    from raven.utils.commands import command_argv
+
     frame = (
         json.dumps(
             {
@@ -442,7 +444,7 @@ def _smoke_handshake(row: object) -> tuple[str, str]:
         )
         + "\n"
     )
-    command = str(getattr(row, "command", "")).split()
+    command = command_argv(str(getattr(row, "command", "")))
     cwd = str(getattr(row, "cwd", "") or "") or None
     timeout = max(float(getattr(row, "ready_timeout_ms", 120000)) / 1000.0, 10.0)
 
