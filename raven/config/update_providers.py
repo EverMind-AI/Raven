@@ -1464,10 +1464,10 @@ def test_provider(
     shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
     native = shape(api_key) if shape and api_key else None
     if native and (not api_base or urlparse(api_base).hostname == urlparse(native[0]).hostname):
-        # The vendor's own catalogue, for the two whose address is not in the
-        # registry and whose door is not opened by a bearer token. Asked before
-        # the derivation below, which answers "" for both of them and leaves the
-        # guard after it reporting `no_probe_endpoint` for a working key.
+        # The vendor's own catalogue, for the vendors in `_CATALOGUE_SHAPES`,
+        # whose catalogue neither a stored nor a derived address reaches. Asked
+        # before the derivation below, which answers "" for most of them and
+        # leaves the guard after it reporting `no_probe_endpoint` for a working key.
         #
         # Only when nothing else supplied an address, or the one supplied is on
         # the vendor's own host: a section pointed anywhere else is pointed at
@@ -1531,9 +1531,10 @@ def test_provider(
         result = _confirm_credential(spec, api_base, url, headers, result, timeout_s=timeout_s, transport=transport)
     if derived_api_base and result.get("status") == "http_404":
         # The address LiteLLM sends completions to is not always where the
-        # catalogue lives -- DeepSeek's is `/beta`, which has no `/models`. A 404
-        # never says anything about the credential, so reporting a failure here
-        # would be the same lie in a new spelling.
+        # catalogue lives -- DeepSeek's `/beta` lists no models, which is why
+        # DeepSeek's catalogue is now filed in `_CATALOGUE_SHAPES` and no longer
+        # reaches this. A 404 never says anything about the credential, so
+        # reporting a failure here would be the same lie in a new spelling.
         return {
             **result,
             "ok": False,
@@ -1581,16 +1582,17 @@ def _litellm_api_base(spec: Any) -> str:
     return base or ""
 
 
-#: The two vendors that publish a catalogue but no address the probe can find.
+#: The vendors whose catalogue the probe cannot find from an address alone.
 #: Keyed by provider name; each entry answers "where, and with which headers"
 #: for a key already in hand, and is consulted when the section names no
 #: ``api_base`` of its own or one on that vendor's own host -- see the call site.
 #:
-#: Neither ships a ``default_api_base`` and LiteLLM keeps their address inside
-#: its SDK, so before this table the probe had nowhere to ask and answered
-#: ``no_probe_endpoint`` for a perfectly good key. Everything else either speaks
-#: the OpenAI shape or arrives through its own probe (``_probe_codex_catalog``,
-#: ``_probe_copilot_seat``).
+#: None ships a ``default_api_base``. LiteLLM keeps Anthropic's, Google's and
+#: OpenAI's address inside its SDK, so before this table the probe had nowhere to
+#: ask and answered ``no_probe_endpoint`` for a perfectly good key; it sends
+#: DeepSeek's completions to ``/beta``, which lists no models. Everything else
+#: either speaks the OpenAI shape at an address the probe can derive or arrives
+#: through its own probe (``_probe_codex_catalog``, ``_probe_copilot_seat``).
 #: Sibling catalogue endpoints a provider serves beside its main one: the path
 #: replacing the last segment of the probed URL, and what being listed there
 #: proves about a model.
@@ -1620,6 +1622,10 @@ _CATALOGUE_SHAPES: dict[str, Any] = {
         "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
         {"x-goog-api-key": key},
     ),
+    # These two take the bearer token. Their address is only shown in the
+    # settings dialog, never stored, so a section rarely names one.
+    "openai": lambda key: ("https://api.openai.com/v1/models", {"Authorization": f"Bearer {key}"}),
+    "deepseek": lambda key: ("https://api.deepseek.com/v1/models", {"Authorization": f"Bearer {key}"}),
 }
 
 

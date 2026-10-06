@@ -1692,16 +1692,22 @@ def test_a_vendor_litellm_knows_the_address_of_is_actually_probed(cfg_path: Path
     assert result["status"] == "invalid_key", "a bad key is now distinguishable from an unconfigured one"
 
 
-def test_a_vendor_with_no_catalogue_endpoint_is_reported_as_unprobed_not_unconfigured(cfg_path: Path) -> None:
+def test_a_vendor_with_no_catalogue_endpoint_is_reported_as_unprobed_not_unconfigured(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A vendor that keeps its address inside its SDK has no ``/models`` to ping
     and nothing the user could supply. The key is there; this probe simply
     cannot reach the vendor. Saying so is the honest answer, and it is not a
     failure.
 
-    OpenAI rather than Anthropic: this used to name three vendors, and two of
-    them turned out to publish a catalogue after all -- see
-    ``_CATALOGUE_SHAPES``, which now probes those two where they actually
-    answer. The rule this pins is the same one, on the vendor it still fits."""
+    This used to name three vendors, and each turned out to publish a
+    catalogue after all -- see ``_CATALOGUE_SHAPES``, which now probes them
+    where they actually answer. OpenAI was the last vendor in the registry the
+    rule fitted, so its entry is taken out here to keep the rule pinned for the
+    next one that has nowhere to be asked."""
+    from raven.config import update_providers
+
+    monkeypatch.delitem(update_providers._CATALOGUE_SHAPES, "openai")
     _seed_key(cfg_path, "openai", "sk-openai")
 
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not be reached
@@ -1725,25 +1731,28 @@ def test_a_provider_that_genuinely_needs_an_address_still_says_so(cfg_path: Path
 
 
 def test_a_404_from_an_address_we_guessed_is_not_reported_as_a_broken_key(cfg_path: Path) -> None:
-    """DeepSeek's completions endpoint is ``/beta``, which has no ``/models``.
+    """The address LiteLLM sends completions to need not list any models.
 
-    A 404 never says anything about a credential, so surfacing it as a failure
-    would be the original lie in a new spelling. A 404 from an address the *user*
-    supplied is different -- that is a typo they need to see -- so this only
-    applies where the address was derived.
+    DeepSeek's ``/beta`` was the case that showed it, and this used to drive
+    DeepSeek, until its catalogue was filed in ``_CATALOGUE_SHAPES``; Z.ai still
+    reaches the probe through a derived address. A 404 never says anything
+    about a credential, so surfacing it as a failure would be the original lie
+    in a new spelling. A 404 from an address the *user* supplied is different
+    -- that is a typo they need to see -- so this only applies where the
+    address was derived.
     """
-    _seed_key(cfg_path, "deepseek", "sk-deepseek")
+    _seed_key(cfg_path, "zai", "sk-zai")
 
     derived = probe_provider(
-        "deepseek",
+        "zai",
         config_path=cfg_path,
         transport=_mock_transport(lambda r: httpx.Response(404, json={"error": "not found"})),
     )
     assert derived["status"] == "no_probe_endpoint"
 
-    set_provider_fields("deepseek", {"api_base": "https://typo.example.com/v1"}, config_path=cfg_path)
+    set_provider_fields("zai", {"api_base": "https://typo.example.com/v1"}, config_path=cfg_path)
     typed = probe_provider(
-        "deepseek",
+        "zai",
         config_path=cfg_path,
         transport=_mock_transport(lambda r: httpx.Response(404, json={"error": "not found"})),
     )
@@ -1890,6 +1899,42 @@ def test_an_address_on_the_vendors_own_host_is_probed_the_way_that_vendor_answer
     assert seen["url"].startswith(listed_at)
     assert seen["key"] == key
     assert seen["auth"] is None
+
+
+@pytest.mark.parametrize(
+    ("slug", "stored", "listed_at"),
+    [
+        ("openai", None, "https://api.openai.com/v1/models"),
+        ("deepseek", None, "https://api.deepseek.com/v1/models"),
+        ("deepseek", "https://api.deepseek.com/beta", "https://api.deepseek.com/v1/models"),
+    ],
+)
+def test_a_vendor_no_stored_address_reaches_is_asked_where_it_lists_its_models(
+    cfg_path: Path, slug: str, stored: str | None, listed_at: str
+) -> None:
+    """A section holds no address once the settings dialog stops storing the one
+    it only shows, and for these two that left the probe nowhere useful to ask.
+    LiteLLM keeps OpenAI's address inside its SDK, so nothing was sent and a
+    working key read as unprobed; it sends DeepSeek's completions to ``/beta``,
+    which lists no models, so the probe was refused there. Both list their
+    models at a fixed address that takes the bearer token. A DeepSeek section
+    still holding ``/beta`` from before its shown address moved is on the
+    vendor's own host, so it is asked there too."""
+    _seed_key(cfg_path, slug, "sk-test")
+    if stored:
+        set_provider_fields(slug, {"api_base": stored}, config_path=cfg_path)
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization")))
+        if str(request.url) == listed_at:
+            return httpx.Response(200, json={"data": [{"id": "m1"}]})
+        return httpx.Response(404, json={"error": "not found"})
+
+    result = probe_provider(slug, config_path=cfg_path, transport=_mock_transport(handler))
+    assert seen == [(listed_at, "Bearer sk-test")]
+    assert result["status"] == "valid"
+    assert result["model_ids"] == ["m1"]
 
 
 def test_google_naming_the_key_wrong_reads_as_a_refused_key(cfg_path: Path) -> None:
