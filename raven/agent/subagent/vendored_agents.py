@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
-from raven.utils.commands import command_argv, command_quote
+from raven.utils.commands import command_quote, command_tokens
 
 if TYPE_CHECKING:
     from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
@@ -492,10 +492,7 @@ def _launcher_missing(entry: dict) -> str:
     command carries.
     """
     command = str(entry.get("command") or "")
-    try:
-        tokens = command_argv(command)
-    except ValueError:
-        tokens = command.split()
+    tokens = command_tokens(command)
     for token in tokens:
         if _is_absolute_path(token) and not Path(token).exists():
             return token
@@ -938,9 +935,6 @@ def _launcher_is_gone(cfg: Any) -> bool:
     manifests can produce, which is exactly the shape this exists to catch.
     """
     command = str(getattr(cfg, "command", "") or "")
-    try:
-        tokens = command_argv(command)
-    except ValueError:
-        tokens = command.split()
+    tokens = command_tokens(command)
     absolute = [token for token in tokens if _is_absolute_path(token)]
     return bool(absolute) and not all(Path(token).exists() for token in absolute)

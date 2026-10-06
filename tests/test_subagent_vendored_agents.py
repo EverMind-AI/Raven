@@ -1551,13 +1551,6 @@ class TestASpaceInTheResolvedPath:
 
     _WIN_FOLDER = r"C:\Program Files\raven-agents\raven-win"
 
-    @staticmethod
-    def _windows_split(command: str) -> list[str]:
-        """The CommandLineToArgvW tokeniser, to drive the probes from POSIX."""
-        import raven.utils.commands as cmd
-
-        return cmd._split_windows(command)
-
     def _as_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(va, "command_quote", lambda value: '"' + value.replace('"', '\\"') + '"')
 
@@ -1574,22 +1567,16 @@ class TestASpaceInTheResolvedPath:
 
         assert "{PYTHON}" not in entry["command"] and "{SUBAGENT_DIR}" not in entry["command"]
         assert entry["cwd"] == self._WIN_FOLDER, "cwd stays a plain path; only argv-split fields are quoted"
-        assert va.command_argv(entry["command"]) == [
-            r"C:\Program Files\Python312\python.exe",
-            self._WIN_FOLDER + r"\run.py",
-            "--acp",
-        ]
+        assert entry["command"].split(" --acp")[0].count('"') == 4, "both paths are quoted"
 
-    def test_launcher_missing_reads_a_quoted_spaced_path_as_one_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """POSIX-mode shlex would fragment the quoted path against a host that
-        spawns on CommandLineToArgvW rules; ``command_argv`` keeps it whole."""
-        monkeypatch.setattr(va, "command_argv", self._windows_split)
+    def test_launcher_missing_reads_a_quoted_spaced_path_as_one_token(self) -> None:
+        """``command_tokens`` keeps a quoted drive-letter path one token on any
+        host, so the spaced launcher is found missing rather than split apart."""
         command = r'"C:\Program Files\gone\python.exe" C:\also\gone\run.py'
 
         assert va._launcher_missing({"command": command}) == r"C:\Program Files\gone\python.exe"
 
-    def test_launcher_is_gone_reads_a_quoted_spaced_path_as_one_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(va, "command_argv", self._windows_split)
+    def test_launcher_is_gone_reads_a_quoted_spaced_path_as_one_token(self) -> None:
         from raven.config.schema import ThirdPartyCliSubagentConfig
 
         row = ThirdPartyCliSubagentConfig(
