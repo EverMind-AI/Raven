@@ -858,6 +858,64 @@ def test_a_host_without_an_image_section_renders_an_empty_one(grounded, tmp_path
     assert "selectionConfig" not in image
 
 
+def test_a_host_image_section_on_a_named_provider_carries_that_provider(grounded, tmp_path, monkeypatch):
+    """A host that runs its pictures on a provider other than OpenRouter hands the deck
+    that provider, address and key together. A deck endpoint pinned over it is then
+    that endpoint: the provider would otherwise put its own address and key back."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "media": {
+                        "image": {"model": "openai/gpt-image-2", "provider": "openai", "apiKey": "sk-host-dormant"}
+                    }
+                },
+                "providers": {
+                    "openai": {"apiKey": "sk-host-openai", "apiBase": "https://compat.example/v1"},
+                    "openrouter": {"apiKey": "sk-or-host"},
+                },
+            }
+        )
+    )
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    image = data["tools"]["media"]["image"]
+    assert (image["provider"], image["apiKey"], image["apiBase"]) == (
+        "openai",
+        "sk-host-openai",
+        "https://compat.example/v1",
+    )
+    assert image["selectionConfig"] == str(home / "config.json")
+
+    # A pin makes the section a snapshot the deck reads as written, so it carries
+    # the provider's pair and the bare id that pair serves, and no provider to
+    # resolve against a config that may not hold one.
+    monkeypatch.setenv("PPT_IMAGE_MODEL", "gpt-image-2-mini")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    image = data["tools"]["media"]["image"]
+    assert (image["model"], image["apiKey"], image["apiBase"]) == (
+        "gpt-image-2-mini",
+        "sk-host-openai",
+        "https://compat.example/v1",
+    )
+    assert "provider" not in image and "selectionConfig" not in image
+    monkeypatch.delenv("PPT_IMAGE_MODEL")
+
+    # A pinned base without a pinned key does not take the provider's key along.
+    monkeypatch.setenv("PPT_IMAGE_API_BASE", "https://deck-images.example/v1")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    image = data["tools"]["media"]["image"]
+    assert image["apiBase"] == "https://deck-images.example/v1" and image.get("apiKey") != "sk-host-openai"
+    assert image["model"] == "gpt-image-2" and "provider" not in image
+
+    monkeypatch.setenv("PPT_IMAGE_API_KEY", "sk-deck")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    image = data["tools"]["media"]["image"]
+    assert (image["apiKey"], image["apiBase"]) == ("sk-deck", "https://deck-images.example/v1")
+    assert "provider" not in image
+
+
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
     """One key, two readers, ONE source of truth: the slice key is copied from
     the tools.web slot after the secret merge, so every admission source --

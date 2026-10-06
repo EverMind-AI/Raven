@@ -298,6 +298,72 @@ async def test_a_custom_image_endpoint_keeps_its_model_prefix(monkeypatch, tmp_p
     assert json.loads(seen[0].content)["model"] == model
 
 
+@pytest.mark.parametrize("model", ["sensenova-u1.5-lite", "google/gemini-2.5-flash-image"])
+async def test_an_openai_compatible_base_takes_every_model_through_the_images_api(monkeypatch, tmp_path, model) -> None:
+    """Chat routing with output modalities is OpenRouter's own. An OpenAI-compatible
+    base serves pictures at ``/images/generations`` whatever the model is called, and
+    answers ``chat/completions`` for an image model in its own words, which the
+    OpenRouter fallback does not recognise -- so the chat attempt only ever failed."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _image_tool(monkeypatch, handler, model=model, workspace=tmp_path / "ws", api_base="https://relay.test/v1")
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"] and out["model"] == model
+    assert seen == ["/v1/images/generations"]
+
+
+async def test_the_exported_openrouter_key_never_goes_to_another_address(monkeypatch, tmp_path) -> None:
+    """``OPENROUTER_API_KEY`` is OpenRouter's credential. A keyless section pointed at
+    another endpoint used to take it anyway and send it there as the bearer token."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    elsewhere = SimpleNamespace(api_base="https://relay.test/v1", model="gpt-image-2", api_key="")
+    tool = ImageGenerateTool(elsewhere, workspace=tmp_path)
+    assert tool.api_key == "" and not ImageGenerateTool.has_key(elsewhere)
+    out = json.loads(await tool.execute("a poster"))
+    assert "no API key" in out["error"] and seen == []
+
+    on_openrouter = SimpleNamespace(api_base="", model="gpt-image-2", api_key="")
+    assert ImageGenerateTool(on_openrouter, workspace=tmp_path).api_key == "sk-or-env"
+
+
+async def test_a_section_on_a_named_provider_sends_the_id_that_provider_serves(monkeypatch, tmp_path) -> None:
+    """A provider's models are listed under its own prefix (``openai/gpt-image-2``) and
+    its Images API knows the bare name, so the prefix comes off on the way out -- the
+    way the embedding pin's does -- and the call goes to the provider's own address."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    section = SimpleNamespace(
+        provider="openai", api_base="https://api.openai.com/v1", api_key="sk-openai", model="openai/gpt-image-2"
+    )
+    tool = ImageGenerateTool(section, workspace=tmp_path / "ws")
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9", quality="low"))
+    assert out["success"] and out["model"] == "gpt-image-2"
+    assert [str(r.url) for r in seen] == ["https://api.openai.com/v1/images/generations"]
+    assert seen[0].headers["authorization"] == "Bearer sk-openai"
+    body = json.loads(seen[0].content)
+    assert (body["model"], body["size"], body["quality"]) == ("gpt-image-2", "1536x1024", "low")
+
+
 # ── the image path: several pictures in one call ──
 
 

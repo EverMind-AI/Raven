@@ -238,18 +238,37 @@ def configure_image_generation(config: dict, host: dict) -> None:
     ``image`` key stays an operator override for a host that grants nothing.
     """
     from raven.config.schema import live_media_tool_config
+    from raven.providers.wire import wire_model
 
     host_tools = host.get("tools") or {}
     host_image = (host_tools.get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
+    section = live_media_tool_config(host_image, host.get("providers"))
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
+    named = image.get("provider", "")
     paid_by = "the host image section"
     pinned: list[str] = []
     for name, path in IMAGE_SETTING_SLOTS.items():
         if value := env_value(name):
             image[path[-1]] = value
             pinned.append(name)
-    if resolved := render.dig(config, IMAGE_KEY_SLOT):
+    key_pinned = bool(env_value("PPT_IMAGE_API_KEY"))
+    if named and (pinned or key_pinned):
+        # A pin makes the section a snapshot the deck reads as written, with no
+        # host file behind it. It already holds the provider's address and key;
+        # what it must not keep is the provider's name, which would be resolved
+        # against this config's providers -- not the host's -- nor the
+        # provider's own prefix, which the bare address does not take.
+        del image["provider"]
+        if "PPT_IMAGE_MODEL" not in pinned and image.get("model"):
+            image["model"] = wire_model(image["model"], client_provider=named)
+        if "PPT_IMAGE_API_BASE" in pinned and not key_pinned:
+            # The provider's key goes to the provider's address, not the deck's.
+            image["apiKey"] = ""
+    if named and not key_pinned and image.get("apiKey"):
+        # The provider's own key; the host section's own, which the slot below
+        # would read, stood aside for it.
+        paid_by = f"the host's providers.{named}"
+    elif resolved := render.dig(config, IMAGE_KEY_SLOT):
         image["apiKey"], paid_by = resolved, "PPT_IMAGE_API_KEY or the host image key"
     elif not image.get("apiKey") and _IMAGE_GATEWAY in (image.get("apiBase") or _IMAGE_GATEWAY):
         # Borrowed only towards OpenRouter. The host's image section may name
@@ -277,7 +296,7 @@ def configure_image_generation(config: dict, host: dict) -> None:
     if (proxy := (host_tools.get("media") or {}).get("proxy")) and not media.get("proxy"):
         media["proxy"] = proxy
     if not image.get("apiKey"):
-        log("[run] images: no OpenRouter key to draw with; the deck keeps only the pictures it can find")
+        log("[run] images: no image key to draw with; the deck keeps only the pictures it can find")
         return
     pin_note = f", pinned by {', '.join(pinned)}" if pinned else ", following the host" if host_selects else ""
     log(f"[run] images: {image.get('model') or 'the shipped default'}, paid by {paid_by}{pin_note}")

@@ -1299,6 +1299,29 @@ async def test_what_an_unset_media_model_still_needs_follows_the_keys_on_file(co
 
 
 @pytest.mark.asyncio
+async def test_what_an_unset_media_model_needs_asks_the_provider_it_would_borrow_from(config_file):
+    """The OpenRouter key on file is borrowed by no section pointed elsewhere, and a
+    section on a named provider is paid by that provider's key alone."""
+    line = lambda text: next(x for x in text.splitlines() if "tools.media.image.model =" in x)  # noqa: E731
+    raw = json.loads(config_file.read_text())
+    raw["providers"] = {"openrouter": {"apiKey": "sk-or"}}
+    raw.setdefault("tools", {})["media"] = {"image": {"apiBase": "https://relay.test/v1"}}
+    config_file.write_text(json.dumps(raw))
+    elsewhere = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "it also needs a key: tools.media.image.apiKey" in elsewhere and "all it lacks" not in elsewhere
+
+    raw["tools"]["media"] = {"image": {"provider": "openai"}}
+    config_file.write_text(json.dumps(raw))
+    unpaid = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "it also needs a key: providers.openai.apiKey" in unpaid and "all it lacks" not in unpaid
+
+    raw["providers"]["openai"] = {"apiKey": "sk-openai"}
+    config_file.write_text(json.dumps(raw))
+    paid = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "a model is all it lacks" in paid
+
+
+@pytest.mark.asyncio
 async def test_a_download_that_timed_out_names_how_to_fetch_it_even_without_a_command(config_file):
     """A refusal whose remedy carries no launch to quote read
     "run `its own sign-in or setup command` once" for an npx fetch."""

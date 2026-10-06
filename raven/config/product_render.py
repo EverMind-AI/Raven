@@ -314,8 +314,9 @@ def inherit_media_image(config: dict, host: dict) -> dict:
     """Take the host raven's image-generation section, and keep following it.
 
     The section is resolved the way the host resolves it for its own
-    ``image_generate`` -- ``tools.media.image`` with the OpenRouter key borrowed
-    where it names none -- then written whole into the product config, and
+    ``image_generate`` -- ``tools.media.image`` with what it borrows, the named
+    provider's address and key or, for a keyless section calling OpenRouter, the
+    OpenRouter key -- then written whole into the agent's config, and
     ``selectionConfig`` is pointed at the host's config file so a model or
     quality changed in Settings later reaches the product's next generation
     without a re-render. A host with no image section leaves an empty section,
@@ -329,7 +330,7 @@ def inherit_media_image(config: dict, host: dict) -> dict:
 
     host_tools = host.get("tools") or {}
     host_image = (host_tools.get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
+    section = live_media_tool_config(host_image, host.get("providers"))
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
     image["selectionConfig"] = str(raven_home() / CONFIG_FILENAME)
     media = config.setdefault("tools", {}).setdefault("media", {})

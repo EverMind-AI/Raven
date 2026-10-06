@@ -412,6 +412,9 @@ def _build_provider_entry(
         "protocol_overrides": overrides,
         "total_models": len(models),
         "gateway": bool(spec and spec.is_gateway),
+        # Whether the image role may run here; the save that refuses a provider
+        # reads the same registry field.
+        "image_api": bool(spec and spec.image_api),
         # Every prefix that names this provider, for a client comparing two
         # spellings of one model: `route_names` is what `merge_key` strips, and
         # the spec says to compare against it rather than rebuild it, so it

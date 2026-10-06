@@ -170,6 +170,13 @@ class ProviderSpec:
     # the second such provider gets the key field in one place and not another.
     accepts_optional_api_key: bool = False
 
+    # The image tool can run on this provider's address and key: OpenRouter, its
+    # default backend, or a vendor serving OpenAI's Images API
+    # (`/images/generations`, `/images/edits`). Declared here for the same reason
+    # as the field above: the roles card offering the image role and the save
+    # refusing a provider must read one answer.
+    image_api: bool = False
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -268,6 +275,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         requires_api_base=True,
         default_api_base="http://localhost:8000/v1",
+        image_api=True,
     ),
     # === Azure OpenAI ======================================================
     # Served by AzureOpenAIProvider, not LiteLLM (hence ``client`` below): Azure
@@ -305,6 +313,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
         supports_prompt_caching=True,
         default_model="openrouter/anthropic/claude-sonnet-5",
+        image_api=True,
     ),
     # AiHubMix: global gateway, OpenAI-compatible interface.
     # strip_model_prefix=True: it doesn't understand "anthropic/claude-3",
@@ -716,6 +725,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
         default_model="openai/gpt-5.5",
+        image_api=True,
     ),
     # OpenAI Codex: uses OAuth, not API key.
     ProviderSpec(

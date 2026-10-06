@@ -394,6 +394,137 @@ class TestTheBorrowInputIsAdmittedOnTheSameTerms:
         cfg = media_tool_config(live, "image")
         assert cfg is not None and cfg.api_key == "sk-own", "the borrow is not consulted, so it cannot veto"
 
+    def test_a_section_pointed_elsewhere_borrows_no_openrouter_key(self, tmp_path):
+        """The OpenRouter key is borrowed only by a section that calls OpenRouter. A keyless
+        section whose apiBase names another endpoint would send that endpoint the
+        OpenRouter credential as its bearer token."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        runs_on = {"openrouter": {"apiKey": "sk-or"}}
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "apiBase": "https://relay.test/v1"}}},
+                "providers": runs_on,
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.api_key == ""
+
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "apiBase": "https://openrouter.ai/api/v1"}}},
+                "providers": runs_on,
+            },
+        )
+        assert media_tool_config(live, "image").api_key == "sk-or", "OpenRouter's own address, spelled out, borrows"
+
+    def test_a_named_provider_supplies_its_address_and_key_together(self, tmp_path):
+        """A section naming a provider runs on that provider, address and key as one
+        pair, and its own apiKey and apiBase stand aside: a key the section holds for
+        OpenRouter must not travel to the provider's address."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        own = {"apiKey": "sk-own", "apiBase": "https://openrouter.ai/api/v1"}
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "openai/gpt-image-2", "provider": "openai", **own}}},
+                "providers": {
+                    "openai": {"apiKey": "sk-openai", "apiBase": "https://compat.test/v1"},
+                    "openrouter": {"apiKey": "sk-or"},
+                },
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.provider, cfg.api_base, cfg.api_key) == ("openai", "https://compat.test/v1", "sk-openai")
+
+    def test_a_named_provider_with_no_address_of_its_own_runs_on_its_public_one(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "provider": "openai"}}},
+                "providers": {"openai": {"apiKey": "sk-openai"}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_base, cfg.api_key) == ("https://api.openai.com/v1", "sk-openai")
+
+    def test_a_named_provider_without_a_key_leaves_the_section_keyless(self, tmp_path):
+        """Keyless is the answer -- not the OpenRouter key, and not the section's own."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "provider": "openai", "apiKey": "sk-own"}}},
+                "providers": {"openrouter": {"apiKey": "sk-or"}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.api_key == "" and cfg.api_base == "https://api.openai.com/v1"
+
+    def test_an_invalid_edit_of_the_named_provider_keeps_the_lent_pair(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        image = {"model": "gpt-image-2", "provider": "openai"}
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"openai": {"apiKey": "sk-openai"}}})
+        assert media_tool_config(live, "image").api_key == "sk-openai"
+
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"openai": {"apiKey": 123}}})
+        kept = media_tool_config(live, "image")
+        assert kept is not None and kept.api_key == "sk-openai"
+
+    def test_a_named_provider_with_no_address_takes_no_key(self, tmp_path):
+        """An empty address means the tool's own default, which is OpenRouter's: a key
+        taken with no address of its own would be sent there."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "m", "provider": "anthropic"}}},
+                "providers": {"anthropic": {"apiKey": "sk-ant"}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and (cfg.api_base, cfg.api_key) == ("", "")
+
+    def test_an_unrelated_providers_bad_edit_does_not_hold_the_answer(self, tmp_path):
+        """Only the borrowed-from provider's section is validated."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        providers = {"openrouter": {"apiKey": "sk-or"}, "anthropic": {"apiKey": 123}}
+        self._write(path, {"tools": {"media": {"image": {"model": "a"}}}, "providers": providers})
+        assert media_tool_config(live, "image").model == "a"
+
+        self._write(path, {"tools": {"media": {"image": {"model": "b"}}}, "providers": providers})
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and (cfg.model, cfg.api_key) == ("b", "sk-or")
+
+    def test_a_section_naming_only_a_provider_is_not_switched_on(self, tmp_path):
+        """No model and no key of its own: the provider's key must not enable a tool
+        that bills per call, any more than a chat key does."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {"tools": {"media": {"image": {"provider": "openai"}}}, "providers": {"openai": {"apiKey": "sk-openai"}}},
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.provider == "openai" and cfg.api_key == "" and cfg.model == ""
+
 
 def test_permissions_node_that_stops_validating_keeps_the_last_policy(tmp_path):
     """A broken live edit must not un-deny a default-allow tool.
