@@ -422,6 +422,29 @@ def test_launchers_name_why_they_cannot_inherit(oauth_host, oauth_launcher, prod
         assert f"{oauth_launcher.REQUIRED_SECRETS[0]} is not set" in message
 
 
+@pytest.mark.parametrize("product", ["raven-code", "raven-design", "raven-oncall", "raven-research", "raven-ppt"])
+def test_launchers_still_refuse_in_words_on_a_raven_without_inherit_refusal(
+    oauth_host, oauth_launcher, monkeypatch, product
+):
+    _, token = oauth_host
+    token.unlink()
+    monkeypatch.delattr(render, "inherit_refusal")
+
+    with pytest.raises(SystemExit) as refused:
+        if product == "raven-code":
+            oauth_launcher.render_acp_config(oauth_launcher.DEFAULT_CONFIG)
+        else:
+            oauth_launcher.render_config(oauth_launcher.DEFAULT_CONFIG)
+
+    message = str(refused.value)
+    if product == "raven-design":
+        assert message.endswith("before starting Design")
+    else:
+        assert (
+            f"{oauth_launcher.REQUIRED_SECRETS[0]} is not set and the host's model cannot be inherited; put" in message
+        )
+
+
 def test_inherit_llm_honours_the_parent_riders_on_the_inheritance_branch(monkeypatch):
     """The fork launchers' riders, kept at the shared seat (G1): the cli
     dispatcher injects RAVEN_PARENT_MODEL / RAVEN_PARENT_REASONING_EFFORT per

@@ -167,10 +167,11 @@ def render_config(source: Path) -> Path:
     config.pop("routing", None)
     taken = render.inherit_llm(config, deepcopy(host))
     if not taken:
-        raise SystemExit(
-            "error: configure a model provider in the host Raven settings before starting Design "
-            f"({render.inherit_refusal(config, host)})"
-        )
+        # A home tree copied out by a newer wheel also serves an older checkout, so this
+        # can run on a raven that predates inherit_refusal; that one refuses without the reason.
+        explain = getattr(render, "inherit_refusal", None)
+        reason = f" ({explain(config, host)})" if explain else ""
+        raise SystemExit(f"error: configure a model provider in the host Raven settings before starting Design{reason}")
     log(f"[run] llm: inherited from the host ({taken})")
 
     # The pooled loop reads identity, sessions, transcripts and the skill pool
