@@ -631,9 +631,7 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
                     if field != "cwd":
                         directory = command_quote(directory)
                         interpreter = command_quote(interpreter)
-                    entry[field] = (
-                        str(template).replace("{SUBAGENT_DIR}", directory).replace("{PYTHON}", interpreter)
-                    )
+                    entry[field] = str(template).replace("{SUBAGENT_DIR}", directory).replace("{PYTHON}", interpreter)
             _read_route_notes(folder, entry)
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
             logger.warning("Skipping the agent product in {}: {}", folder.name, exc)
