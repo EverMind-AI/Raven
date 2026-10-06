@@ -814,7 +814,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
-        default_model="gemini/gemini-2.5-flash",
+        default_model="gemini/gemini-3.8-flash",
     ),
     # Z.ai (formerly Zhipu AI): named after the vendor's current brand, which is
     # also what LiteLLM calls it. Old configs saying "zhipu" still load.
