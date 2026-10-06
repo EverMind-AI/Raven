@@ -1536,3 +1536,64 @@ class TestOwnKeyIsOneFactPerFolder:
         }
 
         assert kinds == {True, False}
+
+
+class TestASpaceInTheResolvedPath:
+    r"""A quoted interpreter/launcher path survives resolution and spawning.
+
+    ``{PYTHON}`` and ``{SUBAGENT_DIR}`` are now substituted quoted, and the
+    readiness probes tokenise with the shell's own rules rather than empty-
+    whitespace, so a product whose interpreter sits under ``C:\Program Files``
+    -- the ``python.org`` default -- is neither mangled by the split nor
+    silently declared ready from a fragment. Windows-only behaviour pinned from
+    any host by the module's own ``os.name`` read.
+    """
+
+    _WIN_FOLDER = r"C:\Program Files\raven-agents\raven-win"
+
+    @staticmethod
+    def _windows_split(command: str) -> list[str]:
+        """The CommandLineToArgvW tokeniser, to drive the probes from POSIX."""
+        import raven.utils.commands as cmd
+
+        return cmd._split_windows(command)
+
+    def _as_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(va, "command_quote", lambda value: '"' + value.replace('"', '\\"') + '"')
+
+    def test_resolution_quotes_a_spaced_subagent_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._as_windows(monkeypatch)
+        entry = {"command": r"{PYTHON} {SUBAGENT_DIR}\run.py --acp", "cwd": "{SUBAGENT_DIR}"}
+
+        for field, value in list(entry.items()):
+            directory, interpreter = self._WIN_FOLDER, r"C:\Program Files\Python312\python.exe"
+            if field != "cwd":
+                directory = va.command_quote(directory)
+                interpreter = va.command_quote(interpreter)
+            entry[field] = str(value).replace("{SUBAGENT_DIR}", directory).replace("{PYTHON}", interpreter)
+
+        assert "{PYTHON}" not in entry["command"] and "{SUBAGENT_DIR}" not in entry["command"]
+        assert entry["cwd"] == self._WIN_FOLDER, "cwd stays a plain path; only argv-split fields are quoted"
+        assert va.command_argv(entry["command"]) == [
+            r"C:\Program Files\Python312\python.exe",
+            self._WIN_FOLDER + r"\run.py",
+            "--acp",
+        ]
+
+    def test_launcher_missing_reads_a_quoted_spaced_path_as_one_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """POSIX-mode shlex would fragment the quoted path against a host that
+        spawns on CommandLineToArgvW rules; ``command_argv`` keeps it whole."""
+        monkeypatch.setattr(va, "command_argv", self._windows_split)
+        command = r'"C:\Program Files\gone\python.exe" C:\also\gone\run.py'
+
+        assert va._launcher_missing({"command": command}) == r"C:\Program Files\gone\python.exe"
+
+    def test_launcher_is_gone_reads_a_quoted_spaced_path_as_one_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(va, "command_argv", self._windows_split)
+        from raven.config.schema import ThirdPartyCliSubagentConfig
+
+        row = ThirdPartyCliSubagentConfig(
+            name="Raven-Win", command=r'"C:\Program Files\gone\python.exe" C:\exists\run.py'
+        )
+
+        assert va._launcher_is_gone(row) is True

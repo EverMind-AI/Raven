@@ -52,6 +52,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
+from raven.utils.commands import command_argv, command_quote
+
 if TYPE_CHECKING:
     from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
@@ -490,7 +492,11 @@ def _launcher_missing(entry: dict) -> str:
     command carries.
     """
     command = str(entry.get("command") or "")
-    for token in command.split():
+    try:
+        tokens = command_argv(command)
+    except ValueError:
+        tokens = command.split()
+    for token in tokens:
         if _is_absolute_path(token) and not Path(token).exists():
             return token
     return ""
@@ -621,7 +627,13 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
                 raise ValueError("manifest is not an object")
             for field in _PLACEHOLDER_FIELDS:
                 if template := entry.get(field):
-                    entry[field] = str(template).replace("{SUBAGENT_DIR}", str(folder)).replace("{PYTHON}", python)
+                    directory, interpreter = str(folder), python
+                    if field != "cwd":
+                        directory = command_quote(directory)
+                        interpreter = command_quote(interpreter)
+                    entry[field] = (
+                        str(template).replace("{SUBAGENT_DIR}", directory).replace("{PYTHON}", interpreter)
+                    )
             _read_route_notes(folder, entry)
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
             logger.warning("Skipping the agent product in {}: {}", folder.name, exc)
@@ -928,5 +940,9 @@ def _launcher_is_gone(cfg: Any) -> bool:
     manifests can produce, which is exactly the shape this exists to catch.
     """
     command = str(getattr(cfg, "command", "") or "")
-    absolute = [token for token in command.split() if _is_absolute_path(token)]
+    try:
+        tokens = command_argv(command)
+    except ValueError:
+        tokens = command.split()
+    absolute = [token for token in tokens if _is_absolute_path(token)]
     return bool(absolute) and not all(Path(token).exists() for token in absolute)
