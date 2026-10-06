@@ -100,6 +100,24 @@ def test_set_gemini_extra_fields(cfg_path: Path) -> None:
     assert section["apiKeyList"] == ["k1", "k2", "k3"]
 
 
+def test_the_address_a_vendor_only_shows_is_stored_as_no_address(cfg_path: Path) -> None:
+    """Gemini's settings field shows Google's bare host where the section names
+    no address, and that host is display data rather than an address of the
+    section's own. Stored, it became the per-call base, which Gemini's driver
+    takes as the versioned root -- every chat went to a path Google answers 404.
+    So writing it writes no address, clearing one the section held, while any
+    other address, on the same host or not, is kept as typed."""
+    set_provider_fields("gemini", {"api_key": "g-key", "api_base": "https://proxy.test/v1"}, config_path=cfg_path)
+
+    set_provider_fields("gemini", {"api_base": "https://generativelanguage.googleapis.com/"}, config_path=cfg_path)
+    assert not _read(cfg_path)["providers"]["gemini"].get("apiBase")
+
+    set_provider_fields(
+        "gemini", {"api_base": "https://generativelanguage.googleapis.com/v1beta"}, config_path=cfg_path
+    )
+    assert _read(cfg_path)["providers"]["gemini"]["apiBase"] == "https://generativelanguage.googleapis.com/v1beta"
+
+
 def test_set_api_key_for_oauth_provider_raises(cfg_path: Path) -> None:
     with pytest.raises(RuntimeError, match="OAuth"):
         set_provider_fields(

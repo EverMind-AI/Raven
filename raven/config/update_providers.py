@@ -774,6 +774,13 @@ def set_provider_fields(
                 from raven.providers.wire import stored_model_id
 
                 coerced = [stored_model_id(name, str(m)) for m in coerced]
+            if path_key == "api_base" and spec is not None and spec.is_display_only(coerced):
+                # The address a settings field shows in place of a default is
+                # not one the section needs, and stored it reached the driver as
+                # a per-call base: Gemini's takes it as the versioned root, so
+                # every chat went to a path Google answers 404. Writing it is
+                # writing none, which also clears a proxy the section held.
+                coerced = None
             prev[path_key] = _set_nested(path_key, coerced, working)
 
         validated = cls.model_validate(working)

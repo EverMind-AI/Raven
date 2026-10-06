@@ -87,7 +87,7 @@ class ProviderSpec:
     #: to /v1/models instead of the /v1beta/models its shape asks for.
     #:
     #: So this says only "show this when the field would otherwise be blank".
-    #: Read through `display_api_base`, never directly.
+    #: Read through `display_api_base` or `is_display_only`, never directly.
     shown_api_base: str = ""
     native_api_bases: tuple[tuple[str, str], ...] = ()
     #: Addresses one vendor serves the same account model from, where the choice
@@ -182,6 +182,19 @@ class ProviderSpec:
         and several are addresses this project chose rather than the vendor's.
         """
         return self.default_api_base or self.shown_api_base
+
+    def is_display_only(self, api_base: str | None) -> bool:
+        """Whether ``api_base`` is the address this spec shows and nothing sends.
+
+        That is `shown_api_base`, standing in for a `default_api_base` the spec
+        does not state: the vendor's own endpoint, which LiteLLM reaches without
+        being told. A section holding it holds no address of its own, and keeping
+        it there is not harmless -- Gemini's driver takes a stored base as its
+        versioned root, and the provider probe takes one for a proxy.
+        """
+        if self.default_api_base or not self.shown_api_base or not api_base:
+            return False
+        return api_base.strip().rstrip("/") == self.shown_api_base.rstrip("/")
 
     @property
     def usable_default_api_base(self) -> str:

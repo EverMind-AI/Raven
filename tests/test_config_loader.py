@@ -1517,6 +1517,96 @@ def test_the_retired_pin_table_leads_to_the_command_its_preset_ships_now() -> No
         assert retired and current not in retired, preset
 
 
+def test_an_address_the_settings_dialog_only_showed_leaves_the_file_once(tmp_path: Path) -> None:
+    """Connecting a key-only vendor from the settings dialog sent the address its
+    field merely shows -- Google's bare host, Anthropic's -- and the section kept
+    it. For Gemini that broke both halves: the key probe read the section as a
+    proxy and answered 401 for a working key, and the driver took the host as its
+    versioned root, so every chat went to a path Google answers 404.
+
+    A config stamped 11 (the literal a shipped build wrote) loses each such
+    address from the file, trailing slash or not, and hears about it once. An
+    address of the section's own stays: a proxy, and a gateway provider's real default."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "providers": {
+                "gemini": {"apiKey": "AIza-x", "apiBase": "https://generativelanguage.googleapis.com"},
+                "anthropic": {"apiKey": "sk-ant-x", "apiBase": "https://api.anthropic.com/"},
+                "deepseek": {"apiKey": "sk-ds", "apiBase": "https://proxy.test/v1"},
+                "openrouter": {"apiKey": "sk-or", "apiBase": "https://openrouter.ai/api/v1"},
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 11}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    providers = json.loads(p.read_text(encoding="utf-8"))["providers"]
+    assert providers == {
+        "gemini": {"apiKey": "AIza-x"},
+        "anthropic": {"apiKey": "sk-ant-x"},
+        "deepseek": {"apiKey": "sk-ds", "apiBase": "https://proxy.test/v1"},
+        "openrouter": {"apiKey": "sk-or", "apiBase": "https://openrouter.ai/api/v1"},
+    }
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len(notices) == 2, notices
+    assert "providers.gemini" in notices[0] and "providers.anthropic" in notices[1], notices
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_the_shown_address_migration_clears_only_the_exact_address_a_vendor_shows() -> None:
+    """Only a flat address equal to the one the spec shows in place of a default
+    it does not state, in either key spelling. A longer path on the same host is
+    an address of the section's own, and so is the endpoint list, which the
+    settings dialog never writes. A second pass has nothing left to say, and a
+    config already at the floor keeps even Gemini's bare host.
+
+    The floors are literals, for the reason
+    test_the_retired_deep_research_section_goes_and_its_disabled_entry_stays gives.
+    """
+    from raven.config import loader
+
+    endpoints = [{"apiKey": "AIza-y", "apiBase": "https://generativelanguage.googleapis.com"}]
+    loader._migration_notices.clear()
+    data = {
+        "providers": {
+            "gemini": {
+                "api_key": "AIza-x",
+                "api_base": "https://generativelanguage.googleapis.com/",
+                "endpoints": json.loads(json.dumps(endpoints)),
+            },
+            "openai": {"apiKey": "sk-o", "apiBase": "https://api.openai.com/v1"},
+            "groq": {"apiKey": "gsk", "apiBase": "https://api.groq.com/openai/v1/extra"},
+            "ollama_chat": {"apiBase": "http://localhost:11434"},
+        }
+    }
+    loader._migrate_config(data, from_version=11)
+
+    assert data["providers"] == {
+        "gemini": {"api_key": "AIza-x", "endpoints": endpoints},
+        "openai": {"apiKey": "sk-o"},
+        "groq": {"apiKey": "gsk", "apiBase": "https://api.groq.com/openai/v1/extra"},
+        "ollama_chat": {"apiBase": "http://localhost:11434"},
+    }
+    assert len(loader.drain_migration_notices()) == 2
+
+    loader._migrate_config(data, from_version=11)
+    assert loader.drain_migration_notices() == []
+
+    untouched = {"providers": {"gemini": {"apiKey": "AIza-x", "apiBase": "https://generativelanguage.googleapis.com"}}}
+    loader._migrate_config(untouched, from_version=12)
+    assert untouched == {
+        "providers": {"gemini": {"apiKey": "AIza-x", "apiBase": "https://generativelanguage.googleapis.com"}}
+    }
+    assert loader.drain_migration_notices() == []
+
+
 def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:
     """``channels.sendProgress`` is a setting of the section, not a channel whose
     table failed to parse; only an unknown scalar under ``channels`` warns."""
