@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shlex
 import signal
 import time
 from collections import deque
@@ -35,6 +34,7 @@ from raven.acp_client.protocol import (
     AcpRemoteError,
     AcpTimeoutError,
 )
+from raven.utils.commands import launch_argv
 
 _STDERR_LINES = 200
 
@@ -233,7 +233,7 @@ class AcpClient:
         from raven.agent.subagent.role import subagent_role_env
 
         try:
-            argv = shlex.split(command)
+            argv = launch_argv(command)
         except ValueError as exc:
             raise AcpConnectionError(f"acp agent {name!r}: command cannot be parsed: {exc}") from exc
         if not argv:

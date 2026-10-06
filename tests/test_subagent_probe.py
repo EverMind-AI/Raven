@@ -152,7 +152,11 @@ async def test_cli_probe_reports_missing_and_still_names_what_it_looked_for(tmp_
     assert "definitely-not-installed" in res.detail
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell line: a lone quote is not a parse error to CreateProcess")
 async def test_cli_probe_reports_unparseable_command_as_unknown() -> None:
+    # On Windows the CommandLineToArgvW reader only treats a double quote as
+    # special, so `'unbalanced` tokenises fine and the probe reports the agent
+    # missing (the shell's own reading) rather than unparseable.
     res = await probe_one(_cli("claude -p 'unbalanced {prompt}"), source="config", path="/usr/bin")
     assert res.status == "unknown"
     assert "cannot be parsed" in res.detail
