@@ -1901,6 +1901,34 @@ def test_an_address_on_the_vendors_own_host_is_probed_the_way_that_vendor_answer
     assert seen["auth"] is None
 
 
+@pytest.mark.parametrize("slug", ["gemini", "openai", "groq"])
+def test_an_address_that_does_not_parse_is_reported_not_raised(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch, slug: str
+) -> None:
+    """``urlsplit`` raises on an address that does not parse -- ``http://[``
+    opens an IPv6 literal it never closes -- and the probe asked it twice: once
+    for whether the section sits on the vendor's own host, and once more, after
+    the request failed, for which proxy to name. Either let the error out of a
+    probe whose contract is a dict, never an exception, so the settings dialog
+    saw an internal error. Such an address names no host: it is asked on the
+    generic path, and its failure reads as the network error it is. The real
+    error branch runs here, which an injected transport would skip."""
+    monkeypatch.undo()
+    asked: list[str] = []
+
+    def refuse(self, url, **kwargs):
+        asked.append(url)
+        raise httpx.ConnectError("unreachable")
+
+    monkeypatch.setattr(httpx.Client, "get", refuse)
+    _seed_key(cfg_path, slug, "k-test")
+    set_provider_fields(slug, {"api_base": "http://["}, config_path=cfg_path)
+
+    result = probe_provider(slug, config_path=cfg_path, timeout_s=5)
+    assert asked == ["http://[/v1/models"]
+    assert result["status"] == "network_error"
+
+
 @pytest.mark.parametrize(
     ("slug", "stored", "listed_at"),
     [

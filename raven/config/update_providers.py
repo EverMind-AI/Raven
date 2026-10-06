@@ -1463,7 +1463,7 @@ def test_provider(
     extras = _CATALOGUE_EXTRAS.get(spec.name, ()) if (spec and full_catalogue) else ()
     shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
     native = shape(api_key) if shape and api_key else None
-    if native and (not api_base or urlparse(api_base).hostname == urlparse(native[0]).hostname):
+    if native and (not api_base or _hostname(api_base) == _hostname(native[0])):
         # The vendor's own catalogue, for the vendors in `_CATALOGUE_SHAPES`,
         # whose catalogue neither a stored nor a derived address reaches. Asked
         # before the derivation below, which answers "" for most of them and
@@ -1689,11 +1689,29 @@ def _env_proxy_for(url: str) -> str | None:
     import urllib.request
     from urllib.parse import urlsplit
 
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        # Asked after the request already failed: an address that does not
+        # parse is reported as that failure, not raised past it.
+        return None
     if not parts.hostname or urllib.request.proxy_bypass(parts.hostname):
         return None
     proxies = urllib.request.getproxies()
     return proxies.get(parts.scheme) or proxies.get("all") or None
+
+
+def _hostname(address: str) -> str | None:
+    """The host ``address`` names, or None for an address that does not parse.
+
+    ``urlparse`` raises on some malformed authorities -- ``http://[`` opens an
+    IPv6 literal it never closes -- and a probe answers with a dict, never an
+    exception, so such an address is treated as naming no host at all.
+    """
+    try:
+        return urlparse(address).hostname
+    except ValueError:
+        return None
 
 
 def _without_userinfo(url: str) -> str:
