@@ -176,10 +176,10 @@ def render_config(source: Path) -> Path:
 
     # The pooled loop reads identity, sessions, transcripts and the skill pool
     # from ONE agent home; unpinned it would be the host's own (the launcher
-    # inherits RAVEN_HOME), which this agent must not share -- and it must sit
-    # OUTSIDE the host Agent home, which the host hands over as the session
-    # cwd (the runtime refuses a cwd that contains the engine's home). The
-    # shared placement helper seats it in the raven data directory;
+    # normally shares the host's home), which this agent must not share -- and
+    # it must sit OUTSIDE the host Agent home, which the host hands over as the
+    # session cwd (the runtime refuses a cwd that contains the engine's home).
+    # The shared placement helper seats it in the raven data directory;
     # DESIGN_ACP_HOME overrides. setdefault, so an operator's explicit
     # workspace wins.
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})

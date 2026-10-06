@@ -315,11 +315,12 @@ def inherit_host_denials(config: dict, host: dict) -> list[str]:
 def inherit_plugin_opt_outs(config: dict, host: dict, *, own: Iterable[str] = ()) -> list[str]:
     """Carry the host's ``plugins.disabled`` into the product config.
 
-    A product engine scans the host's plugin roots -- the launcher inherits
-    ``RAVEN_HOME``, so ``<home>/plugins`` is the host's -- and the entry points
-    of the interpreter they share, but it reads its opt-outs only from the
-    rendered file. So a plugin the host operator switched off, most often one
-    that fails to load, came back in every product the host dispatched.
+    An agent's engine scans the host's plugin roots -- ``<home>/plugins`` is
+    the host's, since the launcher normally resolves the host's home -- and
+    the entry points of the interpreter they share, but it reads its opt-outs
+    only from the rendered file. So a plugin the host operator switched off,
+    most often one that fails to load, came back in every agent the host
+    dispatched.
 
     ``own`` names the product's own engine plugins, which never travel: the
     product is that plugin, and a host turning it off for its own agent is not
