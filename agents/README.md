@@ -12,13 +12,16 @@ Inheritance uses the same credential check as the host runtime,
 including stored OAuth sign-ins such as OpenAI Codex. The child reads
 OAuth credentials from the host's home, which it shares because the
 host passes its `RAVEN_HOME` when one is set and both otherwise
-resolve `~/.raven`; tokens stay in that credential store rather than
-the rendered agent config. An agent is spawned with the login shell's
-environment -- raven's own environment only when that shell cannot be
-captured -- so a token-location override (`CHATGPT_TOKEN_DIR`,
-`CHATGPT_AUTH_FILE`) reaches it when the login profile exports it,
-when the agent's stored row carries it in `env` (a stored row replaces
-the discovered one whole), or in that fallback.
+normally resolve `~/.raven`; tokens stay in that credential store
+rather than the rendered agent config. An agent is spawned with the
+login shell's environment -- raven's own environment only when that
+shell cannot be captured -- so a token-location override
+(`CHATGPT_TOKEN_DIR`, `CHATGPT_AUTH_FILE`) reaches it when the login
+profile exports it, when the agent's stored row carries it in `env` (a
+stored row replaces the discovered one whole), or in that fallback. A
+`RAVEN_HOME` the login profile exports while the host has none reaches
+the agent the same way, and the agent then reads that home instead of
+the host's.
 
 What one agent directory carries:
 
