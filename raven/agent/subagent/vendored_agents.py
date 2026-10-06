@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
-from raven.utils.commands import command_quote, command_tokens
+from raven.utils.commands import command_tokens, resolve_subagent_command
 
 if TYPE_CHECKING:
     from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
@@ -624,11 +624,9 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
                 raise ValueError("manifest is not an object")
             for field in _PLACEHOLDER_FIELDS:
                 if template := entry.get(field):
-                    directory, interpreter = str(folder), python
-                    if field != "cwd":
-                        directory = command_quote(directory)
-                        interpreter = command_quote(interpreter)
-                    entry[field] = str(template).replace("{SUBAGENT_DIR}", directory).replace("{PYTHON}", interpreter)
+                    entry[field] = resolve_subagent_command(
+                        str(template), python=python, subagent_dir=str(folder), quote=field != "cwd"
+                    )
             _read_route_notes(folder, entry)
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
             logger.warning("Skipping the agent product in {}: {}", folder.name, exc)

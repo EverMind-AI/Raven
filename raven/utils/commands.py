@@ -128,6 +128,31 @@ def command_tokens(command: str) -> list[str]:
     return _split_shape(command)
 
 
+def resolve_subagent_command(template: str, *, python: str, subagent_dir: str, quote: bool = True) -> str:
+    """Substitute ``{PYTHON}`` and ``{SUBAGENT_DIR}`` in a manifest field.
+
+    The one rule every producer of a roster row agrees on: a field that is
+    split back into argv before spawning (``command`` / ``resumeCommand``, the
+    default ``quote=True``) gets each path token that names the interpreter or
+    the agent root quoted the way that host's parser reads, so a spaced one
+    survives instead of being refused. A field the spawn reads as a single
+    path (``cwd``, ``quote=False``) is substituted unquoted.
+
+    The quoting happens at replacement: each value is quoted with
+    :func:`command_quote` and the template's placeholders swapped for the
+    quoted spelling, so a spaced value reads as one token to the parser.
+    The shipped manifests use ``{SUBAGENT_DIR}/run.py`` -- a forward slash --
+    so the quoted root and its launcher stay one token on both hosts.
+    Discovery (``vendored_agents``), ``raven agents new --register`` and each
+    folder's ``install.py`` all write through this, so the three agree.
+    """
+    directory, interpreter = subagent_dir, python
+    if quote:
+        directory = command_quote(directory)
+        interpreter = command_quote(interpreter)
+    return template.replace("{SUBAGENT_DIR}", directory).replace("{PYTHON}", interpreter)
+
+
 def command_quote(value: str) -> str:
     """Quote one argv token for the platform this command will spawn on.
 
