@@ -1853,6 +1853,87 @@ def test_an_address_of_ones_own_keeps_the_shape_that_address_speaks(cfg_path: Pa
     assert seen["auth"] == "Bearer sk-ant-x"
 
 
+@pytest.mark.parametrize(
+    ("slug", "key", "api_base", "header", "listed_at"),
+    [
+        (
+            "gemini",
+            "AIza-TEST",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "x-goog-api-key",
+            "https://generativelanguage.googleapis.com/v1beta/models",
+        ),
+        ("anthropic", "sk-ant-x", "https://api.anthropic.com/v1", "x-api-key", "https://api.anthropic.com/v1/models"),
+    ],
+)
+def test_an_address_on_the_vendors_own_host_is_probed_the_way_that_vendor_answers(
+    cfg_path: Path, slug: str, key: str, api_base: str, header: str, listed_at: str
+) -> None:
+    """The vendor's own host is nobody's proxy, so the rule above does not reach it.
+
+    A section pointed at Google's own host was sent a bearer token, which Google's
+    native routes read as an OAuth token and refuse with 401 whatever the key --
+    and the settings dialog told the user the provider rejected a key that works.
+    """
+    _seed_key(cfg_path, slug, key)
+    set_provider_fields(slug, {"api_base": api_base}, config_path=cfg_path)
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["key"] = request.headers.get(header)
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": [], "models": []})
+
+    result = probe_provider(slug, config_path=cfg_path, transport=_mock_transport(handler))
+    assert result["ok"] is True
+    assert seen["url"].startswith(listed_at)
+    assert seen["key"] == key
+    assert seen["auth"] is None
+
+
+def test_google_naming_the_key_wrong_reads_as_a_refused_key(cfg_path: Path) -> None:
+    """Google refuses a key it does not know with 400, not the 401 the status
+    table maps: INVALID_ARGUMENT, with an ErrorInfo reason of API_KEY_INVALID.
+    The body below is what generativelanguage.googleapis.com returned for a
+    made-up key. Read by status alone it was ``http_400``, "couldn't verify",
+    for a key the vendor named as wrong; any other 400 still reads as one."""
+    _seed_key(cfg_path, "gemini", "AIza-WRONG")
+    refused = {
+        "error": {
+            "code": 400,
+            "message": "API key not valid. Please pass a valid API key.",
+            "status": "INVALID_ARGUMENT",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "API_KEY_INVALID",
+                    "domain": "googleapis.com",
+                    "metadata": {"service": "generativelanguage.googleapis.com"},
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+                    "locale": "en-US",
+                    "message": "API key not valid. Please pass a valid API key.",
+                },
+            ],
+        }
+    }
+    malformed = {"error": {"code": 400, "message": "Invalid page size.", "status": "INVALID_ARGUMENT"}}
+
+    result = probe_provider(
+        "gemini", config_path=cfg_path, transport=_mock_transport(lambda _r: httpx.Response(400, json=refused))
+    )
+    assert result["status"] == "invalid_key"
+    assert result["http_status"] == 400
+    assert result["ok"] is False
+
+    result = probe_provider(
+        "gemini", config_path=cfg_path, transport=_mock_transport(lambda _r: httpx.Response(400, json=malformed))
+    )
+    assert result["status"] == "http_400"
+
+
 def test_a_full_catalogue_asks_the_sibling_endpoints_a_probe_does_not(cfg_path: Path) -> None:
     """OpenRouter files its embedders and image models away from ``/models``.
 
