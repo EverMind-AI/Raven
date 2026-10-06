@@ -949,32 +949,40 @@ def test_dry_run_leaves_stale_staging_residue_untouched(raven_home: Path) -> Non
     assert not residue.exists()
 
 
-def test_a_home_path_with_whitespace_is_refused_before_any_write(tmp_path: Path, monkeypatch) -> None:
-    """The roster command template is split on whitespace, so a spacey landing
-    can never be addressed as a command -- refuse whole rather than scaffold a
-    folder the doctor then reports as a missing launcher."""
+def test_a_home_path_with_whitespace_registers_with_a_quoted_command(tmp_path: Path, monkeypatch) -> None:
+    """A spacey landing is quoted into the roster command, not refused: the
+    folder scaffolds and the registered command still spawns the launcher as
+    one token."""
     home = tmp_path / "space y" / "home"
     home.mkdir(parents=True)
     monkeypatch.setenv("RAVEN_HOME", str(home))
 
     r = runner.invoke(app, ["agents", "new", "demo-agent"])
 
-    assert r.exit_code != 0
-    assert "whitespace" in r.output
-    assert not (home / "agents").exists()
+    assert r.exit_code == 0, r.output
+    assert (home / "agents" / "demo-agent").is_dir()
+    from raven.config.update_subagents import get_agents
+    from raven.utils.commands import command_argv
+
+    (row,) = get_agents(config_path=home / "config.json")
+    argv = command_argv(row["command"])
+    assert str(home / "agents" / "demo-agent" / "run.py") in argv
 
 
-def test_a_spacey_working_directory_refuses_here_mode(raven_home: Path, tmp_path: Path, monkeypatch) -> None:
+def test_a_spacey_working_directory_registers_in_here_mode(raven_home: Path, tmp_path: Path, monkeypatch) -> None:
     checkout = tmp_path / "space y checkout"
     checkout.mkdir()
     monkeypatch.chdir(checkout)
 
     r = runner.invoke(app, ["agents", "new", "demo-agent", "--here"])
 
-    assert r.exit_code != 0
-    assert "whitespace" in r.output
-    assert not (checkout / "agents").exists()
-    assert not (raven_home / "agents").exists()
+    assert r.exit_code == 0, r.output
+    assert (checkout / "agents" / "demo-agent").is_dir()
+    from raven.config.update_subagents import get_agents
+    from raven.utils.commands import command_argv
+
+    (row,) = get_agents(config_path=raven_home / "config.json")
+    assert str(checkout / "agents" / "demo-agent" / "run.py") in command_argv(row["command"])
 
 
 def test_an_explicit_schema_default_workspace_renders_like_an_omitted_one(raven_home: Path, monkeypatch) -> None:
@@ -1044,14 +1052,18 @@ def test_a_clean_subagent_python_passes_the_gate_and_is_what_register_writes(
     assert "spa cey" not in row["command"]
 
 
-def test_a_spacey_subagent_python_is_refused_even_with_a_clean_sys_executable(raven_home: Path, monkeypatch) -> None:
+def test_a_spacey_subagent_python_reg_with_a_quoted_command(raven_home: Path, monkeypatch) -> None:
+    """A spacey interpreter is quoted into the roster command, not refused."""
     monkeypatch.setenv("SUBAGENT_PYTHON", "/spa cey/python")
 
     r = runner.invoke(app, ["agents", "new", "demo-agent"])
 
-    assert r.exit_code != 0
-    assert "whitespace" in r.output
-    assert not (raven_home / "agents").exists()
+    assert r.exit_code == 0, r.output
+    from raven.config.update_subagents import get_agents
+    from raven.utils.commands import command_argv
+
+    (row,) = get_agents(config_path=raven_home / "config.json")
+    assert command_argv(row["command"])[0] == "/spa cey/python"
 
 
 def test_the_registered_interpreter_equals_the_discovered_one(
@@ -1072,11 +1084,11 @@ def test_the_registered_interpreter_equals_the_discovered_one(
     assert registered["command"].startswith(str(clean_alt_python))
 
 
-def test_the_generated_installer_honors_subagent_python_and_refuses_whitespace(
+def test_the_generated_installer_honors_subagent_python_and_quotes_whitespace(
     raven_home: Path, clean_alt_python: Path, monkeypatch
 ) -> None:
-    """The template installer resolves {PYTHON} the way discovery does, and
-    refuses loudly when the resolved interpreter carries whitespace."""
+    """The template installer resolves {PYTHON} the way discovery does, and a
+    spacey resolved interpreter is quoted into the row, not refused."""
     import importlib.util
 
     r = runner.invoke(app, ["agents", "new", "demo-agent", "--no-smoke"])
@@ -1096,5 +1108,8 @@ def test_the_generated_installer_honors_subagent_python_and_refuses_whitespace(
     assert row["cwd"] == str(target)
 
     monkeypatch.setenv("SUBAGENT_PYTHON", "/spa cey/python")
-    with pytest.raises(SystemExit, match="whitespace"):
-        install.main()
+    assert install.main() == 0
+    (spacey,) = get_agents(config_path=raven_home / "config.json")
+    from raven.utils.commands import command_argv
+
+    assert command_argv(spacey["command"])[0] == "/spa cey/python"
