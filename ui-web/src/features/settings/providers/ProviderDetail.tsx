@@ -78,6 +78,11 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
   const kind = kindOf(p)
   const checking = store.isBusy(busy(p.id))
+  /* The address goes out only from a field this block draws. For a key-only
+     vendor it draws none, yet `base` holds the address `model.options`
+     hands over for display -- Gemini's bare host -- and sending it stored an
+     address nobody typed. */
+  const drawsBase = kind !== 'oauth' && ((!needsKey(p) && takesBase(p)) || !takesKey(p))
   const save = (): void => {
     const k = key.trim()
     const b = base.trim()
@@ -85,7 +90,7 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
-    if (b) params.api_base = b
+    if (b && drawsBase) params.api_base = b
     void store.connect(busy(p.id), p.id, params).then((ok) => { if (ok) setKey('') })
   }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')

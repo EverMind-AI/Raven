@@ -176,6 +176,25 @@ describe('provider detail', () => {
     expect(calls).toEqual([['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }], ['fetchModels:verify', 'openai']])
   })
 
+  it('a key-only vendor connects with its key alone, whatever address it was handed', async () => {
+    /* `model.options` hands over a direct vendor's address for display --
+       Gemini's is Google's bare host -- and the Connection block draws no
+       address field for a key-only vendor. Sending it anyway stored an address nobody typed: the
+       key probe took the section for a proxy and Gemini's driver for its
+       versioned root. */
+    const data = snap()
+    data.providers = [...data.providers, {
+      id: 'gemini', name: 'Gemini', models: [], configured: [], on: false, kind: 'key', acceptsKey: true,
+      defaultApiBase: 'https://generativelanguage.googleapis.com',
+    }]
+    const { calls } = install(data)
+    await open('gemini')
+    const box = screen.getByLabelText('gui.settings.providers.api_key') as HTMLInputElement
+    await act(async () => { fireEvent.change(box, { target: { value: 'AIza-new' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'gemini', api_key: 'AIza-new' }], ['fetchModels:verify', 'gemini']])
+  })
+
   it('a local provider connects by address alone and refuses an empty one', async () => {
     const { calls } = install()
     await open('ollama')

@@ -174,6 +174,39 @@ describe('ModelStepBody', () => {
     expect(address.placeholder).toBe('https://openrouter.ai/api/v1')
   })
 
+  it('the add form connects a key-only vendor with its key alone, whatever address it was handed', async () => {
+    /* The form draws no address field for a key-only vendor, but it was seeded
+       with the address `model.options` hands over for display and sent it on
+       Connect -- Gemini's bare host, stored in a section nobody typed it into. */
+    const data = snap()
+    data.providers = [...data.providers, {
+      id: 'gemini', name: 'Gemini', models: [], configured: [], on: false, kind: 'key', acceptsKey: true,
+      defaultApiBase: 'https://generativelanguage.googleapis.com',
+    }]
+    const { calls } = install(data)
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.click(document.querySelector('.settings-padd .settings-vpick')!) })
+    await act(async () => { fireEvent.click(screen.getByRole('option', { name: 'Gemini' })) })
+    expect(screen.queryByLabelText('gui.settings.providers.base')).toBeNull()
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: 'AIza-new' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(calls.filter(([m]) => m === 'provider')).toEqual([['provider', { op: 'save_key', slug: 'gemini', api_key: 'AIza-new' }]])
+  })
+
+  it('the add form sends the address it draws', async () => {
+    /* The other half of the rule above: a local deployment is reached by the
+       address typed into the field the form shows for it. */
+    const { calls } = install(snap())
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.click(document.querySelector('.settings-padd .settings-vpick')!) })
+    await act(async () => { fireEvent.click(screen.getByRole('option', { name: 'Ollama' })) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.base'), { target: { value: 'http://localhost:11434' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(calls.filter(([m]) => m === 'provider')).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }]])
+  })
+
   it('connect saves at once, closes the form, and the row tests the key on the side', async () => {
     let answer: (v: unknown) => void = () => {}
     const data = snap()
