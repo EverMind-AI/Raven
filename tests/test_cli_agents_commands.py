@@ -1046,24 +1046,30 @@ def test_a_clean_subagent_python_passes_the_gate_and_is_what_register_writes(
 
     assert r.exit_code == 0, r.output
     from raven.config.update_subagents import get_agents
+    from raven.utils.commands import command_argv
 
     (row,) = get_agents(config_path=raven_home / "config.json")
-    assert row["command"].startswith(str(clean_alt_python))
+    assert command_argv(row["command"])[0] == str(clean_alt_python)
     assert "spa cey" not in row["command"]
 
 
-def test_a_spacey_subagent_python_reg_with_a_quoted_command(raven_home: Path, monkeypatch) -> None:
-    """A spacey interpreter is quoted into the roster command, not refused."""
-    monkeypatch.setenv("SUBAGENT_PYTHON", "/spa cey/python")
+def test_a_spacey_subagent_python_registers_with_a_quoted_command(
+    raven_home: Path, tmp_path: Path, monkeypatch
+) -> None:
+    """A real, spaced interpreter is quoted into the roster command, not refused."""
+    spacey = tmp_path / "spa cey" / "python"
+    spacey.parent.mkdir(parents=True)
+    spacey.symlink_to(sys.executable)
+    monkeypatch.setenv("SUBAGENT_PYTHON", str(spacey))
 
-    r = runner.invoke(app, ["agents", "new", "demo-agent"])
+    r = runner.invoke(app, ["agents", "new", "demo-agent", "--no-smoke"])
 
     assert r.exit_code == 0, r.output
     from raven.config.update_subagents import get_agents
     from raven.utils.commands import command_argv
 
     (row,) = get_agents(config_path=raven_home / "config.json")
-    assert command_argv(row["command"])[0] == "/spa cey/python"
+    assert command_argv(row["command"])[0] == str(spacey)
 
 
 def test_the_registered_interpreter_equals_the_discovered_one(
@@ -1077,19 +1083,22 @@ def test_the_registered_interpreter_equals_the_discovered_one(
     assert r.exit_code == 0, r.output
     from raven.agent.subagent.vendored_agents import discover_product_rows
     from raven.config.update_subagents import get_agents
+    from raven.utils.commands import command_argv
 
     (discovered,) = discover_product_rows(raven_home / "agents")
     (registered,) = get_agents(config_path=raven_home / "config.json")
     assert registered["command"] == discovered.command
-    assert registered["command"].startswith(str(clean_alt_python))
+    assert command_argv(registered["command"])[0] == str(clean_alt_python)
 
 
 def test_the_generated_installer_honors_subagent_python_and_quotes_whitespace(
-    raven_home: Path, clean_alt_python: Path, monkeypatch
+    raven_home: Path, clean_alt_python: Path, tmp_path: Path, monkeypatch
 ) -> None:
     """The template installer resolves {PYTHON} the way discovery does, and a
     spacey resolved interpreter is quoted into the row, not refused."""
     import importlib.util
+
+    from raven.utils.commands import command_argv
 
     r = runner.invoke(app, ["agents", "new", "demo-agent", "--no-smoke"])
     assert r.exit_code == 0, r.output
@@ -1104,12 +1113,13 @@ def test_the_generated_installer_honors_subagent_python_and_quotes_whitespace(
     from raven.config.update_subagents import get_agents
 
     (row,) = get_agents(config_path=raven_home / "config.json")
-    assert row["command"].startswith(str(clean_alt_python))
+    assert command_argv(row["command"])[0] == str(clean_alt_python)
     assert row["cwd"] == str(target)
 
-    monkeypatch.setenv("SUBAGENT_PYTHON", "/spa cey/python")
+    spacey = tmp_path / "spa cey" / "python"
+    spacey.parent.mkdir(parents=True)
+    spacey.symlink_to(sys.executable)
+    monkeypatch.setenv("SUBAGENT_PYTHON", str(spacey))
     assert install.main() == 0
-    (spacey,) = get_agents(config_path=raven_home / "config.json")
-    from raven.utils.commands import command_argv
-
-    assert command_argv(spacey["command"])[0] == "/spa cey/python"
+    (spacey_row,) = get_agents(config_path=raven_home / "config.json")
+    assert command_argv(spacey_row["command"])[0] == str(spacey)
