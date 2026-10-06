@@ -78,16 +78,25 @@ def _split_shape(command: str) -> list[str]:
     shape on any host. An unclosed double quote reads the rest as one token
     rather than raising: this arm is a probe, and a malformed command answers
     "the path is not there" through whatever token it produced.
+
+    Both quote characters group: the Windows producer emits double quotes and
+    the POSIX one single quotes (``shlex.quote``), and a token either of them
+    quoted must stay whole here or the path it carries is judged split. A
+    backslash stays literal under both, so a POSIX escape is read a character
+    longer -- a malformed spelling that simply names a path that is not there,
+    which is fail-closed.
     """
     argv: list[str] = []
     token: list[str] = []
     token_started = False
-    in_quotes = False
+    quote: str | None = None
     for char in command:
-        if char == '"':
-            in_quotes = not in_quotes
+        if quote is None and char in "\"'":
+            quote = char
             token_started = True
-        elif char in " \t" and not in_quotes:
+        elif char == quote:
+            quote = None
+        elif char in " \t" and quote is None:
             if token_started:
                 argv.append("".join(token))
                 token = []

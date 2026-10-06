@@ -1584,3 +1584,43 @@ class TestASpaceInTheResolvedPath:
         )
 
         assert va._launcher_is_gone(row) is True
+
+
+class TestAQuotedSpacedRootStaysFailClosed:
+    """A product root needing quotes must not read as ready with a launcher gone.
+
+    The producer quotes a spaced ``{SUBAGENT_DIR}`` (single quotes from POSIX
+    ``shlex.quote``, double from Windows), and ``command_tokens`` must group
+    under both or the launcher token stops reading as absolute and a missing
+    launcher is advertised as enabled. Driven through the public
+    ``discover_product_rows`` so the producer and the shape consumer have to
+    agree, the case a quoted-token unit test alone did not pin.
+    """
+
+    def _spaced_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        root = tmp_path / "agents spaced(1)"
+        root.mkdir()
+        monkeypatch.setattr(va, "agents_root", lambda: root)
+        return root
+
+    def test_a_spaced_root_with_a_missing_launcher_stays_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = self._spaced_root(tmp_path, monkeypatch)
+        _product(root, "raven-probe", manifest=_ACP_MANIFEST, launcher=False)
+
+        (row,) = va.discover_product_rows()
+
+        assert row.enabled is False
+        assert va.product_state()["Raven-Probe-Acp"].kind == "launcher"
+
+    def test_a_spaced_root_with_a_present_launcher_is_ready(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The quoting fix must not over-disable: a real launcher still reads ready."""
+        root = self._spaced_root(tmp_path, monkeypatch)
+        _product(root, "raven-probe", manifest=_ACP_MANIFEST, launcher=True)
+
+        (row,) = va.discover_product_rows()
+
+        assert row.enabled is True
