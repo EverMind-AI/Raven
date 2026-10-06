@@ -52,6 +52,27 @@ class TestCommandArgv:
                 cmd.command_argv('run "unterminated')
 
 
+class TestCommandTokens:
+    """The shape-preserving split the launcher existence probes judge with."""
+
+    def test_groups_a_double_quoted_windows_path(self) -> None:
+        assert cmd.command_tokens(r'"C:\Program Files\app\run.exe" --go') == [
+            r"C:\Program Files\app\run.exe",
+            "--go",
+        ]
+
+    def test_groups_a_single_quoted_posix_path(self) -> None:
+        """``shlex.quote`` output must stay one token to the shape probe."""
+        assert cmd.command_tokens("python '/tmp/raven agents(1)/raven-code/run.py' --acp") == [
+            "python",
+            "/tmp/raven agents(1)/raven-code/run.py",
+            "--acp",
+        ]
+
+    def test_keeps_a_backslash_path_whole_on_any_host(self) -> None:
+        assert cmd.command_tokens(r"C:\gone\python.exe --run") == [r"C:\gone\python.exe", "--run"]
+
+
 class TestCommandQuote:
     def test_windows_wraps_a_spaced_path_and_escapes_inner_quotes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _as("nt", monkeypatch)
