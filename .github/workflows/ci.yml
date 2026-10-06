@@ -88,6 +88,12 @@ jobs:
     timeout-minutes: 20
     env:
       PYTHON_VERSION: ${{ matrix.python }}
+      # UTF-8 mode: the stock shell on a GBK-locale Windows machine reads and
+      # writes files in the locale code page, so any text I/O without an
+      # explicit encoding= can fail or mangle non-ASCII content. Setting this
+      # at the job level means pytest, coverage, and any subprocess all run
+      # in UTF-8 mode regardless of the runner OS.
+      PYTHONUTF8: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -258,6 +264,7 @@ jobs:
       - name: Replay committed regression cases
         env:
           RAVEN_REGRESSION_REPORT_DIR: ${{ runner.temp }}/trajectory-reports
+          PYTHONUTF8: "1"
         run: uv run pytest tests/test_trajectory_regressions.py -q
 
       - name: Validate case format, redaction review, and size budget
@@ -371,6 +378,8 @@ jobs:
         run: uv python install 3.12
 
       - name: Test real uv self-upgrade
+        env:
+          PYTHONUTF8: "1"
         # pytest-asyncio is needed even though this file has no async test: the
         # isolated interpreter still reads the project's pytest config, whose
         # --strict-config turns the then-unknown asyncio_mode into a hard error.
