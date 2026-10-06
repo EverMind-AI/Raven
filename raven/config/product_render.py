@@ -63,9 +63,11 @@ def env_value(name: str, *, env_file: Path | None = None) -> str | None:
 def host_config() -> dict:
     """The host raven's config, or an empty dict when there is none to read.
 
-    Read as JSON through the path paper's answer -- the host propagates its
-    ``RAVEN_HOME`` into a launcher process (builtin_agents does), so
-    ``raven_home()`` here is the host's home.
+    Read as JSON through the path paper's answer. ``raven_home()`` here is the
+    host's home because the host passes its ``RAVEN_HOME`` to a launcher when
+    it has one set, and with none set both normally resolve ``~/.raven``; a
+    ``RAVEN_HOME`` the login profile exports while the host has none sends the
+    launcher elsewhere.
     """
     try:
         return json.loads((raven_home() / CONFIG_FILENAME).read_text(encoding="utf-8"))
