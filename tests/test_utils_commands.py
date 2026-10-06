@@ -11,13 +11,22 @@ drive-letter path be judged on POSIX.
 
 from __future__ import annotations
 
+import os
+from types import SimpleNamespace
+
 import pytest
 
 import raven.utils.commands as cmd
 
 
 def _as(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cmd.os, "name", name)
+    """Swap the module's ``os`` binding for one reporting this name.
+
+    The real ``os`` is a singleton; setting ``os.name`` there would leak the
+    platform swap into the whole test process. Replacing the module attribute
+    leaves the true ``os`` untouched and monkeypatch restores it after.
+    """
+    monkeypatch.setattr(cmd, "os", SimpleNamespace(**{**vars(os), "name": name}))
 
 
 class TestCommandArgv:

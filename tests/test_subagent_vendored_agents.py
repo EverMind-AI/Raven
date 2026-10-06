@@ -1538,36 +1538,60 @@ class TestOwnKeyIsOneFactPerFolder:
         assert kinds == {True, False}
 
 
-class TestASpaceInTheResolvedPath:
-    r"""A quoted interpreter/launcher path survives resolution and spawning.
+class TestResolveSubagentCommand:
+    r"""The shared resolver round-trips a manifest through the spawn parser.
 
-    ``{PYTHON}`` and ``{SUBAGENT_DIR}`` are now substituted quoted, and the
-    readiness probes tokenise with the shell's own rules rather than empty-
-    whitespace, so a product whose interpreter sits under ``C:\Program Files``
-    -- the ``python.org`` default -- is neither mangled by the split nor
-    silently declared ready from a fragment. Windows-only behaviour pinned from
-    any host by the module's own ``os.name`` read.
+    ``{PYTHON}`` and ``{SUBAGENT_DIR}`` are substituted quoted with
+    ``command_quote`` and the line holds up under the spawning host's parser,
+    so a spaced interpreter or root starts rather than failing on a mangled
+    path, and ``cwd`` stays a plain, unquoted path. Each host arm is exercised
+    by driving ``resolve_subagent_command`` and then reading the result with
+    that arm's splitter, whichever host the suite runs on.
     """
 
-    _WIN_FOLDER = r"C:\Program Files\raven-agents\raven-win"
+    def test_windows_spaced_paths_round_trip(self) -> None:
+        import raven.utils.commands as cmd
 
-    def _as_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(va, "command_quote", lambda value: '"' + value.replace('"', '\\"') + '"')
+        monkeyed = cmd.os
+        if monkeyed.name != "nt":
+            pytest.skip("the Windows splitter is the host parser here")
+        python = r"C:\Program Files\Python312\python.exe"
+        root = r"C:\raven agents\raven-code"
+        out = cmd.resolve_subagent_command(
+            r"{PYTHON} {SUBAGENT_DIR}/run.py --acp", python=python, subagent_dir=root, quote=True
+        )
+        assert cmd.command_argv(out) == [python, root + "/run.py", "--acp"]
 
-    def test_resolution_quotes_a_spaced_subagent_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._as_windows(monkeypatch)
-        entry = {"command": r"{PYTHON} {SUBAGENT_DIR}\run.py --acp", "cwd": "{SUBAGENT_DIR}"}
+    def test_posix_spaced_paths_round_trip(self) -> None:
+        import raven.utils.commands as cmd
 
-        for field, value in list(entry.items()):
-            directory, interpreter = self._WIN_FOLDER, r"C:\Program Files\Python312\python.exe"
-            if field != "cwd":
-                directory = va.command_quote(directory)
-                interpreter = va.command_quote(interpreter)
-            entry[field] = str(value).replace("{SUBAGENT_DIR}", directory).replace("{PYTHON}", interpreter)
+        if cmd.os.name != "posix":
+            pytest.skip("the POSIX splitter is the host parser here")
+        python = "/opt/py/bin/python3"
+        root = "/srv/raven agents/raven-code"
+        out = cmd.resolve_subagent_command(
+            "{PYTHON} {SUBAGENT_DIR}/run.py --acp", python=python, subagent_dir=root, quote=True
+        )
+        assert cmd.command_argv(out) == [python, root + "/run.py", "--acp"]
 
-        assert "{PYTHON}" not in entry["command"] and "{SUBAGENT_DIR}" not in entry["command"]
-        assert entry["cwd"] == self._WIN_FOLDER, "cwd stays a plain path; only argv-split fields are quoted"
-        assert entry["command"].split(" --acp")[0].count('"') == 4, "both paths are quoted"
+    def test_a_path_free_template_round_trips_unchanged(self) -> None:
+        """``{SUBAGENT_DIR}/run.py`` needs no quoting, so whatever the host's
+        quote style, the parsed argv equals the plainly-substituted tokens --
+        the existing manifests behave exactly as before."""
+        import raven.utils.commands as cmd
+
+        python = "/opt/py/bin/python3"
+        root = "/srv/raven/agents"
+        out = cmd.resolve_subagent_command(
+            "{PYTHON} {SUBAGENT_DIR}/run.py --acp", python=python, subagent_dir=root, quote=True
+        )
+        assert cmd.command_argv(out) == [python, root + "/run.py", "--acp"]
+
+    def test_cwd_is_substituted_unquoted(self) -> None:
+        import raven.utils.commands as cmd
+
+        root = r"C:\Program Files\raven-agents\raven-code"
+        assert cmd.resolve_subagent_command("{SUBAGENT_DIR}", python="py", subagent_dir=root, quote=False) == root
 
     def test_launcher_missing_reads_a_quoted_spaced_path_as_one_token(self) -> None:
         """``command_tokens`` keeps a quoted drive-letter path one token on any

@@ -294,11 +294,15 @@ def _register_row(target: Path) -> str:
     (``add_third_party_subagent``) -- so a ``--register`` run and a later
     ``python install.py`` cannot produce different rows for one folder.
     """
+    from raven.utils.commands import resolve_subagent_command
+
     row = json.loads((target / "subagent.json").read_text(encoding="utf-8"))
     for field in ("command", "cwd"):
         value = row.get(field)
         if isinstance(value, str):
-            row[field] = value.replace("{SUBAGENT_DIR}", str(target)).replace("{PYTHON}", _resolved_python())
+            row[field] = resolve_subagent_command(
+                value, python=_resolved_python(), subagent_dir=str(target), quote=field != "cwd"
+            )
 
     from raven.config.update_subagents import add_third_party_subagent
 
@@ -593,19 +597,6 @@ def new(
         target = raven_home() / "agents" / name
     if target.exists():
         _refuse(f"{target} already exists; there is no --force, move it away or choose another name")
-
-    # The roster command template is split on whitespace -- the documented
-    # platform constraint discovery and the ACP client share -- so a landing
-    # path or interpreter path with whitespace can never be addressed as a
-    # command. Refused whole here; quoting argv would be a seam across both
-    # tokenizers and is not this command's to open.
-    python = _resolved_python()
-    for label, spelled in (("the agent folder path", str(target)), ("the python interpreter path", python)):
-        if any(c.isspace() for c in spelled):
-            _refuse(
-                f"{label} '{spelled}' contains whitespace: the roster command template is split on "
-                "whitespace, so the launcher could not be addressed; choose a location without spaces"
-            )
 
     taken = _discovered_identities(target.parent)
     for candidate in dict.fromkeys((name, shown)):
