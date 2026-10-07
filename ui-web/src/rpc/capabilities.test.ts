@@ -20,6 +20,7 @@ import {
   servesBugReport,
   servesChannels,
   servesFolderDialog,
+  supportsModelSelectionOnly,
 } from './capabilities'
 
 beforeEach(() => {
@@ -87,6 +88,7 @@ describe("the handshake's own list", () => {
     absorb(undefined)
     expect(serves('subscriptions')).toBe(false)
   })
+
   it('offers the bug report only where the gateway announced a receiver', () => {
     absorb(['jsonrpc-2.0', 'trajectory-v1'])
     expect(servesBugReport()).toBe(false)
@@ -98,6 +100,16 @@ describe("the handshake's own list", () => {
     expect(servesFolderDialog()).toBe(false)
     absorb(['jsonrpc-2.0', 'trajectory-v1', 'folder-dialog-v1'])
     expect(servesFolderDialog()).toBe(true)
+  })
+
+  it('enables selection-only reads only while the connected gateway announces them', () => {
+    expect(supportsModelSelectionOnly()).toBe(false)
+    absorb(['model.options.selection_only'])
+    expect(supportsModelSelectionOnly()).toBe(true)
+    absorb(['jsonrpc-2.0'])
+    expect(supportsModelSelectionOnly()).toBe(false)
+    absorb(undefined)
+    expect(supportsModelSelectionOnly()).toBe(false)
   })
 })
 

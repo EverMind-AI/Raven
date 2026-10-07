@@ -50,6 +50,7 @@ async def test_hello_returns_versions():
     assert isinstance(result["server_capabilities"], list)
     assert "jsonrpc-2.0" in result["server_capabilities"]
     assert "trajectory-v1" in result["server_capabilities"]
+    assert "model.options.selection_only" in result["server_capabilities"]
     assert "session" in result
     assert result["session"]["default_channel"] == "tui"
     assert result["session"]["default_session_key"].startswith("tui:")

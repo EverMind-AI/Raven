@@ -86,8 +86,11 @@ The composer's model chip shows "Loading model..." until the gateway reports
 the configured default or the open conversation's model. Reading that
 selection does not build the provider catalogue or probe provider endpoints.
 Once the selection arrives, sending a message can proceed while the model
-list continues loading in the background. Opening the picker during that
-load shows a short loading notice.
+list continues loading in the background. Gateways announce this read mode as
+`model.options.selection_only` in `system.hello.server_capabilities`. For older
+gateways without that capability, the selection shares the full catalogue
+request and becomes usable when that response arrives. Opening the picker during
+that load shows a short loading notice.
 
 If the selection or model list cannot be loaded, click the model chip to
 retry. An empty selection shows "Choose a model"; a failed read never shows
