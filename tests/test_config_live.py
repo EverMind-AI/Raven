@@ -586,6 +586,26 @@ class TestTheBorrowInputIsAdmittedOnTheSameTerms:
         cfg = media_tool_config(live, "image")
         assert boot.api_key and (cfg.api_base, cfg.api_key) == (boot.api_base, boot.api_key)
 
+    @pytest.mark.parametrize(
+        ("kind", "runs_on"),
+        [("image", ("https://relay.test/v1", "sk-oa")), ("speech", ("", "sk-or")), ("video", ("", "sk-or"))],
+    )
+    def test_only_the_image_section_runs_on_a_named_provider(self, tmp_path, kind, runs_on):
+        """Speech and video speak OpenRouter's request shapes alone, so a provider
+        written into their sections is ignored like any unknown key, by both readers."""
+        from raven.config.live import media_tool_config
+        from raven.config.schema import Config
+
+        live, path = self._live(tmp_path)
+        providers = {
+            "openai": {"apiKey": "sk-oa", "apiBase": "https://relay.test/v1"},
+            "openrouter": {"apiKey": "sk-or"},
+        }
+        payload = {"tools": {"media": {kind: {"model": "m", "provider": "openai"}}}, "providers": providers}
+        self._write(path, payload)
+        boot = getattr(Config.model_validate(payload).effective_media_config(), kind)
+        cfg = media_tool_config(live, kind)
+        assert (cfg.api_base, cfg.api_key) == (boot.api_base, boot.api_key) == runs_on
 
 
 def test_permissions_node_that_stops_validating_keeps_the_last_policy(tmp_path):

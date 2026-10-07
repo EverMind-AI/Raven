@@ -369,8 +369,8 @@ def media_tool_config(live: LiveConfig, kind: str):
     The resolution itself -- validation and the borrowing rule -- lives in
     ``config.schema`` next to ``effective_media_config``, so the rule is stated
     once and this module never handles a credential field. Only the per-tool
-    section (key / base / model / provider / headers) and the provider it borrows from are
-    live preferences; the surrounding wiring
+    section (key / base / model / headers, and the image section's provider) and
+    the provider it borrows from are live preferences; the surrounding wiring
     (proxy, output directory, workspace restriction) is generation state and
     changes with a swap. None means the file has no ``tools.media`` section at
     all -- the constructor-fallback lane. A candidate that fails validation
@@ -384,7 +384,9 @@ def media_tool_config(live: LiveConfig, kind: str):
     if media is None:
         value = _admit(live, slot, present=False, value=None)
     else:
-        candidate = live_media_tool_config(media.get(kind), live.get("providers")) if isinstance(media, dict) else None
+        candidate = (
+            live_media_tool_config(media.get(kind), live.get("providers"), kind) if isinstance(media, dict) else None
+        )
         value = _admit(live, slot, present=True, value=candidate)
     return resolve_media_selection(value, kind)
 
@@ -401,7 +403,7 @@ def resolve_media_selection(config, kind: str = "image"):
     if media is None:
         _admit(live, f"media_selection:{kind}", present=False, value=None)
         return MediaToolConfig()
-    value = live_media_tool_config(media.get(kind), live.get("providers")) if isinstance(media, dict) else None
+    value = live_media_tool_config(media.get(kind), live.get("providers"), kind) if isinstance(media, dict) else None
     return _admit(live, f"media_selection:{kind}", present=True, value=value) or MediaToolConfig()
 
 

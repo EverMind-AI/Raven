@@ -330,7 +330,7 @@ def inherit_media_image(config: dict, host: dict) -> dict:
 
     host_tools = host.get("tools") or {}
     host_image = (host_tools.get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, host.get("providers"))
+    section = live_media_tool_config(host_image, host.get("providers"), "image")
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
     image["selectionConfig"] = str(raven_home() / CONFIG_FILENAME)
     media = config.setdefault("tools", {}).setdefault("media", {})

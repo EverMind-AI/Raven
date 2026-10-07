@@ -94,7 +94,11 @@ def _media_attrs() -> list[str]:
     """
     from raven.config.schema import MediaGenConfig, MediaToolConfig
 
-    return [n for n, f in MediaGenConfig.model_fields.items() if f.annotation is MediaToolConfig]
+    return [
+        n
+        for n, f in MediaGenConfig.model_fields.items()
+        if isinstance(f.annotation, type) and issubclass(f.annotation, MediaToolConfig)
+    ]
 
 
 def _loop(workspace: Path, config, **kw) -> AgentLoop:

@@ -115,6 +115,18 @@ def test_media_set_preserves_siblings_and_shared_settings(cfg: Path):
     assert media["image"]["apiKey"] == "sk-img"
 
 
+def test_only_the_image_section_takes_a_provider(cfg: Path):
+    """A write puts the section back whole through its class: the image one keeps the
+    provider it runs on, and speech and video refuse one like any unknown field."""
+    image = {"model": "gpt-image-2", "provider": "openai"}
+    cfg.write_text(json.dumps({"tools": {"media": {"image": image}}}), encoding="utf-8")
+    ut.set_media("image", {"quality": "low"}, config_path=cfg)
+    assert _raw(cfg)["tools"]["media"]["image"]["provider"] == "openai"
+    for kind in set(ut.MEDIA_TOOLS) - {"image"}:
+        with pytest.raises(KeyError):
+            ut.set_media(kind, {"provider": "openai"}, config_path=cfg)
+
+
 def test_media_rejects_an_unknown_tool(cfg: Path):
     # Not a silent no-op: the caller named a tool that will never register, and
     # writing `tools.media.music` would look like it had worked.

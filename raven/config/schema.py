@@ -1153,19 +1153,29 @@ class MediaToolConfig(Base):
     / ``OPENROUTER_API_KEY``, borrowed only while the tool calls OpenRouter's own
     address; ``api_base`` → OpenRouter; ``model`` → the tool's default
     (gpt-image-2.5-sunburst for images). Empty quality uses the provider default.
-    ``provider`` names another configured provider to run on instead, whose
-    address, key and headers replace this section's -- see
-    :func:`borrow_media_credentials`.
     """
 
     api_key: str = ""
     api_base: str = ""  # defaults to https://openrouter.ai/api/v1
     model: str = ""
     quality: Literal["", "low", "medium", "high"] = ""
-    provider: str = ""  # empty (or "openrouter") is the OpenRouter default
     # Sent with every request, beside the key; secret like a provider's own.
     extra_headers: dict[str, str] = Field(default_factory=dict, json_schema_extra={"secret": True})
     selection_config: str = Field(default="", description="Host config path for live model and quality inheritance")
+
+
+class ImageToolConfig(MediaToolConfig):
+    """The image tool's section, the one media section that can name a provider.
+
+    ``provider`` names another configured provider to run on instead, whose
+    address, key and headers replace this section's -- see
+    :func:`borrow_media_credentials`. Only the image tool has a request path for
+    such a provider (OpenAI's Images API); speech and video keep to OpenRouter's
+    request shapes, so their sections have no such field, and a ``provider``
+    written there is ignored like any key their class does not declare.
+    """
+
+    provider: str = ""  # empty (or "openrouter") is the OpenRouter default
 
 
 class MediaGenConfig(Base):
@@ -1177,11 +1187,20 @@ class MediaGenConfig(Base):
     ``image.provider``; speech and video keep to OpenRouter's request shapes.
     """
 
-    image: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    image: ImageToolConfig = Field(default_factory=ImageToolConfig)
     speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
     video: MediaToolConfig = Field(default_factory=MediaToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
+
+    @field_validator("image", mode="before")
+    @classmethod
+    def _plain_section_is_an_image_section(cls, value: Any) -> Any:
+        """A plain ``MediaToolConfig`` is still an image section, one naming no
+        provider: an embedder handing ``AgentLoop`` one keeps working."""
+        if isinstance(value, MediaToolConfig) and not isinstance(value, ImageToolConfig):
+            return value.model_dump(exclude_unset=True)
+        return value
 
 
 class MCPOAuthConfig(Base):
@@ -2653,6 +2672,12 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
             tool.api_key = openrouter.api_key
 
 
+def media_section_class(kind: str) -> type[MediaToolConfig]:
+    """The class ``MediaGenConfig`` declares for ``kind``'s section, for a reader
+    validating a raw one: only the image section has a provider."""
+    return MediaGenConfig.model_fields[kind].annotation
+
+
 def _provider_section(providers_section: dict[str, Any], name: str) -> "ProviderConfig | None":
     """``name``'s section out of a raw ``providers`` subtree, as ``ProvidersConfig``
     resolves it at boot, or ``None`` when the file has none.
@@ -2733,23 +2758,26 @@ def live_web_provider_key(section: Any, vendor: str) -> str | None:
         return None
 
 
-def live_media_tool_config(section: Any, providers_section: Any) -> "MediaToolConfig | None":
+def live_media_tool_config(section: Any, providers_section: Any, kind: str = "image") -> "MediaToolConfig | None":
     """One media tool's section as a live file has it, resolved by the same
     rule as :meth:`Config.effective_media_config`.
 
     Takes raw file subtrees -- the tool's section and the file's ``providers`` --
-    because the caller (``config.live``) holds no validated ``Config``;
-    validation happens here so the credential handling stays in this module,
-    next to the rule it applies. ``None`` is "no usable answer" and the caller
-    keeps what it had: the tool's own section failing validation, and equally
-    the provider's it borrows from -- a section whose provider is present but
-    invalid gets no new answer, never a valid-looking config with the borrowed
-    credential dropped.
+    because the caller (``config.live``) holds no validated ``Config``, and the
+    tool's ``kind``, whose declared class (:func:`media_section_class`) the
+    section is validated with. ``kind`` defaults to the image tool, the one an
+    agent launcher inherits: a launcher copied out of an older raven calls this
+    with two arguments. Validation happens here so the credential
+    handling stays in this module, next to the rule it applies. ``None`` is "no
+    usable answer" and the caller keeps what it had: the tool's own section
+    failing validation, and equally the provider's it borrows from -- a section
+    whose provider is present but invalid gets no new answer, never a
+    valid-looking config with the borrowed credential dropped.
     """
     if section is not None and not isinstance(section, dict):
         return None
     try:
-        cfg = MediaToolConfig.model_validate(section or {})
+        cfg = media_section_class(kind).model_validate(section or {})
     except Exception:  # noqa: BLE001 - a torn read is not worth a turn
         return None
     runs_on = media_provider(cfg) if (cfg.api_key or cfg.model) else ""
