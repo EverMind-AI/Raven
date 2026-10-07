@@ -163,6 +163,8 @@ async function harness(
   })
   const registry = (await import('./registry')) as Registry
   api.switchTo = registry.switchTo
+  const { absorb } = await import('../../rpc/capabilities')
+  absorb(['model.options.selection_only'])
   await fakeGateway((method: string, params: Record<string, string> = {}) => {
     calls.push(['rpc', method, params || {}])
     if (method === 'session.resume') {

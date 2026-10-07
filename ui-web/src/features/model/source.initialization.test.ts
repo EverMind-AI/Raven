@@ -14,7 +14,7 @@ interface Read {
   reject(error: Error): void
 }
 
-async function live() {
+async function live({ selectionOnly = true } = {}) {
   let generation = 0
   const staged: { model: { model: string; provider: string } | null } = { model: null }
   const toasts: string[] = []
@@ -30,14 +30,25 @@ async function live() {
   const store = await import('./store')
   store._resetForTests()
   source._resetForTests()
+  const { absorb } = await import('../../rpc/capabilities')
+  const { RpcError } = await import('../../rpc/transport')
+  let acceptsSelectionOnly = selectionOnly
+  const announce = (enabled: boolean) => {
+    acceptsSelectionOnly = enabled
+    absorb(enabled ? ['model.options.selection_only'] : [])
+  }
+  announce(selectionOnly)
   const reads: Read[] = []
   await fakeGateway((method: string, params: ParamsOf<'model.options'>) => {
     if (method !== 'model.options') throw new Error(`unexpected method ${method}`)
+    if (!acceptsSelectionOnly && Object.keys(params).some((key) => key !== 'session_id')) {
+      throw new RpcError(-32011, 'config_validation_error')
+    }
     return new Promise<Options>((resolve, reject) => { reads.push({ params, resolve, reject }) })
   })
   const answer = (model = 'deepseek/deepseek-chat', provider = 'deepseek'): Options => ({ model, provider, providers: [] })
   const tick = () => new Promise<void>((resolve) => { setTimeout(resolve, 0) })
-  return { source, store, reads, staged, toasts, answer, tick, bump: () => { generation += 1 } }
+  return { source, store, reads, staged, toasts, answer, tick, announce, bump: () => { generation += 1 } }
 }
 
 describe('model initialization', () => {
@@ -96,8 +107,8 @@ describe('model initialization', () => {
     expect(h.store.loadStatus()).toBe('ready')
   })
 
-  it('clears the previous model when the backend has no selection', async () => {
-    const h = await live()
+  it.each([true, false])('clears the previous model when the backend has no selection (selection-only: %s)', async (selectionOnly) => {
+    const h = await live({ selectionOnly })
     h.store.setCurrent('previous-model', 'previous-provider')
     const load = h.source.loadSelection()
     h.reads[0]!.resolve(h.answer('', ''))
@@ -107,8 +118,8 @@ describe('model initialization', () => {
     expect(h.store.loadStatus()).toBe('empty')
   })
 
-  it('drops a selection from a conversation that has been left', async () => {
-    const h = await live()
+  it.each([true, false])('drops a selection from a conversation that has been left (selection-only: %s)', async (selectionOnly) => {
+    const h = await live({ selectionOnly })
     const old = h.source.loadSelection('old')
     h.bump()
     const next = h.source.loadSelection('next')
@@ -120,8 +131,8 @@ describe('model initialization', () => {
     expect(h.store.current()).toBe('new-model')
   })
 
-  it('does not let a late selection or failure undo a local pick', async () => {
-    const h = await live()
+  it.each([true, false])('does not let a late selection or failure undo a local pick (selection-only: %s)', async (selectionOnly) => {
+    const h = await live({ selectionOnly })
     const load = h.source.loadSelection()
     h.store.setCurrent('chosen-model', 'chosen-provider')
     h.reads[0]!.resolve(h.answer('old-model'))
@@ -149,8 +160,8 @@ describe('model initialization', () => {
     expect(h.source.modelSource.loading?.()).toBe(false)
   })
 
-  it('keeps a staged draft pick during provider refreshes', async () => {
-    const h = await live()
+  it.each([true, false])('keeps a staged draft pick during provider refreshes (selection-only: %s)', async (selectionOnly) => {
+    const h = await live({ selectionOnly })
     h.staged.model = { model: 'draft-model', provider: 'draft-provider' }
     const load = h.source.loadProviders(null)
     expect(h.reads).toHaveLength(1)
@@ -158,5 +169,67 @@ describe('model initialization', () => {
     h.reads[0]!.resolve(h.answer())
     await load
     expect(h.store.current()).toBe('draft-model')
+  })
+
+  it.each([null, 'bound-session'])('shares one legacy catalogue read and restores sending for session %s', async (session) => {
+    const h = await live({ selectionOnly: false })
+    const load = h.source.loadProviders(session)
+    expect(h.reads.map((read) => read.params)).toEqual([session ? { session_id: session } : {}])
+    expect(h.store.loadStatus()).toBe('loading')
+    expect(h.source.openModelsForMissingProvider()).toBe(true)
+    h.reads[0]!.resolve(h.answer('legacy-model', 'legacy-provider'))
+    await load
+    expect(h.store.current()).toBe('legacy-model')
+    expect(h.store.currentProvider()).toBe('legacy-provider')
+    expect(h.store.loadStatus()).toBe('ready')
+    expect(h.source.modelSource.loading?.()).toBe(false)
+    expect(h.source.openModelsForMissingProvider()).toBe(false)
+  })
+
+  it('reads a selection directly from a legacy gateway', async () => {
+    const h = await live({ selectionOnly: false })
+    const load = h.source.loadSelection('bound-session')
+    expect(h.reads.map((read) => read.params)).toEqual([{ session_id: 'bound-session' }])
+    h.reads[0]!.resolve(h.answer())
+    await load
+    expect(h.store.current()).toBe('deepseek/deepseek-chat')
+    expect(h.source.openModelsForMissingProvider()).toBe(false)
+  })
+
+  it('recovers a failed legacy read through retry without sending unsupported fields', async () => {
+    const h = await live({ selectionOnly: false })
+    const load = h.source.loadProviders()
+    h.reads[0]!.reject(new Error('socket disconnected'))
+    await load
+    expect(h.store.loadStatus()).toBe('error')
+    expect(h.source.openModelsForMissingProvider()).toBe(true)
+    expect(h.source.retryFailedLoad()).toBe(true)
+    expect(h.store.loadStatus()).toBe('loading')
+    expect(h.reads.map((read) => read.params)).toEqual([{}, {}])
+    h.reads[1]!.resolve(h.answer())
+    await h.tick()
+    expect(h.store.loadStatus()).toBe('ready')
+    expect(h.source.retryFailedLoad()).toBe(false)
+    expect(h.source.openModelsForMissingProvider()).toBe(false)
+  })
+
+  it('uses the newly announced mode after each handshake', async () => {
+    const h = await live()
+    const first = h.source.loadSelection()
+    h.reads[0]!.resolve(h.answer('first-model'))
+    await first
+    h.announce(false)
+    const legacy = h.source.loadProviders()
+    expect(h.reads[1]!.params).toEqual({})
+    expect(h.reads).toHaveLength(2)
+    h.reads[1]!.resolve(h.answer('legacy-model'))
+    await legacy
+    h.announce(true)
+    const current = h.source.loadProviders()
+    expect(h.reads.slice(2).map((read) => read.params)).toEqual([{ include_providers: false }, {}])
+    h.reads[2]!.resolve(h.answer('current-model'))
+    h.reads[3]!.resolve(h.answer('obsolete-model'))
+    await current
+    expect(h.store.current()).toBe('current-model')
   })
 })

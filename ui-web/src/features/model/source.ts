@@ -8,6 +8,7 @@
 
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
+import { supportsModelSelectionOnly } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
@@ -192,7 +193,9 @@ export async function loadSelection(sid?: string | null, gen?: number): Promise<
     return
   }
   try {
-    const mo = await readOptions({ ...(target ? { session_id: target } : {}), include_providers: false })
+    const params: ParamsOf<'model.options'> = target ? { session_id: target } : {}
+    if (supportsModelSelectionOnly()) params.include_providers = false
+    const mo = await readOptions(params)
     if (ticket !== generation() || read !== loadToken()) return
     showModel(mo.model, mo.provider || '')
   } catch {

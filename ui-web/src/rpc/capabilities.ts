@@ -11,10 +11,9 @@
  *     site. Every one of them is named below and moved here unchanged, so the
  *     tolerances read as a list instead of being found by grep.
  *
- * `system.hello` is the third source and the coarsest: `server_capabilities`
- * announces "jsonrpc-2.0", "subscriptions" and "cli-dispatch" and nothing
- * finer (raven/rpc/methods/system.py), so `absorb()` records it and `serves()`
- * reads it -- and none of the field questions below can be answered from it.
+ * `system.hello` is the third source: `server_capabilities` announces protocol
+ * features and optional request modes. `absorb()` records it on every
+ * handshake, and `serves()` reads it.
  */
 
 /** Names a call answered -32601 with. Absent, not merely unusable right now. */
@@ -32,6 +31,9 @@ export function absorb(serverCapabilities: readonly string[] | null | undefined)
 export function serves(capability: string): boolean {
   return announced.has(capability)
 }
+
+/** Older gateways reject the include_providers request field. */
+export const supportsModelSelectionOnly = (): boolean => serves('model.options.selection_only')
 
 /**
  * Record a rejection against a name and answer whether that name is now known

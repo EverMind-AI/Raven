@@ -39,6 +39,8 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
       'src/i18n/t': { t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
     },
   }) as Source
+  const { absorb } = await import('../../rpc/capabilities')
+  absorb(['model.options.selection_only'])
   await fakeGateway(async (method: string, params: unknown) => {
     seen.push([method, params])
     if (method in answers) return answers[method]

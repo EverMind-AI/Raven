@@ -81,6 +81,8 @@ async function live({ session = null, answers = null }: Options = {}) {
       },
     },
   })
+  const { absorb } = await import('../../rpc/capabilities')
+  absorb(['model.options.selection_only'])
   await fakeGateway((method: string, params: Record<string, unknown>) => {
     if (switching) return new Promise(() => {})
     if (method === 'model.options' && params.include_providers === false) {

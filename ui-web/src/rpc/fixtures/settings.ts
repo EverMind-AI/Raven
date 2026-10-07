@@ -158,7 +158,7 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
          would be exercising the tolerances rather than the page. */
       'system.hello': () => ({
         server_version: '0.1.0',
-        server_capabilities: ['jsonrpc-2.0', 'subscriptions', 'cli-dispatch'],
+        server_capabilities: ['jsonrpc-2.0', 'subscriptions', 'cli-dispatch', 'model.options.selection_only'],
         session: { default_channel: 'gui', default_session_key: '' },
       }),
       /* No `update_available`: the notice row stays hidden, which is the state

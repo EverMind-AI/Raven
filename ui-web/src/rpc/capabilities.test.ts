@@ -16,6 +16,7 @@ import {
   hasUpdateFlag,
   resetCapabilities,
   serves,
+  supportsModelSelectionOnly,
   servesChannels,
 } from './capabilities'
 
@@ -75,6 +76,16 @@ describe("the handshake's own list", () => {
   it('survives a gateway that sends no list at all', () => {
     absorb(undefined)
     expect(serves('subscriptions')).toBe(false)
+  })
+
+  it('enables selection-only reads only while the connected gateway announces them', () => {
+    expect(supportsModelSelectionOnly()).toBe(false)
+    absorb(['model.options.selection_only'])
+    expect(supportsModelSelectionOnly()).toBe(true)
+    absorb(['jsonrpc-2.0'])
+    expect(supportsModelSelectionOnly()).toBe(false)
+    absorb(undefined)
+    expect(supportsModelSelectionOnly()).toBe(false)
   })
 })
 

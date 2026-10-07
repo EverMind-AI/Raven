@@ -256,6 +256,42 @@ describe('the send button', () => {
     expect(calls.sent).toEqual([])
     expect(ta().value).toBe('configure a provider first')
   })
+
+  it('sends after the configured model loads from a strict legacy gateway', async () => {
+    const models = await import('../model/source')
+    const selection = await import('../model/store')
+    const { resetCapabilities } = await import('../../rpc/capabilities')
+    const { FixtureTransport } = await import('../../rpc/fixtureTransport')
+    const { setGateway } = await import('../../rpc/gateway')
+    const { RpcError } = await import('../../rpc/transport')
+    models._resetForTests()
+    selection._resetForTests()
+    resetCapabilities()
+    const gateway = new FixtureTransport({
+      'model.options': (params) => {
+        if (Object.keys(params).some((key) => key !== 'session_id')) {
+          throw new RpcError(-32011, 'config_validation_error')
+        }
+        return { model: 'deepseek/deepseek-chat', provider: 'deepseek', providers: [] }
+      },
+    })
+    setGateway(gateway)
+    try {
+      const { calls } = wire({ beforeSend: models.openModelsForMissingProvider })
+      await models.loadProviders('legacy-session')
+      expect(gateway.calls).toEqual([{ method: 'model.options', params: { session_id: 'legacy-session' } }])
+      expect(selection.current()).toBe('deepseek/deepseek-chat')
+      ta().value = 'send through the legacy gateway'
+      store.fireSend()
+      expect(calls.sent).toEqual(['send through the legacy gateway'])
+      expect(ta().value).toBe('')
+    } finally {
+      setGateway(null)
+      models._resetForTests()
+      selection._resetForTests()
+      resetCapabilities()
+    }
+  })
 })
 
 describe('composer drafts', () => {
