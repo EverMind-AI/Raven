@@ -1154,7 +1154,8 @@ class MediaToolConfig(Base):
     address; ``api_base`` → OpenRouter; ``model`` → the tool's default
     (gpt-image-2.5-sunburst for images). Empty quality uses the provider default.
     ``provider`` names another configured provider to run on instead, whose
-    address and key replace this section's -- see :func:`borrow_media_credentials`.
+    address, key and headers replace this section's -- see
+    :func:`borrow_media_credentials`.
     """
 
     api_key: str = ""
@@ -1162,6 +1163,8 @@ class MediaToolConfig(Base):
     model: str = ""
     quality: Literal["", "low", "medium", "high"] = ""
     provider: str = ""  # empty (or "openrouter") is the OpenRouter default
+    # Sent with every request, beside the key; secret like a provider's own.
+    extra_headers: dict[str, str] = Field(default_factory=dict, json_schema_extra={"secret": True})
     selection_config: str = Field(default="", description="Host config path for live model and quality inheritance")
 
 
@@ -2622,9 +2625,9 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
     Only a configured section borrows anything -- one naming a model or a key of
     its own -- which is what keeps a credential set for chat from quietly
     enabling tools that bill per call. A section on a named provider takes that
-    provider's address and key as one pair, its own two standing aside, and
-    takes no key at all where it finds no address to send it to. A keyless
-    section calling OpenRouter takes ``providers.openrouter``'s key.
+    provider's address, key and headers as one group, its own standing aside,
+    and takes no key or headers at all where it finds no address to send them
+    to. A keyless section calling OpenRouter takes ``providers.openrouter``'s key.
 
     ``providers`` is anything answering ``get(name)`` with a provider section or
     ``None``: the validated ``ProvidersConfig``, or that one provider's section.
@@ -2633,15 +2636,16 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
         return
     runs_on = media_provider(tool)
     if runs_on and runs_on != _OPENROUTER:
-        from raven.config.update_providers import provider_address_and_key
+        from raven.config.update_providers import provider_connection
 
         try:
             section = providers.get(runs_on)
         except Exception:  # noqa: BLE001 - an undeclared section is validated only when read
             section = None
-        api_base, api_key = provider_address_and_key(runs_on, section)
+        api_base, api_key, headers = provider_connection(runs_on, section)
         tool.api_base = api_base
         tool.api_key = api_key if api_base else ""
+        tool.extra_headers = headers if api_base else {}
         return
     if runs_on and not tool.api_key:
         openrouter = providers.get(_OPENROUTER)

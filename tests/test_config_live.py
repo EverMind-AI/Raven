@@ -493,11 +493,49 @@ class TestTheBorrowInputIsAdmittedOnTheSameTerms:
             path,
             {
                 "tools": {"media": {"image": {"model": "m", "provider": "anthropic"}}},
-                "providers": {"anthropic": {"apiKey": "sk-ant"}},
+                "providers": {"anthropic": {"apiKey": "sk-ant", "extraHeaders": {"X-Tenant": "t1"}}},
             },
         )
         cfg = media_tool_config(live, "image")
-        assert cfg is not None and (cfg.api_base, cfg.api_key) == ("", "")
+        assert cfg is not None and (cfg.api_base, cfg.api_key, cfg.extra_headers) == ("", "", {})
+
+    def test_a_named_provider_supplies_its_headers_with_its_address_and_key(self, tmp_path):
+        """Headers are part of the connection; the section's own stand aside with its
+        own key and address."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "m", "provider": "custom", "extraHeaders": {"X-Own": "o"}}}},
+                "providers": {
+                    "custom": {"apiKey": "sk-c", "apiBase": "https://relay.test/v1", "extraHeaders": {"X-Tenant": "t1"}}
+                },
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_key, cfg.extra_headers) == ("sk-c", {"X-Tenant": "t1"})
+
+    def test_the_headers_come_from_the_endpoint_the_key_comes_from(self, tmp_path):
+        """An endpoint inherits the section's flat headers unless it names its own,
+        the way every other caller of ``provider_endpoints`` reads it."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        custom = {
+            "apiBase": "https://relay.test/v1",
+            "extraHeaders": {"X-Tenant": "flat"},
+            "endpoints": [{"label": "a", "apiKey": "sk-a"}],
+        }
+        image = {"model": "m", "provider": "custom"}
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"custom": custom}})
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_key, cfg.extra_headers) == ("sk-a", {"X-Tenant": "flat"})
+
+        custom["endpoints"] = [{"label": "a", "apiKey": "sk-a", "extraHeaders": {"X-Tenant": "own"}}]
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"custom": custom}})
+        assert media_tool_config(live, "image").extra_headers == {"X-Tenant": "own"}
 
     def test_an_unrelated_providers_bad_edit_does_not_hold_the_answer(self, tmp_path):
         """Only the borrowed-from provider's section is validated."""

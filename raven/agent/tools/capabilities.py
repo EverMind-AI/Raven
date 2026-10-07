@@ -183,7 +183,8 @@ def resolve(cap: Capability, config: "Config") -> Capability:
 
 def _resolved_media(cap: Capability, config: "Config") -> Any:
     """This tool's media section with what it borrows already applied: the named
-    provider's address and key, or the OpenRouter key for a section calling OpenRouter."""
+    provider's address, key and headers, or the OpenRouter key for a section calling
+    OpenRouter."""
     return getattr(config.effective_media_config(), cap.media_attr)
 
 
@@ -356,9 +357,9 @@ def borrowable_credential(cap: Capability, config: "Config") -> str:
 
     runs_on = media_provider(getattr(config.tools.media, cap.media_attr))
     if runs_on and runs_on != "openrouter":
-        from raven.config.update_providers import provider_address_and_key
+        from raven.config.update_providers import provider_connection
 
-        api_base, api_key = provider_address_and_key(runs_on, config.providers.get(runs_on))
+        api_base, api_key, _ = provider_connection(runs_on, config.providers.get(runs_on))
         return f"providers.{runs_on}.apiKey" if api_base and api_key else ""
     if not runs_on:
         return ""

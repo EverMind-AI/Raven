@@ -873,7 +873,11 @@ def test_a_host_image_section_on_a_named_provider_carries_that_provider(grounded
                     }
                 },
                 "providers": {
-                    "openai": {"apiKey": "sk-host-openai", "apiBase": "https://compat.example/v1"},
+                    "openai": {
+                        "apiKey": "sk-host-openai",
+                        "apiBase": "https://compat.example/v1",
+                        "extraHeaders": {"X-Tenant": "t1"},
+                    },
                     "openrouter": {"apiKey": "sk-or-host"},
                 },
             }
@@ -886,6 +890,7 @@ def test_a_host_image_section_on_a_named_provider_carries_that_provider(grounded
         "sk-host-openai",
         "https://compat.example/v1",
     )
+    assert image["extraHeaders"] == {"X-Tenant": "t1"}
     assert image["selectionConfig"] == str(home / "config.json")
 
     # A pin makes the section a snapshot the deck reads as written, so it carries
@@ -900,20 +905,21 @@ def test_a_host_image_section_on_a_named_provider_carries_that_provider(grounded
         "https://compat.example/v1",
     )
     assert "provider" not in image and "selectionConfig" not in image
+    assert image["extraHeaders"] == {"X-Tenant": "t1"}, "the address is still the provider's"
     monkeypatch.delenv("PPT_IMAGE_MODEL")
 
-    # A pinned base without a pinned key does not take the provider's key along.
+    # A pinned base without a pinned key does not take the provider's key or headers along.
     monkeypatch.setenv("PPT_IMAGE_API_BASE", "https://deck-images.example/v1")
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     image = data["tools"]["media"]["image"]
     assert image["apiBase"] == "https://deck-images.example/v1" and image.get("apiKey") != "sk-host-openai"
-    assert image["model"] == "gpt-image-2" and "provider" not in image
+    assert image["model"] == "gpt-image-2" and "provider" not in image and "extraHeaders" not in image
 
     monkeypatch.setenv("PPT_IMAGE_API_KEY", "sk-deck")
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     image = data["tools"]["media"]["image"]
     assert (image["apiKey"], image["apiBase"]) == ("sk-deck", "https://deck-images.example/v1")
-    assert "provider" not in image
+    assert "provider" not in image and "extraHeaders" not in image
 
 
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):

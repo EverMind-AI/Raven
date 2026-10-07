@@ -185,6 +185,16 @@ class _OpenRouterMediaTool(Tool):
         cfg_base = getattr(self._config, "api_base", "") if self._config else ""
         return (cfg_base or _DEFAULT_BASE).rstrip("/")
 
+    def _headers(self, *, json_body: bool = False) -> dict[str, str]:
+        """What every request to the API carries: the key, then the section's own
+        headers, which win where they name the same one -- the order the chat route
+        gives a provider's ``extra_headers``."""
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        if json_body:
+            headers["Content-Type"] = "application/json"
+        extra = getattr(self._config, "extra_headers", None) if self._config else None
+        return {**headers, **(extra or {})}
+
     def _model(self, override: str | None) -> str:
         cfg_model = getattr(self._config, "model", "") if self._config else ""
         return override or cfg_model or self.default_model
@@ -242,7 +252,7 @@ class _OpenRouterMediaTool(Tool):
         async with httpx.AsyncClient(proxy=self._proxy, timeout=180.0) as client:
             r = await client.post(
                 f"{self.api_base}/chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                headers=self._headers(json_body=True),
                 json=payload,
             )
             r.raise_for_status()
@@ -752,7 +762,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
     ) -> str:
         """The Images API: OpenRouter's unified ``/images``, or ``/images/generations``
         and ``/images/edits`` on an OpenAI-compatible base."""
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = self._headers()
         openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
         try:
             # OpenRouter takes the chat content-part shape verbatim; the OpenAI
@@ -939,10 +949,7 @@ class SpeechGenerateTool(_OpenRouterMediaTool):
         """
         pcm = bytearray()
         transcript_parts: list[str] = []
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        headers = self._headers(json_body=True)
         async with httpx.AsyncClient(proxy=self._proxy, timeout=180.0) as client:
             async with client.stream("POST", f"{self.api_base}/chat/completions", headers=headers, json=payload) as r:
                 if r.status_code >= 400:
@@ -1102,7 +1109,7 @@ class VideoGenerateTool(_OpenRouterMediaTool):
         if params:
             body.update(params)
 
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        headers = self._headers(json_body=True)
         try:
             async with httpx.AsyncClient(proxy=self._proxy, timeout=120.0) as client:
                 # 1) submit job

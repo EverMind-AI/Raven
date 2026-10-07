@@ -339,6 +339,78 @@ async def test_the_exported_openrouter_key_never_goes_to_another_address(monkeyp
     assert ImageGenerateTool(on_openrouter, workspace=tmp_path).api_key == "sk-or-env"
 
 
+async def test_a_named_provider_s_headers_ride_the_image_request(monkeypatch, tmp_path) -> None:
+    """A provider's connection is its address, its key and its headers: an endpoint
+    that routes or authenticates by header refuses a request carrying the first two
+    alone. Driven from the file through the live reader, the way the loop builds it."""
+    from raven.config.live import LiveConfig, media_tool_config
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "custom": {"apiKey": "sk-c", "apiBase": "https://relay.test/v1", "extraHeaders": {"X-Tenant": "t1"}}
+                },
+                "tools": {"media": {"image": {"model": "gpt-image-2", "provider": "custom"}}},
+            }
+        )
+    )
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    live = LiveConfig(path)
+    tool = ImageGenerateTool(lambda: media_tool_config(live, "image"), workspace=tmp_path / "ws")
+    assert json.loads(await tool.execute("a poster"))["success"]
+    assert str(seen[0].url) == "https://relay.test/v1/images/generations"
+    assert (seen[0].headers["x-tenant"], seen[0].headers["authorization"]) == ("t1", "Bearer sk-c")
+
+
+@pytest.mark.parametrize(
+    ("build", "call", "path"),
+    [
+        (lambda c: ImageGenerateTool(c, workspace=None), "a poster", "/v1/images/generations"),
+        (lambda c: SpeechGenerateTool(c), "read me", "/v1/chat/completions"),
+        (lambda c: VideoGenerateTool(c), "a river", "/v1/videos"),
+    ],
+    ids=["image", "speech", "video"],
+)
+async def test_the_section_headers_ride_every_media_request(monkeypatch, build, call, path) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(500, text="stop here")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    section = SimpleNamespace(
+        api_base="https://relay.test/v1", api_key="k", model="gpt-image-2", extra_headers={"X-Tenant": "t1"}
+    )
+    await build(section).execute(call)
+    assert seen and seen[0].url.path == path
+    assert (seen[0].headers["x-tenant"], seen[0].headers["authorization"]) == ("t1", "Bearer k")
+
+
+def test_the_section_headers_stay_home_with_the_key() -> None:
+    """They can be credentials too, so a poll or content URL on another origin gets
+    neither them nor the key."""
+    tool = VideoGenerateTool(
+        SimpleNamespace(api_base="https://api.mycorp.example", model="", api_key="k", extra_headers={"X-Key": "s"})
+    )
+    headers = tool._headers()
+    assert headers["X-Key"] == "s"
+    assert tool._api_headers_for("https://api.mycorp.example/v1/x", headers) == headers
+    assert tool._api_headers_for("https://cdn.elsewhere.test/x", headers) is None
+
+
 async def test_a_section_on_a_named_provider_sends_the_id_that_provider_serves(monkeypatch, tmp_path) -> None:
     """A provider's models are listed under its own prefix (``openai/gpt-image-2``) and
     its Images API knows the bare name, so the prefix comes off on the way out -- the

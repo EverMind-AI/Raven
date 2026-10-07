@@ -86,6 +86,7 @@ def test_media_set_writes_only_its_own_tool(cfg: Path):
         "model": "google/gemini-2.5-flash-image",
         "quality": "",
         "provider": "",
+        "extraHeaders": {},
         "selectionConfig": "",
     }
     assert set(media) == {"image"}  # speech/video not materialised by an image write

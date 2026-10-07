@@ -261,9 +261,11 @@ def configure_image_generation(config: dict, host: dict) -> None:
         del image["provider"]
         if "PPT_IMAGE_MODEL" not in pinned and image.get("model"):
             image["model"] = wire_model(image["model"], client_provider=named)
-        if "PPT_IMAGE_API_BASE" in pinned and not key_pinned:
-            # The provider's key goes to the provider's address, not the deck's.
-            image["apiKey"] = ""
+        if "PPT_IMAGE_API_BASE" in pinned:
+            # The provider's key and headers go to the provider's address, not the deck's.
+            image.pop("extraHeaders", None)
+            if not key_pinned:
+                image["apiKey"] = ""
     if named and not key_pinned and image.get("apiKey"):
         # The provider's own key; the host section's own, which the slot below
         # would read, stood aside for it.
