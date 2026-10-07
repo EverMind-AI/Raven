@@ -1718,11 +1718,12 @@ def _own_addresses(vendor: str, catalogue: str) -> tuple[str, ...]:
     bare host and the root its ``catalogue`` hangs from, plus any in
     `_MORE_OWN_ADDRESSES`.
 
-    A section's address is matched against these as written, not by host --
-    though only the vendor serves its own host, a path or a port the vendor
-    does not answer at is still a typo, and taken for the vendor it was
-    answered from the vendor's catalogue and read as a verified key. Asked
-    where it points, it reads as the 404 or the refused connection it is.
+    A section's address is matched against these as written, not by host.
+    Only the vendor serves its own host, but a path or a port it does not
+    answer at is a typo or somebody's proxy, and taken for the vendor it was
+    answered from the vendor's catalogue, so a typo read as a verified key.
+    Asked where it points, it gets that address's own answer -- for a typo,
+    the 404 the user needs to see.
     """
     root = catalogue.split("?", 1)[0].removesuffix("/models")
     parts = urlparse(root)
