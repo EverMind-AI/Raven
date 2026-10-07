@@ -28,6 +28,8 @@ let providersLive: Provider[] = []
 let providersLoading = false
 let providersFailed = false
 let providerRead = 0
+let selectionSession: string | null = null
+let selectionGeneration = -1
 let defaultProvidersLive: Provider[] = []
 let defaultModelLive = ''
 let defaultProviderLive = ''
@@ -102,6 +104,11 @@ export function openModelsForMissingProvider(): boolean {
     void openModels()
     return true
   }
+  return false
+}
+
+export function blockSendForModel(): boolean {
+  if (openModelsForMissingProvider()) return true
   if (loadStatus() === 'loading' || loadStatus() === 'error') {
     toast(loadStatus() === 'loading' ? t('gui.model.loading') : t('gui.model.load_failed'))
     return true
@@ -186,7 +193,10 @@ export async function loadSelection(sid?: string | null, gen?: number): Promise<
   const target = sid !== undefined ? sid : sessionCurrent()
   const ticket = gen !== undefined ? gen : generation()
   if (ticket !== generation()) return
-  const read = beginLoad()
+  const preserveReady = selectionSession === target && selectionGeneration === ticket
+  selectionSession = target
+  selectionGeneration = ticket
+  const read = beginLoad(preserveReady)
   const staged = !target ? staging().model : null
   if (staged) {
     showModel(staged.model, staged.provider)
@@ -220,9 +230,8 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   providersLoading = true
   providersFailed = false
   const selection = loadSelection(target, ticket)
-  const catalogue = readOptions(target ? { session_id: target } : {})
   try {
-    const mo = await catalogue
+    const mo = await readOptions(target ? { session_id: target } : {})
     if (ticket !== generation() || read !== providerRead) return
     providersLive = rowsOf(mo.providers || [])
   } catch {
@@ -367,6 +376,8 @@ export function _resetForTests(): void {
   providersLoading = false
   providersFailed = false
   providerRead = 0
+  selectionSession = null
+  selectionGeneration = -1
   inFlight.clear()
   setupState.providerConfigured = null
   defaultProvidersLive = []

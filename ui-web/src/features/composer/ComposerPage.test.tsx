@@ -257,34 +257,48 @@ describe('the send button', () => {
     expect(ta().value).toBe('configure a provider first')
   })
 
-  it('sends after the configured model loads from a strict legacy gateway', async () => {
+  it.each([true, false])('sends during a same-session refresh (selection-only: %s)', async (selectionOnly) => {
     const models = await import('../model/source')
     const selection = await import('../model/store')
-    const { resetCapabilities } = await import('../../rpc/capabilities')
+    const { absorb, resetCapabilities } = await import('../../rpc/capabilities')
     const { FixtureTransport } = await import('../../rpc/fixtureTransport')
     const { setGateway } = await import('../../rpc/gateway')
     const { RpcError } = await import('../../rpc/transport')
     models._resetForTests()
     selection._resetForTests()
     resetCapabilities()
+    absorb(selectionOnly ? ['model.options.selection_only'] : [])
+    const options = { model: 'deepseek/deepseek-chat', provider: 'deepseek', providers: [] }
+    const pending: Array<(value: typeof options) => void> = []
+    let refreshing = false
     const gateway = new FixtureTransport({
       'model.options': (params) => {
-        if (Object.keys(params).some((key) => key !== 'session_id')) {
+        if (!selectionOnly && Object.keys(params).some((key) => key !== 'session_id')) {
           throw new RpcError(-32011, 'config_validation_error')
         }
-        return { model: 'deepseek/deepseek-chat', provider: 'deepseek', providers: [] }
+        if (refreshing) return new Promise<typeof options>((resolve) => { pending.push(resolve) })
+        return options
       },
     })
     setGateway(gateway)
     try {
-      const { calls } = wire({ beforeSend: models.openModelsForMissingProvider })
-      await models.loadProviders('legacy-session')
-      expect(gateway.calls).toEqual([{ method: 'model.options', params: { session_id: 'legacy-session' } }])
+      const { calls } = wire({ beforeSend: models.blockSendForModel })
+      await models.loadProviders('visible-session')
+      expect(gateway.calls).toEqual(selectionOnly ? [
+        { method: 'model.options', params: { session_id: 'visible-session', include_providers: false } },
+        { method: 'model.options', params: { session_id: 'visible-session' } },
+      ] : [{ method: 'model.options', params: { session_id: 'visible-session' } }])
       expect(selection.current()).toBe('deepseek/deepseek-chat')
-      ta().value = 'send through the legacy gateway'
+      refreshing = true
+      const refresh = models.loadProviders('visible-session')
+      expect(pending).toHaveLength(selectionOnly ? 2 : 1)
+      expect(selection.loadStatus()).toBe('ready')
+      ta().value = 'send during the background refresh'
       store.fireSend()
-      expect(calls.sent).toEqual(['send through the legacy gateway'])
+      expect(calls.sent).toEqual(['send during the background refresh'])
       expect(ta().value).toBe('')
+      pending.forEach((resolve) => { resolve(options) })
+      await refresh
     } finally {
       setGateway(null)
       models._resetForTests()

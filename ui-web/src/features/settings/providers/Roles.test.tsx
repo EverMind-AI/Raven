@@ -51,6 +51,27 @@ const withOpenAI = (): ReturnType<typeof snap> => {
 }
 
 describe('model roles', () => {
+  it.each([
+    ['title', 'claude-sonnet-4-5', 'Anthropic'],
+    ['embedding', 'text-embedding-3-small', 'OpenRouter'],
+  ])('allows the %s role to change during a composer catalogue refresh', async (slot, model, provider) => {
+    const { calls } = install()
+    setSources({ model: {
+      providers: modelSource.providers,
+      persist: modelSource.persist,
+      openSettings: modelSource.openSettings,
+      loading: () => true,
+    } })
+    await mount('model')
+    await pick(`gui.settings.roles.${slot}`, model, provider)
+    expect(calls).toEqual(slot === 'title' ? [
+      ['set', { key: 'sessionTitle.model', value: 'claude-sonnet-4-5' }],
+      ['set', { key: 'sessionTitle.provider', value: 'anthropic' }],
+    ] : [
+      ['everosSet', { section: 'embedding', model: 'text-embedding-3-small', provider: 'openrouter' }],
+    ])
+  })
+
   it('a keyed role writes its model then its provider; clearing writes null to both', async () => {
     const { calls } = install()
     await mount('model')

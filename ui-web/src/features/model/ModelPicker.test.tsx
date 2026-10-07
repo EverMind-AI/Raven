@@ -130,6 +130,25 @@ describe('the model picker', () => {
     expect(pick()).toBeNull()
   })
 
+  it('waits for the composer catalogue before opening its picker', () => {
+    const h = install({ loading: () => true })
+    mount()
+    openIt()
+    expect(pick()).toBeNull()
+    expect(h.toasts).toEqual(['gui.model.catalogue_loading'])
+  })
+
+  it('opens a settings picker while the composer catalogue is pending', async () => {
+    const h = install({ loading: () => true })
+    mount()
+    openIt(document.getElementById('modelChip'))
+    expect(pick()).toBeTruthy()
+    expect(h.toasts).toEqual([])
+    await act(async () => { rows('models')[1]!.click() })
+    expect(h.persisted).toEqual(['minimax-m2'])
+    expect(h.persistedScopes).toEqual(['default'])
+  })
+
   it('offers every provider with an account, including one with nothing added', () => {
     /* Reversed 2026-09-20: a provider with a working key and an empty list used
        to be dropped here, which told a reader it was not connected and left a

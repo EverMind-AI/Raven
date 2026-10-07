@@ -93,9 +93,9 @@ export const current = (): string => selected
 export const loadStatus = (): typeof status => status
 export const loadToken = (): number => selectionRead
 
-export function beginLoad(): number {
+export function beginLoad(preserveReady = false): number {
   selectionRead += 1
-  status = 'loading'
+  if (!preserveReady || status !== 'ready') status = 'loading'
   announce()
   return selectionRead
 }
@@ -127,7 +127,7 @@ export function setCurrent(model: string, provider = ''): void {
    settings button can both be reached while a picker is up. */
 export function open(anchor?: HTMLElement | null, after?: () => void, marked?: string, offer: Offer = DEFAULT_OFFER): void {
   if (!installed()) return
-  if (source().loading?.()) {
+  if (!anchor && source().loading?.()) {
     toast(t('gui.model.catalogue_loading'))
     return
   }
