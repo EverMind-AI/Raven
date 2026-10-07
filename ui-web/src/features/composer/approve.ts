@@ -129,7 +129,7 @@ export function open(
        mounted one may be answered from the keyboard, or a chord pressed here
        would allow something another conversation asked. */
     if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
-    if (e.key === 'Escape') { e.preventDefault(); close(onDeny); return }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(onDeny); return }
     if (typing(e)) return
     if (sendChord(e) === 'plain') { e.preventDefault(); close(onAllow) }
   }
@@ -374,7 +374,7 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
 
   function onKey(e: KeyboardEvent): void {
     if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
-    if (e.key === 'Escape') { e.preventDefault(); answer('deny'); return }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); answer('deny'); return }
     if (typing(e)) return
     const chord = sendChord(e)
     if (!chord) return

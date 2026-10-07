@@ -161,13 +161,23 @@ describe('the approval sheet', () => {
     expect(sheets().length).toBe(0)
   })
 
-  it('answers deny on the first option, and on Escape', () => {
+  it('answers deny on the first option and consumes Escape before the page sees it', () => {
     const said: string[] = []
-    open('a', () => said.push('allow'), () => said.push('deny'))
-    opts()[0]!.click()
-    open('b', () => said.push('allow'), () => said.push('deny'))
-    key('Escape')
-    expect(said).toEqual(['deny', 'deny'])
+    const pageKey = vi.fn()
+    document.addEventListener('keydown', pageKey)
+    try {
+      open('a', () => said.push('allow'), () => said.push('deny'))
+      opts()[0]!.click()
+      open('b', () => said.push('allow'), () => said.push('deny'))
+      key('Escape')
+      expect(said).toEqual(['deny', 'deny'])
+      expect(pageKey).not.toHaveBeenCalled()
+      key('Escape')
+      expect(said).toEqual(['deny', 'deny'])
+      expect(pageKey).toHaveBeenCalledTimes(1)
+    } finally {
+      document.removeEventListener('keydown', pageKey)
+    }
   })
 
   it('reads Escape and Cmd+Enter as answers, and a digit as nothing', () => {
@@ -685,6 +695,24 @@ describe('the permission approval sheet', () => {
     broaderKey()
     expect(said.map(([c]) => c)).toEqual(['deny', 'allow', 'allow_always'])
     expect(said[2]![2]).toBe('git push *')
+  })
+
+  it.each(['input', 'textarea'])('consumes Escape from %s without also reaching the page', (tag) => {
+    const pageKey = vi.fn()
+    document.addEventListener('keydown', pageKey)
+    try {
+      openApproval(base, handlers())
+      const field = document.createElement(tag)
+      rack().appendChild(field)
+      field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      expect(said.map(([choice]) => choice)).toEqual(['deny'])
+      expect(sheets()).toHaveLength(0)
+      expect(pageKey).not.toHaveBeenCalled()
+      key('Escape')
+      expect(pageKey).toHaveBeenCalledTimes(1)
+    } finally {
+      document.removeEventListener('keydown', pageKey)
+    }
   })
 
   /* With no rule to save, the broader grant is the conversation's, and the

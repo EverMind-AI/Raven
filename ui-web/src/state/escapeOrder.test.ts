@@ -13,17 +13,16 @@
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
  * fullscreen -> node -> pane -> collapse retreat). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all fifty-five pairs of layers. The three
- * capture-phase handlers
- * each open sheet registers run *before* the table and two of them act on
- * Escape without stopping propagation, so one Escape can both deny an approval
- * and interrupt the running turn: that is pinned here with the real sheet.
+ * fixture page, and all fifty-five pairs of layers. The capture-phase handlers
+ * the open sheets register run before the table. An approval consumes Escape
+ * after denying, leaving the running turn alone until a later Escape: that is
+ * pinned here with the real sheets.
  */
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { openApproval } from '../features/composer/approve'
+import { open as openConfirm, openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
 import * as desk from '../features/desk/store'
 import * as extAgents from '../features/extAgents/store'
@@ -288,13 +287,12 @@ describe('the one listener that reads the order', () => {
     expect(clicks).toEqual(['newBtn'])
   })
 
-  it('is a bubble-phase listener, after the three the sheets register', () => {
-    /* Which is what lets one Escape do two things. The count is the pinned
-       fact: two in the approval sheet, one in the clarify sheet, all three
-       registered with capture. */
+  it('is a bubble-phase listener, after the sheets\' capture-phase handlers', () => {
+    /* Each sheet gets to answer before the page reads the key. */
     const capture = /document\.addEventListener\('keydown', onKey, true\)/g
     expect(source('src/features/composer/approve.ts').match(capture) ?? []).toHaveLength(2)
     expect(source('src/features/composer/clarify.ts').match(capture) ?? []).toHaveLength(1)
+    expect(source('src/features/composer/credential.ts').match(capture) ?? []).toHaveLength(1)
     /* And every keydown the page installs is bubble-phase, this one included:
        a third argument would show up in one of the matches below. Sorted,
        because what the three are registered in is declared in one place and
@@ -319,16 +317,62 @@ describe('the one listener that reads the order', () => {
     expect(spies.extAgentsClose).not.toHaveBeenCalled()
   })
 
-  /* The approval sheet's capture handler denies and does not stop the event,
-     so the same Escape carries on into the table and ends at the last entry --
-     which interrupts the turn the approval was blocking. */
-  it('both denies an approval and stops the running turn', () => {
+  it.each(['shell.exec', 'file.write', 'mcp.call', 'config.change', 'unknown'])(
+    'Escape denies %s approval and leaves stopping to the next Escape', (kind) => {
+      const said: string[] = []
+      openApproval({ approvalId: '1', command: 'rm -rf build/', description: 'shell', kind },
+        { onChoice: (choice: string) => { said.push(choice) } }, 'a')
+      turn.dispatch({ type: 'send' })
+      key('Escape')
+      expect(said).toEqual(['deny'])
+      expect(spies.stop).not.toHaveBeenCalled()
+      expect(turn.busy()).toBe(true)
+      key('Escape')
+      expect(said).toEqual(['deny'])
+      expect(spies.stop).toHaveBeenCalledTimes(1)
+    })
+
+  it('denies a confirmation on Escape without stopping the running turn', () => {
+    const denied = vi.fn()
+    openConfirm('Confirm this action', vi.fn(), denied, 'a')
+    turn.dispatch({ type: 'send' })
+    key('Escape')
+    expect(denied).toHaveBeenCalledTimes(1)
+    expect(spies.stop).not.toHaveBeenCalled()
+    key('Escape')
+    expect(denied).toHaveBeenCalledTimes(1)
+    expect(spies.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the normal close priority after an approval is denied', () => {
     const said: string[] = []
     openApproval({ approvalId: '1', command: 'rm -rf build/', description: 'shell' },
       { onChoice: (choice: string) => { said.push(choice) } }, 'a')
     turn.dispatch({ type: 'send' })
+    LAYERS['desk.escapeOpen()']!.up()
+
     key('Escape')
     expect(said).toEqual(['deny'])
+    expect(desk.get().paletteOpen).toBe(true)
+    expect(spies.stop).not.toHaveBeenCalled()
+    key('Escape')
+    expect(desk.get().paletteOpen).toBe(false)
+    expect(spies.stop).not.toHaveBeenCalled()
+    key('Escape')
     expect(spies.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets a parked approval leave Escape to the active conversation', () => {
+    const said: string[] = []
+    const approval = openApproval({ approvalId: '1', command: 'rm -rf build/', description: 'shell' },
+      { onChoice: (choice: string) => { said.push(choice) } }, 'b')
+    try {
+      turn.dispatch({ type: 'send' })
+      key('Escape')
+      expect(said).toEqual([])
+      expect(spies.stop).toHaveBeenCalledTimes(1)
+    } finally {
+      approval.close()
+    }
   })
 })

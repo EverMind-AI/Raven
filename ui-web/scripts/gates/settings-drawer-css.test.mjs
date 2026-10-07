@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import { decls, rules } from './css.mjs'
+import { root } from './paths.mjs'
 
 const sheet = readFileSync(new URL('../../src/features/settings/styles.css', import.meta.url), 'utf8')
 const at = (selector) => {
@@ -91,7 +92,7 @@ describe('what a drawer sizes', () => {
         }
       }
     }
-    walk(new URL('.', dir).pathname)
+    walk(root(dir))
     const unused = []
     for (const [selector] of rules(/^\.settings-cfg\s+\./, sheet)) {
       for (const part of selector.split(',')) {
