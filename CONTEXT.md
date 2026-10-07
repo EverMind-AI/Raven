@@ -2826,8 +2826,14 @@ _Avoid_: "orphaned" -- a released run is not lost, it has changed lane.
 **Working directory** (`raven/agent/workdir.py`):
 The directory a turn reads and writes files in — shared by the session's leader `AgentLoop`
 and every Subagent it spawns, and resolved per turn by `WorkdirResolver.resolve()`.
-`raven tui` and `raven agent` use the process launch directory, so the agent works in the
-checkout you started it from (Workdir policy `LAUNCH_DIR`); intermediate artifacts it
+Local surfaces (`raven tui`, `raven serve`, `raven agent`, and standalone `raven a2a`)
+use the process launch directory, so the agent works in the checkout you started it from
+(Workdir policy `LAUNCH_DIR`). If that launch directory is Agent home, one of its
+memory/skills/transcript subtrees, or an ancestor narrower than the user's home,
+assembly warns and selects `PER_CHANNEL` instead, with the gateway's default root.
+An explicit working-directory override still takes precedence. Launching from the
+user's home or above retains that directory; checkpointing already refuses those roots.
+The Project slug still names the original launch directory. Intermediate artifacts it
 produces there go under that directory's `.raven/` (the shadow-git repo lives at
 `.raven/shadow.git`). `raven gateway` gives each channel one directory (Workdir policy
 `PER_CHANNEL`), set by `channels.<name>.workspace`, defaulting to `<agent home>/../tmp/<channel>`, i.e. `~/.raven/tmp/<channel>`.
@@ -2854,7 +2860,8 @@ as they do in the reference. The project's identity is therefore carried by
 
 **Workdir policy** (`WorkdirPolicy`, `raven/agent/workdir.py`):
 Which default a `WorkdirResolver` falls back to when a session has no explicit override:
-`LAUNCH_DIR` or `PER_CHANNEL`. Fixed per entrypoint (tui/agent vs. gateway), not user-facing.
+`LAUNCH_DIR` or `PER_CHANNEL`. Local surfaces normally use `LAUNCH_DIR`, with a
+`PER_CHANNEL` fallback for a protected launch directory; the gateway uses `PER_CHANNEL`.
 
 **Workspace Template** (`templates/`):
 The bundled markdown seed files copied into Agent home on first run by

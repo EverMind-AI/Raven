@@ -591,14 +591,10 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     is module-global: one test calling ``set_config_path`` otherwise aims every
     later test in the process at that path.
 
-    The knob is ``HOME`` because it is the only one every test that isolates the
-    home itself can still beat, and this fixture must lose to all of them. Tests
-    do it two ways -- ``monkeypatch.setattr(Path, "home", ...)`` and
-    ``monkeypatch.setenv("HOME", ...)`` -- and the precedence runs
-    ``RAVEN_HOME`` > ``Path.home`` > ``HOME``. Setting ``RAVEN_HOME`` here beats
-    both camps (measured: 17 unrelated failures), patching ``Path.home`` beats the
-    ``setenv`` camp (measured: 3), and setting ``HOME`` beats neither: an attribute
-    patch shadows it, and a later ``setenv`` replaces it.
+    Set ``HOME`` on POSIX and ``USERPROFILE`` on Windows, where ``Path.home``
+    ignores ``HOME``. A test can still replace the platform's variable or patch
+    ``Path.home`` itself. Leave ``RAVEN_HOME`` unset because it would outrank
+    either way a test names its own home.
     """
 
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
@@ -611,6 +607,7 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     home = tmp_path.with_name(f"{tmp_path.name}-home")
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     # The suite's baseline permission mode is full access -- the behaviour the
     # whole suite was written against before the gate existed, and what a test
     # about streaming or diffs should keep seeing. The product default is ask;

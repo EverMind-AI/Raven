@@ -520,6 +520,7 @@ async def test_trackable_follows_the_repos_own_exclusion_rules(workspace, tmp_pa
     assert kept == {str(names["plain"])}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX byte filenames require surrogate-escape decoding")
 async def test_a_name_that_is_not_utf8_is_judged_and_looked_up_by_its_bytes(workspace):
     """A POSIX name holding byte 0xff reaches Python surrogate-escaped. The
     query git reads must carry that byte, not fail to encode it after the
@@ -1000,7 +1001,7 @@ def test_checkpoint_refuses_a_home_or_wider_root(tmp_path, monkeypatch):
     to recover in exchange."""
     home = tmp_path / "home"
     (home / "proj").mkdir(parents=True)
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: home)
 
     for refused in (home, tmp_path, Path(tmp_path.anchor)):
         with pytest.raises(ValueError, match="home directory"):
@@ -1015,7 +1016,7 @@ async def test_checkpoint_excludes_private_keys(tmp_path, monkeypatch):
     exhaustive miss the most common secret on the machine."""
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: home)
     proj = home / "proj"
     (proj / ".ssh").mkdir(parents=True)
     (proj / ".ssh" / "id_ed25519").write_text("PRIVATE\n", encoding="utf-8")
@@ -1030,6 +1031,59 @@ async def test_checkpoint_excludes_private_keys(tmp_path, monkeypatch):
     assert sorted(out.split()) == ["main.py"]
 
 
+@pytest.mark.parametrize("launch_scope", ["instance", "agent_home"])
+async def test_protected_local_launch_excludes_runtime_data_from_checkpoint_and_exec_changes(
+    workspace, monkeypatch, launch_scope
+):
+    """The local fallback must protect both the shadow repo and command diffs."""
+    from raven.agent.tools import command_writes
+    from raven.config.schema import Config
+    from raven.core.engine_stack import build_local_sessions
+
+    home = workspace / "home"
+    instance = home / ".raven"
+    agent_home = instance / "workspace"
+    agent_home.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    for relative in (
+        "config.json",
+        "oauth/codex.json",
+        "workspace/user_memory/MEMORY.md",
+        "workspace/sessions/sub/.config.rendered.123.json",
+    ):
+        path = instance / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"apiKey": "fake-runtime-secret"}', encoding="utf-8")
+    config = Config()
+    config.agents.defaults.workspace = str(agent_home)
+    with monkeypatch.context() as launch:
+        launch.chdir(instance if launch_scope == "instance" else agent_home)
+        sessions, resolver = build_local_sessions(config, workspace=None)
+    session = sessions.get_or_create("tui:repro")
+    session.add_message("user", "Before the command.")
+    sessions.save(session)
+    working_dir = resolver.resolve(session.key)
+    svc = CheckpointService(working_dir)
+
+    before = await command_writes.before(working_dir, lambda _: svc)
+    notes = working_dir / "notes.md"
+    notes.write_text("The command's own output.\n", encoding="utf-8")
+    session.add_message("assistant", "Transcript written while the command runs.")
+    sessions.save(session)
+    writes, removals = await command_writes.after(before)
+    cid, changed = await svc.commit_turn("local turn")
+    rc, tracked, _ = await svc._git("ls-tree", "-r", "--name-only", "HEAD")
+
+    assert {Path(row.path).resolve() for row in writes} == {notes.resolve()}
+    assert removals == ()
+    assert cid is not None
+    assert changed == ["notes.md"]
+    assert rc == 0
+    assert tracked.splitlines() == ["notes.md"]
+    assert not (instance / ".raven" / "shadow.git").exists()
+    assert not (agent_home / ".raven" / "shadow.git").exists()
+
+
 async def test_loop_runs_the_turn_when_the_root_is_refused(tmp_path, monkeypatch):
     """A refused root disables the safety net, it does not break the turn.
 
@@ -1039,7 +1093,7 @@ async def test_loop_runs_the_turn_when_the_root_is_refused(tmp_path, monkeypatch
     """
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: home)
     (home / ".raven").mkdir()
     (home / ".raven" / "config.json").write_text('{"permissions": {"mode": "full"}}')
 
@@ -1119,6 +1173,7 @@ async def test_a_commands_own_staging_that_fails_unexpectedly_still_answers(work
     assert await asyncio.wait_for(svc.stage_tree(), 30) is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Requires a POSIX shell and non-destructive process liveness probes")
 async def test_a_git_call_whose_caller_stops_waiting_is_killed(workspace, monkeypatch):
     """A bounded measurement or a cancelled turn stops waiting on a git read;
     the git itself must not be left running behind it."""
