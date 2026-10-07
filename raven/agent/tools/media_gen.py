@@ -187,13 +187,15 @@ class _OpenRouterMediaTool(Tool):
 
     def _headers(self, *, json_body: bool = False) -> dict[str, str]:
         """What every request to the API carries: the key, then the section's own
-        headers, which win where they name the same one -- the order the chat route
-        gives a provider's ``extra_headers``."""
+        headers, which replace any of these they name -- the order the chat route
+        gives a provider's ``extra_headers``. Compared without case, as HTTP does:
+        a dict alone would send ``authorization`` beside ``Authorization``."""
+        extra = (getattr(self._config, "extra_headers", None) if self._config else None) or {}
+        named = {name.lower() for name in extra}
         headers = {"Authorization": f"Bearer {self.api_key}"}
         if json_body:
             headers["Content-Type"] = "application/json"
-        extra = getattr(self._config, "extra_headers", None) if self._config else None
-        return {**headers, **(extra or {})}
+        return {**{k: v for k, v in headers.items() if k.lower() not in named}, **extra}
 
     def _model(self, override: str | None) -> str:
         cfg_model = getattr(self._config, "model", "") if self._config else ""

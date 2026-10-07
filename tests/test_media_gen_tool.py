@@ -399,6 +399,25 @@ async def test_the_section_headers_ride_every_media_request(monkeypatch, build, 
     assert (seen[0].headers["x-tenant"], seen[0].headers["authorization"]) == ("t1", "Bearer k")
 
 
+async def test_a_section_header_replaces_the_key_s_in_any_case(monkeypatch) -> None:
+    """Header names compare without case, so a section's ``authorization`` replaces
+    the bearer the key builds instead of travelling beside it as a second one."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(500, text="stop here")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    section = SimpleNamespace(
+        api_base="https://relay.test/v1", api_key="k", model="gpt-image-2", extra_headers={"authorization": "Bearer h"}
+    )
+    await ImageGenerateTool(section, workspace=None).execute("a poster")
+    assert seen[0].headers.get_list("authorization") == ["Bearer h"]
+
+
 def test_the_section_headers_stay_home_with_the_key() -> None:
     """They can be credentials too, so a poll or content URL on another origin gets
     neither them nor the key."""
