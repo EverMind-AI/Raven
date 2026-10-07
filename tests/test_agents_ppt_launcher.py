@@ -967,6 +967,22 @@ def test_a_pinned_deck_key_is_the_key_on_the_wire(grounded, tmp_path, monkeypatc
     assert tool._headers() == {"Authorization": "Bearer sk-deck"}
 
 
+def test_a_provider_without_a_key_does_not_draw_on_the_section_s_own(grounded, tmp_path, monkeypatch):
+    """The host's tool sends no key to a provider that holds none -- the section's own
+    stood aside for the provider's -- and neither may the deck, whose key slot reads
+    that same section key."""
+    image = {"model": "gpt-image-2", "provider": "custom", "apiKey": "sk-host-section"}
+    _host_image(tmp_path, image, {"custom": {"apiBase": "https://host-relay.test/v1"}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    image = data["tools"]["media"]["image"]
+    assert image["apiBase"] == "https://host-relay.test/v1" and not image.get("apiKey")
+
+    monkeypatch.setenv("PPT_IMAGE_MODEL", "gpt-image-2-mini")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    image = data["tools"]["media"]["image"]
+    assert image["apiBase"] == "https://host-relay.test/v1" and not image.get("apiKey")
+
+
 def test_a_pinned_deck_base_gets_no_key_borrowed_for_the_host_s_address(grounded, tmp_path, monkeypatch):
     """The host borrows the OpenRouter key only while it calls OpenRouter, and a deck
     endpoint pinned in its place is another address: it gets the deck's own key or

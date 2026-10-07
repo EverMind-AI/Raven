@@ -274,10 +274,12 @@ def configure_image_generation(config: dict, host: dict) -> None:
         del image["provider"]
         if "PPT_IMAGE_MODEL" not in pinned and image.get("model"):
             image["model"] = wire_model(image["model"], client_provider=named)
-    if named and not key_pinned and image.get("apiKey"):
-        # The provider's own key; the host section's own, which the slot below
-        # would read, stood aside for it.
-        paid_by = f"the host's providers.{named}"
+    if named and not (key_pinned or base_pinned):
+        # On the provider's address only the provider's key goes, or none: the
+        # host section's own, which the slot below would read, stood aside for
+        # it, and the host's own tool never sends it there.
+        if image.get("apiKey"):
+            paid_by = f"the host's providers.{named}"
     elif resolved := render.dig(config, IMAGE_KEY_SLOT):
         image["apiKey"], paid_by = resolved, "PPT_IMAGE_API_KEY or the host image key"
     elif not image.get("apiKey") and _IMAGE_GATEWAY in (image.get("apiBase") or _IMAGE_GATEWAY):
