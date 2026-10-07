@@ -207,6 +207,26 @@ describe('provider detail', () => {
     expect(calls).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }], ['fetchModels:verify', 'ollama']])
   })
 
+  it('sends the address from the field it draws alone for a vendor that takes no key', async () => {
+    /* The other place the address field is drawn: alone, for a vendor that takes
+       no key. `model.options` sends no such row today -- only OAuth and local
+       rows take none -- but the block still draws the field for one, and the
+       address typed there has to go out the way the one above the key does. The
+       row is connected, since Connect on a key-shaped row asks for a key first. */
+    const data = snap()
+    data.providers = [...data.providers, {
+      id: 'keyless', name: 'Keyless', models: [], configured: [], on: true, kind: 'key', acceptsKey: false,
+    }]
+    const { calls } = install(data)
+    await open('keyless')
+    const boxes = document.querySelectorAll('.settings-tp-main input[aria-label="gui.settings.providers.base"]')
+    expect(boxes).toHaveLength(1)
+    const box = boxes[0] as HTMLInputElement
+    await act(async () => { fireEvent.change(box, { target: { value: 'https://keyless.test/v1' } }) })
+    await act(async () => { fireEvent.click(box.parentElement!.querySelector('button')!) })
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'keyless', api_base: 'https://keyless.test/v1' }], ['fetchModels:verify', 'keyless']])
+  })
+
   it('a header is added as a one-name patch and removed as a one-name null', async () => {
     const { calls } = install()
     await open('openrouter')
