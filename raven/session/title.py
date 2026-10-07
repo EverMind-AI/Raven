@@ -23,6 +23,7 @@ from typing import Any
 from loguru import logger
 
 from raven.i18n import zh_lexicon
+from raven.observability.purpose import purpose as _llm_purpose
 
 TITLE_BUDGET = 24
 """Codepoints a generated title is asked (and clamped) to fit."""
@@ -200,12 +201,13 @@ async def generate_title(
     indistinguishable from a model that had nothing to say.
     """
     try:
-        response = await provider.chat_with_retry(
-            messages=build_title_prompt(first_message, budget=budget),
-            tools=title_tool_schema(budget),
-            model=model,
-            tool_choice="auto",
-        )
+        with _llm_purpose("title"):
+            response = await provider.chat_with_retry(
+                messages=build_title_prompt(first_message, budget=budget),
+                tools=title_tool_schema(budget),
+                model=model,
+                tool_choice="auto",
+            )
     except Exception as exc:
         logger.debug("session title: generation call failed ({}); keeping fallback", exc)
         return None

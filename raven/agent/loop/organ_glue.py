@@ -19,6 +19,7 @@ from raven.agent.loop._shared import (
     vision_verdict,
 )
 from raven.memory_engine import DrainOutcome
+from raven.observability.purpose import purpose as _llm_purpose
 
 
 class OrganGlueMixin:
@@ -538,10 +539,11 @@ class OrganGlueMixin:
         from raven.agent.subagent import watch_work
 
         try:
-            response = await asyncio.wait_for(
-                self._llm_call_stream(watch_work.build_prompt(message), None, self.model, **effort_kwargs),
-                timeout=self._WATCH_JUDGEMENT_TIMEOUT_S,
-            )
+            with _llm_purpose("watch_work"):
+                response = await asyncio.wait_for(
+                    self._llm_call_stream(watch_work.build_prompt(message), None, self.model, **effort_kwargs),
+                    timeout=self._WATCH_JUDGEMENT_TIMEOUT_S,
+                )
         except asyncio.TimeoutError:
             logger.warning(
                 "watch-work judgement did not answer in {:.0f}s; the turn goes on unjudged",

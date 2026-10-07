@@ -64,6 +64,9 @@ VALUE_LIMIT = 64 * 1024
 JSON_DEPTH = 8
 MESSAGES_PAGE = 20
 ITEMS_PAGE = 50
+OUTLINE_PAGE = 200
+OUTLINE_BLOB_BYTES = 8 * 1024
+OUTLINE_PREVIEW_CHARS = 80
 PREVIEW_CHARS = 600
 PREVIEW_LINES = 6
 PREVIEW_ITEM_CHARS = 200
@@ -228,13 +231,11 @@ _REGISTRY: dict[str, tuple[BlockSpec, ...]] = {
         BlockSpec("response", JSON, False, "derived:llm_response"),
     ),
     "tool.input": (
-        BlockSpec("tool", KEY_VALUES, True, "derived:tool"),
         _art("params", JSON, "tool.input", "params"),
         BlockSpec("schema", JSON, True, "schema", related="llm.input"),
     ),
     "tool.output": (
         _art("result", TEXT, "tool.output", "result"),
-        BlockSpec("tool", KEY_VALUES, True, "derived:tool"),
         _art("params", JSON, "tool.input", "params", related="tool.input"),
         BlockSpec("schema", JSON, True, "schema", related="llm.input"),
     ),
@@ -282,9 +283,8 @@ _REGISTRY: dict[str, tuple[BlockSpec, ...]] = {
         BlockSpec("stats", KEY_VALUES, True, "derived:store_stats"),
     ),
     "memory.feedback": (
-        _attrs("injected", ITEMS, "memory.injected"),
-        _attrs("used", ITEMS, "memory.used"),
-        _attrs("origin", KEY_VALUES, "memory.session_id"),
+        BlockSpec("injected", ITEMS, True, "derived:feedback_injected"),
+        BlockSpec("used", ITEMS, True, "derived:feedback_used"),
     ),
     "memory.extract": (
         _attrs("settings", KEY_VALUES, "memory.surface,memory.model,memory.enable_foresight"),
@@ -355,6 +355,33 @@ _TAIL = (
 )
 
 _EVIDENCE_KINDS = ("span.error", "span.malformed", "span.unreadable")
+_OUTLINE = BlockSpec("outline", ITEMS, False, "derived:messages_outline")
+_UNTIMED_BASES = (_entries.BASIS_ZERO, _entries.BASIS_SHARED, _entries.BASIS_NOT_RECORDED)
+_HIDE_WHEN_EMPTY = {"llm.output": ("content", "toolCalls"), "llm.thinking": ("thinkingBlocks",)}
+
+
+def _all_specs(entry: _entries.TrajectoryEntry) -> tuple[BlockSpec, ...]:
+    """The kind's blocks, an outline beside a message list, and the common tail;
+    the timing block only where the entry owns a clock of its own."""
+    kind = _kind_specs(entry)
+    outline = (_OUTLINE,) if any(s.renderer == MESSAGES and s.source.startswith(_A) for s in kind) else ()
+    tail = tuple(s for s in _TAIL if not (s.id == "timing" and entry.timing_basis in _UNTIMED_BASES))
+    return (*kind, *outline, *tail)
+
+
+def _empty_block(evaluated: "_Evaluated") -> bool:
+    data = evaluated.data
+    if evaluated.availability in (EMPTY, NOT_RECORDED):
+        return True
+    if not isinstance(data, dict):
+        return True
+    if evaluated.spec.renderer == TEXT:
+        return not str(data.get("text", "")).strip()
+    if evaluated.spec.renderer in (ITEMS, MESSAGES, KEY_VALUES):
+        return not data.get("items")
+    if evaluated.spec.renderer == JSON:
+        return data.get("value") in (None, "", [], {})
+    return False
 
 
 def _kind_specs(entry: _entries.TrajectoryEntry) -> tuple[BlockSpec, ...]:
@@ -435,6 +462,30 @@ class _Reader:
 
     def blob(self, sha1: str) -> tuple[str | None, str | None] | None:
         return self.read(str(artifact_v2.message_path(self.state / "logs" / "audit-artifacts", sha1)), is_blob=True)
+
+    def blob_prefix(self, sha1: str, limit: int) -> tuple[str | None, int | None] | None:
+        """(text, file size) with at most ``limit`` bytes of the blob read, or None when the budget is spent.
+
+        Counted like any blob read; a file longer than ``limit`` comes back
+        as its prefix with its real size, so the caller knows it holds a part.
+        """
+        path = artifact_v2.message_path(self.state / "logs" / "audit-artifacts", sha1)
+        key = f"{path}#{limit}"
+        if key in self.cache:
+            text, size = self.cache[key]
+            return text, int(size) if size is not None else None
+        if not self._allowed(True):
+            self.exhausted = True
+            return None
+        try:
+            size: int | None = path.stat().st_size
+        except OSError:
+            size = None
+        text, _ = _conv._read_artifact(self.state, str(path), limit) if size is not None else (None, None)
+        self.blobs += 1
+        self.bytes += len(text.encode("utf-8", errors="replace")) if text else 0
+        self.cache[key] = (text, str(size) if size is not None else None)
+        return text, size
 
 
 @dataclass
@@ -729,14 +780,59 @@ def _d_thinking(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Der
     return out.availability, {"text": out.text or ""}, out.integrity, out.reason
 
 
+_USAGE_PREFIX = "llm.usage."
+
+
 def _d_llm_usage(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
-    out = loaded("llm.output")
-    items: list[tuple[str, Any, str]] = []
-    present, value = _field(out, "usage")
-    if present and value is not None:
-        items.append(("usage", value, "artifact"))
-    items += _attr_pairs(attrs, sorted(k for k in attrs if isinstance(k, str) and k.startswith("llm.usage.")))
-    return _kv_from(out, items)
+    """The normalized counters alone (``llm.usage.*`` without the prefix); the
+    provider's own ``usage`` object stays in the raw record, where it is not
+    mistaken for a second set of numbers."""
+    items = [
+        (key[len(_USAGE_PREFIX) :], attrs[key], "attribute")
+        for key in sorted(k for k in attrs if isinstance(k, str) and k.startswith(_USAGE_PREFIX))
+    ]
+    return _kv_block(items)
+
+
+def _feedback_items(attrs: dict[str, Any], key: str) -> _Derived:
+    injected = [v for v in (attrs.get("memory.injected") or []) if isinstance(v, str)]
+    used = [v for v in (attrs.get("memory.used") or []) if isinstance(v, str)]
+    ids = injected if key == "memory.injected" else used
+    items = [{"id": skill_id, "used": skill_id in used} for skill_id in ids]
+    return (AVAILABLE if items else EMPTY), {"items": items, "offset": 0}, (), None
+
+
+def _d_feedback_injected(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
+    return _feedback_items(attrs, "memory.injected")
+
+
+def _d_feedback_used(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
+    return _feedback_items(attrs, "memory.used")
+
+
+def _messages_spec(entry: _entries.TrajectoryEntry) -> BlockSpec | None:
+    return next((s for s in _kind_specs(entry) if s.renderer == MESSAGES and s.source.startswith(_A)), None)
+
+
+def _d_messages_outline(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
+    """One row per message of the kind's message list, unresolved: the index
+    and the raw item (a ``$msg`` reference or an inline message). The page the
+    reader asks for is resolved in :func:`read_block`, within its blob budget."""
+    spec = _messages_spec(view.entry)
+    if spec is None:
+        return NOT_RECORDED, None, (), NOT_RECORDED
+    load = loaded(spec.source[len(_A) :])
+    if not load.loaded:
+        return AVAILABLE, None, (), REASON_NOT_LOADED
+    problem = _structured_problem(load)
+    if problem is not None:
+        availability, code = problem
+        return availability, None, (*load.integrity, code), code
+    present, value = _field(load, spec.field)
+    if not present or not isinstance(value, list):
+        return NOT_RECORDED, None, load.integrity, NOT_RECORDED
+    items = [{"index": index, "raw": item} for index, item in enumerate(value)]
+    return (AVAILABLE if items else EMPTY), {"items": items, "offset": 0}, load.integrity, None
 
 
 def _d_llm_response(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
@@ -855,7 +951,9 @@ _DERIVED: dict[str, Callable[[EntryView, dict[str, Any], _Loader], _Derived]] = 
     ),
     "llm_usage": _d_llm_usage,
     "llm_response": _d_llm_response,
-    "tool": _from_payload_and_attrs("tool.input", ("name",), ("tool.name", "tool.duration_ms", "tool.error")),
+    "feedback_injected": _d_feedback_injected,
+    "feedback_used": _d_feedback_used,
+    "messages_outline": _d_messages_outline,
     "inject_origin": _from_payload_and_attrs("skill.inject", ("via", "sources"), ()),
     "inject_stats": _from_payload_and_attrs(
         "skill.inject", ("body_len",), ("skill.inject.count", "skill.inject.body_len")
@@ -1091,6 +1189,231 @@ def _resolve_messages(
     return out, tuple(integrity)
 
 
+# ── the message outline ───────────────────────────────────────────────
+
+
+def _scan_top_level(prefix: str, keys: tuple[str, ...] = ("role", "content")) -> dict[str, Any]:
+    """The string fields in ``keys`` (``role`` and ``content`` by default) a JSON object's prefix shows at its top level.
+
+    A bounded scan over possibly cut-off text: it tracks string state, escape
+    state and nesting depth, and records a key only at depth one, so a
+    ``role`` or ``content`` inside ``tool_calls[].function.arguments`` is
+    passed over. A value the prefix ends in the middle of is not accepted.
+    ``content`` comes back decoded and clipped to ``OUTLINE_PREVIEW_CHARS``,
+    or as the marker ``[multipart]`` when it is a list whose first text part
+    is not within reach.
+    """
+    out: dict[str, Any] = {key: None for key in keys}
+    if "content" in keys:
+        out["content_kind"] = None
+    n = len(prefix)
+    i = 0
+
+    def skip_ws(pos: int) -> int:
+        while pos < n and prefix[pos] in " \t\r\n":
+            pos += 1
+        return pos
+
+    def read_string(pos: int, limit: int | None = None) -> tuple[str | None, int, bool]:
+        """(decoded value, position after the closing quote, complete) for a string opening at ``pos``."""
+        if pos >= n or prefix[pos] != '"':
+            return None, pos, False
+        pos += 1
+        chars: list[str] = []
+        clipped = False
+        while pos < n:
+            ch = prefix[pos]
+            if ch == '"':
+                return ("".join(chars), pos + 1, True)
+            if ch == "\\":
+                if pos + 1 >= n:
+                    break
+                esc = prefix[pos + 1]
+                if esc == "u":
+                    if pos + 6 > n:
+                        break
+                    try:
+                        code = int(prefix[pos + 2 : pos + 6], 16)
+                    except ValueError:
+                        break
+                    decoded = chr(code)
+                    pos += 6
+                else:
+                    decoded = {
+                        "n": "\n",
+                        "t": "\t",
+                        "r": "\r",
+                        "b": "\b",
+                        "f": "\f",
+                        "/": "/",
+                        "\\": "\\",
+                        '"': '"',
+                    }.get(esc, esc)
+                    pos += 2
+            else:
+                decoded = ch
+                pos += 1
+            if limit is None or len(chars) < limit:
+                chars.append(decoded)
+            else:
+                clipped = True
+        return (None, pos, False) if not clipped else ("".join(chars), pos, False)
+
+    def skip_value(pos: int) -> int | None:
+        """Position after the value starting at ``pos``, or None when the prefix ends inside it."""
+        pos = skip_ws(pos)
+        if pos >= n:
+            return None
+        ch = prefix[pos]
+        if ch == '"':
+            _, after, complete = read_string(pos, limit=0)
+            return after if complete else None
+        if ch in "{[":
+            depth = 0
+            in_string = False
+            while pos < n:
+                c = prefix[pos]
+                if in_string:
+                    if c == "\\":
+                        pos += 2
+                        continue
+                    if c == '"':
+                        in_string = False
+                elif c == '"':
+                    in_string = True
+                elif c in "{[":
+                    depth += 1
+                elif c in "}]":
+                    depth -= 1
+                    if depth == 0:
+                        return pos + 1
+                pos += 1
+            return None
+        while pos < n and prefix[pos] not in ",}]":
+            pos += 1
+        return pos if pos < n else None
+
+    def take(key: str, pos: int) -> int | None:
+        """Record the value at ``pos`` for ``key`` when it is one we keep; position after it, or None at the prefix's end."""
+        if key in keys and prefix[pos] == '"':
+            long_text = key in ("content", "text")
+            value, after, complete = read_string(pos, limit=OUTLINE_PREVIEW_CHARS if long_text else 64)
+            if value is not None and (complete or (long_text and len(value) >= OUTLINE_PREVIEW_CHARS)):
+                out[key] = value
+                if key == "content":
+                    out["content_kind"] = "text"
+            return after if complete else None
+        if key == "content" and prefix[pos] == "[":
+            out["content_kind"] = "array"
+            out["content"] = _first_text_part(prefix, pos)
+        return skip_value(pos)
+
+    i = skip_ws(i)
+    if i >= n or prefix[i] != "{":
+        return out
+    i += 1
+    while i < n:
+        i = skip_ws(i)
+        if i >= n or prefix[i] == "}":
+            break
+        if prefix[i] == ",":
+            i += 1
+            continue
+        key, i, complete = read_string(i)
+        if not complete or key is None:
+            break
+        i = skip_ws(i)
+        if i >= n or prefix[i] != ":":
+            break
+        i = skip_ws(i + 1)
+        if i >= n:
+            break
+        after = take(key, i)
+        if after is None:
+            break
+        i = after
+    return out
+
+
+def _first_text_part(prefix: str, start: int) -> str:
+    """The text of the first ``{"type": "text", "text": ...}`` part a content array opens with, or the multipart marker."""
+    end = min(len(prefix), start + 4096)
+    head = prefix[start:end]
+    probe = _scan_top_level(head[head.find("{") :], keys=("type", "text")) if "{" in head else {}
+    text = probe.get("text")
+    if probe.get("type") == "text" and isinstance(text, str) and text:
+        return text
+    return "[multipart]"
+
+
+def _outline_item(item: dict[str, Any], reader: _Reader, entry_id: str, revision: int, epoch: str) -> dict[str, Any]:
+    """One outline row for a raw message list item: its role, size and first words, plus the cursor of the page it starts."""
+    index = int(item.get("index", 0))
+    raw = item.get("raw")
+    row: dict[str, Any] = {
+        "index": index,
+        "role": "unknown",
+        "bytes": None,
+        "chars": None,
+        "preview": "",
+        "partial": False,
+        "missing": False,
+        "cursor": _encode_cursor(entry_id, revision, epoch, index),
+    }
+    sha1 = artifact_v2.ref_sha1(raw)
+    if sha1 is None:
+        _fill_outline_from_message(row, raw)
+        return row
+    result = reader.blob_prefix(sha1, OUTLINE_BLOB_BYTES)
+    if result is None:
+        row["partial"] = True
+        return row
+    text, size = result
+    row["bytes"] = size
+    if text is None:
+        row["missing"] = True
+        row["preview"] = f"[message blob missing: {sha1}]"
+        return row
+    if size is not None and size <= OUTLINE_BLOB_BYTES:
+        parsed, ok = _conv._parse_json(text)
+        if not ok:
+            row["missing"] = True
+            row["preview"] = f"[message blob unreadable: {sha1}]"
+            return row
+        _fill_outline_from_message(row, parsed)
+        return row
+    scanned = _scan_top_level(text)
+    row["partial"] = True
+    if isinstance(scanned.get("role"), str):
+        row["role"] = scanned["role"]
+    if isinstance(scanned.get("content"), str):
+        row["preview"] = scanned["content"][:OUTLINE_PREVIEW_CHARS]
+    return row
+
+
+def _fill_outline_from_message(row: dict[str, Any], message: Any) -> None:
+    if not isinstance(message, dict):
+        text = _conv._display(message)
+        row["chars"] = len(text)
+        row["preview"] = text[:OUTLINE_PREVIEW_CHARS]
+        return
+    role = message.get("role")
+    row["role"] = role if isinstance(role, str) and role else "unknown"
+    content = message.get("content")
+    if isinstance(content, list):
+        part = next(
+            (p for p in content if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("text"), str)),
+            None,
+        )
+        text = part["text"] if part is not None else ""
+        row["preview"] = text[:OUTLINE_PREVIEW_CHARS] if text else "[multipart]"
+        row["chars"] = len(text) if text else None
+        return
+    text = _conv._display(content)
+    row["chars"] = len(text)
+    row["preview"] = text[:OUTLINE_PREVIEW_CHARS]
+
+
 def _resolve_text_ref(value: Any, reader: _Reader) -> tuple[str, tuple[str, ...]]:
     sha1 = artifact_v2.ref_sha1(value)
     if sha1 is None:
@@ -1118,6 +1441,8 @@ def _preview_for(evaluated: _Evaluated, reader: _Reader) -> tuple[Any, tuple[str
             list(data.get("items", []))[:PREVIEW_MESSAGES], reader, limit=PREVIEW_MESSAGES
         )
         return [_json_preview(item) for item in head], integrity
+    if evaluated.spec.id == "outline":
+        return None, ()
     if renderer in (ITEMS, REFERENCES):
         return [_clip_value(item) for item in list(data.get("items", []))[:PREVIEW_ITEMS]], ()
     if renderer == KEY_VALUES:
@@ -1130,7 +1455,8 @@ def _preview_for(evaluated: _Evaluated, reader: _Reader) -> tuple[Any, tuple[str
 
 def _blocks_for(view: EntryView, reader: _Reader) -> list[_Evaluated]:
     loaded = _loader(view, reader)
-    specs = (*_kind_specs(view.entry), *_TAIL)
+    specs = _all_specs(view.entry)
+    hide_empty = _HIDE_WHEN_EMPTY.get(view.entry.kind, ())
     out: list[_Evaluated] = []
     for spec in specs:
         if spec.id == "error" and view.entry.operation_status != _entries.STATUS_ERROR:
@@ -1139,6 +1465,8 @@ def _blocks_for(view: EntryView, reader: _Reader) -> list[_Evaluated]:
             continue
         evaluated = _evaluate(spec, view, reader, loaded)
         if evaluated is None:
+            continue
+        if spec.id in hide_empty and evaluated.loaded and _empty_block(evaluated):
             continue
         if spec.id in _OPTIONAL_DEPENDENT and not evaluated.loaded:
             evaluated.reason = REASON_NOT_LOADED
@@ -1310,8 +1638,12 @@ def read_block(
     reader = _Reader(
         state, max_artifacts=READ_BLOCK_ARTIFACTS, max_blobs=READ_BLOCK_BLOBS, max_bytes=READ_BLOCK_BYTES_LIMIT
     )
+    if block_id == "outline":
+        reader = _Reader(
+            state, max_artifacts=READ_BLOCK_ARTIFACTS, max_blobs=OUTLINE_PAGE, max_bytes=READ_BLOCK_BYTES_LIMIT
+        )
     loaded = _loader(view, reader)
-    specs = (*_kind_specs(view.entry), *_TAIL)
+    specs = _all_specs(view.entry)
     spec = next((s for s in specs if s.id == block_id), None)
     if spec is None:
         raise UnknownBlockError(block_id)
@@ -1353,11 +1685,15 @@ def read_block(
                 availability = TRUNCATED
         elif spec.renderer in (MESSAGES, ITEMS, REFERENCES):
             items = list(data.get("items", []))
-            page = MESSAGES_PAGE if spec.renderer == MESSAGES else ITEMS_PAGE
+            page = (
+                MESSAGES_PAGE if spec.renderer == MESSAGES else (OUTLINE_PAGE if spec.id == "outline" else ITEMS_PAGE)
+            )
             window = items[offset : offset + page]
             if spec.renderer == MESSAGES:
                 window, blob_integrity = _resolve_messages(window, reader)
                 integrity.extend(code for code in blob_integrity if code not in integrity)
+            elif spec.id == "outline":
+                window = [_outline_item(item, reader, entry_id, entry_revision, epoch) for item in window]
             fitted, end, truncated = _fit_items(window, 0, page, budget)
             end_offset = offset + end
             data = {**data, "items": fitted, "offset": offset}

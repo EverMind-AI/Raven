@@ -2114,9 +2114,31 @@ operation's status (`running` / `ok` / `error` / `cancelled` / `unknown`) with t
 evidence codes that produced it, data-integrity codes kept separate from status,
 and the span's clock with a Timing Owner. A base span that expands to nothing
 gets a `summary` entry; a failed span with no completion slot gets an `error`
-entry, so exactly one entry per failed span is the `failure_entry`.
+entry, so exactly one entry per failed span is the `failure_entry`. Its `meta`
+carries what the projection derives from the cached records around it:
+for a model input the Message Delta (`delta` ∈ `first` / `continued` /
+`independent` / `unknown`, `new_from`, `message_count`) and the LLM Purpose
+(`purpose`); for a reply that repeats the turn's last model output word for
+word, or an outer-only summary that recorded nothing, `hidden`
+(`redundant_reply` / `empty_internal`) — the row stays in the index and keeps
+its clock, the list merely need not show it.
 _Avoid_: calling a Conversation Record an entry — that is the CLI's text
 projection, without identity, structured status or timing.
+
+**Message Delta** (`raven/trajectory/entries.py`, `_apply_delta`):
+What one model input adds to the conversation before it, proven rather than
+assumed: an earlier input of the same chain (the main line, or one sub-agent
+trace) with a compatible LLM Purpose counts as the predecessor only when its
+message sequence — the content addresses of a v2 artifact's messages — is an
+ordered prefix of this one; then `new_from = len(prefix)`. The chain's first
+input is `first` (all new); an input no candidate precedes is `independent`
+(all new); an input whose own or whose candidates' messages are not read yet is
+`unknown`, decided again when they are. Computed at projection time from the
+preview cache, so a predecessor read later changes the row under a new
+revision; the row's preview then wants the first added message, which the index
+fetches with one more bounded read (`_schedule_preview_repairs`).
+_Avoid_: calling two inputs of one trace a conversation because they share a
+turn — the watch-work judgement shares the turn and nothing else.
 
 **Timing Owner** (`raven/trajectory/entries.py`):
 The single Trajectory Entry charged a logical span's whole `end - start`
@@ -2130,6 +2152,17 @@ time is therefore counted at most once, while parent and child spans each keep
 their own, so the duration bar sums charged time, not wall-clock time.
 _Avoid_: reading `tool.duration_ms` or usage fields as the owner's charge — they
 are diagnostics, not the span clock.
+
+**LLM Purpose** (`raven/observability/purpose.py`):
+The caller's own name for why a model call is made — `main` for the agent
+loop's action call, `synthesis`, `watch_work`, `title`, `permission_judge`,
+`memory_extract`, `skill_gate`, `personalize`, `window_shrink`, `dag_verdict`,
+`playbook` — set with `with purpose(name):` around the provider call and read
+by the `llm.call` span extractor into the `llm.purpose` attribute. A call made
+under no label records nothing: absent means "not said", never "main".
+_Avoid_: reading `llm.invocation_source` as the purpose — that is the nearest
+enclosing span's name (`session.turn` for every call of a turn), not the
+caller's intent.
 
 ### Workspace & Onboarding
 

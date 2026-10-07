@@ -271,6 +271,42 @@ async def test_detail_and_block_round_trip(state):
     assert pages[0]["total_items"] == 45
 
 
+async def test_outline_block_lists_every_message_and_hands_out_page_cursors(state):
+    _seed(state, turns=1, v2_messages=45)
+    tpol.arm(True)
+    dispatcher = _dispatcher()
+    entries, first = await _list_all(dispatcher)
+    llm_in = next(e for e in entries if e["entry_id"] == "t:llm0:llm.input")
+    detail = await _call(dispatcher, "trajectory.detail", {"session_key": SESSION, "entry_id": llm_in["entry_id"]})
+    outline = next(b for b in detail["result"]["blocks"] if b["id"] == "outline")
+    assert outline["renderer"] == "items" and outline["preview"] is None and outline["total_items"] == 45
+    base = {
+        "session_key": SESSION,
+        "entry_id": llm_in["entry_id"],
+        "entry_revision": llm_in["revision"],
+        "epoch": first["epoch"],
+    }
+    body = await _call(dispatcher, "trajectory.block", {**base, "block_id": "outline"})
+    TrajectoryBlockResult.model_validate(body["result"])
+    assert body["result"]["next_cursor"] is None and body["result"]["total_items"] == 45
+    rows = body["result"]["data"]["items"]
+    assert [row["index"] for row in rows] == list(range(45))
+    assert {k: v for k, v in rows[7].items() if k not in ("bytes", "cursor")} == {
+        "index": 7,
+        "role": "user",
+        "chars": len("message 7"),
+        "preview": "message 7",
+        "partial": False,
+        "missing": False,
+    }
+    assert rows[7]["bytes"] > 0 and isinstance(rows[7]["cursor"], str)
+    page = await _call(dispatcher, "trajectory.block", {**base, "block_id": "messages", "cursor": rows[20]["cursor"]})
+    TrajectoryBlockResult.model_validate(page["result"])
+    assert page["result"]["data"]["offset"] == 20
+    assert [m["content"] for m in page["result"]["data"]["items"]] == [f"message {n}" for n in range(20, 40)]
+    assert page["result"]["next_cursor"] is not None
+
+
 async def test_error_mapping(state):
     _seed(state, turns=1)
     tpol.arm(True)

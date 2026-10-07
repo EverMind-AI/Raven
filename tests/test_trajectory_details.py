@@ -208,6 +208,7 @@ def test_every_kind_in_the_gui_table_yields_ordered_blocks(state):
                 "thinking_blocks": [{"thinking": "think"}],
                 "call": {"status": 200},
             },
+            extra={"llm.usage.input_tokens": 1},
         ),
         _tool(state, "t", "tool", "turn", start=3, end=4),
         _span(
@@ -431,11 +432,11 @@ def test_every_kind_in_the_gui_table_yields_ordered_blocks(state):
     expected = {
         ("turn", "turn.input"): ["content", "media", "origin"],
         ("turn", "turn.output"): ["content"],
-        ("llm", "llm.input"): ["messages", "model", "tools"],
+        ("llm", "llm.input"): ["messages", "model", "tools", "outline"],
         ("llm", "llm.thinking"): ["thinking", "thinkingBlocks"],
         ("llm", "llm.output"): ["content", "toolCalls", "finish", "usage", "response"],
-        ("tool", "tool.input"): ["tool", "params", "schema"],
-        ("tool", "tool.output"): ["result", "tool", "params", "schema"],
+        ("tool", "tool.input"): ["params", "schema"],
+        ("tool", "tool.output"): ["result", "params", "schema"],
         ("read", "skill.read"): ["skill", "params", "content", "origin"],
         ("inject", "skill.inject"): ["skills", "origin", "stats"],
         ("rewrite", "io.input"): ["query"],
@@ -447,10 +448,10 @@ def test_every_kind_in_the_gui_table_yields_ordered_blocks(state):
         ("sub", "subagent.run"): ["task", "agent"],
         ("ext", "artifact:subagent.external.transcript"): ["agent", "result", "transcript", "frames"],
         ("recall", "artifact:memory.recall"): ["query", "settings", "hits"],
-        ("store", "artifact:memory.store"): ["messages", "stats"],
-        ("fb", "summary"): ["injected", "used", "origin"],
+        ("store", "artifact:memory.store"): ["messages", "stats", "outline"],
+        ("fb", "summary"): ["injected", "used"],
         ("enq", "summary"): ["operation"],
-        ("pz", "io.input"): ["content", "messages"],
+        ("pz", "io.input"): ["content", "messages", "outline"],
         ("pz", "io.output"): ["result"],
         ("plugin", "summary"): ["plugin", "contribution", "result"],
         ("foo", "artifact:foo.alpha"): ["content", "attributes"],
@@ -460,10 +461,11 @@ def test_every_kind_in_the_gui_table_yields_ordered_blocks(state):
         entry = _entry(index, span_id, slot)
         descriptor = _describe(index, state, entry)
         ids = _ids(descriptor)
-        tail = ["error"] if entry.operation_status == "error" and span_id != "boom" else []
-        expected_ids = own + (["timing", "relations"] if span_id != "boom" else ["timing", "relations"])
+        # Only the entry charged a clock of its own carries a timing block.
+        timed = entry.timing_basis not in ("zero", "shared", "not_recorded")
+        expected_ids = own + (["timing"] if timed else []) + ["relations"]
         if span_id == "boom":
-            expected_ids = ["error", "timing", "relations"]
+            expected_ids = ["error"] + (["timing"] if timed else []) + ["relations"]
         if entry.integrity:
             expected_ids = expected_ids + ["integrity"]
         expected_ids = expected_ids + ["raw"]
@@ -471,7 +473,6 @@ def test_every_kind_in_the_gui_table_yields_ordered_blocks(state):
         assert len(ids) == len(set(ids))
         assert all(b.renderer in tdet.RENDERERS for b in descriptor.blocks)
         assert all(b.availability in tdet.AVAILABILITIES for b in descriptor.blocks)
-        del tail
     enqueue = _describe(index, state, _entry(index, "enq", "summary"))
     assert enqueue.blocks[0].availability == tdet.EMPTY
     assert enqueue.notes == (tdet.NOTE_OUTER_ONLY,)
@@ -861,6 +862,7 @@ def test_describe_budget_marks_unopened_blocks_not_loaded(state, monkeypatch):
                 "tool_calls": [{"id": "1", "name": "x", "arguments": "{}"}],
                 "usage": {"input_tokens": 1},
             },
+            extra={"llm.usage.input_tokens": 1},
         ),
     ]
     _append(state, spans)
@@ -872,15 +874,13 @@ def test_describe_budget_marks_unopened_blocks_not_loaded(state, monkeypatch):
     monkeypatch.setattr(tdet, "DESCRIBE_ARTIFACTS", 1)
     out = _describe(index, state, _entry(index, "llm", "llm.output"))
     not_loaded = {b.id for b in out.blocks if b.reason == tdet.REASON_NOT_LOADED}
-    assert not_loaded >= {"toolCalls", "usage", "response"} or all(
-        b.reason != tdet.REASON_NOT_LOADED for b in out.blocks
-    )
+    assert not_loaded >= {"toolCalls", "response"} or all(b.reason != tdet.REASON_NOT_LOADED for b in out.blocks), [
+        (b.id, b.availability, b.reason) for b in out.blocks
+    ]
     monkeypatch.setattr(tdet, "DESCRIBE_ARTIFACTS", 0)
     out = _describe(index, state, _entry(index, "llm", "llm.output"))
     assert {b.id for b in out.blocks} >= {"content", "toolCalls", "finish", "usage", "response"}
-    assert all(
-        b.reason == tdet.REASON_NOT_LOADED for b in out.blocks if b.id in ("content", "toolCalls", "usage", "response")
-    )
+    assert all(b.reason == tdet.REASON_NOT_LOADED for b in out.blocks if b.id in ("content", "toolCalls", "response"))
     body = _block(index, state, _entry(index, "llm", "llm.output"), "toolCalls")
     assert body.availability == tdet.AVAILABLE and body.total_items == 1
 
@@ -949,11 +949,16 @@ def test_info_notes_timing_and_relations(state):
     tool_in = _entry(index, "tool", "tool.input")
     descriptor = _describe(index, state, tool_in)
     assert descriptor.operation_status == "ok" and not descriptor.failure_entry
-    timing = _block(index, state, tool_in, "timing")
+    # The input is charged nothing, so it carries no timing block; the output owns the clock.
+    assert "timing" not in _ids(descriptor)
+    with pytest.raises(tdet.UnknownBlockError):
+        _block(index, state, tool_in, "timing")
+    tool_out = _entry(index, "tool", "tool.output")
+    timing = _block(index, state, tool_out, "timing")
     values = {item["key"]: item["value"] for item in timing.data["items"]}
     assert (
-        values["charged_ms"] == 0
-        and values["timing_basis"] == "zero"
+        values["charged_ms"] == 2000
+        and values["timing_basis"] == "span_full"
         and values["duration_owner"] == "t:tool:tool.output"
     )
     assert values["tool.duration_ms"] == 1999
@@ -1216,11 +1221,10 @@ def test_derived_blocks_keep_source_failures(state, monkeypatch):
     assert (big_request.availability, big_request.reason) == (tdet.TRUNCATED, "artifact_truncated")
     raw_request = _block(index, state, _entry(index, "raw", "io.input"), "request")
     assert (raw_request.availability, raw_request.reason) == (tdet.UNREADABLE, "artifact_unreadable")
+    # The usage block reads the normalized counters alone, so the lost artifact does not touch it.
     usage = _block(index, state, _entry(index, "llm", "llm.output"), "usage")
-    assert usage.availability == tdet.AVAILABLE and usage.reason == "artifact_missing"
-    assert {item["key"] for item in usage.data["items"]} == {
-        "llm.usage.input_tokens"
-    } and "artifact_missing" in usage.integrity
+    assert usage.availability == tdet.AVAILABLE and usage.reason is None
+    assert {item["key"] for item in usage.data["items"]} == {"input_tokens"} and not usage.integrity
     response = _block(index, state, _entry(index, "llm", "llm.output"), "response")
     assert response.availability == tdet.AVAILABLE and response.reason == "artifact_missing"
     assert response.data["value"] == {"llm.http_status": 200}
@@ -1325,3 +1329,236 @@ def test_integrity_read_is_bounded_and_marks_partial_results(state, monkeypatch)
     with pytest.raises(tdet.UnknownBlockError):
         monkeypatch.setattr(tdet, "DESCRIBE_ARTIFACTS", 0)
         _block(index, state, entry, "integrity")
+
+
+# ── the message outline ───────────────────────────────────────────────
+
+
+def _items(block):
+    return list(block.data["items"])
+
+
+def test_outline_pages_every_message_with_a_cursor_to_its_body(state):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _llm(state, "t", "llm", "turn", start=1, end=2, v2_count=450, output={"content": "a"}),
+        ],
+    )
+    index = _ready(state)
+    entry = _entry(index, "llm", "llm.input")
+    descriptor = _describe(index, state, entry)
+    outline_block = next(b for b in descriptor.blocks if b.id == "outline")
+    assert outline_block.preview is None and outline_block.total_items == 450
+    first = _block(index, state, entry, "outline")
+    assert first.renderer == tdet.ITEMS and first.total_items == 450
+    rows = _items(first)
+    assert len(rows) == tdet.OUTLINE_PAGE and first.next_cursor is not None
+    assert [r["index"] for r in rows] == list(range(200))
+    assert rows[7] == {
+        "index": 7,
+        "role": "user",
+        "bytes": rows[7]["bytes"],
+        "chars": len("message 7"),
+        "preview": "message 7",
+        "partial": False,
+        "missing": False,
+        "cursor": rows[7]["cursor"],
+    }
+    assert rows[7]["bytes"] > 0
+    second = _block(index, state, entry, "outline", cursor=first.next_cursor)
+    third = _block(index, state, entry, "outline", cursor=second.next_cursor)
+    assert [r["index"] for r in _items(second)] == list(range(200, 400))
+    assert [r["index"] for r in _items(third)] == list(range(400, 450)) and third.next_cursor is None
+    # A row's cursor opens the message page that starts with that very message.
+    body = _block(index, state, entry, "messages", cursor=_items(second)[13]["cursor"])
+    assert body.data["offset"] == 213 and body.data["items"][0]["content"] == "message 213"
+    assert body.total_items == 450
+
+
+def test_outline_reads_big_blobs_at_the_top_level_and_calls_them_partial(state):
+    nested = {"tool_calls": [{"function": {"role": "x", "content": "inner", "arguments": '{"content": 1}'}}]}
+    tail_role = {**nested, "content": 'He said "hi" é ' + "x" * 9000, "role": "assistant"}
+    head_role = {**nested, "role": "assistant", "content": "lead words " + "y" * 9000}
+    small = {
+        "role": "user",
+        "content": [{"type": "text", "text": "a part"}, {"type": "image_url", "image_url": {"url": "u"}}],
+    }
+    refs = [_blob(state, head_role), _blob(state, tail_role), _blob(state, small), {"$msg": "0" * 40}]
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs, "prompt": refs[-1], "tools": []}
+    attrs = {"llm.model": "m", "llm.input.artifact_path": _artifact(state, shell, "big-in")}
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _span("t", "llm", "llm.call", parent="turn", start=1, end=2, attrs=attrs),
+        ],
+    )
+    index = _ready(state)
+    rows = _items(_block(index, state, _entry(index, "llm", "llm.input"), "outline"))
+    assert rows[0]["role"] == "assistant" and rows[0]["partial"] and rows[0]["chars"] is None
+    assert rows[0]["preview"] == "lead words " + "y" * (tdet.OUTLINE_PREVIEW_CHARS - len("lead words "))
+    assert rows[0]["bytes"] > tdet.OUTLINE_BLOB_BYTES
+    # The content came first and runs past the prefix: its first words are read, the role after it is not reached.
+    assert rows[1]["role"] == "unknown" and rows[1]["partial"] and not rows[1]["missing"]
+    assert rows[1]["preview"].startswith('He said "hi" é xxxx')
+    assert rows[2] == {**rows[2], "role": "user", "preview": "a part", "chars": len("a part"), "partial": False}
+    assert rows[3]["missing"] and rows[3]["role"] == "unknown" and rows[3]["bytes"] is None
+
+
+def test_scan_top_level_accepts_only_complete_top_level_fields():
+    scan = tdet._scan_top_level
+    assert scan('{"role":"user","content":"hi"}') == {"role": "user", "content": "hi", "content_kind": "text"}
+    nested = '{"tool_calls":[{"function":{"role":"x","arguments":"{\\"content\\": 1}"}}],"role":"assistant","content":"He said \\"hi\\" \\u00e9"}'
+    assert scan(nested) == {"role": "assistant", "content": 'He said "hi" é', "content_kind": "text"}
+    cut = scan('{"role":"user","content":"cut off in the mid')
+    assert cut["role"] == "user" and cut["content"] is None
+    long_cut = scan('{"content":"' + "z" * 100)
+    assert long_cut["content"] == "z" * tdet.OUTLINE_PREVIEW_CHARS and long_cut["role"] is None
+    half_key = scan('{"role":"user","cont')
+    assert half_key == {"role": "user", "content": None, "content_kind": None}
+    parts = scan('{"role":"user","content":[{"type":"text","text":"first part"},{"type":"image_url"}]}')
+    assert parts == {"role": "user", "content": "first part", "content_kind": "array"}
+    assert scan('{"role":"user","content":[{"type":"image_url","image_url":{"url":"u"}}]}')["content"] == "[multipart]"
+    assert scan("not json at all") == {"role": None, "content": None, "content_kind": None}
+    assert scan('{"role":5,"content":"x"}') == {"role": None, "content": "x", "content_kind": "text"}
+
+
+# ── blocks that say nothing, and clocks nobody owns ───────────────────
+
+
+def test_empty_model_output_blocks_are_not_listed(state):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _llm(
+                state,
+                "t",
+                "quiet",
+                "turn",
+                start=1,
+                end=2,
+                output={"content": "", "tool_calls": [], "finish_reason": "stop"},
+                extra={"llm.usage.input_tokens": 3, "llm.usage.output_tokens": 0},
+            ),
+            _llm(
+                state,
+                "t",
+                "loud",
+                "turn",
+                start=3,
+                end=4,
+                output={
+                    "content": "x",
+                    "tool_calls": [{"id": "1", "name": "f", "arguments": "{}"}],
+                    "finish_reason": "tool_calls",
+                },
+            ),
+        ],
+    )
+    index = _ready(state)
+    quiet = _ids(_describe(index, state, _entry(index, "quiet", "llm.output")))
+    assert "content" not in quiet and "toolCalls" not in quiet and "response" not in quiet
+    assert quiet[:2] == ["finish", "usage"]
+    loud = _ids(_describe(index, state, _entry(index, "loud", "llm.output")))
+    assert loud[:3] == ["content", "toolCalls", "finish"] and "usage" not in loud
+    # Only the user's own words keep an empty content block: an empty reply is itself information.
+    user = _ids(_describe(index, state, _entry(index, "turn", "turn.input")))
+    assert user[0] == "content"
+
+
+def test_untimed_entries_carry_no_timing_block(state):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _llm(state, "t", "llm", "turn", start=1, end=3, output={"content": "a", "reasoning_content": "deep"}),
+            _tool(state, "t", "tool", "turn", start=4, end=6),
+        ],
+    )
+    index = _ready(state)
+    untimed = [("turn", "turn.input"), ("llm", "llm.input"), ("llm", "llm.thinking"), ("tool", "tool.input")]
+    timed = [("turn", "turn.output"), ("llm", "llm.output"), ("tool", "tool.output")]
+    for span_id, slot in untimed:
+        assert "timing" not in _ids(_describe(index, state, _entry(index, span_id, slot))), (span_id, slot)
+    for span_id, slot in timed:
+        values = {
+            i["key"]: i["value"] for i in _block(index, state, _entry(index, span_id, slot), "timing").data["items"]
+        }
+        assert values["timing_basis"] == "span_full" and values["charged_ms"] > 0, (span_id, slot)
+
+
+def test_usage_block_reads_the_normalized_counters_and_nothing_else(state):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _llm(
+                state,
+                "t",
+                "llm",
+                "turn",
+                start=1,
+                end=2,
+                output={
+                    "content": "a",
+                    "usage": {"prompt_tokens": 15124, "completion_tokens": 126, "total_tokens": 15250},
+                },
+                extra={
+                    "llm.usage.input_tokens": 532,
+                    "llm.usage.output_tokens": 126,
+                    "llm.usage.reasoning_tokens": 80,
+                    "llm.usage.cache_read_tokens": 14592,
+                    "llm.usage.cache_write_tokens": None,
+                    "llm.usage.total_tokens": 15250,
+                    "llm.usage.cost_total": 0.00060885,
+                },
+            ),
+        ],
+    )
+    index = _ready(state)
+    usage = _block(index, state, _entry(index, "llm", "llm.output"), "usage")
+    items = {i["key"]: i["value"] for i in usage.data["items"]}
+    assert items == {
+        "input_tokens": 532,
+        "output_tokens": 126,
+        "reasoning_tokens": 80,
+        "cache_read_tokens": 14592,
+        "cache_write_tokens": None,
+        "total_tokens": 15250,
+        "cost_total": 0.00060885,
+    }
+    assert all(i["source"] == "attribute" for i in usage.data["items"])
+    raw = _block(index, state, _entry(index, "llm", "llm.output"), "raw")
+    assert raw.data["value"]["attributes"]["llm.usage.input_tokens"] == 532
+
+
+def test_feedback_blocks_list_each_skill_with_its_use(state):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _span(
+                "t",
+                "fb",
+                "memory.feedback",
+                parent="turn",
+                start=1,
+                end=2,
+                attrs={"memory.session_id": SESSION, "memory.injected": ["a", "b"], "memory.used": ["b"]},
+            ),
+        ],
+    )
+    index = _ready(state)
+    entry = _entry(index, "fb", "summary")
+    assert _ids(_describe(index, state, entry))[:2] == ["injected", "used"]
+    injected = _block(index, state, entry, "injected")
+    assert injected.data["items"] == [{"id": "a", "used": False}, {"id": "b", "used": True}]
+    used = _block(index, state, entry, "used")
+    assert used.data["items"] == [{"id": "b", "used": True}]
+    with pytest.raises(tdet.UnknownBlockError):
+        _block(index, state, entry, "origin")
+    with pytest.raises(tdet.UnknownBlockError):
+        _block(index, state, _entry(index, "turn", "turn.input"), "tool")

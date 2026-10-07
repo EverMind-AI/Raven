@@ -239,6 +239,22 @@ def _tool_call_line(tc: Any) -> str:
     return f"→ tool call {name}{suffix}({args_text})"
 
 
+def _tool_call_brief(tc: Any) -> str:
+    """The trajectory row's spelling of a tool call: the name and its arguments, nothing else.
+
+    The CLI preview's :func:`_tool_call_line` keeps the call id because a
+    transcript reader may follow it to the matching result; a list row has
+    the result one line below and the id is noise there.
+    """
+    if not isinstance(tc, dict):
+        return _compact(tc)
+    fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+    name = _str(tc.get("name")) or _str(fn.get("name")) or "?"
+    args = tc.get("arguments", fn.get("arguments"))
+    args_text = args if isinstance(args, str) else ("" if args is None else _compact(args))
+    return f"{name} {args_text}".rstrip()
+
+
 def _render_message(message: Any) -> str:
     if not isinstance(message, dict):
         return _compact(message)

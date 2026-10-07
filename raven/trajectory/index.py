@@ -651,6 +651,8 @@ class SessionIndex:
             self.recovery_queue.popleft()
         self._fill_previews(deadline)
         projection = self._reproject() if self._dirty else None
+        if projection is not None:
+            self._schedule_preview_repairs(projection)
         ready = batch.done and not self.recovery_queue
         self.phase = PHASE_READY if ready else PHASE_SCANNING
         self.failure = None
@@ -789,13 +791,46 @@ class SessionIndex:
             cache = self.preview_cache.get(key)
             if cache is not None and cache.complete:
                 continue
-            before = (cache.cursor, len(cache.records)) if cache is not None else None
+            before = cache.version if cache is not None else -1
             updated = _entries.preview_records(span, state=self.state_dir, budget=budget, cache=cache)
             self.preview_cache[key] = updated
-            if before != (updated.cursor, len(updated.records)):
+            if before != updated.version:
                 self._dirty = True
             if budget.exhausted:
                 break
+
+    def _schedule_preview_repairs(self, projection: _entries.Projection) -> None:
+        """Queue the one blob read a continued model input still needs for its row.
+
+        The preview pass read each input's prompt before anything was known
+        about the input before it; once the projection has proven a prefix,
+        the row should show the first message this input added instead. The
+        cache is reopened with that single read pending, so the next pass
+        performs it and the following projection picks the text up. A read
+        that fails is recorded as failed under the same index, which is a
+        terminal state: nothing schedules it again.
+        """
+        for entry in projection.entries:
+            if entry.slot != "llm.input" or entry.meta.get("delta") != _entries.DELTA_CONTINUED:
+                continue
+            new_from, count = entry.meta.get("new_from"), entry.meta.get("message_count")
+            if not isinstance(new_from, int) or not isinstance(count, int) or new_from >= count:
+                continue
+            cache = self.preview_cache.get(self._span_key_of(entry))
+            if cache is None or cache.pending is not None:
+                continue
+            at = next((i for i, r in enumerate(cache.records) if r["slot"] == "llm.input"), None)
+            if at is None:
+                continue
+            record = cache.records[at]
+            fresh = record.get("new_preview")
+            if isinstance(fresh, dict) and fresh.get("index") == new_from:
+                continue
+            refs = record.get("refs")
+            if not isinstance(refs, list) or new_from >= len(refs):
+                continue
+            cache.pending = {"index": at, "sha1": refs[new_from], "kind": "new_preview", "preview_index": new_from}
+            cache.complete = False
 
     def _extra_turns(self) -> list[tuple[str, str, str]]:
         return [

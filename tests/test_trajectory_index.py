@@ -1081,3 +1081,158 @@ def test_capture_returns_one_consistent_view(state, clock):
         stop.set()
         thread.join(5)
     assert mismatches == []
+
+
+# ── the repair read behind a continued model input ────────────────────
+
+
+def _v2_shell(state: Path, name: str, messages: list[dict]) -> str:
+    from raven.tracing import artifact_v2
+
+    refs = []
+    for message in messages:
+        sha1 = artifact_v2.message_sha1(message)
+        path = artifact_v2.message_path(state / "logs" / "audit-artifacts", sha1)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(artifact_v2.message_text(message), encoding="utf-8")
+        refs.append({"$msg": sha1})
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs, "prompt": refs[-1], "tools": []}
+    return _artifact(state, shell, name)
+
+
+def _dialogue(state: Path) -> list[dict]:
+    s, u1, a1, u2 = (
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "the answer"},
+        {"role": "user", "content": "next question"},
+    )
+    return [
+        _turn("a", "turnA", start=0, end=10),
+        _span(
+            "a",
+            "a1",
+            "llm.call",
+            parent="turnA",
+            start=1,
+            end=2,
+            attrs={
+                "llm.purpose": "main",
+                "llm.input.artifact_path": _v2_shell(state, "a1-in", [s, u1]),
+                "llm.output.artifact_path": _artifact(state, {"content": "the answer"}, "a1-out"),
+            },
+        ),
+        _turn("b", "turnB", start=20, end=30),
+        _span(
+            "b",
+            "b1",
+            "llm.call",
+            parent="turnB",
+            start=21,
+            end=22,
+            attrs={
+                "llm.purpose": "main",
+                "llm.input.artifact_path": _v2_shell(state, "b1-in", [s, u1, a1, u2]),
+                "llm.output.artifact_path": _artifact(state, {"content": "second answer"}, "b1-out"),
+            },
+        ),
+    ]
+
+
+def _refresh_until(index: tidx.SessionIndex, clock: Clock, condition, *, rounds: int = 40) -> int:
+    for used in range(1, rounds + 1):
+        index.refresh_sync(None)
+        clock.advance(1)
+        if condition():
+            return used
+    raise AssertionError("condition never met")
+
+
+def test_a_late_predecessor_repairs_the_successor_row_and_bumps_its_revision(state, clock):
+    _append(state, _dialogue(state))
+    index = _index(state, clock, preview_reads=2)
+    b1 = lambda: index.entry("b:b1:llm.input")  # noqa: E731 - a re-read of the published row
+    # Newest first: the second call's own files are read while the first call's are still unread.
+    _refresh_until(index, clock, lambda: b1() is not None and b1().meta.get("message_count") == 4)
+    assert b1().meta["delta"] == "unknown" and b1().preview == "next question"
+    unknown_revision = b1().revision
+    # The predecessor arrives: the prefix is proven, the repair read is queued, the row still shows the prompt.
+    _refresh_until(index, clock, lambda: b1().meta.get("delta") == "continued")
+    assert b1().meta["new_from"] == 2 and b1().revision > unknown_revision
+    assert index.preview_cache[("b", "b1")].pending is not None
+    assert index.index_state().preview_pending >= 1
+    continued_revision = b1().revision
+    # The repair read lands: the row names the first message this call added, under a new revision.
+    _refresh_until(index, clock, lambda: b1().preview == "the answer")
+    assert b1().revision > continued_revision and b1().meta["delta"] == "continued"
+    batch = index.changes(index.epoch, continued_revision, 50)
+    assert "b:b1:llm.input" in {e.entry_id for e in batch.upserts}
+    _refresh_until(index, clock, lambda: index.index_state().preview_pending == 0)
+    assert index.preview_cache[("b", "b1")].complete and index.preview_cache[("b", "b1")].pending is None
+    assert index.entry("a:a1:llm.input").meta["delta"] == "first"
+
+
+def test_a_failed_repair_read_is_terminal(state, clock, monkeypatch):
+    from raven.tracing import artifact_v2
+
+    _append(state, _dialogue(state))
+    index = _index(state, clock, preview_reads=2)
+    b1 = lambda: index.entry("b:b1:llm.input")  # noqa: E731
+    _refresh_until(index, clock, lambda: b1() is not None and b1().meta.get("delta") == "continued")
+    answer_sha1 = artifact_v2.message_sha1({"role": "assistant", "content": "the answer"})
+    artifact_v2.message_path(state / "logs" / "audit-artifacts", answer_sha1).unlink()
+    reads = {"n": 0}
+    original = tconv._read_artifact
+
+    def counting(state_dir, path, limit=tconv._ARTIFACT_LIMIT):
+        reads["n"] += 1
+        return original(state_dir, path, limit)
+
+    monkeypatch.setattr(tconv, "_read_artifact", counting)
+    _refresh_until(index, clock, lambda: index.preview_cache[("b", "b1")].pending is None)
+    record = next(r for r in index.preview_cache[("b", "b1")].records if r["slot"] == "llm.input")
+    assert record["new_preview"]["index"] == 2 and record["new_preview"]["text"] is None
+    assert record["new_preview"]["failed"]
+    assert b1().preview == "next question" and b1().meta["delta"] == "continued"
+    _refresh_until(index, clock, lambda: index.index_state().preview_pending == 0)
+    settled = reads["n"]
+    for _ in range(3):
+        index.refresh_sync(None)
+        clock.advance(1)
+    assert reads["n"] == settled and index.index_state().preview_pending == 0
+
+
+def test_a_reply_hides_once_the_model_output_it_repeats_is_read(state, clock):
+    spans = [
+        _turn(
+            "t",
+            "turn",
+            start=0,
+            end=10,
+            extra={
+                "turn.input.artifact_path": _artifact(state, {"content": "go"}, "turn-in"),
+                "turn.output.artifact_path": _artifact(state, {"content": "Done."}, "turn-out"),
+            },
+        ),
+        _span(
+            "t",
+            "l1",
+            "llm.call",
+            parent="turn",
+            start=1,
+            end=2,
+            attrs={
+                "llm.input.artifact_path": _v2_shell(state, "l1-in", [{"role": "user", "content": "go"}]),
+                "llm.output.artifact_path": _artifact(state, {"content": "Done."}, "l1-out"),
+            },
+        ),
+    ]
+    _append(state, spans)
+    index = _index(state, clock, preview_reads=1)
+    reply = lambda: index.entry("t:turn:turn.output")  # noqa: E731
+    _refresh_until(index, clock, lambda: reply() is not None)
+    first_revision = reply().revision
+    assert "hidden" not in reply().meta
+    _refresh_until(index, clock, lambda: reply().meta.get("hidden") == "redundant_reply")
+    assert reply().revision > first_revision and reply().charged_ms == 10000
+    assert "t:turn:turn.output" in {e.entry_id for e in index.changes(index.epoch, first_revision, 50).upserts}

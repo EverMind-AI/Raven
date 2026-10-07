@@ -33,6 +33,9 @@ produce no entries, so trimmed ancestors keep their descendants attributed.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -59,6 +62,15 @@ BASIS_SHARED = "shared"
 BASIS_NOT_RECORDED = "not_recorded"
 BASIS_UNKNOWN = "unknown"
 
+DELTA_FIRST = "first"
+DELTA_CONTINUED = "continued"
+DELTA_INDEPENDENT = "independent"
+DELTA_UNKNOWN = "unknown"
+DELTA_CANDIDATES = 50
+
+HIDDEN_REDUNDANT_REPLY = "redundant_reply"
+HIDDEN_EMPTY_INTERNAL = "empty_internal"
+
 ORIGIN_MAIN = "main"
 ORIGIN_SUBAGENT = "subagent"
 
@@ -74,7 +86,24 @@ _TOOL_RESULT_SPANS = ("tool.call", "skill.read")
 _TOOL_RESULT_SLOTS = ("tool.output", "skill.read")
 
 _IO_PAIR_SPANS = ("skill.rewrite", "skill.gate", "context.curate")
-_COMPACT_KEYS = ("slot", "phase", "degraded", "error", "preview_text", "text", "payload")
+_COMPACT_KEYS = (
+    "slot",
+    "phase",
+    "degraded",
+    "error",
+    "preview_text",
+    "text",
+    "payload",
+    "refs",
+    "new_preview",
+    "content_sha1",
+    "result_error",
+)
+_RESULT_ERROR_TEXT = re.compile(r"^(Error|ERROR|Traceback|Exception)\b")
+_RESULT_ERROR_KEYS = ("error", "errors")
+_RESULT_FALSE_FLAGS = ("ok", "success")
+_RESULT_TRUE_FLAGS = ("is_error", "isError")
+_RESULT_ERROR_STATUSES = ("error", "failed")
 
 _INTEGRITY_RULES = (
     ("outside the trace store", "artifact_outside_store"),
@@ -186,6 +215,7 @@ class SpanCache:
     complete: bool = False
     cursor: int = 0
     pending: dict[str, Any] | None = None
+    version: int = 0
 
 
 def preview_text(text: str) -> str:
@@ -286,7 +316,13 @@ def _meta_of(info: _conv._SpanInfo) -> dict[str, Any]:
             ("model", "llm.model"),
             ("input_tokens", "llm.usage.input_tokens"),
             ("output_tokens", "llm.usage.output_tokens"),
+            ("purpose", "llm.purpose"),
         )
+    elif info.name == "memory.feedback":
+        return {
+            "injected": _id_list(attrs.get("memory.injected")),
+            "used": _id_list(attrs.get("memory.used")),
+        }
     elif info.name in _TOOL_RESULT_SPANS:
         keys = (("tool", "tool.name"), ("skill", "skill.name"))
     elif info.name == "subagent.run":
@@ -296,13 +332,62 @@ def _meta_of(info: _conv._SpanInfo) -> dict[str, Any]:
     return {name: _scalar(attrs[key]) for name, key in keys if key in attrs}
 
 
-def _tool_result(records: list[dict[str, Any]], attrs: dict[str, Any]) -> Any:
+def _id_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [v for v in value if isinstance(v, str)]
+
+
+def _result_error(result: Any) -> str | None:
+    """The rule a tool result trips as an error, or None.
+
+    Only the top level of a structured result is read -- a search hit that
+    happens to carry an ``error`` field somewhere inside is not a failed
+    search. A string result that is JSON text is read the same way.
+    """
+    if isinstance(result, str):
+        stripped = result.lstrip()
+        if stripped.startswith(("{", "[")) and len(stripped) <= PREVIEW_READ_LIMIT:
+            try:
+                parsed = json.loads(stripped)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                return _result_error(parsed)
+        return "tool_result_error" if _RESULT_ERROR_TEXT.match(stripped) else None
+    if not isinstance(result, dict):
+        return None
+    for key in _RESULT_ERROR_KEYS:
+        value = result.get(key)
+        if value not in (None, "", [], {}, False):
+            return "result_error_key"
+    for key in _RESULT_TRUE_FLAGS:
+        if result.get(key) is True:
+            return "result_error_flag"
+    for key in _RESULT_FALSE_FLAGS:
+        if result.get(key) is False:
+            return "result_error_flag"
+    status = result.get("status")
+    if isinstance(status, str) and status.lower() in _RESULT_ERROR_STATUSES:
+        return "result_error_status"
+    return None
+
+
+def _tool_result_error(records: list[dict[str, Any]], attrs: dict[str, Any]) -> str | None:
+    """The result-level error evidence for a tool span, from the loaded payload or the preview pass's verdict."""
     for record in records:
-        if record["slot"] in _TOOL_RESULT_SLOTS and isinstance(record["payload"], dict):
-            result = record["payload"].get("result")
-            if isinstance(result, str):
-                return result
-    return attrs.get("tool.result_preview")
+        if record["slot"] not in _TOOL_RESULT_SLOTS:
+            continue
+        verdict = record.get("result_error")
+        if verdict is not None:
+            return verdict or None
+        payload = record["payload"]
+        if isinstance(payload, dict) and "result" in payload and payload.get("result") is not None:
+            if "result_error" in record:
+                return None
+            return _result_error(payload["result"])
+    preview = attrs.get("tool.result_preview")
+    return _result_error(preview) if isinstance(preview, str) else None
 
 
 def _status_of(info: _conv._SpanInfo, records: list[dict[str, Any]]) -> tuple[str, tuple[str, ...]]:
@@ -313,9 +398,9 @@ def _status_of(info: _conv._SpanInfo, records: list[dict[str, Any]]) -> tuple[st
     if info.attrs.get("tool.error"):
         evidence.append("tool_error")
     if info.name in _TOOL_RESULT_SPANS:
-        result = _tool_result(records, info.attrs)
-        if isinstance(result, str) and result.startswith("Error"):
-            evidence.append("tool_result_error")
+        code = _tool_result_error(records, info.attrs)
+        if code is not None:
+            evidence.append(code)
     if evidence:
         return STATUS_ERROR, tuple(evidence)
     if info.name == "session.turn" and info.attrs.get("turn.in_progress") is True:
@@ -451,6 +536,23 @@ def _entry_id(info: _conv._SpanInfo, slot: str) -> str:
     return f"{info.trace_id}:{info.span_id}:{slot}"
 
 
+_REGENERATED_SLOTS = ("tool.input", *_TOOL_RESULT_SLOTS, "llm.output", "artifact:memory.store")
+
+
+def _row_preview(info: _conv._SpanInfo, record: dict[str, Any]) -> str | None:
+    """The row's preview: the record's, respelled from its full payload where the row has a spelling of its own."""
+    if info.name == "memory.feedback" and record["slot"] == SLOT_SUMMARY:
+        injected = len(_id_list(info.attrs.get("memory.injected")))
+        used = len(_id_list(info.attrs.get("memory.used")))
+        return f"injected {injected} \u00b7 used {used}"
+    preview = _preview_of(record)
+    payload = record.get("payload")
+    full = "info" in record
+    if full and record["degraded"] is None and isinstance(payload, dict) and record["slot"] in _REGENERATED_SLOTS:
+        preview = preview_text(_preview_source(record["slot"], payload, record["text"], info.attrs))
+    return preview
+
+
 def _span_entries(
     info: _conv._SpanInfo,
     records: list[dict[str, Any]],
@@ -458,6 +560,16 @@ def _span_entries(
     turn_numbers: dict[str, int],
     subagent_traces: set[str],
 ) -> list[TrajectoryEntry]:
+    return [entry for entry, _ in _span_rows(info, records, turn_numbers=turn_numbers, subagent_traces=subagent_traces)]
+
+
+def _span_rows(
+    info: _conv._SpanInfo,
+    records: list[dict[str, Any]],
+    *,
+    turn_numbers: dict[str, int],
+    subagent_traces: set[str],
+) -> list[tuple[TrajectoryEntry, dict[str, Any]]]:
     if not records:
         records = [_summary_record(info)]
     status, evidence = _status_of(info, records)
@@ -472,7 +584,7 @@ def _span_entries(
     start_dt = _parse_ts(info.start)
     end_dt = _parse_ts(info.end)
     meta = _meta_of(info)
-    entries: list[TrajectoryEntry] = []
+    entries: list[tuple[TrajectoryEntry, dict[str, Any]]] = []
     for rank, record in enumerate(records):
         slot = record["slot"]
         is_input = record["phase"] == _conv._PHASE_INPUT
@@ -497,40 +609,43 @@ def _span_entries(
         if turn_number is None:
             integrity.append("turn_unknown")
         entries.append(
-            TrajectoryEntry(
-                entry_id=_entry_id(info, slot),
-                kind=_kind_of(info.name, slot),
-                span_name=info.name,
-                slot=slot,
-                trace_id=info.trace_id,
-                span_id=info.span_id,
-                parent_span_id=info.parent_id,
-                turn_span_id=info.turn_span_id,
-                turn_number=turn_number,
-                turn_start=False,
-                origin=origin,
-                sort_key=(
-                    _utc(event_raw, event_dt),
-                    record["phase"],
-                    depth,
-                    _utc(info.start, start_dt),
-                    info.trace_id,
-                    info.span_id,
-                    rank,
+            (
+                TrajectoryEntry(
+                    entry_id=_entry_id(info, slot),
+                    kind=_kind_of(info.name, slot),
+                    span_name=info.name,
+                    slot=slot,
+                    trace_id=info.trace_id,
+                    span_id=info.span_id,
+                    parent_span_id=info.parent_id,
+                    turn_span_id=info.turn_span_id,
+                    turn_number=turn_number,
+                    turn_start=False,
+                    origin=origin,
+                    sort_key=(
+                        _utc(event_raw, event_dt),
+                        record["phase"],
+                        depth,
+                        _utc(info.start, start_dt),
+                        info.trace_id,
+                        info.span_id,
+                        rank,
+                    ),
+                    event_time=event_raw,
+                    preview=_row_preview(info, record),
+                    operation_status=status,
+                    status_evidence=evidence,
+                    failure_entry=status == STATUS_ERROR and is_owner,
+                    integrity=tuple(integrity),
+                    operation_start=info.start or None,
+                    operation_end=info.end or None,
+                    duration_ms=duration,
+                    charged_ms=charged,
+                    timing_basis=basis,
+                    duration_owner=owner_id,
+                    meta=meta,
                 ),
-                event_time=event_raw,
-                preview=_preview_of(record),
-                operation_status=status,
-                status_evidence=evidence,
-                failure_entry=status == STATUS_ERROR and is_owner,
-                integrity=tuple(integrity),
-                operation_start=info.start or None,
-                operation_end=info.end or None,
-                duration_ms=duration,
-                charged_ms=charged,
-                timing_basis=basis,
-                duration_owner=owner_id,
-                meta=meta,
+                record,
             )
         )
     return entries
@@ -566,6 +681,7 @@ def project_entries(
     subagent_traces = _subagent_traces(infos)
     blob_cache: dict[str, tuple[Any, str]] = {}
     entries: list[TrajectoryEntry] = []
+    record_of: dict[str, dict[str, Any]] = {}
     for info in infos:
         key = (info.trace_id, info.span_id)
         if key in skeleton_keys:
@@ -574,7 +690,9 @@ def project_entries(
             records = [dict(record) for record in cached_records[key]]
         else:
             records = _conv.span_records(info, state, None, blob_cache, read=read, dedup=False)
-        entries.extend(_span_entries(info, records, turn_numbers=turn_numbers, subagent_traces=subagent_traces))
+        for entry, record in _span_rows(info, records, turn_numbers=turn_numbers, subagent_traces=subagent_traces):
+            entries.append(entry)
+            record_of[entry.entry_id] = record
     entries.sort(key=lambda entry: entry.sort_key)
     seen_turns: set[str] = set()
     for index, entry in enumerate(entries):
@@ -582,7 +700,139 @@ def project_entries(
             continue
         seen_turns.add(entry.turn_span_id)
         entries[index] = replace(entry, turn_start=True)
+    _apply_delta(entries, record_of)
+    _apply_hidden(entries, record_of)
     return Projection(entries=tuple(entries), turns=turns)
+
+
+# ── what one model input adds, and which rows say nothing new ──────────
+
+
+def _refs_of(record: dict[str, Any]) -> list[str] | None:
+    """The content addresses of a model input's messages, from the preview pass or a full payload."""
+    refs = record.get("refs")
+    if isinstance(refs, list):
+        return refs
+    if "info" in record and record["degraded"] is None:
+        return _refs_of_payload(record.get("payload"))
+    return None
+
+
+def _refs_of_payload(obj: Any) -> list[str] | None:
+    if not isinstance(obj, dict):
+        return None
+    messages = obj.get("messages")
+    if not isinstance(messages, list):
+        return None
+    out: list[str] = []
+    for message in messages:
+        sha1 = artifact_v2.ref_sha1(message)
+        out.append(sha1 if sha1 is not None else artifact_v2.message_sha1(message))
+    return out
+
+
+def _is_prefix(shorter: Sequence[str], longer: Sequence[str]) -> bool:
+    return len(shorter) <= len(longer) and list(longer[: len(shorter)]) == list(shorter)
+
+
+def _chain_of(entry: TrajectoryEntry) -> tuple[str, ...]:
+    return (ORIGIN_MAIN,) if entry.origin == ORIGIN_MAIN else (ORIGIN_SUBAGENT, entry.trace_id)
+
+
+def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[str, Any]]) -> None:
+    """Mark every model input with what it adds to the conversation before it.
+
+    Continuity is proven, never assumed: an earlier input in the same chain
+    (the main line, or one sub-agent trace) and with a compatible purpose
+    counts as the predecessor only when its message sequence is an ordered
+    prefix of this one. The first input of a chain is all new; an input no
+    candidate precedes is independent and all new too; an input whose own
+    messages or whose candidates' messages are not read yet is unknown, and
+    is decided again once they are.
+    """
+    history: dict[tuple[str, ...], list[tuple[list[str] | None, str | None]]] = {}
+    for index, entry in enumerate(entries):
+        if entry.slot != "llm.input":
+            continue
+        record = record_of.get(entry.entry_id)
+        refs = _refs_of(record) if record is not None else None
+        purpose = entry.meta.get("purpose")
+        purpose = purpose if isinstance(purpose, str) else None
+        chain = history.setdefault(_chain_of(entry), [])
+        window = [
+            (candidate, label)
+            for candidate, label in chain[-DELTA_CANDIDATES:]
+            if purpose is None or label is None or label == purpose
+        ]
+        meta: dict[str, Any] = {**entry.meta, "message_count": len(refs) if refs is not None else None}
+        if refs is None:
+            meta.update(delta=DELTA_UNKNOWN, new_from=None)
+        elif not chain:
+            meta.update(delta=DELTA_FIRST, new_from=0)
+        elif not window:
+            # Earlier inputs exist in this chain, none of them of a compatible purpose: a conversation of its own.
+            meta.update(delta=DELTA_INDEPENDENT, new_from=0)
+        elif any(candidate is None for candidate, _ in window):
+            meta.update(delta=DELTA_UNKNOWN, new_from=None)
+        else:
+            previous = next((c for c, _ in reversed(window) if c is not None and _is_prefix(c, refs)), None)
+            if previous is None:
+                meta.update(delta=DELTA_INDEPENDENT, new_from=0)
+            else:
+                meta.update(delta=DELTA_CONTINUED, new_from=len(previous))
+        chain.append((refs, purpose))
+        preview = entry.preview
+        new_from = meta.get("new_from")
+        if meta["delta"] == DELTA_CONTINUED and isinstance(new_from, int) and refs is not None and new_from < len(refs):
+            fresh = record.get("new_preview") if record is not None else None
+            if isinstance(fresh, dict) and fresh.get("index") == new_from and isinstance(fresh.get("text"), str):
+                preview = preview_text(fresh["text"])
+        entries[index] = replace(entry, meta=meta, preview=preview)
+
+
+def _content_sha1(content: Any) -> str | None:
+    text = " ".join(_conv._display(content).split())
+    return hashlib.sha1(text.encode("utf-8")).hexdigest() if text else None
+
+
+def _record_content_sha1(record: dict[str, Any] | None) -> str | None:
+    if record is None:
+        return None
+    sha1 = record.get("content_sha1")
+    if isinstance(sha1, str):
+        return sha1
+    if "info" in record and record["degraded"] is None and isinstance(record.get("payload"), dict):
+        return _content_sha1(record["payload"].get("content"))
+    return None
+
+
+def _apply_hidden(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[str, Any]]) -> None:
+    """Mark the rows the list need not show: a reply that repeats the turn's
+    last model output word for word, and an internal step that recorded nothing."""
+    last_output: dict[str, str | None] = {}
+    for entry in entries:
+        if entry.slot != "llm.output" or entry.turn_span_id is None:
+            continue
+        purpose = entry.meta.get("purpose")
+        if purpose not in (None, "main"):
+            continue
+        last_output[entry.turn_span_id] = _record_content_sha1(record_of.get(entry.entry_id))
+    for index, entry in enumerate(entries):
+        hidden: str | None = None
+        if entry.slot == "turn.output" and entry.turn_span_id is not None:
+            own = _record_content_sha1(record_of.get(entry.entry_id))
+            last = last_output.get(entry.turn_span_id)
+            if own is not None and last is not None and own == last:
+                hidden = HIDDEN_REDUNDANT_REPLY
+        elif entry.slot == SLOT_SUMMARY and "outer_only" in entry.status_evidence:
+            record = record_of.get(entry.entry_id)
+            empty = entry.preview is None or (record is not None and record.get("degraded") == _conv.NOT_LOADED)
+            if entry.span_name.startswith("memory.feedback"):
+                empty = not entry.meta.get("injected") and not entry.meta.get("used")
+            if empty:
+                hidden = HIDDEN_EMPTY_INTERNAL
+        if hidden is not None:
+            entries[index] = replace(entry, meta={**entry.meta, "hidden": hidden})
 
 
 def _artifact_key(span_name: str, slot: str) -> str | None:
@@ -609,13 +859,51 @@ def _compact(record: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _preview_source(slot: str, obj: Any, text: str) -> str:
+def _tool_name(obj: Any, attrs: Mapping[str, Any] | None) -> str | None:
+    name = _conv._str(attrs.get("tool.name")) if attrs else None
+    if name is None and isinstance(obj, dict):
+        name = _conv._str(obj.get("name"))
+    return name
+
+
+def _first_line(text: str, limit: int = 60) -> str:
+    line = text.strip().splitlines()[0].strip() if text.strip() else ""
+    return line if len(line) <= limit else line[: limit - 1].rstrip() + "\u2026"
+
+
+def _message_text(message: Any) -> str:
+    if isinstance(message, dict):
+        return _conv._display(message.get("content"))
+    return _conv._display(message)
+
+
+def _store_preview(obj: dict[str, Any]) -> str | None:
+    """What a stored conversation is about: the first question and the last answer."""
+    messages = obj.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+    first = next((m for m in messages if isinstance(m, dict) and m.get("role") == "user"), None)
+    last = next((m for m in reversed(messages) if isinstance(m, dict) and m.get("role") == "assistant"), None)
+    parts = [_first_line(_message_text(m)) for m in (first, last) if m is not None]
+    parts = [part for part in parts if part]
+    return " \u2192 ".join(parts) if parts else None
+
+
+def _preview_source(slot: str, obj: Any, text: str, attrs: Mapping[str, Any] | None = None) -> str:
     if slot in ("turn.input", "turn.output"):
         return _conv._payload_field(obj, text, "content")
     if slot == "tool.input":
-        return _conv._payload_field(obj, text, "params")
+        params = _conv._payload_field(obj, text, "params")
+        name = _tool_name(obj, attrs)
+        return f"{name} {params}".rstrip() if name else params
     if slot in _TOOL_RESULT_SLOTS:
-        return _conv._payload_field(obj, text, "result")
+        result = _conv._payload_field(obj, text, "result")
+        name = _tool_name(None, attrs)
+        return f"{name}: {result}".rstrip() if name else result
+    if slot == "artifact:memory.store" and isinstance(obj, dict):
+        summary = _store_preview(obj)
+        if summary is not None:
+            return summary
     if slot == "llm.output" and isinstance(obj, dict):
         lines = []
         content = _conv._display(obj.get("content"))
@@ -623,7 +911,7 @@ def _preview_source(slot: str, obj: Any, text: str) -> str:
             lines.append(content)
         tool_calls = obj.get("tool_calls")
         if isinstance(tool_calls, list):
-            lines.extend(_conv._tool_call_line(tc) for tc in tool_calls)
+            lines.extend(_conv._tool_call_brief(tc) for tc in tool_calls)
         return "\n".join(lines)
     if slot == "llm.input" and isinstance(obj, dict):
         prompt = obj.get("prompt")
@@ -725,12 +1013,28 @@ def preview_records(
             cache.complete = True
             return cache
     records = cache.records
+
+    def put(at: int, record: dict[str, Any]) -> None:
+        records[at] = record
+        cache.version += 1
+
     if cache.pending is not None:
         pending = cache.pending
         if not budget.take(PREVIEW_READ_LIMIT):
             return cache
+        if pending.get("kind") == "new_preview":
+            # The repair read: the first message this input adds, for the row's preview.
+            message, note, _ = _read_blob(state, pending["sha1"])
+            fresh = dict(records[pending["index"]])
+            text = _message_text(message) if note is None else None
+            fresh["new_preview"] = {"index": pending["preview_index"], "text": text, "failed": note}
+            put(pending["index"], fresh)
+            cache.pending = None
+            cache.complete = position_done(cache, info, records)
+            return cache
         message, note, capped = _read_blob(state, pending["sha1"])
-        records[pending["index"]] = _finish_llm_input(records[pending["index"]], message, note, capped=capped)
+        finished = _finish_llm_input(records[pending["index"]], message, note, capped=capped)
+        put(pending["index"], finished)
         cache.pending = None
         cache.cursor += 1
     position = cache.cursor
@@ -748,23 +1052,28 @@ def preview_records(
             break
         text, reason = _conv._read_artifact(state, pointer, PREVIEW_READ_LIMIT)
         if text is None:
-            records[index] = _failed_record(record, reason or "artifact missing")
+            put(index, _failed_record(record, reason or "artifact missing"))
             position += 1
             continue
         capped = reason is not None
         obj, ok = _conv._parse_json(text) if not capped else (None, False)
+        if record["slot"] == "llm.input" and isinstance(obj, dict):
+            refs = _refs_of_payload(obj)
+            if refs is not None:
+                record = {**record, "refs": refs}
+                put(index, record)
         if record["slot"] == "llm.input" and isinstance(obj, dict) and artifact_v2.is_v2(obj):
             sha1 = _last_message_ref(obj)
             if sha1 is None:
-                records[index] = _loaded_record(record, "", capped=capped, payload=None)
+                put(index, _loaded_record(record, "", capped=capped, payload=None))
                 position += 1
                 continue
             if not budget.take(PREVIEW_READ_LIMIT):
-                cache.pending = {"index": index, "sha1": sha1}
+                cache.pending = {"index": index, "sha1": sha1, "kind": "prompt"}
                 cache.cursor = position
                 return cache
             message, note, blob_capped = _read_blob(state, sha1)
-            records[index] = _finish_llm_input(record, message, note, capped=capped or blob_capped)
+            put(index, _finish_llm_input(record, message, note, capped=capped or blob_capped))
             position += 1
             continue
         if not capped and not ok:
@@ -773,14 +1082,19 @@ def preview_records(
             loaded = _loaded_record(record, preview_text(text), capped=False, payload=None)
             if not record["slot"].startswith("artifact:"):
                 loaded["degraded"] = "artifact is not valid JSON — shown raw"
-            records[index] = loaded
+            put(index, loaded)
             position += 1
             continue
-        source = _preview_source(record["slot"], obj if ok else None, text)
+        source = _preview_source(record["slot"], obj if ok else None, text, info.attrs)
         payload = None
         if record["slot"] in _TOOL_RESULT_SLOTS and isinstance(obj, dict) and isinstance(obj.get("result"), str):
             payload = {"result": obj["result"][:16]}
-        records[index] = _loaded_record(record, preview_text(source), capped=capped, payload=payload)
+        loaded = _loaded_record(record, preview_text(source), capped=capped, payload=payload)
+        if record["slot"] in _TOOL_RESULT_SLOTS and isinstance(obj, dict) and "result" in obj:
+            loaded["result_error"] = _result_error(obj.get("result"))
+        if record["slot"] in ("turn.output", "llm.output") and isinstance(obj, dict) and not capped:
+            loaded["content_sha1"] = _content_sha1(obj.get("content"))
+        put(index, loaded)
         if record["slot"] == "llm.output" and isinstance(obj, dict):
             thinking = _conv._thinking_text(obj)
             existing = next((i for i, r in enumerate(records) if r["slot"] == SLOT_THINKING), None)
@@ -794,12 +1108,17 @@ def preview_records(
                         payload=None,
                     ),
                 )
+                cache.version += 1
             elif thinking and existing is not None:
-                records[existing] = _loaded_record(records[existing], preview_text(thinking), capped=True, payload=None)
+                put(existing, _loaded_record(records[existing], preview_text(thinking), capped=True, payload=None))
         position += 1
     cache.cursor = position
-    cache.complete = cache.pending is None and position >= len(_targets(info, records))
+    cache.complete = position_done(cache, info, records)
     return cache
+
+
+def position_done(cache: SpanCache, info: _conv._SpanInfo, records: list[dict[str, Any]]) -> bool:
+    return cache.pending is None and cache.cursor >= len(_targets(info, records))
 
 
 __all__ = [

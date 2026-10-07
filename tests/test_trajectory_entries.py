@@ -217,7 +217,7 @@ def test_identical_error_texts_keep_evidence_from_payload_not_display(state):
     inp, out = _one(entries, "same", "tool.input"), _one(entries, "same", "tool.output")
     assert out.status_evidence == ("tool_result_error",)
     assert (inp.failure_entry, out.failure_entry) == (False, True)
-    assert inp.preview == "Error: dup" and out.preview == "Error: dup"
+    assert inp.preview == "same Error: dup" and out.preview == "same: Error: dup"
     assert "same content as" not in (inp.preview or "")
 
 
@@ -819,12 +819,10 @@ def test_preview_records_reads_each_slot_once_with_slot_specific_sources(state, 
     assert len(reads) == 3  # input shell, one prompt blob, output
     by_slot = {r["slot"]: r for r in cache.records}
     assert by_slot["llm.input"]["preview_text"] == "message 49"
-    assert by_slot["llm.output"]["preview_text"] == "final → tool call f#1({})"
+    assert by_slot["llm.output"]["preview_text"] == "final f {}"
     assert by_slot["llm.thinking"]["preview_text"] == "ponder"
     assert [r["slot"] for r in cache.records] == ["llm.input", "llm.thinking", "llm.output"]
-    assert all(
-        set(r) == {"slot", "phase", "degraded", "error", "preview_text", "text", "payload"} for r in cache.records
-    )
+    assert all(set(r) == set(tent._COMPACT_KEYS) for r in cache.records)
     entries = tent.project_entries([span], state=state, cached_records={("t", "llm"): cache.records}).entries
     assert [e.slot for e in entries] == ["llm.input", "llm.thinking", "llm.output"]
     assert _one(entries, "llm", "llm.thinking").preview == "ponder"
@@ -869,7 +867,7 @@ def test_cached_records_skip_span_expansion(state, monkeypatch):
     monkeypatch.setattr(tconv, "span_records", counting)
     entries = tent.project_entries([span], state=state, cached_records={("t", "t2"): cache.records}).entries
     assert calls["n"] == 0
-    assert _one(entries, "t2", "tool.output").preview == "ok"
+    assert _one(entries, "t2", "tool.output").preview == "t2: ok"
     direct = tent.project_entries([span], state=state, read=True).entries
     assert [(e.entry_id, e.preview) for e in entries] == [(e.entry_id, e.preview) for e in direct]
 
@@ -1002,3 +1000,308 @@ def test_preview_records_resume_v2_blob_with_single_read_budgets(state, monkeypa
         "llm.input",
     )
     assert entry.preview == "message 2"
+
+
+# ── tool result errors ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("result", "code"),
+    [
+        ({"error": "URL validation failed", "detail": "blocked", "url": "https://x"}, "result_error_key"),
+        (json.dumps({"error": "URL validation failed", "detail": "blocked"}), "result_error_key"),
+        ({"errors": ["a"]}, "result_error_key"),
+        ({"is_error": True, "content": "x"}, "result_error_flag"),
+        ({"isError": True}, "result_error_flag"),
+        ({"ok": False}, "result_error_flag"),
+        ({"success": False}, "result_error_flag"),
+        ({"status": "failed", "data": 1}, "result_error_status"),
+        ({"status": "ERROR"}, "result_error_status"),
+        ("Traceback (most recent call last):\n  boom", "tool_result_error"),
+        ("Error: nope", "tool_result_error"),
+    ],
+)
+def test_structured_tool_results_are_read_for_errors(state, result, code):
+    attrs = _tool_attrs(state, "web_fetch", {"url": "https://x"}, result)
+    span = _span("t", "web_fetch", "tool.call", start=0, end=1, attrs=attrs)
+    direct = tent.project_entries([span], state=state, read=True).entries
+    out = _one(direct, "web_fetch", "tool.output")
+    assert out.status_evidence == (code,) and out.failure_entry and out.operation_status == "error"
+    cache = tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7))
+    cached = tent.project_entries([span], state=state, cached_records={("t", "web_fetch"): cache.records}).entries
+    assert _one(cached, "web_fetch", "tool.output").status_evidence == (code,)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"data": {"error": "nested errors are the payload's business"}},
+        {"error": None},
+        {"errors": []},
+        {"ok": True, "status": "done"},
+        "all good",
+        json.dumps({"results": [{"error": "inside a list"}]}),
+    ],
+)
+def test_tool_results_without_a_top_level_error_stay_ok(state, result):
+    attrs = _tool_attrs(state, "search", {"q": 1}, result)
+    span = _span("t", "search", "tool.call", start=0, end=1, attrs=attrs)
+    for entries in (
+        tent.project_entries([span], state=state, read=True).entries,
+        tent.project_entries(
+            [span],
+            state=state,
+            cached_records={
+                ("t", "search"): tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7)).records
+            },
+        ).entries,
+    ):
+        out = _one(entries, "search", "tool.output")
+        assert out.status_evidence == () and not out.failure_entry and out.operation_status == "ok"
+
+
+# ── row spellings ─────────────────────────────────────────────────────
+
+
+def test_tool_rows_lead_with_the_tool_name_and_model_rows_name_their_calls(state):
+    tool_attrs = _tool_attrs(state, "web_fetch", {"url": "https://x"}, {"status": 200})
+    output = {"content": "final", "tool_calls": [{"id": "call_9", "name": "web_fetch", "arguments": '{"url": "u"}'}]}
+    spans = [
+        _span("t", "turn", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "turn")),
+        _span(
+            "t",
+            "llm",
+            "llm.call",
+            parent="turn",
+            start=1,
+            end=2,
+            attrs=_llm_attrs(state, "llm", _messages("hi"), output),
+        ),
+        _span("t", "web_fetch", "tool.call", parent="turn", start=3, end=4, attrs=tool_attrs),
+    ]
+    for entries in (
+        tent.project_entries(spans, state=state, read=True).entries,
+        tent.project_entries(
+            spans,
+            state=state,
+            cached_records={
+                (s["traceId"], s["spanId"]): tent.preview_records(
+                    s, state=state, budget=tent.ReadBudget(10, 10**7)
+                ).records
+                for s in spans
+            },
+        ).entries,
+    ):
+        assert _one(entries, "web_fetch", "tool.input").preview == 'web_fetch { "url": "https://x" }'
+        assert _one(entries, "web_fetch", "tool.output").preview == 'web_fetch: { "status": 200 }'
+        assert _one(entries, "llm", "llm.output").preview == 'final web_fetch {"url": "u"}'
+
+
+def test_memory_store_rows_show_the_first_question_and_the_last_answer(state):
+    messages = [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "What is X?\nmore detail"},
+        {"role": "assistant", "content": "X is a thing."},
+        {"role": "user", "content": "And Y?"},
+        {"role": "assistant", "content": "Y is another."},
+    ]
+    attrs = {
+        "memory.session_id": "tui:a",
+        "memory.message_count": 5,
+        "memory.store.artifact_path": _artifact(state, {"session_id": "tui:a", "messages": messages}, "store"),
+    }
+    span = _span("t", "store", "memory.store", start=0, end=1, attrs=attrs)
+    direct = tent.project_entries([span], state=state, read=True).entries
+    cached = tent.project_entries(
+        [span],
+        state=state,
+        cached_records={
+            ("t", "store"): tent.preview_records(span, state=state, budget=tent.ReadBudget(10, 10**7)).records
+        },
+    ).entries
+    for entries in (direct, cached):
+        assert _one(entries, "store", "artifact:memory.store").preview == "What is X? → Y is another."
+
+
+def test_memory_feedback_rows_count_injected_and_used_skills(state):
+    attrs = {"memory.session_id": "tui:a", "memory.injected": ["a", "b"], "memory.used": ["a"]}
+    span = _span("t", "fb", "memory.feedback", start=0, end=1, attrs=attrs)
+    entry = _one(tent.project_entries([span], state=state, read=True).entries, "fb", "summary")
+    assert entry.preview == "injected 2 · used 1"
+    assert entry.meta == {"injected": ["a", "b"], "used": ["a"]}
+    assert "hidden" not in entry.meta
+
+
+# ── the message delta ─────────────────────────────────────────────────
+
+
+def _call(state, trace, span_id, parent, *, start, messages, purpose=None, content="ok"):
+    extra = {"llm.purpose": purpose} if purpose else None
+    attrs = _llm_attrs(state, span_id, messages, {"content": content}, extra=extra)
+    return _span(trace, span_id, "llm.call", parent=parent, start=start, end=start + 1, attrs=attrs)
+
+
+def _m(role, text):
+    return {"role": role, "content": text}
+
+
+def _delta(entries, span_id):
+    meta = _one(entries, span_id, "llm.input").meta
+    return meta.get("delta"), meta.get("new_from"), meta.get("message_count")
+
+
+def test_model_inputs_say_what_they_add_only_when_the_history_proves_it(state):
+    s, u1, a1, u2, a2, u3 = (
+        _m("system", "rules"),
+        _m("user", "q1"),
+        _m("assistant", "a1"),
+        _m("user", "q2"),
+        _m("assistant", "a2"),
+        _m("user", "q3"),
+    )
+    spans = [
+        _span("A", "tA", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "tA")),
+        _call(state, "A", "a1", "tA", start=1, messages=[s, u1], purpose="main"),
+        _span("B", "tB", "session.turn", start=20, end=30, attrs=_turn_attrs(state, "tB")),
+        _call(state, "B", "b1", "tB", start=21, messages=[s, u1, a1, u2], purpose="main"),
+        _call(state, "B", "b2", "tB", start=22, messages=[_m("user", "is this watched work?")], purpose="watch_work"),
+        _call(state, "B", "b3", "tB", start=23, messages=[s, u1, a1, u2], purpose="main"),
+        _span("C", "tC", "session.turn", start=40, end=50, attrs=_turn_attrs(state, "tC")),
+        _call(state, "C", "c1", "tC", start=41, messages=[s, _m("user", "compacted"), u1], purpose="main"),
+        _call(state, "C", "c2", "tC", start=42, messages=[s, u1, a1, u2, a2, u3]),
+        _call(state, "C", "c3", "tC", start=43, messages=[_m("user", "A"), _m("user", "B")], purpose="dup"),
+        _call(
+            state,
+            "C",
+            "c4",
+            "tC",
+            start=44,
+            messages=[_m("user", "A"), _m("user", "B"), _m("user", "A")],
+            purpose="dup",
+        ),
+        _call(
+            state,
+            "C",
+            "c5",
+            "tC",
+            start=45,
+            messages=[_m("user", "A"), _m("user", "X"), _m("user", "B")],
+            purpose="dup",
+        ),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    assert _delta(entries, "a1") == ("first", 0, 2)
+    assert _delta(entries, "b1") == ("continued", 2, 4)
+    # The watch-work question shares nothing with the dialogue: its own conversation, all new.
+    assert _delta(entries, "b2") == ("independent", 0, 1)
+    assert _delta(entries, "b3") == ("continued", 4, 4)
+    # Compaction rewrote the history: no prefix, so nothing is called old.
+    assert _delta(entries, "c1") == ("independent", 0, 3)
+    # A call that recorded no purpose continues a main call when the prefix holds.
+    assert _delta(entries, "c2") == ("continued", 4, 6)
+    assert _delta(entries, "c3") == ("independent", 0, 2)
+    assert _delta(entries, "c4") == ("continued", 2, 3)
+    assert _delta(entries, "c5") == ("independent", 0, 3)
+    assert _one(entries, "b1", "llm.input").meta["purpose"] == "main"
+    assert _one(entries, "b2", "llm.input").meta["purpose"] == "watch_work"
+    assert "purpose" not in _one(entries, "c2", "llm.input").meta
+
+
+def test_sub_agent_inputs_are_measured_against_their_own_trace(state):
+    s, u1, a1, u2 = _m("system", "rules"), _m("user", "q1"), _m("assistant", "a1"), _m("user", "q2")
+    spans = [
+        _span("A", "tA", "session.turn", start=0, end=30, attrs=_turn_attrs(state, "tA")),
+        _call(state, "A", "a1", "tA", start=1, messages=[s, u1, a1, u2], purpose="main"),
+        _span(
+            "S",
+            "sub",
+            "session.turn",
+            start=2,
+            end=20,
+            attrs={**_turn_attrs(state, "sub"), "trace.dispatched_in_trace_id": "A"},
+        ),
+        _call(state, "S", "s1", "sub", start=3, messages=[s, u1], purpose="main"),
+        _call(state, "S", "s2", "sub", start=4, messages=[s, u1, a1], purpose="main"),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    assert _one(entries, "s1", "llm.input").origin == "subagent"
+    assert _delta(entries, "s1") == ("first", 0, 2)
+    assert _delta(entries, "s2") == ("continued", 2, 3)
+
+
+def test_delta_is_unknown_until_the_predecessor_is_read(state):
+    s, u1, a1, u2 = _m("system", "rules"), _m("user", "q1"), _m("assistant", "a1"), _m("user", "q2")
+    a = _call(state, "A", "a1", None, start=1, messages=[s, u1], purpose="main")
+    b = _call(state, "B", "b1", None, start=2, messages=[s, u1, a1, u2], purpose="main")
+    budget = tent.ReadBudget(10, 10**7)
+    b_cache = tent.preview_records(b, state=state, budget=budget)
+    unread = tent.project_entries([a, b], state=state, cached_records={("B", "b1"): b_cache.records}).entries
+    assert _delta(unread, "b1") == ("unknown", None, 4)
+    a_cache = tent.preview_records(a, state=state, budget=budget)
+    read = tent.project_entries(
+        [a, b], state=state, cached_records={("A", "a1"): a_cache.records, ("B", "b1"): b_cache.records}
+    ).entries
+    assert _delta(read, "b1") == ("continued", 2, 4)
+    assert _delta(read, "a1") == ("first", 0, 2)
+
+
+# ── rows the list need not show ───────────────────────────────────────
+
+
+def test_replies_repeating_the_last_model_output_are_marked_hidden(state):
+    spans = [
+        _span("t", "turn", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "turn", content_out="Done.")),
+        _call(state, "t", "l1", "turn", start=1, messages=[_m("user", "go")], content="working"),
+        _call(state, "t", "l2", "turn", start=2, messages=[_m("user", "go")], content="Done. "),
+        _span(
+            "u",
+            "turn2",
+            "session.turn",
+            start=20,
+            end=30,
+            attrs=_turn_attrs(state, "turn2", content_out="Summary of two outputs"),
+        ),
+        _call(state, "u", "l3", "turn2", start=21, messages=[_m("user", "go")], content="first"),
+        _call(state, "u", "l4", "turn2", start=22, messages=[_m("user", "go")], content="second"),
+        _span("t", "enq", "memory.enqueue", parent="turn", start=3, end=3),
+        _span(
+            "t",
+            "fb0",
+            "memory.feedback",
+            parent="turn",
+            start=4,
+            end=4,
+            attrs={"memory.injected": [], "memory.used": []},
+        ),
+        _span(
+            "t",
+            "fb1",
+            "memory.feedback",
+            parent="turn",
+            start=5,
+            end=5,
+            attrs={"memory.injected": ["a"], "memory.used": []},
+        ),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    assert _one(entries, "turn", "turn.output").meta.get("hidden") == "redundant_reply"
+    assert "hidden" not in _one(entries, "turn2", "turn.output").meta
+    assert _one(entries, "enq", "summary").meta.get("hidden") == "empty_internal"
+    assert _one(entries, "fb0", "summary").meta.get("hidden") == "empty_internal"
+    assert "hidden" not in _one(entries, "fb1", "summary").meta
+    # The hidden reply still owns the turn's clock.
+    assert _one(entries, "turn", "turn.output").charged_ms == 10000
+
+
+def test_a_reply_is_not_hidden_while_either_side_is_unread(state):
+    turn = _span("t", "turn", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "turn", content_out="Done."))
+    call = _call(state, "t", "l1", "turn", start=1, messages=[_m("user", "go")], content="Done.")
+    budget = tent.ReadBudget(10, 10**7)
+    turn_cache = tent.preview_records(turn, state=state, budget=budget)
+    half = tent.project_entries([turn, call], state=state, cached_records={("t", "turn"): turn_cache.records}).entries
+    assert "hidden" not in _one(half, "turn", "turn.output").meta
+    call_cache = tent.preview_records(call, state=state, budget=budget)
+    both = tent.project_entries(
+        [turn, call], state=state, cached_records={("t", "turn"): turn_cache.records, ("t", "l1"): call_cache.records}
+    ).entries
+    assert _one(both, "turn", "turn.output").meta.get("hidden") == "redundant_reply"
