@@ -239,7 +239,7 @@ describe('the chat column chrome and the trajectory view', () => {
     const btn = el('trajBtn')
     expect(btn.getAttribute('aria-pressed')).toBe('false')
     expect(Array.from(top().children).map((child) => child.id || child.className)).toEqual([
-      'title', 'wdTag', 'spacer', 'wsBtn', 'trajBtn',
+      'title', 'wdTag', 'spacer', 'trajBtn', 'wsBtn',
     ])
     const ta = document.getElementById('ta') as HTMLTextAreaElement
     ta.value = 'half a thought'

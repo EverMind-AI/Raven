@@ -78,10 +78,10 @@ afterEach(() => {
 })
 
 describe('the trajectory island', () => {
-  it('draws the list between an absent status line and the bar\'s strip', async () => {
+  it('draws the bar under an absent status line and the list under the bar', async () => {
     await draw()
     const root = document.querySelector('.trajectory-root') as HTMLElement
-    expect([...root.children].map((c) => c.className)).toEqual(['trajectory-body', 'trajectory-bar'])
+    expect([...root.children].map((c) => c.className)).toEqual(['trajectory-bar', 'trajectory-body'])
     expect([...root.querySelector('.trajectory-body')!.children].map((c) => c.className)).toEqual(['trajectory-list'])
     expect(document.querySelectorAll('.trajectory-row')).toHaveLength(1)
   })

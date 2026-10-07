@@ -19,13 +19,16 @@ import { kindClass, kindLabel } from './palette'
 import * as list from './store'
 import { panelId, tabId, Tabs } from './Tabs'
 
-import type { TrajectoryDetailResult } from './types'
+import type { TrajectoryDetailResult, TrajectoryEntry } from './types'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 
-/* The name under the tag: a tool's, a skill's or a model's when the
-   descriptor's own blocks carry it in their preview, the span name otherwise. */
-export function shortName(value: TrajectoryDetailResult): string {
-  for (const [blockId, key] of [['tool', 'name'], ['skill', 'skill.name'], ['model', 'model'], ['plugin', 'plugin.name'], ['agent', 'subagent.label']] as const) {
+/* The name under the tag: the tool's from the row's own meta, else a
+   skill's, a model's or an agent's when the descriptor's blocks carry it in
+   their preview, the span name otherwise. */
+export function shortName(value: TrajectoryDetailResult, entry?: TrajectoryEntry | null): string {
+  const tool = entry?.meta?.tool
+  if (typeof tool === 'string' && tool) return tool
+  for (const [blockId, key] of [['skill', 'skill.name'], ['model', 'model'], ['plugin', 'plugin.name'], ['agent', 'subagent.label']] as const) {
     const block = value.blocks.find((b) => b.id === blockId)
     const preview = block?.preview
     if (!Array.isArray(preview)) continue
@@ -131,7 +134,7 @@ export function Details(): JSX.Element | null {
     >
       <div className="trajectory-head">
         {kind ? <span className={`trajectory-tag ${kindClass(kind)}`}>{kindLabel(kind)}</span> : null}
-        <span className="trajectory-head-name" title={value ? shortName(value) : undefined}>{value ? shortName(value) : (entry?.span_name ?? '')}</span>
+        <span className="trajectory-head-name" title={value ? shortName(value, entry) : undefined}>{value ? shortName(value, entry) : (entry?.span_name ?? '')}</span>
         <button className="trajectory-close" aria-label={closeLabel} title={closeLabel} onClick={() => details.closeDetails()}>
           {narrow ? t('gui.trajectory.details.back') : '✕'}
         </button>

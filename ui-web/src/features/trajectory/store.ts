@@ -101,6 +101,81 @@ export interface TrajectoryState {
   follow: boolean
   anchor: Anchor | null
   timeline: Timeline
+  /** The reader's two switches for the list and the bar, kept in the browser. */
+  prefs: Prefs
+  /** Hidden rows shown for now because something pointed at them; cleared with the conversation. */
+  revealed: string[]
+  /** The rows the list draws: `entries` less the hidden ones, unless the switch or `revealed` says otherwise. */
+  visible: TrajectoryEntry[]
+  /** `entry_id` to position in `visible`, rebuilt with it. */
+  visibleIndex: Record<string, number>
+  /** `trace_id:span_id` to the first entry of that span, for the links a detail carries. */
+  spanIndex: Record<string, string>
+  /** A turn's whole charged time, from its reply entry, by `turn_span_id`. */
+  turnTotals: Record<string, number>
+}
+
+/** What the reader can switch: hide the blocks under 20 ms, and show the internal steps the list leaves out. */
+export interface Prefs {
+  hideShort: boolean
+  showInternal: boolean
+}
+
+export const PREFS_KEY = 'raven.gui.trajectory.prefs'
+const DEFAULT_PREFS: Prefs = { hideShort: true, showInternal: false }
+
+/** The switches as the browser last kept them; the defaults where it kept nothing readable. */
+export function readPrefs(): Prefs {
+  return loadPrefs()
+}
+
+function loadPrefs(): Prefs {
+  try {
+    const raw: unknown = typeof localStorage === 'undefined' ? null : JSON.parse(localStorage.getItem(PREFS_KEY) || 'null')
+    if (raw && typeof raw === 'object') {
+      const value = raw as Partial<Prefs>
+      return {
+        hideShort: typeof value.hideShort === 'boolean' ? value.hideShort : DEFAULT_PREFS.hideShort,
+        showInternal: typeof value.showInternal === 'boolean' ? value.showInternal : DEFAULT_PREFS.showInternal,
+      }
+    }
+  } catch {
+    /* Storage may be unavailable or hold something else; the defaults stand. */
+  }
+  return { ...DEFAULT_PREFS }
+}
+
+function savePrefs(prefs: Prefs): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
+  } catch {
+    /* Private mode or quota: the switch still holds for this page. */
+  }
+}
+
+/** The index's reason for leaving a row out of the list, or null for a row it shows. */
+export const hiddenOf = (entry: TrajectoryEntry): string | null => {
+  const value = entry.meta?.hidden
+  return typeof value === 'string' ? value : null
+}
+
+const spanKey = (trace: string, span: string): string => `${trace}:${span}`
+
+/* Everything the list and the bar read that follows from `entries`: the
+   visible rows and their positions, the span lookup and the turn totals. */
+function derived(entries: TrajectoryEntry[], prefs: Prefs, revealed: string[]) {
+  const visible: TrajectoryEntry[] = []
+  const spanIndex: Record<string, string> = {}
+  const turnTotals: Record<string, number> = {}
+  for (const entry of entries) {
+    const key = spanKey(entry.trace_id, entry.span_id)
+    if (!(key in spanIndex)) spanIndex[key] = entry.entry_id
+    if (entry.slot === 'turn.output' && entry.turn_span_id && typeof entry.charged_ms === 'number') {
+      turnTotals[entry.turn_span_id] = entry.charged_ms
+    }
+    if (hiddenOf(entry) === null || prefs.showInternal || revealed.includes(entry.entry_id)) visible.push(entry)
+  }
+  return { entries, index: indexOf(entries), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals }
 }
 
 const initial: TrajectoryState = {
@@ -125,6 +200,12 @@ const initial: TrajectoryState = {
   follow: true,
   anchor: null,
   timeline: initialTimeline,
+  prefs: loadPrefs(),
+  revealed: [],
+  visible: [],
+  visibleIndex: {},
+  spanIndex: {},
+  turnTotals: {},
 }
 
 const store = makeStore<TrajectoryState>(initial)
@@ -132,6 +213,10 @@ const store = makeStore<TrajectoryState>(initial)
 export const { get, set, subscribe } = store
 
 const patch = (p: Partial<TrajectoryState>): void => { store.set({ ...store.get(), ...p }) }
+
+/** The fields that change together with the rows: the whole set, its positions, the visible set and the lookups. */
+export const rowsOf = (entries: TrajectoryEntry[], s: TrajectoryState = store.get()) => derived(entries, s.prefs, s.revealed)
+const rows = rowsOf
 
 export const source = (): TrajectorySource | null => sources.trajectory ?? null
 
@@ -200,8 +285,20 @@ export function handshake(): void {
 function leaveView(): void {
   if (store.get().view === 'trajectory') {
     bump()
-    patch({ view: 'chat', listing: false, timeline: { ...store.get().timeline, bucket: null } })
+    const s = store.get()
+    patch({ view: 'chat', listing: false, timeline: { ...s.timeline, bucket: null }, revealed: [], ...rows(s.entries, { ...s, revealed: [] }) })
   }
+}
+
+/* ── the reader's switches ────────────────────────────────────────────── */
+
+/** Flip a switch: kept in the browser for the next visit, and the rows reconsidered now. */
+export function setPrefs(next: Partial<Prefs>): void {
+  const s = store.get()
+  const prefs = { ...s.prefs, ...next }
+  if (prefs.hideShort === s.prefs.hideShort && prefs.showInternal === s.prefs.showInternal) return
+  savePrefs(prefs)
+  patch({ prefs, revealed: [], ...derived(s.entries, prefs, []) })
 }
 
 /** The surface is switched off for this process; the toggle goes, the data stays. */
@@ -264,7 +361,11 @@ export function setView(view: View): void {
   if (s.view === view) return
   if (view === 'trajectory' && !available(s)) return
   bump()
-  patch({ view, listing: false, timeline: view === 'chat' ? { ...s.timeline, bucket: null } : s.timeline })
+  const revealed = view === 'chat' ? [] : s.revealed
+  patch({
+    view, listing: false, timeline: view === 'chat' ? { ...s.timeline, bucket: null } : s.timeline,
+    revealed, ...rows(s.entries, { ...s, revealed }),
+  })
 }
 
 export const toggleView = (): void => { setView(store.get().view === 'trajectory' ? 'chat' : 'trajectory') }
@@ -275,8 +376,15 @@ export const toggleView = (): void => { setView(store.get().view === 'trajectory
 export function select(entryId: string | null, opts: { source: SelectSource }): void {
   const s = store.get()
   if (entryId !== null && !(entryId in s.index)) return
-  if (s.selectedId === entryId) return
-  patch({ selectedId: entryId, selectedBy: entryId === null ? null : opts.source })
+  /* A hidden row that something pointed at is shown for now, so the selection has a row to land on --
+     also when it was the selection already and a switch has since hidden it. */
+  const reveal = entryId !== null && !(entryId in s.visibleIndex)
+  if (s.selectedId === entryId && !reveal) return
+  const revealed = reveal ? [...s.revealed, entryId as string] : s.revealed
+  patch({
+    selectedId: entryId, selectedBy: entryId === null ? null : opts.source,
+    ...(reveal ? { revealed, ...rows(s.entries, { ...s, revealed }) } : {}),
+  })
 }
 
 /** The list reports where the reader is: at the tail, or anchored to a row. */
@@ -344,6 +452,11 @@ export function sessionChanged(key: string | null = sessionCurrent()): void {
     follow: back?.follow ?? true,
     anchor: back?.anchor ?? null,
     timeline: back?.timeline ?? initialTimeline,
+    revealed: [],
+    visible: [],
+    visibleIndex: {},
+    spanIndex: {},
+    turnTotals: {},
   })
   if (back?.view === 'trajectory' && !available()) patch({ view: 'chat' })
 }
@@ -368,7 +481,7 @@ async function pages(src: TrajectorySource, key: string, g: number, progressive:
     if (g !== generation || store.get().sessionKey !== key) return null
     entries = cursor === null ? [...page.entries] : [...entries, ...page.entries]
     cursor = page.next_cursor ?? null
-    if (progressive) patch({ entries, index: indexOf(entries), indexState: page.index_state })
+    if (progressive) patch({ ...rows(entries), indexState: page.index_state })
     if (cursor === null) return { entries, last: page }
   }
 }
@@ -393,8 +506,7 @@ export async function load(): Promise<void> {
       if (got === null) return
       const { entries, last } = got
       patch({
-        entries,
-        index: indexOf(entries),
+        ...rows(entries),
         epoch: last.epoch,
         revision: last.snapshot_revision,
         snapshotReady: true,
@@ -449,8 +561,7 @@ export function applyChanges(batch: TrajectoryChangesResult): void {
     else if (!(selectedId in index)) selectedId = null
   }
   patch({
-    entries,
-    index,
+    ...rows(entries, s),
     revision: Math.max(s.revision, batch.to_revision),
     indexState: batch.index_state,
     fault: null,
@@ -470,6 +581,10 @@ export const entry = (id: string): TrajectoryEntry | null => {
   const at = s.index[id]
   return at === undefined ? null : (s.entries[at] ?? null)
 }
+
+/** The first entry of a span, by the identity the details carry, when the list has one. */
+export const entryOfSpan = (traceId: string, spanId: string, s: TrajectoryState = store.get()): string | null =>
+  s.spanIndex[spanKey(traceId, spanId)] ?? null
 
 export function _resetForTests(): void {
   store._resetForTests()

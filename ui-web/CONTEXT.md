@@ -157,10 +157,17 @@ details pane beside the list (`features/trajectory/detailStore.ts`): a descripto
 read through `trajectory.detail` and block bodies read through
 `trajectory.block`, each filed under its whole identity (session, epoch,
 entry, revision, block) and shown only under the ticket it was asked with.
-Under both sits the duration bar (`features/trajectory/DurationBar.tsx`,
+Above the list sits the duration bar (`features/trajectory/DurationBar.tsx`,
 arithmetic in `geometry.ts`): every entry as a block as wide as what it is
 charged, zoomed about the pointer and dragged, dense blocks where the fit has
-no room, a click on a block being one more door to the same `select`.
+no room, a click on a block being one more door to the same `select`. The list
+store keeps two indexes: the server's whole `entries` (every coordinate, change
+feeds and the anchor) and the derived `visible` rows, which leave out the
+entries the index marked `meta.hidden` (a reply that repeats the turn's last
+model output, an internal step that recorded nothing) unless the "show internal
+steps" switch is on or a link `revealed` one; the two switches are the viewer's
+`prefs`, kept in `localStorage` and never in the session memory. A hidden reply
+is drawn as the turn's band under the blocks rather than a block of its own.
 _Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
 records, the trajectory is how this page reads it back.
 

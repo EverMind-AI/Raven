@@ -8,8 +8,8 @@ import { dispatch as escape } from '../../state/escapeOrder'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import * as details from './detailStore'
-import { BUCKET_MAX_H, DurationBar } from './DurationBar'
-import { DBL_MS, GAP, MIN_W, capacity, hitTest, layoutFor, toSegments } from './geometry'
+import { BUCKET_MAX_H, DurationBar, paint } from './DurationBar'
+import { BLOCK_H, BLOCK_TOP, DBL_MS, DOT_ABOVE_Y, DOT_BELOW_Y, GAP, MIN_W, bandsFor, capacity, hitTest, hitTestExact, initialViewport, layoutFor, toSegments } from './geometry'
 import * as store from './store'
 
 import type { TrajectoryEntry, TrajectoryIndexState, TrajectorySource } from './types'
@@ -110,6 +110,8 @@ afterAll(() => {
 async function ready(): Promise<void> {
   absorb(['trajectory-v1'])
   store.install()
+  /* These fixtures lean on zero-length marks; the short-entry switch would take them out. */
+  store.setPrefs({ hideShort: false })
   details.install()
   unpitch()
   store.sessionChanged('gui:a')
@@ -120,6 +122,14 @@ async function ready(): Promise<void> {
 
 const flush = async (): Promise<void> => { await act(async () => { for (let i = 0; i < 6; i += 1) await Promise.resolve() }) }
 const later = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+
+/* A content x in a gap of the fitted layout: nobody's, so the bar speaks for itself there. */
+const gapAfter = (n: number, width = WIDTH): number => {
+  const layout = layoutFor(toSegments(store.get().visible), initialViewport(width))
+  const b = layout.blocks[n]!
+  return b.x + b.w + 0.5
+}
+const brief = (): string => q('.trajectory-hover-brief')?.textContent ?? ''
 
 const pointer = (type: string, clientX: number, pointerId = 1): void => {
   act(() => { fireEvent(canvas(), new PointerEvent(type, { clientX, clientY: 10, pointerId, button: 0, bubbles: true })) })
@@ -175,7 +185,10 @@ describe('the duration bar', () => {
     render(<DurationBar />)
     await flush()
     expect(canvas().getAttribute('aria-label')).toBe('gui.trajectory.bar.canvas_label {"n":3,"known":"1s"}')
-    expect(q('.trajectory-bar-sum')?.textContent).toBe('gui.trajectory.bar.sum_known {"dur":"1s"}gui.trajectory.bar.sum_unknown {"n":1}')
+    /* No text beside the canvas any more: the sum is said where no block is. */
+    expect(q('.trajectory-bar-sum')).toBeNull()
+    pointer('pointermove', gapAfter(0))
+    expect(brief()).toBe('gui.trajectory.bar.sum_known {"dur":"1s"} \u00b7 gui.trajectory.bar.sum_unknown {"n":1}')
     expect(q('.trajectory-bar')?.hasAttribute('data-fit')).toBe(true)
   })
 
@@ -187,8 +200,9 @@ describe('the duration bar', () => {
     await ready()
     render(<DurationBar />)
     await flush()
-    expect(q('.trajectory-bar-sum')?.textContent).toContain('gui.trajectory.bar.sum_overlap')
-    expect(q('.trajectory-bar-sum')?.textContent).toContain('"dur":"6s"')
+    pointer('pointermove', gapAfter(0))
+    expect(brief()).toContain('gui.trajectory.bar.sum_overlap')
+    expect(brief()).toContain('"dur":"6s"')
   })
 
   it('selects the block under a click after the double-click wait, through the bar\'s own door, and opens the details', async () => {
@@ -316,7 +330,7 @@ describe('the duration bar', () => {
     expect(store.get().timeline.fit).toBe(false)
     expect(store.get().timeline.scale).toBeGreaterThan(1)
     const elsewhere = new WheelEvent('wheel', { deltaY: -200, bubbles: true, cancelable: true })
-    act(() => { (q('.trajectory-bar-sum') as HTMLElement).dispatchEvent(elsewhere) })
+    act(() => { (q('.trajectory-bar-tools') as HTMLElement).dispatchEvent(elsewhere) })
     expect(elsewhere.defaultPrevented).toBe(false)
   })
 
@@ -364,13 +378,13 @@ describe('the duration bar', () => {
     await ready()
     render(<DurationBar />)
     await flush()
-    const more = { ...store.get(), entries: [...THREE, entry('late', 9, { charged_ms: 3000 })], index: { in: 0, think: 1, out: 2, late: 3 } }
+    const more = { ...store.get(), ...store.rowsOf([...THREE, entry('late', 9, { charged_ms: 3000 })]) }
     act(() => { store.set(more) })
     expect(store.get().timeline.fit).toBe(true)
     expect(canvas().getAttribute('aria-label')).toContain('"n":4')
     act(() => { fireEvent.click(q('.trajectory-bar-tool[aria-label="gui.trajectory.bar.zoom_in"]') as HTMLElement) })
     const zoomed = store.get().timeline
-    act(() => { store.set({ ...store.get(), entries: [...more.entries, entry('later', 10, { charged_ms: 500 })], index: { ...more.index, later: 4 } }) })
+    act(() => { store.set({ ...store.get(), ...store.rowsOf([...more.entries, entry('later', 10, { charged_ms: 500 })]) }) })
     expect(store.get().timeline.scale).toBe(zoomed.scale)
     expect(store.get().timeline.fit).toBe(false)
     expect(store.get().timeline.offset).toBe(zoomed.offset)
@@ -426,13 +440,13 @@ describe('the duration bar', () => {
     expect(edge).toBe(dragged.anchor!.id)
     /* Rows appended at the tail: nothing before them moves, so neither does the view. */
     const s1 = store.get()
-    act(() => { store.set({ ...s1, entries: [...s1.entries, entry('tail', 20, { charged_ms: 3000 })], index: { ...s1.index, tail: s1.entries.length } }) })
+    act(() => { store.set({ ...s1, ...store.rowsOf([...s1.entries, entry('tail', 20, { charged_ms: 3000 })], s1) }) })
     expect(store.get().timeline.offset).toBeCloseTo(dragged.offset, 6)
     expect(atLeftEdge()).toBe(edge)
     /* A row in front: the view slides by its slot, so the same entry stays at the edge. */
     const s2 = store.get()
     const early = entry('early', 0, { charged_ms: 2000 })
-    act(() => { store.set({ ...s2, entries: [early, ...s2.entries], index: Object.fromEntries([early, ...s2.entries].map((e, i) => [e.entry_id, i])) }) })
+    act(() => { store.set({ ...s2, ...store.rowsOf([early, ...s2.entries], s2) }) })
     const slot = Math.max(MIN_W, dragged.frozenUnit! * dragged.scale * 2000) + GAP
     expect(store.get().timeline.offset).toBeCloseTo(dragged.offset + slot, 6)
     expect(atLeftEdge()).toBe(edge)
@@ -563,5 +577,115 @@ describe('a dense block', () => {
     act(() => { store.sessionChanged('gui:b') })
     expect(store.get().timeline.bucket).toBeNull()
     expect(q('.trajectory-bucket')).toBeNull()
+  })
+})
+
+describe('the switches, the bands and the dots', () => {
+  const recorder = (): { ctx: CanvasRenderingContext2D; calls: Array<[string, unknown[]]> } => {
+    const calls: Array<[string, unknown[]]> = []
+    const ctx = new Proxy({} as CanvasRenderingContext2D, {
+      get: (_t, name) => {
+        if (name === 'fillStyle' || name === 'strokeStyle' || name === 'lineWidth') return undefined
+        return (...args: unknown[]) => { calls.push([String(name), args]) }
+      },
+      set: (_t, name, value) => { calls.push([`set ${String(name)}`, [value]]); return true },
+    })
+    return { ctx, calls }
+  }
+
+  it('hides the recorded durations under 20 ms while the switch is on, never an unknown one or the user\'s input', async () => {
+    rows = [
+      entry('u', 0, { kind: 'user.input', charged_ms: 0, timing_basis: 'zero' }),
+      entry('fast', 1, { kind: 'tool.output', charged_ms: 12 }),
+      entry('unknown', 2, { kind: 'llm.thinking', charged_ms: null, timing_basis: 'not_recorded' }),
+      entry('slow', 3, { kind: 'llm.output', charged_ms: 900 }),
+    ]
+    await ready()
+    store.setPrefs({ hideShort: true })
+    render(<DurationBar />)
+    await flush()
+    expect(canvas().getAttribute('aria-label')).toContain('"n":3')
+    const sw = q('.trajectory-bar-switch[aria-label="gui.trajectory.bar.hide_short"]') as HTMLButtonElement
+    expect(sw.getAttribute('aria-pressed')).toBe('true')
+    act(() => { fireEvent.click(sw) })
+    expect(store.get().prefs.hideShort).toBe(false)
+    expect(canvas().getAttribute('aria-label')).toContain('"n":4')
+    expect(JSON.parse(localStorage.getItem(store.PREFS_KEY) as string)).toEqual({ hideShort: false, showInternal: false })
+  })
+
+  it('draws a hidden reply\'s time as a band behind its turn, says the turn\'s total there and lands a click on the turn\'s first row', async () => {
+    rows = [
+      entry('ask', 0, { kind: 'user.input', charged_ms: 0, timing_basis: 'zero', turn_number: 1, turn_start: true }),
+      entry('out', 1, { kind: 'llm.output', charged_ms: 2000, turn_number: 1 }),
+      entry('reply', 2, { kind: 'agent.reply', slot: 'turn.output', charged_ms: 5000, turn_number: 1, meta: { hidden: 'redundant_reply' } }),
+      entry('ask2', 3, { kind: 'user.input', charged_ms: 0, timing_basis: 'zero', turn_number: 2, turn_start: true }),
+      entry('out2', 4, { kind: 'llm.output', charged_ms: 2000, turn_number: 2 }),
+      entry('reply2', 5, { kind: 'agent.reply', slot: 'turn.output', charged_ms: 3000, turn_number: 2 }),
+    ]
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    /* The hidden reply is not a block: three blocks for turn 1, three for turn 2 (its reply shows). */
+    expect(canvas().getAttribute('aria-label')).toContain('"n":5')
+    const { ctx, calls } = recorder()
+    const view = { ...store.get().timeline, width: WIDTH }
+    const segments = toSegments(store.get().visible)
+    const layout = layoutFor(segments, view)
+    const bySegment = new Map(segments.map((s) => [s.id, s]))
+    const bands = bandsFor(layout, bySegment, new Map([[1, 5000]]))
+    expect(bands).toHaveLength(1)
+    const [ask, out] = layout.blocks
+    expect(bands[0]).toEqual({ turn: 1, x0: ask!.x, x1: out!.x + out!.w, total: 5000 })
+    paint(ctx, layout, view, 'out', bySegment, 1, bands)
+    const fills = calls.filter(([name]) => name === 'fillRect').map(([, args]) => args as number[])
+    /* The band is drawn first, under the blocks, and the blocks are half the row's height. */
+    expect(fills[0]![0]).toBe(bands[0]!.x0)
+    expect(fills[0]![2]).toBeCloseTo(bands[0]!.x1 - bands[0]!.x0, 6)
+    expect(fills.slice(1).every((f) => f[1] === BLOCK_TOP && f[3] === BLOCK_H)).toBe(true)
+    /* One green dot over the selected block, drawn above the blocks, none below since nothing failed. */
+    const arcs = calls.filter(([name]) => name === 'arc').map(([, args]) => args as number[])
+    expect(arcs).toHaveLength(1)
+    expect(arcs[0]![0]).toBeCloseTo(out!.x + out!.w / 2, 6)
+    expect(arcs[0]![1]).toBe(DOT_ABOVE_Y)
+    /* The gap between turn 1's blocks lies in the band: the hover names the turn, the click selects its first row. */
+    const inBand = gapAfter(0)
+    pointer('pointermove', inBand)
+    expect(brief()).toBe('gui.trajectory.bar.turn_total {"n":1,"dur":"5s"}')
+    await click(inBand)
+    expect(store.get().selectedId).toBe('ask')
+    expect(store.get().selectedBy).toBe('bar')
+    /* A gap outside any band says the sum instead. */
+    pointer('pointermove', gapAfter(3))
+    expect(brief()).toContain('gui.trajectory.bar.sum_known')
+    /* Showing the internal steps brings the reply back as a block and takes the band away. */
+    act(() => { store.setPrefs({ showInternal: true }) })
+    await flush()
+    expect(canvas().getAttribute('aria-label')).toContain('"n":6')
+    pointer('pointermove', gapAfter(0))
+    expect(brief()).toContain('gui.trajectory.bar.sum_known')
+  })
+
+  it('marks a failed block with a dot below it', async () => {
+    rows = [entry('ok', 0, { charged_ms: 1000 }), entry('bad', 1, { charged_ms: 1000, failure_entry: true })]
+    await ready()
+    const { ctx, calls } = recorder()
+    const view = { ...store.get().timeline, width: WIDTH }
+    const segments = toSegments(store.get().visible)
+    const layout = layoutFor(segments, view)
+    paint(ctx, layout, view, null, new Map(segments.map((s) => [s.id, s])), 1)
+    const arcs = calls.filter(([name]) => name === 'arc').map(([, args]) => args as number[])
+    expect(arcs).toHaveLength(1)
+    expect(arcs[0]![1]).toBe(DOT_BELOW_Y)
+    expect(arcs[0]![0]).toBeCloseTo(layout.blocks[1]!.x + layout.blocks[1]!.w / 2, 6)
+  })
+
+  it('hits only a block\'s own slot: a gap is nobody\'s', () => {
+    const layout = layoutFor(toSegments([entry('a', 0, { charged_ms: 1000 }), entry('b', 1, { charged_ms: 1000 })]), initialViewport(600))
+    const [a, b] = layout.blocks
+    expect(hitTestExact(layout, a!.x + 1)?.id).toBe('a')
+    expect(hitTestExact(layout, a!.x + a!.w + 0.5)).toBeNull()
+    expect(hitTest(layout, a!.x + a!.w + 0.5)?.id).toBe('a')
+    expect(hitTestExact(layout, b!.x + b!.w - 0.01)?.id).toBe('b')
+    expect(hitTestExact(layout, b!.x + b!.w + 1)).toBeNull()
   })
 })

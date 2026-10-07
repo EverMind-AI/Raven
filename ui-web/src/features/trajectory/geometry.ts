@@ -31,6 +31,13 @@ export const DRAG_PX = 4
 /** How long a click waits for a second one before it is a click. */
 export const DBL_MS = 250
 export const BAR_H = 32
+/** Below this many charged milliseconds an entry (other than the user's input) draws no block while the switch is on. */
+export const MIN_CHARGED_MS = 20
+/** The block's height and its top; the dots sit in the bands above and below. */
+export const BLOCK_TOP = 11
+export const BLOCK_H = 10
+export const DOT_ABOVE_Y = 5
+export const DOT_BELOW_Y = 27
 
 export interface Segment {
   id: string
@@ -261,6 +268,57 @@ export function layoutFor(segments: readonly Segment[], view: Viewport): Layout 
 }
 
 /* ── places ───────────────────────────────────────────────────────────── */
+
+/* The entries the bar draws: the visible rows, less the recorded durations
+   under the threshold while that switch is on. An unknown duration is not a
+   short one -- it stays, as a mark -- and the user's own input always stays. */
+export function barEntries(visible: readonly TrajectoryEntry[], hideShort: boolean): TrajectoryEntry[] {
+  if (!hideShort) return [...visible]
+  return visible.filter(
+    (e) => e.kind === 'user.input' || typeof e.charged_ms !== 'number' || e.charged_ms >= MIN_CHARGED_MS,
+  )
+}
+
+/** The block whose own slot holds content coordinate `x`; a gap or the space past the last block is nobody's. */
+export function hitTestExact(layout: Layout, x: number): Block | null {
+  for (const b of layout.blocks) {
+    if (x >= b.x && x < b.x + b.w) return b
+  }
+  return null
+}
+
+/* A turn whose reply the list hides keeps its time on the bar as a band
+   behind the blocks: from the first block holding one of the turn's entries
+   to the last, a dense block counting for every turn among its members. */
+export interface Band {
+  turn: number
+  x0: number
+  x1: number
+  /** The hidden reply's charged milliseconds, the turn's whole time. */
+  total: number
+}
+
+export function bandsFor(layout: Layout, bySegment: ReadonlyMap<string, Segment>, hidden: ReadonlyMap<number, number>): Band[] {
+  const span = new Map<number, { x0: number; x1: number }>()
+  for (const b of layout.blocks) {
+    const turns = new Set<number>()
+    for (const id of b.ids ?? [b.id]) {
+      const turn = bySegment.get(id)?.turn
+      if (turn !== null && turn !== undefined && hidden.has(turn)) turns.add(turn)
+    }
+    for (const turn of turns) {
+      const have = span.get(turn)
+      if (!have) span.set(turn, { x0: b.x, x1: b.x + b.w })
+      else span.set(turn, { x0: Math.min(have.x0, b.x), x1: Math.max(have.x1, b.x + b.w) })
+    }
+  }
+  return [...span.entries()]
+    .map(([turn, { x0, x1 }]) => ({ turn, x0, x1, total: hidden.get(turn) as number }))
+    .sort((a, b) => a.x0 - b.x0)
+}
+
+/** The band under content coordinate `x`, when one is there. */
+export const bandAt = (bands: readonly Band[], x: number): Band | null => bands.find((b) => x >= b.x0 && x < b.x1) ?? null
 
 /** The block under content coordinate `x`; a gap belongs to the block before it. */
 export function hitTest(layout: Layout, x: number): Block | null {

@@ -100,6 +100,12 @@ html[data-theme="dark"] {
 
 .trajectory-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trajectory-text-none { color: var(--faint); font-style: italic; }
+/* A row whose record is not there to read says so, in the failure colour. */
+.trajectory-text-missing { color: var(--chat-danger, var(--clay)); }
+/* The small word after a model row's tag naming the side question it answers. */
+.trajectory-purpose { margin-left: 4px; font-size: 10px; color: var(--faint); white-space: nowrap; }
+/* A hidden row shown because something pointed at it: a dashed edge on the left. */
+.trajectory-row-revealed { box-shadow: inset 3px 0 0 var(--line); color: var(--muted); }
 
 .trajectory-empty {
   flex: 1; display: grid; place-items: center; padding: 24px;
@@ -108,17 +114,18 @@ html[data-theme="dark"] {
 
 /* ── the duration bar ───────────────────────────────────────────── */
 
-/* One row the height of a list row: the canvas takes the width, the sum and
-   the three tools sit after it. */
+/* One row the height of a list row, between the title and the list: the
+   canvas takes the width and the tools sit after it; what the bar has to say
+   it says on hover. The lines above and below are the pane dividers. */
 .trajectory-bar {
   flex: none; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 0;
-  border-top: 1px solid var(--line-soft); position: relative; outline: 0;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); position: relative; outline: 0;
 }
 .trajectory-canvas { flex: 1; min-width: 0; height: 32px; display: block; cursor: crosshair; touch-action: none; }
 .trajectory-bar[data-fit] .trajectory-canvas { cursor: pointer; }
 .trajectory-bar[data-drag] .trajectory-canvas { cursor: grabbing; }
-.trajectory-bar-sum { flex: none; display: flex; gap: 10px; font-size: 11px; color: var(--muted); white-space: nowrap; }
 .trajectory-bar-tools { flex: none; display: flex; gap: 2px; }
+.trajectory-bar-switch[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--raised)); }
 .trajectory-bar-tool {
   width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 13px; line-height: 1;
   display: grid; place-items: center;
@@ -134,6 +141,7 @@ html[data-theme="dark"] {
   box-shadow: var(--elev);
 }
 .trajectory-hover-line { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trajectory-hover-brief { width: auto; max-width: 420px; padding: 5px 10px; }
 .trajectory-hover-mono { font-family: var(--mono); font-size: 11px; }
 .trajectory-hover-muted { opacity: .8; }
 .trajectory-hover-fail { color: var(--chat-danger, var(--clay)); }
@@ -165,8 +173,9 @@ html[data-theme="dark"] {
 .trajectory-body > .trajectory-list, .trajectory-body > .trajectory-empty { flex: 1; min-width: 0; }
 .trajectory-details {
   flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  border-left: 1px solid var(--line-soft); background: var(--paper, var(--ink));
+  border-left: 1px solid var(--line);
 }
+.trajectory-details-over { background: var(--ink); }
 .trajectory-details-over { position: absolute; inset: 0; width: auto; border-left: 0; z-index: 1; }
 
 /* The seam: a 6px grab area drawn as a hairline, lit while dragged. */
@@ -189,10 +198,17 @@ html[data-theme="dark"] {
 }
 .trajectory-close:hover { color: var(--text); background: var(--hover); }
 
+/* The strip and, when it overflows, an arrow at either end to move it. */
+.trajectory-tabs-wrap { flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line-soft); }
 .trajectory-tabs {
-  flex: none; display: flex; gap: 2px; padding: 4px 8px 0; overflow-x: auto; overflow-y: hidden; white-space: nowrap;
-  border-bottom: 1px solid var(--line-soft); scrollbar-width: none;
+  flex: 1; min-width: 0; display: flex; gap: 2px; padding: 4px 8px 0; overflow-x: auto; overflow-y: hidden; white-space: nowrap;
+  scrollbar-width: none;
 }
+.trajectory-tab-arrow {
+  flex: none; width: 22px; color: var(--muted); font-size: 16px; line-height: 1; display: grid; place-items: center;
+}
+.trajectory-tab-arrow:hover { color: var(--text); background: var(--hover); }
+.trajectory-tab-arrow:disabled { color: var(--faint); background: none; }
 .trajectory-tab {
   flex: none; padding: 6px 10px 7px; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent;
   border-radius: 6px 6px 0 0; display: inline-flex; align-items: center; gap: 5px;
@@ -213,6 +229,7 @@ html[data-theme="dark"] {
 .trajectory-info dt { color: var(--muted); }
 .trajectory-info dd { margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .trajectory-info-sub { color: var(--muted); font-size: 11.5px; }
+.trajectory-info-mono { font-family: var(--mono); font-size: 11.5px; }
 .trajectory-status-error { color: var(--clay); }
 .trajectory-status-running { color: var(--amber); }
 .trajectory-status-cancelled, .trajectory-status-unknown { color: var(--muted); }
@@ -275,11 +292,42 @@ html[data-theme="dark"] {
 .trajectory-kv-v { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .trajectory-kv-src { margin-left: 8px; color: var(--faint); font-size: 10.5px; }
 .trajectory-kv-note { margin-left: 8px; color: var(--muted); }
+/* Relations: an id the list holds is a link to its row; one it does not is plain. */
+.trajectory-rel { font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.trajectory-rel-off { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.trajectory-rel-list { display: flex; flex-direction: column; gap: 2px; }
+.trajectory-usage .trajectory-kv-k { white-space: normal; }
+
+/* Skills: each one named, and whether the turn used it. */
+.trajectory-skill-use .trajectory-item { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.trajectory-skill-mark { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.trajectory-skill-used .trajectory-skill-mark { color: var(--moss); }
+.trajectory-skill-unused .trajectory-item-head { color: var(--muted); }
 
 /* Messages and lists. */
-.trajectory-msgs { display: flex; flex-direction: column; gap: 10px; }
+.trajectory-msgs { display: flex; flex-direction: column; gap: 6px; }
 .trajectory-msg { padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 8px; min-width: 0; }
 .trajectory-msg-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+
+/* The message list drawn from its outline: the two controls, then every row,
+   folded to one line or opened with its body. */
+.trajectory-msgs-view { min-width: 0; }
+.trajectory-msg-controls { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 8px; }
+.trajectory-msg-progress, .trajectory-msg-note { font-size: 11.5px; color: var(--muted); }
+.trajectory-msg-fold {
+  width: 100%; display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 10px; align-items: baseline;
+  padding: 4px 10px; border: 1px solid var(--line-soft); border-radius: 6px; text-align: left; font-size: 12px; color: var(--text);
+}
+.trajectory-msg-fold:hover { background: var(--hover); }
+.trajectory-msg-role { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.trajectory-msg-first { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.trajectory-msg-size { font-family: var(--mono); font-size: 10.5px; color: var(--faint); white-space: nowrap; }
+.trajectory-msg-open { position: relative; min-width: 0; }
+.trajectory-msg-close {
+  position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; border-radius: 4px; color: var(--faint); font-size: 12px;
+  display: grid; place-items: center;
+}
+.trajectory-msg-close:hover { color: var(--text); background: var(--hover); }
 .trajectory-items { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .trajectory-item { padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: 6px; min-width: 0; }
 .trajectory-item-head { font-weight: 500; margin-bottom: 2px; }

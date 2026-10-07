@@ -595,3 +595,74 @@ describe('sessionChanged', () => {
     expect(store.get().view).toBe('chat')
   })
 })
+
+describe('the switches and the rows they hide', () => {
+  const rowsOf = (list: TrajectoryEntry[]): void => { store.set({ ...store.get(), ...store.rowsOf(list), snapshotReady: true, epoch: 'e1' }) }
+  const hidden = (id: string, at: number, reason: string, over: Partial<TrajectoryEntry> = {}): TrajectoryEntry =>
+    entry(id, at, { meta: { hidden: reason }, ...over })
+
+  beforeEach(() => {
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+  })
+
+  it('keeps every row but shows the ones the index did not hide, and remembers the switch in the browser', () => {
+    rowsOf([entry('a', 0), hidden('reply', 1, 'redundant_reply', { slot: 'turn.output', turn_span_id: 'turn', charged_ms: 7000 }), hidden('enq', 2, 'empty_internal'), entry('b', 3)])
+    const s = store.get()
+    expect(s.entries.map((e) => e.entry_id)).toEqual(['a', 'reply', 'enq', 'b'])
+    expect(s.visible.map((e) => e.entry_id)).toEqual(['a', 'b'])
+    expect(s.visibleIndex).toEqual({ a: 0, b: 1 })
+    expect(s.index.b).toBe(3)
+    expect(s.turnTotals).toEqual({ turn: 7000 })
+    expect(store.hiddenOf(s.entries[1]!)).toBe('redundant_reply')
+    store.setPrefs({ showInternal: true })
+    expect(store.get().visible).toHaveLength(4)
+    expect(JSON.parse(localStorage.getItem(store.PREFS_KEY) as string)).toEqual({ hideShort: true, showInternal: true })
+    store.setPrefs({ showInternal: false })
+    expect(store.get().visible).toHaveLength(2)
+  })
+
+  it('shows a hidden row for now when it is selected, and forgets that with the conversation, the view or a switch', () => {
+    rowsOf([entry('a', 0), hidden('reply', 1, 'redundant_reply'), entry('b', 2)])
+    store.select('reply', { source: 'link' })
+    expect(store.get().selectedId).toBe('reply')
+    expect(store.get().revealed).toEqual(['reply'])
+    expect(store.get().visible.map((e) => e.entry_id)).toEqual(['a', 'reply', 'b'])
+    store.setPrefs({ hideShort: false })
+    expect(store.get().revealed).toEqual([])
+    expect(store.get().visible.map((e) => e.entry_id)).toEqual(['a', 'b'])
+    store.select('reply', { source: 'link' })
+    expect(store.get().revealed).toEqual(['reply'])
+    store.set({ ...store.get(), view: 'trajectory' })
+    store.setView('chat')
+    expect(store.get().revealed).toEqual([])
+    store.select('reply', { source: 'bar' })
+    store.sessionChanged('gui:b')
+    expect(store.get().revealed).toEqual([])
+  })
+
+  it('finds the first row of a span by trace and span id, and nothing for a span it does not hold', () => {
+    rowsOf([
+      entry('x:1:in', 0, { trace_id: 'x', span_id: '1', slot: 'tool.input' }),
+      entry('x:1:out', 1, { trace_id: 'x', span_id: '1' }),
+      entry('y:1:out', 2, { trace_id: 'y', span_id: '1' }),
+    ])
+    expect(store.entryOfSpan('x', '1')).toBe('x:1:in')
+    expect(store.entryOfSpan('y', '1')).toBe('y:1:out')
+    expect(store.entryOfSpan('z', '1')).toBeNull()
+    store.applyChanges({
+      epoch: 'e1', from_revision: 100, to_revision: 101, upserts: [],
+      removed: [{ entry_id: 'x:1:in', revision: 101, replaced_by: null }], has_more: false, reset_required: false, index_state: READY,
+    })
+    expect(store.entryOfSpan('x', '1')).toBe('x:1:out')
+  })
+
+  it('reads the switches back from the browser on a fresh start', () => {
+    localStorage.setItem(store.PREFS_KEY, JSON.stringify({ hideShort: false, showInternal: true }))
+    expect(store.readPrefs()).toEqual({ hideShort: false, showInternal: true })
+    localStorage.setItem(store.PREFS_KEY, 'not json')
+    expect(store.readPrefs()).toEqual({ hideShort: true, showInternal: false })
+    localStorage.removeItem(store.PREFS_KEY)
+  })
+})

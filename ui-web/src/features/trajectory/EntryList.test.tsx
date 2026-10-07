@@ -6,7 +6,7 @@ import { resetTranslator, setTranslator } from '../../i18n/t'
 import { absorb, resetCapabilities } from '../../rpc/capabilities'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
-import { EntryList, FOLLOW_SLACK, OVERSCAN, ROW_HEIGHT, windowOf } from './EntryList'
+import { EntryList, FOLLOW_SLACK, OVERSCAN, ROW_HEIGHT, measureColumns, windowOf } from './EntryList'
 import * as store from './store'
 
 import type { TrajectoryEntry, TrajectoryIndexState, TrajectoryListResult, TrajectorySource } from './types'
@@ -95,7 +95,7 @@ function stubObserver(): { observed: Element[]; fire: () => void } {
 }
 
 const feed = (list: TrajectoryEntry[]): void => {
-  store.set({ ...store.get(), entries: list, index: Object.fromEntries(list.map((e, i) => [e.entry_id, i])), snapshotReady: true, epoch: 'e1' })
+  store.set({ ...store.get(), ...store.rowsOf(list), snapshotReady: true, epoch: 'e1' })
 }
 
 describe('windowOf', () => {
@@ -269,5 +269,62 @@ describe('the entry list', () => {
     indexState = READY
     await draw()
     expect(document.querySelector('.trajectory-empty')?.textContent).toBe('gui.trajectory.empty')
+  })
+})
+
+describe('what the rows say about themselves', () => {
+  it('draws the visible rows only, marks a revealed one, reads a missing record in red and names a side question', async () => {
+    const list = [
+      entry('ask', 0, { kind: 'user.input', turn_start: true, turn_number: 1, turn_span_id: 'turn' }),
+      entry('side', 1, { kind: 'llm.input', meta: { purpose: 'watch_work' } }),
+      entry('main', 2, { kind: 'llm.input', meta: { purpose: 'main' } }),
+      entry('gone', 3, { kind: 'tool.output', integrity: ['artifact_missing'], preview: 'stale words' }),
+      entry('reply', 4, { kind: 'agent.reply', slot: 'turn.output', turn_span_id: 'turn', charged_ms: 9000, meta: { hidden: 'redundant_reply' } }),
+      entry('enq', 5, { kind: 'memory.enqueue.summary', meta: { hidden: 'empty_internal' } }),
+    ]
+    render(<EntryList />)
+    act(() => { feed(list) })
+    const ids = (): string[] => [...document.querySelectorAll('.trajectory-row')].map((r) => (r as HTMLElement).dataset.entry as string)
+    expect(ids()).toEqual(['ask', 'side', 'main', 'gone'])
+    expect(document.querySelector('.trajectory-row[data-entry="ask"]')?.getAttribute('aria-setsize')).toBe('4')
+    /* The turn's number carries the whole turn's time, the hidden reply's charge. */
+    expect(document.querySelector('.trajectory-row[data-entry="ask"] .trajectory-turn')?.getAttribute('title')).toBe('gui.trajectory.turn_total {"n":1,"dur":"9s"}')
+    expect(document.querySelector('.trajectory-row[data-entry="side"] .trajectory-purpose')?.textContent).toBe('watch_work')
+    expect(document.querySelector('.trajectory-row[data-entry="main"] .trajectory-purpose')).toBeNull()
+    const missing = document.querySelector('.trajectory-row[data-entry="gone"] .trajectory-text') as HTMLElement
+    expect(missing.classList.contains('trajectory-text-missing')).toBe(true)
+    expect(missing.textContent).toBe('gui.trajectory.missing_record')
+    expect(missing.getAttribute('title')).toBe('artifact_missing')
+    /* A link to the hidden reply shows it, marked, until the switch or the conversation changes. */
+    act(() => { store.select('reply', { source: 'link' }) })
+    expect(ids()).toEqual(['ask', 'side', 'main', 'gone', 'reply'])
+    expect(document.querySelector('.trajectory-row[data-entry="reply"]')?.hasAttribute('data-revealed')).toBe(true)
+    act(() => { store.setPrefs({ showInternal: true }) })
+    expect(ids()).toEqual(['ask', 'side', 'main', 'gone', 'reply', 'enq'])
+    expect(document.querySelector('.trajectory-row[data-entry="reply"]')?.hasAttribute('data-revealed')).toBe(false)
+    act(() => { store.setPrefs({ showInternal: false }) })
+    expect(ids()).toEqual(['ask', 'side', 'main', 'gone'])
+  })
+
+  it('sizes its columns from the words they hold and falls back where nothing can be measured', () => {
+    const cols = measureColumns(['Tool output', 'LLM input'], '11px system-ui', '11px monospace')
+    expect(cols).toEqual({ turn: 72, kind: 176 })
+    const ctx = { font: '', measureText: (s: string) => ({ width: s.length * 6 }) }
+    vi.spyOn(document, 'createElement').mockImplementationOnce(() => ({ getContext: () => ctx }) as unknown as HTMLElement)
+    expect(measureColumns(['Tool output', 'LLM input'], '11px system-ui', '11px monospace')).toEqual({ turn: 18 + 12, kind: 66 + 20 })
+    render(<EntryList />)
+    act(() => { feed([entry('a', 0)]) })
+    expect((document.querySelector('.trajectory-list') as HTMLElement).style.getPropertyValue('--trajectory-cols')).toMatch(/^\d+px 14px \d+px minmax\(0, 1fr\)$/)
+  })
+
+  it('anchors to the first visible row after one a switch hid', () => {
+    const list = [entry('a', 0), entry('hid', 1, { meta: { hidden: 'empty_internal' } }), entry('b', 2)]
+    render(<EntryList />)
+    act(() => { feed(list); store.setPrefs({ showInternal: true }) })
+    act(() => { store.setPlace(false, { id: 'hid', offset: 4 }) })
+    const el = document.querySelector('.trajectory-list') as HTMLElement
+    act(() => { store.setPrefs({ showInternal: false }) })
+    /* The hidden anchor row gives way to `b`, now at position 1. */
+    expect(el.scrollTop).toBe(1 * ROW_HEIGHT + 4)
   })
 })

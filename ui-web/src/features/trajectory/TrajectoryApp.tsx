@@ -78,8 +78,8 @@ export function TrajectoryApp(): JSX.Element {
   return (
     <div className="trajectory-root">
       <Status />
-      <Body />
       <DurationBar />
+      <Body />
     </div>
   )
 }

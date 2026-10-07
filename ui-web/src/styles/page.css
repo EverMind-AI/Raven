@@ -2671,12 +2671,9 @@ textarea:focus, textarea:focus-visible,
 .scroll[data-parked] ~ .backpill { display: none; }
 #trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column; padding-bottom: var(--lift, 96px); }
 #trajHost[hidden] { display: none; }
-/* The header's view toggle is a word beside its glyph, unlike the icon-only
-   panel toggle it sits next to, because "trajectory" is not a shape a reader
-   already knows. */
-.chrome-traj { width: auto; padding: 0 10px 0 8px; gap: 6px; font-size: 12px; }
+/* The header's view toggle is an icon like the panel toggle beside it; the
+   pressed state is the only thing it says in colour. */
 .chrome-traj[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--hover)); }
-.chrome-traj-word { white-space: nowrap; }
 /* The landing page does not move the composer. It used to float it up to the
    centre at 640px with a hero lockup over it and five characters perched on
    it; the composer then jumped down and widened the moment the first message

@@ -65,12 +65,12 @@ interface Row {
 
 const ROWS: Row[] = [
   { id: 't:turn:turn.input', kind: 'user.input', span: 'turn', spanName: 'session.turn', slot: 'turn.input', parent: null, startOffset: 0, endOffset: 12, phase: 0, preview: 'Summarise the open issues in this repository.', status: 'ok', evidence: [], failure: false, charged: 0, basis: 'zero', owner: 't:turn:turn.output', meta: { tool_count: 2 } },
-  { id: 't:llm:llm.input', kind: 'llm.input', span: 'llm', spanName: 'llm.call', slot: 'llm.input', parent: 'turn', startOffset: 0.2, endOffset: 3.4, phase: 0, preview: 'Summarise the open issues in this repository.', status: 'ok', evidence: [], failure: false, charged: 0, basis: 'zero', owner: 't:llm:llm.output', meta: { model: 'demo-model' } },
+  { id: 't:llm:llm.input', kind: 'llm.input', span: 'llm', spanName: 'llm.call', slot: 'llm.input', parent: 'turn', startOffset: 0.2, endOffset: 3.4, phase: 0, preview: 'Summarise the open issues in this repository.', status: 'ok', evidence: [], failure: false, charged: 0, basis: 'zero', owner: 't:llm:llm.output', meta: { model: 'demo-model', purpose: 'main', delta: 'first', new_from: 0, message_count: 2 } },
   { id: 't:llm:llm.thinking', kind: 'llm.thinking', span: 'llm', spanName: 'llm.call', slot: 'llm.thinking', parent: 'turn', startOffset: 0.2, endOffset: 3.4, phase: 1, preview: 'The user wants a summary; list the issues first, then read the two that look related.', status: 'ok', evidence: [], failure: false, charged: 0, basis: 'not_recorded', owner: 't:llm:llm.output', meta: { model: 'demo-model' } },
-  { id: 't:llm:llm.output', kind: 'llm.output', span: 'llm', spanName: 'llm.call', slot: 'llm.output', parent: 'turn', startOffset: 0.2, endOffset: 3.4, phase: 1, preview: '→ tool call list_issues#1({"state": "open"}) → tool call read_issue#2({"id": 42})', status: 'ok', evidence: [], failure: false, charged: 3200, basis: 'span_full', owner: 't:llm:llm.output', meta: { model: 'demo-model', input_tokens: 812, output_tokens: 96 } },
-  { id: 't:tool1:tool.input', kind: 'tool.input', span: 'tool1', spanName: 'tool.call', slot: 'tool.input', parent: 'turn', startOffset: 3.5, endOffset: 4.1, phase: 0, preview: '{"state": "open"}', status: 'error', evidence: ['tool_error'], failure: false, charged: 0, basis: 'zero', owner: 't:tool1:tool.output', meta: { tool: 'list_issues' } },
-  { id: 't:tool1:tool.output', kind: 'tool.output', span: 'tool1', spanName: 'tool.call', slot: 'tool.output', parent: 'turn', startOffset: 3.5, endOffset: 4.1, phase: 1, preview: 'Error: the issue tracker is unreachable (timeout after 600 ms)', status: 'error', evidence: ['tool_error'], failure: true, charged: 600, basis: 'span_full', owner: 't:tool1:tool.output', meta: { tool: 'list_issues' } },
-  { id: 't:tool2:tool.output', kind: 'tool.output', span: 'tool2', spanName: 'tool.call', slot: 'tool.output', parent: 'turn', startOffset: 4.2, endOffset: 5.0, phase: 1, preview: '# Issue 42: flaky retry on the sync path ...', status: 'ok', evidence: [], failure: false, charged: 800, basis: 'span_full', owner: 't:tool2:tool.output', meta: { tool: 'read_issue' } },
+  { id: 't:llm:llm.output', kind: 'llm.output', span: 'llm', spanName: 'llm.call', slot: 'llm.output', parent: 'turn', startOffset: 0.2, endOffset: 3.4, phase: 1, preview: 'list_issues {"state": "open"} read_issue {"id": 42}', status: 'ok', evidence: [], failure: false, charged: 3200, basis: 'span_full', owner: 't:llm:llm.output', meta: { model: 'demo-model', input_tokens: 812, output_tokens: 96 } },
+  { id: 't:tool1:tool.input', kind: 'tool.input', span: 'tool1', spanName: 'tool.call', slot: 'tool.input', parent: 'turn', startOffset: 3.5, endOffset: 4.1, phase: 0, preview: 'list_issues {"state": "open"}', status: 'error', evidence: ['tool_error'], failure: false, charged: 0, basis: 'zero', owner: 't:tool1:tool.output', meta: { tool: 'list_issues' } },
+  { id: 't:tool1:tool.output', kind: 'tool.output', span: 'tool1', spanName: 'tool.call', slot: 'tool.output', parent: 'turn', startOffset: 3.5, endOffset: 4.1, phase: 1, preview: 'list_issues: Error: the issue tracker is unreachable (timeout after 600 ms)', status: 'error', evidence: ['tool_error'], failure: true, charged: 600, basis: 'span_full', owner: 't:tool1:tool.output', meta: { tool: 'list_issues' } },
+  { id: 't:tool2:tool.output', kind: 'tool.output', span: 'tool2', spanName: 'tool.call', slot: 'tool.output', parent: 'turn', startOffset: 4.2, endOffset: 5.0, phase: 1, preview: 'read_issue: # Issue 42: flaky retry on the sync path ...', status: 'ok', evidence: [], failure: false, charged: 800, basis: 'span_full', owner: 't:tool2:tool.output', meta: { tool: 'read_issue' } },
   { id: 't:turn:turn.output', kind: 'agent.reply', span: 'turn', spanName: 'session.turn', slot: 'turn.output', parent: null, startOffset: 0, endOffset: 12, phase: 1, preview: 'Two open issues; the tracker call timed out, so this is from the one issue I could read.', status: 'ok', evidence: [], failure: false, charged: 12000, basis: 'span_full', owner: 't:turn:turn.output', meta: { tool_count: 2 } },
 ]
 
@@ -164,7 +164,17 @@ const OWN: Record<string, Own> = {
       block('messages', 'messages', [{ role: 'system', content: 'You are a careful assistant.' }, { role: 'user', content: ASK }], { total_items: 2 }),
       block('model', 'key_values', [{ key: 'model', value: 'demo-model' }], { total_items: 1 }),
       block('tools', 'items', ['list_issues', 'read_issue'], { total_items: 2 }),
+      block('outline', 'items', null, { total_items: 2 }),
     ],
+    bodies: {
+      outline: {
+        items: [
+          { index: 0, role: 'system', bytes: 52, chars: 28, preview: 'You are a careful assistant.', partial: false, missing: false, cursor: 'outline-0' },
+          { index: 1, role: 'user', bytes: 60, chars: ASK.length, preview: ASK, partial: false, missing: false, cursor: 'outline-1' },
+        ],
+        offset: 0,
+      },
+    },
   },
   't:llm:llm.thinking': {
     blocks: [
@@ -181,7 +191,6 @@ const OWN: Record<string, Own> = {
   },
   't:tool1:tool.input': {
     blocks: [
-      block('tool', 'key_values', [{ key: 'name', value: 'list_issues' }], { total_items: 1 }),
       block('params', 'json', { state: 'open' }),
       SCHEMA_UNPROVEN,
     ],
@@ -189,7 +198,6 @@ const OWN: Record<string, Own> = {
   't:tool1:tool.output': {
     blocks: [
       block('result', 'text', TRACKER_ERROR),
-      block('tool', 'key_values', [{ key: 'name', value: 'list_issues' }], { total_items: 1 }),
       block('params', 'json', { state: 'open' }, { related_operation: 'tool.input' }),
       SCHEMA_UNPROVEN,
     ],
@@ -197,7 +205,6 @@ const OWN: Record<string, Own> = {
   't:tool2:tool.output': {
     blocks: [
       block('result', 'text', '# Issue 42: flaky retry on the sync path ...'),
-      block('tool', 'key_values', [{ key: 'name', value: 'read_issue' }], { total_items: 1 }),
       block('params', 'json', { id: 42 }, { related_operation: 'tool.input' }),
       SCHEMA_UNPROVEN,
     ],

@@ -59,6 +59,37 @@ const BLOCK_TITLES: Record<string, string> = {
   relations: 'gui.trajectory.block.relations',
   integrity: 'gui.trajectory.block.integrity',
   raw: 'gui.trajectory.block.raw',
+  outline: 'gui.trajectory.block.outline',
+}
+
+/** Blocks the pane reads for itself and never offers as a tab or an overview section. */
+export const INTERNAL_BLOCKS: readonly string[] = ['outline']
+
+/* The usage block's rows, in the order the reader expects them, each with
+   the catalogue key for its label. The counters are the normalized ones
+   (`llm.usage.*` without the prefix); how they add up is the view's. */
+const USAGE_LABELS: Record<string, string> = {
+  total: 'gui.trajectory.usage.total',
+  input: 'gui.trajectory.usage.input',
+  cache_read: 'gui.trajectory.usage.cache_read',
+  cache_write: 'gui.trajectory.usage.cache_write',
+  output: 'gui.trajectory.usage.output',
+  reasoning: 'gui.trajectory.usage.reasoning',
+  cost: 'gui.trajectory.usage.cost',
+  unknown: 'gui.trajectory.usage.unknown',
+  not_recorded: 'gui.trajectory.usage.not_recorded',
+}
+
+export const usageLabelKey = (row: string): string | null => USAGE_LABELS[row] ?? null
+
+/* The relations block's keys that name another entry or span, and where to
+   look them up: an entry id as it stands; a span id in the entry's own trace;
+   the dispatching span in the trace named beside it. */
+export const RELATION_LINKS: Record<string, 'entry' | 'span' | 'dispatched'> = {
+  sibling_entries: 'entry',
+  turn_span_id: 'span',
+  parent_span_id: 'span',
+  'trace.dispatched_by_span_id': 'dispatched',
 }
 
 /** Every block id the registry can name, for the test that holds the catalogue to them. */
@@ -125,6 +156,9 @@ const EVIDENCE: Record<string, string> = {
   span_error: 'gui.trajectory.evidence.span_error',
   tool_error: 'gui.trajectory.evidence.tool_error',
   tool_result_error: 'gui.trajectory.evidence.tool_result_error',
+  result_error_key: 'gui.trajectory.evidence.result_error_key',
+  result_error_flag: 'gui.trajectory.evidence.result_error_flag',
+  result_error_status: 'gui.trajectory.evidence.result_error_status',
   outer_only: 'gui.trajectory.evidence.outer_only',
 }
 

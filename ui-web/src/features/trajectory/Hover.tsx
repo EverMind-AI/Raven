@@ -14,7 +14,7 @@ import { formatDuration } from '../../lib/duration'
 import { basisKey } from './blocks'
 import { kindClass, kindLabel } from './palette'
 
-import type { Block, Segment } from './geometry'
+import type { Band, Block, Segment, Summary } from './geometry'
 import type { JSX } from 'react'
 
 export interface HoverAt {
@@ -75,6 +75,44 @@ export function BarHover({ at, bySegment, bar, size, viewport }: {
       </div>
       <div className="trajectory-hover-line trajectory-hover-mono">{when(segment)}</div>
       <div className="trajectory-hover-line trajectory-hover-muted">{charge(segment)}</div>
+    </div>
+  )
+}
+
+/* One line about a turn whose reply the list leaves out: its number and the
+   whole time it took, shown over the band that stands for it. */
+export function BandHover({ band, bar, clientX, size, viewport }: {
+  band: Band
+  bar: DOMRect
+  clientX: number
+  size: { width: number; height: number }
+  viewport: { width: number; height: number }
+}): JSX.Element {
+  const { left, top } = placeHover(bar, clientX, size, viewport)
+  return (
+    <div className="trajectory-hover trajectory-hover-brief" style={{ left, top }} aria-hidden="true">
+      <div className="trajectory-hover-line">{t('gui.trajectory.bar.turn_total', { n: band.turn, dur: formatDuration(band.total) })}</div>
+    </div>
+  )
+}
+
+/* One line about the whole bar, shown where no block and no band is: the
+   charged sum, the entries with no recorded time, and whether the sum holds
+   overlap. What used to be printed beside the canvas, now only on demand. */
+export function BarSummary({ sum, bar, clientX, size, viewport }: {
+  sum: Summary
+  bar: DOMRect
+  clientX: number
+  size: { width: number; height: number }
+  viewport: { width: number; height: number }
+}): JSX.Element {
+  const { left, top } = placeHover(bar, clientX, size, viewport)
+  const parts = [t('gui.trajectory.bar.sum_known', { dur: formatDuration(sum.known) })]
+  if (sum.unknownCount > 0) parts.push(t('gui.trajectory.bar.sum_unknown', { n: sum.unknownCount }))
+  if (sum.overlap) parts.push(t('gui.trajectory.bar.sum_overlap'))
+  return (
+    <div className="trajectory-hover trajectory-hover-brief" style={{ left, top }} aria-hidden="true">
+      <div className="trajectory-hover-line">{parts.join(' \u00b7 ')}</div>
     </div>
   )
 }

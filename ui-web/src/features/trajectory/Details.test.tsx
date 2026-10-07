@@ -434,8 +434,10 @@ describe('the details pane across a rebuilt index', () => {
 })
 
 describe('shortName', () => {
-  it('prefers the tool, skill, model or plugin name a block carries over the span name', () => {
-    expect(shortName(descriptor('x', [block({ id: 'tool', renderer: 'key_values', preview: [{ key: 'name', value: 'read_file' }] })]))).toBe('read_file')
+  it('prefers the tool name the row carries, then a skill, model or plugin name a block carries, over the span name', () => {
+    const toolRow = { meta: { tool: 'read_file' } } as unknown as TrajectoryEntry
+    expect(shortName(descriptor('x', [block({ id: 'content' })]), toolRow)).toBe('read_file')
+    expect(shortName(descriptor('x', [block({ id: 'skill', renderer: 'key_values', preview: [{ key: 'skill.name', value: 'pdf' }] })]))).toBe('pdf')
     expect(shortName(descriptor('x', [block({ id: 'model', renderer: 'key_values', preview: [{ key: 'model', value: 'gpt-x' }] })]))).toBe('gpt-x')
     expect(shortName(descriptor('x', [block({ id: 'content' })]))).toBe('tool.call')
   })

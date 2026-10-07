@@ -15,15 +15,17 @@
  * `select`, and the list only draws what it says.
  */
 
-import { useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
+import { formatDuration } from '../../lib/duration'
+import * as lang from '../../state/lang'
 import * as details from './detailStore'
-import { isKnownKind, kindClass, kindLabel } from './palette'
+import { isKnownKind, kindClass, kindLabel, kindLabels } from './palette'
 import * as store from './store'
 
 import type { TrajectoryEntry } from './types'
-import type { JSX, KeyboardEvent as ReactKeyboardEvent, UIEvent } from 'react'
+import type { CSSProperties, JSX, KeyboardEvent as ReactKeyboardEvent, UIEvent } from 'react'
 
 export const ROW_HEIGHT = 32
 /** Rows drawn beyond either edge of the viewport, so a flick has rows to show. */
@@ -34,6 +36,33 @@ export const FOLLOW_SLACK = 48
 export const NARROW_WIDTH = 480
 /** What a box that has not been measured yet is assumed to show. */
 const DEFAULT_ROWS = 20
+/** The integrity codes that mean the row's record is not there to read. */
+const MISSING_CODES = ['artifact_missing', 'artifact_unreadable', 'blob_missing']
+/** The column widths before any label was measured: the turn number, the mark, the kind tag. */
+const FALLBACK_COLS = { turn: 72, kind: 176 }
+
+/* The grid's first three columns, measured from the words they must hold:
+   three digits and the sub-agent mark for the turn, the widest kind label in
+   the current language plus the tag's padding for the kind. Measured on a
+   canvas so no row has to be drawn twice; where there is no canvas (the test
+   DOM) the fallback widths stand. */
+export function measureColumns(labels: string[], tagFont: string, turnFont: string): { turn: number; kind: number } {
+  const ctx = typeof document !== 'undefined' ? document.createElement('canvas').getContext?.('2d') : null
+  if (!ctx) return FALLBACK_COLS
+  ctx.font = tagFont
+  const widest = labels.reduce((w, label) => Math.max(w, ctx.measureText(label).width), 0)
+  ctx.font = turnFont
+  const digits = ctx.measureText('000').width
+  return { turn: Math.ceil(digits + 12), kind: Math.ceil(widest + 16 + 4) }
+}
+
+const fontOf = (selector: string, fallback: string): string => {
+  const el = typeof document !== 'undefined' ? document.querySelector<HTMLElement>(selector) : null
+  const font = el ? getComputedStyle(el).font : ''
+  return font || fallback
+}
+
+const isMissing = (entry: TrajectoryEntry): boolean => entry.integrity.some((code) => MISSING_CODES.includes(code))
 
 interface Window {
   first: number
@@ -50,26 +79,37 @@ export function windowOf(scrollTop: number, height: number, count: number): Wind
   return { first, last }
 }
 
-function Row({ entry, at, selected, total }: {
-  entry: TrajectoryEntry; at: number; selected: boolean; total: number
+function Row({ entry, at, selected, total, revealed, turnTotal }: {
+  entry: TrajectoryEntry; at: number; selected: boolean; total: number; revealed: boolean; turnTotal: number | null
 }): JSX.Element {
   const known = isKnownKind(entry.kind)
   /* A sub-agent's turn carries a mark after its number; the main line does not. */
   const turnClass = entry.origin === 'main' ? 'trajectory-turn' : 'trajectory-turn trajectory-turn-sub'
+  const turnShown = entry.turn_start && entry.turn_number !== null && entry.turn_number !== undefined
+  const turnTitle = turnShown && turnTotal !== null
+    ? t('gui.trajectory.turn_total', { n: entry.turn_number as number, dur: formatDuration(turnTotal) })
+    : undefined
+  const purpose = typeof entry.meta?.purpose === 'string' && entry.meta.purpose !== 'main' ? entry.meta.purpose : null
+  const missing = isMissing(entry)
+  const classes = ['trajectory-row']
+  if (selected) classes.push('trajectory-row-on')
+  if (revealed) classes.push('trajectory-row-revealed')
   return (
     <div
-      className={selected ? 'trajectory-row trajectory-row-on' : 'trajectory-row'}
+      className={classes.join(' ')}
       id={`trajectory-row-${at}`}
       role="option"
       aria-selected={selected}
       aria-setsize={total}
       aria-posinset={at + 1}
       data-entry={entry.entry_id}
+      data-revealed={revealed ? '' : undefined}
+      title={revealed ? t('gui.trajectory.revealed_row') : undefined}
       style={{ top: at * ROW_HEIGHT }}
       onClick={() => { store.select(entry.entry_id, { source: 'click' }); details.openDetails() }}
     >
-      <span className={turnClass}>
-        {entry.turn_start && entry.turn_number !== null && entry.turn_number !== undefined ? entry.turn_number : ''}
+      <span className={turnClass} title={turnTitle}>
+        {turnShown ? entry.turn_number : ''}
       </span>
       <span className="trajectory-fail">
         {entry.failure_entry ? <span className="trajectory-fail-dot" role="img" aria-label={t('gui.trajectory.failed')} /> : null}
@@ -78,17 +118,24 @@ function Row({ entry, at, selected, total }: {
         <span className={`trajectory-tag ${kindClass(entry.kind)}`} title={known ? undefined : entry.span_name}>
           {kindLabel(entry.kind)}
         </span>
+        {purpose ? <span className="trajectory-purpose" title={t('gui.trajectory.purpose_title', { purpose })}>{purpose}</span> : null}
       </span>
-      {entry.preview === null || entry.preview === undefined
-        ? <span className="trajectory-text trajectory-text-none">{t('gui.trajectory.no_preview')}</span>
-        : <span className="trajectory-text" title={entry.preview}>{entry.preview}</span>}
+      {missing
+        ? <span className="trajectory-text trajectory-text-missing" title={entry.integrity.join(', ')}>{t('gui.trajectory.missing_record')}</span>
+        : entry.preview === null || entry.preview === ''
+          ? <span className="trajectory-text trajectory-text-none">{t('gui.trajectory.no_preview')}</span>
+          : <span className="trajectory-text" title={entry.preview}>{entry.preview}</span>}
     </div>
   )
 }
 
 export function EntryList(): JSX.Element {
   const state = useSyncExternalStore(store.subscribe, store.get)
-  const { entries, selectedId, follow, anchor, listing, indexState } = state
+  const { selectedId, follow, anchor, listing, indexState } = state
+  /* The rows the list draws are the visible ones; the store keeps the whole
+     set beside them for the feed, the span links and the turn totals. */
+  const entries = state.visible
+  const index = state.visibleIndex
   const box = useRef<HTMLDivElement | null>(null)
   const observer = useRef<ResizeObserver | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
@@ -96,9 +143,15 @@ export function EntryList(): JSX.Element {
   const count = entries.length
   const paneOpen = useSyncExternalStore(details.subscribe, details.get).open
   const wasOpen = useRef(paneOpen)
+  /* The column widths follow the words of the current language: the labels
+     are the subscription's snapshot, joined so the value compares by content. */
+  const labels = useSyncExternalStore(lang.subscribe, () => kindLabels().join('\n'))
+  const cols = useMemo(() => {
+    const measured = measureColumns(labels.split('\n'), fontOf('.trajectory-tag', '11px system-ui'), fontOf('.trajectory-turn', '11px monospace'))
+    return `${measured.turn}px 14px ${measured.kind}px minmax(0, 1fr)`
+  }, [labels])
 
   /* The selected row, brought into view when the window has scrolled past it. */
-  const index = state.index
   const reveal = useCallback((): void => {
     const el = box.current
     if (!el || selectedId === null) return
@@ -155,10 +208,18 @@ export function EntryList(): JSX.Element {
       return
     }
     if (anchor) {
-      const at = state.index[anchor.id]
+      /* The anchored row, or -- when a switch hid it -- the first visible row after it. */
+      let at = index[anchor.id]
+      if (at === undefined) {
+        const whole = state.index[anchor.id]
+        if (whole !== undefined) {
+          const next = state.entries.slice(whole).find((e) => e.entry_id in index)
+          at = next ? index[next.entry_id] : undefined
+        }
+      }
       if (at !== undefined) el.scrollTop = at * ROW_HEIGHT + anchor.offset
     }
-  }, [entries, follow, anchor, state.index])
+  }, [entries, follow, anchor, index, state.index, state.entries])
 
   const onScroll = (e: UIEvent<HTMLDivElement>): void => {
     const el = e.currentTarget
@@ -177,7 +238,7 @@ export function EntryList(): JSX.Element {
      the store's one door and then brings the row into view. */
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (!count) return
-    const at = selectedId !== null ? state.index[selectedId] : undefined
+    const at = selectedId !== null ? index[selectedId] : undefined
     let next: number | null = null
     if (e.key === 'ArrowDown') next = at === undefined ? 0 : Math.min(count - 1, at + 1)
     else if (e.key === 'ArrowUp') next = at === undefined ? count - 1 : Math.max(0, at - 1)
@@ -210,9 +271,21 @@ export function EntryList(): JSX.Element {
   const rows: JSX.Element[] = []
   for (let at = first; at < last; at += 1) {
     const entry = entries[at]
-    if (entry) rows.push(<Row key={entry.entry_id} entry={entry} at={at} selected={entry.entry_id === selectedId} total={count} />)
+    if (!entry) continue
+    const turnTotal = entry.turn_span_id ? (state.turnTotals[entry.turn_span_id] ?? null) : null
+    rows.push(
+      <Row
+        key={entry.entry_id}
+        entry={entry}
+        at={at}
+        selected={entry.entry_id === selectedId}
+        total={count}
+        revealed={store.hiddenOf(entry) !== null && !state.prefs.showInternal}
+        turnTotal={turnTotal}
+      />,
+    )
   }
-  const activeAt = selectedId !== null ? state.index[selectedId] : undefined
+  const activeAt = selectedId !== null ? index[selectedId] : undefined
   return (
     <div
       className="trajectory-list"
@@ -222,6 +295,7 @@ export function EntryList(): JSX.Element {
       aria-label={t('gui.trajectory.list_label')}
       aria-activedescendant={activeAt !== undefined ? `trajectory-row-${activeAt}` : undefined}
       data-narrow={size.width > 0 && size.width < NARROW_WIDTH ? '' : undefined}
+      style={{ '--trajectory-cols': cols } as CSSProperties}
       onScroll={onScroll}
       onKeyDown={onKeyDown}
     >

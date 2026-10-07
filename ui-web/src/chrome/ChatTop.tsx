@@ -69,6 +69,7 @@ function Header(): JSX.Element {
           (src/chrome/WorkdirTag.tsx). */}
       <WorkdirTag />
       <span className="spacer" />
+      <TrajectoryToggle />
       <button
         className="ghost-ic wstog tipdn"
         id="wsBtn"
@@ -81,13 +82,15 @@ function Header(): JSX.Element {
         </svg>
         <span className="bdg" id="wsBdg" hidden>2</span>
       </button>
-      <TrajectoryToggle />
     </>
   )
 }
 
-/* The switch between the conversation and its trajectory, right of the panel
-   toggle. Rendered only while the trajectory store says the view may be
+/* The switch between the conversation and its trajectory, left of the panel
+   toggle: the corner slot is the panel toggle's, and the desk launcher stands
+   in that same slot (fixed at the window's edge, `#wsBtn` hidden under
+   `.desk-ready`), so anything placed after it is covered the moment a desk is
+   up. Rendered only while the trajectory store says the view may be
    offered -- the gateway serves it, it is on, a conversation with content is
    open -- so the served header carries no trace of it, and the words come
    through the catalogue because they change with the view. The store is read
@@ -98,6 +101,8 @@ function TrajectoryToggle(): JSX.Element | null {
   if (!trajectory.available(state)) return null
   const on = state.view === 'trajectory'
   const label = t(on ? 'gui.trajectory.back' : 'gui.trajectory.show')
+  /* The icon names where the click goes: the trajectory's line while the
+     conversation is up, the conversation's bubble while the trajectory is. */
   return (
     <button
       className="ghost-ic tipdn chrome-traj"
@@ -107,10 +112,15 @@ function TrajectoryToggle(): JSX.Element | null {
       aria-label={label}
       onClick={trajectory.toggleView}
     >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-        <path d="M4 17.5h4l3-11 3 11h6" /><circle cx="18" cy="17.5" r="1.5" />
-      </svg>
-      <span className="chrome-traj-word">{label}</span>
+      {on ? (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M4.5 5.5h15v10.5h-9.5l-5.5 4v-4h0z" />
+        </svg>
+      ) : (
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+          <path d="M4 17.5h4l3-11 3 11h6" /><circle cx="18" cy="17.5" r="1.5" />
+        </svg>
+      )}
     </button>
   )
 }

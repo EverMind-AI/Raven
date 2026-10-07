@@ -27,7 +27,7 @@ describe('the detail vocabulary', () => {
       'thinking', 'thinkingBlocks', 'toolCalls', 'finish', 'usage', 'response', 'tool', 'params', 'schema', 'result',
       'skill', 'skills', 'stats', 'query', 'decision', 'task', 'candidates', 'agent', 'settings', 'hits', 'injected',
       'used', 'position', 'operation', 'qa', 'summary', 'plugin', 'contribution', 'transcript', 'frames', 'attributes',
-      'error', 'timing', 'relations', 'integrity', 'raw',
+      'error', 'timing', 'relations', 'integrity', 'raw', 'outline',
     ]
     expect([...BLOCK_IDS].sort()).toEqual([...expected].sort())
     for (const id of BLOCK_IDS) expect(ui[blockTitleKey(id) as string], id).toBeTruthy()

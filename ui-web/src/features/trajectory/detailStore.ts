@@ -74,6 +74,35 @@ export interface DescriptorRecord {
   at: number
 }
 
+/* One row of a message list's outline, as the gateway's `outline` block
+   spells it: enough to draw the row folded, and the cursor of the page its
+   body starts on. */
+export interface OutlineItem {
+  index: number
+  role: string
+  bytes: number | null
+  chars: number | null
+  preview: string
+  partial: boolean
+  missing: boolean
+  cursor: string
+}
+
+/* The outline of the current entry's message list: every row, gathered page
+   by page in the background, so the pane can draw the whole list folded
+   before any body is read. */
+export interface OutlineRecord {
+  identity: Identity
+  items: OutlineItem[]
+  total: number | null
+  nextCursor: string | null
+  /** A page is on its way. */
+  loading: boolean
+  fault: string | null
+  bytes: number
+  at: number
+}
+
 export type Tab = 'overview' | string
 
 export interface DetailsState {
@@ -102,6 +131,8 @@ export interface DetailsState {
   scrollByEntryTab: Record<string, number>
   descriptors: Record<string, DescriptorRecord>
   blocks: Record<string, BlockRecord>
+  /** Message outlines by descriptor key: one per entry identity. */
+  outlines: Record<string, OutlineRecord>
   /** Reads in the air, by key, each owned by the request's own token. */
   loading: Record<string, number>
   faults: Record<string, string>
@@ -115,6 +146,8 @@ export const RESIZE_STEP = 16
 export const BUDGET = 8 * 1024 * 1024
 /** Pages of one block kept at once; the earliest go as more arrive. */
 export const PAGE_WINDOW = 10
+/** How many messages the gateway puts on one page of a message list (`MESSAGES_PAGE` in details.py). */
+export const MESSAGES_PAGE = 20
 export const DESCRIPTORS_MAX = 20
 /** Revision changes followed inside one reader action before giving up. */
 export const REVISION_RETRIES = 3
@@ -133,6 +166,7 @@ const initial: DetailsState = {
   scrollByEntryTab: {},
   descriptors: {},
   blocks: {},
+  outlines: {},
   loading: {},
   faults: {},
 }
@@ -316,6 +350,7 @@ function activeBlockKey(s: DetailsState): string | null {
 const usage = (s: DetailsState): number =>
   Object.values(s.descriptors).reduce((n, r) => n + r.bytes, 0)
   + Object.values(s.blocks).reduce((n, r) => n + r.bytes, 0)
+  + Object.values(s.outlines).reduce((n, r) => n + r.bytes, 0)
 
 /* Brings the cache back under the budget, oldest first in three rounds:
    records of any other identity, then the current entry's other tabs, then
@@ -332,10 +367,15 @@ function trim(s: DetailsState): DetailsState {
       ...next,
       descriptors: without(next.descriptors, key),
       blocks: without(next.blocks, key),
+      outlines: without(next.outlines, key),
       loading: without(next.loading, key),
     }
   }
   const foreign = (id: Identity): boolean => !sameIdentity(id, next.current)
+  for (const key of byAge(Object.keys(next.outlines).filter((k) => foreign(next.outlines[k]!.identity)), (k) => next.outlines[k]!.at)) {
+    if (!over()) return next
+    drop(key)
+  }
   for (const key of byAge(Object.keys(next.blocks).filter((k) => foreign(next.blocks[k]!.identity)), (k) => next.blocks[k]!.at)) {
     if (!over()) return next
     drop(key)
@@ -361,7 +401,7 @@ function trim(s: DetailsState): DetailsState {
 /* The record without its earliest page: the window slides and the pane says
    how many items went before what it still holds. */
 function dropEarliest(record: BlockRecord): BlockRecord {
-  const [first, ...rest] = record.pages
+  const [first, ...rest] = [...record.pages].sort((a, b) => a.offset - b.offset)
   if (!first || !rest.length) return record
   const second = rest[0]!
   const dropped = second.offset - first.offset
@@ -439,7 +479,12 @@ function accept(result: TrajectoryDetailResult, t: number, g: number, mark: stri
         const r = blocks[k]!
         if (r.identity.entryId === id.entryId && !sameIdentity(r.identity, id)) delete blocks[k]
       }
-      next = { ...next, blocks }
+      const outlines = { ...next.outlines }
+      for (const k of Object.keys(outlines)) {
+        const r = outlines[k]!
+        if (r.identity.entryId === id.entryId && !sameIdentity(r.identity, id)) delete outlines[k]
+      }
+      next = { ...next, blocks, outlines }
       revisionHops += 1
       if (revisionHops > REVISION_RETRIES) next = { ...next, unstable: true }
     }
@@ -534,7 +579,13 @@ function filePage(
   const page = pageOf(result, offsetOf(result.data))
   const have = s.blocks[key]
   let record: BlockRecord = continuing && have
-    ? { ...have, pages: [...have.pages, page], nextCursor: result.next_cursor ?? null, at: touch() }
+    ? {
+      ...have,
+      /* A page may land at any offset now that rows are opened by their own cursor; one offset, one page. */
+      pages: [...have.pages.filter((p) => p.offset !== page.offset), page],
+      nextCursor: result.next_cursor ?? null,
+      at: touch(),
+    }
     : {
       identity: id, blockId, renderer: result.renderer, pages: [page], nextCursor: result.next_cursor ?? null,
       droppedBefore: 0, bytes: 0, at: touch(),
@@ -610,6 +661,121 @@ export function loadMore(blockId: string): Promise<void> {
   return read(blockId, have.nextCursor, true)
 }
 
+/* The page a message list opens at a given row: asked for by the cursor the
+   outline carries for that row, kept beside whatever pages are already held.
+   Nothing is asked when the row's page is in. */
+export function loadPageAt(blockId: string, cursor: string, index: number): Promise<void> {
+  const have = block(blockId)
+  if (have && pageHolding(have, index) !== null) return Promise.resolve()
+  return read(blockId, cursor, have !== null)
+}
+
+/** The held page whose items cover message `index`, or null. */
+export function pageHolding(record: BlockRecord, index: number): BlockPage | null {
+  for (const page of record.pages) {
+    const data = page.data
+    const items = data !== null && typeof data === 'object' && !Array.isArray(data) ? (data as { items?: unknown }).items : undefined
+    const n = Array.isArray(items) ? items.length : 0
+    if (index >= page.offset && index < page.offset + n) return page
+  }
+  return null
+}
+
+/** The message at `index` from the held pages, or undefined when its page is not in. */
+export function messageAt(record: BlockRecord, index: number): unknown {
+  const page = pageHolding(record, index)
+  if (!page) return undefined
+  const items = (page.data as { items: unknown[] }).items
+  return items[index - page.offset]
+}
+
+/* ── the outline of a message list ───────────────────────────────────── */
+
+const outlineKey = (id: Identity): string => descriptorKey(id)
+
+/** The current identity's outline, when any page of it is in. */
+export const outline = (s: DetailsState = store.get()): OutlineRecord | null =>
+  s.current ? (s.outlines[outlineKey(s.current)] ?? null) : null
+
+const outlineItems = (data: JsonValue | null | undefined): OutlineItem[] => {
+  const items = data !== null && typeof data === 'object' && !Array.isArray(data) ? (data as { items?: unknown }).items : undefined
+  if (!Array.isArray(items)) return []
+  return items.filter((it): it is OutlineItem => it !== null && typeof it === 'object' && typeof (it as OutlineItem).index === 'number')
+}
+
+const emptyOutline = (id: Identity): OutlineRecord =>
+  ({ identity: id, items: [], total: null, nextCursor: null, loading: false, fault: null, bytes: 0, at: touch() })
+
+/* Walks every page of the outline block in order, in the background: each
+   answer is filed under the identity it was asked for and the next page is
+   asked for at once, until the gateway says the list ends. The walk stops
+   when the pane moves on; a later visit to the same identity resumes from the
+   cursor it holds. */
+export async function loadOutline(): Promise<void> {
+  const src = list.source()
+  const id = store.get().current
+  if (!src || !id || !mayRead(store.get())) return
+  const key = outlineKey(id)
+  const have = store.get().outlines[key]
+  if (have && (have.loading || have.fault !== null || (have.nextCursor === null && have.items.length > 0))) return
+  const mark = keyOf('outline', key)
+  if (inflight.has(mark)) return
+  const t = gen
+  const g = list.gen()
+  const token = begin(mark)
+  const write = (apply: (record: OutlineRecord) => OutlineRecord, s: DetailsState = store.get()): void => {
+    commit({ ...s, outlines: { ...s.outlines, [key]: apply(s.outlines[key] ?? emptyOutline(id)) } })
+  }
+  write((r) => ({ ...r, loading: true }))
+  let cursor: string | null = have?.nextCursor ?? null
+  try {
+    for (;;) {
+      const result: TrajectoryBlockResult = await src.block(id.sessionKey, id.entryId, id.revision, id.epoch, 'outline', cursor)
+      if (!currentEpoch(id.sessionKey, id.epoch) || result.epoch !== id.epoch || result.entry_revision !== id.revision || result.entry_id !== id.entryId) break
+      cursor = result.next_cursor ?? null
+      const fresh = outlineItems(result.data)
+      const total = typeof result.total_items === 'number' ? result.total_items : null
+      write((r) => {
+        const byIndex = new Map(r.items.map((it) => [it.index, it]))
+        for (const it of fresh) byIndex.set(it.index, it)
+        const items = [...byIndex.values()].sort((a, b) => a.index - b.index)
+        return { ...r, items, total: total ?? r.total, nextCursor: cursor, bytes: bytesOf(items), at: touch() }
+      })
+      if (cursor === null || !live(t, g, id.entryId)) break
+    }
+    settle(mark, token)
+    write((r) => ({ ...r, loading: false }), unmarked(store.get(), mark, token))
+  } catch (e) {
+    settle(mark, token)
+    const s = unmarked(store.get(), mark, token)
+    if (!currentEpoch(id.sessionKey, id.epoch) || !live(t, g, id.entryId)) { store.set(s); return }
+    if (isDisabled(e) || saysAbsent(e)) {
+      store.set(s)
+      if (g === list.gen()) list.liveFailed(e)
+      return
+    }
+    const moved = revisionChange(e)
+    if (moved) {
+      if (moved.epoch !== id.epoch) { store.set({ ...s, waitingEpoch: moved.epoch }); return }
+      store.set({ ...s, stale: true, pending: { epoch: moved.epoch, revision: moved.revision } })
+      void loadDescriptor({ fresh: true })
+      return
+    }
+    write((r) => ({ ...r, loading: false, fault: (e as Error)?.message || String(e) }), s)
+  }
+}
+
+/** The reader's retry after a failed outline walk. */
+export function retryOutline(): Promise<void> {
+  const id = store.get().current
+  if (id) {
+    const key = outlineKey(id)
+    const s = store.get()
+    if (s.outlines[key]) store.set({ ...s, outlines: { ...s.outlines, [key]: { ...s.outlines[key]!, fault: null } } })
+  }
+  return loadOutline()
+}
+
 /** The reader's own retry: drops what is held for a block and reads it from its first page. */
 export function reloadBlock(blockId: string): Promise<void> {
   const id = store.get().current
@@ -634,8 +800,24 @@ export function retryDescriptor(): Promise<void> {
 /* Whether what is held for a block is less than the whole: the gateway cut
    it, pages are still to come, or the earliest pages were let go to stay in
    the window -- a last page with no cursor is still partial then. */
-export const isPartial = (record: BlockRecord): boolean =>
-  record.droppedBefore > 0 || record.nextCursor !== null || record.pages.some((p) => p.truncated || p.availability === 'truncated')
+export const isPartial = (record: BlockRecord): boolean => {
+  if (record.droppedBefore > 0 || record.pages.some((p) => p.truncated || p.availability === 'truncated')) return true
+  const total = record.pages.find((p) => p.total !== null)?.total ?? null
+  if (total === null) return record.nextCursor !== null
+  return heldCount(record) < total
+}
+
+/** How many items the held pages carry between them. */
+export const heldCount = (record: BlockRecord): number =>
+  record.pages.reduce((n, p) => {
+    const data = p.data
+    const items = data !== null && typeof data === 'object' && !Array.isArray(data) ? (data as { items?: unknown }).items : undefined
+    return n + (Array.isArray(items) ? items.length : 0)
+  }, 0)
+
+/** The lowest offset among the held pages, or null with none held. */
+export const firstHeldOffset = (record: BlockRecord): number | null =>
+  record.pages.length ? Math.min(...record.pages.map((p) => p.offset)) : null
 
 /** Whether a read is in the air for the pane's current identity. */
 export const isLoading = (what: 'descriptor' | { blockId: string; more?: boolean }, s: DetailsState = store.get()): boolean => {

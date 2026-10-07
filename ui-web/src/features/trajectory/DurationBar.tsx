@@ -28,13 +28,14 @@ import { t } from '../../i18n/t'
 import { formatDuration } from '../../lib/duration'
 import * as details from './detailStore'
 import {
-  BAR_H, DBL_MS, DRAG_PX, GAP, MIN_W, anchorOf, expand, hitTest, layoutFor, pan, restoreAnchor, summarize, toSegments, zoomAt,
+  BAR_H, BLOCK_H, BLOCK_TOP, DBL_MS, DOT_ABOVE_Y, DOT_BELOW_Y, DRAG_PX, GAP, MIN_W, anchorOf, bandAt, bandsFor, barEntries, expand,
+  hitTestExact, layoutFor, pan, restoreAnchor, summarize, toSegments, zoomAt,
 } from './geometry'
-import { BarHover } from './Hover'
+import { BandHover, BarHover, BarSummary } from './Hover'
 import { kindClass, kindLabel, kindSlug } from './palette'
 import * as store from './store'
 
-import type { Block, Layout, Segment, Viewport } from './geometry'
+import type { Band, Block, Layout, Segment, Viewport } from './geometry'
 import type { HoverAt } from './Hover'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 
@@ -76,7 +77,7 @@ interface Drag {
 
 /* The CSS variables the canvas paints with, read once per frame; happy-dom
    answers nothing, and the fallbacks keep the bar legible there too. */
-function paintColors(): { line: string; selected: string; failure: string; faint: string; kind: (kind: string) => string } {
+function paintColors(): { line: string; band: string; selected: string; failure: string; faint: string; kind: (kind: string) => string } {
   const style = typeof getComputedStyle === 'function' ? getComputedStyle(document.documentElement) : null
   const read = (name: string, fallback: string): string => {
     const v = style?.getPropertyValue(name).trim()
@@ -84,28 +85,40 @@ function paintColors(): { line: string; selected: string; failure: string; faint
   }
   return {
     line: read('--line', '#e7e7e7'),
-    selected: read('--amber', '#a8801c'),
+    band: read('--line-soft', read('--raised', '#f0f0f0')),
+    selected: read('--moss', '#3f7d2c'),
     failure: read('--chat-danger', read('--clay', '#b4402f')),
     faint: read('--faint', '#9d9d9d'),
     kind: (kind) => read(`--trajectory-c-${kindSlug(kind)}-fg`, '#5c5c5c'),
   }
 }
 
-/* Draws the visible part of a layout. Exported for the test that drives it
-   against a recording context. */
-export function paint(ctx: CanvasRenderingContext2D, layout: Layout, view: Viewport, selectedId: string | null, bySegment: ReadonlyMap<string, Segment>, dpr: number): void {
+/* Draws the visible part of a layout: the turn bands first, then every block
+   at half the row's height, a green dot over the block holding the selected
+   entry and a red dot under a failed one. Exported for the test that drives
+   it against a recording context. */
+export function paint(
+  ctx: CanvasRenderingContext2D, layout: Layout, view: Viewport, selectedId: string | null,
+  bySegment: ReadonlyMap<string, Segment>, dpr: number, bands: readonly Band[] = [],
+): void {
   const colors = paintColors()
   ctx.save()
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, view.width, BAR_H)
   const left = view.offset
   const right = view.offset + view.width
-  const top = 6
-  const h = BAR_H - 12
+  const top = BLOCK_TOP
+  const h = BLOCK_H
+  ctx.fillStyle = colors.band
+  for (const band of bands) {
+    if (band.x1 < left || band.x0 > right) continue
+    ctx.fillRect(band.x0 - left, top - 2, band.x1 - band.x0, h + 4)
+  }
   for (const b of layout.blocks) {
     if (b.x + b.w < left || b.x > right) continue
     const x = b.x - left
     ctx.fillStyle = colors.kind(b.kind)
+    let failed = false
     if (b.ids) {
       /* A dense block: hatched, so it reads as several rather than one. */
       ctx.fillRect(x, top, b.w, h)
@@ -118,6 +131,7 @@ export function paint(ctx: CanvasRenderingContext2D, layout: Layout, view: Viewp
         ctx.strokeStyle = 'rgba(255,255,255,0.35)'
         ctx.stroke()
       }
+      failed = b.failure
     } else {
       const segment = bySegment.get(b.id)
       const mark = segment !== undefined && !(segment.charged !== null && segment.charged > 0)
@@ -128,18 +142,21 @@ export function paint(ctx: CanvasRenderingContext2D, layout: Layout, view: Viewp
       } else {
         ctx.fillRect(x, top, b.w, h)
       }
-      if (segment?.failure) {
-        ctx.fillStyle = colors.failure
-        ctx.beginPath()
-        ctx.arc(x + b.w / 2, top - 2, 2, 0, Math.PI * 2)
-        ctx.fill()
-      }
+      failed = segment?.failure ?? false
+    }
+    const cx = x + b.w / 2
+    if (failed) {
+      ctx.fillStyle = colors.failure
+      ctx.beginPath()
+      ctx.arc(cx, DOT_BELOW_Y, 2.5, 0, Math.PI * 2)
+      ctx.fill()
     }
     const selected = selectedId !== null && (b.id === selectedId || (b.ids?.includes(selectedId) ?? false))
     if (selected) {
-      ctx.strokeStyle = colors.selected
-      ctx.lineWidth = 2
-      ctx.strokeRect(x + 1, top + 1, Math.max(1, b.w - 2), h - 2)
+      ctx.fillStyle = colors.selected
+      ctx.beginPath()
+      ctx.arc(cx, DOT_ABOVE_Y, 2.5, 0, Math.PI * 2)
+      ctx.fill()
     }
   }
   ctx.strokeStyle = colors.line
@@ -203,14 +220,29 @@ function Bucket({ ids, left, top, maxHeight, onPick, onExpand }: {
   )
 }
 
+/* What the pointer is over besides a block: a turn's band, or the bare bar. */
+type Over = { kind: 'band'; band: Band; clientX: number } | { kind: 'summary'; clientX: number }
+
 export function DurationBar(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
-  const { entries, selectedId, timeline } = s
+  const { selectedId, timeline, prefs } = s
+  /* The bar draws the visible rows, less the short ones while that switch is on. */
+  const entries = useMemo(() => barEntries(s.visible, prefs.hideShort), [s.visible, prefs.hideShort])
+  /* The turns whose reply the list leaves out keep their time as a band. */
+  const hiddenTurns = useMemo(() => {
+    const out = new Map<number, number>()
+    for (const e of s.entries) {
+      if (e.slot !== 'turn.output' || store.hiddenOf(e) === null || e.entry_id in s.visibleIndex) continue
+      if (typeof e.turn_number === 'number' && typeof e.charged_ms === 'number') out.set(e.turn_number, e.charged_ms)
+    }
+    return out
+  }, [s.entries, s.visibleIndex])
   const root = useRef<HTMLDivElement | null>(null)
   const canvas = useRef<HTMLCanvasElement | null>(null)
   const observer = useRef<ResizeObserver | null>(null)
   const [width, setWidth] = useState(0)
   const [hover, setHover] = useState<HoverAt | null>(null)
+  const [over, setOver] = useState<Over | null>(null)
   const [theme, setTheme] = useState(0)
   const pending = useRef<Pending | null>(null)
   const drag = useRef<Drag | null>(null)
@@ -220,6 +252,7 @@ export function DurationBar(): JSX.Element {
   const view: Viewport = useMemo(() => ({ ...timeline, width }), [timeline, width])
   const layout = useMemo(() => layoutFor(segments, view), [segments, view])
   const sum = useMemo(() => summarize(segments), [segments])
+  const bands = useMemo(() => bandsFor(layout, bySegment, hiddenTurns), [layout, bySegment, hiddenTurns])
 
   /* The canvas's own width -- not the bar's, which also holds the sum and
      the tools -- measured as it is and again whenever it changes, so the
@@ -270,10 +303,10 @@ export function DurationBar(): JSX.Element {
       if (el.width !== Math.round(width * dpr)) el.width = Math.round(width * dpr)
       if (el.height !== Math.round(BAR_H * dpr)) el.height = Math.round(BAR_H * dpr)
       const ctx = el.getContext('2d')
-      if (ctx) paint(ctx, layout, view, selectedId, bySegment, dpr)
+      if (ctx) paint(ctx, layout, view, selectedId, bySegment, dpr, bands)
     })
     return () => cancelAnimationFrame(frame)
-  }, [layout, view, selectedId, bySegment, width, theme])
+  }, [layout, view, selectedId, bySegment, width, theme, bands])
 
   /* The wheel zooms, about the pointer, and only over the canvas: a native
      listener, because React's own is passive and could not keep the page
@@ -321,6 +354,7 @@ export function DurationBar(): JSX.Element {
       clearPending()
       endDrag()
       setHover(null)
+      setOver(null)
       store.closeBucket()
     })
     return () => {
@@ -341,6 +375,22 @@ export function DurationBar(): JSX.Element {
   const contentX = (clientX: number): number => {
     const rect = canvas.current?.getBoundingClientRect()
     return clientX - (rect?.left ?? 0) + view.offset
+  }
+
+  /* What is under the pointer: a block, else a band, else the bar itself. */
+  const describe = (clientX: number): void => {
+    const x = contentX(clientX)
+    const block = hitTestExact(layout, x)
+    if (block) { setHover({ block, clientX }); setOver(null); return }
+    setHover(null)
+    const band = bandAt(bands, x)
+    setOver(band ? { kind: 'band', band, clientX } : { kind: 'summary', clientX })
+  }
+
+  /* A click on a turn's band lands on the turn's first visible entry. */
+  const selectBand = (band: Band): void => {
+    const first = entries.find((e) => e.turn_number === band.turn)
+    if (first) store.select(first.entry_id, { source: 'bar' })
   }
 
   /* The delayed click, fired with the world it was made in. */
@@ -371,6 +421,7 @@ export function DurationBar(): JSX.Element {
         e.currentTarget.setPointerCapture(e.pointerId)
         if (root.current) root.current.dataset.drag = 'true'
         setHover(null)
+        setOver(null)
       }
       if (d.moved) {
         const next = pan(view, e.clientX - d.lastX, layout.contentWidth)
@@ -382,8 +433,7 @@ export function DurationBar(): JSX.Element {
       }
     }
     if (width < MIN_W) return
-    const block = hitTest(layout, contentX(e.clientX))
-    setHover(block ? { block, clientX: e.clientX } : null)
+    describe(e.clientX)
   }
 
   const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>): void => {
@@ -391,8 +441,13 @@ export function DurationBar(): JSX.Element {
     if (!d || d.pointerId !== e.pointerId) return
     endDrag()
     if (d.moved) return
-    const block = hitTest(layout, contentX(e.clientX))
-    if (!block) return
+    const at = contentX(e.clientX)
+    const block = hitTestExact(layout, at)
+    if (!block) {
+      const band = bandAt(bands, at)
+      if (band) selectBand(band)
+      return
+    }
     clearPending()
     const world = captured()
     const x = block.x
@@ -472,18 +527,35 @@ export function DurationBar(): JSX.Element {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         onLostPointerCapture={onPointerCancel}
-        onPointerLeave={() => setHover(null)}
+        onPointerLeave={() => { setHover(null); setOver(null) }}
         onDoubleClick={onDoubleClick}
       />
-      <div className="trajectory-bar-sum">
-        <span>{t('gui.trajectory.bar.sum_known', { dur: formatDuration(sum.known) })}</span>
-        {sum.unknownCount > 0 ? <span>{t('gui.trajectory.bar.sum_unknown', { n: sum.unknownCount })}</span> : null}
-        {sum.overlap ? <span>{t('gui.trajectory.bar.sum_overlap')}</span> : null}
-      </div>
       <div className="trajectory-bar-tools" role="group">
         <button className="trajectory-bar-tool" aria-label={t('gui.trajectory.bar.zoom_in')} title={t('gui.trajectory.bar.zoom_in')} onClick={() => zoomBy(2)}>+</button>
         <button className="trajectory-bar-tool" aria-label={t('gui.trajectory.bar.zoom_out')} title={t('gui.trajectory.bar.zoom_out')} onClick={() => zoomBy(0.5)} disabled={timeline.fit}>{'−'}</button>
         <button className="trajectory-bar-tool" aria-label={t('gui.trajectory.bar.reset')} title={t('gui.trajectory.bar.reset')} onClick={onDoubleClick} disabled={timeline.fit}>{'⤢'}</button>
+        <button
+          className="trajectory-bar-tool trajectory-bar-switch"
+          aria-label={t('gui.trajectory.bar.hide_short')}
+          title={t('gui.trajectory.bar.hide_short')}
+          aria-pressed={prefs.hideShort}
+          onClick={() => store.setPrefs({ hideShort: !prefs.hideShort })}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <path d="M3 5h18l-7 8v6l-4 2v-8z" />
+          </svg>
+        </button>
+        <button
+          className="trajectory-bar-tool trajectory-bar-switch"
+          aria-label={t('gui.trajectory.bar.show_internal')}
+          title={t('gui.trajectory.bar.show_internal')}
+          aria-pressed={prefs.showInternal}
+          onClick={() => store.setPrefs({ showInternal: !prefs.showInternal })}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
       </div>
       {hover && rect && !bucket ? (
         <BarHover
@@ -493,6 +565,27 @@ export function DurationBar(): JSX.Element {
           size={{ width: 320, height: 64 }}
           viewport={{ width: document.documentElement.clientWidth || 1000, height: document.documentElement.clientHeight || 800 }}
         />
+      ) : null}
+      {!hover && over && rect && !bucket ? (
+        over.kind === 'band'
+          ? (
+            <BandHover
+              band={over.band}
+              bar={rect}
+              clientX={over.clientX}
+              size={{ width: 240, height: 28 }}
+              viewport={{ width: document.documentElement.clientWidth || 1000, height: document.documentElement.clientHeight || 800 }}
+            />
+          )
+          : (
+            <BarSummary
+              sum={sum}
+              bar={rect}
+              clientX={over.clientX}
+              size={{ width: 320, height: 28 }}
+              viewport={{ width: document.documentElement.clientWidth || 1000, height: document.documentElement.clientHeight || 800 }}
+            />
+          )
       ) : null}
       {bucket ? <Bucket ids={bucket.ids} {...bucketPlace()} onPick={onPick} onExpand={onExpand} /> : null}
     </div>

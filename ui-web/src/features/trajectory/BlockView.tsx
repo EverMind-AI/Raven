@@ -19,8 +19,10 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { t } from '../../i18n/t'
 import { copy } from '../../lib/clipboard'
 import { formatDuration } from '../../lib/duration'
-import { availabilityKey, basisKey, integrityKey, reasonKey, timingLabelKey } from './blocks'
+import { RELATION_LINKS, availabilityKey, basisKey, integrityKey, reasonKey, timingLabelKey, usageLabelKey } from './blocks'
 import * as details from './detailStore'
+import { MessagesView } from './Messages'
+import * as list from './store'
 
 import type { JsonValue, TrajectoryBlockDescriptor } from './types'
 import type { JSX } from 'react'
@@ -123,6 +125,38 @@ function KvValue({ item, blockId }: { item: KvItem; blockId: string }): JSX.Elem
   return <Scalar value={v} />
 }
 
+/* A relation's value as a link to the row it names, when the list has that
+   row: an entry id as it stands; a span id looked up in the entry's own trace;
+   the dispatching span looked up in the trace named beside it. A target the
+   list does not hold stays plain text. */
+function RelationLink({ id, text }: { id: string | null; text: string }): JSX.Element {
+  if (id === null || list.entry(id) === null) return <span className="trajectory-v trajectory-rel-off">{text}</span>
+  return (
+    <button className="trajectory-link trajectory-rel" onClick={() => { list.select(id, { source: 'link' }) }}>{text}</button>
+  )
+}
+
+function RelationValue({ item, rows }: { item: KvItem; rows: KvItem[] }): JSX.Element {
+  const how = RELATION_LINKS[item.key]
+  const str = (key: string): string | null => {
+    const found = rows.find((r) => r.key === key)?.value
+    return typeof found === 'string' ? found : null
+  }
+  if (how === 'entry' && Array.isArray(item.value)) {
+    return (
+      <span className="trajectory-rel-list">
+        {item.value.map((v, i) => (typeof v === 'string' ? <RelationLink key={`${v}-${i}`} id={v} text={v} /> : <Scalar key={i} value={v} />))}
+      </span>
+    )
+  }
+  if ((how === 'span' || how === 'dispatched') && typeof item.value === 'string') {
+    const trace = how === 'span' ? str('trace_id') : str('trace.dispatched_in_trace_id')
+    const target = trace !== null ? list.entryOfSpan(trace, item.value) : null
+    return <RelationLink id={target} text={item.value} />
+  }
+  return <KvValue item={item} blockId="relations" />
+}
+
 export function KeyValuesView({ items, blockId }: { items: unknown[]; blockId: string }): JSX.Element {
   const rows = items.filter(isObj) as unknown as KvItem[]
   if (!rows.length) return <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p>
@@ -138,13 +172,94 @@ export function KeyValuesView({ items, blockId }: { items: unknown[]; blockId: s
           <div key={`${item.key}-${i}`} className="trajectory-kv-row">
             <dt className="trajectory-kv-k" title={item.key}>{label ? t(label) : item.key}</dt>
             <dd className="trajectory-kv-v">
-              <KvValue item={item} blockId={blockId} />
+              {blockId === 'relations' ? <RelationValue item={item} rows={rows} /> : <KvValue item={item} blockId={blockId} />}
               {source ? <span className="trajectory-kv-src">{t(source)}</span> : null}
             </dd>
           </div>
         )
       })}
     </dl>
+  )
+}
+
+/* ── usage ────────────────────────────────────────────────────────────── */
+
+/* The normalized counters read back as the reader thinks of them. The
+   recorded prompt count is the fresh input plus whatever cache counts the
+   provider reported, which is how the normalizer took it apart; so the input
+   total is put back together only when the fresh count is known, and a cache
+   count the provider never reported is said to be unrecorded, not zero. The
+   total and the cost are shown as recorded or not at all. */
+export interface UsageRows {
+  /** The recorded total, or null for none recorded. */
+  total: number | null
+  /** The fresh input plus the recorded cache counts, or null while the fresh count is unknown. */
+  input: number | null
+  /** A cache count the provider reported; undefined where it reported none. */
+  cacheRead: number | undefined
+  cacheWrite: number | undefined
+  output: number | null
+  reasoning: number | null
+  cost: number | null
+}
+
+export function usageRows(items: unknown[]): UsageRows {
+  const value = (key: string): number | undefined => {
+    const item = (items.filter(isObj) as unknown as KvItem[]).find((r) => r.key === key)
+    return item && typeof item.value === 'number' ? item.value : undefined
+  }
+  const fresh = value('input_tokens')
+  const read = value('cache_read_tokens')
+  const write = value('cache_write_tokens')
+  return {
+    total: value('total_tokens') ?? null,
+    input: fresh === undefined ? null : fresh + (read ?? 0) + (write ?? 0),
+    cacheRead: read,
+    cacheWrite: write,
+    output: value('output_tokens') ?? null,
+    reasoning: value('reasoning_tokens') ?? null,
+    cost: value('cost_total') ?? null,
+  }
+}
+
+function UsageView({ items }: { items: unknown[] }): JSX.Element {
+  const rows = usageRows(items)
+  const label = (row: string): string => { const key = usageLabelKey(row); return key ? t(key) : row }
+  const count = (n: number | undefined): string => (n === undefined ? label('not_recorded') : String(n))
+  const lines: Array<[string, string]> = [
+    ['total', rows.total === null ? label('unknown') : String(rows.total)],
+    ['input', rows.input === null ? label('unknown') : String(rows.input)],
+    ['cache_read', count(rows.cacheRead)],
+    ['cache_write', count(rows.cacheWrite)],
+    ['output', rows.output === null ? label('unknown') : rows.reasoning ? `${rows.output} (${label('reasoning')} ${rows.reasoning})` : String(rows.output)],
+    ['cost', rows.cost === null ? '\u2014' : `$${rows.cost}`],
+  ]
+  return (
+    <dl className="trajectory-kv trajectory-usage">
+      {lines.map(([row, text]) => (
+        <div key={row} className="trajectory-kv-row">
+          <dt className="trajectory-kv-k">{label(row)}</dt>
+          <dd className="trajectory-kv-v"><span className="trajectory-v trajectory-v-num">{text}</span></dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/* ── skills a turn was given, and which it used ───────────────────────── */
+
+function SkillUseView({ items }: { items: unknown[] }): JSX.Element {
+  const rows = items.filter(isObj) as Array<{ id?: unknown; used?: unknown }>
+  if (!rows.length) return <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p>
+  return (
+    <ul className="trajectory-items trajectory-skill-use">
+      {rows.map((row, i) => (
+        <li key={`${String(row.id)}-${i}`} className={row.used === true ? 'trajectory-item trajectory-skill-used' : 'trajectory-item trajectory-skill-unused'}>
+          <span className="trajectory-item-head">{typeof row.id === 'string' ? row.id : String(row.id)}</span>
+          <span className="trajectory-skill-mark">{t(row.used === true ? 'gui.trajectory.details.skill_used' : 'gui.trajectory.details.skill_unused')}</span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -227,7 +342,7 @@ export function ListView({ renderer, items, offset }: {
 /** A block's preview, in the same renderer its body uses. */
 export function PreviewView({ block }: { block: TrajectoryBlockDescriptor }): JSX.Element | null {
   const p = block.preview
-  if (p === undefined || p === null) return null
+  if (p === undefined || p === null || block.id === 'outline') return null
   switch (block.renderer) {
     case 'text':
       return <TextView text={typeof p === 'string' ? p : JSON.stringify(p)} />
@@ -350,9 +465,12 @@ export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.
 
   const identityKey = s.current ? details.descriptorKey(s.current) : null
   const permitted = details.mayRead(s)
+  const messages = block.renderer === 'messages'
   useEffect(() => {
+    if (messages) return
     if (!record && !loading && !fault && identityKey !== null && permitted) void details.loadBlock(block.id)
-  }, [record, loading, fault, identityKey, permitted, block.id])
+  }, [record, loading, fault, identityKey, permitted, block.id, messages])
+  const entryId = s.current?.entryId ?? list.get().selectedId ?? ''
 
   let body: JSX.Element | null = null
   if (record) {
@@ -366,12 +484,20 @@ export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.
         body = isObj(data) ? <JsonView value={data.value} /> : null
         break
       case 'key_values':
-        body = isObj(data) && Array.isArray(data.items) ? <KeyValuesView items={data.items as unknown[]} blockId={block.id} /> : null
+        body = isObj(data) && Array.isArray(data.items)
+          ? block.id === 'usage'
+            ? <UsageView items={data.items as unknown[]} />
+            : <KeyValuesView items={data.items as unknown[]} blockId={block.id} />
+          : null
         break
       case 'messages':
+        body = null
+        break
       case 'items':
       case 'references':
-        body = <ListView renderer={record.renderer} items={joinedItems(record)} offset={record.droppedBefore} />
+        body = block.id === 'injected' || block.id === 'used'
+          ? <SkillUseView items={joinedItems(record)} />
+          : <ListView renderer={record.renderer} items={joinedItems(record)} offset={record.droppedBefore} />
         break
       default:
         body = data === undefined || data === null ? null : <JsonView value={data} />
@@ -388,8 +514,10 @@ export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.
           <button className="trajectory-link" onClick={() => { void details.reloadBlock(block.id) }}>{t('gui.trajectory.details.retry')}</button>
         </p>
       ) : null}
-      {!record && loading ? <Skeleton /> : body}
-      {record && record.nextCursor !== null ? (
+      {messages
+        ? <MessagesView block={block} entryId={entryId} render={(message) => <Message item={message} />} />
+        : !record && loading ? <Skeleton /> : body}
+      {!messages && record && record.nextCursor !== null ? (
         <div className="trajectory-more">
           {moreFault ? <span className="trajectory-fault">{t('gui.trajectory.details.failed', { detail: moreFault })}</span> : null}
           <button className="trajectory-link" disabled={more} onClick={() => { void details.loadMore(block.id) }}>

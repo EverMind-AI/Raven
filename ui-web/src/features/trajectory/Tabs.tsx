@@ -10,12 +10,17 @@
  * squeezes a name into something unreadable.
  */
 
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+
 import { t } from '../../i18n/t'
-import { blockTitleKey } from './blocks'
+import { INTERNAL_BLOCKS, blockTitleKey } from './blocks'
 import * as details from './detailStore'
 
 import type { TrajectoryBlockDescriptor } from './types'
 import type { JSX, KeyboardEvent as ReactKeyboardEvent } from 'react'
+
+/** How much of the strip one arrow press scrolls: most of what is in view. */
+export const ARROW_STEP = 0.8
 
 export const tabId = (tab: details.Tab): string => `trajectory-tab-${tab}`
 export const panelId = (tab: details.Tab): string => `trajectory-panel-${tab}`
@@ -26,9 +31,40 @@ export function blockTitle(block: Pick<TrajectoryBlockDescriptor, 'id'>): string
   return key ? t(key) : block.id
 }
 
-export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryBlockDescriptor[] }): JSX.Element {
+export function Tabs({ entryId, blocks: all }: { entryId: string; blocks: TrajectoryBlockDescriptor[] }): JSX.Element {
   const current = details.tabOf(entryId)
+  const blocks = all.filter((b) => !INTERNAL_BLOCKS.includes(b.id))
   const tabs: details.Tab[] = ['overview', ...blocks.map((b) => b.id)]
+  const strip = useRef<HTMLDivElement | null>(null)
+  const [reach, setReach] = useState({ left: false, right: false })
+
+  /* Whether the strip has more than it shows on either side, re-read after
+     every scroll and whenever the strip or its contents change size. */
+  const measure = useCallback((): void => {
+    const el = strip.current
+    if (!el) return
+    const over = el.scrollWidth > el.clientWidth + 1
+    setReach({ left: over && el.scrollLeft > 0, right: over && el.scrollLeft + el.clientWidth < el.scrollWidth - 1 })
+  }, [])
+  useLayoutEffect(measure, [measure, tabs.length])
+  useEffect(() => {
+    const el = strip.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [measure])
+  /* The selected tab is kept in view, however it was selected. */
+  useLayoutEffect(() => {
+    strip.current?.querySelector<HTMLElement>(`#${tabId(current)}`)?.scrollIntoView?.({ inline: 'nearest', block: 'nearest' })
+    measure()
+  }, [current, measure])
+  const nudge = (direction: -1 | 1): void => {
+    const el = strip.current
+    if (!el) return
+    el.scrollLeft += direction * el.clientWidth * ARROW_STEP
+    measure()
+  }
 
   /* Arrows move the selection and the focus together; Home and End go to the ends. */
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
@@ -47,7 +83,13 @@ export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryB
   }
 
   return (
-    <div className="trajectory-tabs" role="tablist" aria-label={t('gui.trajectory.details.tabs')} onKeyDown={onKeyDown}>
+    <div className="trajectory-tabs-wrap" data-reach-left={reach.left ? '' : undefined} data-reach-right={reach.right ? '' : undefined}>
+      {reach.left || reach.right ? (
+        <button className="trajectory-tab-arrow" aria-label={t('gui.trajectory.details.tabs_earlier')} disabled={!reach.left} onClick={() => nudge(-1)}>
+          {'\u2039'}
+        </button>
+      ) : null}
+    <div className="trajectory-tabs" role="tablist" aria-label={t('gui.trajectory.details.tabs')} ref={strip} onScroll={measure} onKeyDown={onKeyDown}>
       {tabs.map((tab) => {
         const block = tab === 'overview' ? null : blocks.find((b) => b.id === tab)
         const selected = tab === current
@@ -68,6 +110,12 @@ export function Tabs({ entryId, blocks }: { entryId: string; blocks: TrajectoryB
           </button>
         )
       })}
+    </div>
+      {reach.left || reach.right ? (
+        <button className="trajectory-tab-arrow" aria-label={t('gui.trajectory.details.tabs_later')} disabled={!reach.right} onClick={() => nudge(1)}>
+          {'\u203a'}
+        </button>
+      ) : null}
     </div>
   )
 }

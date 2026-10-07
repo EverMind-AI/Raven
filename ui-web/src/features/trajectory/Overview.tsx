@@ -10,10 +10,11 @@
  */
 
 import { t } from '../../i18n/t'
-import { availabilityKey, evidenceKey, noteKey, previewSummary, reasonKey, statusKey } from './blocks'
+import { INTERNAL_BLOCKS, availabilityKey, evidenceKey, noteKey, previewSummary, reasonKey, statusKey } from './blocks'
 import { PreviewView } from './BlockView'
 import * as details from './detailStore'
 import { kindClass, kindLabel } from './palette'
+import * as list from './store'
 import { blockTitle, panelId, tabId } from './Tabs'
 
 import type { TrajectoryBlockDescriptor, TrajectoryDetailResult } from './types'
@@ -46,6 +47,9 @@ function Section({ entryId, block }: { entryId: string; block: TrajectoryBlockDe
 export function Overview({ entryId, value }: { entryId: string; value: TrajectoryDetailResult }): JSX.Element {
   const status = statusKey(value.operation_status)
   const evidence = value.status_evidence.map((code) => { const key = evidenceKey(code); return key ? t(key) : code })
+  const sections = value.blocks.filter((b) => !INTERNAL_BLOCKS.includes(b.id))
+  /* An entry charged no clock of its own has no timing block; its moment is still worth one row here. */
+  const eventTime = sections.some((b) => b.id === 'timing') ? null : (list.entry(entryId)?.event_time ?? null)
   return (
     <div className="trajectory-overview" role="tabpanel" id={panelId('overview')} aria-labelledby={tabId('overview')}>
       <dl className="trajectory-info">
@@ -60,13 +64,19 @@ export function Overview({ entryId, value }: { entryId: string; value: Trajector
             {evidence.length ? <span className="trajectory-info-sub">{evidence.join(', ')}</span> : null}
           </dd>
         </div>
+        {eventTime !== null ? (
+          <div className="trajectory-info-row">
+            <dt>{t('gui.trajectory.timing.event_time')}</dt>
+            <dd><span className="trajectory-info-mono">{eventTime}</span></dd>
+          </div>
+        ) : null}
       </dl>
       {value.notes.length ? (
         <ul className="trajectory-notes">
           {value.notes.map((code) => { const key = noteKey(code); return <li key={code}>{key ? t(key) : code}</li> })}
         </ul>
       ) : null}
-      {value.blocks.map((block) => <Section key={block.id} entryId={entryId} block={block} />)}
+      {sections.map((block) => <Section key={block.id} entryId={entryId} block={block} />)}
     </div>
   )
 }

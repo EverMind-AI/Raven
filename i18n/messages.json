@@ -11120,8 +11120,8 @@
       "zh": "用量"
     },
     "gui.trajectory.block.response": {
-      "en": "Response diagnostics",
-      "zh": "响应诊断"
+      "en": "Response metadata",
+      "zh": "响应元数据"
     },
     "gui.trajectory.block.tool": {
       "en": "Tool",
@@ -11506,6 +11506,238 @@
     "gui.trajectory.bar.failed": {
       "en": "failed",
       "zh": "失败"
+    },
+    "gui.trajectory.kind.skill_read": {
+      "en": "Skill read",
+      "zh": "读技能"
+    },
+    "gui.trajectory.kind.skill_inject": {
+      "en": "Skills injected",
+      "zh": "注入技能"
+    },
+    "gui.trajectory.kind.skill_rewrite_input": {
+      "en": "Query rewrite",
+      "zh": "改写查询"
+    },
+    "gui.trajectory.kind.skill_rewrite_output": {
+      "en": "Rewritten query",
+      "zh": "改写结果"
+    },
+    "gui.trajectory.kind.skill_gate_input": {
+      "en": "Skill gate",
+      "zh": "技能筛选"
+    },
+    "gui.trajectory.kind.skill_gate_output": {
+      "en": "Skills selected",
+      "zh": "筛选结果"
+    },
+    "gui.trajectory.kind.context_curate_input": {
+      "en": "Context input",
+      "zh": "整理输入"
+    },
+    "gui.trajectory.kind.context_curate_output": {
+      "en": "Context curated",
+      "zh": "整理结果"
+    },
+    "gui.trajectory.kind.memory_recall": {
+      "en": "Memory recall",
+      "zh": "记忆召回"
+    },
+    "gui.trajectory.kind.memory_store": {
+      "en": "Memory store",
+      "zh": "记忆写入"
+    },
+    "gui.trajectory.kind.memory_feedback": {
+      "en": "Memory feedback",
+      "zh": "记忆反馈"
+    },
+    "gui.trajectory.kind.memory_enqueue": {
+      "en": "Memory queued",
+      "zh": "记忆入队"
+    },
+    "gui.trajectory.kind.memory_extract": {
+      "en": "Memory extract",
+      "zh": "记忆提取"
+    },
+    "gui.trajectory.kind.memory_profile_refresh": {
+      "en": "Profile refresh",
+      "zh": "画像刷新"
+    },
+    "gui.trajectory.kind.memory_consolidate": {
+      "en": "Memory consolidate",
+      "zh": "记忆整合"
+    },
+    "gui.trajectory.kind.personalize_input": {
+      "en": "Personalize input",
+      "zh": "个性输入"
+    },
+    "gui.trajectory.kind.personalize_output": {
+      "en": "Personalize result",
+      "zh": "个性结果"
+    },
+    "gui.trajectory.kind.subagent_run": {
+      "en": "Sub-agent",
+      "zh": "子代理"
+    },
+    "gui.trajectory.kind.subagent_external": {
+      "en": "External agent",
+      "zh": "外部代理"
+    },
+    "gui.trajectory.kind.span_error": {
+      "en": "Error",
+      "zh": "错误"
+    },
+    "gui.trajectory.kind.span_malformed": {
+      "en": "Broken record",
+      "zh": "损坏记录"
+    },
+    "gui.trajectory.kind.span_unreadable": {
+      "en": "Unreadable",
+      "zh": "不可读"
+    },
+    "gui.trajectory.kind.summary": {
+      "en": "Summary",
+      "zh": "摘要"
+    },
+    "gui.trajectory.kind.plugin_load": {
+      "en": "Plugin load",
+      "zh": "插件加载"
+    },
+    "gui.trajectory.missing_record": {
+      "en": "Recorded data missing",
+      "zh": "记录数据缺失"
+    },
+    "gui.trajectory.purpose_title": {
+      "en": "A side question the model was asked: {purpose}",
+      "zh": "向模型提出的辅助调用：{purpose}"
+    },
+    "gui.trajectory.turn_total": {
+      "en": "Turn {n}: {dur} in all",
+      "zh": "回合 {n}：总耗时 {dur}"
+    },
+    "gui.trajectory.revealed_row": {
+      "en": "An internal step, shown because something pointed at it",
+      "zh": "内部步骤，因被引用而临时显示"
+    },
+    "gui.trajectory.bar.hide_short": {
+      "en": "Hide entries under 20 ms",
+      "zh": "隐藏 20 ms 以下的条目"
+    },
+    "gui.trajectory.bar.show_internal": {
+      "en": "Show internal steps",
+      "zh": "显示内部步骤"
+    },
+    "gui.trajectory.bar.turn_total": {
+      "en": "Turn {n}: {dur} in all",
+      "zh": "回合 {n} · 总耗时 {dur}"
+    },
+    "gui.trajectory.details.tabs_earlier": {
+      "en": "Earlier tabs",
+      "zh": "前面的标签"
+    },
+    "gui.trajectory.details.tabs_later": {
+      "en": "Later tabs",
+      "zh": "后面的标签"
+    },
+    "gui.trajectory.details.expand_all": {
+      "en": "Expand all",
+      "zh": "展开全部"
+    },
+    "gui.trajectory.details.collapse_old": {
+      "en": "Collapse older messages",
+      "zh": "折叠旧消息"
+    },
+    "gui.trajectory.details.collapse_one": {
+      "en": "Collapse this message",
+      "zh": "折叠此消息"
+    },
+    "gui.trajectory.details.outline_progress": {
+      "en": "Listed {n} of {total}",
+      "zh": "已列出 {n} / {total}"
+    },
+    "gui.trajectory.details.delta_unknown": {
+      "en": "Which messages are new is not decided yet",
+      "zh": "新旧消息尚未判定"
+    },
+    "gui.trajectory.details.delta_same": {
+      "en": "Same messages as the previous call",
+      "zh": "与上一次调用相同"
+    },
+    "gui.trajectory.details.msg_chars": {
+      "en": "{n} chars",
+      "zh": "{n} 字"
+    },
+    "gui.trajectory.details.msg_bytes": {
+      "en": "{n} bytes",
+      "zh": "{n} 字节"
+    },
+    "gui.trajectory.details.msg_missing": {
+      "en": "Message body missing",
+      "zh": "消息正文缺失"
+    },
+    "gui.trajectory.details.msg_partial": {
+      "en": "Read from the first 8 KiB of the message",
+      "zh": "按消息前 8 KiB 解析"
+    },
+    "gui.trajectory.details.skill_used": {
+      "en": "used",
+      "zh": "已使用"
+    },
+    "gui.trajectory.details.skill_unused": {
+      "en": "not used",
+      "zh": "未使用"
+    },
+    "gui.trajectory.block.outline": {
+      "en": "Outline",
+      "zh": "大纲"
+    },
+    "gui.trajectory.usage.total": {
+      "en": "Total tokens",
+      "zh": "总 token"
+    },
+    "gui.trajectory.usage.input": {
+      "en": "Input",
+      "zh": "输入"
+    },
+    "gui.trajectory.usage.cache_read": {
+      "en": "Cache hits",
+      "zh": "缓存命中"
+    },
+    "gui.trajectory.usage.cache_write": {
+      "en": "Cache writes",
+      "zh": "缓存写入"
+    },
+    "gui.trajectory.usage.output": {
+      "en": "Output",
+      "zh": "输出"
+    },
+    "gui.trajectory.usage.reasoning": {
+      "en": "reasoning",
+      "zh": "推理"
+    },
+    "gui.trajectory.usage.cost": {
+      "en": "Cost",
+      "zh": "费用"
+    },
+    "gui.trajectory.usage.unknown": {
+      "en": "unknown",
+      "zh": "未知"
+    },
+    "gui.trajectory.usage.not_recorded": {
+      "en": "not recorded",
+      "zh": "未记录"
+    },
+    "gui.trajectory.evidence.result_error_key": {
+      "en": "the tool result carries an error field",
+      "zh": "工具结果带有 error 字段"
+    },
+    "gui.trajectory.evidence.result_error_flag": {
+      "en": "the tool result flags itself as failed",
+      "zh": "工具结果自标为失败"
+    },
+    "gui.trajectory.evidence.result_error_status": {
+      "en": "the tool result reports an error status",
+      "zh": "工具结果报告错误状态"
     }
   }
 }

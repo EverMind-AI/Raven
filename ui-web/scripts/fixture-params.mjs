@@ -70,7 +70,7 @@ export const PARAMS = {
   'trajectory.list': { session_key: 'gui:demo' },
   'trajectory.changes': { session_key: 'gui:demo', epoch: 'demo-1', after_revision: 8 },
   'trajectory.detail': { session_key: 'gui:demo', entry_id: 't:tool1:tool.output' },
-  'trajectory.block': { session_key: 'gui:demo', entry_id: 't:tool1:tool.output', entry_revision: 6, epoch: 'demo-1', block_id: 'tool' },
+  'trajectory.block': { session_key: 'gui:demo', entry_id: 't:tool1:tool.output', entry_revision: 6, epoch: 'demo-1', block_id: 'error' },
   'model.save_key': { slug: 'openai', api_key: 'sk-x' },
   'model.disconnect': { slug: 'openai' },
   'model.reveal_key': { slug: 'anthropic' },
