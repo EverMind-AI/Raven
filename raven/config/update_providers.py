@@ -1465,7 +1465,7 @@ def test_provider(
     shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
     native = shape(api_key) if shape and api_key else None
     own = _own_addresses(spec.name, native[0]) if spec and native else ()
-    if native and (not api_base or api_base.strip().rstrip("/") in own):
+    if native and (not api_base or api_base.rstrip("/") in own):
         # The vendor's own catalogue, for the vendors in `_CATALOGUE_SHAPES`,
         # whose catalogue neither a stored nor a derived address reaches. Asked
         # before the derivation below, which answers "" for most of them and

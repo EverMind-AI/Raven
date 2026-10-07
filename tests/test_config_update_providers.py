@@ -1889,7 +1889,7 @@ def test_an_address_of_ones_own_keeps_the_shape_that_address_speaks(cfg_path: Pa
         (
             "gemini",
             "AIza-TEST",
-            "https://generativelanguage.googleapis.com",
+            "https://generativelanguage.googleapis.com/",
             "x-goog-api-key",
             "https://generativelanguage.googleapis.com/v1beta/models",
         ),
