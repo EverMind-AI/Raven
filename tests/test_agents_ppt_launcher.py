@@ -922,6 +922,51 @@ def test_a_host_image_section_on_a_named_provider_carries_that_provider(grounded
     assert "provider" not in image and "extraHeaders" not in image
 
 
+def _host_image(tmp_path: Path, image: dict, providers: dict | None = None) -> None:
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"media": {"image": image}}, "providers": providers or {}}))
+
+
+_AUTH_HEADERS = {"Authorization": "Bearer sk-host-header", "X-Tenant": "t1"}
+
+
+@pytest.mark.parametrize(
+    ("image", "providers"),
+    [
+        (
+            {"model": "gpt-image-2", "provider": "custom"},
+            {"custom": {"apiKey": "sk-host", "apiBase": "https://host-relay.test/v1", "extraHeaders": _AUTH_HEADERS}},
+        ),
+        (
+            {
+                "model": "gpt-image-2",
+                "apiKey": "sk-host",
+                "apiBase": "https://host-relay.test/v1",
+                "extraHeaders": _AUTH_HEADERS,
+            },
+            {},
+        ),
+    ],
+    ids=["named-provider", "own-section"],
+)
+def test_a_pinned_deck_key_is_the_key_on_the_wire(grounded, tmp_path, monkeypatch, image, providers):
+    """The inherited headers complete the inherited key. Left beside a pinned one, an
+    Authorization among them outranked it on the wire while the log named the pin as
+    the payer; the address is still the host's, so only the headers stay behind."""
+    from raven.agent.tools.media_gen import ImageGenerateTool
+    from raven.config.schema import MediaToolConfig
+
+    _host_image(tmp_path, image, providers)
+    monkeypatch.setenv("PPT_IMAGE_API_KEY", "sk-deck")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    section = data["tools"]["media"]["image"]
+    assert (section["apiKey"], section["apiBase"]) == ("sk-deck", "https://host-relay.test/v1")
+    assert "extraHeaders" not in section
+    tool = ImageGenerateTool(MediaToolConfig.model_validate(section), workspace=tmp_path / "ws")
+    assert tool._headers() == {"Authorization": "Bearer sk-deck"}
+
+
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
     """One key, two readers, ONE source of truth: the slice key is copied from
     the tools.web slot after the secret merge, so every admission source --

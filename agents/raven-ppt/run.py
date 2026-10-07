@@ -230,7 +230,9 @@ def configure_image_generation(config: dict, host: dict) -> None:
     The product's own ``PPT_IMAGE_API_BASE`` and ``PPT_IMAGE_MODEL`` pin a deck
     endpoint or model over the inherited one, and any product pin (key, base or
     model) also pins the section as rendered: a live host selection would
-    replace it whole on the next call. The host's media proxy rides along.
+    replace it whole on the next call. A pinned key or base leaves the inherited
+    headers behind: the host resolved them for its own key at its own address.
+    The host's media proxy rides along.
 
     The engine gets no copy: the deck's ``ppt_generate_image`` rides the host's
     ``image_generate`` and reads ``tools.media.image`` through the locator's
@@ -252,6 +254,12 @@ def configure_image_generation(config: dict, host: dict) -> None:
             image[path[-1]] = value
             pinned.append(name)
     key_pinned = bool(env_value("PPT_IMAGE_API_KEY"))
+    base_pinned = "PPT_IMAGE_API_BASE" in pinned
+    if key_pinned or base_pinned:
+        # The inherited headers complete the inherited key at the inherited
+        # address: a pinned base sends neither there, and a pinned key replaces
+        # the key they complete -- an Authorization among them would outrank it.
+        image.pop("extraHeaders", None)
     if named and (pinned or key_pinned):
         # A pin makes the section a snapshot the deck reads as written, with no
         # host file behind it. It already holds the provider's address and key;
@@ -261,11 +269,9 @@ def configure_image_generation(config: dict, host: dict) -> None:
         del image["provider"]
         if "PPT_IMAGE_MODEL" not in pinned and image.get("model"):
             image["model"] = wire_model(image["model"], client_provider=named)
-        if "PPT_IMAGE_API_BASE" in pinned:
-            # The provider's key and headers go to the provider's address, not the deck's.
-            image.pop("extraHeaders", None)
-            if not key_pinned:
-                image["apiKey"] = ""
+        if base_pinned and not key_pinned:
+            # The provider's key goes to the provider's address, not the deck's.
+            image["apiKey"] = ""
     if named and not key_pinned and image.get("apiKey"):
         # The provider's own key; the host section's own, which the slot below
         # would read, stood aside for it.
