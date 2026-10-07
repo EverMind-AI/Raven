@@ -239,14 +239,20 @@ def configure_image_generation(config: dict, host: dict) -> None:
     ``media_config`` grant, live, exactly as the host tool does. The slice's own
     ``image`` key stays an operator override for a host that grants nothing.
     """
-    from raven.config.schema import live_media_tool_config
+    from raven.config import schema
     from raven.providers.wire import wire_model
 
     host_tools = host.get("tools") or {}
     host_image = (host_tools.get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, host.get("providers"))
+    # This file can outlive its raven -- a stamped home tree outranks a
+    # checkout's own agents/ -- so it calls what every 0.2 release has: the
+    # reader's two-argument form, and media_provider only where it exists. A
+    # raven without it has no section that can name a provider.
+    section = schema.live_media_tool_config(host_image, host.get("providers"))
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
-    named = image.get("provider", "")
+    media_provider = getattr(schema, "media_provider", None)
+    runs_on = media_provider(section) if media_provider is not None and section is not None else ""
+    named = "" if runs_on == "openrouter" else runs_on
     paid_by = "the host image section"
     pinned: list[str] = []
     for name, path in IMAGE_SETTING_SLOTS.items():

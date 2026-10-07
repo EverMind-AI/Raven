@@ -997,6 +997,47 @@ def test_a_pinned_deck_base_gets_no_key_borrowed_for_the_host_s_address(grounded
     assert image["apiBase"] == "https://deck-images.example/v1" and not image.get("apiKey")
 
 
+@pytest.mark.parametrize(
+    "pins",
+    [{"PPT_IMAGE_MODEL": "gpt-image-2-mini"}, {"PPT_IMAGE_API_BASE": "https://deck-images.example/v1"}],
+    ids=["model-pinned", "base-pinned"],
+)
+def test_a_section_naming_openrouter_renders_as_the_default(grounded, tmp_path, monkeypatch, capsys, pins):
+    """Every other reader folds ``provider: "openrouter"`` back into the default; read
+    as a named provider here, the same intent rendered a different section and named
+    a different payer."""
+    for name, value in pins.items():
+        monkeypatch.setenv(name, value)
+    rendered = []
+    for image in ({"model": "m"}, {"model": "m", "provider": "openrouter"}):
+        _host_image(tmp_path, image, {"openrouter": {"apiKey": "sk-or-host"}})
+        capsys.readouterr()
+        data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+        said = [line for line in capsys.readouterr().err.splitlines() if line.startswith("[run] images:")]
+        rendered.append(({k: v for k, v in data["tools"]["media"]["image"].items() if k != "provider"}, said))
+    assert rendered[0] == rendered[1]
+
+
+def test_the_launcher_still_renders_under_the_releases_it_can_outlive(grounded, tmp_path, monkeypatch):
+    """A stamped home tree outranks a checkout's own agents/, so this file can run
+    under any 0.2 raven. Those have no ``media_provider`` and read the image section
+    as ``live_media_tool_config(section, openrouter_section)``, whose sections cannot
+    name a provider: the launcher has to render there rather than raise."""
+    from raven.config import schema
+
+    _host_image(tmp_path, {"model": "m", "apiKey": "sk-host-images"})
+    monkeypatch.delattr(schema, "media_provider")
+    monkeypatch.setattr(
+        schema,
+        "live_media_tool_config",
+        lambda section, openrouter_section: schema.MediaToolConfig.model_validate(section or {}),
+    )
+    monkeypatch.setenv("PPT_IMAGE_MODEL", "gpt-image-2-mini")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    image = data["tools"]["media"]["image"]
+    assert (image["apiKey"], image["model"]) == ("sk-host-images", "gpt-image-2-mini")
+
+
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
     """One key, two readers, ONE source of truth: the slice key is copied from
     the tools.web slot after the secret merge, so every admission source --
