@@ -967,6 +967,20 @@ def test_a_pinned_deck_key_is_the_key_on_the_wire(grounded, tmp_path, monkeypatc
     assert tool._headers() == {"Authorization": "Bearer sk-deck"}
 
 
+def test_a_pinned_deck_base_gets_no_key_borrowed_for_the_host_s_address(grounded, tmp_path, monkeypatch):
+    """The host borrows the OpenRouter key only while it calls OpenRouter, and a deck
+    endpoint pinned in its place is another address: it gets the deck's own key or
+    the host section's own, not the one borrowed for OpenRouter."""
+    _host_image(tmp_path, {"model": "m"}, {"openrouter": {"apiKey": "sk-or-host"}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    assert data["tools"]["media"]["image"]["apiKey"] == "sk-or-host"
+
+    monkeypatch.setenv("PPT_IMAGE_API_BASE", "https://deck-images.example/v1")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    image = data["tools"]["media"]["image"]
+    assert image["apiBase"] == "https://deck-images.example/v1" and not image.get("apiKey")
+
+
 def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkeypatch):
     """One key, two readers, ONE source of truth: the slice key is copied from
     the tools.web slot after the secret merge, so every admission source --
