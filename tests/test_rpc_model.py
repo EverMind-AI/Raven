@@ -1166,6 +1166,7 @@ NO_SHORTLIST_VENDORS = [
     "ph8",
     "aionly",
     "radeon_cloud",
+    "opper",
 ]
 
 

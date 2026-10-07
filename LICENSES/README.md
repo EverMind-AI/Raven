@@ -20,6 +20,11 @@ history.
   header; the stylesheet lifts it in the light theme rather than editing the
   file. Neither icon set below carries an AMD mark, which is why this one comes
   straight from the vendor.
+- Opper's mark, `ui-web/src/assets/providers/opper.svg`, is supplied by Opper,
+  the vendor, with the change that added the Opper row, and shown to identify
+  that row on the same nominative basis. It is drawn in `currentColor`, so the
+  dark theme inverts it the way it does `vllm.svg`. Neither icon set below
+  carries an Opper mark, which is why this one comes straight from the vendor.
 - The channel marks under `ui-web/src/assets/channels/` come straight from the
   vendors too, on the same nominative basis: each identifies the channel row it
   sits on. Nine are the app icons the vendors publish on their App Store
