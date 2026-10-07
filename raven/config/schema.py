@@ -2654,24 +2654,29 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
 
 
 def _provider_section(providers_section: dict[str, Any], name: str) -> "ProviderConfig | None":
-    """``name``'s section out of a raw ``providers`` subtree, validated with the
-    class ``ProvidersConfig`` declares for it, or ``None`` when the file has none.
+    """``name``'s section out of a raw ``providers`` subtree, as ``ProvidersConfig``
+    resolves it at boot, or ``None`` when the file has none.
 
-    Raises when the section is there but invalid; the caller turns that into "no
-    new answer". Only this one section is validated, so an unrelated provider's
-    bad edit cannot hold a media answer back.
+    Every key that may spell this provider -- in another case, with LiteLLM's
+    hyphens, under a former name or a field alias -- goes through
+    ``ProvidersConfig`` itself, so the spellings fold into one section and the
+    name resolves exactly as :meth:`Config.effective_media_config` sees them.
+    Only those keys are validated, so an unrelated provider's bad edit cannot
+    hold a media answer back; a bad edit to this provider's raises, and the
+    caller turns that into "no new answer".
     """
-    from raven.providers.registry import names_same_provider
+    from raven.providers.registry import find_by_name, names_same_provider
 
-    raw = providers_section.get(name)
-    if raw is None:
-        raw = next((value for key, value in providers_section.items() if names_same_provider(key, name)), None)
-    if raw is None:
-        return None
+    spec = find_by_name(name)
+    spellings = spec.route_names if spec else frozenset({name})
     field = ProvidersConfig.model_fields.get(name)
-    declared = field.annotation if field is not None else None
-    cls = declared if isinstance(declared, type) and issubclass(declared, ProviderConfig) else ProviderConfig
-    return cls.model_validate(raw)
+    aliases = getattr(field.validation_alias, "choices", ()) if field is not None else ()
+    own = {
+        key: value
+        for key, value in providers_section.items()
+        if key in aliases or any(names_same_provider(key, spelling) for spelling in spellings)
+    }
+    return ProvidersConfig.model_validate(own).get(name) if own else None
 
 
 def live_web_search_key(section: Any) -> str | None:

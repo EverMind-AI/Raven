@@ -563,6 +563,30 @@ class TestTheBorrowInputIsAdmittedOnTheSameTerms:
         cfg = media_tool_config(live, "image")
         assert cfg is not None and cfg.provider == "openai" and cfg.api_key == "" and cfg.model == ""
 
+    @pytest.mark.parametrize(
+        ("providers", "named"),
+        [
+            ({"openai": {"apiBase": "https://relay.test/v1"}, "OpenAI": {"apiKey": "sk-oa"}}, "openai"),
+            ({"zhipu": {"apiKey": "sk-z", "apiBase": "https://z.test/v1"}}, "zai"),
+            ({"fireworks": {"apiKey": "sk-fw", "apiBase": "https://fw.test/v1"}}, "fireworks_ai"),
+        ],
+        ids=["second-spelling", "former-name", "field-alias"],
+    )
+    def test_the_live_reader_finds_the_provider_the_boot_reader_does(self, tmp_path, providers, named):
+        """Both go through ``ProvidersConfig``, which folds a provider's spellings,
+        former names and field aliases into one section: a live reader taking the
+        first match alone registered the tool with a key and then ran it without one."""
+        from raven.config.live import media_tool_config
+        from raven.config.schema import Config
+
+        live, path = self._live(tmp_path)
+        payload = {"tools": {"media": {"image": {"model": "m", "provider": named}}}, "providers": providers}
+        self._write(path, payload)
+        boot = Config.model_validate(payload).effective_media_config().image
+        cfg = media_tool_config(live, "image")
+        assert boot.api_key and (cfg.api_base, cfg.api_key) == (boot.api_base, boot.api_key)
+
+
 
 def test_permissions_node_that_stops_validating_keeps_the_last_policy(tmp_path):
     """A broken live edit must not un-deny a default-allow tool.
