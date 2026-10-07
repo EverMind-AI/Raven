@@ -1607,6 +1607,19 @@ def test_the_shown_address_migration_clears_only_the_exact_address_a_vendor_show
     assert loader.drain_migration_notices() == []
 
 
+def test_an_address_that_is_not_a_string_reads_as_a_schema_error_not_a_crash(tmp_path: Path) -> None:
+    """The shown-address migration runs on the file as read, before any schema
+    has seen it, so the address it is handed can be a number. It has to pass over
+    one and leave the schema to name the field: raising there would end every
+    load in a traceback."""
+    p = tmp_path / "config.json"
+    _write(p, {"providers": {"anthropic": {"apiKey": "sk-ant-x", "apiBase": 123}}})
+    _stamp_path(p).write_text(json.dumps({"version": 11}), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="fails schema validation"):
+        load_config(p)
+
+
 def test_channels_section_settings_are_not_mistaken_for_channels(tmp_path: Path, caplog) -> None:
     """``channels.sendProgress`` is a setting of the section, not a channel whose
     table failed to parse; only an unknown scalar under ``channels`` warns."""

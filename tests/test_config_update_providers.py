@@ -118,6 +118,20 @@ def test_the_address_a_vendor_only_shows_is_stored_as_no_address(cfg_path: Path)
     assert _read(cfg_path)["providers"]["gemini"]["apiBase"] == "https://generativelanguage.googleapis.com/v1beta"
 
 
+@pytest.mark.parametrize("value", [123, ["x"], {"a": 1}, True, 1.5])
+def test_an_address_that_is_not_a_string_is_refused_by_the_schema(cfg_path: Path, value: Any) -> None:
+    """``model.set_fields`` takes any JSON value, so an address can arrive as a
+    number or a list. The check for the address a vendor only shows ran before
+    the schema and called ``strip()`` on it, raising ``AttributeError`` -- which
+    the RPC answers as an internal error -- where the schema refuses it with the
+    ``ValidationError`` that reads as a bad field."""
+    from pydantic import ValidationError
+
+    set_provider_fields("gemini", {"api_key": "g-key"}, config_path=cfg_path)
+    with pytest.raises(ValidationError):
+        set_provider_fields("gemini", {"api_base": value}, config_path=cfg_path)
+
+
 def test_set_api_key_for_oauth_provider_raises(cfg_path: Path) -> None:
     with pytest.raises(RuntimeError, match="OAuth"):
         set_provider_fields(

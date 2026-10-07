@@ -165,7 +165,8 @@ def test_only_the_address_a_spec_shows_in_place_of_a_default_is_display_only() -
     address stands in for a default the spec does not state: a stated default is
     the real answer, one the router may send to, so a spec carrying both keeps
     the address. No spec in the registry does today, which is why this is
-    asserted on specs built here."""
+    asserted on specs built here. Nor is anything but a string the address: both
+    callers hand it values read from JSON."""
     from raven.providers.registry import ProviderSpec
 
     shown = ProviderSpec(name="v", keywords=(), env_key="", shown_api_base="https://api.v.test")
@@ -176,6 +177,7 @@ def test_only_the_address_a_spec_shows_in_place_of_a_default_is_display_only() -
     assert shown.is_display_only("https://api.v.test/")
     assert not shown.is_display_only("https://api.v.test/v1")
     assert not shown.is_display_only(None)
+    assert not shown.is_display_only(123)
     assert not stated.is_display_only("https://api.w.test")
 
 

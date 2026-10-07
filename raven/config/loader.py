@@ -1158,7 +1158,7 @@ def _migrate_display_only_addresses(data: dict[str, Any], *, notify: bool = Fals
             continue
         for key in ("apiBase", "api_base"):
             address = section.get(key)
-            if not (isinstance(address, str) and spec.is_display_only(address)):
+            if not spec.is_display_only(address):
                 continue
             del section[key]
             changed = True

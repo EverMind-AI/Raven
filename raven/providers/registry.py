@@ -183,7 +183,7 @@ class ProviderSpec:
         """
         return self.default_api_base or self.shown_api_base
 
-    def is_display_only(self, api_base: str | None) -> bool:
+    def is_display_only(self, api_base: object) -> bool:
         """Whether ``api_base`` is the address this spec shows and nothing sends.
 
         That is `shown_api_base`, standing in for a `default_api_base` the spec
@@ -191,8 +191,12 @@ class ProviderSpec:
         being told. A section holding it holds no address of its own, and keeping
         it there is not harmless -- Gemini's driver takes a stored base as its
         versioned root, and the provider probe takes one for a proxy.
+
+        Anything but a string is not that address. Both callers hand over a value
+        read from JSON before any schema has seen it, and a write needs the
+        schema's refusal of a bad one, not an error raised here.
         """
-        if self.default_api_base or not self.shown_api_base or not api_base:
+        if self.default_api_base or not self.shown_api_base or not isinstance(api_base, str):
             return False
         return api_base.strip().rstrip("/") == self.shown_api_base.rstrip("/")
 
