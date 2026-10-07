@@ -68,7 +68,7 @@ describe('model initialization', () => {
     expect(h.store.currentProvider()).toBe('deepseek')
     expect(h.store.loadStatus()).toBe('ready')
     expect(h.source.modelSource.loading?.()).toBe(true)
-    expect(h.source.openModelsForMissingProvider()).toBe(false)
+    expect(h.source.blockSendForModel()).toBe(false)
     h.reads[1]!.resolve(h.answer('obsolete-model', 'other'))
     await load
     expect(h.store.current()).toBe('deepseek/deepseek-chat')
@@ -82,7 +82,7 @@ describe('model initialization', () => {
     h.reads[1]!.reject(new Error('catalogue unavailable'))
     await load
     expect(h.store.loadStatus()).toBe('ready')
-    expect(h.source.openModelsForMissingProvider()).toBe(false)
+    expect(h.source.blockSendForModel()).toBe(false)
     expect(h.toasts).toHaveLength(1)
     expect(h.source.retryFailedLoad()).toBe(true)
     h.reads[2]!.resolve(h.answer())
@@ -98,7 +98,8 @@ describe('model initialization', () => {
     await load
     expect(h.store.loadStatus()).toBe('error')
     expect(h.store.current()).toBe('')
-    expect(h.source.openModelsForMissingProvider()).toBe(true)
+    expect(h.source.blockSendForModel()).toBe(true)
+    expect(h.source.openModelsForMissingProvider()).toBe(false)
     expect(h.source.retryFailedLoad()).toBe(true)
     expect(h.store.loadStatus()).toBe('loading')
     h.reads[1]!.resolve(h.answer())
@@ -116,6 +117,93 @@ describe('model initialization', () => {
     expect(h.store.current()).toBe('')
     expect(h.store.currentProvider()).toBe('')
     expect(h.store.loadStatus()).toBe('empty')
+  })
+
+  it.each([
+    [true, null], [true, 'bound-session'], [false, null], [false, 'bound-session'],
+  ] as const)('keeps a known selection ready during a background refresh (selection-only: %s, session: %s)', async (selectionOnly, session) => {
+    const h = await live({ selectionOnly })
+    const initial = h.source.loadSelection(session)
+    h.reads[0]!.resolve(h.answer())
+    await initial
+    const refresh = h.source.loadProviders(session)
+    expect(h.store.loadStatus()).toBe('ready')
+    expect(h.store.current()).toBe('deepseek/deepseek-chat')
+    expect(h.source.blockSendForModel()).toBe(false)
+    expect(h.source.modelSource.loading?.()).toBe(true)
+    h.reads[1]!.resolve(h.answer('updated-model', 'updated-provider'))
+    if (selectionOnly) h.reads[2]!.resolve(h.answer('catalogue-model'))
+    await refresh
+    expect(h.store.current()).toBe('updated-model')
+    expect(h.store.currentProvider()).toBe('updated-provider')
+    expect(h.source.modelSource.loading?.()).toBe(false)
+  })
+
+  it.each([true, false])('waits for the first read even when an old pair is present (selection-only: %s)', async (selectionOnly) => {
+    const h = await live({ selectionOnly })
+    h.store.setCurrent('old-model', 'old-provider')
+    const load = h.source.loadSelection('new-session')
+    expect(h.store.loadStatus()).toBe('loading')
+    expect(h.source.blockSendForModel()).toBe(true)
+    expect(h.source.openModelsForMissingProvider()).toBe(false)
+    h.reads[0]!.resolve(h.answer())
+    await load
+  })
+
+  it.each([true, false])('waits for a different session even under the same generation (selection-only: %s)', async (selectionOnly) => {
+    const h = await live({ selectionOnly })
+    const initial = h.source.loadSelection('first')
+    h.reads[0]!.resolve(h.answer())
+    await initial
+    const next = h.source.loadSelection('second')
+    expect(h.store.loadStatus()).toBe('loading')
+    expect(h.source.blockSendForModel()).toBe(true)
+    h.reads[1]!.resolve(h.answer('second-model'))
+    await next
+    expect(h.store.current()).toBe('second-model')
+  })
+
+  it.each([true, false])('waits after navigation even when the session key is unchanged (selection-only: %s)', async (selectionOnly) => {
+    const h = await live({ selectionOnly })
+    const initial = h.source.loadSelection(null)
+    h.reads[0]!.resolve(h.answer())
+    await initial
+    h.bump()
+    const next = h.source.loadSelection(null)
+    expect(h.store.loadStatus()).toBe('loading')
+    expect(h.source.blockSendForModel()).toBe(true)
+    h.reads[1]!.resolve(h.answer('new-draft-model'))
+    await next
+    expect(h.store.current()).toBe('new-draft-model')
+  })
+
+  it.each([true, false])('still reports a failed background selection and permits retry (selection-only: %s)', async (selectionOnly) => {
+    const h = await live({ selectionOnly })
+    const initial = h.source.loadSelection()
+    h.reads[0]!.resolve(h.answer())
+    await initial
+    const refresh = h.source.loadSelection()
+    expect(h.store.loadStatus()).toBe('ready')
+    h.reads[1]!.reject(new Error('selection unavailable'))
+    await refresh
+    expect(h.store.loadStatus()).toBe('error')
+    expect(h.source.blockSendForModel()).toBe(true)
+    expect(h.source.openModelsForMissingProvider()).toBe(false)
+    expect(h.source.retryFailedLoad()).toBe(true)
+    expect(h.store.loadStatus()).toBe('loading')
+    h.reads[2]!.resolve(h.answer())
+    if (selectionOnly) h.reads[3]!.resolve(h.answer())
+    await h.tick()
+    expect(h.store.loadStatus()).toBe('ready')
+  })
+
+  it('settles both loading states when no gateway is installed', async () => {
+    const h = await live()
+    const { setGateway } = await import('../../rpc/gateway')
+    setGateway(null)
+    await expect(h.source.loadProviders()).resolves.toBeUndefined()
+    expect(h.store.loadStatus()).toBe('error')
+    expect(h.source.modelSource.loading?.()).toBe(false)
   })
 
   it.each([true, false])('drops a selection from a conversation that has been left (selection-only: %s)', async (selectionOnly) => {
@@ -176,14 +264,14 @@ describe('model initialization', () => {
     const load = h.source.loadProviders(session)
     expect(h.reads.map((read) => read.params)).toEqual([session ? { session_id: session } : {}])
     expect(h.store.loadStatus()).toBe('loading')
-    expect(h.source.openModelsForMissingProvider()).toBe(true)
+    expect(h.source.blockSendForModel()).toBe(true)
     h.reads[0]!.resolve(h.answer('legacy-model', 'legacy-provider'))
     await load
     expect(h.store.current()).toBe('legacy-model')
     expect(h.store.currentProvider()).toBe('legacy-provider')
     expect(h.store.loadStatus()).toBe('ready')
     expect(h.source.modelSource.loading?.()).toBe(false)
-    expect(h.source.openModelsForMissingProvider()).toBe(false)
+    expect(h.source.blockSendForModel()).toBe(false)
   })
 
   it('reads a selection directly from a legacy gateway', async () => {
@@ -193,7 +281,7 @@ describe('model initialization', () => {
     h.reads[0]!.resolve(h.answer())
     await load
     expect(h.store.current()).toBe('deepseek/deepseek-chat')
-    expect(h.source.openModelsForMissingProvider()).toBe(false)
+    expect(h.source.blockSendForModel()).toBe(false)
   })
 
   it('recovers a failed legacy read through retry without sending unsupported fields', async () => {
@@ -202,7 +290,7 @@ describe('model initialization', () => {
     h.reads[0]!.reject(new Error('socket disconnected'))
     await load
     expect(h.store.loadStatus()).toBe('error')
-    expect(h.source.openModelsForMissingProvider()).toBe(true)
+    expect(h.source.blockSendForModel()).toBe(true)
     expect(h.source.retryFailedLoad()).toBe(true)
     expect(h.store.loadStatus()).toBe('loading')
     expect(h.reads.map((read) => read.params)).toEqual([{}, {}])
@@ -210,7 +298,7 @@ describe('model initialization', () => {
     await h.tick()
     expect(h.store.loadStatus()).toBe('ready')
     expect(h.source.retryFailedLoad()).toBe(false)
-    expect(h.source.openModelsForMissingProvider()).toBe(false)
+    expect(h.source.blockSendForModel()).toBe(false)
   })
 
   it('uses the newly announced mode after each handshake', async () => {
