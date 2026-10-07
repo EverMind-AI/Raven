@@ -6,10 +6,28 @@ declaration.
 
 from __future__ import annotations
 
+import locale
+import os
+
+# The suite must run in UTF-8 mode. Without an explicit encoding=, text I/O
+# follows the locale code page, so a Windows checkout under GBK decodes and
+# encodes cp936 wherever a test forgot encoding= -- the mechanism behind
+# test_no_workflow_step_enters_the_removed_page_directory. This repo documents
+# `uv run pytest` in AGENTS.md, and that caller does not read the Makefile, so
+# Makefile exports alone cannot close the gap. Any conftest-loaded run on a
+# non-UTF-8 interpreter stops here, with the fix on the message.
+if locale.getpreferredencoding(False).lower() not in ("utf-8", "utf8"):
+    raise RuntimeError(
+        "raven's tests must run in UTF-8 mode (set 'PYTHONUTF8=1' or add "
+        "'-X utf8' to the python call) so text I/O without an explicit encoding= decodes "
+        "consistently on every platform. The current interpreter's preferred "
+        "encoding is "
+        f"{locale.getpreferredencoding(False)!r}."
+    )
+
 import contextlib
 import fnmatch
 import functools
-import os
 import shutil
 import tempfile
 import threading
