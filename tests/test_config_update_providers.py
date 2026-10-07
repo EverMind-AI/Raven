@@ -1886,20 +1886,32 @@ def test_an_address_of_ones_own_keeps_the_shape_that_address_speaks(cfg_path: Pa
             "x-goog-api-key",
             "https://generativelanguage.googleapis.com/v1beta/models",
         ),
+        (
+            "gemini",
+            "AIza-TEST",
+            "https://generativelanguage.googleapis.com",
+            "x-goog-api-key",
+            "https://generativelanguage.googleapis.com/v1beta/models",
+        ),
         ("anthropic", "sk-ant-x", "https://api.anthropic.com/v1", "x-api-key", "https://api.anthropic.com/v1/models"),
     ],
 )
-def test_an_address_on_the_vendors_own_host_is_probed_the_way_that_vendor_answers(
+def test_the_vendors_own_address_is_probed_the_way_that_vendor_answers(
     cfg_path: Path, slug: str, key: str, api_base: str, header: str, listed_at: str
 ) -> None:
-    """The vendor's own host is nobody's proxy, so the rule above does not reach it.
+    """The vendor's own address -- its bare host, or the root its catalogue hangs
+    from -- is nobody's proxy, so the rule above does not reach it.
 
     A section pointed at Google's own host was sent a bearer token, which Google's
     native routes read as an OAuth token and refuse with 401 whatever the key --
     and the settings dialog told the user the provider rejected a key that works.
-    """
+    The address is written to the file directly: the settings write stores
+    Google's bare host as no address at all, and an endpoint or a hand edit is
+    how a section still holds it."""
     _seed_key(cfg_path, slug, key)
-    set_provider_fields(slug, {"api_base": api_base}, config_path=cfg_path)
+    data = _read(cfg_path)
+    data["providers"][slug]["apiBase"] = api_base
+    cfg_path.write_text(json.dumps(data), encoding="utf-8")
     seen: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1915,18 +1927,50 @@ def test_an_address_on_the_vendors_own_host_is_probed_the_way_that_vendor_answer
     assert seen["auth"] is None
 
 
+@pytest.mark.parametrize(
+    ("slug", "api_base", "asked_at"),
+    [
+        ("openai", "https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1/chat/completions/models"),
+        ("openai", "https://api.openai.com:8443/v1", "https://api.openai.com:8443/v1/models"),
+        (
+            "anthropic",
+            "https://api.anthropic.com/mycorp-gateway/v1",
+            "https://api.anthropic.com/mycorp-gateway/v1/models",
+        ),
+    ],
+)
+def test_an_address_on_the_vendors_host_that_is_not_its_own_is_asked_where_it_points(
+    cfg_path: Path, slug: str, api_base: str, asked_at: str
+) -> None:
+    """Only the vendor's own address stands for its catalogue. Another port, or a
+    path below the root -- an endpoint pasted whole -- is not where the vendor
+    answers, and taking it for the vendor answered from the vendor's catalogue,
+    so a typo there read as a verified key. Asked where it points, it reads as
+    the 404 it is, the way it does on any other host."""
+    _seed_key(cfg_path, slug, "k-test")
+    set_provider_fields(slug, {"api_base": api_base}, config_path=cfg_path)
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization")))
+        return httpx.Response(404, json={"error": {"message": "not found"}})
+
+    result = probe_provider(slug, config_path=cfg_path, transport=_mock_transport(handler))
+    assert seen == [(asked_at, "Bearer k-test")]
+    assert result["status"] == "http_404"
+
+
 @pytest.mark.parametrize("slug", ["gemini", "openai", "groq"])
 def test_an_address_that_does_not_parse_is_reported_not_raised(
     cfg_path: Path, monkeypatch: pytest.MonkeyPatch, slug: str
 ) -> None:
     """``urlsplit`` raises on an address that does not parse -- ``http://[``
-    opens an IPv6 literal it never closes -- and the probe asked it twice: once
-    for whether the section sits on the vendor's own host, and once more, after
-    the request failed, for which proxy to name. Either let the error out of a
-    probe whose contract is a dict, never an exception, so the settings dialog
-    saw an internal error. Such an address names no host: it is asked on the
-    generic path, and its failure reads as the network error it is. The real
-    error branch runs here, which an injected transport would skip."""
+    opens an IPv6 literal it never closes -- and a probe whose contract is a
+    dict, never an exception, let that error out, so the settings dialog saw an
+    internal error. Such an address is no vendor's own: it is asked on the
+    generic path, and its failure reads as the network error it is, which needs
+    the proxy lookup after the failed request to survive it too. The real error
+    branch runs here, which an injected transport would skip."""
     monkeypatch.undo()
     asked: list[str] = []
 

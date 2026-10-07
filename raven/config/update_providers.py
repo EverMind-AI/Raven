@@ -1331,7 +1331,8 @@ def test_provider(
        (falling back to ``ProviderSpec.default_api_base`` when unset).
     2. ``GET {api_base}/v1/models`` with ``Authorization: Bearer {key}`` --
        except a vendor in ``_CATALOGUE_SHAPES``, asked at its own catalogue
-       with its own header unless the section points at another host.
+       with its own header unless the section names an address other than
+       the vendor's own.
     3. Map status code → keyword (see ``_HTTP_STATUS_MAP``), with a 400 that
        names the key invalid read as ``invalid_key``. Unknown codes
        render as ``http_{code}``. Network errors → ``network_error``.
@@ -1463,19 +1464,21 @@ def test_provider(
     extras = _CATALOGUE_EXTRAS.get(spec.name, ()) if (spec and full_catalogue) else ()
     shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
     native = shape(api_key) if shape and api_key else None
-    if native and (not api_base or _hostname(api_base) == _hostname(native[0])):
+    own = _own_addresses(spec.name, native[0]) if spec and native else ()
+    if native and (not api_base or api_base.strip().rstrip("/") in own):
         # The vendor's own catalogue, for the vendors in `_CATALOGUE_SHAPES`,
         # whose catalogue neither a stored nor a derived address reaches. Asked
         # before the derivation below, which answers "" for most of them and
         # leaves the guard after it reporting `no_probe_endpoint` for a working key.
         #
-        # Only when nothing else supplied an address, or the one supplied is on
-        # the vendor's own host: a section pointed anywhere else is pointed at
-        # somebody's proxy, and a proxy speaks the OpenAI shape the generic path
-        # sends -- answering that with Google's header would break a probe that
-        # works today. The vendor's own host speaks only its own shape: Google's
-        # native routes read a bearer token as an OAuth token and refuse it with
-        # 401 whatever the key, which the settings dialog reported as a refused key.
+        # Only when nothing else supplied an address, or the one supplied is the
+        # vendor's own (`_own_addresses`): any other is somebody's proxy or a typo,
+        # and the generic path asks it where it points. A proxy speaks the OpenAI
+        # shape that path sends -- answering it with Google's header would break a
+        # probe that works today. The vendor's own address speaks only its own
+        # shape: Google's native routes read a bearer token as an OAuth token and
+        # refuse it with 401 whatever the key, which the settings dialog reported
+        # as a refused key.
         url, shaped = native
         # The vendor's own auth header wins over a configured one, for the same
         # reason `Authorization` does below: this probe reports on the credential
@@ -1585,7 +1588,7 @@ def _litellm_api_base(spec: Any) -> str:
 #: The vendors whose catalogue the probe cannot find from an address alone.
 #: Keyed by provider name; each entry answers "where, and with which headers"
 #: for a key already in hand, and is consulted when the section names no
-#: ``api_base`` of its own or one on that vendor's own host -- see the call site.
+#: ``api_base`` of its own or the vendor's own address -- see the call site.
 #:
 #: None ships a ``default_api_base``. LiteLLM keeps Anthropic's, Google's and
 #: OpenAI's address inside its SDK, so before this table the probe had nowhere to
@@ -1701,17 +1704,29 @@ def _env_proxy_for(url: str) -> str | None:
     return proxies.get(parts.scheme) or proxies.get("all") or None
 
 
-def _hostname(address: str) -> str | None:
-    """The host ``address`` names, or None for an address that does not parse.
+#: Addresses a section can hold for a vendor in `_CATALOGUE_SHAPES` besides the
+#: two `_own_addresses` reads off its catalogue. DeepSeek's settings field showed
+#: `/beta` before it showed the root, and stored it, so sections saved then
+#: still hold it.
+_MORE_OWN_ADDRESSES: dict[str, tuple[str, ...]] = {
+    "deepseek": ("https://api.deepseek.com/beta",),
+}
 
-    ``urlparse`` raises on some malformed authorities -- ``http://[`` opens an
-    IPv6 literal it never closes -- and a probe answers with a dict, never an
-    exception, so such an address is treated as naming no host at all.
+
+def _own_addresses(vendor: str, catalogue: str) -> tuple[str, ...]:
+    """The addresses a section can hold and still name ``vendor`` itself: its
+    bare host and the root its ``catalogue`` hangs from, plus any in
+    `_MORE_OWN_ADDRESSES`.
+
+    A section's address is matched against these as written, not by host --
+    though only the vendor serves its own host, a path or a port the vendor
+    does not answer at is still a typo, and taken for the vendor it was
+    answered from the vendor's catalogue and read as a verified key. Asked
+    where it points, it reads as the 404 or the refused connection it is.
     """
-    try:
-        return urlparse(address).hostname
-    except ValueError:
-        return None
+    root = catalogue.split("?", 1)[0].removesuffix("/models")
+    parts = urlparse(root)
+    return (f"{parts.scheme}://{parts.netloc}", root, *_MORE_OWN_ADDRESSES.get(vendor, ()))
 
 
 def _without_userinfo(url: str) -> str:
