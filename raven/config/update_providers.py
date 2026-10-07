@@ -1585,17 +1585,6 @@ def _litellm_api_base(spec: Any) -> str:
     return base or ""
 
 
-#: The vendors whose catalogue the probe cannot find from an address alone.
-#: Keyed by provider name; each entry answers "where, and with which headers"
-#: for a key already in hand, and is consulted when the section names no
-#: ``api_base`` of its own or the vendor's own address -- see the call site.
-#:
-#: None ships a ``default_api_base``. LiteLLM keeps Anthropic's, Google's and
-#: OpenAI's address inside its SDK, so before this table the probe had nowhere to
-#: ask and answered ``no_probe_endpoint`` for a perfectly good key; it sends
-#: DeepSeek's completions to ``/beta``, which lists no models. Everything else
-#: either speaks the OpenAI shape at an address the probe can derive or arrives
-#: through its own probe (``_probe_codex_catalog``, ``_probe_copilot_seat``).
 #: Sibling catalogue endpoints a provider serves beside its main one: the path
 #: replacing the last segment of the probed URL, and what being listed there
 #: proves about a model.
@@ -1613,6 +1602,17 @@ _CATALOGUE_EXTRAS: dict[str, tuple[tuple[str, str], ...]] = {
     "openrouter": (("embeddings/models", "embedding"), ("images/models", "image-generation")),
 }
 
+#: The vendors whose catalogue the probe cannot find from an address alone.
+#: Keyed by provider name; each entry answers "where, and with which headers"
+#: for a key already in hand, and is consulted when the section names no
+#: ``api_base`` of its own or the vendor's own address -- see the call site.
+#:
+#: None ships a ``default_api_base``. LiteLLM keeps Anthropic's, Google's and
+#: OpenAI's address inside its SDK, so before this table the probe had nowhere to
+#: ask and answered ``no_probe_endpoint`` for a perfectly good key; it sends
+#: DeepSeek's completions to ``/beta``, which lists no models. Everything else
+#: either speaks the OpenAI shape at an address the probe can derive or arrives
+#: through its own probe (``_probe_codex_catalog``, ``_probe_copilot_seat``).
 _CATALOGUE_SHAPES: dict[str, Any] = {
     "anthropic": lambda key: (
         "https://api.anthropic.com/v1/models?limit=1000",
