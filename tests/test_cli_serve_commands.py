@@ -2077,7 +2077,29 @@ def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
 class TestStoppingARealTree:
-    """The fakes above say what is signalled; these say it actually ends."""
+    """The fakes above say what is signalled; these say it actually ends.
+
+    The supervisor and gateway these tests start are real processes - they run
+    as ``python -c`` sleepers rather than ``python -m raven ...``, and the
+    gateway's pid only reaches us inside the state files its supervisor wrote.
+    Identifying them by argv is what the production check does, so it is what
+    the fake processes are made to satisfy: each sleeper's argv ends with the
+    home directory it was told to record, and ``looks_like_raven`` is patched
+    to accept a pid whose command line names that home.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _sleepers_carry_their_home(self, home: Path, monkeypatch) -> None:
+        from raven.cli import serve_commands
+        from raven.utils import processes
+
+        real = processes.command_line
+
+        def _looks(pid: int) -> bool:
+            line = real(pid)
+            return line is not None and str(home) in line
+
+        monkeypatch.setattr(serve_commands, "looks_like_raven", _looks)
 
     def test_stop_ends_a_supervisor_and_gateway_that_both_ignore_sigterm(self, home: Path, monkeypatch) -> None:
         """Detached the way `_spawn_supervisor` detaches it -- its own session,
