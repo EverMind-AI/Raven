@@ -39,11 +39,14 @@ def _command_line_posix(pid: int) -> Optional[str]:
 
     ``/proc/<pid>/cmdline`` answers the same question on Linux but does not
     exist on macOS, which is a documented platform; ``ps -p -o command=`` is
-    the one spelling both accept.
+    the one spelling both accept. ``-ww`` is not decoration: without it both
+    GNU and BSD ``ps`` size ``command`` output from the inherited display
+    width, and a long install path is exactly where the ``-m raven`` token
+    this reader exists to find gets cut off.
     """
     try:
         out = subprocess.run(  # noqa: S603 - pid is an int
-            ["ps", "-p", str(pid), "-o", "command="],
+            ["ps", "-ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             timeout=10,
