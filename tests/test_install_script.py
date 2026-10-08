@@ -711,6 +711,12 @@ def _installer_job() -> str:
     return job[: job.index("\n  windows-upgrade:")]
 
 
+def _step_value(step: str, pattern: str) -> str:
+    found = re.search(pattern, step)
+    assert found, f"{pattern!r} matches nothing in the step {step.splitlines()[0]!r}"
+    return found.group(1)
+
+
 def test_the_ci_gate_installs_the_latest_release_the_way_users_do() -> None:
     """The text pins above cannot catch the class of defect that shipped: a
     script on main calling something the latest release lacks. Only a real
@@ -730,11 +736,18 @@ def test_the_ci_gate_runs_the_windows_install_under_both_powershells() -> None:
     one CI reaches for, and their web cmdlets fail differently. A release
     lookup that only worked the pwsh way passed this gate while every install
     from the stock shell failed, so the gate runs both -- each into its own
-    tool directory, so that each version check answers for its own install."""
-    job = _installer_job()
-    steps = [step for step in job.split("\n      - ") if "Get-Content install.ps1 -Raw | Invoke-Expression" in step]
-    assert sorted(re.search(r"\n        shell: (\S+)", step).group(1) for step in steps) == ["powershell", "pwsh"]
-    assert len({re.search(r"\n          UV_TOOL_DIR: (.+)", step).group(1) for step in steps}) == 2
+    tool, bin and home directories. The version check runs the raven.exe in
+    UV_TOOL_BIN_DIR, so a bin directory both installs shared would let one
+    shell's install answer for the other's."""
+    steps = [
+        step
+        for step in _installer_job().split("\n      - ")
+        if "Get-Content install.ps1 -Raw | Invoke-Expression" in step
+    ]
+    assert sorted(_step_value(step, r"\n        shell: (\S+)") for step in steps) == ["powershell", "pwsh"]
+    for name in ("UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "RAVEN_HOME"):
+        values = {_step_value(step, rf"\n          {name}: (.+)") for step in steps}
+        assert len(values) == 2, f"both PowerShell installs share one {name}"
 
 
 def test_the_windows_installer_is_where_this_tripwire_thinks_it_is() -> None:
