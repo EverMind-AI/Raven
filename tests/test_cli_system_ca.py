@@ -27,8 +27,6 @@ import pytest
 from raven.config.update_providers import set_provider_fields
 from tests._tls import OpenAIModels, https_endpoint, private_ca
 
-pytestmark = pytest.mark.slow
-
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="the stand-in store is the one Linux verifies against")
 
 _CONSOLE_SCRIPT = (
@@ -74,6 +72,7 @@ def _provider_test(launch: list[str], env: dict[str, str], cwd: Path) -> subproc
     )
 
 
+@pytest.mark.slow
 @linux_only
 @pytest.mark.parametrize("launch", LAUNCHES.values(), ids=LAUNCHES.keys())
 def test_a_root_only_the_system_store_holds_is_trusted(corporate, launch, tmp_path) -> None:
@@ -83,6 +82,7 @@ def test_a_root_only_the_system_store_holds_is_trusted(corporate, launch, tmp_pa
     assert "custom OK" in done.stdout
 
 
+@pytest.mark.slow
 @linux_only
 @pytest.mark.parametrize("launch", LAUNCHES.values(), ids=LAUNCHES.keys())
 def test_opting_out_leaves_the_probe_on_its_bundled_roots(corporate, launch, tmp_path) -> None:
@@ -92,6 +92,7 @@ def test_opting_out_leaves_the_probe_on_its_bundled_roots(corporate, launch, tmp
     assert "certificate_untrusted" in done.stdout
 
 
+@pytest.mark.slow
 def test_trust_is_settled_before_the_cli_builds_a_context(tmp_path) -> None:
     """aiohttp makes its default context when it is imported, and importing the
     CLI reaches it, so a switch made after that import would leave every aiohttp
@@ -118,3 +119,21 @@ def test_trust_is_settled_before_the_cli_builds_a_context(tmp_path) -> None:
     )
 
     assert "built after the switch: True" in done.stdout, done.stdout[-2000:] + done.stderr[-2000:]
+
+
+def test_the_entry_settles_trust_then_hands_the_process_to_the_cli(monkeypatch) -> None:
+    """The in-process half of the entry's contract: the switch, then the CLI.
+
+    The subprocess tests above show what that order buys; this one runs the
+    entry in the test process, where its own lines can be measured.
+    """
+    from raven.cli import commands, entry
+    from raven.security import tls
+
+    calls: list[str] = []
+    monkeypatch.setattr(tls, "use_system_ca", lambda: calls.append("trust"))
+    monkeypatch.setattr(commands, "run", lambda: calls.append("cli"))
+
+    entry.run()
+
+    assert calls == ["trust", "cli"]
