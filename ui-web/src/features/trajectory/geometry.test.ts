@@ -36,12 +36,17 @@ function randomSegments(next: () => number, n: number, zeroOnly = false): Segmen
 
 const near = (a: number, b: number, eps = 1e-6): boolean => Math.abs(a - b) <= eps
 
-/* Every layout's blocks: slots at least the minimum, abutting with one gap. */
+/* Every layout's blocks: slots at least the minimum, abutting with one gap.
+   The properties below check thousands of layouts, so each one is checked in
+   plain code and asserted once; a failure still names the block. */
 function wellFormed(layout: ReturnType<typeof fitLayout>): void {
-  for (const b of layout.blocks) expect(b.w).toBeGreaterThanOrEqual(MIN_W - 1e-9)
-  for (let i = 1; i < layout.blocks.length; i += 1) {
-    expect(near(layout.blocks[i]!.x, layout.blocks[i - 1]!.x + layout.blocks[i - 1]!.w + GAP)).toBe(true)
-  }
+  const faults: string[] = []
+  layout.blocks.forEach((b, i) => {
+    if (b.w < MIN_W - 1e-9) faults.push(`block ${i} is ${b.w} wide`)
+    const before = layout.blocks[i - 1]
+    if (before && !near(b.x, before.x + before.w + GAP)) faults.push(`block ${i} starts at ${b.x}, not one gap after block ${i - 1}`)
+  })
+  expect(faults).toEqual([])
 }
 
 describe('the fit', () => {
@@ -179,21 +184,31 @@ describe('the timing fixtures', () => {
 
 describe('places', () => {
   it('hit-tests without a seam, each gap going to the block before it', () => {
+    /* Every half pixel of every layout, plus each block's own edges: a few
+       hundred thousand points, checked in plain code and asserted once. */
     const next = rng(11)
+    const faults: string[] = []
     for (let round = 0; round < 100; round += 1) {
       const segments = randomSegments(next, 1 + Math.floor(next() * 40))
       const width = 300 + Math.floor(next() * 900)
       const layout = layoutFor(segments, initialViewport(width))
-      for (let x = 0; x <= layout.contentWidth; x += 0.5) {
-        const hit = hitTest(layout, x)!
-        expect(hit).not.toBeNull()
-        expect(x).toBeGreaterThanOrEqual(hit.x - 1e-9)
-        const nextBlock = layout.blocks[layout.blocks.indexOf(hit) + 1]
-        if (nextBlock) expect(x).toBeLessThan(nextBlock.x)
+      const blocks = layout.blocks
+      const check = (x: number): void => {
+        const hit = hitTest(layout, x)
+        const after = hit ? blocks[blocks.indexOf(hit) + 1] : undefined
+        if (!hit || x < hit.x - 1e-9 || (after && x >= after.x)) {
+          faults.push(`round ${round}, x ${x}: hit the block at ${hit ? hit.x : 'none'}`)
+        }
       }
-      expect(hitTest(layout, -1)).toBeNull()
-      expect(hitTest(layout, layout.contentWidth + 1)).toBeNull()
+      for (let x = 0; x <= layout.contentWidth; x += 0.5) check(x)
+      for (const b of blocks) {
+        check(b.x)
+        if (b.x - 1e-6 >= 0) check(b.x - 1e-6)
+      }
+      if (hitTest(layout, -1) !== null) faults.push(`round ${round}: a hit left of the bar`)
+      if (hitTest(layout, layout.contentWidth + 1) !== null) faults.push(`round ${round}: a hit right of the bar`)
     }
+    expect(faults.slice(0, 5)).toEqual([])
   })
 
   it('locates a place and finds it again in the same layout, dense or not', () => {
