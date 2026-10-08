@@ -426,6 +426,11 @@ max-complexity = 40
 # may live elsewhere on a given host.
 "raven/agent/subagent/backends/env.py" = ["S607"]
 
+# ``ps`` is the POSIX standard for asking the process table, not a partial
+# path that would fail on some machines; the Windows sibling resolves
+# PowerShell through PATHEXT explicitly.
+"raven/utils/processes.py" = ["S607"]
+
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]
 "raven/cli/cron_commands.py" = ["E402"]

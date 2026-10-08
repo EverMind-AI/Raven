@@ -6,13 +6,12 @@ is the right answer to that question. It is the wrong answer to the question
 state files actually pose: pids are recycled by the kernel, so "alive" says
 nothing about whether the process is the raven one the record names.
 
-The one discriminator already on every such process is its argv: every raven
-entrance runs through the interpreter as ``python -m raven ...``, read back
-through the OS's own process table with no extra dependency. A process whose
-argv cannot be read -- another account's, or one the OS will not describe --
-answers "not positively ours": it is never signalled for it, and the caller
-that must never be wrong keeps its own stronger evidence (the gateway's
-flock).
+The discriminator is the recorded process's own command line, read back from
+the OS's process table. POSIX asks ``ps`` (which every documented platform
+ships -- macOS has no ``/proc`` to read instead); Windows asks CIM for its
+``Win32_Process`` row. Neither side invents a fallback when the read fails:
+a stranger the lookup cannot name is "not positively ours", and the stop
+keeps its hands off.
 """
 
 from __future__ import annotations
@@ -30,22 +29,33 @@ def command_line(pid: int) -> Optional[str]:
     """
     if pid <= 0:
         return None
-    if sys.platform == "win32":
+    if sys.platform == "win32":  # pragma: no cover - linux is the covered CI host
         return _command_line_windows(pid)
     return _command_line_posix(pid)
 
 
 def _command_line_posix(pid: int) -> Optional[str]:
-    from pathlib import Path
+    """The process's argv through ``ps``, which POSIX guarantees everywhere.
 
+    ``/proc/<pid>/cmdline`` answers the same question on Linux but does not
+    exist on macOS, which is a documented platform; ``ps -p -o command=`` is
+    the one spelling both accept.
+    """
     try:
-        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
-    except OSError:
+        out = subprocess.run(  # noqa: S603 - pid is an int
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
-    return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip() or None
+    if out.returncode != 0:
+        return None
+    return out.stdout.strip() or None
 
 
-def _command_line_windows(pid: int) -> Optional[str]:
+def _command_line_windows(pid: int) -> Optional[str]:  # pragma: no cover - no Windows CI
     # CIM rather than the legacy WMI class: Win32_Process's getter opens each
     # process it lists, which is seconds of failures on a full table, while
     # the CIM instance read answers from the snapshot. The class itself never
@@ -80,23 +90,54 @@ def _command_line_windows(pid: int) -> Optional[str]:
     return out.stdout.strip() or None
 
 
-def looks_like_raven(pid: int) -> bool:
-    """Whether ``pid`` runs a ``python -m raven`` module invocation.
+_RESIDENT_SUBCOMMANDS = frozenset({"serve", "web", "gateway"})
+"""The subcommands a state file may have come from, and only those.
 
-    Every entrance raven leaves running -- the gateway, standalone serve, the
-    web supervisor -- is launched that way, so the record's claim "this pid is
-    raven's" is decidable without trusting the pid alone. An unreadable or
-    empty command line answers False: nothing is signalled on a guess. The
-    match is on the flag, quoted or not: a path separator that happens to
-    spell ``/m`` is not a module flag, which is what looking at raw tokens
-    would answer.
+``raven web`` leaves a supervisor; ``raven serve`` and ``raven gateway`` are
+the engines it watches. The other verbs are run-and-done -- they may get a
+recycled pid attached to their name, but they never write serve.json or
+web.json, so the stop paths under this module cannot confuse them with the
+records they do not produce. Narrow on purpose: every alias admitted here is
+one more spelling a stranger could share."""
+
+
+def looks_like_raven(pid: int) -> bool:
+    """Whether ``pid`` runs a raven entrance that a state file could name.
+
+    Two spellings the installs this code runs under:
+
+    - ``python -m raven ...`` -- what the supervisor spawns for its gateway
+      (``_spawn_supervisor``, ``_gateway_argv``), and how ``uv run raven``
+      leaves the process looking too;
+    - ``raven <serve|web|gateway> ...`` -- the console-script entry point,
+      with or without its ``.exe`` suffix on Windows.
+
+    An unreadable or empty command line answers False: nothing is signalled
+    on a guess. The match is on the flag form, quoted or not -- a path that
+    happens to spell ``/m raven/...`` is not a module invocation.
     """
     import re
 
     line = command_line(pid)
     if line is None:
         return False
-    return bool(re.search(r"(?<![\w/\\.-])-m\s+raven(?![\w.-])", line, re.IGNORECASE))
+    if re.search(r"(?<![\w/\\.-])-m\s+raven(?![\w.-])", line, re.IGNORECASE):
+        return True
+    return _is_console_serve(line)
+
+
+def _is_console_serve(line: str) -> bool:
+    """Whether the argv spells ``raven <a resident subcommand>``.
+
+    The console script is a tiny shim that forwards to ``raven.cli.commands:run``;
+    its argv[0] is the script name and argv[1] is the subcommand. Anything else
+    (``raven --version``, ``raven tui``) is fine to reject: it is not a process
+    this module's state files can point at.
+    """
+    import re
+
+    match = re.match(r'.*?(?:^|[/\\])raven(?:\.exe)?"?\s+(\w+)', line, re.IGNORECASE)
+    return match is not None and match.group(1).lower() in _RESIDENT_SUBCOMMANDS
 
 
 __all__ = ["command_line", "looks_like_raven"]
