@@ -65,6 +65,19 @@ own channel, and two different things under one label is worse than no label.
 """
 
 
+def looks_like_raven(pid: int) -> bool:
+    """Whether ``pid`` runs a ``python -m raven`` invocation, for callers that
+    cannot use the lock or the port.
+
+    Kept as a name here for the same reason ``_pid_alive`` is: the identity
+    probe is one name the tests pin, and the platform question itself belongs
+    to ``utils.processes``.
+    """
+    from raven.utils.processes import looks_like_raven as _check
+
+    return _check(pid)
+
+
 def port_strict() -> bool:
     """Whether this launch must reclaim its exact port rather than probe forward.
 
@@ -739,9 +752,10 @@ def _write_web_state(port: int) -> None:
 def _read_web_state() -> Optional[int]:
     """The pid of the running supervisor, or None if there is not one.
 
-    A recorded pid that is not alive is the same answer as no file at all: the
+    A recorded pid that is not ours is the same answer as no file at all: the
     file is removed on a clean exit only, so a killed supervisor leaves one
-    behind and a later ``web`` must read that as "nothing is supervising".
+    behind -- and a pid the kernel has since recycled to somebody else is not
+    a supervisor, however alive.
     """
     import json
 
@@ -749,7 +763,7 @@ def _read_web_state() -> Optional[int]:
         pid = int(json.loads(_web_state_path().read_text(encoding="utf-8"))["pid"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return pid if pid > 0 and _pid_alive(pid) else None
+    return pid if pid > 0 and _pid_alive(pid) and looks_like_raven(pid) else None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -761,6 +775,52 @@ def _pid_alive(pid: int) -> bool:
     from raven.utils.pid import pid_alive
 
     return pid_alive(pid)
+
+
+def _live_gateway_pid() -> Optional[int]:
+    """The pid of the gateway holding this instance's lock, or None.
+
+    The lock is the authority: an OS-held flock dies with its holder, where a
+    pid is handed to somebody else. Failure reads as no gateway rather than as
+    "maybe one": acting on maybe is what signals a process that only inherited
+    a number.
+    """
+    import time
+
+    try:
+        from raven.gateway.lock import read_status
+
+        status = read_status(time.time())
+    except Exception:
+        return None
+    return status.pid if status is not None and status.pid > 0 else None
+
+
+def _drop_stale_serve_state(recorded: int) -> None:
+    """Say why a recorded pid proved not to be raven's, and clear its file.
+
+    The leftover is how the refusal loop starts: named at removal here, so the
+    message a later command prints has the removal as its explanation rather
+    than a file having quietly vanished.
+    """
+    typer.echo(f"removing the stale record in {_state_path()}: pid {recorded} is no longer a raven process")
+    _state_path().unlink(missing_ok=True)
+
+
+def _recorded_is_ours(recorded: int) -> bool:
+    """Whether the pid a state file names is still the raven process it was.
+
+    The instance lock answers for the page-hosting gateway it guards; the
+    command line names everything else that keeps the ``-m raven`` module
+    shape. Probing the recorded port's ``/health`` instead would catch any
+    raven already listening there, which on a developer's machine returns a
+    live gateway's own pid as "the stale file's owner" -- a second alias for
+    the same wrong answer, not an identity.
+    """
+    holder = _live_gateway_pid()
+    if holder is not None and holder == recorded:
+        return True
+    return looks_like_raven(recorded)
 
 
 def _gateway_holds_the_lock() -> bool:
@@ -1224,10 +1284,13 @@ def _stop_resident() -> bool:
     supervisor = _read_web_state()
     if supervisor is not None:
         try:
-            stopped = True
             _stop_one("supervisor", supervisor, unresponsive)
+            stopped = True
         except ProcessLookupError:
-            pass
+            # Gone is stopped: the process exited between the read and the
+            # signal. What this stop cannot honestly claim is an OSError --
+            # a live pid it was not allowed to touch is still running.
+            stopped = True
         except OSError as exc:
             typer.echo(f"warning: could not stop the supervisor (pid {supervisor}): {exc}")
         if not _pid_alive(supervisor):
@@ -1236,12 +1299,19 @@ def _stop_resident() -> bool:
     gateway = _read_serve_pid()
     if gateway is not None and gateway != supervisor:
         try:
-            stopped = True
             _stop_one("gateway", gateway, unresponsive)
+            stopped = True
         except ProcessLookupError:
-            pass
+            stopped = True
         except OSError as exc:
             typer.echo(f"warning: could not stop the gateway (pid {gateway}): {exc}")
+    if not stopped and not unresponsive:
+        # The stop signalled nothing, so the only honest "done" left to offer
+        # is clearing a leftover neither the lock nor the liveness probe will
+        # vouch for; a record that might still be somebody's gateway stays.
+        recorded = _recorded_serve_pid()
+        if recorded is not None and _live_gateway_pid() is None and not _pid_alive(recorded):
+            _state_path().unlink(missing_ok=True)
 
     if unresponsive:
         # Reported, not swallowed: a relaunch from here lands on `serve` and the
@@ -1251,15 +1321,35 @@ def _stop_resident() -> bool:
     return stopped
 
 
-def _read_serve_pid() -> Optional[int]:
-    """The pid ``_write_serve_state`` recorded, if that process is still alive."""
+def _recorded_serve_pid() -> Optional[int]:
+    """The bare pid the state file names, with no claim made about it."""
     import json
 
     try:
         pid = int(json.loads(_state_path().read_text(encoding="utf-8"))["pid"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return pid if pid > 0 and _pid_alive(pid) else None
+    return pid if pid > 0 else None
+
+
+def _read_serve_pid() -> Optional[int]:
+    """The pid ``_write_serve_state`` recorded, while it still names raven.
+
+    Alive was never the question -- a pid the kernel has since handed to
+    somebody else answers that exactly as a live gateway does, and reading
+    either as "our gateway" is what refused every ``raven web`` and signed the
+    stop of an unrelated process. What makes the record ours is decidable:
+    the instance lock for a page-hosting gateway, the command line for
+    anything that keeps the module shape. A record that cannot prove itself
+    ours is said once and removed, so the leftover stops deciding.
+    """
+    pid = _recorded_serve_pid()
+    if pid is None or not _pid_alive(pid):
+        return None
+    if _recorded_is_ours(pid):
+        return pid
+    _drop_stale_serve_state(pid)
+    return None
 
 
 _ATTACH_PATIENCE_S = 150.0
