@@ -483,6 +483,7 @@ class EntryView:
     turn: _entries.TurnInfo | None
     parent_llm_calls: tuple[dict[str, Any], ...]
     owner: _entries.TrajectoryEntry | None
+    turn_skill_injects: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -559,6 +560,21 @@ def _llm_by_parent(spans: dict[SpanKey, dict[str, Any]]) -> dict[tuple[str, str]
     return {key: tuple(items) for key, items in grouped.items()}
 
 
+def _skill_injects_by_turn(
+    projection: _entries.Projection, spans: dict[SpanKey, dict[str, Any]]
+) -> dict[tuple[str, str], tuple[dict[str, Any], ...]]:
+    """The skill.inject spans of each turn, by (trace, turn span): where a
+    feedback step's skill ids find their names, and nowhere else."""
+    grouped: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    for entry in projection.entries:
+        if entry.span_name != "skill.inject" or entry.turn_span_id is None:
+            continue
+        span = spans.get((entry.trace_id, entry.span_id))
+        if span is not None:
+            grouped.setdefault((entry.trace_id, entry.turn_span_id), {})[entry.span_id] = span
+    return {key: tuple(items.values()) for key, items in grouped.items()}
+
+
 def _has_artifacts(span: dict[str, Any]) -> bool:
     attrs = tstore._span_attrs(span)
     return any(isinstance(key, str) and key.endswith(".artifact_path") for key in attrs)
@@ -617,6 +633,7 @@ class SessionIndex:
         self._dirty = False
         self._published_spans: dict[SpanKey, dict[str, Any]] = {}
         self._published_llm_by_parent: dict[tuple[str, str], tuple[dict[str, Any], ...]] = {}
+        self._published_injects_by_turn: dict[tuple[str, str], tuple[dict[str, Any], ...]] = {}
         self._published_turns: dict[str, _entries.TurnInfo] = {}
         self._entries_by_span: dict[SpanKey, tuple[str, ...]] = {}
         self._published_state = self._compute_state()
@@ -659,11 +676,17 @@ class SessionIndex:
         state = self._compute_state()
         spans_view = dict(self.spans) if projection is not None else None
         llm_by_parent = _llm_by_parent(spans_view) if spans_view is not None else None
+        injects_by_turn = (
+            _skill_injects_by_turn(projection, spans_view)
+            if projection is not None and spans_view is not None
+            else None
+        )
         with self._lock:
             if projection is not None:
                 self._publish(projection)
                 self._published_spans = spans_view or {}
                 self._published_llm_by_parent = llm_by_parent or {}
+                self._published_injects_by_turn = injects_by_turn or {}
                 self._published_turns = {turn.turn_span_id: turn for turn in projection.turns}
             self._published_state = state
         self._dirty = False
@@ -800,21 +823,24 @@ class SessionIndex:
                 break
 
     def _schedule_preview_repairs(self, projection: _entries.Projection) -> None:
-        """Queue the one blob read a continued model input still needs for its row.
+        """Queue the one blob read a model input still needs for its row.
 
         The preview pass read each input's prompt before anything was known
-        about the input before it; once the projection has proven a prefix,
-        the row should show the first message this input added instead. The
-        cache is reopened with that single read pending, so the next pass
-        performs it and the following projection picks the text up. A read
-        that fails is recorded as failed under the same index, which is a
-        terminal state: nothing schedules it again.
+        about the input before it; once the projection has decided what the
+        input adds, the row should show the first non-system message of that
+        (the whole list for a first or an independent call, the added messages
+        for a continued one) instead. The cache is reopened with that single
+        read pending, so the next pass performs it and the following projection
+        picks the text up; a system message there sends the read on to the next
+        message, up to the scan limit. A read that fails is recorded as failed
+        under the same index, which is a terminal state: nothing schedules it
+        again. An input read whole needs no read at all: its text is at hand.
         """
         for entry in projection.entries:
-            if entry.slot != "llm.input" or entry.meta.get("delta") != _entries.DELTA_CONTINUED:
+            if entry.slot != "llm.input":
                 continue
-            new_from, count = entry.meta.get("new_from"), entry.meta.get("message_count")
-            if not isinstance(new_from, int) or not isinstance(count, int) or new_from >= count:
+            start = _entries.preview_start(entry.meta)
+            if start is None:
                 continue
             cache = self.preview_cache.get(self._span_key_of(entry))
             if cache is None or cache.pending is not None:
@@ -823,13 +849,21 @@ class SessionIndex:
             if at is None:
                 continue
             record = cache.records[at]
-            fresh = record.get("new_preview")
-            if isinstance(fresh, dict) and fresh.get("index") == new_from:
+            if _entries.inline_messages(record) is not None:
                 continue
             refs = record.get("refs")
-            if not isinstance(refs, list) or new_from >= len(refs):
+            if not isinstance(refs, list):
                 continue
-            cache.pending = {"index": at, "sha1": refs[new_from], "kind": "new_preview", "preview_index": new_from}
+            target = _entries.preview_target(record, start, len(refs))
+            if target is None:
+                continue
+            cache.pending = {
+                "index": at,
+                "sha1": refs[target],
+                "kind": "new_preview",
+                "preview_index": target,
+                "start": start,
+            }
             cache.complete = False
 
     def _extra_turns(self) -> list[tuple[str, str, str]]:
@@ -954,7 +988,12 @@ class SessionIndex:
             llm_calls = self._published_llm_by_parent.get((entry.trace_id, parent), ()) if parent else ()
             owner = self._entries.get(entry.duration_owner) if entry.duration_owner else None
             turn = self._published_turns.get(entry.turn_span_id) if entry.turn_span_id else None
-            return EntryView(self.epoch, entry, span, siblings, turn, llm_calls, owner)
+            injects = (
+                self._published_injects_by_turn.get((entry.trace_id, entry.turn_span_id), ())
+                if entry.turn_span_id
+                else ()
+            )
+            return EntryView(self.epoch, entry, span, siblings, turn, llm_calls, owner, injects)
 
     def _compute_state(self) -> IndexState:
         """Built by the worker from its own containers; readers see the published copy."""

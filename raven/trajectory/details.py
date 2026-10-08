@@ -794,20 +794,36 @@ def _d_llm_usage(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _De
     return _kv_block(items)
 
 
-def _feedback_items(attrs: dict[str, Any], key: str) -> _Derived:
+def _skill_names(view: EntryView) -> dict[str, str]:
+    """Skill id to name, from the skill.inject steps of the entry's own turn
+    and trace: the recorder writes both lists side by side on those spans."""
+    names: dict[str, str] = {}
+    for span in view.turn_skill_injects:
+        attrs = tstore._span_attrs(span)
+        ids, labels = attrs.get("skill.inject.ids"), attrs.get("skill.inject.names")
+        if not isinstance(ids, list) or not isinstance(labels, list):
+            continue
+        for skill_id, name in zip(ids, labels):
+            if isinstance(skill_id, str) and isinstance(name, str) and name:
+                names.setdefault(skill_id, name)
+    return names
+
+
+def _feedback_items(view: EntryView, attrs: dict[str, Any], key: str) -> _Derived:
     injected = [v for v in (attrs.get("memory.injected") or []) if isinstance(v, str)]
     used = [v for v in (attrs.get("memory.used") or []) if isinstance(v, str)]
     ids = injected if key == "memory.injected" else used
-    items = [{"id": skill_id, "used": skill_id in used} for skill_id in ids]
+    names = _skill_names(view)
+    items = [{"id": skill_id, "name": names.get(skill_id), "used": skill_id in used} for skill_id in ids]
     return (AVAILABLE if items else EMPTY), {"items": items, "offset": 0}, (), None
 
 
 def _d_feedback_injected(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
-    return _feedback_items(attrs, "memory.injected")
+    return _feedback_items(view, attrs, "memory.injected")
 
 
 def _d_feedback_used(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
-    return _feedback_items(attrs, "memory.used")
+    return _feedback_items(view, attrs, "memory.used")
 
 
 def _messages_spec(entry: _entries.TrajectoryEntry) -> BlockSpec | None:

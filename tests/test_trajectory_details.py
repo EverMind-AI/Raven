@@ -1535,11 +1535,22 @@ def test_usage_block_reads_the_normalized_counters_and_nothing_else(state):
     assert raw.data["value"]["attributes"]["llm.usage.input_tokens"] == 532
 
 
-def test_feedback_blocks_list_each_skill_with_its_use(state):
+def test_feedback_blocks_list_each_skill_with_its_use_and_the_name_its_own_turn_injected_it_under(state):
+    inject = lambda trace, span_id, parent, start, ids, names: _span(  # noqa: E731
+        trace,
+        span_id,
+        "skill.inject",
+        parent=parent,
+        start=start,
+        end=start,
+        attrs={"skill.inject.via": "always", "skill.inject.ids": ids, "skill.inject.names": names},
+    )
     _append(
         state,
         [
             _turn(state, "t", "turn", start=0, end=100),
+            # The turn's own injection names `a`; `b` was injected with no name recorded.
+            inject("t", "inj", "turn", 0, ["a", "b"], ["Alpha", ""]),
             _span(
                 "t",
                 "fb",
@@ -1547,17 +1558,26 @@ def test_feedback_blocks_list_each_skill_with_its_use(state):
                 parent="turn",
                 start=1,
                 end=2,
-                attrs={"memory.session_id": SESSION, "memory.injected": ["a", "b"], "memory.used": ["b"]},
+                attrs={"memory.session_id": SESSION, "memory.injected": ["a", "b", "c"], "memory.used": ["b"]},
             ),
+            # Another turn and another trace both name `b` and `c`: neither reaches this turn's feedback.
+            _turn(state, "t", "turn2", start=200, end=300),
+            inject("t", "inj2", "turn2", 201, ["b", "c"], ["Wrong turn", "Wrong turn"]),
+            _turn(state, "u", "turn3", start=400, end=500),
+            inject("u", "inj3", "turn3", 401, ["c"], ["Wrong trace"]),
         ],
     )
     index = _ready(state)
     entry = _entry(index, "fb", "summary")
     assert _ids(_describe(index, state, entry))[:2] == ["injected", "used"]
     injected = _block(index, state, entry, "injected")
-    assert injected.data["items"] == [{"id": "a", "used": False}, {"id": "b", "used": True}]
+    assert injected.data["items"] == [
+        {"id": "a", "name": "Alpha", "used": False},
+        {"id": "b", "name": None, "used": True},
+        {"id": "c", "name": None, "used": False},
+    ]
     used = _block(index, state, entry, "used")
-    assert used.data["items"] == [{"id": "b", "used": True}]
+    assert used.data["items"] == [{"id": "b", "name": None, "used": True}]
     with pytest.raises(tdet.UnknownBlockError):
         _block(index, state, entry, "origin")
     with pytest.raises(tdet.UnknownBlockError):

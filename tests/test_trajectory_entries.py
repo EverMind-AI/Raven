@@ -705,7 +705,8 @@ def test_read_true_previews_come_from_full_content(state):
     ]
     entry = _one(tent.project_entries(spans, state=state, read=True).entries, "llm", "llm.input")
     assert entry.preview is not None
-    assert entry.preview.startswith("[user] word word")
+    # A first call's row shows its first non-system message, as the v2 inputs do: the text alone.
+    assert entry.preview.startswith("word word")
     assert len(entry.preview) == tent.PREVIEW_LIMIT and entry.preview.endswith("…")
     assert "\n" not in entry.preview
 
@@ -1205,6 +1206,47 @@ def test_model_inputs_say_what_they_add_only_when_the_history_proves_it(state):
     assert _one(entries, "b1", "llm.input").meta["purpose"] == "main"
     assert _one(entries, "b2", "llm.input").meta["purpose"] == "watch_work"
     assert "purpose" not in _one(entries, "c2", "llm.input").meta
+    # The row's preview is the first non-system message of what the call brought: the whole list
+    # for a first or an independent call, the added messages for a continued one -- never the prompt
+    # when that is not it, and never a system message.
+    previews = {
+        span_id: _one(entries, span_id, "llm.input").preview
+        for span_id in ("a1", "b1", "b2", "b3", "c1", "c2", "c3", "c4", "c5")
+    }
+    assert previews == {
+        "a1": "q1",
+        "b1": "a1",
+        "b2": "is this watched work?",
+        "b3": "q2",
+        "c1": "compacted",
+        "c2": "a2",
+        "c3": "A",
+        "c4": "A",
+        "c5": "A",
+    }
+
+
+def test_a_continued_input_whose_added_messages_start_with_a_system_message_previews_the_one_after(state):
+    s, u1, a1, u2, s2, u3 = (
+        _m("system", "rules"),
+        _m("user", "q1"),
+        _m("assistant", "a1"),
+        _m("user", "q2"),
+        _m("system", "a reminder slipped in"),
+        _m("user", "q3"),
+    )
+    spans = [
+        _span("A", "tA", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "tA")),
+        _call(state, "A", "a1", "tA", start=1, messages=[s, u1, a1, u2], purpose="main"),
+        _call(state, "A", "a2", "tA", start=2, messages=[s, u1, a1, u2, s2, u3], purpose="main"),
+        _call(state, "A", "a3", "tA", start=3, messages=[s, s2], purpose="main"),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    assert _delta(entries, "a2") == ("continued", 4, 6)
+    assert _one(entries, "a2", "llm.input").preview == "q3"
+    # Nothing but system messages: the prompt's own preview stands.
+    assert _delta(entries, "a3") == ("independent", 0, 2)
+    assert _one(entries, "a3", "llm.input").preview == "a reminder slipped in"
 
 
 def test_sub_agent_inputs_are_measured_against_their_own_trace(state):

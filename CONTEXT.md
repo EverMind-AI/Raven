@@ -2135,8 +2135,12 @@ input is `first` (all new); an input no candidate precedes is `independent`
 (all new); an input whose own or whose candidates' messages are not read yet is
 `unknown`, decided again when they are. Computed at projection time from the
 preview cache, so a predecessor read later changes the row under a new
-revision; the row's preview then wants the first added message, which the index
-fetches with one more bounded read (`_schedule_preview_repairs`).
+revision. The row's preview is the first message that is not a system one of
+what the input brought — the whole list for `first` and `independent`, the added
+messages for `continued`; the prompt stands while `unknown` or when nothing was
+added — read straight from an inline payload, or fetched for a referenced one
+with bounded reads the index queues (`_schedule_preview_repairs`), each moving
+past a system message up to a scan limit, a failed read being terminal.
 _Avoid_: calling two inputs of one trace a conversation because they share a
 turn — the watch-work judgement shares the turn and nothing else.
 

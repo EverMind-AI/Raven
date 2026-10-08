@@ -67,6 +67,7 @@ DELTA_CONTINUED = "continued"
 DELTA_INDEPENDENT = "independent"
 DELTA_UNKNOWN = "unknown"
 DELTA_CANDIDATES = 50
+PREVIEW_TARGET_SCAN = 4
 
 HIDDEN_REDUNDANT_REPLY = "redundant_reply"
 HIDDEN_EMPTY_INTERNAL = "empty_internal"
@@ -739,6 +740,71 @@ def _chain_of(entry: TrajectoryEntry) -> tuple[str, ...]:
     return (ORIGIN_MAIN,) if entry.origin == ORIGIN_MAIN else (ORIGIN_SUBAGENT, entry.trace_id)
 
 
+def preview_start(meta: Mapping[str, Any]) -> int | None:
+    """The message index a model input's row preview is searched from: the
+    whole list for a first or an independent call, the added messages for a
+    continued one; None while the delta is unknown or nothing was added, when
+    the prompt's own preview stands."""
+    delta = meta.get("delta")
+    if delta in (DELTA_FIRST, DELTA_INDEPENDENT):
+        return 0
+    if delta == DELTA_CONTINUED:
+        new_from, count = meta.get("new_from"), meta.get("message_count")
+        if isinstance(new_from, int) and isinstance(count, int) and new_from < count:
+            return new_from
+    return None
+
+
+def inline_messages(record: Mapping[str, Any] | None) -> list[Any] | None:
+    """The messages of a model input read whole (a legacy payload), or None
+    when they are references the preview pass resolves one blob at a time."""
+    if record is None or "info" not in record or record.get("degraded") is not None:
+        return None
+    payload = record.get("payload")
+    if not isinstance(payload, dict) or artifact_v2.is_v2(payload):
+        return None
+    messages = payload.get("messages")
+    return messages if isinstance(messages, list) else None
+
+
+def preview_target(record: Mapping[str, Any], start: int, count: int) -> int | None:
+    """The message the next repair read should open for the row's preview, or
+    None when the search is over: the text is in, the read failed, the list
+    ended, or the leading system messages outran the scan limit."""
+    fresh = record.get("new_preview")
+    if not isinstance(fresh, dict) or fresh.get("start") != start:
+        return start if start < count else None
+    if fresh.get("failed") or isinstance(fresh.get("text"), str):
+        return None
+    if fresh.get("system"):
+        following = int(fresh.get("index", start)) + 1
+        if following < count and following - start < PREVIEW_TARGET_SCAN:
+            return following
+    return None
+
+
+def _prompt_text(record: Mapping[str, Any] | None) -> str | None:
+    """The prompt of an input read whole: its last message, as a referenced input's preview pass reads it."""
+    messages = inline_messages(record)
+    return _message_text(messages[-1]) if messages else None
+
+
+def _target_text(record: Mapping[str, Any] | None, start: int) -> str | None:
+    """The first non-system message at or after `start`: straight from an
+    inline payload, or from the repair read the index queued for a referenced one."""
+    messages = inline_messages(record)
+    if messages is not None:
+        for message in messages[start:]:
+            if isinstance(message, dict) and message.get("role") == "system":
+                continue
+            return _message_text(message)
+        return None
+    fresh = record.get("new_preview") if record is not None else None
+    if isinstance(fresh, dict) and fresh.get("start") == start and isinstance(fresh.get("text"), str):
+        return fresh["text"]
+    return None
+
+
 def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[str, Any]]) -> None:
     """Mark every model input with what it adds to the conversation before it.
 
@@ -782,11 +848,12 @@ def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[st
                 meta.update(delta=DELTA_CONTINUED, new_from=len(previous))
         chain.append((refs, purpose))
         preview = entry.preview
-        new_from = meta.get("new_from")
-        if meta["delta"] == DELTA_CONTINUED and isinstance(new_from, int) and refs is not None and new_from < len(refs):
-            fresh = record.get("new_preview") if record is not None else None
-            if isinstance(fresh, dict) and fresh.get("index") == new_from and isinstance(fresh.get("text"), str):
-                preview = preview_text(fresh["text"])
+        start = preview_start(meta)
+        picked = _target_text(record, start) if start is not None else None
+        if picked is None:
+            picked = _prompt_text(record)
+        if picked is not None and picked.strip():
+            preview = preview_text(picked)
         entries[index] = replace(entry, meta=meta, preview=preview)
 
 
@@ -1023,11 +1090,19 @@ def preview_records(
         if not budget.take(PREVIEW_READ_LIMIT):
             return cache
         if pending.get("kind") == "new_preview":
-            # The repair read: the first message this input adds, for the row's preview.
+            # The repair read: one message of the input, for the row's preview; a system
+            # message yields no text and sends the search on to the next one.
             message, note, _ = _read_blob(state, pending["sha1"])
             fresh = dict(records[pending["index"]])
-            text = _message_text(message) if note is None else None
-            fresh["new_preview"] = {"index": pending["preview_index"], "text": text, "failed": note}
+            system = note is None and isinstance(message, dict) and message.get("role") == "system"
+            text = _message_text(message) if note is None and not system else None
+            fresh["new_preview"] = {
+                "start": pending.get("start", pending["preview_index"]),
+                "index": pending["preview_index"],
+                "text": text,
+                "failed": note,
+                "system": system,
+            }
             put(pending["index"], fresh)
             cache.pending = None
             cache.complete = position_done(cache, info, records)

@@ -1172,6 +1172,71 @@ def test_a_late_predecessor_repairs_the_successor_row_and_bumps_its_revision(sta
     assert index.entry("a:a1:llm.input").meta["delta"] == "first"
 
 
+def test_first_and_independent_inputs_preview_their_first_non_system_message_once_read(state, clock):
+    s = {"role": "system", "content": "rules"}
+    u1, a1, u2 = (
+        {"role": "user", "content": "FIRST NEW QUESTION"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "LAST PROMPT"},
+    )
+    j, w1, w2 = (
+        {"role": "system", "content": "judge rules"},
+        {"role": "user", "content": "FIRST INDEPENDENT"},
+        {"role": "user", "content": "LAST INDEPENDENT"},
+    )
+    s2, u3 = {"role": "system", "content": "a reminder slipped in"}, {"role": "user", "content": "AFTER THE REMINDER"}
+
+    def call(span_id, start, purpose, messages, answer):
+        return _span(
+            "a",
+            span_id,
+            "llm.call",
+            parent="turnA",
+            start=start,
+            end=start + 1,
+            attrs={
+                "llm.purpose": purpose,
+                "llm.input.artifact_path": _v2_shell(state, f"{span_id}-in", messages),
+                "llm.output.artifact_path": _artifact(state, {"content": answer}, f"{span_id}-out"),
+            },
+        )
+
+    _append(
+        state,
+        [
+            _turn("a", "turnA", start=0, end=10),
+            call("a1", 1, "main", [s, u1, a1, u2], "answer"),
+            call("a2", 3, "watch_work", [j, w1, w2], "no"),
+            call("a3", 5, "main", [s, u1, a1, u2, s2, u3], "ok"),
+        ],
+    )
+    index = _index(state, clock, preview_reads=2)
+    row = lambda span_id: index.entry(f"a:{span_id}:llm.input")  # noqa: E731
+    _refresh_until(
+        index,
+        clock,
+        lambda: all(row(x) is not None for x in ("a1", "a2", "a3")) and index.index_state().preview_pending == 0,
+        rounds=200,
+    )
+    # The prompt is the last message; the row names the first message that is not a system one.
+    assert row("a1").meta["delta"] == "first" and row("a1").preview == "FIRST NEW QUESTION"
+    assert row("a2").meta["delta"] == "independent" and row("a2").preview == "FIRST INDEPENDENT"
+    # A continued call whose added messages begin with a system message: the search moves one on.
+    assert row("a3").meta["delta"] == "continued" and row("a3").meta["new_from"] == 4
+    assert row("a3").preview == "AFTER THE REMINDER"
+    record = next(r for r in index.preview_cache[("a", "a3")].records if r["slot"] == "llm.input")
+    assert record["new_preview"] == {
+        "start": 4,
+        "index": 5,
+        "text": "AFTER THE REMINDER",
+        "failed": None,
+        "system": False,
+    }
+    # Settled: nothing is read again.
+    pending_after = [index.preview_cache[("a", x)].pending for x in ("a1", "a2", "a3")]
+    assert pending_after == [None, None, None]
+
+
 def test_a_failed_repair_read_is_terminal(state, clock, monkeypatch):
     from raven.tracing import artifact_v2
 
