@@ -2113,6 +2113,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.probe_rate_limited': 'The key works, but is rate limited right now',
     'gui.settings.providers.probe_unreachable': "Couldn't reach the service, saved anyway",
     'gui.settings.providers.probe_proxy': "The proxy this machine is set to use isn't reachable, saved anyway",
+    'gui.settings.providers.probe_certificate': "This machine doesn't trust the service's certificate, saved anyway",
     'gui.settings.providers.probe_unchecked':
       "This provider's model list doesn't check keys, so the key can't be confirmed; saved",
     'gui.settings.providers.probe_no_endpoint': 'This provider offers no way to check a key online, saved',
@@ -4694,6 +4695,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.probe_rate_limited': 'Key 有效，当前被限流',
     'gui.settings.providers.probe_unreachable': '连不上服务，已先保存',
     'gui.settings.providers.probe_proxy': '本机设置的代理连不上，已先保存',
+    'gui.settings.providers.probe_certificate': '本机不信任该服务的证书，已先保存',
     'gui.settings.providers.probe_unchecked': '这家的模型列表不校验 Key，无法确认是否填对，已保存',
     'gui.settings.providers.probe_no_endpoint': '这家不支持在线验证 Key，已保存',
     'gui.settings.providers.probe_unknown': '未能验证（{status}），已先保存',
