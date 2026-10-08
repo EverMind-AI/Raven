@@ -2275,6 +2275,71 @@ async def test_load_fallback_reuses_the_same_mcp_grant(tmp_path: Path) -> None:
     assert [params["mcpServers"] for _method, params in calls] == [mcp_servers, mcp_servers]
 
 
+async def _open_after_load_refusal(
+    tmp_path: Path, refusal: AcpRemoteError, *, mode: str | None = None
+) -> tuple[tuple[str, bool], list[str], str | None]:
+    """Open a bound instance whose ``session/load`` the agent refuses with ``refusal``."""
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "held-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    methods: list[str] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict[str, Any], *, timeout: float):
+            methods.append(method)
+            if method == "session/load":
+                raise refusal
+            return {"sessionId": "fresh-session"} if method == "session/new" else {}
+
+    opened = await backend._open_session(
+        _Client(), cwd=str(tmp_path), skey="s", handle="work", budget=5, mcp_servers=[], mode=mode
+    )
+    return opened, methods, await registry.lookup("s", "a", "work", kind="acp")
+
+
+async def test_a_session_the_agent_still_holds_is_continued_not_replaced(tmp_path: Path) -> None:
+    """GitHub Copilot answers ``session/load`` for a session its process already holds
+    with ``-32602 Session <id> is already loaded``. That session is live and keeps its
+    context, so treating it as pruned dropped the conversation the caller asked to
+    continue and told the parent model it could continue it. The mode the caller asked
+    for is still put on it, since the resume path does that on every route."""
+    refusal = AcpRemoteError("session/load", -32602, "Session held-session is already loaded")
+
+    opened, methods, bound = await _open_after_load_refusal(tmp_path, refusal, mode="deep")
+
+    assert opened == ("held-session", True)
+    assert methods == ["session/load", "session/set_mode"]
+    assert bound == "held-session"
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        AcpRemoteError("session/load", -32602, "Session held-session not found"),
+        AcpRemoteError("session/load", -32001, "Session held-session is already loaded"),
+        AcpRemoteError("session/load", -32000, "session not found"),
+    ],
+)
+async def test_any_other_refusal_of_a_load_still_starts_a_fresh_session(
+    tmp_path: Path, refusal: AcpRemoteError
+) -> None:
+    """Only the one refusal that says the process holds the session is read that way;
+    a pruned id, the right words under another code, and the right code under other
+    words all keep the old recovery."""
+    opened, methods, bound = await _open_after_load_refusal(tmp_path, refusal)
+
+    assert opened == ("fresh-session", False)
+    assert methods == ["session/load", "session/new"]
+    assert bound is None
+
+
 async def test_a_pruned_session_keeps_the_instance_on_the_strip(tmp_path: Path) -> None:
     """A failed resume learned the id is stale, not that the instance is gone.
 
