@@ -394,6 +394,219 @@ class TestTheBorrowInputIsAdmittedOnTheSameTerms:
         cfg = media_tool_config(live, "image")
         assert cfg is not None and cfg.api_key == "sk-own", "the borrow is not consulted, so it cannot veto"
 
+    def test_a_section_pointed_elsewhere_borrows_no_openrouter_key(self, tmp_path):
+        """The OpenRouter key is borrowed only by a section that calls OpenRouter. A keyless
+        section whose apiBase names another endpoint would send that endpoint the
+        OpenRouter credential as its bearer token."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        runs_on = {"openrouter": {"apiKey": "sk-or"}}
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "apiBase": "https://relay.test/v1"}}},
+                "providers": runs_on,
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.api_key == ""
+
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "apiBase": "https://openrouter.ai/api/v1"}}},
+                "providers": runs_on,
+            },
+        )
+        assert media_tool_config(live, "image").api_key == "sk-or", "OpenRouter's own address, spelled out, borrows"
+
+    def test_a_named_provider_supplies_its_address_and_key_together(self, tmp_path):
+        """A section naming a provider runs on that provider, address and key as one
+        pair, and its own apiKey and apiBase stand aside: a key the section holds for
+        OpenRouter must not travel to the provider's address."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        own = {"apiKey": "sk-own", "apiBase": "https://openrouter.ai/api/v1"}
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "openai/gpt-image-2", "provider": "openai", **own}}},
+                "providers": {
+                    "openai": {"apiKey": "sk-openai", "apiBase": "https://compat.test/v1"},
+                    "openrouter": {"apiKey": "sk-or"},
+                },
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.provider, cfg.api_base, cfg.api_key) == ("openai", "https://compat.test/v1", "sk-openai")
+
+    def test_a_named_provider_with_no_address_of_its_own_runs_on_its_public_one(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "provider": "openai"}}},
+                "providers": {"openai": {"apiKey": "sk-openai"}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_base, cfg.api_key) == ("https://api.openai.com/v1", "sk-openai")
+
+    def test_a_named_provider_without_a_key_leaves_the_section_keyless(self, tmp_path):
+        """Keyless is the answer -- not the OpenRouter key, and not the section's own."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "provider": "openai", "apiKey": "sk-own"}}},
+                "providers": {"openrouter": {"apiKey": "sk-or"}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.api_key == "" and cfg.api_base == "https://api.openai.com/v1"
+
+    def test_an_invalid_edit_of_the_named_provider_keeps_the_lent_pair(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        image = {"model": "gpt-image-2", "provider": "openai"}
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"openai": {"apiKey": "sk-openai"}}})
+        assert media_tool_config(live, "image").api_key == "sk-openai"
+
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"openai": {"apiKey": 123}}})
+        kept = media_tool_config(live, "image")
+        assert kept is not None and kept.api_key == "sk-openai"
+
+    def test_a_named_provider_with_no_address_takes_no_key(self, tmp_path):
+        """An empty address means the tool's own default, which is OpenRouter's: a key
+        taken with no address of its own would be sent there."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "m", "provider": "anthropic"}}},
+                "providers": {"anthropic": {"apiKey": "sk-ant", "extraHeaders": {"X-Tenant": "t1"}}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and (cfg.api_base, cfg.api_key, cfg.extra_headers) == ("", "", {})
+
+    def test_a_named_provider_supplies_its_headers_with_its_address_and_key(self, tmp_path):
+        """Headers are part of the connection; the section's own stand aside with its
+        own key and address."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "m", "provider": "custom", "extraHeaders": {"X-Own": "o"}}}},
+                "providers": {
+                    "custom": {"apiKey": "sk-c", "apiBase": "https://relay.test/v1", "extraHeaders": {"X-Tenant": "t1"}}
+                },
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_key, cfg.extra_headers) == ("sk-c", {"X-Tenant": "t1"})
+
+    def test_the_headers_come_from_the_endpoint_the_key_comes_from(self, tmp_path):
+        """An endpoint inherits the section's flat headers unless it names its own,
+        the way every other caller of ``provider_endpoints`` reads it."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        custom = {
+            "apiBase": "https://relay.test/v1",
+            "extraHeaders": {"X-Tenant": "flat"},
+            "endpoints": [{"label": "a", "apiKey": "sk-a"}],
+        }
+        image = {"model": "m", "provider": "custom"}
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"custom": custom}})
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_key, cfg.extra_headers) == ("sk-a", {"X-Tenant": "flat"})
+
+        custom["endpoints"] = [{"label": "a", "apiKey": "sk-a", "extraHeaders": {"X-Tenant": "own"}}]
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"custom": custom}})
+        assert media_tool_config(live, "image").extra_headers == {"X-Tenant": "own"}
+
+    def test_an_unrelated_providers_bad_edit_does_not_hold_the_answer(self, tmp_path):
+        """Only the borrowed-from provider's section is validated."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        providers = {"openrouter": {"apiKey": "sk-or"}, "anthropic": {"apiKey": 123}}
+        self._write(path, {"tools": {"media": {"image": {"model": "a"}}}, "providers": providers})
+        assert media_tool_config(live, "image").model == "a"
+
+        self._write(path, {"tools": {"media": {"image": {"model": "b"}}}, "providers": providers})
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and (cfg.model, cfg.api_key) == ("b", "sk-or")
+
+    def test_a_section_naming_only_a_provider_is_not_switched_on(self, tmp_path):
+        """No model and no key of its own: the provider's key must not enable a tool
+        that bills per call, any more than a chat key does."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {"tools": {"media": {"image": {"provider": "openai"}}}, "providers": {"openai": {"apiKey": "sk-openai"}}},
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.provider == "openai" and cfg.api_key == "" and cfg.model == ""
+
+    @pytest.mark.parametrize(
+        ("providers", "named"),
+        [
+            ({"openai": {"apiBase": "https://relay.test/v1"}, "OpenAI": {"apiKey": "sk-oa"}}, "openai"),
+            ({"zhipu": {"apiKey": "sk-z", "apiBase": "https://z.test/v1"}}, "zai"),
+            ({"fireworks": {"apiKey": "sk-fw", "apiBase": "https://fw.test/v1"}}, "fireworks_ai"),
+        ],
+        ids=["second-spelling", "former-name", "field-alias"],
+    )
+    def test_the_live_reader_finds_the_provider_the_boot_reader_does(self, tmp_path, providers, named):
+        """Both go through ``ProvidersConfig``, which folds a provider's spellings,
+        former names and field aliases into one section: a live reader taking the
+        first match alone registered the tool with a key and then ran it without one."""
+        from raven.config.live import media_tool_config
+        from raven.config.schema import Config
+
+        live, path = self._live(tmp_path)
+        payload = {"tools": {"media": {"image": {"model": "m", "provider": named}}}, "providers": providers}
+        self._write(path, payload)
+        boot = Config.model_validate(payload).effective_media_config().image
+        cfg = media_tool_config(live, "image")
+        assert boot.api_key and (cfg.api_base, cfg.api_key) == (boot.api_base, boot.api_key)
+
+    @pytest.mark.parametrize(
+        ("kind", "runs_on"),
+        [("image", ("https://relay.test/v1", "sk-oa")), ("speech", ("", "sk-or")), ("video", ("", "sk-or"))],
+    )
+    def test_only_the_image_section_runs_on_a_named_provider(self, tmp_path, kind, runs_on):
+        """Speech and video speak OpenRouter's request shapes alone, so a provider
+        written into their sections is ignored like any unknown key, by both readers."""
+        from raven.config.live import media_tool_config
+        from raven.config.schema import Config
+
+        live, path = self._live(tmp_path)
+        providers = {
+            "openai": {"apiKey": "sk-oa", "apiBase": "https://relay.test/v1"},
+            "openrouter": {"apiKey": "sk-or"},
+        }
+        payload = {"tools": {"media": {kind: {"model": "m", "provider": "openai"}}}, "providers": providers}
+        self._write(path, payload)
+        boot = getattr(Config.model_validate(payload).effective_media_config(), kind)
+        cfg = media_tool_config(live, kind)
+        assert (cfg.api_base, cfg.api_key) == (boot.api_base, boot.api_key) == runs_on
+
 
 def test_permissions_node_that_stops_validating_keeps_the_last_policy(tmp_path):
     """A broken live edit must not un-deny a default-allow tool.

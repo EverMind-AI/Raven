@@ -230,26 +230,63 @@ def configure_image_generation(config: dict, host: dict) -> None:
     The product's own ``PPT_IMAGE_API_BASE`` and ``PPT_IMAGE_MODEL`` pin a deck
     endpoint or model over the inherited one, and any product pin (key, base or
     model) also pins the section as rendered: a live host selection would
-    replace it whole on the next call. The host's media proxy rides along.
+    replace it whole on the next call. A pinned key or base leaves the inherited
+    headers behind, and a pinned base the inherited key too: the host resolved
+    both for its own key at its own address. The host's media proxy rides along.
 
     The engine gets no copy: the deck's ``ppt_generate_image`` rides the host's
     ``image_generate`` and reads ``tools.media.image`` through the locator's
     ``media_config`` grant, live, exactly as the host tool does. The slice's own
     ``image`` key stays an operator override for a host that grants nothing.
     """
-    from raven.config.schema import live_media_tool_config
+    from raven.config import schema
+    from raven.providers.wire import wire_model
 
     host_tools = host.get("tools") or {}
     host_image = (host_tools.get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
+    # This file can outlive its raven -- a stamped home tree outranks a
+    # checkout's own agents/ -- so it calls what every 0.2 release has: the
+    # reader's two-argument form, and media_provider only where it exists. A
+    # raven without it has no section that can name a provider.
+    section = schema.live_media_tool_config(host_image, host.get("providers"))
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
+    media_provider = getattr(schema, "media_provider", None)
+    runs_on = media_provider(section) if media_provider is not None and section is not None else ""
+    named = "" if runs_on == "openrouter" else runs_on
     paid_by = "the host image section"
     pinned: list[str] = []
     for name, path in IMAGE_SETTING_SLOTS.items():
         if value := env_value(name):
             image[path[-1]] = value
             pinned.append(name)
-    if resolved := render.dig(config, IMAGE_KEY_SLOT):
+    key_pinned = bool(env_value("PPT_IMAGE_API_KEY"))
+    base_pinned = "PPT_IMAGE_API_BASE" in pinned
+    if key_pinned or base_pinned:
+        # The inherited headers complete the inherited key at the inherited
+        # address: a pinned base sends neither there, and a pinned key replaces
+        # the key they complete -- an Authorization among them would outrank it.
+        image.pop("extraHeaders", None)
+    if base_pinned and not key_pinned:
+        # Whatever key the host resolved -- its own, a provider's, or one
+        # borrowed from OpenRouter -- was resolved for the host's address; the
+        # slot below decides afresh for the deck's.
+        image["apiKey"] = ""
+    if named and (pinned or key_pinned):
+        # A pin makes the section a snapshot the deck reads as written, with no
+        # host file behind it. It already holds what it took from the provider;
+        # what it must not keep is the provider's name, which would be resolved
+        # against this config's providers -- not the host's -- nor the
+        # provider's own prefix, which the bare address does not take.
+        del image["provider"]
+        if "PPT_IMAGE_MODEL" not in pinned and image.get("model"):
+            image["model"] = wire_model(image["model"], client_provider=named)
+    if named and not (key_pinned or base_pinned):
+        # On the provider's address only the provider's key goes, or none: the
+        # host section's own, which the slot below would read, stood aside for
+        # it, and the host's own tool never sends it there.
+        if image.get("apiKey"):
+            paid_by = f"the host's providers.{named}"
+    elif resolved := render.dig(config, IMAGE_KEY_SLOT):
         image["apiKey"], paid_by = resolved, "PPT_IMAGE_API_KEY or the host image key"
     elif not image.get("apiKey") and _IMAGE_GATEWAY in (image.get("apiBase") or _IMAGE_GATEWAY):
         # Borrowed only towards OpenRouter. The host's image section may name
@@ -277,7 +314,7 @@ def configure_image_generation(config: dict, host: dict) -> None:
     if (proxy := (host_tools.get("media") or {}).get("proxy")) and not media.get("proxy"):
         media["proxy"] = proxy
     if not image.get("apiKey"):
-        log("[run] images: no OpenRouter key to draw with; the deck keeps only the pictures it can find")
+        log("[run] images: no image key to draw with; the deck keeps only the pictures it can find")
         return
     pin_note = f", pinned by {', '.join(pinned)}" if pinned else ", following the host" if host_selects else ""
     log(f"[run] images: {image.get('model') or 'the shipped default'}, paid by {paid_by}{pin_note}")
@@ -527,10 +564,14 @@ def render_config(source: Path) -> Path:
     else:
         taken = render.inherit_llm(config, host)
         if not taken:
+            # A home tree copied out by a newer wheel also serves an older checkout, so this
+            # can run on a raven that predates inherit_refusal; that one refuses without the reason.
+            explain = getattr(render, "inherit_refusal", None)
+            reason = f" ({explain(config, host)})" if explain else ""
             raise SystemExit(
-                f"error: {llm_key} is not set and the host config has no provider key to "
-                f"inherit from; put the key in {HERE / '.env'} (see .env.example), export "
-                f"it, or configure a provider in the host raven"
+                f"error: {llm_key} is not set and the host's model cannot be inherited{reason}; "
+                f"put the key in {HERE / '.env'} (see .env.example), export it, or configure a "
+                f"provider in the host raven"
             )
         ignored = [name for name in ("PPT_MODEL", "PPT_API_BASE") if env_value(name)]
         log(
@@ -589,10 +630,10 @@ def render_config(source: Path) -> Path:
 
     # The pooled loop reads identity, sessions, transcripts and the skill pool
     # from ONE agent home; unpinned it would be the host's own (the launcher
-    # inherits RAVEN_HOME), which this agent must not share -- and it must sit
-    # OUTSIDE the host Agent home, which the host hands over as the session
-    # cwd (the runtime refuses a cwd that contains the engine's home). The
-    # shared placement helper seats it in the raven data directory;
+    # normally shares the host's home), which this agent must not share -- and
+    # it must sit OUTSIDE the host Agent home, which the host hands over as the
+    # session cwd (the runtime refuses a cwd that contains the engine's home).
+    # The shared placement helper seats it in the raven data directory;
     # PPT_ACP_HOME overrides. The state root keeps the work (rendered
     # configs, sweep) exactly as before. setdefault, so an operator's
     # explicit workspace wins.

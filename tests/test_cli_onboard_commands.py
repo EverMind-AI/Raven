@@ -6493,7 +6493,7 @@ def test_no_workflow_step_enters_the_removed_page_directory() -> None:
     workflows = sorted((root / ".github" / "workflows").glob("*.yml"))
     assert workflows, "no workflows found -- the glob is wrong, not the tree"
     for path in workflows:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         assert "working-directory: ui\n" not in text + "\n", f"{path.name}: enters the removed ui/ tree"
         assert "--prefix ui " not in text and "--prefix ui\n" not in text + "\n", (
             f"{path.name}: runs npm against the removed ui/ tree"

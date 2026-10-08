@@ -315,22 +315,40 @@ _MEDIA_MODEL = re.compile(r"^tools\.media\.(?P<kind>image|speech|video)\.model$"
 
 
 def _media_needs(raw: dict[str, Any], path: str) -> str:
-    """What else an unset media model needs, read from the keys actually on file.
+    """What else an unset media model needs, given the keys this install has.
 
-    The rule is the schema's (an empty media key falls back to the one under
-    ``providers.openrouter``); whether a model alone is enough depends on
-    whether that key or the tool's own is set, so it is said per install
-    rather than as a fixed sentence that is wrong wherever neither is.
+    The section is resolved by ``config.schema``'s own resolver as it would
+    stand once a model is set, then put to the tool's own ``has_key``, so a key
+    counts wherever the tool would find it: the provider the image section
+    names (flat or on an endpoint, under any spelling), ``providers.openrouter``
+    or ``OPENROUTER_API_KEY`` while the section calls OpenRouter, and nobody for
+    a section pointed elsewhere. Whether a model alone is enough depends on
+    whether that key or the tool's own is set, so it is said per install rather
+    than as a fixed sentence that is wrong wherever neither is.
     """
     found = _MEDIA_MODEL.match(path)
     if found is None:
         return ""
+    from raven.agent.tools.media_gen import _OpenRouterMediaTool
+    from raven.config.schema import live_media_tool_config, media_provider
+
     kind = found["kind"]
-    _, own = surface.lookup(raw, f"tools.media.{kind}.apiKey")
-    _, lent = surface.lookup(raw, "providers.openrouter.apiKey")
-    if own or lent:
+    _, section = surface.lookup(raw, f"tools.media.{kind}")
+    # Only a section naming a model borrows, and the question is what one would.
+    staged = {**(section if isinstance(section, dict) else {}), "model": "any"}
+    resolved = live_media_tool_config(staged, raw.get("providers"), kind)
+    if resolved is None:
+        return ""
+    if _OpenRouterMediaTool.has_key(resolved):
         return "a model is all it lacks: a key it can use is already set"
-    return f"it also needs a key: tools.media.{kind}.apiKey, or one under providers.openrouter"
+    runs_on = media_provider(resolved)
+    if runs_on and runs_on != "openrouter":
+        wanted = f"one under providers.{runs_on}, the provider it runs on"
+    elif runs_on:
+        wanted = f"tools.media.{kind}.apiKey, or one under providers.openrouter"
+    else:
+        wanted = f"tools.media.{kind}.apiKey"
+    return f"it also needs a key: {wanted}"
 
 
 def _compact(value: Any) -> str:

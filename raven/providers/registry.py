@@ -87,7 +87,7 @@ class ProviderSpec:
     #: to /v1/models instead of the /v1beta/models its shape asks for.
     #:
     #: So this says only "show this when the field would otherwise be blank".
-    #: Read through `display_api_base`, never directly.
+    #: Read through `display_api_base` or `is_display_only`, never directly.
     shown_api_base: str = ""
     native_api_bases: tuple[tuple[str, str], ...] = ()
     #: Addresses one vendor serves the same account model from, where the choice
@@ -170,6 +170,13 @@ class ProviderSpec:
     # the second such provider gets the key field in one place and not another.
     accepts_optional_api_key: bool = False
 
+    # The image tool can run on this provider's address and key: OpenRouter, its
+    # default backend, or a vendor serving OpenAI's Images API
+    # (`/images/generations`, `/images/edits`). Declared here for the same reason
+    # as the field above: the roles card offering the image role and the save
+    # refusing a provider must read one answer.
+    image_api: bool = False
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -182,6 +189,23 @@ class ProviderSpec:
         and several are addresses this project chose rather than the vendor's.
         """
         return self.default_api_base or self.shown_api_base
+
+    def is_display_only(self, api_base: object) -> bool:
+        """Whether ``api_base`` is the address this spec shows and nothing sends.
+
+        That is `shown_api_base`, standing in for a `default_api_base` the spec
+        does not state: the vendor's own endpoint, which LiteLLM reaches without
+        being told. A section holding it holds no address of its own, and keeping
+        it there is not harmless -- Gemini's driver takes a stored base as its
+        versioned root, and the provider probe takes one for a proxy.
+
+        Anything but a string is not that address. Both callers hand over a value
+        read from JSON before any schema has seen it, and a write needs the
+        schema's refusal of a bad one, not an error raised here.
+        """
+        if self.default_api_base or not self.shown_api_base or not isinstance(api_base, str):
+            return False
+        return api_base.strip().rstrip("/") == self.shown_api_base.rstrip("/")
 
     @property
     def usable_default_api_base(self) -> str:
@@ -268,6 +292,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_gateway=True,
         requires_api_base=True,
         default_api_base="http://localhost:8000/v1",
+        image_api=True,
     ),
     # === Azure OpenAI ======================================================
     # Served by AzureOpenAIProvider, not LiteLLM (hence ``client`` below): Azure
@@ -305,6 +330,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
         supports_prompt_caching=True,
         default_model="openrouter/anthropic/claude-sonnet-5",
+        image_api=True,
     ),
     # AiHubMix: global gateway, OpenAI-compatible interface.
     # strip_model_prefix=True: it doesn't understand "anthropic/claude-3",
@@ -716,6 +742,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         strip_model_prefix=False,
         model_overrides=(),
         default_model="openai/gpt-5.5",
+        image_api=True,
     ),
     # OpenAI Codex: uses OAuth, not API key.
     ProviderSpec(
@@ -801,7 +828,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
-        default_model="gemini/gemini-2.5-flash",
+        default_model="gemini/gemini-3.8-flash",
     ),
     # Z.ai (formerly Zhipu AI): named after the vendor's current brand, which is
     # also what LiteLLM calls it. Old configs saying "zhipu" still load.

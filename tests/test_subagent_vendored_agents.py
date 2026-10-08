@@ -756,6 +756,11 @@ class TestTheEdgesThatDegrade:
             {"agents": "not-a-mapping"},
             {"agents": {"defaults": "not-a-mapping"}},
             {"providers": {"openrouter": {"apiKey": 42}}},
+            {"providers": {"openrouter": {"apiKey": "sk-x"}}, "agents": {"defaults": {"model": 42}}},
+            {
+                "providers": {"openrouter": {"apiKey": "sk-x"}},
+                "agents": {"defaults": {"provider": "openrouter", "model": 42}},
+            },
         ],
     )
     def test_an_invalid_host_config_is_nothing_to_lend(

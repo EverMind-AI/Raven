@@ -103,6 +103,8 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
     // The catalogue page's filter, and the picker's answer to "whose column
     // does the running model belong in": both are facts only the registry has.
     gateway: !!p.gateway, current: !!p.is_current, routes: p.route_names || [],
+    // Which providers the image role may run on; the save checks the same flag.
+    imageApi: !!p.image_api,
     // Addresses to choose between. A provider that has them is asked which
     // storefront the key came from instead of being handed a host field --
     // the key does not say, and the three are separate accounts.

@@ -31,6 +31,9 @@ export interface Provider {
   /* Resells other vendors' models under vendor/model ids (the registry's
      `is_gateway`). The settings catalogue filters on it. */
   gateway?: boolean
+  /* The image tool can run on this provider's address and key (the registry's
+     `image_api`). The roles card offers the image role exactly these. */
+  imageApi?: boolean
   /* Every model-id prefix that names this provider, which is what one spelling
      of a model has to be stripped of before it can be compared with another
      (`ModelHost` below). Absent on a wire that does not carry the set, and on

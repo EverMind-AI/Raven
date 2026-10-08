@@ -229,7 +229,8 @@ class PptGenerateImageTool(Tool):
         if not self.media.api_key:
             return _return.failed(
                 "no image API key is configured",
-                hint="set tools.media.image.apiKey (or providers.openrouter.apiKey) in the host config",
+                hint="set tools.media.image.apiKey (or providers.openrouter.apiKey) in the host config, "
+                "or give a key to the provider its image role runs on",
             )
         wanted = list(prompts or [])
         if prompt or filename:

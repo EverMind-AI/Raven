@@ -39,6 +39,16 @@ const pick = async (roleName: string, model: string, providerName?: string): Pro
   await act(async () => { fireEvent.click(within(scope).getAllByText(model)[0]!) })
 }
 const sets = (calls: Array<[string, unknown]>) => calls.filter(([m]) => m === 'set').map(([, a]) => a)
+/* OpenAI connected with one image model, as `model.options` answers a key whose
+   list carries gpt-image-2. */
+const withOpenAI = (): ReturnType<typeof snap> => {
+  const data = snap()
+  data.providers = data.providers.map((p) => (p.id === 'openai'
+    ? { ...p, on: true, models: ['gpt-image-2'], configured: ['gpt-image-2'],
+        labels: { 'gpt-image-2': { label: 'gpt-image-2', kind: 'image' } } }
+    : p))
+  return data
+}
 
 describe('model roles', () => {
   it('a keyed role writes its model then its provider; clearing writes null to both', async () => {
@@ -75,17 +85,41 @@ describe('model roles', () => {
     expect(store.get().needsRestart).toBe(true)
   })
 
-  it('a media role offers OpenRouter only, writes the selection first and then unhides the tool', async () => {
+  it('an OpenRouter image pick writes the selection, naming no provider, then unhides the tool', async () => {
     const { calls } = install()
     await mount('model')
-    expect(roleProviders(role('image'), snap()).map((p) => p.id)).toEqual(['openrouter'])
     /* The image slot lists image models: a text model on the same provider is
        not offered for it any more. */
     await pick('gui.settings.roles.image', 'gemini-2.5-flash-image')
     expect(sets(calls)).toEqual([
-      { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '' } },
+      { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '', provider: '' } },
       { key: 'tools.disabledTools', value: ['write_file'] },
     ])
+  })
+
+  it('the image role offers the connected providers the image tool can run on; speech and video keep to OpenRouter', () => {
+    const data = withOpenAI()
+    expect(roleProviders(role('image'), data).map((p) => p.id)).toEqual(['openrouter', 'openai'])
+    expect(roleProviders(role('speech'), data).map((p) => p.id)).toEqual(['openrouter'])
+    expect(roleProviders(role('video'), data).map((p) => p.id)).toEqual(['openrouter'])
+  })
+
+  it('an image pick on another provider writes that provider into the selection', async () => {
+    const { calls } = install(withOpenAI())
+    await mount('model')
+    await pick('gui.settings.roles.image', 'gpt-image-2', 'OpenAI')
+    expect(sets(calls)[0]).toEqual({ key: 'tools.media.image', value: { model: 'gpt-image-2', quality: '', provider: 'openai' } })
+  })
+
+  it('the image slot reads its provider off the selection, OpenRouter when it names none', () => {
+    const data = withOpenAI()
+    const media = data.raw.tools as { media?: unknown }
+    media.media = { image: { model: 'gpt-image-2', quality: '', provider: 'openai' } }
+    expect(roleValue(role('image'), data)).toEqual({ model: 'gpt-image-2', provider: 'openai' })
+    /* Counted where a disconnect asks which roles still run on the provider. */
+    expect(rolesUsing(data, 'openai').map((r) => r.id)).toContain('image')
+    media.media = { image: { model: 'google/gemini-2.5-flash-image', quality: '' } }
+    expect(roleValue(role('image'), data)).toEqual({ model: 'google/gemini-2.5-flash-image', provider: 'openrouter' })
   })
 
   it('clearing a media role empties the model, keeps the quality, and puts the tool back on the disabled list', async () => {

@@ -46,6 +46,9 @@ export interface ProviderRow {
      `is_gateway`). The catalogue's filter reads it; no client can derive it
      from a slug. */
   gateway?: boolean
+  /* The image tool can run on this provider's address and key (the registry's
+     `image_api`); the roles card offers the image role exactly these. */
+  imageApi?: boolean
   needsBase?: boolean
   /* Whether the provider takes an API key at all. Absent from a source that
      predates the field, where every non-local provider took one. */

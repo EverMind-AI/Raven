@@ -173,6 +173,12 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- When an agent cannot inherit the host's model, its launcher now names
+  what is missing -- for example the OpenAI Codex sign-in, with the
+  command that adds it -- instead of reporting that the host has no
+  provider key, which was untrue when the host's key sits on a provider
+  other than the one its selected model uses.
+
 - `raven doctor` warns when `permissions.mode` is `full` and when
   `tools.sandbox.backend` is `none`. Ask-tier calls then run without asking,
   and commands run on the host with no isolation. The exit code stays 0.

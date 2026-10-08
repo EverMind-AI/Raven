@@ -1856,6 +1856,9 @@ class ModelOptionProvider(_Strict):
     #: vendor/model ids. The catalogue's filter reads it; no client can derive
     #: it from a slug.
     gateway: bool = False
+    #: The registry's ``image_api``: the image tool can run on this provider's
+    #: address and key. The roles card offers the image role these providers.
+    image_api: bool = False
     #: Every model-id prefix that names this provider: its own name plus the
     #: ones it used to answer to (``ProviderSpec.route_names``). A client
     #: comparing two spellings of one model has to strip any of them, the way

@@ -42,6 +42,7 @@ from pydantic import BaseModel
 from pydantic.alias_generators import to_camel, to_snake
 
 from raven.config.loader import EXTENSION_KEYS, get_config_path, read_raw_or_raise
+from raven.providers.registry import PROVIDERS
 from raven.utils.atomic_io import atomic_update
 
 
@@ -353,10 +354,18 @@ SECTIONS: tuple[Section, ...] = (
                 writer="settings",
                 choices=("", "low", "medium", "high"),
             ),
+            Setting(
+                "tools.media.image.provider",
+                "Provider the image tool runs on, its address and key together; empty is OpenRouter",
+                "enum",
+                _E.NEXT_TURN,
+                writer="settings",
+                choices=("", *(spec.name for spec in PROVIDERS if spec.image_api)),
+            ),
             *(
                 Setting(
                     f"tools.media.{medium}.apiKey",
-                    f"Key for {medium} generation; left empty, the key of providers.openrouter is used",
+                    f"Key for {medium} generation; left empty, a tool calling OpenRouter uses the key of providers.openrouter",
                     "str",
                     _E.NEXT_TURN,
                     secret=True,

@@ -11614,6 +11614,10 @@
             "type": "boolean",
             "description": "The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false."
           },
+          "image_api": {
+            "type": "boolean",
+            "description": "The registry's image_api: the image tool can run on this provider's address and key. The roles card offers the image role these providers; absent means false."
+          },
           "route_names": {
             "type": "array",
             "items": { "type": "string" },
