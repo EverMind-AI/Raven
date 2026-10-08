@@ -442,9 +442,8 @@ describe('the outline walk', () => {
     void details.loadDescriptor()
     await answerDetail(descriptor('r2', 1, ['content']))
     await failBlock(new Error('socket closed'))
-    const stuck = details.get().outlines[details.descriptorKey(r1)]
-    expect(stuck?.loading).toBe(false)
-    expect(stuck?.fault).toBeNull()
+    /* No page had come: the record goes, rather than standing in for an empty list. */
+    expect(details.get().outlines[details.descriptorKey(r1)]).toBeUndefined()
     /* Back on r1, the walk starts again and the outline arrives. */
     list.select('r1', { source: 'click' })
     void details.loadDescriptor()
@@ -467,7 +466,7 @@ describe('the outline walk', () => {
     void details.loadOutline()
     const key = details.descriptorKey(details.get().current!)
     await failBlock(new RpcError(-32020, 'trajectory view is off'))
-    expect(details.get().outlines[key]?.loading).toBe(false)
+    expect(details.get().outlines[key]).toBeUndefined()
     /* The view comes back: the list is read again and the entry reopened. */
     await list.refreshState()
     list.setView('trajectory')
@@ -475,8 +474,9 @@ describe('the outline walk', () => {
     list.select('r1', { source: 'click' })
     void details.loadDescriptor()
     await flush()
-    /* A loading mark with no request behind it is a leftover: the retry clears it and reads. */
-    details.set({ ...details.get(), outlines: { ...details.get().outlines, [key]: { ...details.get().outlines[key]!, loading: true } } })
+    /* A loading mark with no request behind it is a leftover: the retry clears it and reads on. */
+    const partial = { identity: details.get().current!, items: [{ index: 0, role: 'user', bytes: 2, chars: 2, preview: 'hi', partial: false, missing: false, cursor: 'o0' }], total: 40, nextCursor: 'o20', loading: true, done: false, fault: null, bytes: 10, at: 1 }
+    details.set({ ...details.get(), outlines: { ...details.get().outlines, [key]: partial } })
     const before = blockCalls.length
     void details.retryOutline()
     expect(blockCalls).toHaveLength(before + 1)

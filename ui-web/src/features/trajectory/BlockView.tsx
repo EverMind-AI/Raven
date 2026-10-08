@@ -513,7 +513,7 @@ export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.
   return (
     <div className="trajectory-block" ref={setBox}>
       <Toolbar block={block} record={record} />
-      {fault ? (
+      {fault && !messages ? (
         <p className="trajectory-fault" role="alert">
           {t('gui.trajectory.details.failed', { detail: fault })}
           {' '}

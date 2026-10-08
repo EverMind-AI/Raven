@@ -100,9 +100,10 @@ export function MessagesView({ block, entryId, render }: {
   const permitted = details.mayRead(s)
   const identityKey = s.current ? details.descriptorKey(s.current) : null
 
-  /* The outline, asked for once the pane may read; the walk goes on by itself. */
+  /* The outline, asked for once the pane may read; the walk goes on by itself, and a walk that
+     was cut short (the reader left, the wire dropped) is taken up again on return. */
   useEffect(() => {
-    if (permitted && identityKey !== null && (outline === null || (outline.nextCursor !== null && !outline.loading && outline.fault === null))) {
+    if (permitted && identityKey !== null && (outline === null || (!outline.done && !outline.loading && outline.fault === null))) {
       void details.loadOutline()
     }
   }, [permitted, identityKey, outline])
@@ -221,7 +222,8 @@ export function MessagesView({ block, entryId, render }: {
   }
   /* Open rows in the window read their bodies; nothing beyond the window is asked for,
      and a page that failed waits for the reader's retry rather than being asked again. */
-  const faulted = details.fault({ blockId: block.id, more: true }, s) !== null || details.fault({ blockId: block.id }, s) !== null
+  const pageFault = details.fault({ blockId: block.id, more: true }, s) ?? details.fault({ blockId: block.id }, s)
+  const faulted = pageFault !== null
   useEffect(() => {
     if (!permitted || faulted) return
     for (const item of shown) {
@@ -246,7 +248,7 @@ export function MessagesView({ block, entryId, render }: {
         <button className="trajectory-link" onClick={() => { setExpandedAll(true); setChoices({}) }}>{t('gui.trajectory.details.expand_all')}</button>
         {/* Back to the default fold: the messages the model had seen folded, the new ones open. */}
         <button className="trajectory-link" onClick={() => { setExpandedAll(false); setChoices({}) }}>{t('gui.trajectory.details.collapse_old')}</button>
-        {outline && (outline.loading || outline.nextCursor !== null) ? (
+        {outline && (outline.loading || (!outline.done && outline.fault === null)) ? (
           <span className="trajectory-msg-progress">{t('gui.trajectory.details.outline_progress', { n: items.length, total: outline.total ?? '?' })}</span>
         ) : null}
         {note ? <span className="trajectory-msg-note">{note}</span> : null}
@@ -256,6 +258,14 @@ export function MessagesView({ block, entryId, render }: {
           {t('gui.trajectory.details.failed', { detail: outline.fault })}
           {' '}
           <button className="trajectory-link" onClick={() => { void details.retryOutline() }}>{t('gui.trajectory.details.retry')}</button>
+        </p>
+      ) : null}
+      {/* A page of bodies that failed: said where the rows wait, with the one way to ask again. */}
+      {pageFault !== null ? (
+        <p className="trajectory-fault" role="alert">
+          {t('gui.trajectory.details.failed', { detail: pageFault })}
+          {' '}
+          <button className="trajectory-link" onClick={() => { details.clearBlockFaults(block.id) }}>{t('gui.trajectory.details.retry')}</button>
         </p>
       ) : null}
       <div className="trajectory-msgs" ref={box}>
@@ -278,7 +288,7 @@ export function MessagesView({ block, entryId, render }: {
         })}
         {bottomPad > 0 ? <div className="trajectory-msg-space" style={{ height: bottomPad - ROW_GAP }} aria-hidden="true" /> : null}
         {outline === null || (items.length === 0 && outline.loading) ? <div className="trajectory-skel-line" aria-busy="true" /> : null}
-        {outline !== null && items.length === 0 && !outline.loading && !outline.fault ? <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p> : null}
+        {outline !== null && outline.done && items.length === 0 ? <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p> : null}
       </div>
     </div>
   )

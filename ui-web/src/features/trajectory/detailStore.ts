@@ -102,6 +102,8 @@ export interface OutlineRecord {
   nextCursor: string | null
   /** A page is on its way. */
   loading: boolean
+  /** The walk reached the list's end: every row is in, be there many or none. */
+  done: boolean
   fault: string | null
   bytes: number
   at: number
@@ -723,7 +725,10 @@ const outlineItems = (data: JsonValue | null | undefined): OutlineItem[] => {
 }
 
 const emptyOutline = (id: Identity): OutlineRecord =>
-  ({ identity: id, items: [], total: null, nextCursor: null, loading: false, fault: null, bytes: 0, at: touch() })
+  ({ identity: id, items: [], total: null, nextCursor: null, loading: false, done: false, fault: null, bytes: 0, at: touch() })
+
+/** A record no page has reached yet: nothing to keep when its walk ends without one. */
+const unstarted = (r: OutlineRecord): boolean => !r.done && r.items.length === 0 && r.total === null
 
 /* Walks every page of the outline block in order, in the background: each
    answer is filed under the identity it was asked for and the next page is
@@ -736,7 +741,7 @@ export async function loadOutline(): Promise<void> {
   if (!src || !id || !mayRead(store.get())) return
   const key = outlineKey(id)
   const have = store.get().outlines[key]
-  if (have && (have.fault !== null || (have.nextCursor === null && have.items.length > 0))) return
+  if (have && (have.fault !== null || have.done)) return
   const mark = keyOf('outline', key)
   if (inflight.has(mark)) return
   const t = gen
@@ -758,7 +763,7 @@ export async function loadOutline(): Promise<void> {
         const byIndex = new Map(r.items.map((it) => [it.index, it]))
         for (const it of fresh) byIndex.set(it.index, it)
         const items = [...byIndex.values()].sort((a, b) => a.index - b.index)
-        return { ...r, items, total: total ?? r.total, nextCursor: cursor, bytes: bytesOf(items), at: touch() }
+        return { ...r, items, total: total ?? r.total, nextCursor: cursor, done: cursor === null, bytes: bytesOf(items), at: touch() }
       })
       if (cursor === null || !live(t, g, id.entryId)) break
     }
@@ -767,10 +772,15 @@ export async function loadOutline(): Promise<void> {
   } catch (e) {
     settle(mark, token)
     const s = unmarked(store.get(), mark, token)
-    /* Whatever ends the walk ends the record's loading: the record is filed under the identity that
-       asked, and a reader coming back to it must be able to start the walk again. */
-    const calm = (state: DetailsState): DetailsState =>
-      state.outlines[key] ? { ...state, outlines: { ...state.outlines, [key]: { ...state.outlines[key]!, loading: false } } } : state
+    /* Whatever ends the walk ends the record's loading -- or, when no page had come yet, takes
+       the record away -- so a reader coming back to the entry finds either a list to go on with
+       or nothing, and asks again; an empty record left behind would pass for an empty list. */
+    const calm = (state: DetailsState): DetailsState => {
+      const r = state.outlines[key]
+      if (!r) return state
+      if (unstarted(r)) return { ...state, outlines: without(state.outlines, key) }
+      return { ...state, outlines: { ...state.outlines, [key]: { ...r, loading: false } } }
+    }
     if (!currentEpoch(id.sessionKey, id.epoch) || !live(t, g, id.entryId)) { store.set(calm(s)); return }
     if (isDisabled(e) || saysAbsent(e)) {
       store.set(calm(s))
@@ -801,6 +811,15 @@ export function retryOutline(): Promise<void> {
     }
   }
   return loadOutline()
+}
+
+/** The reader's retry of a message list's page reads: both faults of the block are forgiven, so the rows in view ask again. */
+export function clearBlockFaults(blockId: string): void {
+  const id = store.get().current
+  if (!id) return
+  const key = blockKey(id, blockId)
+  const s = store.get()
+  store.set({ ...s, faults: without(without(s.faults, keyOf('block', key, 'first')), keyOf('block', key, 'more')) })
 }
 
 /** The reader's own retry: drops what is held for a block and reads it from its first page. */

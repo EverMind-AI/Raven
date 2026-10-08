@@ -68,6 +68,7 @@ const source: TrajectorySource = {
 
 const flush = async (): Promise<void> => { await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve() }) }
 const answer = async (r: TrajectoryBlockResult): Promise<void> => { await act(async () => { blockQueue.shift()!.resolve(r) }); await flush() }
+const refuse = async (e: unknown): Promise<void> => { await act(async () => { blockQueue.shift()!.reject(e) }); await flush() }
 const q = (sel: string): HTMLElement | null => document.querySelector<HTMLElement>(sel)
 
 const messages = (from: number, n: number) => Array.from({ length: n }, (_, k) => ({ role: 'user', content: `m${from + k}` }))
@@ -298,6 +299,68 @@ describe('a block tab', () => {
     await answer(body('messages', { items: messages(200, 20), offset: 200 }, { renderer: 'messages', next_cursor: 'c11', total_items: total }))
     expect(q('.trajectory-msg-open[data-index="200"] .trajectory-text-body')?.textContent).toBe('m200')
     expect(blockCalls).toHaveLength(4)
+  })
+
+  it('asks for the outline again when its first request failed after the reader had left, and once only for an empty list', async () => {
+    await ready()
+    act(() => { list.set({ ...list.get(), ...list.rowsOf([{ ...row, meta: { delta: 'first', new_from: 0, message_count: 3 } }]) }) })
+    const spec = descriptor.blocks[0]!
+    const first = render(<BlockView block={spec} />, { container: paneOf(5000) })
+    await flush()
+    expect(blockCalls).toEqual(['outline|'])
+    /* The reader leaves before the outline arrives; the request then fails on the wire. */
+    act(() => { first.unmount() })
+    list.select(null, { source: 'click' })
+    await refuse(new Error('socket closed'))
+    expect(details.get().outlines).toEqual({})
+    /* Back on the entry, the view asks on its own: no empty list stands in for the outline. */
+    list.select('r0', { source: 'click' })
+    await details.loadDescriptor()
+    render(<BlockView block={spec} />, { container: paneOf(5000) })
+    await flush()
+    expect(blockCalls).toEqual(['outline|', 'outline|'])
+    expect(q('.trajectory-v-none')).toBeNull()
+    /* An outline that really is empty is asked for once, and stays so across a remount. */
+    await answer(body('outline', { items: [], offset: 0 }, { renderer: 'items', total_items: 0 }))
+    expect(q('.trajectory-v-none')?.textContent).toBe('gui.trajectory.details.empty_list')
+    expect(details.outline()?.done).toBe(true)
+    cleanup()
+    render(<BlockView block={spec} />, { container: paneOf(5000) })
+    await flush()
+    expect(blockCalls).toEqual(['outline|', 'outline|'])
+    expect(q('.trajectory-v-none')?.textContent).toBe('gui.trajectory.details.empty_list')
+  })
+
+  it('says when a page of bodies failed, asks nothing more until the reader retries, then reads that page and goes on', async () => {
+    await ready()
+    const total = 60
+    act(() => { list.set({ ...list.get(), ...list.rowsOf([{ ...row, meta: { delta: 'first', new_from: 0, message_count: total } }]) }) })
+    render(<BlockView block={descriptor.blocks[0]!} />, { container: paneOf(30000) })
+    await flush()
+    await answer(body('outline', { items: outlineItems(0, total), offset: 0 }, { renderer: 'items', total_items: total }))
+    expect(blockCalls.at(-1)).toBe('messages|o0')
+    await answer(body('messages', { items: messages(0, 20), offset: 0 }, { renderer: 'messages', next_cursor: 'c1', total_items: total }))
+    expect(blockCalls.at(-1)).toBe('messages|o20')
+    await refuse(new Error('page two unavailable'))
+    /* The failure is said where the rows wait, and nothing is asked again on its own. */
+    expect(details.fault({ blockId: 'messages', more: true })).toBe('page two unavailable')
+    const alert = q('.trajectory-msgs-view [role=alert]')
+    expect(alert?.textContent).toContain('page two unavailable')
+    const asked = blockCalls.length
+    await flush()
+    expect(blockCalls).toHaveLength(asked)
+    expect(q('.trajectory-msg-open[data-index="20"] .trajectory-skel-line')).not.toBeNull()
+    /* The reader's retry reads the failed page; the rows after it in view then read theirs. */
+    act(() => { fireEvent.click(alert!.querySelector('.trajectory-link') as HTMLElement) })
+    await flush()
+    expect(q('.trajectory-msgs-view [role=alert]')).toBeNull()
+    expect(blockCalls.at(-1)).toBe('messages|o20')
+    await answer(body('messages', { items: messages(20, 20), offset: 20 }, { renderer: 'messages', next_cursor: 'c2', total_items: total }))
+    expect(q('.trajectory-msg-open[data-index="20"] .trajectory-text-body')?.textContent).toBe('m20')
+    expect(blockCalls.at(-1)).toBe('messages|o40')
+    await answer(body('messages', { items: messages(40, 20), offset: 40 }, { renderer: 'messages', next_cursor: null, total_items: total }))
+    expect(q('.trajectory-msg-open[data-index="59"] .trajectory-text-body')?.textContent).toBe('m59')
+    expect(blockCalls).toHaveLength(asked + 2)
   })
 
   it('names a body the gateway could not serve, and retries a failed read inside the block', async () => {
