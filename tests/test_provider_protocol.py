@@ -310,7 +310,7 @@ _FORCED_TOOL_REFUSAL = 'tool_choice: type "tool" and "any" are not supported for
 
 
 def test_anthropic_repairs_a_forced_tool_choice_a_400_refuses() -> None:
-    """A model that thinks refuses a call it is forced to make, and the 400 says so.
+    """A model can refuse a call it is forced to make, and the 400 says so.
     The tool stays on offer under ``auto``; only a forced choice is rewritten."""
     from raven.providers.anthropic_messages_provider import rewrite_on_400
 

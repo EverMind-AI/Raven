@@ -504,8 +504,8 @@ def rewrite_on_400(body: dict[str, Any], error_text: str) -> str | None:
         return "ceiling"
     forced = body.get("tool_choice")
     if "tool_choice" in text and isinstance(forced, dict) and forced.get("type") in {"tool", "any"}:
-        # Models that think refuse a forced call; under ``auto`` the tool stays on
-        # offer and a model that declines it answers in plain text.
+        # A model can refuse a forced call; under ``auto`` the tool stays on offer
+        # and a model that declines it answers in plain text.
         body["tool_choice"] = {"type": "auto"}
         return "tool_choice"
     if isinstance(body.get("reasoning"), dict) and "reasoning" in text:
