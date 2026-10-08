@@ -366,6 +366,7 @@ class TestTheCommand:
 
         home.mkdir(parents=True, exist_ok=True)
         (home / "web.json").write_text(json.dumps({"pid": os.getpid(), "port": 18999}), encoding="utf-8")
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
 
@@ -848,12 +849,15 @@ class TestTheSupervisor:
         assert serve_commands._gateway_holds_the_lock() is True
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")
 class TestStopping:
     @pytest.fixture(autouse=True)
     def _no_real_groups(self, monkeypatch) -> None:
         """The pids here are made up, and a real process may hold one. Left to
         the real calls, the escalation would read that process's group and
-        SIGKILL it, or fail on it and skip the wait being measured."""
+        SIGKILL it, or fail on it and skip the wait being measured. The
+        identity probe is nulled for the same reason: these tests are about
+        signal choreography, and argv reads are this file's other class."""
         import os
 
         def _no_such_process(pid: int) -> int:
@@ -861,6 +865,7 @@ class TestStopping:
 
         monkeypatch.setattr(os, "getpgid", _no_such_process)
         monkeypatch.setattr(os, "killpg", lambda *_a: pytest.fail("signalled a real process group"))
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
 
     @staticmethod
     def _resident(home: Path) -> None:
@@ -1095,6 +1100,69 @@ class TestStopping:
 
     def test_nothing_running_is_not_an_error(self, home: Path) -> None:
         assert serve_commands._stop_resident() is False
+
+
+class TestARecycledPid:
+    """The pid a killed gateway left in serve.json is the kernel's to give away.
+
+    A state file's pid can name a live process without naming raven at all.
+    """
+
+    @staticmethod
+    def _not_ours(monkeypatch) -> None:
+        """Every identity probe says the recorded pid belongs to somebody else."""
+        from raven.gateway import lock as _gateway_lock
+
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(_gateway_lock, "read_status", lambda _now: None)
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: False)
+
+    def test_a_leftover_names_a_pid_but_blocks_nothing(self, home: Path, monkeypatch, capsys) -> None:
+        """The stale-file case the locking refusal used to trip on: remove the
+        record and say so, rather than refusing to start beside it."""
+        self._not_ours(monkeypatch)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+
+        assert serve_commands._read_serve_pid() is None
+
+        assert not (home / "serve.json").exists()
+        assert "pid 222" in capsys.readouterr().out
+
+    def test_the_lock_holder_s_pid_is_read_as_its_own_page(self, home: Path, monkeypatch) -> None:
+        from raven.gateway import lock as _gateway_lock
+
+        info = _gateway_lock.LockInfo(pid=222, started_at=0.0, config_path="")
+        monkeypatch.setattr(_gateway_lock, "read_status", lambda _now: info)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+
+        assert serve_commands._read_serve_pid() == 222
+
+    def test_a_stop_never_signals_a_pid_that_is_not_ours(self, home: Path, monkeypatch) -> None:
+        import os
+
+        self._not_ours(monkeypatch)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+        monkeypatch.setattr(os, "kill", lambda *_a: pytest.fail("signalled a pid that was never proven ours"))
+
+        assert serve_commands._stop_resident() is False
+
+    def test_a_stop_clears_a_leftover_with_nothing_to_signal(self, home: Path, monkeypatch) -> None:
+        """What makes the recovery instructions true: the `--stop` the refusal
+        sends the reader to must end the state that refused them."""
+        from raven.gateway import lock as _gateway_lock
+
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: False)
+        monkeypatch.setattr(_gateway_lock, "read_status", lambda _now: None)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+
+        assert serve_commands._stop_resident() is False
+
+        assert not (home / "serve.json").exists()
 
 
 def test_web_is_registered_as_its_own_command() -> None:
