@@ -102,3 +102,27 @@ class TestThePosixReader:
         finally:
             sleeper.terminate()
             sleeper.wait(timeout=10)
+
+    def test_a_narrow_terminal_does_not_truncate_the_argv(self, monkeypatch) -> None:
+        """``ps`` sizes its output from the display width it inherits, and the
+        whole point of this reader is to find a flag that can sit past it."""
+        import os
+        import subprocess
+        import sys
+
+        if sys.platform == "win32":
+            import pytest
+
+            pytest.skip("the POSIX reader is not the Windows reader")
+
+        monkeypatch.setenv("COLUMNS", "40")
+        argv = [sys.executable, "-c", "import time; time.sleep(30)"]
+        sleeper = subprocess.Popen(argv, env={**os.environ, "COLUMNS": "40"})
+        try:
+            line = processes.command_line(sleeper.pid)
+            assert line is not None
+            assert argv[0] in line
+            assert "time.sleep" in line
+        finally:
+            sleeper.terminate()
+            sleeper.wait(timeout=10)
