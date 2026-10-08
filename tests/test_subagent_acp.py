@@ -2652,6 +2652,24 @@ async def test_an_unrouted_notification_is_journalled_rather_than_dropped(tmp_pa
     assert any(r.get("session") == "no-such-session" for r in records), "the stray update went unrecorded"
 
 
+async def test_an_agent_that_echoes_its_mcp_servers_leaves_no_secret_in_the_journal(tmp_path: Path) -> None:
+    """Grok reports the servers it was given, environment and headers included, in a
+    notification of its own. The journal records inbound frames as they arrive, so
+    the values it echoed were written down in plain text. Only the record is
+    redacted: the run itself goes on to completion."""
+    backend = build_third_party_backend(stub_config("a", mode="echoes_mcp_servers"))
+    assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    path = _journal_for("a")
+    raw = path.read_text(encoding="utf-8")
+    assert "echoed-env-secret" not in raw and "echoed-header-secret" not in raw
+    echo = next(r for r in _journal_records(path) if r.get("frame", {}).get("method") == "_x.ai/mcp/servers_updated")
+    server = echo["frame"]["params"]["mcpServers"][0]
+    assert echo["dir"] == "in"
+    assert server["env"] == [{"name": "STUB_AGENT_TOKEN", "value": "<redacted>"}]
+    assert server["headers"] == [{"name": "Authorization", "value": "<redacted>"}]
+
+
 async def test_stderr_is_journalled_beside_the_frames(tmp_path: Path) -> None:
     """An adapter can report a fatal condition only on stderr.
 

@@ -341,6 +341,27 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
         ok(request_id, {"stopReason": "end_turn"})
         return
+    if MODE == "echoes_mcp_servers":
+        # An agent that reports the MCP servers it was given back to its client,
+        # environment and headers included.
+        notify(
+            "_x.ai/mcp/servers_updated",
+            {
+                "mcpServers": [
+                    {
+                        "name": "private",
+                        "type": "stdio",
+                        "command": "npx",
+                        "args": [],
+                        "env": [{"name": "STUB_AGENT_TOKEN", "value": "echoed-env-secret"}],
+                        "headers": [{"name": "Authorization", "value": "echoed-header-secret"}],
+                    }
+                ]
+            },
+        )
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
+        ok(request_id, {"stopReason": "end_turn"})
+        return
     if MODE == "meta":
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "pong"}})
         ok(

@@ -630,7 +630,7 @@ class AcpClient:
                 # Before dispatch, so a notification the router has no sink for
                 # is recorded rather than dropped with only a debug line.
                 if self._journal is not None:
-                    self._journal.note("in", frame=frame, session=self._frame_session(frame))
+                    self._journal.note("in", frame=redact_acp_frame(frame), session=self._frame_session(frame))
                 await self._dispatch(frame)
         except asyncio.CancelledError:
             raise

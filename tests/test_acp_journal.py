@@ -88,6 +88,44 @@ def test_mcp_secrets_are_redacted_without_mutating_the_wire_frame() -> None:
     assert frame["params"]["mcpServers"][0]["headers"][0]["value"] == "header-secret"
 
 
+def test_a_notification_that_echoes_mcp_servers_is_redacted_whatever_its_method() -> None:
+    """An agent can report the servers it was given back to its client, environment
+    and headers included. What marks the frame is what it carries, not its method."""
+    frame = {
+        "method": "_x.ai/mcp/servers_updated",
+        "params": {
+            "mcpServers": [
+                {
+                    "name": "private",
+                    "command": "npx",
+                    "env": [{"name": "TOKEN", "value": "echoed-secret"}],
+                    "headers": [{"name": "Authorization", "value": "echoed-header"}],
+                }
+            ]
+        },
+    }
+
+    server = redact_acp_frame(frame)["params"]["mcpServers"][0]
+
+    assert server["env"] == [{"name": "TOKEN", "value": "<redacted>"}]
+    assert server["headers"] == [{"name": "Authorization", "value": "<redacted>"}]
+    assert server["command"] == "npx" and server["name"] == "private"
+    assert frame["params"]["mcpServers"][0]["env"][0]["value"] == "echoed-secret"
+
+
+def test_a_frame_that_carries_no_mcp_servers_is_journalled_as_it_is() -> None:
+    plain = [
+        {"method": "session/update", "params": {"sessionId": "s1", "update": {"sessionUpdate": "plan"}}},
+        {"method": "session/new", "params": {"cwd": "/work"}},
+        {"method": "session/new", "params": {"cwd": "/work", "mcpServers": []}},
+        {"method": "x", "params": {"mcpServers": "not-a-list"}},
+        {"method": "x", "params": None},
+        {"id": 3, "result": {"stopReason": "end_turn"}},
+    ]
+    for frame in plain:
+        assert redact_acp_frame(frame) == frame
+
+
 def test_reaching_the_ceiling_is_written_down(tmp_path: Path) -> None:
     """A journal that simply stopped would read as a connection that went quiet.
 

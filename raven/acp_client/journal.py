@@ -75,15 +75,18 @@ than skipping it."""
 
 
 def redact_acp_frame(frame: dict[str, Any]) -> dict[str, Any]:
-    """Return a journal-safe copy of a session frame carrying MCP secrets."""
-    if frame.get("method") not in ("session/new", "session/load"):
-        return frame
-    copied = deepcopy(frame)
-    params = copied.get("params")
+    """Return a journal-safe copy of a frame that carries MCP servers.
+
+    Recognised by what it carries, not by its method: raven's ``session/new`` and
+    ``session/load`` do, and so does an agent that echoes the servers it was
+    given back in a notification of its own (Grok's ``_x.ai/mcp/servers_updated``).
+    """
+    params = frame.get("params")
     servers = params.get("mcpServers") if isinstance(params, dict) else None
     if not isinstance(servers, list):
-        return copied
-    for server in servers:
+        return frame
+    copied = deepcopy(frame)
+    for server in copied["params"]["mcpServers"]:
         if not isinstance(server, dict):
             continue
         for field in ("env", "headers"):
