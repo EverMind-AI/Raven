@@ -116,6 +116,35 @@ Follow the prompts to configure a model provider and choose which built-in
 agents to enable. You can later add or update providers in the WebUI under
 **Settings > Model providers**.
 
+### Behind a corporate proxy or private CA
+
+Raven checks HTTPS certificates against your operating system's certificate
+store, so a root certificate your IT department installed there is trusted
+without extra settings. If a provider check reports `certificate_untrusted`,
+add the root certificate that signs your gateway or proxy to that store.
+
+On WSL2 the Linux distribution keeps its own store and does not see the
+certificates installed in Windows. Import the root once inside WSL:
+
+```bash
+sudo cp corporate-ca.pem /usr/local/share/ca-certificates/corporate-ca.crt
+sudo update-ca-certificates
+```
+
+The EverOS memory server and Node-based agents run as separate programs that
+read environment variables instead. Export these in your shell profile, not
+only in the current terminal, so every process Raven starts receives them:
+
+```bash
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem
+```
+
+`SSL_CERT_FILE` replaces the whole list of trusted roots, so point it at a
+complete bundle such as the one above, not at the corporate certificate alone.
+To go back to each library's own certificate list, export
+`RAVEN_NO_SYSTEM_CA=1` in the same profile.
+
 ## Start Raven
 
 Launch the WebUI with the Raven engine running in the background:

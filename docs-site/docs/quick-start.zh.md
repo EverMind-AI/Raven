@@ -105,6 +105,32 @@ raven onboard
 按照向导提示配置模型服务商，并选择要启用的内置 Agent。之后可以在 WebUI 的
 **设置 > 模型服务商（Settings > Model providers）**中添加或修改配置。
 
+### 公司代理或私有 CA { #behind-a-corporate-proxy-or-private-ca }
+
+Raven 用操作系统的证书库校验 HTTPS 证书，IT 部门装进系统的根证书无需额外设置即可
+被信任。如果服务商检测报告 `certificate_untrusted`，请把签发网关或代理证书的根证书
+加入该证书库。
+
+WSL2 中的 Linux 发行版有自己的证书库，看不到 Windows 里安装的证书。在 WSL 内导入
+一次根证书：
+
+```bash
+sudo cp corporate-ca.pem /usr/local/share/ca-certificates/corporate-ca.crt
+sudo update-ca-certificates
+```
+
+EverOS 记忆服务和基于 Node 的 Agent 作为独立程序运行，读取的是环境变量。请在 shell
+配置文件里导出下面两项，而不是只在当前终端里设置，这样 Raven 启动的每个进程都能拿到：
+
+```bash
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem
+```
+
+`SSL_CERT_FILE` 会替换整份受信任根证书列表，所以要指向上面这样的完整证书包，而不是
+只指向公司根证书。如需改回各个库自带的证书列表，在同一个配置文件里导出
+`RAVEN_NO_SYSTEM_CA=1`。
+
 ## 启动 Raven { #start-raven }
 
 启动 WebUI，同时在后台运行 Raven 引擎：
