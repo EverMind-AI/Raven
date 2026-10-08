@@ -1283,10 +1283,11 @@ async def test_a_huge_catalog_read_without_a_filter_asks_for_one(config_file):
 
 
 @pytest.mark.asyncio
-async def test_what_an_unset_media_model_still_needs_follows_the_keys_on_file(config_file):
+async def test_what_an_unset_media_model_still_needs_follows_the_keys_on_file(config_file, monkeypatch):
     """ "Setting a model is enough" was written as a fixed sentence, true only
     where a usable key happened to be set; without one the model told the user
     to pick a model and nothing more."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     line = lambda text: next(x for x in text.splitlines() if "tools.media.image.model =" in x)  # noqa: E731
     with_key = line(await _run(RavenConfigTool(), action="describe", path="tools"))
     assert "a model is all it lacks" in with_key
@@ -1296,6 +1297,43 @@ async def test_what_an_unset_media_model_still_needs_follows_the_keys_on_file(co
     config_file.write_text(json.dumps(raw))
     without = line(await _run(RavenConfigTool(), action="describe", path="tools"))
     assert "it also needs a key: tools.media.image.apiKey" in without and "all it lacks" not in without
+
+    # The tool also takes OPENROUTER_API_KEY while it calls OpenRouter.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
+    from_env = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "a model is all it lacks" in from_env
+
+
+@pytest.mark.asyncio
+async def test_what_an_unset_media_model_needs_asks_the_provider_it_would_borrow_from(config_file, monkeypatch):
+    """The OpenRouter key on file is borrowed by no section pointed elsewhere, and a
+    section on a named provider is paid by that provider's key alone."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    line = lambda text: next(x for x in text.splitlines() if "tools.media.image.model =" in x)  # noqa: E731
+    raw = json.loads(config_file.read_text())
+    raw["providers"] = {"openrouter": {"apiKey": "sk-or"}}
+    raw.setdefault("tools", {})["media"] = {"image": {"apiBase": "https://relay.test/v1"}}
+    config_file.write_text(json.dumps(raw))
+    elsewhere = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "it also needs a key: tools.media.image.apiKey" in elsewhere and "all it lacks" not in elsewhere
+
+    raw["tools"]["media"] = {"image": {"provider": "openai"}}
+    config_file.write_text(json.dumps(raw))
+    unpaid = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "it also needs a key: one under providers.openai" in unpaid and "all it lacks" not in unpaid
+
+    raw["providers"]["openai"] = {"apiKey": "sk-openai"}
+    config_file.write_text(json.dumps(raw))
+    paid = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "a model is all it lacks" in paid
+
+    # A key the provider keeps on an endpoint is the key the tool would use.
+    raw["providers"]["openai"] = {
+        "endpoints": [{"label": "main", "apiBase": "https://relay.test/v1", "apiKey": "sk-ep"}]
+    }
+    config_file.write_text(json.dumps(raw))
+    on_endpoint = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "a model is all it lacks" in on_endpoint
 
 
 @pytest.mark.asyncio

@@ -56,6 +56,11 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "tools.media.image.model",
         "tools.media.image.quality",
         "tools.media.image",
+        # Which configured provider the image tool runs on. The same reach as the
+        # pins below: the tool moves to an address and key the operator already
+        # configured for that provider, and the name is checked against the ones
+        # whose image API the tool can call. It names no address and carries no key.
+        "tools.media.image.provider",
         "channels.sendProgress",
         "channels.sendToolHints",
         "memory.memoryTopK",
@@ -1937,6 +1942,25 @@ async def test_image_selection_saves_both_fields_and_preserves_credentials(setti
     assert result == {"applied": True, "previous": {"model": "old", "quality": "low"}}
 
 
+async def test_image_selection_saves_the_provider_it_names(settings_cfg):
+    """The image role may run on a provider other than OpenRouter; the empty name is
+    the OpenRouter default, which is how a pick moves back to it."""
+    import json
+
+    image = {"apiKey": "secret", "model": "old", "quality": "low"}
+    settings_cfg.write_text(json.dumps({"tools": {"media": {"image": image}}}))
+    await console_module.settings_set(
+        {"key": "tools.media.image", "value": {"model": "gpt-image-2", "quality": "", "provider": "openai"}}
+    )
+    actual = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert actual == {**image, "model": "gpt-image-2", "quality": "", "provider": "openai"}
+
+    await console_module.settings_set(
+        {"key": "tools.media.image", "value": {"model": "openai/gpt-image-2", "quality": "", "provider": ""}}
+    )
+    assert json.loads(settings_cfg.read_text())["tools"]["media"]["image"]["provider"] == ""
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
@@ -1947,6 +1971,14 @@ async def test_image_selection_saves_both_fields_and_preserves_credentials(setti
         ("tools.media.image", {"model": "new", "quality": "ultra"}),
         ("tools.media.image", {"model": "new"}),
         ("tools.media.image", {"model": "new", "quality": "", "apiBase": "https://other.test"}),
+        # A provider the image tool cannot call, and one that does not exist.
+        ("tools.media.image", {"model": "new", "quality": "", "provider": "anthropic"}),
+        ("tools.media.image", {"model": "new", "quality": "", "provider": "no-such-vendor"}),
+        ("tools.media.image.provider", "anthropic"),
+        ("tools.media.image.provider", 7),
+        # Speech and video keep to OpenRouter: their request shapes are its own.
+        ("tools.media.speech", {"model": "new", "quality": "", "provider": "openai"}),
+        ("tools.media.video", {"model": "new", "quality": "", "provider": "openai"}),
     ],
 )
 async def test_invalid_image_selection_leaves_config_untouched(settings_cfg, key, value):
@@ -1956,7 +1988,7 @@ async def test_invalid_image_selection_leaves_config_untouched(settings_cfg, key
     assert settings_cfg.read_bytes() == before
 
 
-@pytest.mark.parametrize("key,value", [("model", "vendor/custom-image"), ("quality", "medium")])
+@pytest.mark.parametrize("key,value", [("model", "vendor/custom-image"), ("quality", "medium"), ("provider", "openai")])
 async def test_image_selection_leaves_are_writable(settings_cfg, key, value):
     import json
 

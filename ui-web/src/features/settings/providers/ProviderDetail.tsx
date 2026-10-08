@@ -78,6 +78,15 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
   const kind = kindOf(p)
   const checking = store.isBusy(busy(p.id))
+  /* Where this block draws the address field, if anywhere: above the key for a
+     provider reached by address, or alone for a vendor that takes no key. One
+     answer serves both places and the send. Two conditions once let a local
+     server that takes an address and no key meet both and show "Server address"
+     twice, each with its own Connect. And the address goes out only from a field
+     drawn here: `base` also holds the address `model.options` hands over for
+     display -- Gemini's bare host -- which a key-only vendor's block draws no
+     field for, and sending it stored an address nobody typed. */
+  const basePlace = kind === 'oauth' ? null : !needsKey(p) && takesBase(p) ? 'above' : !takesKey(p) ? 'alone' : null
   const save = (): void => {
     const k = key.trim()
     const b = base.trim()
@@ -85,11 +94,20 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
-    if (b) params.api_base = b
+    if (b && basePlace) params.api_base = b
     void store.connect(busy(p.id), p.id, params).then((ok) => { if (ok) setKey('') })
   }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')
   const tested = !!store.get().probes[p.id] || store.isBusy(`probe:${p.id}`)
+  const baseField = (
+    <Sec label={t('gui.settings.providers.base')}>
+      <span className="settings-taglist">
+        <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
+          onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
+        <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
+      </span>
+    </Sec>
+  )
   return (
     <>
       {kind === 'oauth' && (
@@ -106,15 +124,7 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           <Sec label={t('gui.settings.providers.billing')}><Rov>{t('gui.settings.providers.subscription')}</Rov></Sec>
         </>
       )}
-      {kind !== 'oauth' && !needsKey(p) && takesBase(p) && (
-        <Sec label={t('gui.settings.providers.base')}>
-          <span className="settings-taglist">
-            <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
-              onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-            <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
-          </span>
-        </Sec>
-      )}
+      {basePlace === 'above' && baseField}
       {kind !== 'oauth' && takesKey(p) && (
         <Sec label={<>{t(needsKey(p) ? 'gui.settings.providers.api_key' : 'gui.settings.providers.api_key_optional')}<KeyGet url={p.keyUrl} /></>}>
           <span className="settings-taglist">
@@ -135,19 +145,7 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           )}
         </div>
       )}
-      {/* The address for a provider that takes no key -- unless the block above
-          has already drawn it: a local server that takes an address and no
-          key met both conditions and showed "Server address" twice, each with
-          its own Connect. */}
-      {kind !== 'oauth' && !takesKey(p) && !(!needsKey(p) && takesBase(p)) && (
-        <Sec label={t('gui.settings.providers.base')}>
-          <span className="settings-taglist">
-            <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
-              onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-            <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
-          </span>
-        </Sec>
-      )}
+      {basePlace === 'alone' && baseField}
       {kind !== 'oauth' && needsKey(p) && (takesBase(p) || p.gateway || p.kind === 'endpoint') && (
         <AddressRow p={p} label={t('gui.settings.providers.api_base')}
           placeholder={p.needsBase ? 'https://' : (p.defaultApiBase || t('gui.settings.providers.base_default'))} />

@@ -176,6 +176,25 @@ describe('provider detail', () => {
     expect(calls).toEqual([['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }], ['fetchModels:verify', 'openai']])
   })
 
+  it('a key-only vendor connects with its key alone, whatever address it was handed', async () => {
+    /* `model.options` hands over a direct vendor's address for display --
+       Gemini's is Google's bare host -- and the Connection block draws no
+       address field for a key-only vendor. Sending it anyway stored an address nobody typed: the
+       key probe took the section for a proxy and Gemini's driver for its
+       versioned root. */
+    const data = snap()
+    data.providers = [...data.providers, {
+      id: 'gemini', name: 'Gemini', models: [], configured: [], on: false, kind: 'key', acceptsKey: true,
+      defaultApiBase: 'https://generativelanguage.googleapis.com',
+    }]
+    const { calls } = install(data)
+    await open('gemini')
+    const box = screen.getByLabelText('gui.settings.providers.api_key') as HTMLInputElement
+    await act(async () => { fireEvent.change(box, { target: { value: 'AIza-new' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'gemini', api_key: 'AIza-new' }], ['fetchModels:verify', 'gemini']])
+  })
+
   it('a local provider connects by address alone and refuses an empty one', async () => {
     const { calls } = install()
     await open('ollama')
@@ -186,6 +205,26 @@ describe('provider detail', () => {
     await act(async () => { fireEvent.change(box, { target: { value: 'http://localhost:11434' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
     expect(calls).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }], ['fetchModels:verify', 'ollama']])
+  })
+
+  it('sends the address from the field it draws alone for a vendor that takes no key', async () => {
+    /* The other place the address field is drawn: alone, for a vendor that takes
+       no key. `model.options` sends no such row today -- only OAuth and local
+       rows take none -- but the block still draws the field for one, and the
+       address typed there has to go out the way the one above the key does. The
+       row is connected, since Connect on a key-shaped row asks for a key first. */
+    const data = snap()
+    data.providers = [...data.providers, {
+      id: 'keyless', name: 'Keyless', models: [], configured: [], on: true, kind: 'key', acceptsKey: false,
+    }]
+    const { calls } = install(data)
+    await open('keyless')
+    const boxes = document.querySelectorAll('.settings-tp-main input[aria-label="gui.settings.providers.base"]')
+    expect(boxes).toHaveLength(1)
+    const box = boxes[0] as HTMLInputElement
+    await act(async () => { fireEvent.change(box, { target: { value: 'https://keyless.test/v1' } }) })
+    await act(async () => { fireEvent.click(box.parentElement!.querySelector('button')!) })
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'keyless', api_base: 'https://keyless.test/v1' }], ['fetchModels:verify', 'keyless']])
   })
 
   it('a header is added as a one-name patch and removed as a one-name null', async () => {

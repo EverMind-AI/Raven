@@ -149,6 +149,15 @@ async def test_options_rows_carry_the_gateway_flag(fake_home: Path) -> None:
     assert _entry(result, "anthropic")["gateway"] is False
 
 
+async def test_options_rows_say_which_providers_the_image_tool_runs_on(fake_home: Path) -> None:
+    """The roles card offers the image role exactly these, and the save checks the
+    same flag, so the two cannot disagree about a provider."""
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    result = await model_options({})
+    serving = sorted(row["slug"] for row in result["providers"] if row["image_api"])
+    assert serving == ["custom", "openai", "openrouter"]
+
+
 async def test_options_rows_carry_every_prefix_that_names_the_provider(fake_home: Path) -> None:
     """The set ``merge_key`` strips, so a client can ask the same identity.
 

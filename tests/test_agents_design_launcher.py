@@ -360,7 +360,7 @@ def test_no_host_llm_key_refuses_even_with_own_key(grounded, tmp_path):
 
 def test_unconfigured_host_model_refuses_even_with_another_provider_key(grounded, tmp_path):
     _host_config(tmp_path, {"providers": {"openrouter": {"apiKey": "sk-host-or"}}})
-    with pytest.raises(SystemExit, match="host Raven settings"):
+    with pytest.raises(SystemExit, match=r"host Raven settings before starting Design \(.+\)"):
         grounded.render_config(RUN_PY.parent / "config.json")
 
 

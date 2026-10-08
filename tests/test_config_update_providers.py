@@ -100,6 +100,38 @@ def test_set_gemini_extra_fields(cfg_path: Path) -> None:
     assert section["apiKeyList"] == ["k1", "k2", "k3"]
 
 
+def test_the_address_a_vendor_only_shows_is_stored_as_no_address(cfg_path: Path) -> None:
+    """Gemini's settings field shows Google's bare host where the section names
+    no address, and that host is display data rather than an address of the
+    section's own. Stored, it became the per-call base, which Gemini's driver
+    takes as the versioned root -- every chat went to a path Google answers 404.
+    So writing it writes no address, clearing one the section held, while any
+    other address, on the same host or not, is kept as typed."""
+    set_provider_fields("gemini", {"api_key": "g-key", "api_base": "https://proxy.test/v1"}, config_path=cfg_path)
+
+    set_provider_fields("gemini", {"api_base": "https://generativelanguage.googleapis.com/"}, config_path=cfg_path)
+    assert not _read(cfg_path)["providers"]["gemini"].get("apiBase")
+
+    set_provider_fields(
+        "gemini", {"api_base": "https://generativelanguage.googleapis.com/v1beta"}, config_path=cfg_path
+    )
+    assert _read(cfg_path)["providers"]["gemini"]["apiBase"] == "https://generativelanguage.googleapis.com/v1beta"
+
+
+@pytest.mark.parametrize("value", [123, ["x"], {"a": 1}, True, 1.5])
+def test_an_address_that_is_not_a_string_is_refused_by_the_schema(cfg_path: Path, value: Any) -> None:
+    """``model.set_fields`` takes any JSON value, so an address can arrive as a
+    number or a list. The check for the address a vendor only shows ran before
+    the schema and called ``strip()`` on it, raising ``AttributeError`` -- which
+    the RPC answers as an internal error -- where the schema refuses it with the
+    ``ValidationError`` that reads as a bad field."""
+    from pydantic import ValidationError
+
+    set_provider_fields("gemini", {"api_key": "g-key"}, config_path=cfg_path)
+    with pytest.raises(ValidationError):
+        set_provider_fields("gemini", {"api_base": value}, config_path=cfg_path)
+
+
 def test_set_api_key_for_oauth_provider_raises(cfg_path: Path) -> None:
     with pytest.raises(RuntimeError, match="OAuth"):
         set_provider_fields(
@@ -1674,16 +1706,22 @@ def test_a_vendor_litellm_knows_the_address_of_is_actually_probed(cfg_path: Path
     assert result["status"] == "invalid_key", "a bad key is now distinguishable from an unconfigured one"
 
 
-def test_a_vendor_with_no_catalogue_endpoint_is_reported_as_unprobed_not_unconfigured(cfg_path: Path) -> None:
+def test_a_vendor_with_no_catalogue_endpoint_is_reported_as_unprobed_not_unconfigured(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A vendor that keeps its address inside its SDK has no ``/models`` to ping
     and nothing the user could supply. The key is there; this probe simply
     cannot reach the vendor. Saying so is the honest answer, and it is not a
     failure.
 
-    OpenAI rather than Anthropic: this used to name three vendors, and two of
-    them turned out to publish a catalogue after all -- see
-    ``_CATALOGUE_SHAPES``, which now probes those two where they actually
-    answer. The rule this pins is the same one, on the vendor it still fits."""
+    This used to name three vendors, and each turned out to publish a
+    catalogue after all -- see ``_CATALOGUE_SHAPES``, which now probes them
+    where they actually answer. OpenAI was the last vendor in the registry the
+    rule fitted, so its entry is taken out here to keep the rule pinned for the
+    next one that has nowhere to be asked."""
+    from raven.config import update_providers
+
+    monkeypatch.delitem(update_providers._CATALOGUE_SHAPES, "openai")
     _seed_key(cfg_path, "openai", "sk-openai")
 
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - must not be reached
@@ -1707,25 +1745,28 @@ def test_a_provider_that_genuinely_needs_an_address_still_says_so(cfg_path: Path
 
 
 def test_a_404_from_an_address_we_guessed_is_not_reported_as_a_broken_key(cfg_path: Path) -> None:
-    """DeepSeek's completions endpoint is ``/beta``, which has no ``/models``.
+    """The address LiteLLM sends completions to need not list any models.
 
-    A 404 never says anything about a credential, so surfacing it as a failure
-    would be the original lie in a new spelling. A 404 from an address the *user*
-    supplied is different -- that is a typo they need to see -- so this only
-    applies where the address was derived.
+    DeepSeek's ``/beta`` was the case that showed it, and this used to drive
+    DeepSeek, until its catalogue was filed in ``_CATALOGUE_SHAPES``; Z.ai still
+    reaches the probe through a derived address. A 404 never says anything
+    about a credential, so surfacing it as a failure would be the original lie
+    in a new spelling. A 404 from an address the *user* supplied is different
+    -- that is a typo they need to see -- so this only applies where the
+    address was derived.
     """
-    _seed_key(cfg_path, "deepseek", "sk-deepseek")
+    _seed_key(cfg_path, "zai", "sk-zai")
 
     derived = probe_provider(
-        "deepseek",
+        "zai",
         config_path=cfg_path,
         transport=_mock_transport(lambda r: httpx.Response(404, json={"error": "not found"})),
     )
     assert derived["status"] == "no_probe_endpoint"
 
-    set_provider_fields("deepseek", {"api_base": "https://typo.example.com/v1"}, config_path=cfg_path)
+    set_provider_fields("zai", {"api_base": "https://typo.example.com/v1"}, config_path=cfg_path)
     typed = probe_provider(
-        "deepseek",
+        "zai",
         config_path=cfg_path,
         transport=_mock_transport(lambda r: httpx.Response(404, json={"error": "not found"})),
     )
@@ -1833,6 +1874,195 @@ def test_an_address_of_ones_own_keeps_the_shape_that_address_speaks(cfg_path: Pa
     assert result["ok"] is True
     assert seen["url"] == "https://proxy.test/v1/models"
     assert seen["auth"] == "Bearer sk-ant-x"
+
+
+@pytest.mark.parametrize(
+    ("slug", "key", "api_base", "header", "listed_at"),
+    [
+        (
+            "gemini",
+            "AIza-TEST",
+            "https://generativelanguage.googleapis.com/v1beta",
+            "x-goog-api-key",
+            "https://generativelanguage.googleapis.com/v1beta/models",
+        ),
+        (
+            "gemini",
+            "AIza-TEST",
+            "https://generativelanguage.googleapis.com/",
+            "x-goog-api-key",
+            "https://generativelanguage.googleapis.com/v1beta/models",
+        ),
+        ("anthropic", "sk-ant-x", "https://api.anthropic.com/v1", "x-api-key", "https://api.anthropic.com/v1/models"),
+    ],
+)
+def test_the_vendors_own_address_is_probed_the_way_that_vendor_answers(
+    cfg_path: Path, slug: str, key: str, api_base: str, header: str, listed_at: str
+) -> None:
+    """The vendor's own address -- its bare host, or the root its catalogue hangs
+    from -- is nobody's proxy, so the rule above does not reach it.
+
+    A section pointed at Google's own host was sent a bearer token, which Google's
+    native routes read as an OAuth token and refuse with 401 whatever the key --
+    and the settings dialog told the user the provider rejected a key that works.
+    The address is written to the file directly: the settings write stores
+    Google's bare host as no address at all, and an endpoint or a hand edit is
+    how a section still holds it."""
+    _seed_key(cfg_path, slug, key)
+    data = _read(cfg_path)
+    data["providers"][slug]["apiBase"] = api_base
+    cfg_path.write_text(json.dumps(data), encoding="utf-8")
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["key"] = request.headers.get(header)
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(200, json={"data": [], "models": []})
+
+    result = probe_provider(slug, config_path=cfg_path, transport=_mock_transport(handler))
+    assert result["ok"] is True
+    assert seen["url"].startswith(listed_at)
+    assert seen["key"] == key
+    assert seen["auth"] is None
+
+
+@pytest.mark.parametrize(
+    ("slug", "api_base", "asked_at"),
+    [
+        ("openai", "https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1/chat/completions/models"),
+        ("openai", "https://api.openai.com:8443/v1", "https://api.openai.com:8443/v1/models"),
+        (
+            "anthropic",
+            "https://api.anthropic.com/mycorp-gateway/v1",
+            "https://api.anthropic.com/mycorp-gateway/v1/models",
+        ),
+    ],
+)
+def test_an_address_on_the_vendors_host_that_is_not_its_own_is_asked_where_it_points(
+    cfg_path: Path, slug: str, api_base: str, asked_at: str
+) -> None:
+    """Only the vendor's own address stands for its catalogue. Another port, or a
+    path below the root -- an endpoint pasted whole -- is not where the vendor
+    answers, and taking it for the vendor answered from the vendor's catalogue,
+    so a typo there read as a verified key. Asked where it points, it reads as
+    the 404 it is, the way it does on any other host."""
+    _seed_key(cfg_path, slug, "k-test")
+    set_provider_fields(slug, {"api_base": api_base}, config_path=cfg_path)
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization")))
+        return httpx.Response(404, json={"error": {"message": "not found"}})
+
+    result = probe_provider(slug, config_path=cfg_path, transport=_mock_transport(handler))
+    assert seen == [(asked_at, "Bearer k-test")]
+    assert result["status"] == "http_404"
+
+
+@pytest.mark.parametrize("slug", ["gemini", "openai", "groq"])
+def test_an_address_that_does_not_parse_is_reported_not_raised(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch, slug: str
+) -> None:
+    """``urlsplit`` raises on an address that does not parse -- ``http://[``
+    opens an IPv6 literal it never closes -- and a probe whose contract is a
+    dict, never an exception, let that error out, so the settings dialog saw an
+    internal error. Such an address is no vendor's own: it is asked on the
+    generic path, and its failure reads as the network error it is, which needs
+    the proxy lookup after the failed request to survive it too. The real error
+    branch runs here, which an injected transport would skip."""
+    monkeypatch.undo()
+    asked: list[str] = []
+
+    def refuse(self, url, **kwargs):
+        asked.append(url)
+        raise httpx.ConnectError("unreachable")
+
+    monkeypatch.setattr(httpx.Client, "get", refuse)
+    _seed_key(cfg_path, slug, "k-test")
+    set_provider_fields(slug, {"api_base": "http://["}, config_path=cfg_path)
+
+    result = probe_provider(slug, config_path=cfg_path, timeout_s=5)
+    assert asked == ["http://[/v1/models"]
+    assert result["status"] == "network_error"
+
+
+@pytest.mark.parametrize(
+    ("slug", "stored", "listed_at"),
+    [
+        ("openai", None, "https://api.openai.com/v1/models"),
+        ("deepseek", None, "https://api.deepseek.com/v1/models"),
+        ("deepseek", "https://api.deepseek.com/beta", "https://api.deepseek.com/v1/models"),
+    ],
+)
+def test_a_vendor_no_stored_address_reaches_is_asked_where_it_lists_its_models(
+    cfg_path: Path, slug: str, stored: str | None, listed_at: str
+) -> None:
+    """A section holds no address once the settings dialog stops storing the one
+    it only shows, and for these two that left the probe nowhere useful to ask.
+    LiteLLM keeps OpenAI's address inside its SDK, so nothing was sent and a
+    working key read as unprobed; it sends DeepSeek's completions to ``/beta``,
+    which lists no models, so the probe was refused there. Both list their
+    models at a fixed address that takes the bearer token. A DeepSeek section
+    still holding ``/beta`` from before its shown address moved is on the
+    vendor's own host, so it is asked there too."""
+    _seed_key(cfg_path, slug, "sk-test")
+    if stored:
+        set_provider_fields(slug, {"api_base": stored}, config_path=cfg_path)
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), request.headers.get("authorization")))
+        if str(request.url) == listed_at:
+            return httpx.Response(200, json={"data": [{"id": "m1"}]})
+        return httpx.Response(404, json={"error": "not found"})
+
+    result = probe_provider(slug, config_path=cfg_path, transport=_mock_transport(handler))
+    assert seen == [(listed_at, "Bearer sk-test")]
+    assert result["status"] == "valid"
+    assert result["model_ids"] == ["m1"]
+
+
+def test_google_naming_the_key_wrong_reads_as_a_refused_key(cfg_path: Path) -> None:
+    """Google refuses a key it does not know with 400, not the 401 the status
+    table maps: INVALID_ARGUMENT, with an ErrorInfo reason of API_KEY_INVALID.
+    The body below is what generativelanguage.googleapis.com returned for a
+    made-up key. Read by status alone it was ``http_400``, "couldn't verify",
+    for a key the vendor named as wrong; any other 400 still reads as one."""
+    _seed_key(cfg_path, "gemini", "AIza-WRONG")
+    refused = {
+        "error": {
+            "code": 400,
+            "message": "API key not valid. Please pass a valid API key.",
+            "status": "INVALID_ARGUMENT",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "API_KEY_INVALID",
+                    "domain": "googleapis.com",
+                    "metadata": {"service": "generativelanguage.googleapis.com"},
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+                    "locale": "en-US",
+                    "message": "API key not valid. Please pass a valid API key.",
+                },
+            ],
+        }
+    }
+    malformed = {"error": {"code": 400, "message": "Invalid page size.", "status": "INVALID_ARGUMENT"}}
+
+    result = probe_provider(
+        "gemini", config_path=cfg_path, transport=_mock_transport(lambda _r: httpx.Response(400, json=refused))
+    )
+    assert result["status"] == "invalid_key"
+    assert result["http_status"] == 400
+    assert result["ok"] is False
+
+    result = probe_provider(
+        "gemini", config_path=cfg_path, transport=_mock_transport(lambda _r: httpx.Response(400, json=malformed))
+    )
+    assert result["status"] == "http_400"
 
 
 def test_a_full_catalogue_asks_the_sibling_endpoints_a_probe_does_not(cfg_path: Path) -> None:

@@ -197,6 +197,10 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
   const [ver, setVer] = useState('2024-10-21')
   const close = (): void => store.set({ provAdd: null, err: '' })
   if (!p) return <div className="settings-cfg settings-padd"><Row><Rov>{t('gui.settings.providers.all_connected')}</Rov></Row></div>
+  /* One answer for drawing the address field and for sending it: `base` is
+     seeded with the address `model.options` hands over for display, and a
+     key-only vendor's form, which draws no field, sent it anyway. */
+  const drawsBase = takesBase(p) || !!p.gateway || p.kind === 'endpoint'
   const connect = (): void => {
     const k = key.trim()
     const b = base.trim()
@@ -204,7 +208,7 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
-    if (b) params.api_base = b
+    if (b && drawsBase) params.api_base = b
     void (async () => {
       if (!await store.connect(`connect:${p.id}`, p.id, params)) return
       if (p.id === AZURE && (deploy.trim() || ver.trim())) {
@@ -237,7 +241,7 @@ function AddBlock({ slug, hideCancel }: { slug: string; hideCancel?: boolean }):
                 onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !saving) connect() }} />
             </Row>
           )}
-          {(takesBase(p) || p.gateway || p.kind === 'endpoint') && (
+          {drawsBase && (
             <Row label={t('gui.settings.providers.base')}>
               <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')}
                 placeholder={kindOf(p) === 'local' ? 'http://localhost:11434' : (p.needsBase ? 'https://' : (p.defaultApiBase || t('gui.settings.providers.base_default')))}

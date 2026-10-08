@@ -774,6 +774,13 @@ def set_provider_fields(
                 from raven.providers.wire import stored_model_id
 
                 coerced = [stored_model_id(name, str(m)) for m in coerced]
+            if path_key == "api_base" and spec is not None and spec.is_display_only(coerced):
+                # The address a settings field shows in place of a default is
+                # not one the section needs, and stored it reached the driver as
+                # a per-call base: Gemini's takes it as the versioned root, so
+                # every chat went to a path Google answers 404. Writing it is
+                # writing none, which also clears a proxy the section held.
+                coerced = None
             prev[path_key] = _set_nested(path_key, coerced, working)
 
         validated = cls.model_validate(working)
@@ -1272,7 +1279,28 @@ def resolve_provider_credentials(name: str, *, config_path: Path | None = None) 
         # second let the same bad config raise from one line higher.
         cls = _provider_schema_cls(name)
         instance = cls()
-    endpoints = provider_endpoints(instance)
+    api_base, api_key, _ = provider_connection(name, instance)
+    if not api_key or not api_base:
+        return None
+    return api_base, api_key
+
+
+def provider_connection(name: str, section: Any) -> tuple[str, str, dict[str, str]]:
+    """The address, key and headers a request to ``name`` goes out on, read off ``section``.
+
+    The selection :func:`resolve_provider_credentials` makes, for a caller already
+    holding the validated section (or ``None`` for none): the first endpoint with a
+    key, else the first endpoint's address, then the spec's default. The headers
+    are that same endpoint's, the section's flat ones included where it names
+    none -- a url/key/header group is reachable only whole. Any part may come back
+    empty -- an OAuth seat hands out no key, and a vendor nothing here knows an
+    address for has none -- and what an empty part means is the caller's to say.
+    """
+    name = canonical_provider_name(name)
+    spec = _provider_spec(name)
+    if spec is not None and spec.is_oauth:
+        return "", "", {}
+    endpoints = provider_endpoints(section) if section is not None else []
     endpoint = next((ep for ep in endpoints if ep.api_key), endpoints[0] if endpoints else None)
     api_key = endpoint.api_key if endpoint else ""
     api_base = (
@@ -1285,9 +1313,8 @@ def resolve_provider_credentials(name: str, *, config_path: Path | None = None) 
         # provider had no usable credential.
         or _PROVIDER_BASE_URL_FALLBACK.get(name, "")
     )
-    if not api_key or not api_base:
-        return None
-    return str(api_base).rstrip("/"), str(api_key)
+    headers = dict(endpoint.extra_headers or {}) if endpoint else {}
+    return str(api_base or "").rstrip("/"), str(api_key or ""), headers
 
 
 def test_provider(
@@ -1322,8 +1349,12 @@ def test_provider(
     1. Look up the provider's ``api_key`` or provider-specific OAuth access
        token and ``api_base``
        (falling back to ``ProviderSpec.default_api_base`` when unset).
-    2. ``GET {api_base}/v1/models`` with ``Authorization: Bearer {key}``.
-    3. Map status code → keyword (see ``_HTTP_STATUS_MAP``). Unknown codes
+    2. ``GET {api_base}/v1/models`` with ``Authorization: Bearer {key}`` --
+       except a vendor in ``_CATALOGUE_SHAPES``, asked at its own catalogue
+       with its own header unless the section names an address other than
+       the vendor's own.
+    3. Map status code → keyword (see ``_HTTP_STATUS_MAP``), with a 400 that
+       names the key invalid read as ``invalid_key``. Unknown codes
        render as ``http_{code}``. Network errors → ``network_error``.
 
     Returns a dict, never raises. ``transport`` is injectable so unit tests
@@ -1452,17 +1483,23 @@ def test_provider(
 
     extras = _CATALOGUE_EXTRAS.get(spec.name, ()) if (spec and full_catalogue) else ()
     shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
-    if shape and api_key and not api_base:
-        # The vendor's own catalogue, for the two whose address is not in the
-        # registry and whose door is not opened by a bearer token. Asked before
-        # the derivation below, which answers "" for both of them and leaves the
-        # guard after it reporting `no_probe_endpoint` for a working key.
+    native = shape(api_key) if shape and api_key else None
+    own = _own_addresses(spec.name, native[0]) if spec and native else ()
+    if native and (not api_base or api_base.rstrip("/") in own):
+        # The vendor's own catalogue, for the vendors in `_CATALOGUE_SHAPES`,
+        # whose catalogue neither a stored nor a derived address reaches. Asked
+        # before the derivation below, which answers "" for most of them and
+        # leaves the guard after it reporting `no_probe_endpoint` for a working key.
         #
-        # Only when nothing else supplied an address: a section pointed at an
-        # api_base is pointed at somebody's proxy, and a proxy speaks the OpenAI
-        # shape the generic path sends. Answering that with Google's header
-        # would break a probe that works today.
-        url, shaped = shape(api_key)
+        # Only when nothing else supplied an address, or the one supplied is the
+        # vendor's own (`_own_addresses`): any other is somebody's proxy or a typo,
+        # and the generic path asks it where it points. A proxy speaks the OpenAI
+        # shape that path sends -- answering it with Google's header would break a
+        # probe that works today. The vendor's own address speaks only its own
+        # shape: Google's native routes read a bearer token as an OAuth token and
+        # refuse it with 401 whatever the key, which the settings dialog reported
+        # as a refused key.
+        url, shaped = native
         # The vendor's own auth header wins over a configured one, for the same
         # reason `Authorization` does below: this probe reports on the credential
         # it resolved, not on one the section names beside it.
@@ -1504,18 +1541,6 @@ def test_provider(
             ),
         }
 
-    extras = _CATALOGUE_EXTRAS.get(spec.name, ()) if (spec and full_catalogue) else ()
-    shape = _CATALOGUE_SHAPES.get(spec.name) if spec else None
-    if shape and api_key and not api_base:
-        # The vendor's own catalogue, for the two whose address is not in the
-        # registry and whose door is not opened by a bearer token. Only when
-        # nothing else supplied an address: a section pointed at an api_base is
-        # pointed at somebody's proxy, and a proxy speaks the OpenAI shape the
-        # generic path below sends -- answering it with Google's header would
-        # break a probe that works today.
-        url, headers = shape(api_key)
-        return _probe_models_endpoint(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
-
     url = api_base.rstrip("/") + "/models"
     if "/v1" not in api_base:
         url = api_base.rstrip("/") + "/v1/models"
@@ -1529,9 +1554,10 @@ def test_provider(
         result = _confirm_credential(spec, api_base, url, headers, result, timeout_s=timeout_s, transport=transport)
     if derived_api_base and result.get("status") == "http_404":
         # The address LiteLLM sends completions to is not always where the
-        # catalogue lives -- DeepSeek's is `/beta`, which has no `/models`. A 404
-        # never says anything about the credential, so reporting a failure here
-        # would be the same lie in a new spelling.
+        # catalogue lives -- DeepSeek's `/beta` lists no models, which is why
+        # DeepSeek's catalogue is now filed in `_CATALOGUE_SHAPES` and no longer
+        # reaches this. A 404 never says anything about the credential, so
+        # reporting a failure here would be the same lie in a new spelling.
         return {
             **result,
             "ok": False,
@@ -1579,16 +1605,6 @@ def _litellm_api_base(spec: Any) -> str:
     return base or ""
 
 
-#: The two vendors that publish a catalogue but no address the probe can find.
-#: Keyed by provider name; each entry answers "where, and with which headers"
-#: for a key already in hand, and is consulted only when the section names no
-#: ``api_base`` of its own -- see the call site.
-#:
-#: Neither ships a ``default_api_base`` and LiteLLM keeps their address inside
-#: its SDK, so before this table the probe had nowhere to ask and answered
-#: ``no_probe_endpoint`` for a perfectly good key. Everything else either speaks
-#: the OpenAI shape or arrives through its own probe (``_probe_codex_catalog``,
-#: ``_probe_copilot_seat``).
 #: Sibling catalogue endpoints a provider serves beside its main one: the path
 #: replacing the last segment of the probed URL, and what being listed there
 #: proves about a model.
@@ -1606,6 +1622,17 @@ _CATALOGUE_EXTRAS: dict[str, tuple[tuple[str, str], ...]] = {
     "openrouter": (("embeddings/models", "embedding"), ("images/models", "image-generation")),
 }
 
+#: The vendors whose catalogue the probe cannot find from an address alone.
+#: Keyed by provider name; each entry answers "where, and with which headers"
+#: for a key already in hand, and is consulted when the section names no
+#: ``api_base`` of its own or the vendor's own address -- see the call site.
+#:
+#: None ships a ``default_api_base``. LiteLLM keeps Anthropic's, Google's and
+#: OpenAI's address inside its SDK, so before this table the probe had nowhere to
+#: ask and answered ``no_probe_endpoint`` for a perfectly good key; it sends
+#: DeepSeek's completions to ``/beta``, which lists no models. Everything else
+#: either speaks the OpenAI shape at an address the probe can derive or arrives
+#: through its own probe (``_probe_codex_catalog``, ``_probe_copilot_seat``).
 _CATALOGUE_SHAPES: dict[str, Any] = {
     "anthropic": lambda key: (
         "https://api.anthropic.com/v1/models?limit=1000",
@@ -1618,6 +1645,10 @@ _CATALOGUE_SHAPES: dict[str, Any] = {
         "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
         {"x-goog-api-key": key},
     ),
+    # These two take the bearer token. Their address is only shown in the
+    # settings dialog, never stored, so a section rarely names one.
+    "openai": lambda key: ("https://api.openai.com/v1/models", {"Authorization": f"Bearer {key}"}),
+    "deepseek": lambda key: ("https://api.deepseek.com/v1/models", {"Authorization": f"Bearer {key}"}),
 }
 
 
@@ -1681,11 +1712,42 @@ def _env_proxy_for(url: str) -> str | None:
     import urllib.request
     from urllib.parse import urlsplit
 
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        # Asked after the request already failed: an address that does not
+        # parse is reported as that failure, not raised past it.
+        return None
     if not parts.hostname or urllib.request.proxy_bypass(parts.hostname):
         return None
     proxies = urllib.request.getproxies()
     return proxies.get(parts.scheme) or proxies.get("all") or None
+
+
+#: Addresses a section can hold for a vendor in `_CATALOGUE_SHAPES` besides the
+#: two `_own_addresses` reads off its catalogue. DeepSeek's settings field showed
+#: `/beta` before it showed the root, and stored it, so sections saved then
+#: still hold it.
+_MORE_OWN_ADDRESSES: dict[str, tuple[str, ...]] = {
+    "deepseek": ("https://api.deepseek.com/beta",),
+}
+
+
+def _own_addresses(vendor: str, catalogue: str) -> tuple[str, ...]:
+    """The addresses a section can hold and still name ``vendor`` itself: its
+    bare host and the root its ``catalogue`` hangs from, plus any in
+    `_MORE_OWN_ADDRESSES`.
+
+    A section's address is matched against these as written, not by host.
+    Only the vendor serves its own host, but a path or a port it does not
+    answer at is a typo or somebody's proxy, and taken for the vendor it was
+    answered from the vendor's catalogue, so a typo read as a verified key.
+    Asked where it points, it gets that address's own answer -- for a typo,
+    the 404 the user needs to see.
+    """
+    root = catalogue.split("?", 1)[0].removesuffix("/models")
+    parts = urlparse(root)
+    return (f"{parts.scheme}://{parts.netloc}", root, *_MORE_OWN_ADDRESSES.get(vendor, ()))
 
 
 def _without_userinfo(url: str) -> str:
@@ -1787,6 +1849,8 @@ def _probe_models_endpoint(
 
     elapsed_ms = int((time.monotonic() - start) * 1000)
     status_keyword = _HTTP_STATUS_MAP.get(resp.status_code, f"http_{resp.status_code}")
+    if resp.status_code == 400 and _refuses_the_key(resp):
+        status_keyword = "invalid_key"
 
     models_count: int | None = None
     model_ids: list[str] | None = None
@@ -1824,6 +1888,23 @@ def _probe_models_endpoint(
         "model_ids": model_ids,
         "error": None if resp.status_code == 200 else f"HTTP {resp.status_code}",
     }
+
+
+def _refuses_the_key(resp: httpx.Response) -> bool:
+    """Whether a 400 names the key as what the vendor refused.
+
+    Google answers a key it does not know with 400 rather than the 401 the status
+    table maps: INVALID_ARGUMENT, carrying an ErrorInfo detail whose reason is
+    ``API_KEY_INVALID``. Read by status alone that was ``http_400`` -- "couldn't
+    verify" -- for a key the vendor had named as wrong.
+    """
+    try:
+        details = resp.json()["error"]["details"]
+    except (ValueError, KeyError, TypeError):
+        return False
+    return isinstance(details, list) and any(
+        isinstance(detail, dict) and detail.get("reason") == "API_KEY_INVALID" for detail in details
+    )
 
 
 def _sibling_ids(

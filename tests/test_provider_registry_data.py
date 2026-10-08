@@ -159,6 +159,28 @@ def test_a_shown_address_reaches_the_pane_and_nothing_else() -> None:
         assert spec.usable_default_api_base == "", f"{slug} would now send its own base to the router"
 
 
+def test_only_the_address_a_spec_shows_in_place_of_a_default_is_display_only() -> None:
+    """A section holding the shown address holds no address of its own, which is
+    what lets a write and a migration drop it. That holds only where the shown
+    address stands in for a default the spec does not state: a stated default is
+    the real answer, one the router may send to, so a spec carrying both keeps
+    the address. No spec in the registry does today, which is why this is
+    asserted on specs built here. Nor is anything but a string the address: both
+    callers hand it values read from JSON."""
+    from raven.providers.registry import ProviderSpec
+
+    shown = ProviderSpec(name="v", keywords=(), env_key="", shown_api_base="https://api.v.test")
+    stated = ProviderSpec(
+        name="w", keywords=(), env_key="", default_api_base="https://api.w.test", shown_api_base="https://api.w.test"
+    )
+
+    assert shown.is_display_only("https://api.v.test/")
+    assert not shown.is_display_only("https://api.v.test/v1")
+    assert not shown.is_display_only(None)
+    assert not shown.is_display_only(123)
+    assert not stated.is_display_only("https://api.w.test")
+
+
 def test_a_hyphenated_vendor_still_reaches_its_rows() -> None:
     """The case that went wrong, named. nano-gpt is the one vendor in the file
     whose upstream name carries a hyphen, and it is reachable only because the

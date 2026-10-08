@@ -94,7 +94,11 @@ def _media_attrs() -> list[str]:
     """
     from raven.config.schema import MediaGenConfig, MediaToolConfig
 
-    return [n for n, f in MediaGenConfig.model_fields.items() if f.annotation is MediaToolConfig]
+    return [
+        n
+        for n, f in MediaGenConfig.model_fields.items()
+        if isinstance(f.annotation, type) and issubclass(f.annotation, MediaToolConfig)
+    ]
 
 
 def _loop(workspace: Path, config, **kw) -> AgentLoop:
@@ -323,6 +327,73 @@ def test_an_exported_key_is_reusable_too(attr, tool, monkeypatch: pytest.MonkeyP
     assert not config.providers.openrouter.api_key, "the environment must be the only source"
 
     assert borrowable_credential(cap, config) == "OPENROUTER_API_KEY"
+
+
+def test_a_media_section_on_a_named_provider_is_paid_by_that_provider(workspace, tmp_path: Path) -> None:
+    """The provider the section names supplies its address and its key together; the
+    OpenRouter key on the same install is not consulted."""
+    config = _config(tmp_path)
+    config.tools.media.image.model = "openai/gpt-image-2"
+    config.tools.media.image.provider = "openai"
+    config.providers.openai.api_key = "sk-openai"
+    config.providers.openrouter.api_key = "sk-or-test"
+    loop = _loop(workspace, config)
+
+    cap = next(c for c in CAPABILITIES if c.tool == "image_generate")
+    resolved = _resolved(config, "image")
+    assert (resolved.api_base, resolved.api_key) == ("https://api.openai.com/v1", "sk-openai")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("image_generate")
+    assert configured_from(cap, config) == "borrowed: providers.openai.apiKey"
+    assert has_credential(cap, config)
+
+
+def test_a_named_provider_whose_section_does_not_validate_lends_nothing_at_boot() -> None:
+    """An undeclared provider's section loads as raw data and is validated only when
+    read, so the boot resolution reads it as absent rather than raising on start."""
+    from raven.config.schema import Config
+
+    config = Config.model_validate(
+        {
+            "providers": {"weirdvendor": {"apiKey": 123}},
+            "tools": {"media": {"image": {"model": "m", "provider": "weirdvendor"}}},
+        }
+    )
+    resolved = _resolved(config, "image")
+    assert (resolved.api_base, resolved.api_key) == ("", "")
+
+
+def test_an_unconfigured_section_on_a_named_provider_would_borrow_that_providers_key(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.tools.media.image.provider = "openai"
+    config.providers.openrouter.api_key = "sk-or-test"
+    cap = next(c for c in CAPABILITIES if c.tool == "image_generate")
+    assert borrowable_credential(cap, config) == ""
+
+    config.providers.openai.api_key = "sk-openai"
+    assert borrowable_credential(cap, config) == "providers.openai.apiKey"
+
+
+@pytest.mark.parametrize(
+    ("attr", "tool"),
+    [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
+)
+def test_a_media_section_pointed_elsewhere_claims_no_openrouter_key(
+    attr, tool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Neither OpenRouter credential reaches a section whose address is somewhere else,
+    so neither may be reported as its source -- that row would read as working."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-from-env")
+    config = _config(tmp_path)
+    config.providers.openrouter.api_key = "sk-or-test"
+    section = getattr(config.tools.media, attr)
+    section.api_base = "https://relay.test/v1"
+    cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert borrowable_credential(cap, config) == ""
+
+    section.model = "some/model"
+    assert not _resolved(config, attr).api_key
+    assert configured_from(cap, config) == ""
+    assert not has_credential(cap, config)
 
 
 def test_only_the_media_family_borrows(tmp_path: Path) -> None:
