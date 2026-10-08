@@ -109,6 +109,43 @@ export interface OutlineRecord {
   at: number
 }
 
+/* One file a span names, as the `files` directory lists it: enough to draw
+   its heading and to read it by its own cursor. */
+export interface FileEntry {
+  index: number
+  key: string
+  path: string
+  /** The size the recorder wrote beside the path, when it did. */
+  size: number | null
+  cursor: string
+}
+
+/* The current entry's file directory: every file the span names, gathered
+   page by page and merged by index, never cut by the page window. */
+export interface FileDirRecord {
+  identity: Identity
+  items: FileEntry[]
+  total: number | null
+  nextCursor: string | null
+  loading: boolean
+  done: boolean
+  /** The directory reached its own size cap and was not walked further. */
+  capped: boolean
+  fault: string | null
+  bytes: number
+  at: number
+}
+
+/* One file's content, as the `file` block answered it, kept on its own so
+   the page window never takes it and the budget lets the stalest go first. */
+export interface FileBody {
+  identity: Identity
+  index: number
+  item: JsonValue
+  bytes: number
+  at: number
+}
+
 export type Tab = 'overview' | string
 
 export interface DetailsState {
@@ -139,6 +176,12 @@ export interface DetailsState {
   blocks: Record<string, BlockRecord>
   /** Message outlines by descriptor key: one per entry identity. */
   outlines: Record<string, OutlineRecord>
+  /** File directories by descriptor key. */
+  fileDirs: Record<string, FileDirRecord>
+  /** File contents by `fileKey`. */
+  fileBodies: Record<string, FileBody>
+  /** Files whose content the budget let go while the raw tab was up, by descriptor key: not read again on their own. */
+  released: Record<string, number[]>
   /** Reads in the air, by key, each owned by the request's own token. */
   loading: Record<string, number>
   faults: Record<string, string>
@@ -152,6 +195,8 @@ export const RESIZE_STEP = 16
 export const BUDGET = 8 * 1024 * 1024
 /** Pages of one block kept at once; the earliest go as more arrive. */
 export const PAGE_WINDOW = 10
+/** The most a file directory may take: past it the walk stops, and the pane says how many it listed. */
+export const FILES_DIRECTORY_MAX_BYTES = 1024 * 1024
 /** How many messages the gateway puts on one page of a message list (`MESSAGES_PAGE` in details.py). */
 export const MESSAGES_PAGE = 20
 export const DESCRIPTORS_MAX = 20
@@ -173,6 +218,9 @@ const initial: DetailsState = {
   descriptors: {},
   blocks: {},
   outlines: {},
+  fileDirs: {},
+  fileBodies: {},
+  released: {},
   loading: {},
   faults: {},
 }
@@ -199,6 +247,8 @@ export const descriptorKey = (id: Identity): string => keyOf(id.sessionKey, id.e
 export const blockKey = (id: Identity, blockId: string): string =>
   keyOf(id.sessionKey, id.epoch, id.entryId, id.revision, blockId)
 export const scrollKey = (entryId: string, tab: Tab): string => keyOf(entryId, tab)
+export const fileKey = (id: Identity, index: number): string =>
+  keyOf(id.sessionKey, id.epoch, id.entryId, id.revision, 'file', index)
 
 const sameIdentity = (a: Identity | null, b: Identity | null): boolean =>
   a !== null && b !== null && a.sessionKey === b.sessionKey && a.epoch === b.epoch
@@ -345,7 +395,8 @@ export const tabScroll = (entryId: string, tab: Tab): number => store.get().scro
 
 /* ── the cache and its budget ─────────────────────────────────────────── */
 
-/* The pane's current tab's record, which the budget treats last. */
+/* The pane's current tab's record, which the budget treats last; on the raw
+   tab the files read under it count as that tab's too. */
 function activeBlockKey(s: DetailsState): string | null {
   const id = s.current
   if (!id) return null
@@ -353,20 +404,25 @@ function activeBlockKey(s: DetailsState): string | null {
   return tab === 'overview' ? null : blockKey(id, tab)
 }
 
+const onRawTab = (s: DetailsState): boolean => s.current !== null && (s.tabByEntry[s.current.entryId] ?? 'overview') === 'raw'
+
 const usage = (s: DetailsState): number =>
   Object.values(s.descriptors).reduce((n, r) => n + r.bytes, 0)
   + Object.values(s.blocks).reduce((n, r) => n + r.bytes, 0)
   + Object.values(s.outlines).reduce((n, r) => n + r.bytes, 0)
+  + Object.values(s.fileDirs).reduce((n, r) => n + r.bytes, 0)
+  + Object.values(s.fileBodies).reduce((n, r) => n + r.bytes, 0)
 
 /* Brings the cache back under the budget, oldest first in three rounds:
    records of any other identity, then the current entry's other tabs, then
    the current tab's earliest pages. A record let go takes its loading mark
    with it, so a tab that needs it again asks again rather than waiting. */
-function trim(s: DetailsState): DetailsState {
+function trim(s: DetailsState, keepFile: string | null = null): DetailsState {
   let next = s
   const over = (): boolean => usage(next) > BUDGET
   if (!over()) return next
   const active = activeBlockKey(next)
+  const rawUp = onRawTab(next)
   const byAge = (keys: string[], at: (k: string) => number): string[] => [...keys].sort((a, b) => at(a) - at(b))
   const drop = (key: string): void => {
     next = {
@@ -374,10 +430,20 @@ function trim(s: DetailsState): DetailsState {
       descriptors: without(next.descriptors, key),
       blocks: without(next.blocks, key),
       outlines: without(next.outlines, key),
+      fileDirs: without(next.fileDirs, key),
+      fileBodies: without(next.fileBodies, key),
       loading: without(next.loading, key),
     }
   }
   const foreign = (id: Identity): boolean => !sameIdentity(id, next.current)
+  for (const key of byAge(Object.keys(next.fileBodies).filter((k) => foreign(next.fileBodies[k]!.identity)), (k) => next.fileBodies[k]!.at)) {
+    if (!over()) return next
+    drop(key)
+  }
+  for (const key of byAge(Object.keys(next.fileDirs).filter((k) => foreign(next.fileDirs[k]!.identity)), (k) => next.fileDirs[k]!.at)) {
+    if (!over()) return next
+    drop(key)
+  }
   for (const key of byAge(Object.keys(next.outlines).filter((k) => foreign(next.outlines[k]!.identity)), (k) => next.outlines[k]!.at)) {
     if (!over()) return next
     drop(key)
@@ -393,6 +459,29 @@ function trim(s: DetailsState): DetailsState {
   for (const key of byAge(Object.keys(next.blocks).filter((k) => k !== active), (k) => next.blocks[k]!.at)) {
     if (!over()) return next
     drop(key)
+  }
+  /* Off the raw tab the files are another tab's records, and go like them. */
+  if (!rawUp) {
+    for (const key of byAge(Object.keys(next.fileBodies), (k) => next.fileBodies[k]!.at)) {
+      if (!over()) return next
+      drop(key)
+    }
+    for (const key of Object.keys(next.fileDirs)) {
+      if (!over()) return next
+      drop(key)
+    }
+  }
+  /* On it, the stalest file content goes, never the one just read; the
+     file is marked released so nothing reads it back on its own. */
+  if (rawUp && next.current) {
+    const dirKey = descriptorKey(next.current)
+    for (const key of byAge(Object.keys(next.fileBodies).filter((k) => k !== keepFile), (k) => next.fileBodies[k]!.at)) {
+      if (!over()) return next
+      const index = next.fileBodies[key]!.index
+      drop(key)
+      const was = next.released[dirKey] ?? []
+      next = { ...next, released: { ...next.released, [dirKey]: was.includes(index) ? was : [...was, index] } }
+    }
   }
   if (active && next.blocks[active]) {
     let record = next.blocks[active]!
@@ -443,8 +532,8 @@ function trimDescriptors(s: DetailsState): DetailsState {
   return { ...s, descriptors }
 }
 
-function commit(next: DetailsState): void {
-  store.set(trim(trimDescriptors(next)))
+function commit(next: DetailsState, keepFile: string | null = null): void {
+  store.set(trim(trimDescriptors(next), keepFile))
 }
 
 const touch = (): number => { clock += 1; return clock }
@@ -503,7 +592,15 @@ function accept(result: TrajectoryDetailResult, t: number, g: number, mark: stri
         const r = outlines[k]!
         if (r.identity.entryId === id.entryId && !sameIdentity(r.identity, id)) delete outlines[k]
       }
-      next = { ...next, blocks, outlines }
+      const fileDirs = { ...next.fileDirs }
+      for (const k of Object.keys(fileDirs)) {
+        if (fileDirs[k]!.identity.entryId === id.entryId && !sameIdentity(fileDirs[k]!.identity, id)) delete fileDirs[k]
+      }
+      const fileBodies = { ...next.fileBodies }
+      for (const k of Object.keys(fileBodies)) {
+        if (fileBodies[k]!.identity.entryId === id.entryId && !sameIdentity(fileBodies[k]!.identity, id)) delete fileBodies[k]
+      }
+      next = { ...next, blocks, outlines, fileDirs, fileBodies }
       revisionHops += 1
       if (revisionHops > REVISION_RETRIES) next = { ...next, unstable: true }
     }
@@ -813,6 +910,197 @@ export function retryOutline(): Promise<void> {
   return loadOutline()
 }
 
+/* ── the files a span names ───────────────────────────────────────────── */
+
+/** The current identity's file directory, when any page of it is in. */
+export const fileDir = (s: DetailsState = store.get()): FileDirRecord | null =>
+  s.current ? (s.fileDirs[descriptorKey(s.current)] ?? null) : null
+
+/** The content read for file `index` of the current identity, when held. */
+export const fileBody = (index: number, s: DetailsState = store.get()): FileBody | null =>
+  s.current ? (s.fileBodies[fileKey(s.current, index)] ?? null) : null
+
+/** Whether the budget let file `index` go: it is read again only when the reader asks. */
+export const isReleased = (index: number, s: DetailsState = store.get()): boolean =>
+  s.current !== null && (s.released[descriptorKey(s.current)] ?? []).includes(index)
+
+const fileMark = (id: Identity, index: number): string => keyOf('file', fileKey(id, index))
+
+/** Whether file `index` of the current identity is being read. */
+export const fileLoading = (index: number, s: DetailsState = store.get()): boolean =>
+  s.current !== null && fileMark(s.current, index) in s.loading
+
+/** The failure of the last read of file `index`, until the reader retries it. */
+export const fileFault = (index: number, s: DetailsState = store.get()): string | null =>
+  s.current ? (s.faults[fileMark(s.current, index)] ?? null) : null
+
+const fileEntries = (data: JsonValue | null | undefined): FileEntry[] => {
+  const items = data !== null && typeof data === 'object' && !Array.isArray(data) ? (data as { items?: unknown }).items : undefined
+  if (!Array.isArray(items)) return []
+  return items.filter((it): it is FileEntry => it !== null && typeof it === 'object'
+    && typeof (it as FileEntry).index === 'number' && typeof (it as FileEntry).cursor === 'string')
+}
+
+const emptyDir = (id: Identity): FileDirRecord =>
+  ({ identity: id, items: [], total: null, nextCursor: null, loading: false, done: false, capped: false, fault: null, bytes: 0, at: touch() })
+
+/* Walks the `files` directory page by page, as the outline is walked: each
+   page merged by index under the identity that asked, until the list ends
+   or the directory reaches its own size cap, which stops the walk without
+   letting any listed file go. A walk cut short before any page came leaves
+   no record, so a later visit starts again; one cut short later goes on
+   from the cursor it holds. */
+export async function loadFileDir(): Promise<void> {
+  const src = list.source()
+  const id = store.get().current
+  if (!src || !id || !mayRead(store.get())) return
+  const key = descriptorKey(id)
+  const have = store.get().fileDirs[key]
+  if (have && (have.fault !== null || have.done || have.capped)) return
+  const mark = keyOf('files', key)
+  if (inflight.has(mark)) return
+  const t = gen
+  const g = list.gen()
+  const token = begin(mark)
+  const write = (apply: (record: FileDirRecord) => FileDirRecord, s: DetailsState = store.get()): void => {
+    commit({ ...s, fileDirs: { ...s.fileDirs, [key]: apply(s.fileDirs[key] ?? emptyDir(id)) } })
+  }
+  write((r) => ({ ...r, loading: true }))
+  let cursor: string | null = have?.nextCursor ?? null
+  try {
+    for (;;) {
+      const result: TrajectoryBlockResult = await src.block(id.sessionKey, id.entryId, id.revision, id.epoch, 'files', cursor)
+      if (!currentEpoch(id.sessionKey, id.epoch) || result.epoch !== id.epoch || result.entry_revision !== id.revision || result.entry_id !== id.entryId) break
+      cursor = result.next_cursor ?? null
+      const fresh = fileEntries(result.data)
+      const total = typeof result.total_items === 'number' ? result.total_items : null
+      let capped = false
+      write((r) => {
+        const byIndex = new Map(r.items.map((it) => [it.index, it]))
+        for (const it of fresh) byIndex.set(it.index, it)
+        const items = [...byIndex.values()].sort((a, b) => a.index - b.index)
+        const bytes = bytesOf(items)
+        capped = cursor !== null && bytes >= FILES_DIRECTORY_MAX_BYTES
+        return { ...r, items, total: total ?? r.total, nextCursor: cursor, done: cursor === null, capped, bytes, at: touch() }
+      })
+      if (cursor === null || capped || !live(t, g, id.entryId)) break
+    }
+    settle(mark, token)
+    write((r) => ({ ...r, loading: false }), unmarked(store.get(), mark, token))
+  } catch (e) {
+    settle(mark, token)
+    const s = unmarked(store.get(), mark, token)
+    const calm = (state: DetailsState): DetailsState => {
+      const r = state.fileDirs[key]
+      if (!r) return state
+      if (!r.done && r.items.length === 0 && r.total === null) return { ...state, fileDirs: without(state.fileDirs, key) }
+      return { ...state, fileDirs: { ...state.fileDirs, [key]: { ...r, loading: false } } }
+    }
+    if (!currentEpoch(id.sessionKey, id.epoch) || !live(t, g, id.entryId)) { store.set(calm(s)); return }
+    if (isDisabled(e) || saysAbsent(e)) {
+      store.set(calm(s))
+      if (g === list.gen()) list.liveFailed(e)
+      return
+    }
+    const moved = revisionChange(e)
+    if (moved) {
+      if (moved.epoch !== id.epoch) { store.set({ ...calm(s), waitingEpoch: moved.epoch }); return }
+      store.set({ ...calm(s), stale: true, pending: { epoch: moved.epoch, revision: moved.revision } })
+      void loadDescriptor({ fresh: true })
+      return
+    }
+    write((r) => ({ ...r, loading: false, fault: (e as Error)?.message || String(e) }), s)
+  }
+}
+
+/** The reader's retry after a failed directory walk. */
+export function retryFileDir(): Promise<void> {
+  const id = store.get().current
+  if (id) {
+    const key = descriptorKey(id)
+    const s = store.get()
+    const have = s.fileDirs[key]
+    if (have) {
+      const loading = inflight.has(keyOf('files', key)) ? have.loading : false
+      store.set({ ...s, fileDirs: { ...s.fileDirs, [key]: { ...have, fault: null, loading } } })
+    }
+  }
+  return loadFileDir()
+}
+
+/* Reads one file's content by the cursor the directory gave it. The answer
+   is filed under the identity that asked -- a reader who moved on finds it
+   there when they come back, and the entry now on screen never sees it --
+   and is kept over every other file's content when the budget must give. */
+export async function loadFile(file: FileEntry): Promise<void> {
+  const src = list.source()
+  const id = store.get().current
+  if (!src || !id || !mayRead(store.get())) return
+  const key = fileKey(id, file.index)
+  if (store.get().fileBodies[key]) return
+  const mark = fileMark(id, file.index)
+  if (inflight.has(mark)) return
+  const t = gen
+  const g = list.gen()
+  const token = begin(mark)
+  try {
+    const result = await src.block(id.sessionKey, id.entryId, id.revision, id.epoch, 'file', file.cursor)
+    settle(mark, token)
+    const s = unmarked(store.get(), mark, token)
+    if (!currentEpoch(id.sessionKey, id.epoch)
+      || result.epoch !== id.epoch || result.entry_revision !== id.revision || result.entry_id !== id.entryId) {
+      if (s !== store.get()) store.set(s)
+      return
+    }
+    const items = result.data !== null && typeof result.data === 'object' && !Array.isArray(result.data)
+      ? (result.data as { items?: unknown }).items
+      : undefined
+    const item = (Array.isArray(items) ? items[0] : undefined) as JsonValue | undefined
+    if (item === undefined) { if (s !== store.get()) store.set(s); return }
+    const dirKey = descriptorKey(id)
+    const released = (s.released[dirKey] ?? []).filter((n) => n !== file.index)
+    commit({
+      ...s,
+      fileBodies: { ...s.fileBodies, [key]: { identity: id, index: file.index, item, bytes: bytesOf(item), at: touch() } },
+      released: { ...s.released, [dirKey]: released },
+      faults: without(s.faults, mark),
+    }, key)
+  } catch (e) {
+    settle(mark, token)
+    const s = unmarked(store.get(), mark, token)
+    if (!currentEpoch(id.sessionKey, id.epoch)) { store.set(s); return }
+    if (isDisabled(e) || saysAbsent(e)) {
+      store.set(s)
+      if (g === list.gen()) list.liveFailed(e)
+      return
+    }
+    if (!live(t, g, id.entryId)) { store.set(s); return }
+    const moved = revisionChange(e)
+    if (moved) {
+      if (moved.epoch !== id.epoch) { store.set({ ...s, waitingEpoch: moved.epoch }); return }
+      store.set({ ...s, stale: true, pending: { epoch: moved.epoch, revision: moved.revision } })
+      void loadDescriptor({ fresh: true })
+      return
+    }
+    store.set({ ...s, faults: { ...s.faults, [mark]: (e as Error)?.message || String(e) } })
+  }
+}
+
+/** The reader asks for a file again: its fault and its released mark are forgiven, and it is read. */
+export function reloadFile(file: FileEntry): Promise<void> {
+  const id = store.get().current
+  if (id) {
+    const s = store.get()
+    const dirKey = descriptorKey(id)
+    store.set({
+      ...s,
+      faults: without(s.faults, fileMark(id, file.index)),
+      released: { ...s.released, [dirKey]: (s.released[dirKey] ?? []).filter((n) => n !== file.index) },
+    })
+  }
+  return loadFile(file)
+}
+
 /** The reader's retry of a message list's page reads: both faults of the block are forgiven, so the rows in view ask again. */
 export function clearBlockFaults(blockId: string): void {
   const id = store.get().current
@@ -964,14 +1252,16 @@ export const hasFocus = (): boolean => {
   return !!pane && pane.contains(document.activeElement)
 }
 
-/* The one layer the two surfaces share: the dense block's pick list, which
-   is open or not, and the pane, which counts only while it holds the focus.
-   The list goes first, being the thing on top. */
+/* The one layer the surfaces share: the dense block's pick list and the
+   duration filter's popover, which are open or not, and the pane, which
+   counts only while it holds the focus. The list goes first, then the
+   popover, being the things on top. */
 onTrajectoryEscape({
   id: 'trajectory.escapeOpen()',
-  isOpen: () => list.get().timeline.bucket !== null || (store.get().open && hasFocus()),
+  isOpen: () => list.get().timeline.bucket !== null || list.get().timeline.threshold || (store.get().open && hasFocus()),
   close: () => {
     if (list.get().timeline.bucket !== null) list.closeBucket()
+    else if (list.get().timeline.threshold) list.setThresholdOpen(false)
     else closeDetails()
   },
 })

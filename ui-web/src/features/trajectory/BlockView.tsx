@@ -21,6 +21,7 @@ import { copy } from '../../lib/clipboard'
 import { formatDuration } from '../../lib/duration'
 import { RELATION_LINKS, availabilityKey, basisKey, integrityKey, reasonKey, timingLabelKey, usageLabelKey } from './blocks'
 import * as details from './detailStore'
+import { FilesView } from './Files'
 import { MessagesView } from './Messages'
 import * as list from './store'
 
@@ -523,6 +524,10 @@ export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.
       {messages
         ? <MessagesView block={block} entryId={entryId} render={(message) => <Message item={message} />} />
         : !record && loading ? <Skeleton /> : body}
+      {/* Under the raw record, the files it names, each with its content. */}
+      {block.id === 'raw' && details.descriptor(s)?.blocks.some((b) => b.id === 'files')
+        ? <FilesView settled={record !== null} renderJson={(value) => <JsonView value={value} />} renderText={(text) => <TextView text={text} />} />
+        : null}
       {!messages && record && record.nextCursor !== null ? (
         <div className="trajectory-more">
           {moreFault ? <span className="trajectory-fault">{t('gui.trajectory.details.failed', { detail: moreFault })}</span> : null}

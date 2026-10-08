@@ -280,7 +280,7 @@ export function EntryList(): JSX.Element {
         at={at}
         selected={entry.entry_id === selectedId}
         total={count}
-        revealed={store.hiddenOf(entry) !== null && !state.prefs.showInternal}
+        revealed={store.hiddenOf(entry) !== null && !state.prefs.showHidden}
         turnTotal={turnTotal}
       />,
     )

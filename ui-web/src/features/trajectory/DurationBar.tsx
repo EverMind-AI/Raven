@@ -28,8 +28,8 @@ import { t } from '../../i18n/t'
 import { formatDuration } from '../../lib/duration'
 import * as details from './detailStore'
 import {
-  BAR_H, BLOCK_H, BLOCK_TOP, DBL_MS, DOT_ABOVE_Y, DOT_BELOW_Y, DRAG_PX, GAP, MIN_W, anchorOf, bandAt, bandsFor, barEntries, expand,
-  hitTestExact, layoutFor, pan, restoreAnchor, summarize, toSegments, zoomAt,
+  BAR_H, BLOCK_H, BLOCK_TOP, DBL_MS, DOT_ABOVE_Y, DOT_BELOW_Y, DRAG_PX, DURATION_DETENTS, GAP, MIN_W, anchorOf, bandAt, bandsFor,
+  barEntries, expand, hitTestExact, layoutFor, pan, restoreAnchor, summarize, toSegments, zoomAt,
 } from './geometry'
 import { BandHover, BarHover, BarSummary, summaryText } from './Hover'
 import { kindClass, kindLabel, kindSlug } from './palette'
@@ -41,6 +41,24 @@ import type { JSX, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPoi
 
 /* A wheel notch's zoom, kept within a halving and a doubling per event. */
 const wheelFactor = (deltaY: number): number => Math.max(0.5, Math.min(2, Math.exp(-deltaY * 0.0015)))
+
+/** A wheel line in pixels, for the browsers that report the wheel in lines. */
+export const WHEEL_LINE_PX = 16
+
+/* A wheel event as a pan or a zoom, in pixels: across when the sideways part
+   leads, or when Shift turns a mouse's only wheel sideways; otherwise the
+   vertical part zooms -- a trackpad's pinch arrives that way too. */
+export function wheelIntent(e: Pick<WheelEvent, 'deltaX' | 'deltaY' | 'deltaMode' | 'shiftKey'>, pageWidth: number): { pan: number } | { zoom: number } {
+  const unit = e.deltaMode === 1 ? WHEEL_LINE_PX : e.deltaMode === 2 ? pageWidth : 1
+  const dx = e.deltaX * unit
+  const dy = e.deltaY * unit
+  if (Math.abs(dx) > Math.abs(dy)) return { pan: dx }
+  if (e.shiftKey && dx === 0 && dy !== 0) return { pan: dy }
+  return { zoom: dy }
+}
+
+/** A threshold in the words of the filter: "20 ms", "1 s". */
+export const thresholdText = (ms: number): string => (ms >= 1000 ? `${ms / 1000} s` : `${ms} ms`)
 
 /** The dense block's pick list: its width, and the most height it takes. */
 export const BUCKET_W = 320
@@ -226,8 +244,25 @@ type Over = { kind: 'band'; band: Band; clientX: number } | { kind: 'summary'; c
 export function DurationBar(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   const { selectedId, timeline, prefs } = s
-  /* The bar draws the visible rows, less the short ones while that switch is on. */
-  const entries = useMemo(() => barEntries(s.visible, prefs.hideShort), [s.visible, prefs.hideShort])
+  /* The bar draws the visible rows, less the ones charged under the threshold. */
+  const entries = useMemo(() => barEntries(s.visible, prefs.minChargedMs), [s.visible, prefs.minChargedMs])
+  const thresholdWords = prefs.minChargedMs > 0
+    ? t('gui.trajectory.bar.threshold', { ms: thresholdText(prefs.minChargedMs) })
+    : t('gui.trajectory.bar.threshold_off')
+  const thresholdBox = useRef<HTMLDivElement | null>(null)
+  const thresholdButton = useRef<HTMLButtonElement | null>(null)
+  /* A press outside the popover and its button closes it, as Escape does through the page's order. */
+  useEffect(() => {
+    if (!timeline.threshold) return
+    const onDown = (e: PointerEvent): void => {
+      const target = e.target as Node | null
+      if (target && (thresholdBox.current?.contains(target) || thresholdButton.current?.contains(target))) return
+      store.setThresholdOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [timeline.threshold])
+  const hiddenCount = useMemo(() => s.entries.reduce((n, e) => n + (store.hiddenOf(e) === null ? 0 : 1), 0), [s.entries])
   /* The turns whose reply the list leaves out keep their time as a band. */
   const hiddenTurns = useMemo(() => {
     const out = new Map<number, number>()
@@ -283,12 +318,12 @@ export function DurationBar(): JSX.Element {
      and a view that had no unit to freeze takes one from the first duration.
      On the rows and the width only -- a move of the view is the reader's,
      and re-anchoring it to itself would chase rounding forever. */
-  const latest = useRef({ view, layout })
-  latest.current = { view, layout }
+  const latest = useRef({ view, layout, order: [] as string[] })
+  latest.current = { view, layout, order: s.visible.map((e) => e.entry_id) }
   useLayoutEffect(() => {
-    const { view: v, layout: l } = latest.current
+    const { view: v, layout: l, order } = latest.current
     if (v.fit || v.width < MIN_W) return
-    const restored = restoreAnchor(l, v)
+    const restored = restoreAnchor(l, v, order)
     const moved = Math.abs(restored.offset - v.offset) > 1e-6 || restored.frozenUnit !== v.frozenUnit
     if (moved) store.setTimeline({ offset: restored.offset, frozenUnit: restored.frozenUnit })
   }, [segments, width])
@@ -320,9 +355,17 @@ export function DurationBar(): JSX.Element {
     if (!el) return
     const onWheel = (e: WheelEvent): void => {
       if (viewRef.current.width < MIN_W || !segmentsRef.current.length) return
+      /* Every wheel over the canvas is the bar's: the page does not scroll, and a sideways swipe does not go back a page. */
       e.preventDefault()
+      const intent = wheelIntent(e, viewRef.current.width)
+      if ('pan' in intent) {
+        const l = layoutFor(segmentsRef.current, viewRef.current)
+        const next = pan(viewRef.current, -intent.pan, l.contentWidth)
+        if (next.offset !== viewRef.current.offset) store.setTimeline({ offset: next.offset, anchor: anchorOf(l, next) })
+        return
+      }
       const x = e.clientX - el.getBoundingClientRect().left
-      const next = zoomAt(viewRef.current, x, wheelFactor(e.deltaY), segmentsRef.current)
+      const next = zoomAt(viewRef.current, x, wheelFactor(intent.zoom), segmentsRef.current)
       store.setTimeline({ scale: next.scale, offset: next.offset, fit: next.fit, frozenUnit: next.frozenUnit, anchor: next.anchor })
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -535,11 +578,14 @@ export function DurationBar(): JSX.Element {
         <button className="trajectory-bar-tool" aria-label={t('gui.trajectory.bar.zoom_out')} title={t('gui.trajectory.bar.zoom_out')} onClick={() => zoomBy(0.5)} disabled={timeline.fit}>{'−'}</button>
         <button className="trajectory-bar-tool" aria-label={t('gui.trajectory.bar.reset')} title={t('gui.trajectory.bar.reset')} onClick={onDoubleClick} disabled={timeline.fit}>{'⤢'}</button>
         <button
-          className="trajectory-bar-tool trajectory-bar-switch"
-          aria-label={t('gui.trajectory.bar.hide_short')}
-          title={t('gui.trajectory.bar.hide_short')}
-          aria-pressed={prefs.hideShort}
-          onClick={() => store.setPrefs({ hideShort: !prefs.hideShort })}
+          className="trajectory-bar-tool trajectory-bar-switch trajectory-threshold-btn"
+          ref={thresholdButton}
+          aria-label={thresholdWords}
+          title={thresholdWords}
+          aria-pressed={prefs.minChargedMs > 0}
+          aria-expanded={timeline.threshold}
+          aria-haspopup="dialog"
+          onClick={() => store.setThresholdOpen(!timeline.threshold)}
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M3 5h18l-7 8v6l-4 2v-8z" />
@@ -547,16 +593,32 @@ export function DurationBar(): JSX.Element {
         </button>
         <button
           className="trajectory-bar-tool trajectory-bar-switch"
-          aria-label={t('gui.trajectory.bar.show_internal')}
-          title={t('gui.trajectory.bar.show_internal')}
-          aria-pressed={prefs.showInternal}
-          onClick={() => store.setPrefs({ showInternal: !prefs.showInternal })}
+          aria-label={t('gui.trajectory.bar.show_hidden', { n: hiddenCount })}
+          title={t('gui.trajectory.bar.show_hidden', { n: hiddenCount })}
+          aria-pressed={prefs.showHidden}
+          onClick={() => store.setPrefs({ showHidden: !prefs.showHidden })}
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
             <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" />
           </svg>
         </button>
       </div>
+      {timeline.threshold ? (
+        <div className="trajectory-threshold" role="dialog" aria-label={t('gui.trajectory.bar.threshold_label')} ref={thresholdBox}>
+          <div className="trajectory-threshold-text">{thresholdWords}</div>
+          <input
+            className="trajectory-threshold-range"
+            type="range"
+            min={0}
+            max={DURATION_DETENTS.length - 1}
+            step={1}
+            value={Math.max(0, DURATION_DETENTS.indexOf(prefs.minChargedMs))}
+            aria-label={t('gui.trajectory.bar.threshold_label')}
+            aria-valuetext={thresholdWords}
+            onChange={(e) => store.setPrefs({ minChargedMs: DURATION_DETENTS[Number(e.currentTarget.value)] ?? 0 })}
+          />
+        </div>
+      ) : null}
       {hover && rect && !bucket ? (
         <BarHover
           at={hover}

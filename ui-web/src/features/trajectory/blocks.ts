@@ -63,7 +63,7 @@ const BLOCK_TITLES: Record<string, string> = {
 }
 
 /** Blocks the pane reads for itself and never offers as a tab or an overview section. */
-export const INTERNAL_BLOCKS: readonly string[] = ['outline']
+export const INTERNAL_BLOCKS: readonly string[] = ['outline', 'files', 'file']
 
 /* The usage block's rows, in the order the reader expects them, each with
    the catalogue key for its label. The counters are the normalized ones

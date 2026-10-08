@@ -32,7 +32,14 @@ export const DRAG_PX = 4
 export const DBL_MS = 250
 export const BAR_H = 32
 /** Below this many charged milliseconds an entry (other than the user's input) draws no block while the switch is on. */
-export const MIN_CHARGED_MS = 20
+/** The duration thresholds the bar's filter offers, in milliseconds; 0 filters nothing. */
+export const DURATION_DETENTS: readonly number[] = [0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+
+/** The detent nearest to `ms`, so a stored value off the scale lands on it. */
+export function snapThreshold(ms: number): number {
+  if (!Number.isFinite(ms)) return 0
+  return DURATION_DETENTS.reduce((best, d) => (Math.abs(d - ms) < Math.abs(best - ms) ? d : best), DURATION_DETENTS[0]!)
+}
 /** The block's height and its top; the dots sit in the bands above and below. */
 export const BLOCK_TOP = 11
 export const BLOCK_H = 10
@@ -270,12 +277,12 @@ export function layoutFor(segments: readonly Segment[], view: Viewport): Layout 
 /* ── places ───────────────────────────────────────────────────────────── */
 
 /* The entries the bar draws: the visible rows, less the recorded durations
-   under the threshold while that switch is on. An unknown duration is not a
-   short one -- it stays, as a mark -- and the user's own input always stays. */
-export function barEntries(visible: readonly TrajectoryEntry[], hideShort: boolean): TrajectoryEntry[] {
-  if (!hideShort) return [...visible]
+   under the threshold. An unknown duration is not a short one -- it stays,
+   as a mark -- and the user's own input always stays. */
+export function barEntries(visible: readonly TrajectoryEntry[], minChargedMs: number): TrajectoryEntry[] {
+  if (!(minChargedMs > 0)) return [...visible]
   return visible.filter(
-    (e) => e.kind === 'user.input' || typeof e.charged_ms !== 'number' || e.charged_ms >= MIN_CHARGED_MS,
+    (e) => e.kind === 'user.input' || typeof e.charged_ms !== 'number' || e.charged_ms >= minChargedMs,
   )
 }
 
@@ -400,14 +407,24 @@ export const anchorOf = (layout: Layout, view: Viewport): Anchor | null =>
   locate(layout, Math.min(view.offset, layout.contentWidth))
 
 /* After the rows changed under a zoomed view: the anchored place stays where
-   it was on screen, or, when the entry is gone, the offset stays and clamps.
-   A view that had no unit to freeze takes one now if the rows have grown a
-   duration, so that duration is drawn in proportion from here on. */
-export function restoreAnchor(layout: Layout, view: Viewport): Viewport {
+   it was on screen. When the anchored entry left the bar (a filter took it,
+   or it is gone), the place falls to the first entry after it in `order`
+   that is still drawn, at its left edge, else the last one before it, at its
+   right edge; only with neither does the offset stay and clamp. A view that
+   had no unit to freeze takes one now if the rows have grown a duration, so
+   that duration is drawn in proportion from here on. */
+export function restoreAnchor(layout: Layout, view: Viewport, order: readonly string[] = []): Viewport {
   const frozenUnit = view.fit ? view.frozenUnit : (view.frozenUnit ?? freeze(layout.unit / Math.max(1, view.scale)))
   const keep = { ...view, frozenUnit, offset: clampOffset(view.offset, layout.contentWidth, view.width) }
   if (view.fit || !view.anchor) return keep
-  const at = position(layout, view.anchor)
+  let at = position(layout, view.anchor)
+  if (at === null) {
+    const from = order.indexOf(view.anchor.id)
+    if (from >= 0) {
+      for (let k = from + 1; k < order.length && at === null; k += 1) at = position(layout, { id: order[k]!, frac: 0 })
+      for (let k = from - 1; k >= 0 && at === null; k -= 1) at = position(layout, { id: order[k]!, frac: 1 })
+    }
+  }
   if (at === null) return keep
   return { ...keep, offset: clampOffset(at, layout.contentWidth, view.width) }
 }
@@ -449,7 +466,7 @@ export function summarize(segments: readonly Segment[]): Summary {
     if (s.charged === null) { if (unknown(s)) unknownCount += 1; continue }
     known += s.charged
     if (s.charged > 0 && s.turn !== null) {
-      if (s.kind === 'agent.reply') turnsWithReply.add(s.turn)
+      if (s.kind === 'turn.end') turnsWithReply.add(s.turn)
       else turnsWithInner.add(s.turn)
     }
   }

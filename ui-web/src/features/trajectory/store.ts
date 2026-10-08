@@ -32,6 +32,7 @@ import { has, servesTrajectory } from '../../rpc/capabilities'
 import { isFresh, onFresh } from '../../state/session/conversation'
 import { sources } from '../../state/sources'
 import { makeStore } from '../../state/store'
+import { snapThreshold } from './geometry'
 import { indexOf, insertSorted, removeIds } from './order'
 import { isAbsent, isCursorExpired, isDisabled } from './source'
 
@@ -59,9 +60,13 @@ export interface Timeline {
   frozenUnit: number | null
   anchor: { id: string; frac: number } | null
   bucket: { ids: string[]; x: number } | null
+  /** The duration filter's popover is up. */
+  threshold: boolean
 }
 
-export const initialTimeline: Timeline = { scale: 1, offset: 0, fit: true, frozenUnit: null, anchor: null, bucket: null }
+export const initialTimeline: Timeline = {
+  scale: 1, offset: 0, fit: true, frozenUnit: null, anchor: null, bucket: null, threshold: false,
+}
 
 export interface TrajectoryState {
   /** The gateway announced the surface and has not refused it since. */
@@ -115,14 +120,14 @@ export interface TrajectoryState {
   turnTotals: Record<string, number>
 }
 
-/** What the reader can switch: hide the blocks under 20 ms, and show the internal steps the list leaves out. */
+/** What the reader can set: the bar's duration threshold (0 filters nothing), and showing the entries the list hides. */
 export interface Prefs {
-  hideShort: boolean
-  showInternal: boolean
+  minChargedMs: number
+  showHidden: boolean
 }
 
 export const PREFS_KEY = 'raven.gui.trajectory.prefs'
-const DEFAULT_PREFS: Prefs = { hideShort: true, showInternal: false }
+const DEFAULT_PREFS: Prefs = { minChargedMs: 20, showHidden: false }
 
 /** The switches as the browser last kept them; the defaults where it kept nothing readable. */
 export function readPrefs(): Prefs {
@@ -133,11 +138,15 @@ function loadPrefs(): Prefs {
   try {
     const raw: unknown = typeof localStorage === 'undefined' ? null : JSON.parse(localStorage.getItem(PREFS_KEY) || 'null')
     if (raw && typeof raw === 'object') {
-      const value = raw as Partial<Prefs>
-      return {
-        hideShort: typeof value.hideShort === 'boolean' ? value.hideShort : DEFAULT_PREFS.hideShort,
-        showInternal: typeof value.showInternal === 'boolean' ? value.showInternal : DEFAULT_PREFS.showInternal,
-      }
+      /* The switches an earlier build kept (`hideShort`, `showInternal`) are read into the current two. */
+      const value = raw as Partial<Prefs> & { hideShort?: unknown; showInternal?: unknown }
+      const minChargedMs = typeof value.minChargedMs === 'number'
+        ? snapThreshold(value.minChargedMs)
+        : typeof value.hideShort === 'boolean' ? (value.hideShort ? 20 : 0) : DEFAULT_PREFS.minChargedMs
+      const showHidden = typeof value.showHidden === 'boolean'
+        ? value.showHidden
+        : typeof value.showInternal === 'boolean' ? value.showInternal : DEFAULT_PREFS.showHidden
+      return { minChargedMs, showHidden }
     }
   } catch {
     /* Storage may be unavailable or hold something else; the defaults stand. */
@@ -173,7 +182,7 @@ function derived(entries: TrajectoryEntry[], prefs: Prefs, revealed: string[]) {
     if (entry.slot === 'turn.output' && entry.turn_span_id && typeof entry.charged_ms === 'number') {
       turnTotals[entry.turn_span_id] = entry.charged_ms
     }
-    if (hiddenOf(entry) === null || prefs.showInternal || revealed.includes(entry.entry_id)) visible.push(entry)
+    if (hiddenOf(entry) === null || prefs.showHidden || revealed.includes(entry.entry_id)) visible.push(entry)
   }
   return { entries, index: indexOf(entries), visible, visibleIndex: indexOf(visible), spanIndex, turnTotals }
 }
@@ -286,17 +295,17 @@ function leaveView(): void {
   if (store.get().view === 'trajectory') {
     bump()
     const s = store.get()
-    patch({ view: 'chat', listing: false, timeline: { ...s.timeline, bucket: null }, revealed: [], ...rows(s.entries, { ...s, revealed: [] }) })
+    patch({ view: 'chat', listing: false, timeline: { ...s.timeline, bucket: null, threshold: false }, revealed: [], ...rows(s.entries, { ...s, revealed: [] }) })
   }
 }
 
 /* ── the reader's switches ────────────────────────────────────────────── */
 
-/** Flip a switch: kept in the browser for the next visit, and the rows reconsidered now. */
+/** Change a setting: kept in the browser for the next visit, and the rows reconsidered now. */
 export function setPrefs(next: Partial<Prefs>): void {
   const s = store.get()
-  const prefs = { ...s.prefs, ...next }
-  if (prefs.hideShort === s.prefs.hideShort && prefs.showInternal === s.prefs.showInternal) return
+  const prefs = { ...s.prefs, ...next, minChargedMs: snapThreshold(next.minChargedMs ?? s.prefs.minChargedMs) }
+  if (prefs.minChargedMs === s.prefs.minChargedMs && prefs.showHidden === s.prefs.showHidden) return
   savePrefs(prefs)
   patch({ prefs, revealed: [], ...derived(s.entries, prefs, []) })
 }
@@ -363,7 +372,7 @@ export function setView(view: View): void {
   bump()
   const revealed = view === 'chat' ? [] : s.revealed
   patch({
-    view, listing: false, timeline: view === 'chat' ? { ...s.timeline, bucket: null } : s.timeline,
+    view, listing: false, timeline: view === 'chat' ? { ...s.timeline, bucket: null, threshold: false } : s.timeline,
     revealed, ...rows(s.entries, { ...s, revealed }),
   })
 }
@@ -411,13 +420,18 @@ export function closeBucket(): void {
   if (store.get().timeline.bucket !== null) setTimeline({ bucket: null })
 }
 
+/** The duration filter's popover, opened or closed by its button, Escape or a click elsewhere. */
+export function setThresholdOpen(open: boolean): void {
+  if (store.get().timeline.threshold !== open) setTimeline({ threshold: open })
+}
+
 /* ── the conversation on screen ───────────────────────────────────────── */
 
 function remember(key: string): void {
   const s = store.get()
   remembered.delete(key)
   remembered.set(key, {
-    view: s.view, selectedId: s.selectedId, follow: s.follow, anchor: s.anchor, timeline: { ...s.timeline, bucket: null },
+    view: s.view, selectedId: s.selectedId, follow: s.follow, anchor: s.anchor, timeline: { ...s.timeline, bucket: null, threshold: false },
   })
   while (remembered.size > REMEMBERED_MAX) {
     const oldest = remembered.keys().next().value as string

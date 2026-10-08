@@ -636,3 +636,167 @@ describe('a changed revision', () => {
     expect(detailQueue).toHaveLength(0)
   })
 })
+
+
+/* ── the files under the raw record ─────────────────────────────────── */
+
+describe('the files a span names', () => {
+  const dirItem = (index: number) => ({ index, key: `f${index}.artifact_path`, path: `/logs/f${index}.json`, size: 10, cursor: `c${index}` })
+  const dirPage = (from: number, n: number, total: number, next: string | null) =>
+    body('r1', 1, 'files', { items: Array.from({ length: n }, (_, k) => dirItem(from + k)), offset: from }, { renderer: 'items', next_cursor: next, total_items: total })
+  const fileBody = (index: number, value: unknown) =>
+    body('r1', 1, 'file', { items: [{ index, key: `f${index}.artifact_path`, kind: 'json', value, size: 10, shown_bytes: 10, truncated: null }], offset: index },
+      { renderer: 'items', total_items: 99 })
+
+  async function onRaw(): Promise<void> {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['raw', 'files', 'file']))
+    details.setTab('r1', 'raw')
+  }
+
+  it('walks a directory of twelve pages and keeps every entry, the first and the last readable by their cursors', async () => {
+    await onRaw()
+    void details.loadFileDir()
+    for (let page = 0; page < 12; page += 1) {
+      const last = page === 11
+      expect(blockCalls.at(-1)).toMatchObject({ blockId: 'files', cursor: page === 0 ? null : `d${page}` })
+      await answerBlock(dirPage(page * 200, 200, 2400, last ? null : `d${page + 1}`))
+    }
+    const dir = details.fileDir()!
+    expect(dir.items).toHaveLength(2400)
+    expect(dir.done).toBe(true)
+    expect(dir.items[0]!.index).toBe(0)
+    expect(dir.items[2399]!.index).toBe(2399)
+    for (const file of [dir.items[0]!, dir.items[2399]!]) {
+      void details.loadFile(file)
+      expect(blockCalls.at(-1)).toMatchObject({ blockId: 'file', cursor: file.cursor })
+      await answerBlock(fileBody(file.index, { n: file.index }))
+      expect(details.fileBody(file.index)?.item).toMatchObject({ value: { n: file.index } })
+    }
+  })
+
+  it('stops the walk at the directory\'s own cap without letting any listed file go, and says how many it listed', async () => {
+    await onRaw()
+    void details.loadFileDir()
+    const long = 'p'.repeat(4000)
+    let page = 0
+    while (blockQueue.length && page < 20) {
+      const items = Array.from({ length: 100 }, (_, k) => ({ ...dirItem(page * 100 + k), path: long }))
+      await answerBlock(body('r1', 1, 'files', { items, offset: page * 100 }, { renderer: 'items', next_cursor: `d${page + 1}`, total_items: 9999 }))
+      page += 1
+    }
+    const dir = details.fileDir()!
+    expect(dir.capped).toBe(true)
+    expect(dir.bytes).toBeGreaterThanOrEqual(details.FILES_DIRECTORY_MAX_BYTES)
+    expect(dir.items[0]!.index).toBe(0)
+    expect(dir.items).toHaveLength(page * 100)
+    expect(blockQueue).toHaveLength(0)
+    const asked = blockCalls.length
+    void details.loadFileDir()
+    expect(blockCalls).toHaveLength(asked)
+  })
+
+  it('takes a walk cut short back up from the cursor it holds, and leaves no record when no page had come', async () => {
+    await onRaw()
+    void details.loadFileDir()
+    await failBlock(new Error('socket closed'))
+    expect(details.fileDir()?.fault).toBe('socket closed')
+    void details.retryFileDir()
+    await answerBlock(dirPage(0, 200, 400, 'd1'))
+    /* The reader leaves mid-walk; the next page fails after they have gone. */
+    list.select('r2', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r2', 1, ['content']))
+    await failBlock(new Error('dropped'))
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await flush()
+    details.setTab('r1', 'raw')
+    const held = details.fileDir()!
+    expect(held.items).toHaveLength(200)
+    expect(held.loading).toBe(false)
+    void details.loadFileDir()
+    expect(blockCalls.at(-1)).toMatchObject({ blockId: 'files', cursor: 'd1' })
+    await answerBlock(dirPage(200, 200, 400, null))
+    expect(details.fileDir()!.items).toHaveLength(400)
+    /* A walk that never got a page leaves nothing behind to stand in for an empty directory. */
+    list.select('r3', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r3', 1, ['raw', 'files', 'file']))
+    void details.loadFileDir()
+    list.select('r1', { source: 'click' })
+    await failBlock(new Error('gone'))
+    expect(Object.values(details.get().fileDirs).some((r) => r.identity.entryId === 'r3')).toBe(false)
+  })
+
+  it('keeps every small file however many, lets the stalest content go past the budget, never the one just read, and reads a released one back on request', async () => {
+    await onRaw()
+    const files = Array.from({ length: 11 }, (_, k) => ({ ...dirItem(k) }))
+    for (const file of files) {
+      void details.loadFile(file)
+      await answerBlock(fileBody(file.index, { small: file.index }))
+    }
+    expect(files.every((f) => details.fileBody(f.index) !== null)).toBe(true)
+    /* Twenty files of about 480 KiB: more than the budget. */
+    const big = 'b'.repeat(480 * 1024)
+    const bigFiles = Array.from({ length: 20 }, (_, k) => ({ ...dirItem(100 + k) }))
+    void details.loadBlock('raw')
+    await answerBlock(body('r1', 1, 'raw', { value: { attributes: {} } }, { renderer: 'json' }))
+    for (const file of bigFiles) {
+      void details.loadFile(file)
+      await answerBlock(fileBody(file.index, big))
+      /* The one just read is always held. */
+      expect(details.fileBody(file.index)).not.toBeNull()
+    }
+    const s = details.get()
+    const used = Object.values(s.fileBodies).reduce((n, r) => n + r.bytes, 0) + Object.values(s.blocks).reduce((n, r) => n + r.bytes, 0)
+    expect(used).toBeLessThanOrEqual(details.BUDGET)
+    expect(details.block('raw')).not.toBeNull()
+    /* The stalest went first: the small files, then the earliest big ones, each marked released. */
+    expect(details.isReleased(0)).toBe(true)
+    expect(details.fileBody(0)).toBeNull()
+    expect(details.isReleased(119)).toBe(false)
+    const released = bigFiles.filter((f) => details.isReleased(f.index))
+    expect(released.length).toBeGreaterThan(0)
+    expect(released[0]!.index).toBe(100)
+    /* Asked for again, it is read and kept; its mark goes. */
+    const asked = blockCalls.length
+    void details.reloadFile(bigFiles[0]!)
+    expect(blockCalls).toHaveLength(asked + 1)
+    await answerBlock(fileBody(100, big))
+    expect(details.isReleased(100)).toBe(false)
+    expect(details.fileBody(100)).not.toBeNull()
+  })
+
+  it('files a late answer under the entry that asked, and keeps one file\'s failure to that file', async () => {
+    await onRaw()
+    const a = dirItem(0)
+    const b = dirItem(1)
+    void details.loadFile(a)
+    void details.loadFile(b)
+    /* The reader moves on before either answer lands. */
+    list.select('r2', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r2', 1, ['raw', 'files', 'file']))
+    await answerBlock(fileBody(0, { from: 'r1' }))
+    await failBlock(new Error('file one failed'))
+    expect(details.fileBody(0)).toBeNull()
+    expect(details.fileFault(1)).toBeNull()
+    expect(Object.values(details.get().fileBodies).map((r) => r.identity.entryId)).toEqual(['r1'])
+    /* Back on r1: the late answer is there; on its own entry a failure stays with its file. */
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await flush()
+    expect(details.fileBody(0)?.item).toMatchObject({ value: { from: 'r1' } })
+    void details.loadFile(b)
+    await failBlock(new Error('file one failed'))
+    expect(details.fileFault(1)).toBe('file one failed')
+    expect(details.fileFault(0)).toBeNull()
+    void details.reloadFile(b)
+    expect(details.fileFault(1)).toBeNull()
+    await answerBlock(fileBody(1, { ok: true }))
+    expect(details.fileBody(1)?.item).toMatchObject({ value: { ok: true } })
+  })
+})

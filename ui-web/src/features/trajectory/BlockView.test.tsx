@@ -57,18 +57,37 @@ const body = (blockId: string, data: unknown, over: Partial<TrajectoryBlockResul
 
 let blockQueue: Array<Deferred<TrajectoryBlockResult>> = []
 let blockCalls: string[] = []
+/* Every read still unanswered, with the call it was: answered by name where the order of reads is not the point. */
+let pendingCalls: Array<{ call: string; d: Deferred<TrajectoryBlockResult> }> = []
+let detailResult: TrajectoryDetailResult = descriptor
 
 const source: TrajectorySource = {
   state: async () => ({ enabled: true, policy_revision: 1, recording_enabled: true }),
   list: async () => ({ epoch: 'e1', snapshot_revision: 100, entries: [row], next_cursor: null, index_state: READY, complete: true }),
   changes: () => Promise.reject(new Error('not scripted')),
-  detail: async () => descriptor,
-  block: (_k, _e, _r, _ep, blockId, cursor) => { blockCalls.push(`${blockId}|${cursor ?? ''}`); const d = deferred<TrajectoryBlockResult>(); blockQueue.push(d); return d.promise },
+  detail: async () => detailResult,
+  block: (_k, _e, _r, _ep, blockId, cursor) => {
+    const call = `${blockId}|${cursor ?? ''}`
+    blockCalls.push(call)
+    const d = deferred<TrajectoryBlockResult>()
+    blockQueue.push(d)
+    pendingCalls.push({ call, d })
+    return d.promise
+  },
 }
 
 const flush = async (): Promise<void> => { await act(async () => { for (let i = 0; i < 8; i += 1) await Promise.resolve() }) }
 const answer = async (r: TrajectoryBlockResult): Promise<void> => { await act(async () => { blockQueue.shift()!.resolve(r) }); await flush() }
 const refuse = async (e: unknown): Promise<void> => { await act(async () => { blockQueue.shift()!.reject(e) }); await flush() }
+const settleCall = async (call: string, outcome: { ok: TrajectoryBlockResult } | { fail: unknown }): Promise<void> => {
+  const at = pendingCalls.findIndex((p) => p.call === call)
+  if (at < 0) throw new Error(`no pending read ${call}; pending: ${pendingCalls.map((p) => p.call).join(', ')}`)
+  const { d } = pendingCalls.splice(at, 1)[0]!
+  blockQueue = blockQueue.filter((x) => x !== d)
+  await act(async () => { if ('ok' in outcome) d.resolve(outcome.ok); else d.reject(outcome.fail) })
+  await flush()
+}
+const pendingFiles = (): string[] => pendingCalls.map((p) => p.call).filter((c) => c.startsWith('file|'))
 const q = (sel: string): HTMLElement | null => document.querySelector<HTMLElement>(sel)
 
 const messages = (from: number, n: number) => Array.from({ length: n }, (_, k) => ({ role: 'user', content: `m${from + k}` }))
@@ -101,6 +120,8 @@ async function ready(): Promise<void> {
 beforeEach(() => {
   blockQueue = []
   blockCalls = []
+  pendingCalls = []
+  detailResult = descriptor
   list._resetForTests()
   details._resetForTests()
   resetCapabilities()
@@ -488,5 +509,143 @@ describe('relations, usage and skills', () => {
       ['trajectory-item trajectory-skill-used', 'pdfgui.trajectory.details.skill_used'],
       ['trajectory-item trajectory-skill-unused', 'webgui.trajectory.details.skill_unused'],
     ])
+  })
+})
+
+
+describe('the files under the raw record', () => {
+  const withFiles: TrajectoryDetailResult = {
+    ...descriptor,
+    blocks: [
+      block({ id: 'model', renderer: 'key_values' }),
+      block({ id: 'raw', renderer: 'json' }),
+      block({ id: 'files', renderer: 'items', total_items: 20 }),
+      block({ id: 'file', renderer: 'items', total_items: 20 }),
+    ],
+  }
+  const dirItem = (index: number) => ({ index, key: `f${index}.artifact_path`, path: `/logs/f${index}.json`, size: 2048, cursor: `c${index}` })
+  const directory = (n: number) => body('files', { items: Array.from({ length: n }, (_, k) => dirItem(k)), offset: 0 }, { renderer: 'items', total_items: n })
+  const fileOf = (index: number, over: Record<string, unknown> = {}) =>
+    body('file', { items: [{ index, key: `f${index}.artifact_path`, path: `/logs/f${index}.json`, size: 2048, kind: 'json', value: { n: index }, shown_bytes: 9, truncated: null, ...over }], offset: index }, { renderer: 'items', total_items: 20 })
+  const rawBlock = () => withFiles.blocks[1]!
+
+  async function openRaw(height: number, files: number): Promise<HTMLElement> {
+    detailResult = { ...withFiles, blocks: withFiles.blocks.map((b) => (b.id === 'files' || b.id === 'file' ? { ...b, total_items: files } : b)) }
+    await ready()
+    act(() => { details.setTab('r0', 'raw') })
+    const pane = paneOf(height)
+    render(<BlockView block={rawBlock()} />, { container: pane })
+    await flush()
+    await settleCall('raw|', { ok: body('raw', { value: { attributes: { 'f0.artifact_path': '/logs/f0.json' } } }, { renderer: 'json' }) })
+    await settleCall('files|', { ok: directory(files) })
+    return pane
+  }
+
+  it('reads no file before the raw record above it has arrived, whatever lands first', async () => {
+    detailResult = withFiles
+    await ready()
+    act(() => { details.setTab('r0', 'raw') })
+    render(<BlockView block={rawBlock()} />, { container: paneOf(300) })
+    await flush()
+    /* The directory lands before the record: its headings are drawn, nothing is read yet. */
+    await settleCall('files|', { ok: directory(3) })
+    expect(document.querySelectorAll('.trajectory-file-h')).toHaveLength(3)
+    expect(pendingFiles()).toEqual([])
+    await settleCall('raw|', { ok: body('raw', { value: { attributes: {} } }, { renderer: 'json' }) })
+    expect(pendingFiles()).toEqual(['file|c0', 'file|c1'])
+  })
+
+  it('heads every file, reads only the open ones in view two at a time, and reads the others when the pane scrolls to them', async () => {
+    const pane = await openRaw(300, 20)
+    expect([...document.querySelectorAll('.trajectory-file-h')].map((h) => h.textContent)).toEqual(Array.from({ length: 20 }, (_, k) => `f${k}.artifact_path`))
+    expect(q('.trajectory-file-path')?.textContent).toBe('/logs/f0.json · 2.0 KiB')
+    expect(pendingFiles()).toEqual(['file|c0', 'file|c1'])
+    await settleCall('file|c0', { ok: fileOf(0) })
+    expect(pendingFiles()).toEqual(['file|c1', 'file|c2'])
+    await settleCall('file|c1', { ok: fileOf(1) })
+    await settleCall('file|c2', { ok: fileOf(2) })
+    /* Three sections fill the view: nothing past them is read on its own. */
+    await flush()
+    expect(pendingFiles()).toEqual([])
+    expect(blockCalls.filter((c) => c.startsWith('file|'))).toEqual(['file|c0', 'file|c1', 'file|c2'])
+    expect(q('[data-file-index="0"] .trajectory-json')).not.toBeNull()
+    /* A folded section is not read; scrolling brings the next ones in. */
+    act(() => { fireEvent.click(q('[data-file-index="3"] .trajectory-file-toggle') as HTMLElement) })
+    pane.scrollTop = 600
+    act(() => { fireEvent.scroll(pane) })
+    await flush()
+    expect(pendingFiles()).toEqual(['file|c4', 'file|c5'])
+  })
+
+  it('says where a file failed, goes on with the others, and reads that file again only when the reader asks', async () => {
+    await openRaw(300, 3)
+    await settleCall('file|c0', { fail: new Error('file zero unavailable') })
+    const alert = q('[data-file-index="0"] [role=alert]')
+    expect(alert?.textContent).toContain('file zero unavailable')
+    /* The others go on; the failed one is not asked for again on its own. */
+    await settleCall('file|c1', { ok: fileOf(1) })
+    await settleCall('file|c2', { ok: fileOf(2) })
+    await flush()
+    expect(pendingFiles()).toEqual([])
+    act(() => { fireEvent.click(alert!.querySelector('.trajectory-link') as HTMLElement) })
+    await flush()
+    expect(pendingFiles()).toEqual(['file|c0'])
+    await settleCall('file|c0', { ok: fileOf(0) })
+    expect(q('[data-file-index="0"] [role=alert]')).toBeNull()
+    expect(q('[data-file-index="0"] .trajectory-json')).not.toBeNull()
+  })
+
+  it('shows JSON as a tree and text as text, says why a file is cut and why one could not be read', async () => {
+    await openRaw(30000, 4)
+    await settleCall('file|c0', { ok: fileOf(0) })
+    await settleCall('file|c1', { ok: fileOf(1, { kind: 'text', value: undefined, text: 'cut here', size: 600 * 1024, shown_bytes: 512 * 1024, truncated: 'file_limit' }) })
+    await settleCall('file|c2', { ok: fileOf(2, { kind: 'text', value: undefined, text: 'squeezed', size: null, shown_bytes: 2048, truncated: 'response_limit' }) })
+    await settleCall('file|c3', { ok: fileOf(3, { kind: 'none', value: undefined, reason: 'artifact_missing' }) })
+    expect(q('[data-file-index="0"] .trajectory-json')).not.toBeNull()
+    expect(q('[data-file-index="1"] .trajectory-text-body')?.textContent).toBe('cut here')
+    expect(q('[data-file-index="1"] .trajectory-file-cut')?.textContent).toBe('gui.trajectory.details.file_cut_file {"size":"600.0 KiB"}')
+    expect(q('[data-file-index="2"] .trajectory-file-cut')?.textContent).toBe('gui.trajectory.details.file_cut_response_nosize {"shown":"2.0 KiB"}')
+    expect(q('[data-file-index="3"] .trajectory-sec-note')?.textContent).toBe('gui.trajectory.reason.artifact_missing')
+  })
+
+  it('lets the stalest contents go past the budget without reading them back, and reads one again on request', async () => {
+    await openRaw(30000, 20)
+    const big = 'b'.repeat(480 * 1024)
+    let answered = 0
+    while (pendingFiles().length && answered < 40) {
+      const call = pendingFiles()[0]!
+      const index = Number(call.slice('file|c'.length))
+      await settleCall(call, { ok: fileOf(index, { value: big }) })
+      answered += 1
+    }
+    /* Every file was read exactly once: the budget's releases never asked for anything again. */
+    expect(blockCalls.filter((c) => c.startsWith('file|'))).toHaveLength(20)
+    expect(new Set(blockCalls.filter((c) => c.startsWith('file|'))).size).toBe(20)
+    const released = q('[data-file-index="0"] .trajectory-file-released')
+    expect(released?.textContent).toBe('gui.trajectory.details.file_released')
+    expect(q('[data-file-index="19"] .trajectory-json')).not.toBeNull()
+    act(() => { fireEvent.click(released as HTMLElement) })
+    await flush()
+    expect(pendingFiles()).toEqual(['file|c0'])
+    await settleCall('file|c0', { ok: fileOf(0, { value: big }) })
+    expect(q('[data-file-index="0"] .trajectory-file-released')).toBeNull()
+    expect(q('[data-file-index="0"] .trajectory-json')).not.toBeNull()
+  })
+
+  it('keeps an answer that lands after the reader changed tabs out of the tab on screen, and shows it on the way back', async () => {
+    await openRaw(300, 2)
+    cleanup()
+    act(() => { details.setTab('r0', 'model') })
+    render(<BlockView block={withFiles.blocks[0]!} />, { container: paneOf(300) })
+    await flush()
+    await settleCall('file|c0', { ok: fileOf(0) })
+    expect(q('.trajectory-files')).toBeNull()
+    expect(q('.trajectory-json')).toBeNull()
+    cleanup()
+    act(() => { details.setTab('r0', 'raw') })
+    render(<BlockView block={rawBlock()} />, { container: paneOf(300) })
+    await flush()
+    expect(q('[data-file-index="0"] .trajectory-json')).not.toBeNull()
+    expect(blockCalls.filter((c) => c === 'file|c0')).toHaveLength(1)
   })
 })

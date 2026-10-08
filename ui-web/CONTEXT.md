@@ -163,11 +163,17 @@ charged, zoomed about the pointer and dragged, dense blocks where the fit has
 no room, a click on a block being one more door to the same `select`. The list
 store keeps two indexes: the server's whole `entries` (every coordinate, change
 feeds and the anchor) and the derived `visible` rows, which leave out the
-entries the index marked `meta.hidden` (a reply that repeats the turn's last
-model output, an internal step that recorded nothing) unless the "show internal
-steps" switch is on or a link `revealed` one; the two switches are the viewer's
-`prefs`, kept in `localStorage` and never in the session memory. A hidden reply
-is drawn as the turn's band under the blocks rather than a block of its own.
+entries the index marked `meta.hidden` (a turn's end that repeats the turn's
+last model output or delivered nothing, an internal step that recorded
+nothing) unless "show hidden entries" is on or a link `revealed` one. That
+switch and the bar's duration threshold (`minChargedMs`, a detent from 0 to
+1000 ms that leaves out of the bar -- never the list -- the entries charged
+less) are the viewer's `prefs`, kept in `localStorage` and never in the session
+memory. A hidden turn's end is drawn as the turn's band under the blocks rather
+than a block of its own. Under the raw record the details pane lists the files
+the span names (`features/trajectory/Files.tsx`): the `files` directory whole,
+each file's content read by its own cursor while it is open and in view, kept
+apart from the block pages and let go stalest first when the budget is short.
 _Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
 records, the trajectory is how this page reads it back.
 

@@ -10911,10 +10911,6 @@
       "en": "User input",
       "zh": "用户输入"
     },
-    "gui.trajectory.kind.agent_reply": {
-      "en": "Agent reply",
-      "zh": "回复"
-    },
     "gui.trajectory.kind.llm_input": {
       "en": "LLM input",
       "zh": "模型输入"
@@ -11616,16 +11612,8 @@
       "zh": "回合 {n}：总耗时 {dur}"
     },
     "gui.trajectory.revealed_row": {
-      "en": "An internal step, shown because something pointed at it",
-      "zh": "内部步骤，因被引用而临时显示"
-    },
-    "gui.trajectory.bar.hide_short": {
-      "en": "Hide entries under 20 ms",
-      "zh": "隐藏 20 ms 以下的条目"
-    },
-    "gui.trajectory.bar.show_internal": {
-      "en": "Show internal steps",
-      "zh": "显示内部步骤"
+      "en": "A hidden entry, shown because something pointed at it",
+      "zh": "已隐藏的条目，因被引用而临时显示"
     },
     "gui.trajectory.bar.turn_total": {
       "en": "Turn {n}: {dur} in all",
@@ -11738,6 +11726,50 @@
     "gui.trajectory.evidence.result_error_status": {
       "en": "the tool result reports an error status",
       "zh": "工具结果报告错误状态"
+    },
+    "gui.trajectory.kind.turn_end": {
+      "en": "Turn end",
+      "zh": "回合结束"
+    },
+    "gui.trajectory.bar.show_hidden": {
+      "en": "Show hidden entries ({n})",
+      "zh": "显示已隐藏的条目（{n} 条）"
+    },
+    "gui.trajectory.bar.threshold": {
+      "en": "Hide entries under {ms}",
+      "zh": "隐藏短于 {ms} 的条目"
+    },
+    "gui.trajectory.bar.threshold_off": {
+      "en": "No duration filter",
+      "zh": "不按时长过滤"
+    },
+    "gui.trajectory.bar.threshold_label": {
+      "en": "Duration filter",
+      "zh": "时长过滤"
+    },
+    "gui.trajectory.details.files_listed_part": {
+      "en": "Too many files to list: the first {n} of {total} are shown",
+      "zh": "目录过长，只列出前 {n} 项（共 {total} 项）"
+    },
+    "gui.trajectory.details.file_cut_file": {
+      "en": "Shown up to the 512 KiB read limit; the file is {size}",
+      "zh": "只显示前 512 KiB（读取上限），文件共 {size}"
+    },
+    "gui.trajectory.details.file_cut_file_nosize": {
+      "en": "Shown up to the 512 KiB read limit",
+      "zh": "只显示前 512 KiB（读取上限）"
+    },
+    "gui.trajectory.details.file_cut_response": {
+      "en": "Cut to fit one response; {shown} of {size} shown",
+      "zh": "超过单次响应上限，已截断：显示 {shown} / {size}"
+    },
+    "gui.trajectory.details.file_cut_response_nosize": {
+      "en": "Cut to fit one response; {shown} shown",
+      "zh": "超过单次响应上限，已截断：显示 {shown}"
+    },
+    "gui.trajectory.details.file_released": {
+      "en": "Released to stay within memory; click to read it again",
+      "zh": "内容已释放（内存上限），点击重新读取"
     }
   }
 }

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  GAP, MAX_SCALE, MIN_W, anchorOf, capacity, denseLayout, expand, fitLayout, hitTest, initialViewport, layoutFor, locate, pan,
-  position, referenceUnit, restoreAnchor, summarize, toSegments, zoomAt,
+  DURATION_DETENTS, GAP, MAX_SCALE, MIN_W, anchorOf, barEntries, capacity, denseLayout, expand, fitLayout, hitTest, initialViewport,
+  layoutFor, locate, pan, position, referenceUnit, restoreAnchor, snapThreshold, summarize, toSegments, zoomAt,
 } from './geometry'
 
 import type { Segment, Viewport } from './geometry'
@@ -168,7 +168,7 @@ describe('the timing fixtures', () => {
     const segments = toSegments(rows([
       { entry_id: 'a', kind: 'tool.output', charged_ms: 2000, timing_basis: 'span_full', turn_number: 1 },
       { entry_id: 'b', kind: 'tool.output', charged_ms: 2000, timing_basis: 'span_full', turn_number: 1 },
-      { entry_id: 'reply', kind: 'agent.reply', charged_ms: 4000, timing_basis: 'span_full', turn_number: 1 },
+      { entry_id: 'reply', kind: 'turn.end', charged_ms: 4000, timing_basis: 'span_full', turn_number: 1 },
     ]))
     const sum = summarize(segments)
     expect(sum.known).toBe(8000)
@@ -520,5 +520,43 @@ describe('spreading a dense block out', () => {
     const shown = spread.blocks.filter((b) => b.x + b.w > opened.offset && b.x < opened.offset + width).length
     expect(shown).toBeLessThanOrEqual(bucket.ids!.length)
     expect(opened.scale).toBeLessThanOrEqual(MAX_SCALE)
+  })
+})
+
+describe('the duration threshold', () => {
+  const row = (id: string, kind: string, charged: number | null): TrajectoryEntry =>
+    ({ entry_id: id, kind, charged_ms: charged, timing_basis: charged === null ? 'not_recorded' : 'span_full' }) as TrajectoryEntry
+
+  it('keeps the user\'s input and unknown durations at any threshold, and filters nothing at zero', () => {
+    const rows = [row('u', 'user.input', 0), row('n', 'llm.thinking', null), row('a', 'tool.output', 12), row('b', 'llm.output', 400), row('c', 'tool.output', 1500)]
+    const ids = (ms: number): string[] => barEntries(rows, ms).map((e) => e.entry_id)
+    expect(ids(0)).toEqual(['u', 'n', 'a', 'b', 'c'])
+    expect(ids(20)).toEqual(['u', 'n', 'b', 'c'])
+    expect(ids(1000)).toEqual(['u', 'n', 'c'])
+    expect(ids(Number.NaN)).toEqual(['u', 'n', 'a', 'b', 'c'])
+  })
+
+  it('snaps a value to the nearest detent, from zero to a second', () => {
+    expect(DURATION_DETENTS[0]).toBe(0)
+    expect(DURATION_DETENTS.at(-1)).toBe(1000)
+    expect([0, 1, 3, 37, 70, 480, 5000, -4, Number.NaN].map(snapThreshold)).toEqual([0, 1, 2, 50, 50, 500, 1000, 0, 0])
+  })
+
+  it('moves the anchor to the next entry still drawn when its own left the bar, else to the one before', () => {
+    const width = 200
+    const all = [seg('a', 3000), seg('b', 30), seg('c', 2000), seg('d', 2000)]
+    const zoomed = zoomAt(initialViewport(width), 0, 4, all)
+    const view = { ...zoomed, anchor: { id: 'b', frac: 0.5 } }
+    const order = ['a', 'b', 'c', 'd']
+    const without = layoutFor([all[0]!, all[2]!, all[3]!], view)
+    const c = without.blocks.find((x) => x.id === 'c')!
+    expect(near(restoreAnchor(without, view, order).offset, Math.min(c.x, Math.max(0, without.contentWidth - width)))).toBe(true)
+    /* Nothing after it is drawn: the last one before it, at its right edge. */
+    const tail = { ...view, anchor: { id: 'd', frac: 0 } }
+    const onlyHead = layoutFor([all[0]!, all[1]!], tail)
+    const last = onlyHead.blocks.at(-1)!
+    expect(near(restoreAnchor(onlyHead, tail, order).offset, Math.min(last.x + last.w, Math.max(0, onlyHead.contentWidth - width)))).toBe(true)
+    /* Without the order the old rule stands: the offset stays and clamps. */
+    expect(restoreAnchor(without, view).offset).toBe(Math.min(view.offset, Math.max(0, without.contentWidth - width)))
   })
 })

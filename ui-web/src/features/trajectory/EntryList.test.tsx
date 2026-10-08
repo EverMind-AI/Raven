@@ -279,7 +279,7 @@ describe('what the rows say about themselves', () => {
       entry('side', 1, { kind: 'llm.input', meta: { purpose: 'watch_work' } }),
       entry('main', 2, { kind: 'llm.input', meta: { purpose: 'main' } }),
       entry('gone', 3, { kind: 'tool.output', integrity: ['artifact_missing'], preview: 'stale words' }),
-      entry('reply', 4, { kind: 'agent.reply', slot: 'turn.output', turn_span_id: 'turn', charged_ms: 9000, meta: { hidden: 'redundant_reply' } }),
+      entry('reply', 4, { kind: 'turn.end', slot: 'turn.output', turn_span_id: 'turn', charged_ms: 9000, meta: { hidden: 'redundant_reply' } }),
       entry('enq', 5, { kind: 'memory.enqueue.summary', meta: { hidden: 'empty_internal' } }),
     ]
     render(<EntryList />)
@@ -299,10 +299,10 @@ describe('what the rows say about themselves', () => {
     act(() => { store.select('reply', { source: 'link' }) })
     expect(ids()).toEqual(['ask', 'side', 'main', 'gone', 'reply'])
     expect(document.querySelector('.trajectory-row[data-entry="reply"]')?.hasAttribute('data-revealed')).toBe(true)
-    act(() => { store.setPrefs({ showInternal: true }) })
+    act(() => { store.setPrefs({ showHidden: true }) })
     expect(ids()).toEqual(['ask', 'side', 'main', 'gone', 'reply', 'enq'])
     expect(document.querySelector('.trajectory-row[data-entry="reply"]')?.hasAttribute('data-revealed')).toBe(false)
-    act(() => { store.setPrefs({ showInternal: false }) })
+    act(() => { store.setPrefs({ showHidden: false }) })
     expect(ids()).toEqual(['ask', 'side', 'main', 'gone'])
   })
 
@@ -320,10 +320,10 @@ describe('what the rows say about themselves', () => {
   it('anchors to the first visible row after one a switch hid', () => {
     const list = [entry('a', 0), entry('hid', 1, { meta: { hidden: 'empty_internal' } }), entry('b', 2)]
     render(<EntryList />)
-    act(() => { feed(list); store.setPrefs({ showInternal: true }) })
+    act(() => { feed(list); store.setPrefs({ showHidden: true }) })
     act(() => { store.setPlace(false, { id: 'hid', offset: 4 }) })
     const el = document.querySelector('.trajectory-list') as HTMLElement
-    act(() => { store.setPrefs({ showInternal: false }) })
+    act(() => { store.setPrefs({ showHidden: false }) })
     /* The hidden anchor row gives way to `b`, now at position 1. */
     expect(el.scrollTop).toBe(1 * ROW_HEIGHT + 4)
   })

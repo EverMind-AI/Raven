@@ -11,7 +11,7 @@ const catalogue = (): Record<string, { en: string; zh: string }> =>
 /* Every kind the index can emit, by the slot rules in raven/trajectory/entries.py
    and the block registry in raven/trajectory/details.py. */
 const EMITTED = [
-  'user.input', 'agent.reply', 'llm.input', 'llm.thinking', 'llm.output', 'tool.input', 'tool.output',
+  'user.input', 'turn.end', 'llm.input', 'llm.thinking', 'llm.output', 'tool.input', 'tool.output',
   'skill.read', 'skill.inject', 'skill.rewrite.input', 'skill.rewrite.output', 'skill.gate.input', 'skill.gate.output',
   'context.curate.input', 'context.curate.output', 'memory.recall', 'memory.store', 'memory.feedback.summary',
   'memory.enqueue.summary', 'memory.extract.summary', 'memory.profile_refresh.summary', 'memory.consolidate.summary',

@@ -16,7 +16,7 @@ import { t } from '../../i18n/t'
    the catalogue. */
 const KNOWN: Record<string, string> = {
   'user.input': 'gui.trajectory.kind.user_input',
-  'agent.reply': 'gui.trajectory.kind.agent_reply',
+  'turn.end': 'gui.trajectory.kind.turn_end',
   'llm.input': 'gui.trajectory.kind.llm_input',
   'llm.thinking': 'gui.trajectory.kind.llm_thinking',
   'llm.output': 'gui.trajectory.kind.llm_output',

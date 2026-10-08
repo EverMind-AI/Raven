@@ -8,8 +8,11 @@ import { dispatch as escape } from '../../state/escapeOrder'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import * as details from './detailStore'
-import { BUCKET_MAX_H, DurationBar, paint } from './DurationBar'
-import { BLOCK_H, BLOCK_TOP, DBL_MS, DOT_ABOVE_Y, DOT_BELOW_Y, GAP, MIN_W, bandsFor, capacity, hitTest, hitTestExact, initialViewport, layoutFor, toSegments } from './geometry'
+import { BUCKET_MAX_H, DurationBar, WHEEL_LINE_PX, paint } from './DurationBar'
+import {
+  BLOCK_H, BLOCK_TOP, DBL_MS, DOT_ABOVE_Y, DOT_BELOW_Y, DURATION_DETENTS, GAP, MIN_W, bandsFor, barEntries, capacity, hitTest,
+  hitTestExact, initialViewport, layoutFor, toSegments,
+} from './geometry'
 import * as store from './store'
 
 import type { TrajectoryEntry, TrajectoryIndexState, TrajectorySource } from './types'
@@ -110,8 +113,8 @@ afterAll(() => {
 async function ready(): Promise<void> {
   absorb(['trajectory-v1'])
   store.install()
-  /* These fixtures lean on zero-length marks; the short-entry switch would take them out. */
-  store.setPrefs({ hideShort: false })
+  /* These fixtures lean on zero-length marks; the duration threshold would take them out. */
+  store.setPrefs({ minChargedMs: 0 })
   details.install()
   unpitch()
   store.sessionChanged('gui:a')
@@ -195,7 +198,7 @@ describe('the duration bar', () => {
   it('says the overlap when a turn and the calls inside it are both charged', async () => {
     rows = [
       entry('a', 0, { charged_ms: 2000 }),
-      entry('reply', 1, { kind: 'agent.reply', charged_ms: 4000 }),
+      entry('reply', 1, { kind: 'turn.end', charged_ms: 4000 }),
     ]
     await ready()
     render(<DurationBar />)
@@ -593,40 +596,133 @@ describe('the switches, the bands and the dots', () => {
     return { ctx, calls }
   }
 
-  it('hides the recorded durations under 20 ms while the switch is on, never an unknown one or the user\'s input', async () => {
+  it('hides the recorded durations under the threshold set on its slider, never an unknown one or the user\'s input', async () => {
     rows = [
       entry('u', 0, { kind: 'user.input', charged_ms: 0, timing_basis: 'zero' }),
       entry('fast', 1, { kind: 'tool.output', charged_ms: 12 }),
       entry('unknown', 2, { kind: 'llm.thinking', charged_ms: null, timing_basis: 'not_recorded' }),
-      entry('slow', 3, { kind: 'llm.output', charged_ms: 900 }),
+      entry('mid', 3, { kind: 'llm.output', charged_ms: 400 }),
+      entry('slow', 4, { kind: 'tool.output', charged_ms: 1500 }),
     ]
     await ready()
-    store.setPrefs({ hideShort: true })
+    store.setPrefs({ minChargedMs: 20 })
     render(<DurationBar />)
     await flush()
-    expect(canvas().getAttribute('aria-label')).toContain('"n":3')
-    const sw = q('.trajectory-bar-switch[aria-label="gui.trajectory.bar.hide_short"]') as HTMLButtonElement
-    expect(sw.getAttribute('aria-pressed')).toBe('true')
-    act(() => { fireEvent.click(sw) })
-    expect(store.get().prefs.hideShort).toBe(false)
     expect(canvas().getAttribute('aria-label')).toContain('"n":4')
-    expect(JSON.parse(localStorage.getItem(store.PREFS_KEY) as string)).toEqual({ hideShort: false, showInternal: false })
+    const button = q('.trajectory-threshold-btn') as HTMLButtonElement
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+    expect(button.getAttribute('aria-label')).toBe('gui.trajectory.bar.threshold {"ms":"20 ms"}')
+    /* The button opens the popover; the slider walks the detents. */
+    act(() => { fireEvent.click(button) })
+    expect(store.get().timeline.threshold).toBe(true)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    const range = q('.trajectory-threshold-range') as HTMLInputElement
+    expect(range.value).toBe(String(DURATION_DETENTS.indexOf(20)))
+    act(() => { fireEvent.change(range, { target: { value: String(DURATION_DETENTS.indexOf(1000)) } }) })
+    expect(store.get().prefs.minChargedMs).toBe(1000)
+    expect(canvas().getAttribute('aria-label')).toContain('"n":3')
+    expect(q('.trajectory-threshold-text')?.textContent).toBe('gui.trajectory.bar.threshold {"ms":"1 s"}')
+    act(() => { fireEvent.change(range, { target: { value: '0' } }) })
+    expect(store.get().prefs.minChargedMs).toBe(0)
+    expect(canvas().getAttribute('aria-label')).toContain('"n":5')
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    expect(q('.trajectory-threshold-text')?.textContent).toBe('gui.trajectory.bar.threshold_off')
+    expect(JSON.parse(localStorage.getItem(store.PREFS_KEY) as string)).toEqual({ minChargedMs: 0, showHidden: false })
+    /* A press elsewhere closes it; so does Escape through the page's order. */
+    act(() => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })) })
+    expect(q('.trajectory-threshold')).toBeNull()
+    act(() => { fireEvent.click(button) })
+    act(() => { fireEvent.pointerDown(q('.trajectory-threshold-range') as HTMLElement) })
+    expect(q('.trajectory-threshold')).not.toBeNull()
+    act(() => { expect(escape()).toBe(true) })
+    expect(q('.trajectory-threshold')).toBeNull()
+    store.setPrefs({ minChargedMs: 20 })
+  })
+
+  it('keeps its place on the entry after the one a new threshold took away, when zoomed', async () => {
+    rows = [
+      entry('a', 0, { charged_ms: 3000 }),
+      entry('b', 1, { charged_ms: 30 }),
+      entry('c', 2, { charged_ms: 2000 }),
+      entry('d', 3, { charged_ms: 2000 }),
+    ]
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    act(() => { fireEvent.click(q('.trajectory-bar-tool[aria-label="gui.trajectory.bar.zoom_in"]') as HTMLElement) })
+    act(() => { fireEvent.click(q('.trajectory-bar-tool[aria-label="gui.trajectory.bar.zoom_in"]') as HTMLElement) })
+    /* Put the view's left edge on b, then raise the threshold over it. */
+    const v = { ...store.get().timeline, width: WIDTH }
+    const before = layoutFor(toSegments(store.get().visible), v)
+    const b = before.blocks.find((x) => x.id === 'b')!
+    act(() => { store.setTimeline({ offset: b.x, anchor: { id: 'b', frac: 0 } }) })
+    act(() => { store.setPrefs({ minChargedMs: 50 }) })
+    await flush()
+    const after = layoutFor(toSegments(barEntries(store.get().visible, 50)), { ...store.get().timeline, width: WIDTH })
+    const c = after.blocks.find((x) => x.id === 'c')!
+    expect(after.blocks.some((x) => x.id === 'b')).toBe(false)
+    expect(store.get().timeline.offset).toBeCloseTo(Math.min(c.x, Math.max(0, after.contentWidth - WIDTH)), 6)
+    store.setPrefs({ minChargedMs: 0 })
+  })
+
+  it('pans on a sideways wheel or a Shift wheel once zoomed, zooms on the vertical one, and stays put in the fit', async () => {
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    const sideways = (deltaX: number, deltaY = 0, over: { deltaMode?: number; shiftKey?: boolean; ctrlKey?: boolean } = {}): WheelEvent => {
+      const ev = new WheelEvent('wheel', { deltaX, deltaY, bubbles: true, cancelable: true })
+      /* Set on the event itself: the test DOM does not carry every init field through. */
+      for (const [key, value] of Object.entries({ clientX: 300, deltaMode: 0, shiftKey: false, ctrlKey: false, ...over })) {
+        Object.defineProperty(ev, key, { value })
+      }
+      return ev
+    }
+    /* In the fit there is nothing to the side: the swipe changes nothing, but the page does not take it either. */
+    const fitted = sideways(120, 4)
+    act(() => { canvas().dispatchEvent(fitted) })
+    expect(fitted.defaultPrevented).toBe(true)
+    expect(store.get().timeline.fit).toBe(true)
+    act(() => { fireEvent.click(q('.trajectory-bar-tool[aria-label="gui.trajectory.bar.zoom_in"]') as HTMLElement) })
+    act(() => { fireEvent.click(q('.trajectory-bar-tool[aria-label="gui.trajectory.bar.zoom_in"]') as HTMLElement) })
+    act(() => { store.setTimeline({ offset: 200 }) })
+    const scale = store.get().timeline.scale
+    /* Sideways leads: a pan by the pixels, never a zoom. */
+    act(() => { canvas().dispatchEvent(sideways(50, 3)) })
+    expect(store.get().timeline.offset).toBeCloseTo(250, 6)
+    expect(store.get().timeline.scale).toBe(scale)
+    expect(store.get().timeline.anchor).not.toBeNull()
+    /* Lines are sixteen pixels; Shift turns the vertical wheel sideways. */
+    act(() => { canvas().dispatchEvent(sideways(-2, 0, { deltaMode: 1 })) })
+    expect(store.get().timeline.offset).toBeCloseTo(250 - 2 * WHEEL_LINE_PX, 6)
+    act(() => { canvas().dispatchEvent(sideways(0, 40, { shiftKey: true })) })
+    expect(store.get().timeline.offset).toBeCloseTo(250 - 2 * WHEEL_LINE_PX + 40, 6)
+    expect(store.get().timeline.scale).toBe(scale)
+    /* A vertical wheel, and a trackpad's pinch (Ctrl with a vertical delta), zoom. */
+    act(() => { canvas().dispatchEvent(wheel(-200, 300)) })
+    expect(store.get().timeline.scale).toBeGreaterThan(scale)
+    const zoomed = store.get().timeline.scale
+    act(() => { canvas().dispatchEvent(sideways(0, 150, { ctrlKey: true })) })
+    expect(store.get().timeline.scale).toBeLessThan(zoomed)
   })
 
   it('draws a hidden reply\'s time as a band behind its turn, says the turn\'s total there and lands a click on the turn\'s first row', async () => {
     rows = [
       entry('ask', 0, { kind: 'user.input', charged_ms: 0, timing_basis: 'zero', turn_number: 1, turn_start: true }),
       entry('out', 1, { kind: 'llm.output', charged_ms: 2000, turn_number: 1 }),
-      entry('reply', 2, { kind: 'agent.reply', slot: 'turn.output', charged_ms: 5000, turn_number: 1, meta: { hidden: 'redundant_reply' } }),
+      entry('reply', 2, { kind: 'turn.end', slot: 'turn.output', charged_ms: 5000, turn_number: 1, meta: { hidden: 'redundant_reply' } }),
       entry('ask2', 3, { kind: 'user.input', charged_ms: 0, timing_basis: 'zero', turn_number: 2, turn_start: true }),
       entry('out2', 4, { kind: 'llm.output', charged_ms: 2000, turn_number: 2 }),
-      entry('reply2', 5, { kind: 'agent.reply', slot: 'turn.output', charged_ms: 3000, turn_number: 2 }),
+      entry('reply2', 5, { kind: 'turn.end', slot: 'turn.output', charged_ms: 3000, turn_number: 2 }),
     ]
     await ready()
     render(<DurationBar />)
     await flush()
     /* The hidden reply is not a block: three blocks for turn 1, three for turn 2 (its reply shows). */
     expect(canvas().getAttribute('aria-label')).toContain('"n":5')
+    /* The switch that shows hidden entries says how many there are. */
+    const showHidden = q('.trajectory-bar-switch[aria-label^="gui.trajectory.bar.show_hidden"]') as HTMLButtonElement
+    expect(showHidden.getAttribute('aria-label')).toBe('gui.trajectory.bar.show_hidden {"n":1}')
+    expect(showHidden.getAttribute('aria-pressed')).toBe('false')
     const { ctx, calls } = recorder()
     const view = { ...store.get().timeline, width: WIDTH }
     const segments = toSegments(store.get().visible)
@@ -662,7 +758,7 @@ describe('the switches, the bands and the dots', () => {
     pointer('pointermove', gapAfter(3))
     expect(brief()).toContain('gui.trajectory.bar.sum_known')
     /* Showing the internal steps brings the reply back as a block and takes the band away. */
-    act(() => { store.setPrefs({ showInternal: true }) })
+    act(() => { store.setPrefs({ showHidden: true }) })
     await flush()
     expect(canvas().getAttribute('aria-label')).toContain('"n":6')
     pointer('pointermove', gapAfter(0))

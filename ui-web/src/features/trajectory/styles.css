@@ -126,6 +126,15 @@ html[data-theme="dark"] {
 .trajectory-bar[data-drag] .trajectory-canvas { cursor: grabbing; }
 .trajectory-bar-tools { flex: none; display: flex; gap: 2px; }
 .trajectory-bar-switch[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--raised)); }
+/* The duration filter's popover: under the tools, right-aligned, one line of words and the slider. */
+.trajectory-threshold {
+  position: absolute; z-index: var(--z-pop); top: calc(100% + 4px); right: 8px; width: 240px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--ink); box-shadow: var(--elev);
+}
+.trajectory-threshold-text { font-size: 12px; color: var(--text); }
+.trajectory-threshold-range { width: 100%; accent-color: var(--accent, var(--text)); }
+.trajectory-threshold-btn[aria-expanded="true"] { outline: 1px solid var(--line); }
 .trajectory-bar-tool {
   width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 13px; line-height: 1;
   display: grid; place-items: center;
@@ -323,6 +332,18 @@ html[data-theme="dark"] {
 .trajectory-msg-first { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .trajectory-msg-size { font-family: var(--mono); font-size: 10.5px; color: var(--faint); white-space: nowrap; }
 .trajectory-msg-open { position: relative; min-width: 0; }
+
+/* The files under the raw record: each headed by its attribute's name, a
+   size larger than the body and bold, the path beneath it small. */
+.trajectory-files { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.trajectory-file { min-width: 0; }
+.trajectory-file-h { margin: 0; font-size: 14px; font-weight: 600; }
+.trajectory-file-toggle { font: inherit; color: var(--text); text-align: left; border-radius: 4px; word-break: break-all; }
+.trajectory-file-toggle:hover { background: var(--hover); }
+.trajectory-file-path { margin: 2px 0 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
+.trajectory-file-body { min-width: 0; }
+.trajectory-file-cut { margin-bottom: 4px; }
+.trajectory-file-released { font-size: 12px; }
 /* The rows the window leaves out stand in as empty height, so the pane's scrollbar spans the whole list. */
 .trajectory-msg-space { flex: none; }
 .trajectory-msg-close {
