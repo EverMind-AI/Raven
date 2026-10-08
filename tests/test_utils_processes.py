@@ -83,7 +83,42 @@ class TestThePosixReader:
             import pytest
 
             pytest.skip("the POSIX reader is not the Windows reader")
-        assert processes._command_line_posix(99999999) is None
+        assert processes.command_line(99999999) is None
+
+    def test_an_invalid_pid_reads_as_none(self) -> None:
+        assert processes.command_line(0) is None
+        assert processes.command_line(-1) is None
+
+    def test_a_ps_that_fails_reads_as_none(self, monkeypatch) -> None:
+        import subprocess
+        import sys
+
+        if sys.platform == "win32":
+            import pytest
+
+            pytest.skip("the POSIX reader is not the Windows reader")
+
+        completed = subprocess.CompletedProcess([], 1, "", "")
+        monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: completed)
+        assert processes._command_line_posix(1) is None
+
+    def test_a_ps_that_cannot_run_reads_as_none(self, monkeypatch) -> None:
+        """CI happens to ship ``ps``; the failure branch still has to be
+        exercised, because the honest answer to "cannot read" is "do not act",
+        never "assume alive"."""
+        import subprocess
+        import sys
+
+        if sys.platform == "win32":
+            import pytest
+
+            pytest.skip("the POSIX reader is not the Windows reader")
+
+        def _unavailable(*_a, **_k):
+            raise OSError("ps: not found")
+
+        monkeypatch.setattr(subprocess, "run", _unavailable)
+        assert processes._command_line_posix(1) is None
 
     def test_a_subprocess_s_own_flag_is_seen(self) -> None:
         import subprocess
