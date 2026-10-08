@@ -77,6 +77,7 @@ DESCRIBE_ARTIFACTS = 16
 DESCRIBE_BLOBS = 4
 DESCRIBE_BYTES_LIMIT = 4 * 1024 * 1024
 READ_BLOCK_ARTIFACTS = 8
+FILES_DIRECTORY_PAGE = 200
 READ_BLOCK_BLOBS = MESSAGES_PAGE + 4
 READ_BLOCK_BYTES_LIMIT = 16 * 1024 * 1024
 
@@ -201,7 +202,7 @@ _REGISTRY: dict[str, tuple[BlockSpec, ...]] = {
         _art("media", ITEMS, "turn.input", "media", required=False),
         BlockSpec("origin", KEY_VALUES, True, "derived:turn_origin"),
     ),
-    "agent.reply": (
+    "turn.end": (
         _art("content", TEXT, "turn.output", "content"),
         _attrs(
             "capabilities",
@@ -352,6 +353,8 @@ _TAIL = (
     BlockSpec("relations", KEY_VALUES, True, "derived:relations"),
     BlockSpec("integrity", ITEMS, False, "derived:integrity"),
     BlockSpec("raw", JSON, True, "derived:raw"),
+    BlockSpec("files", ITEMS, False, "derived:files"),
+    BlockSpec("file", ITEMS, False, "derived:file"),
 )
 
 _EVIDENCE_KINDS = ("span.error", "span.malformed", "span.unreadable")
@@ -935,6 +938,64 @@ def _d_integrity(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _De
     return (AVAILABLE if codes else EMPTY), {"items": codes, "offset": 0}, (), None
 
 
+def _artifact_files(attrs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every file the span's ``*.artifact_path`` attributes name, by attribute name, with the size recorded beside it."""
+    out: list[dict[str, Any]] = []
+    for key in sorted(k for k in attrs if isinstance(k, str) and k.endswith(".artifact_path")):
+        path = tstore._str_value(attrs.get(key))
+        if path is None:
+            continue
+        size = attrs.get(f"{key[: -len('.artifact_path')]}.artifact_bytes")
+        recorded = size if isinstance(size, int) and not isinstance(size, bool) and size >= 0 else None
+        out.append({"index": len(out), "key": key, "path": path, "size": recorded})
+    return out
+
+
+def _d_files(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
+    files = _artifact_files(attrs)
+    if not files:
+        return NOT_RECORDED, None, (), NOT_RECORDED
+    return AVAILABLE, {"items": files, "offset": 0}, (), None
+
+
+def _file_item(file: dict[str, Any], reader: _Reader, budget: int) -> dict[str, Any]:
+    """One artifact file's content for the raw record: JSON when it parses whole, text otherwise.
+
+    ``truncated`` says why less than the file is shown: ``file_limit`` when
+    the file is over the read cap, ``response_limit`` when the content had to
+    be cut to fit one response although the read was whole.
+    """
+    head = {"index": file["index"], "key": file["key"], "path": file["path"], "size": file["size"]}
+    result = reader.read(file["path"])
+    if result is None:
+        return {**head, "kind": "none", "reason": REASON_NOT_LOADED}
+    text, reason = result
+    if text is None:
+        code = next((c for needle, _, c in _REASON_RULES if reason and needle in reason), "artifact_missing")
+        return {**head, "kind": "none", "reason": code}
+    truncated = "file_limit" if reason is not None else None
+    if truncated is None:
+        value, ok = _conv._parse_json(text)
+        if ok:
+            whole = {
+                **head,
+                "kind": "json",
+                "value": value,
+                "shown_bytes": len(text.encode("utf-8")),
+                "truncated": None,
+            }
+            if _size(whole) <= budget:
+                return whole
+    shell = {**head, "kind": "text", "text": "", "shown_bytes": 0, "truncated": truncated}
+    shown, cut = _fit_text(text, budget - _size(shell))
+    return {
+        **shell,
+        "text": shown,
+        "shown_bytes": len(shown.encode("utf-8")),
+        "truncated": "response_limit" if cut else truncated,
+    }
+
+
 def _d_raw(view: EntryView, attrs: dict[str, Any], loaded: _Loader) -> _Derived:
     span = view.span or {}
     artifacts = []
@@ -989,6 +1050,8 @@ _DERIVED: dict[str, Callable[[EntryView, dict[str, Any], _Loader], _Derived]] = 
     "relations": _d_relations,
     "integrity": _d_integrity,
     "raw": _d_raw,
+    "files": _d_files,
+    "file": _d_files,
 }
 
 
@@ -1634,6 +1697,33 @@ def _decode_cursor(cursor: str, entry_id: str, revision: int, epoch: str) -> int
     return data["o"]
 
 
+def _read_file(view: EntryView, reader: _Reader, *, entry_revision: int, epoch: str, index: int) -> BlockBody:
+    """One artifact file of the entry's span, the one the cursor names, whole or cut to fit a response."""
+    attrs = tstore._span_attrs(view.span or {})
+    files = _artifact_files(attrs)
+    if not files:
+        raise UnknownBlockError("file")
+    if not 0 <= index < len(files):
+        raise CursorExpiredError("file cursor out of range")
+    budget = RESPONSE_LIMIT - RESPONSE_RESERVE - _size({"items": [], "offset": index})
+    item = _file_item(files[index], reader, budget)
+    integrity = (item["reason"],) if item["kind"] == "none" and item["reason"] != REASON_NOT_LOADED else ()
+    return BlockBody(
+        entry_id=view.entry.entry_id,
+        entry_revision=entry_revision,
+        epoch=epoch,
+        block_id="file",
+        renderer=ITEMS,
+        availability=AVAILABLE,
+        reason=None,
+        data={"items": [item], "offset": index},
+        next_cursor=None,
+        total_items=len(files),
+        integrity=integrity,
+        truncated=item.get("truncated") is not None,
+    )
+
+
 def read_block(
     index: SessionIndex,
     entry_id: str,
@@ -1658,6 +1748,8 @@ def read_block(
         reader = _Reader(
             state, max_artifacts=READ_BLOCK_ARTIFACTS, max_blobs=OUTLINE_PAGE, max_bytes=READ_BLOCK_BYTES_LIMIT
         )
+    if block_id == "file":
+        return _read_file(view, reader, entry_revision=entry_revision, epoch=epoch, index=offset)
     loaded = _loader(view, reader)
     specs = _all_specs(view.entry)
     spec = next((s for s in specs if s.id == block_id), None)
@@ -1702,7 +1794,9 @@ def read_block(
         elif spec.renderer in (MESSAGES, ITEMS, REFERENCES):
             items = list(data.get("items", []))
             page = (
-                MESSAGES_PAGE if spec.renderer == MESSAGES else (OUTLINE_PAGE if spec.id == "outline" else ITEMS_PAGE)
+                MESSAGES_PAGE
+                if spec.renderer == MESSAGES
+                else {"outline": OUTLINE_PAGE, "files": FILES_DIRECTORY_PAGE}.get(spec.id, ITEMS_PAGE)
             )
             window = items[offset : offset + page]
             if spec.renderer == MESSAGES:
@@ -1710,6 +1804,11 @@ def read_block(
                 integrity.extend(code for code in blob_integrity if code not in integrity)
             elif spec.id == "outline":
                 window = [_outline_item(item, reader, entry_id, entry_revision, epoch) for item in window]
+            elif spec.id == "files":
+                window = [
+                    {**item, "cursor": _encode_cursor(entry_id, entry_revision, epoch, item["index"])}
+                    for item in window
+                ]
             fitted, end, truncated = _fit_items(window, 0, page, budget)
             end_offset = offset + end
             data = {**data, "items": fitted, "offset": offset}

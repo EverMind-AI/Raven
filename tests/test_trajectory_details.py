@@ -13,6 +13,7 @@ from raven.tracing import artifact_v2
 from raven.trajectory import conversation as tconv
 from raven.trajectory import details as tdet
 from raven.trajectory import index as tidx
+from raven.trajectory import store as tstore
 
 SESSION = "tui:main"
 
@@ -183,7 +184,7 @@ def test_block_specs_are_unique_and_renderers_known():
         specs = tdet.block_specs(kind, slot="artifact:foo.alpha" if kind.startswith("foo") else "")
         ids = [s.id for s in specs]
         assert len(ids) == len(set(ids)), kind
-        assert ids[-5:] == ["error", "timing", "relations", "integrity", "raw"], kind
+        assert ids[-7:] == ["error", "timing", "relations", "integrity", "raw", "files", "file"], kind
         assert all(s.renderer in tdet.RENDERERS for s in specs), kind
 
 
@@ -469,6 +470,10 @@ def test_every_kind_in_the_gui_table_yields_ordered_blocks(state):
         if entry.integrity:
             expected_ids = expected_ids + ["integrity"]
         expected_ids = expected_ids + ["raw"]
+        # A span that names artifact files lists them, and reads them one by one, after the raw record.
+        attrs = tstore._span_attrs(index.capture(entry.entry_id).span or {})
+        if any(key.endswith(".artifact_path") for key in attrs):
+            expected_ids = expected_ids + ["files", "file"]
         assert ids == expected_ids, (span_id, slot, ids)
         assert len(ids) == len(set(ids))
         assert all(b.renderer in tdet.RENDERERS for b in descriptor.blocks)
@@ -1582,3 +1587,94 @@ def test_feedback_blocks_list_each_skill_with_its_use_and_the_name_its_own_turn_
         _block(index, state, entry, "origin")
     with pytest.raises(tdet.UnknownBlockError):
         _block(index, state, _entry(index, "turn", "turn.input"), "tool")
+
+
+# ── the files a span names ─────────────────────────────────────────────
+
+
+def test_the_raw_record_lists_the_span_s_files_and_reads_each_by_its_cursor(state, monkeypatch):
+    outside = state.parent / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+    big = "x" * (tdet.ARTIFACT_LIMIT + 100)
+    extra = {
+        "a.artifact_path": _artifact(state, {"k": [1, 2]}, "a"),
+        "a.artifact_bytes": 13,
+        "b.artifact_path": _artifact(state, "plain text, not json", "b"),
+        "c.artifact_path": _artifact(state, big, "c"),
+        "d.artifact_path": str(outside),
+        "e.artifact_path": str(state / "logs" / "audit-artifacts" / "gone.json"),
+        "f.artifact_path": _artifact(state, {"long": "y" * 5000}, "f"),
+    }
+    _append(
+        state,
+        [_turn(state, "t", "turn", start=0, end=100), _tool(state, "t", "x", "turn", start=1, end=2, extra=extra)],
+    )
+    index = _ready(state)
+    entry = _entry(index, "x", "tool.output")
+    descriptor = _describe(index, state, entry)
+    assert _ids(descriptor)[-3:] == ["raw", "files", "file"]
+    files = next(b for b in descriptor.blocks if b.id == "files")
+    assert files.total_items == 8
+    # The directory reads no file: every name, in order, with the size recorded beside it and a cursor.
+    directory = _block(index, state, entry, "files").data["items"]
+    keys = [item["key"] for item in directory]
+    assert keys == sorted(keys) and keys[0] == "a.artifact_path" and "tool.output.artifact_path" in keys
+    assert directory[0]["size"] == 13 and directory[1]["size"] is None
+    assert [item["index"] for item in directory] == list(range(8))
+    body = {item["key"]: _block(index, state, entry, "file", cursor=item["cursor"]) for item in directory}
+    one = lambda key: body[key].data["items"][0]  # noqa: E731
+    assert one("a.artifact_path") == {
+        "index": 0,
+        "key": "a.artifact_path",
+        "path": extra["a.artifact_path"],
+        "size": 13,
+        "kind": "json",
+        "value": {"k": [1, 2]},
+        "shown_bytes": len('{"k": [1, 2]}'),
+        "truncated": None,
+    }
+    assert one("b.artifact_path")["kind"] == "text" and one("b.artifact_path")["text"] == "plain text, not json"
+    # Over the read cap: the first 512 KiB, as text, saying why.
+    assert one("c.artifact_path")["kind"] == "text" and one("c.artifact_path")["truncated"] == "file_limit"
+    assert one("c.artifact_path")["shown_bytes"] == tdet.ARTIFACT_LIMIT
+    assert one("d.artifact_path") == {**one("d.artifact_path"), "kind": "none", "reason": "artifact_outside_store"}
+    assert body["d.artifact_path"].integrity == ("artifact_outside_store",)
+    assert one("e.artifact_path")["kind"] == "none" and one("e.artifact_path")["reason"] == "artifact_missing"
+    assert one("tool.output.artifact_path")["value"] == {"result": "ok"}
+    assert all(b.total_items == 8 and b.next_cursor is None for b in body.values())
+    # Without a cursor the first file; a cursor past the list is stale.
+    assert _block(index, state, entry, "file").data["items"][0]["index"] == 0
+    with pytest.raises(tidx.CursorExpiredError):
+        _block(index, state, entry, "file", cursor=tdet._encode_cursor(entry.entry_id, entry.revision, index.epoch, 99))
+    # A file under the read cap that cannot fit one response is cut to fit, and says so.
+    monkeypatch.setattr(tdet, "RESPONSE_LIMIT", tdet.RESPONSE_RESERVE + 2000)
+    cut = _block(index, state, entry, "file", cursor=directory[5]["cursor"]).data["items"][0]
+    assert cut["key"] == "f.artifact_path" and cut["kind"] == "text" and cut["truncated"] == "response_limit"
+    assert 0 < cut["shown_bytes"] < 5000
+
+
+def test_the_files_directory_pages_by_cursor_and_a_span_without_files_has_none(state, monkeypatch):
+    extra = {f"n{k:02d}.artifact_path": _artifact(state, {"n": k}, f"n{k}") for k in range(5)}
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _tool(state, "t", "x", "turn", start=1, end=2, extra=extra),
+            _span("t", "bare", "custom.step", parent="turn", start=3, end=4, attrs={"memory.session_id": SESSION}),
+        ],
+    )
+    index = _ready(state)
+    monkeypatch.setattr(tdet, "FILES_DIRECTORY_PAGE", 3)
+    entry = _entry(index, "x", "tool.output")
+    pages, cursor = [], None
+    while True:
+        page = _block(index, state, entry, "files", cursor=cursor)
+        pages.append([item["index"] for item in page.data["items"]])
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+    assert pages == [[0, 1, 2], [3, 4, 5], [6]]
+    bare = next(e for e in index.entries() if e.span_id == "bare")
+    assert "files" not in _ids(_describe(index, state, bare)) and "file" not in _ids(_describe(index, state, bare))
+    with pytest.raises(tdet.UnknownBlockError):
+        _block(index, state, bare, "file")

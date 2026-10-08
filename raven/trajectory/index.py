@@ -827,14 +827,17 @@ class SessionIndex:
 
         The preview pass read each input's prompt before anything was known
         about the input before it; once the projection has decided what the
-        input adds, the row should show the first non-system message of that
-        (the whole list for a first or an independent call, the added messages
-        for a continued one) instead. The cache is reopened with that single
-        read pending, so the next pass performs it and the following projection
-        picks the text up; a system message there sends the read on to the next
-        message, up to the scan limit. A read that fails is recorded as failed
-        under the same index, which is a terminal state: nothing schedules it
-        again. An input read whole needs no read at all: its text is at hand.
+        input adds, the row should show the first message of that which is
+        not a system one and has text (the whole list for a first or an
+        independent call, the added messages for a continued one), and a
+        continued input needs to know whether the message right after its
+        predecessor's input is that predecessor's own output. Each read opens
+        one message and records its role and the start of its text; the
+        next projection picks them up, and the next read, if any, follows.
+        The probes kept are the scan window and that one message, so they
+        stay bounded however the decision moves. A read that fails is
+        recorded as failed, a terminal state: nothing schedules it again. An
+        input read whole needs no read at all: its messages are at hand.
         """
         for entry in projection.entries:
             if entry.slot != "llm.input":
@@ -857,12 +860,17 @@ class SessionIndex:
             target = _entries.preview_target(record, start, len(refs))
             if target is None:
                 continue
+            base = None
+            if entry.meta.get("delta") == _entries.DELTA_CONTINUED:
+                echo_at = entry.meta.get("echo_at")
+                base = echo_at if isinstance(echo_at, int) else entry.meta.get("new_from")
             cache.pending = {
                 "index": at,
                 "sha1": refs[target],
-                "kind": "new_preview",
-                "preview_index": target,
+                "kind": "probe",
+                "probe_index": target,
                 "start": start,
+                "base": base,
             }
             cache.complete = False
 

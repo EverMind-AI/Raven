@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from raven.trajectory import conversation as tconv
+from raven.trajectory import entries as tent
 from raven.trajectory import index as tidx
 from raven.trajectory import policy as tpol
 
@@ -1156,20 +1157,114 @@ def test_a_late_predecessor_repairs_the_successor_row_and_bumps_its_revision(sta
     _refresh_until(index, clock, lambda: b1() is not None and b1().meta.get("message_count") == 4)
     assert b1().meta["delta"] == "unknown" and b1().preview == "next question"
     unknown_revision = b1().revision
-    # The predecessor arrives: the prefix is proven, the repair read is queued, the row still shows the prompt.
+    # The predecessor arrives: the prefix is proven; whether the message after it is that call's
+    # own output is not known yet, so what b1 adds starts right after the prefix for now.
     _refresh_until(index, clock, lambda: b1().meta.get("delta") == "continued")
-    assert b1().meta["new_from"] == 2 and b1().revision > unknown_revision
-    assert index.preview_cache[("b", "b1")].pending is not None
+    assert b1().meta["new_from"] == 2 and b1().meta["echo_at"] is None and b1().revision > unknown_revision
+    assert index.preview_cache[("b", "b1")].pending["probe_index"] == 2
     assert index.index_state().preview_pending >= 1
     continued_revision = b1().revision
-    # The repair read lands: the row names the first message this call added, under a new revision.
-    _refresh_until(index, clock, lambda: b1().preview == "the answer")
-    assert b1().revision > continued_revision and b1().meta["delta"] == "continued"
+    # The probe lands: the message there is the predecessor's answer, so b1 adds from one later.
+    _refresh_until(index, clock, lambda: b1().meta.get("echo_at") == 2)
+    assert b1().meta["new_from"] == 3 and b1().revision > continued_revision
     batch = index.changes(index.epoch, continued_revision, 50)
     assert "b:b1:llm.input" in {e.entry_id for e in batch.upserts}
+    # The next probe reads the question b1 adds, and then nothing is left to read.
     _refresh_until(index, clock, lambda: index.index_state().preview_pending == 0)
+    assert b1().preview == "next question"
+    record = next(r for r in index.preview_cache[("b", "b1")].records if r["slot"] == "llm.input")
+    assert record["probes"] == {
+        "2": {"role": "assistant", "text": "the answer", "failed": None},
+        "3": {"role": "user", "text": "next question", "failed": None},
+    }
     assert index.preview_cache[("b", "b1")].complete and index.preview_cache[("b", "b1")].pending is None
     assert index.entry("a:a1:llm.input").meta["delta"] == "first"
+
+
+def test_tool_results_after_the_echo_are_what_a_call_adds_each_probe_under_its_own_revision(state, clock):
+    s, u1 = {"role": "system", "content": "rules"}, {"role": "user", "content": "check both"}
+    echo = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}, {"id": "c2"}]}
+    r1 = {"role": "tool", "tool_call_id": "c1", "content": "result one"}
+    r2 = {"role": "tool", "tool_call_id": "c2", "content": "result two"}
+
+    def call(span_id, start, messages):
+        return _span(
+            "a",
+            span_id,
+            "llm.call",
+            parent="turnA",
+            start=start,
+            end=start + 1,
+            attrs={
+                "llm.purpose": "main",
+                "llm.input.artifact_path": _v2_shell(state, f"{span_id}-in", messages),
+                "llm.output.artifact_path": _artifact(state, {"content": ""}, f"{span_id}-out"),
+            },
+        )
+
+    _append(state, [_turn("a", "turnA", start=0, end=10), call("a1", 1, [s, u1]), call("a2", 3, [s, u1, echo, r1, r2])])
+    index = _index(state, clock, preview_reads=1)
+    a2 = lambda: index.entry("a:a2:llm.input")  # noqa: E731
+    _refresh_until(index, clock, lambda: a2() is not None and a2().meta.get("delta") == "continued", rounds=200)
+    revisions = [a2().revision]
+    _refresh_until(index, clock, lambda: a2().meta.get("echo_at") == 2, rounds=200)
+    revisions.append(a2().revision)
+    _refresh_until(index, clock, lambda: a2().preview == "result one", rounds=200)
+    revisions.append(a2().revision)
+    # One read per pass: the echo and the first result land in different passes, each a new revision.
+    assert revisions == sorted(set(revisions)) and len(revisions) == 3
+    # Both results are what a2 adds; the row names the first.
+    assert a2().meta["new_from"] == 3 and a2().meta["message_count"] == 5
+    _refresh_until(index, clock, lambda: index.index_state().preview_pending == 0, rounds=200)
+    assert a2().preview == "result one"
+
+
+def test_probes_stay_within_the_scan_window_and_the_echo_when_the_decision_moves(state, clock):
+    s, u1, a1, u2 = (
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "x" * 5000},
+        {"role": "user", "content": "next question"},
+    )
+
+    def call(trace, span_id, start, messages):
+        return _span(
+            trace,
+            span_id,
+            "llm.call",
+            parent=f"turn{trace.upper()}",
+            start=start,
+            end=start + 1,
+            attrs={
+                "llm.purpose": "main",
+                "llm.input.artifact_path": _v2_shell(state, f"{span_id}-in", messages),
+                "llm.output.artifact_path": _artifact(state, {"content": "ok"}, f"{span_id}-out"),
+            },
+        )
+
+    # The later call alone first: with no predecessor it is all new, searched from message 0.
+    _append(state, [_turn("b", "turnB", start=20, end=30), call("b", "b1", 21, [s, u1, a1, u2])])
+    index = _index(state, clock, preview_reads=2)
+    b1 = lambda: index.entry("b:b1:llm.input")  # noqa: E731
+    probes = lambda: next(r for r in index.preview_cache[("b", "b1")].records if r["slot"] == "llm.input").get("probes")  # noqa: E731
+    _refresh_until(index, clock, lambda: index.index_state().preview_pending == 0 and b1() is not None, rounds=200)
+    assert b1().meta["delta"] == "first" and b1().preview == "first question"
+    assert set(probes()) == {"0", "1"}
+    # The predecessor turns up: the search now starts after it, and the old window's probes go.
+    _append(state, [_turn("a", "turnA", start=0, end=10), call("a", "a1", 1, [s, u1])])
+    _refresh_until(
+        index, clock, lambda: b1().meta.get("echo_at") == 2 and index.index_state().preview_pending == 0, rounds=200
+    )
+    assert b1().meta["new_from"] == 3 and b1().preview == "next question"
+    kept = probes()
+    assert set(kept) == {"2", "3"} and len(kept) <= 5
+    # The echo's text is kept at the row's preview length, not whole.
+    assert len(kept["2"]["text"]) <= tent.PREVIEW_LIMIT
+    # Settled: further passes queue nothing.
+    for _ in range(3):
+        index.refresh_sync(None)
+        clock.advance(1)
+    assert index.preview_cache[("b", "b1")].pending is None and set(probes()) == {"2", "3"}
 
 
 def test_first_and_independent_inputs_preview_their_first_non_system_message_once_read(state, clock):
@@ -1225,13 +1320,11 @@ def test_first_and_independent_inputs_preview_their_first_non_system_message_onc
     assert row("a3").meta["delta"] == "continued" and row("a3").meta["new_from"] == 4
     assert row("a3").preview == "AFTER THE REMINDER"
     record = next(r for r in index.preview_cache[("a", "a3")].records if r["slot"] == "llm.input")
-    assert record["new_preview"] == {
-        "start": 4,
-        "index": 5,
-        "text": "AFTER THE REMINDER",
-        "failed": None,
-        "system": False,
+    assert record["probes"] == {
+        "4": {"role": "system", "text": None, "failed": None},
+        "5": {"role": "user", "text": "AFTER THE REMINDER", "failed": None},
     }
+    assert row("a3").meta["echo_at"] is None
     # Settled: nothing is read again.
     pending_after = [index.preview_cache[("a", x)].pending for x in ("a1", "a2", "a3")]
     assert pending_after == [None, None, None]
@@ -1256,9 +1349,10 @@ def test_a_failed_repair_read_is_terminal(state, clock, monkeypatch):
     monkeypatch.setattr(tconv, "_read_artifact", counting)
     _refresh_until(index, clock, lambda: index.preview_cache[("b", "b1")].pending is None)
     record = next(r for r in index.preview_cache[("b", "b1")].records if r["slot"] == "llm.input")
-    assert record["new_preview"]["index"] == 2 and record["new_preview"]["text"] is None
-    assert record["new_preview"]["failed"]
+    assert record["probes"]["2"]["text"] is None and record["probes"]["2"]["failed"]
+    # The message after the predecessor could not be read: whether it is an echo stays unknown, for good.
     assert b1().preview == "next question" and b1().meta["delta"] == "continued"
+    assert b1().meta["new_from"] == 2 and b1().meta["echo_at"] is None
     _refresh_until(index, clock, lambda: index.index_state().preview_pending == 0)
     settled = reads["n"]
     for _ in range(3):

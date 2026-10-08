@@ -240,7 +240,7 @@ async def test_detail_and_block_round_trip(state):
     TrajectoryDetailResult.model_validate(detail["result"])
     assert detail["result"]["entry_revision"] == llm_in["revision"]
     block_ids = [b["id"] for b in detail["result"]["blocks"]]
-    assert block_ids[0] == "messages" and "model" in block_ids and block_ids[-1] == "raw"
+    assert block_ids[0] == "messages" and "model" in block_ids and block_ids[-3:] == ["raw", "files", "file"]
     stale = await _call(
         dispatcher,
         "trajectory.detail",
@@ -305,6 +305,28 @@ async def test_outline_block_lists_every_message_and_hands_out_page_cursors(stat
     assert page["result"]["data"]["offset"] == 20
     assert [m["content"] for m in page["result"]["data"]["items"]] == [f"message {n}" for n in range(20, 40)]
     assert page["result"]["next_cursor"] is not None
+
+
+async def test_the_files_directory_and_a_file_are_read_over_rpc(state):
+    _seed(state, turns=1)
+    tpol.arm(True)
+    dispatcher = _dispatcher()
+    entries, first = await _list_all(dispatcher)
+    tool_out = next(e for e in entries if e["entry_id"] == "t:tool0:tool.output")
+    base = {
+        "session_key": SESSION,
+        "entry_id": tool_out["entry_id"],
+        "entry_revision": tool_out["revision"],
+        "epoch": first["epoch"],
+    }
+    directory = await _call(dispatcher, "trajectory.block", {**base, "block_id": "files"})
+    TrajectoryBlockResult.model_validate(directory["result"])
+    items = directory["result"]["data"]["items"]
+    assert [item["key"] for item in items] == ["tool.input.artifact_path", "tool.output.artifact_path"]
+    body = await _call(dispatcher, "trajectory.block", {**base, "block_id": "file", "cursor": items[1]["cursor"]})
+    TrajectoryBlockResult.model_validate(body["result"])
+    file = body["result"]["data"]["items"][0]
+    assert file["kind"] == "json" and file["value"] == {"result": "ok"} and body["result"]["total_items"] == 2
 
 
 async def test_error_mapping(state):

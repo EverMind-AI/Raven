@@ -547,7 +547,7 @@ def test_kinds_slots_and_owners_across_span_types(state):
     ]
     entries = tent.project_entries(spans, state=state, read=True).entries
     expect = {
-        "turn": [("turn.input", "user.input"), ("turn.output", "agent.reply")],
+        "turn": [("turn.input", "user.input"), ("turn.output", "turn.end")],
         "llm": [("llm.input", "llm.input"), ("llm.output", "llm.output")],
         "tool": [("tool.input", "tool.input"), ("tool.output", "tool.output")],
         "read": [("skill.read", "skill.read")],
@@ -1192,16 +1192,20 @@ def test_model_inputs_say_what_they_add_only_when_the_history_proves_it(state):
     ]
     entries = tent.project_entries(spans, state=state, read=True).entries
     assert _delta(entries, "a1") == ("first", 0, 2)
-    assert _delta(entries, "b1") == ("continued", 2, 4)
+    # The assistant message right after a1's input is a1's own output written back: not news.
+    assert _delta(entries, "b1") == ("continued", 3, 4)
+    assert _one(entries, "b1", "llm.input").meta["echo_at"] == 2
     # The watch-work question shares nothing with the dialogue: its own conversation, all new.
     assert _delta(entries, "b2") == ("independent", 0, 1)
     assert _delta(entries, "b3") == ("continued", 4, 4)
     # Compaction rewrote the history: no prefix, so nothing is called old.
     assert _delta(entries, "c1") == ("independent", 0, 3)
     # A call that recorded no purpose continues a main call when the prefix holds.
-    assert _delta(entries, "c2") == ("continued", 4, 6)
+    assert _delta(entries, "c2") == ("continued", 5, 6)
     assert _delta(entries, "c3") == ("independent", 0, 2)
+    # A user message right after the predecessor's input is news, not an echo.
     assert _delta(entries, "c4") == ("continued", 2, 3)
+    assert _one(entries, "c4", "llm.input").meta["echo_at"] is None
     assert _delta(entries, "c5") == ("independent", 0, 3)
     assert _one(entries, "b1", "llm.input").meta["purpose"] == "main"
     assert _one(entries, "b2", "llm.input").meta["purpose"] == "watch_work"
@@ -1215,11 +1219,11 @@ def test_model_inputs_say_what_they_add_only_when_the_history_proves_it(state):
     }
     assert previews == {
         "a1": "q1",
-        "b1": "a1",
+        "b1": "q2",
         "b2": "is this watched work?",
         "b3": "q2",
         "c1": "compacted",
-        "c2": "a2",
+        "c2": "q3",
         "c3": "A",
         "c4": "A",
         "c5": "A",
@@ -1268,7 +1272,9 @@ def test_sub_agent_inputs_are_measured_against_their_own_trace(state):
     entries = tent.project_entries(spans, state=state, read=True).entries
     assert _one(entries, "s1", "llm.input").origin == "subagent"
     assert _delta(entries, "s1") == ("first", 0, 2)
-    assert _delta(entries, "s2") == ("continued", 2, 3)
+    # Only s1's own output was added: nothing new, and the row keeps its prompt.
+    assert _delta(entries, "s2") == ("continued", 3, 3)
+    assert _one(entries, "s2", "llm.input").preview == "a1"
 
 
 def test_delta_is_unknown_until_the_predecessor_is_read(state):
@@ -1333,6 +1339,81 @@ def test_replies_repeating_the_last_model_output_are_marked_hidden(state):
     assert "hidden" not in _one(entries, "fb1", "summary").meta
     # The hidden reply still owns the turn's clock.
     assert _one(entries, "turn", "turn.output").charged_ms == 10000
+
+
+def _end_attrs(state, name, content, *, written=True):
+    """A turn whose recorded end carries ``content`` (None writes a JSON null), or points at a missing file."""
+    attrs = {
+        "turn.input_preview": "go",
+        "turn.input.artifact_path": _artifact(state, {"content": "go"}, f"{name}-in"),
+        "turn.output_preview": "",
+    }
+    if written:
+        attrs["turn.output.artifact_path"] = _artifact(state, {"content": content}, f"{name}-out")
+    else:
+        attrs["turn.output.artifact_path"] = str(state / "logs" / "audit-artifacts" / f"{name}-gone.json")
+    return attrs
+
+
+def test_a_turn_end_with_nothing_in_it_is_hidden_only_when_the_turn_finished_well(state):
+    error = {"code": "ERROR", "message": "boom"}
+    spans = [
+        _span("t", "ok_null", "session.turn", start=0, end=10, attrs=_end_attrs(state, "ok_null", None)),
+        _span("t", "ok_blank", "session.turn", start=20, end=30, attrs=_end_attrs(state, "ok_blank", " \n\t ")),
+        _span(
+            "t", "err_null", "session.turn", start=40, end=50, attrs=_end_attrs(state, "err_null", None), status=error
+        ),
+        _span(
+            "t", "missing", "session.turn", start=60, end=70, attrs=_end_attrs(state, "missing", None, written=False)
+        ),
+        _span("t", "spoken", "session.turn", start=80, end=90, attrs=_end_attrs(state, "spoken", "Here it is.")),
+        _span("t", "said", "session.turn", start=100, end=110, attrs=_end_attrs(state, "said", "Done.")),
+        _call(state, "t", "l1", "said", start=101, messages=[_m("user", "go")], content="Done."),
+    ]
+    for read in (True, False):
+        if read:
+            entries = tent.project_entries(spans, state=state, read=True).entries
+        else:
+            budget = tent.ReadBudget(100, 10**8)
+            cached = {
+                (s["traceId"], s["spanId"]): tent.preview_records(s, state=state, budget=budget).records for s in spans
+            }
+            entries = tent.project_entries(spans, state=state, cached_records=cached).entries
+        hidden = {e.span_id: e.meta.get("hidden") for e in entries if e.slot == "turn.output"}
+        assert hidden == {
+            "ok_null": "empty_reply",
+            "ok_blank": "empty_reply",
+            "err_null": None,
+            "missing": None,
+            "spoken": None,
+            "said": "redundant_reply",
+        }, read
+        assert all(e.kind == "turn.end" for e in entries if e.slot == "turn.output")
+        # Hidden or not, the turn's end keeps the turn's clock, and a failed one keeps its failure mark.
+        assert _one(entries, "ok_null", "turn.output").charged_ms == 10000
+        assert _one(entries, "err_null", "turn.output").failure_entry is True
+
+
+def test_tool_results_after_a_call_s_own_output_are_what_the_next_call_adds(state):
+    s, u = _m("system", "rules"), _m("user", "check both")
+    echo = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}, {"id": "c2"}]}
+    r1, r2 = _m("tool", "result one"), _m("tool", "result two")
+    final, thanks = _m("assistant", "both are fine"), _m("user", "thanks")
+    spans = [
+        _span("A", "tA", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "tA")),
+        _call(state, "A", "a1", "tA", start=1, messages=[s, u], purpose="main"),
+        _call(state, "A", "a2", "tA", start=2, messages=[s, u, echo, r1, r2], purpose="main"),
+        _span("B", "tB", "session.turn", start=20, end=30, attrs=_turn_attrs(state, "tB")),
+        _call(state, "B", "b1", "tB", start=21, messages=[s, u, echo, r1, r2, final, thanks], purpose="main"),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    # Both results are new and open; the row names the first.
+    assert _delta(entries, "a2") == ("continued", 3, 5)
+    assert _one(entries, "a2", "llm.input").meta["echo_at"] == 2
+    assert _one(entries, "a2", "llm.input").preview == "result one"
+    # Across turns the previous turn's last answer is the echo; the user's next message is the news.
+    assert _delta(entries, "b1") == ("continued", 6, 7)
+    assert _one(entries, "b1", "llm.input").preview == "thanks"
 
 
 def test_a_reply_is_not_hidden_while_either_side_is_unread(state):

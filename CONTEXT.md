@@ -2114,14 +2114,19 @@ operation's status (`running` / `ok` / `error` / `cancelled` / `unknown`) with t
 evidence codes that produced it, data-integrity codes kept separate from status,
 and the span's clock with a Timing Owner. A base span that expands to nothing
 gets a `summary` entry; a failed span with no completion slot gets an `error`
-entry, so exactly one entry per failed span is the `failure_entry`. Its `meta`
-carries what the projection derives from the cached records around it:
-for a model input the Message Delta (`delta` ∈ `first` / `continued` /
-`independent` / `unknown`, `new_from`, `message_count`) and the LLM Purpose
-(`purpose`); for a reply that repeats the turn's last model output word for
-word, or an outer-only summary that recorded nothing, `hidden`
-(`redundant_reply` / `empty_internal`) — the row stays in the index and keeps
-its clock, the list merely need not show it.
+entry, so exactly one entry per failed span is the `failure_entry`. A turn
+opens with `user.input` (slot `turn.input`) and closes with `turn.end` (slot
+`turn.output`): the turn's end is the Timing Owner of the whole turn, its event
+time is the turn's end, and its content is the text the turn delivered, which
+may be empty. Its `meta` carries what the projection derives from the cached
+records around it: for a model input the Message Delta (`delta` ∈ `first` /
+`continued` / `independent` / `unknown`, `new_from`, `echo_at`,
+`message_count`) and the LLM Purpose (`purpose`); and `hidden` for a row the
+list need not show — `redundant_reply`, a turn's end that repeats the turn's
+last model output word for word; `empty_reply`, a turn's end of a turn that
+finished `ok` whose recorded content was read and is null or blank;
+`empty_internal`, an outer-only summary that recorded nothing. A hidden row
+stays in the index and keeps its clock.
 _Avoid_: calling a Conversation Record an entry — that is the CLI's text
 projection, without identity, structured status or timing.
 
@@ -2130,17 +2135,23 @@ What one model input adds to the conversation before it, proven rather than
 assumed: an earlier input of the same chain (the main line, or one sub-agent
 trace) with a compatible LLM Purpose counts as the predecessor only when its
 message sequence — the content addresses of a v2 artifact's messages — is an
-ordered prefix of this one; then `new_from = len(prefix)`. The chain's first
+ordered prefix of this one; then `new_from = len(prefix)`, one more when the
+message right after the prefix is an assistant one — the predecessor's own
+output written back into the history, already a row of its own (`echo_at`
+names it; the role of a referenced message is learnt by a bounded read, and
+until then the prefix alone counts). The chain's first
 input is `first` (all new); an input no candidate precedes is `independent`
 (all new); an input whose own or whose candidates' messages are not read yet is
 `unknown`, decided again when they are. Computed at projection time from the
 preview cache, so a predecessor read later changes the row under a new
 revision. The row's preview is the first message that is not a system one of
-what the input brought — the whole list for `first` and `independent`, the added
-messages for `continued`; the prompt stands while `unknown` or when nothing was
-added — read straight from an inline payload, or fetched for a referenced one
-with bounded reads the index queues (`_schedule_preview_repairs`), each moving
-past a system message up to a scan limit, a failed read being terminal.
+what the input brought and has text — the whole list for `first` and
+`independent`, the added messages for `continued`; the prompt stands while
+`unknown` or when nothing was added — read straight from an inline payload, or
+fetched for a referenced one with bounded reads the index queues
+(`_schedule_preview_repairs`): each opens one message and records its role and
+the start of its text, the probes kept being the scan window and the echo's
+place, a failed read being terminal.
 _Avoid_: calling two inputs of one trace a conversation because they share a
 turn — the watch-work judgement shares the turn and nothing else.
 

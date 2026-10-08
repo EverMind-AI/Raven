@@ -70,6 +70,7 @@ DELTA_CANDIDATES = 50
 PREVIEW_TARGET_SCAN = 4
 
 HIDDEN_REDUNDANT_REPLY = "redundant_reply"
+HIDDEN_EMPTY_REPLY = "empty_reply"
 HIDDEN_EMPTY_INTERNAL = "empty_internal"
 
 ORIGIN_MAIN = "main"
@@ -96,8 +97,9 @@ _COMPACT_KEYS = (
     "text",
     "payload",
     "refs",
-    "new_preview",
+    "probes",
     "content_sha1",
+    "content_empty",
     "result_error",
 )
 _RESULT_ERROR_TEXT = re.compile(r"^(Error|ERROR|Traceback|Exception)\b")
@@ -289,7 +291,7 @@ def _kind_of(span_name: str, slot: str) -> str:
     if slot == "turn.input":
         return "user.input"
     if slot == "turn.output":
-        return "agent.reply"
+        return "turn.end"
     if slot in ("io.input", "io.output"):
         return f"{span_name}.{slot.split('.', 1)[1]}"
     if slot.startswith("artifact:"):
@@ -767,19 +769,40 @@ def inline_messages(record: Mapping[str, Any] | None) -> list[Any] | None:
     return messages if isinstance(messages, list) else None
 
 
-def preview_target(record: Mapping[str, Any], start: int, count: int) -> int | None:
-    """The message the next repair read should open for the row's preview, or
-    None when the search is over: the text is in, the read failed, the list
-    ended, or the leading system messages outran the scan limit."""
-    fresh = record.get("new_preview")
-    if not isinstance(fresh, dict) or fresh.get("start") != start:
-        return start if start < count else None
-    if fresh.get("failed") or isinstance(fresh.get("text"), str):
+def _probe(record: Mapping[str, Any] | None, index: int) -> Mapping[str, Any] | None:
+    """What a repair read found at message ``index`` of a referenced input, when one was made."""
+    probes = record.get("probes") if record is not None else None
+    found = probes.get(str(index)) if isinstance(probes, dict) else None
+    return found if isinstance(found, dict) else None
+
+
+def _role_at(record: Mapping[str, Any] | None, index: int) -> str | None:
+    """The role of message ``index``: from an inline payload, or from a repair read; None while unknown."""
+    messages = inline_messages(record)
+    if messages is not None:
+        message = messages[index] if 0 <= index < len(messages) else None
+        role = message.get("role") if isinstance(message, dict) else None
+        return role if isinstance(role, str) else ""
+    found = _probe(record, index)
+    if found is None or found.get("failed"):
         return None
-    if fresh.get("system"):
-        following = int(fresh.get("index", start)) + 1
-        if following < count and following - start < PREVIEW_TARGET_SCAN:
-            return following
+    role = found.get("role")
+    return role if isinstance(role, str) else ""
+
+
+def preview_target(record: Mapping[str, Any], start: int, count: int) -> int | None:
+    """The message the next repair read should open, or None when the search
+    is over: a message with text is found, a read failed (a terminal state),
+    the list ended, or system messages and empty ones outran the scan limit."""
+    for index in range(start, min(count, start + PREVIEW_TARGET_SCAN)):
+        found = _probe(record, index)
+        if found is None:
+            return index
+        if found.get("failed"):
+            return None
+        text = found.get("text")
+        if found.get("role") != "system" and isinstance(text, str) and text.strip():
+            return None
     return None
 
 
@@ -790,19 +813,36 @@ def _prompt_text(record: Mapping[str, Any] | None) -> str | None:
 
 
 def _target_text(record: Mapping[str, Any] | None, start: int) -> str | None:
-    """The first non-system message at or after `start`: straight from an
-    inline payload, or from the repair read the index queued for a referenced one."""
+    """The first message at or after ``start`` that is not a system one and
+    has text: straight from an inline payload, or from the repair reads the
+    index queued for a referenced one."""
     messages = inline_messages(record)
     if messages is not None:
         for message in messages[start:]:
             if isinstance(message, dict) and message.get("role") == "system":
                 continue
-            return _message_text(message)
+            text = _message_text(message)
+            if text.strip():
+                return text
         return None
-    fresh = record.get("new_preview") if record is not None else None
-    if isinstance(fresh, dict) and fresh.get("start") == start and isinstance(fresh.get("text"), str):
-        return fresh["text"]
+    for index in range(start, start + PREVIEW_TARGET_SCAN):
+        found = _probe(record, index)
+        if found is None or found.get("failed"):
+            return None
+        text = found.get("text")
+        if found.get("role") != "system" and isinstance(text, str) and text.strip():
+            return text
     return None
+
+
+def kept_probes(probes: Mapping[str, Any], start: int, base: int | None) -> dict[str, Any]:
+    """The probes worth keeping for a search from ``start``: the scan window,
+    and the message right after the predecessor's input (``base``), whose role
+    decides whether it is the predecessor's own output written back."""
+    keep = {str(index) for index in range(start, start + PREVIEW_TARGET_SCAN)}
+    if base is not None:
+        keep.add(str(base))
+    return {key: value for key, value in probes.items() if key in keep}
 
 
 def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[str, Any]]) -> None:
@@ -811,7 +851,9 @@ def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[st
     Continuity is proven, never assumed: an earlier input in the same chain
     (the main line, or one sub-agent trace) and with a compatible purpose
     counts as the predecessor only when its message sequence is an ordered
-    prefix of this one. The first input of a chain is all new; an input no
+    prefix of this one; what it adds starts after that prefix, and after the
+    predecessor's own output when the message there is an assistant one
+    (``echo_at``). The first input of a chain is all new; an input no
     candidate precedes is independent and all new too; an input whose own
     messages or whose candidates' messages are not read yet is unknown, and
     is decided again once they are.
@@ -845,7 +887,12 @@ def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[st
             if previous is None:
                 meta.update(delta=DELTA_INDEPENDENT, new_from=0)
             else:
-                meta.update(delta=DELTA_CONTINUED, new_from=len(previous))
+                # The loop writes the predecessor's own output back into the history right
+                # after its input: an assistant message there is not news, it is that call's
+                # output, already a row of its own.
+                base = len(previous)
+                echo = base < len(refs) and _role_at(record, base) == "assistant"
+                meta.update(delta=DELTA_CONTINUED, new_from=base + 1 if echo else base, echo_at=base if echo else None)
         chain.append((refs, purpose))
         preview = entry.preview
         start = preview_start(meta)
@@ -873,9 +920,22 @@ def _record_content_sha1(record: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _record_content_empty(record: dict[str, Any] | None) -> bool:
+    """Whether a turn's or a call's output was read and its content is null or blank."""
+    if record is None:
+        return False
+    empty = record.get("content_empty")
+    if isinstance(empty, bool):
+        return empty
+    if "info" in record and record["degraded"] is None and isinstance(record.get("payload"), dict):
+        return _content_sha1(record["payload"].get("content")) is None
+    return False
+
+
 def _apply_hidden(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[str, Any]]) -> None:
-    """Mark the rows the list need not show: a reply that repeats the turn's
-    last model output word for word, and an internal step that recorded nothing."""
+    """Mark the rows the list need not show: a turn's end that repeats the
+    turn's last model output word for word, a turn's end that finished well
+    with nothing in it, and an internal step that recorded nothing."""
     last_output: dict[str, str | None] = {}
     for entry in entries:
         if entry.slot != "llm.output" or entry.turn_span_id is None:
@@ -886,11 +946,15 @@ def _apply_hidden(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[s
         last_output[entry.turn_span_id] = _record_content_sha1(record_of.get(entry.entry_id))
     for index, entry in enumerate(entries):
         hidden: str | None = None
-        if entry.slot == "turn.output" and entry.turn_span_id is not None:
-            own = _record_content_sha1(record_of.get(entry.entry_id))
-            last = last_output.get(entry.turn_span_id)
+        if entry.slot == "turn.output":
+            record = record_of.get(entry.entry_id)
+            own = _record_content_sha1(record)
+            last = last_output.get(entry.turn_span_id) if entry.turn_span_id is not None else None
             if own is not None and last is not None and own == last:
                 hidden = HIDDEN_REDUNDANT_REPLY
+            elif entry.operation_status == STATUS_OK and _record_content_empty(record):
+                # Finished well and delivered nothing on record: the turn's time stays on the bar as its band.
+                hidden = HIDDEN_EMPTY_REPLY
         elif entry.slot == SLOT_SUMMARY and "outer_only" in entry.status_evidence:
             record = record_of.get(entry.entry_id)
             empty = entry.preview is None or (record is not None and record.get("degraded") == _conv.NOT_LOADED)
@@ -1089,20 +1153,17 @@ def preview_records(
         pending = cache.pending
         if not budget.take(PREVIEW_READ_LIMIT):
             return cache
-        if pending.get("kind") == "new_preview":
-            # The repair read: one message of the input, for the row's preview; a system
-            # message yields no text and sends the search on to the next one.
+        if pending.get("kind") == "probe":
+            # The repair read: one message of the input, its role and the start of its text,
+            # for the row's preview and for telling the predecessor's output apart.
             message, note, _ = _read_blob(state, pending["sha1"])
             fresh = dict(records[pending["index"]])
-            system = note is None and isinstance(message, dict) and message.get("role") == "system"
-            text = _message_text(message) if note is None and not system else None
-            fresh["new_preview"] = {
-                "start": pending.get("start", pending["preview_index"]),
-                "index": pending["preview_index"],
-                "text": text,
-                "failed": note,
-                "system": system,
-            }
+            role = message.get("role") if note is None and isinstance(message, dict) else None
+            role = role if isinstance(role, str) else None
+            text = preview_text(_message_text(message)) if note is None and role != "system" else None
+            probes = dict(fresh.get("probes") or {})
+            probes[str(pending["probe_index"])] = {"role": role, "text": text, "failed": note}
+            fresh["probes"] = kept_probes(probes, pending["start"], pending.get("base"))
             put(pending["index"], fresh)
             cache.pending = None
             cache.complete = position_done(cache, info, records)
@@ -1169,6 +1230,7 @@ def preview_records(
             loaded["result_error"] = _result_error(obj.get("result"))
         if record["slot"] in ("turn.output", "llm.output") and isinstance(obj, dict) and not capped:
             loaded["content_sha1"] = _content_sha1(obj.get("content"))
+            loaded["content_empty"] = loaded["content_sha1"] is None
         put(index, loaded)
         if record["slot"] == "llm.output" and isinstance(obj, dict):
             thinking = _conv._thinking_text(obj)
