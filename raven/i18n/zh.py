@@ -151,6 +151,7 @@ MESSAGES: dict[str, str] = {
     "Account out of credits or not provisioned — top up and retry.": "账户余额不足或未开通 — 充值后重试。",
     "Rate limited — wait a bit and retry, or switch provider.": "触发限流 — 稍等后重试,或更换服务商。",
     "Network error reaching the provider — check network / proxy / VPN.": "连接服务商时网络出错 — 检查网络 / 代理 / VPN。",
+    "The provider's TLS certificate isn't trusted on this machine — if a corporate proxy or a private CA signs it, add that CA to the system certificate store.": "本机不信任服务商的 TLS 证书 — 如果它由公司代理或私有 CA 签发，请把该 CA 加入系统证书库。",
     "Run: raven provider login {a0}": "请运行:raven provider login {a0}",
     "Verification failed: {status}": "验证失败:{status}",
     "Default model ({a0} available — type to filter, Tab to complete):": "默认模型(共 {a0} 个 — 输入可筛选,Tab 补全):",

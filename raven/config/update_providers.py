@@ -43,6 +43,7 @@ from raven.providers.registry import (
     normalize_provider_name,
     split_model_id,
 )
+from raven.security.tls import is_untrusted_certificate
 from raven.utils.atomic_io import atomic_update
 
 
@@ -1355,7 +1356,10 @@ def test_provider(
        the vendor's own.
     3. Map status code → keyword (see ``_HTTP_STATUS_MAP``), with a 400 that
        names the key invalid read as ``invalid_key``. Unknown codes
-       render as ``http_{code}``. Network errors → ``network_error``.
+       render as ``http_{code}``. Network errors → ``network_error``, with
+       two named apart: a server certificate that fails verification →
+       ``certificate_untrusted``, and a proxy from the environment that
+       cannot be reached → ``proxy_unreachable``.
 
     Returns a dict, never raises. ``transport`` is injectable so unit tests
     can mount an ``httpx.MockTransport`` without touching real network.
@@ -1826,6 +1830,19 @@ def _probe_models_endpoint(
         # Also covers httpx quoting a scheme-less proxy with the http:// it
         # assumed: the value as set is a substring of that.
         detail = str(exc).replace(raw_proxy, proxy) if raw_proxy and proxy else str(exc)
+        # Ahead of the proxy: one that inspects TLS opens the tunnel and then
+        # presents its own certificate, so a refused certificate behind a proxy
+        # is not that proxy being unreachable.
+        if is_untrusted_certificate(exc):
+            return {
+                "ok": False,
+                "status": "certificate_untrusted",
+                "elapsed_ms": int((time.monotonic() - start) * 1000),
+                "http_status": None,
+                "models_count": None,
+                "model_ids": None,
+                "error": detail,
+            }
         if proxy and isinstance(exc, (httpx.ProxyError, httpx.ConnectError, httpx.ConnectTimeout)):
             return {
                 "ok": False,

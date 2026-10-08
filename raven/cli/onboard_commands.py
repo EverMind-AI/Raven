@@ -751,6 +751,10 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
         "no_credits": t("Account out of credits or not provisioned — top up and retry."),
         "rate_limited": t("Rate limited — wait a bit and retry, or switch provider."),
         "network_error": t("Network error reaching the provider — check network / proxy / VPN."),
+        "certificate_untrusted": t(
+            "The provider's TLS certificate isn't trusted on this machine — if a corporate proxy or a "
+            "private CA signs it, add that CA to the system certificate store."
+        ),
         "oauth_token_missing": t("Run: raven provider login {a0}", a0=provider.replace("_", "-")),
     }
     msg = hint_map.get(status, t("Verification failed: {status}", status=status))
@@ -1349,7 +1353,9 @@ def _resolve_model_with_test(
                     *([(t("Re-enter server URL"), "rebase")] if auth_shape(provider) == SHAPE_LOCAL else []),
                     (t("Continue anyway"), "continue"),
                 ]
-                if status == "network_error"
+                # A certificate this machine does not trust ends the connection
+                # before the key is sent, the same as a network that is down.
+                if status in ("network_error", "certificate_untrusted")
                 else [
                     # What to offer depends on what the provider is reached by.
                     # A local deployment has no key to re-enter, so offering that

@@ -517,6 +517,7 @@ def _register_config_commands(app: typer.Typer) -> None:
             "rate_limited": "Wait a few minutes and retry, or switch provider",
             "oauth_token_missing": (f"Run: raven provider login {name.replace('_', '-')}"),
             "network_error": "Check network / firewall / VPN settings",
+            "certificate_untrusted": "Add the CA that signs the provider's certificate to the system certificate store",
         }
         if result["status"] == "no_probe_endpoint":
             # Not a failure: this probe pings `/models`, and these vendors do not

@@ -4347,6 +4347,9 @@ def test_rolling_back_a_failed_setup_restores_what_was_there(monkeypatch, tmp_pa
         # A vendor reached over the network gets retry only; the address is not
         # the user's to change, and the key is not what failed.
         ("deepseek", "network_error", "retry", "rebase"),
+        # A certificate this machine does not trust ends the connection before the
+        # key is sent, so the key is no more what failed than it is offline.
+        ("deepseek", "certificate_untrusted", "retry", "rekey"),
         # Rejected credentials: the field to fix is the one the provider uses.
         ("ollama_chat", "invalid_key", "rebase", "rekey"),
         ("deepseek", "invalid_key", "rekey", "rebase"),
@@ -4387,6 +4390,33 @@ def test_the_failure_menu_offers_the_field_the_provider_actually_has(
     assert seen, "the failure menu was never shown"
     assert expected in seen[0], f"{slug}/{status}: offered {seen[0]}"
     assert absent not in seen[0], f"{slug}/{status}: should not offer {absent}, got {seen[0]}"
+
+
+def test_a_certificate_the_machine_does_not_trust_points_at_the_certificate_store(monkeypatch, capsys) -> None:
+    """Behind a corporate proxy the network is fine and the remedy is the CA.
+
+    Telling the reader to check the network, the proxy or the VPN sends them after
+    the parts that work.
+    """
+    from raven.cli import onboard_commands
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers,
+        "test_provider",
+        lambda provider: {
+            "ok": False,
+            "status": "certificate_untrusted",
+            "error": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate",
+        },
+    )
+
+    ok, status, _ = onboard_commands._verify_provider("deepseek")
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert (ok, status) == (False, "certificate_untrusted")
+    assert "certificate store" in out
+    assert "VPN" not in out
 
 
 def test_managing_an_oauth_provider_explains_instead_of_exiting(monkeypatch, tmp_path, capsys) -> None:

@@ -27,6 +27,7 @@ from raven.config.update_providers import (
 )
 from raven.config.update_providers import test_provider as probe_provider
 from raven.providers.registry import PROVIDERS as _PROVIDERS
+from tests._tls import OpenAIModels, connect_proxy, https_endpoint, private_ca
 
 
 @pytest.fixture
@@ -642,6 +643,41 @@ def test_test_provider_never_returns_the_proxy_credentials(cfg_path: Path, monke
     assert result["proxy"] == f"http://127.0.0.1:{port}"
     dumped = json.dumps(result)
     assert "s3cr" not in dumped and "alice" not in dumped
+
+
+def test_a_certificate_that_fails_verification_is_named_for_what_it_is(cfg_path: Path, tmp_path: Path) -> None:
+    """A gateway signed by a root this machine does not hold is refused at the handshake.
+
+    The network did not fail and the key was never sent, so the remedy is neither:
+    it is the certificate store. The transport is a real one, and so is the handshake.
+    """
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        set_provider_fields("custom", {"api_key": "k", "api_base": f"{origin}/v1"}, config_path=cfg_path)
+        result = probe_provider("custom", config_path=cfg_path, timeout_s=5, transport=httpx.HTTPTransport())
+
+    assert result["ok"] is False
+    assert result["status"] == "certificate_untrusted"
+
+
+def test_a_certificate_refused_through_an_environment_proxy_is_not_an_unreachable_proxy(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The proxy answered and opened the tunnel; the certificate behind it is the fault.
+
+    A proxy that inspects TLS is the usual place such a certificate comes from, so
+    calling the proxy unreachable sends the reader after the one setting that works.
+    """
+    monkeypatch.undo()
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin, connect_proxy() as proxy:
+        monkeypatch.setenv("HTTPS_PROXY", proxy)
+        set_provider_fields("custom", {"api_key": "k", "api_base": f"{origin}/v1"}, config_path=cfg_path)
+        result = probe_provider("custom", config_path=cfg_path, timeout_s=5)
+
+    assert result["status"] == "certificate_untrusted"
 
 
 def test_a_proxy_error_that_quotes_the_proxy_is_redacted_too(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
