@@ -323,6 +323,8 @@ html[data-theme="dark"] {
 .trajectory-msg-first { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .trajectory-msg-size { font-family: var(--mono); font-size: 10.5px; color: var(--faint); white-space: nowrap; }
 .trajectory-msg-open { position: relative; min-width: 0; }
+/* The rows the window leaves out stand in as empty height, so the pane's scrollbar spans the whole list. */
+.trajectory-msg-space { flex: none; }
 .trajectory-msg-close {
   position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; border-radius: 4px; color: var(--faint); font-size: 12px;
   display: grid; place-items: center;

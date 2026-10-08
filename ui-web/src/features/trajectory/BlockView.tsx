@@ -249,13 +249,15 @@ function UsageView({ items }: { items: unknown[] }): JSX.Element {
 /* ── skills a turn was given, and which it used ───────────────────────── */
 
 function SkillUseView({ items }: { items: unknown[] }): JSX.Element {
-  const rows = items.filter(isObj) as Array<{ id?: unknown; used?: unknown }>
+  const rows = items.filter(isObj) as Array<{ id?: unknown; name?: unknown; used?: unknown }>
   if (!rows.length) return <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p>
   return (
     <ul className="trajectory-items trajectory-skill-use">
       {rows.map((row, i) => (
         <li key={`${String(row.id)}-${i}`} className={row.used === true ? 'trajectory-item trajectory-skill-used' : 'trajectory-item trajectory-skill-unused'}>
-          <span className="trajectory-item-head">{typeof row.id === 'string' ? row.id : String(row.id)}</span>
+          <span className="trajectory-item-head" title={typeof row.name === 'string' && row.name ? String(row.id) : undefined}>
+            {typeof row.name === 'string' && row.name ? row.name : typeof row.id === 'string' ? row.id : String(row.id)}
+          </span>
           <span className="trajectory-skill-mark">{t(row.used === true ? 'gui.trajectory.details.skill_used' : 'gui.trajectory.details.skill_unused')}</span>
         </li>
       ))}
@@ -364,17 +366,21 @@ export function PreviewView({ block }: { block: TrajectoryBlockDescriptor }): JS
 /* After the window slid, the item that is now first goes back under the
    eye: the pane scrolls so that item's top is at its own top, rather than
    keeping a scroll offset that now points into content that is gone. */
-function useWindowAnchor(droppedBefore: number, box: HTMLElement | null): void {
-  const seen = useRef(droppedBefore)
+function useWindowAnchor(firstHeld: number, box: HTMLElement | null): void {
+  const seen = useRef(firstHeld)
   useLayoutEffect(() => {
-    if (droppedBefore <= seen.current) { seen.current = droppedBefore; return }
-    seen.current = droppedBefore
+    if (firstHeld <= seen.current) { seen.current = firstHeld; return }
+    seen.current = firstHeld
     if (!box) return
     const pane = box.closest<HTMLElement>('.trajectory-pane')
-    const first = box.querySelector<HTMLElement>(`[data-offset="${droppedBefore}"]`)
+    const first = box.querySelector<HTMLElement>(`[data-offset="${firstHeld}"]`)
     if (pane && first) pane.scrollTop = first.offsetTop - pane.offsetTop
-  }, [droppedBefore, box])
+  }, [firstHeld, box])
 }
+
+/** The lowest offset among a record's pages: where a list read page by page now begins. */
+const firstHeldOffset = (record: details.BlockRecord | null): number =>
+  record && record.pages.length ? Math.min(...record.pages.map((p) => p.offset)) : 0
 
 function joinedItems(record: details.BlockRecord): unknown[] {
   const out: unknown[] = []
@@ -411,10 +417,10 @@ function Toolbar({ block, record }: { block: TrajectoryBlockDescriptor; record: 
   }
   const partial = record ? details.isPartial(record) : false
   if (partial) lines.push(<span key="partial" className="trajectory-tool-note trajectory-tool-warn">{t('gui.trajectory.details.partial')}</span>)
-  if (record && record.droppedBefore > 0) {
+  if (record && record.letGo > 0) {
     lines.push(
       <span key="dropped" className="trajectory-tool-note">
-        {t('gui.trajectory.details.earlier_unloaded', { n: record.droppedBefore })}
+        {t('gui.trajectory.details.earlier_unloaded', { n: record.letGo })}
         {' '}
         <button className="trajectory-link" onClick={() => { void details.reloadBlock(block.id) }}>{t('gui.trajectory.details.reload_from_start')}</button>
       </span>,
@@ -461,7 +467,7 @@ export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.
   const fault = details.fault({ blockId: block.id }, s)
   const moreFault = details.fault({ blockId: block.id, more: true }, s)
   const [box, setBox] = useState<HTMLDivElement | null>(null)
-  useWindowAnchor(record?.droppedBefore ?? 0, box)
+  useWindowAnchor(firstHeldOffset(record), box)
 
   const identityKey = s.current ? details.descriptorKey(s.current) : null
   const permitted = details.mayRead(s)
@@ -497,7 +503,7 @@ export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.
       case 'references':
         body = block.id === 'injected' || block.id === 'used'
           ? <SkillUseView items={joinedItems(record)} />
-          : <ListView renderer={record.renderer} items={joinedItems(record)} offset={record.droppedBefore} />
+          : <ListView renderer={record.renderer} items={joinedItems(record)} offset={firstHeldOffset(record)} />
         break
       default:
         body = data === undefined || data === null ? null : <JsonView value={data} />

@@ -53,6 +53,8 @@ export interface BlockPage {
   integrity: string[]
   truncated: boolean
   total: number | null
+  /** When the page was filed: the window lets the stalest page go first. */
+  at: number
 }
 
 export interface BlockRecord {
@@ -61,8 +63,10 @@ export interface BlockRecord {
   renderer: Renderer
   pages: BlockPage[]
   nextCursor: string | null
-  /** Items of earlier pages let go to stay inside the page window. */
-  droppedBefore: number
+  /** Items of the pages let go to stay inside the page window. */
+  letGo: number
+  /** Offsets of the pages let go: a row on one of them folds again until the reader asks for it. */
+  evicted: number[]
   bytes: number
   at: number
 }
@@ -391,22 +395,35 @@ function trim(s: DetailsState): DetailsState {
   if (active && next.blocks[active]) {
     let record = next.blocks[active]!
     while (over() && record.pages.length > 1) {
-      record = dropEarliest(record)
+      record = dropStalest(record, null)
       next = { ...next, blocks: { ...next.blocks, [active]: record } }
     }
   }
   return next
 }
 
-/* The record without its earliest page: the window slides and the pane says
-   how many items went before what it still holds. */
-function dropEarliest(record: BlockRecord): BlockRecord {
-  const [first, ...rest] = [...record.pages].sort((a, b) => a.offset - b.offset)
-  if (!first || !rest.length) return record
-  const second = rest[0]!
-  const dropped = second.offset - first.offset
-  const pages = rest
-  return { ...record, pages, droppedBefore: record.droppedBefore + dropped, bytes: pages.reduce((n, p) => n + bytesOf(p.data), 0) }
+const itemsOf = (page: BlockPage): number => {
+  const data = page.data
+  const items = data !== null && typeof data === 'object' && !Array.isArray(data) ? (data as { items?: unknown }).items : undefined
+  return Array.isArray(items) ? items.length : 0
+}
+
+/* The record without its stalest page -- the one filed longest ago, never
+   the page `keep` names, which is the one just filed -- so a reader going
+   back to the start of a long list is not handed the page and robbed of it
+   in the same breath. The pane says how many items it let go. */
+function dropStalest(record: BlockRecord, keep: number | null): BlockRecord {
+  const candidates = record.pages.filter((p) => p.offset !== keep)
+  if (!candidates.length || record.pages.length < 2) return record
+  const victim = candidates.reduce((a, b) => (b.at < a.at ? b : a))
+  const pages = record.pages.filter((p) => p !== victim)
+  return {
+    ...record,
+    pages,
+    letGo: record.letGo + itemsOf(victim),
+    evicted: record.evicted.includes(victim.offset) ? record.evicted : [...record.evicted, victim.offset],
+    bytes: pages.reduce((n, p) => n + bytesOf(p.data), 0),
+  }
 }
 
 /* Descriptors have a count as well as the shared byte budget: twenty, the
@@ -554,6 +571,7 @@ function pageOf(result: TrajectoryBlockResult, offset: number): BlockPage {
     integrity: [...result.integrity],
     truncated: result.truncated,
     total: typeof result.total_items === 'number' ? result.total_items : null,
+    at: touch(),
   }
 }
 
@@ -584,13 +602,14 @@ function filePage(
       /* A page may land at any offset now that rows are opened by their own cursor; one offset, one page. */
       pages: [...have.pages.filter((p) => p.offset !== page.offset), page],
       nextCursor: result.next_cursor ?? null,
+      evicted: have.evicted.filter((offset) => offset !== page.offset),
       at: touch(),
     }
     : {
       identity: id, blockId, renderer: result.renderer, pages: [page], nextCursor: result.next_cursor ?? null,
-      droppedBefore: 0, bytes: 0, at: touch(),
+      letGo: 0, evicted: [], bytes: 0, at: touch(),
     }
-  while (record.pages.length > PAGE_WINDOW) record = dropEarliest(record)
+  while (record.pages.length > PAGE_WINDOW) record = dropStalest(record, page.offset)
   record = { ...record, bytes: record.pages.reduce((n, p) => n + bytesOf(p.data), 0) }
   let next: DetailsState = { ...s, blocks: { ...s.blocks, [key]: record } }
   if (live(t, g, id.entryId)) next = { ...next, faults: without(next.faults, mark) }
@@ -717,7 +736,7 @@ export async function loadOutline(): Promise<void> {
   if (!src || !id || !mayRead(store.get())) return
   const key = outlineKey(id)
   const have = store.get().outlines[key]
-  if (have && (have.loading || have.fault !== null || (have.nextCursor === null && have.items.length > 0))) return
+  if (have && (have.fault !== null || (have.nextCursor === null && have.items.length > 0))) return
   const mark = keyOf('outline', key)
   if (inflight.has(mark)) return
   const t = gen
@@ -748,16 +767,20 @@ export async function loadOutline(): Promise<void> {
   } catch (e) {
     settle(mark, token)
     const s = unmarked(store.get(), mark, token)
-    if (!currentEpoch(id.sessionKey, id.epoch) || !live(t, g, id.entryId)) { store.set(s); return }
+    /* Whatever ends the walk ends the record's loading: the record is filed under the identity that
+       asked, and a reader coming back to it must be able to start the walk again. */
+    const calm = (state: DetailsState): DetailsState =>
+      state.outlines[key] ? { ...state, outlines: { ...state.outlines, [key]: { ...state.outlines[key]!, loading: false } } } : state
+    if (!currentEpoch(id.sessionKey, id.epoch) || !live(t, g, id.entryId)) { store.set(calm(s)); return }
     if (isDisabled(e) || saysAbsent(e)) {
-      store.set(s)
+      store.set(calm(s))
       if (g === list.gen()) list.liveFailed(e)
       return
     }
     const moved = revisionChange(e)
     if (moved) {
-      if (moved.epoch !== id.epoch) { store.set({ ...s, waitingEpoch: moved.epoch }); return }
-      store.set({ ...s, stale: true, pending: { epoch: moved.epoch, revision: moved.revision } })
+      if (moved.epoch !== id.epoch) { store.set({ ...calm(s), waitingEpoch: moved.epoch }); return }
+      store.set({ ...calm(s), stale: true, pending: { epoch: moved.epoch, revision: moved.revision } })
       void loadDescriptor({ fresh: true })
       return
     }
@@ -765,13 +788,17 @@ export async function loadOutline(): Promise<void> {
   }
 }
 
-/** The reader's retry after a failed outline walk. */
+/** The reader's retry after a failed outline walk: the fault is forgiven, and so is a loading mark no request stands behind. */
 export function retryOutline(): Promise<void> {
   const id = store.get().current
   if (id) {
     const key = outlineKey(id)
     const s = store.get()
-    if (s.outlines[key]) store.set({ ...s, outlines: { ...s.outlines, [key]: { ...s.outlines[key]!, fault: null } } })
+    const have = s.outlines[key]
+    if (have) {
+      const loading = inflight.has(keyOf('outline', key)) ? have.loading : false
+      store.set({ ...s, outlines: { ...s.outlines, [key]: { ...have, fault: null, loading } } })
+    }
   }
   return loadOutline()
 }
@@ -801,23 +828,18 @@ export function retryDescriptor(): Promise<void> {
    it, pages are still to come, or the earliest pages were let go to stay in
    the window -- a last page with no cursor is still partial then. */
 export const isPartial = (record: BlockRecord): boolean => {
-  if (record.droppedBefore > 0 || record.pages.some((p) => p.truncated || p.availability === 'truncated')) return true
+  if (record.letGo > 0 || record.pages.some((p) => p.truncated || p.availability === 'truncated')) return true
   const total = record.pages.find((p) => p.total !== null)?.total ?? null
   if (total === null) return record.nextCursor !== null
   return heldCount(record) < total
 }
 
 /** How many items the held pages carry between them. */
-export const heldCount = (record: BlockRecord): number =>
-  record.pages.reduce((n, p) => {
-    const data = p.data
-    const items = data !== null && typeof data === 'object' && !Array.isArray(data) ? (data as { items?: unknown }).items : undefined
-    return n + (Array.isArray(items) ? items.length : 0)
-  }, 0)
+export const heldCount = (record: BlockRecord): number => record.pages.reduce((n, p) => n + itemsOf(p), 0)
 
-/** The lowest offset among the held pages, or null with none held. */
-export const firstHeldOffset = (record: BlockRecord): number | null =>
-  record.pages.length ? Math.min(...record.pages.map((p) => p.offset)) : null
+/** Whether message `index` sits on a page the window let go and nobody has asked for since. */
+export const onEvictedPage = (record: BlockRecord, index: number): boolean =>
+  record.evicted.includes(index - (index % MESSAGES_PAGE)) && pageHolding(record, index) === null
 
 /** Whether a read is in the air for the pane's current identity. */
 export const isLoading = (what: 'descriptor' | { blockId: string; more?: boolean }, s: DetailsState = store.get()): boolean => {

@@ -382,11 +382,105 @@ describe('the budget', () => {
     }
     const record = details.block('messages')!
     expect(record.pages).toHaveLength(details.PAGE_WINDOW)
-    expect(record.droppedBefore).toBe(40)
+    expect(record.letGo).toBe(40)
     expect(record.pages[0]?.offset).toBe(40)
     expect(record.nextCursor).toBeNull()
     expect(record.pages.every((p) => !p.truncated)).toBe(true)
     expect(details.isPartial(record)).toBe(true)
+  })
+
+  it('lets the stalest page go, never the one just asked for: the first page comes back after twelve, and the last stays', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['messages']))
+    const page = (offset: number) => body('r1', 1, 'messages', { items: Array.from({ length: 20 }, (_, k) => ({ role: 'user', content: `m${offset + k}` })), offset },
+      { renderer: 'messages', next_cursor: offset + 20 < 240 ? `c${offset + 20}` : null, total_items: 240 })
+    void details.loadBlock('messages')
+    for (let offset = 0; offset < 240; offset += 20) {
+      await answerBlock(page(offset))
+      if (offset + 20 < 240) void details.loadMore('messages')
+    }
+    let record = details.block('messages')!
+    expect(record.pages.map((p) => p.offset).sort((a, b) => a - b)).toEqual([40, 60, 80, 100, 120, 140, 160, 180, 200, 220])
+    expect(record.evicted).toEqual([0, 20])
+    expect(details.onEvictedPage(record, 7)).toBe(true)
+    /* Back to the first message: its page is asked for by its own cursor, filed, and kept; the stalest other page goes. */
+    void details.loadPageAt('messages', 'o0', 0)
+    expect(blockCalls.at(-1)?.cursor).toBe('o0')
+    await answerBlock(page(0))
+    record = details.block('messages')!
+    expect(details.messageAt(record, 0)).toEqual({ role: 'user', content: 'first'.length ? 'm0' : 'm0' })
+    expect(details.pageHolding(record, 0)?.offset).toBe(0)
+    expect(record.pages).toHaveLength(details.PAGE_WINDOW)
+    expect(record.evicted).toEqual([20, 40])
+    expect(details.onEvictedPage(record, 7)).toBe(false)
+    expect(details.onEvictedPage(record, 45)).toBe(true)
+    expect(record.bytes).toBeLessThanOrEqual(details.BUDGET)
+    /* The last page is still held: asking for it reads nothing. */
+    const asked = blockCalls.length
+    void details.loadPageAt('messages', 'o220', 220)
+    expect(blockCalls).toHaveLength(asked)
+    expect(details.messageAt(record, 239)).toEqual({ role: 'user', content: 'm239' })
+  })
+})
+
+/* ── the outline walk ─────────────────────────────────────────────── */
+
+describe('the outline walk', () => {
+  it('ends its loading when a request fails after the pane moved on, so the entry reads again on return', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['messages']))
+    void details.loadOutline()
+    expect(blockCalls.at(-1)).toMatchObject({ entryId: 'r1', blockId: 'outline' })
+    expect(details.outline()?.loading).toBe(true)
+    const r1 = details.get().current!
+    /* The reader moves on; r1's outline request then fails on the wire. */
+    list.select('r2', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r2', 1, ['content']))
+    await failBlock(new Error('socket closed'))
+    const stuck = details.get().outlines[details.descriptorKey(r1)]
+    expect(stuck?.loading).toBe(false)
+    expect(stuck?.fault).toBeNull()
+    /* Back on r1, the walk starts again and the outline arrives. */
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await flush()
+    const before = blockCalls.length
+    void details.loadOutline()
+    expect(blockCalls).toHaveLength(before + 1)
+    expect(blockCalls.at(-1)).toMatchObject({ entryId: 'r1', blockId: 'outline' })
+    await answerBlock(body('r1', 1, 'outline', { items: [{ index: 0, role: 'user', bytes: 2, chars: 2, preview: 'hi', partial: false, missing: false, cursor: 'o0' }], offset: 0 },
+      { renderer: 'items', total_items: 1 }))
+    expect(details.outline()?.items).toHaveLength(1)
+    expect(details.outline()?.loading).toBe(false)
+  })
+
+  it('ends its loading when the gateway says the view is off, and forgives a leftover mark on retry', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['messages']))
+    void details.loadOutline()
+    const key = details.descriptorKey(details.get().current!)
+    await failBlock(new RpcError(-32020, 'trajectory view is off'))
+    expect(details.get().outlines[key]?.loading).toBe(false)
+    /* The view comes back: the list is read again and the entry reopened. */
+    await list.refreshState()
+    list.setView('trajectory')
+    await list.load()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await flush()
+    /* A loading mark with no request behind it is a leftover: the retry clears it and reads. */
+    details.set({ ...details.get(), outlines: { ...details.get().outlines, [key]: { ...details.get().outlines[key]!, loading: true } } })
+    const before = blockCalls.length
+    void details.retryOutline()
+    expect(blockCalls).toHaveLength(before + 1)
+    expect(blockCalls.at(-1)).toMatchObject({ entryId: 'r1', blockId: 'outline' })
   })
 })
 

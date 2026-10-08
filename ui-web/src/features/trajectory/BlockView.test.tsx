@@ -9,6 +9,7 @@ import { resetSources, setSources } from '../../state/sources'
 import { get as toasts } from '../../state/toast'
 import { BlockView, JsonView, KeyValuesView, copyText, usageRows } from './BlockView'
 import * as details from './detailStore'
+import { OPEN_EST, ROW_GAP } from './Messages'
 import * as list from './store'
 
 import type {
@@ -73,6 +74,16 @@ const messages = (from: number, n: number) => Array.from({ length: n }, (_, k) =
 const outlineItems = (from: number, n: number) => Array.from({ length: n }, (_, k) => ({
   index: from + k, role: 'user', bytes: 40, chars: 3, preview: `m${from + k}`, partial: false, missing: false, cursor: `o${from + k}`,
 }))
+
+/* The pane the details scroll in, as the messages view finds it: a height it can read, a scroll it can set. */
+function paneOf(height: number): HTMLElement {
+  const pane = document.createElement('div')
+  pane.className = 'trajectory-pane'
+  Object.defineProperty(pane, 'clientHeight', { value: height, configurable: true })
+  Object.defineProperty(pane, 'scrollTop', { value: 0, writable: true, configurable: true })
+  document.body.appendChild(pane)
+  return pane
+}
 
 async function ready(): Promise<void> {
   list.install()
@@ -150,7 +161,7 @@ describe('a block tab', () => {
     const spec = descriptor.blocks[0]!
     const writeText = vi.fn((_text: string) => Promise.resolve())
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
-    render(<BlockView block={spec} />)
+    render(<BlockView block={spec} />, { container: paneOf(30000) })
     await flush()
     expect(blockCalls).toEqual(['outline|'])
     await answer(body('outline', { items: outlineItems(0, 45), offset: 0 }, { renderer: 'items', total_items: 45 }))
@@ -215,37 +226,78 @@ describe('a block tab', () => {
     }
   })
 
-  it('lets the earliest pages go past the window and folds their rows again, saying the copy is partial', async () => {
+  it('lets the stalest pages go past the window and folds their rows again until asked, saying the copy is partial', async () => {
     await ready()
-    act(() => { list.set({ ...list.get(), ...list.rowsOf([{ ...row, meta: { delta: 'first', new_from: 0, message_count: (details.PAGE_WINDOW + 2) * 20 } }]) }) })
+    const total = (details.PAGE_WINDOW + 2) * 20
+    act(() => { list.set({ ...list.get(), ...list.rowsOf([{ ...row, meta: { delta: 'first', new_from: 0, message_count: total } }]) }) })
     const writeText = vi.fn((_text: string) => Promise.resolve())
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
-    render(<BlockView block={descriptor.blocks[0]!} />)
+    render(<BlockView block={descriptor.blocks[0]!} />, { container: paneOf(30000) })
     await flush()
-    const total = (details.PAGE_WINDOW + 2) * 20
     await answer(body('outline', { items: outlineItems(0, total), offset: 0 }, { renderer: 'items', total_items: total }))
     expect(document.querySelectorAll('.trajectory-msg-open')).toHaveLength(total)
-    /* Every row is in view here, as in a short pane: each page is asked for in turn. */
+    /* Every row is in view in this tall pane: each page is asked for in turn. */
     for (let page = 0; page < details.PAGE_WINDOW + 2; page += 1) {
       const last = page === details.PAGE_WINDOW + 1
       expect(blockCalls.at(-1)).toBe(`messages|o${page * 20}`)
       await answer(body('messages', { items: messages(page * 20, 20), offset: page * 20 }, { renderer: 'messages', next_cursor: last ? null : `c${page + 1}`, total_items: total }))
     }
-    /* The window is full and the first pages are gone: nothing asks for them again on its own. */
+    /* The window is full: the two stalest pages are gone, their rows fold again, and nothing asks for them on its own. */
     const asked = blockCalls.length
     await flush()
     expect(blockCalls).toHaveLength(asked)
     const record = details.block('messages')!
     expect(record.pages).toHaveLength(details.PAGE_WINDOW)
-    expect(record.pages[0]!.offset).toBe(40)
-    /* The rows whose page was let go stand open with their skeleton again; a body still held is drawn. */
+    expect(record.evicted).toEqual([0, 20])
     expect(q('.trajectory-msg-open[data-index="239"] .trajectory-text-body')?.textContent).toBe('m239')
-    expect(q('.trajectory-msg-open[data-index="0"] .trajectory-text-body')).toBeNull()
+    expect(q('.trajectory-msg-open[data-index="0"]')).toBeNull()
+    expect(q('.trajectory-msg-fold[data-index="0"]')?.textContent).toContain('m0')
+    expect(document.querySelectorAll('.trajectory-msg-fold')).toHaveLength(40)
     expect(q('.trajectory-tool-warn')?.textContent).toBe('gui.trajectory.details.partial')
+    /* Asking for a folded row reads its page again, and that page is kept over the stalest one. */
+    act(() => { fireEvent.click(q('.trajectory-msg-fold[data-index="0"]') as HTMLElement) })
+    await flush()
+    expect(blockCalls.at(-1)).toBe('messages|o0')
+    await answer(body('messages', { items: messages(0, 20), offset: 0 }, { renderer: 'messages', next_cursor: 'c1', total_items: total }))
+    expect(q('.trajectory-msg-open[data-index="0"] .trajectory-text-body')?.textContent).toBe('m0')
+    expect(details.block('messages')!.evicted).toEqual([20, 40])
+    expect(document.querySelectorAll('.trajectory-msg-fold')).toHaveLength(40)
     act(() => { fireEvent.click(q('.trajectory-copy') as HTMLElement) })
     await flush()
     expect(toasts().at(-1)?.text).toBe('gui.trajectory.details.copied_partial')
     expect(JSON.parse(writeText.mock.calls[0]![0])).toHaveLength(details.PAGE_WINDOW * 20)
+  })
+
+  it('draws only the rows near the viewport and reads only their pages: no scroll, no walk to the end', async () => {
+    await ready()
+    const total = 240
+    act(() => { list.set({ ...list.get(), ...list.rowsOf([{ ...row, meta: { delta: 'first', new_from: 0, message_count: total } }]) }) })
+    const pane = paneOf(400)
+    render(<BlockView block={descriptor.blocks[0]!} />, { container: pane })
+    await flush()
+    await answer(body('outline', { items: outlineItems(0, total), offset: 0 }, { renderer: 'items', total_items: total }))
+    expect(blockCalls).toEqual(['outline|', 'messages|o0'])
+    const drawn = document.querySelectorAll('.trajectory-msg-open').length
+    expect(drawn).toBeGreaterThan(0)
+    expect(drawn).toBeLessThan(20)
+    expect(q('[data-index="239"]')).toBeNull()
+    await answer(body('messages', { items: messages(0, 20), offset: 0 }, { renderer: 'messages', next_cursor: 'c1', total_items: total }))
+    await flush()
+    /* The first page is in and the reader has not moved: nothing else is asked for. */
+    expect(blockCalls).toEqual(['outline|', 'messages|o0'])
+    expect(q('.trajectory-msg-open[data-index="0"] .trajectory-text-body')?.textContent).toBe('m0')
+    /* Far down the list, the page under the viewport is asked for, and the rows at the top leave the DOM. */
+    pane.scrollTop = 200 * (OPEN_EST + ROW_GAP)
+    act(() => { fireEvent.scroll(pane) })
+    await flush()
+    expect(blockCalls.at(-1)).toBe('messages|o180')
+    expect(q('[data-index="0"]')).toBeNull()
+    expect(document.querySelectorAll('.trajectory-msg-open').length).toBeLessThan(20)
+    await answer(body('messages', { items: messages(180, 20), offset: 180 }, { renderer: 'messages', next_cursor: 'c10', total_items: total }))
+    expect(blockCalls.at(-1)).toBe('messages|o200')
+    await answer(body('messages', { items: messages(200, 20), offset: 200 }, { renderer: 'messages', next_cursor: 'c11', total_items: total }))
+    expect(q('.trajectory-msg-open[data-index="200"] .trajectory-text-body')?.textContent).toBe('m200')
+    expect(blockCalls).toHaveLength(4)
   })
 
   it('names a body the gateway could not serve, and retries a failed read inside the block', async () => {
@@ -290,9 +342,9 @@ describe('a block tab', () => {
 
   it('copies text as text and JSON as pretty JSON', () => {
     const id = { sessionKey: 'gui:a', epoch: 'e1', entryId: 'r0', revision: 1 }
-    const page = (data: unknown) => ({ offset: 0, data: data as never, availability: 'available' as const, reason: null, integrity: [], truncated: false, total: null })
-    expect(copyText({ identity: id, blockId: 'content', renderer: 'text', pages: [page({ text: 'plain' })], nextCursor: null, droppedBefore: 0, bytes: 0, at: 0 })).toBe('plain')
-    expect(copyText({ identity: id, blockId: 'raw', renderer: 'json', pages: [page({ value: { a: 1 } })], nextCursor: null, droppedBefore: 0, bytes: 0, at: 0 })).toBe('{\n  "a": 1\n}')
+    const page = (data: unknown) => ({ offset: 0, data: data as never, availability: 'available' as const, reason: null, integrity: [], truncated: false, total: null, at: 0 })
+    expect(copyText({ identity: id, blockId: 'content', renderer: 'text', pages: [page({ text: 'plain' })], nextCursor: null, letGo: 0, evicted: [], bytes: 0, at: 0 })).toBe('plain')
+    expect(copyText({ identity: id, blockId: 'raw', renderer: 'json', pages: [page({ value: { a: 1 } })], nextCursor: null, letGo: 0, evicted: [], bytes: 0, at: 0 })).toBe('{\n  "a": 1\n}')
   })
 })
 

@@ -650,7 +650,11 @@ describe('the switches, the bands and the dots', () => {
     /* The gap between turn 1's blocks lies in the band: the hover names the turn, the click selects its first row. */
     const inBand = gapAfter(0)
     pointer('pointermove', inBand)
-    expect(brief()).toBe('gui.trajectory.bar.turn_total {"n":1,"dur":"5s"}')
+    const lines = [...document.querySelectorAll('.trajectory-hover-brief .trajectory-hover-line')].map((l) => l.textContent)
+    expect(lines[0]).toBe('gui.trajectory.bar.turn_total {"n":1,"dur":"5s"}')
+    /* The sum rides along under the turn's line, and the tools say it as their title, so it is never only in a gap. */
+    expect(lines[1]).toContain('gui.trajectory.bar.sum_known')
+    expect(q('.trajectory-bar-tools')?.getAttribute('title')).toBe(lines[1])
     await click(inBand)
     expect(store.get().selectedId).toBe('ask')
     expect(store.get().selectedBy).toBe('bar')

@@ -31,7 +31,7 @@ import {
   BAR_H, BLOCK_H, BLOCK_TOP, DBL_MS, DOT_ABOVE_Y, DOT_BELOW_Y, DRAG_PX, GAP, MIN_W, anchorOf, bandAt, bandsFor, barEntries, expand,
   hitTestExact, layoutFor, pan, restoreAnchor, summarize, toSegments, zoomAt,
 } from './geometry'
-import { BandHover, BarHover, BarSummary } from './Hover'
+import { BandHover, BarHover, BarSummary, summaryText } from './Hover'
 import { kindClass, kindLabel, kindSlug } from './palette'
 import * as store from './store'
 
@@ -530,7 +530,7 @@ export function DurationBar(): JSX.Element {
         onPointerLeave={() => { setHover(null); setOver(null) }}
         onDoubleClick={onDoubleClick}
       />
-      <div className="trajectory-bar-tools" role="group">
+      <div className="trajectory-bar-tools" role="group" title={summaryText(sum)}>
         <button className="trajectory-bar-tool" aria-label={t('gui.trajectory.bar.zoom_in')} title={t('gui.trajectory.bar.zoom_in')} onClick={() => zoomBy(2)}>+</button>
         <button className="trajectory-bar-tool" aria-label={t('gui.trajectory.bar.zoom_out')} title={t('gui.trajectory.bar.zoom_out')} onClick={() => zoomBy(0.5)} disabled={timeline.fit}>{'−'}</button>
         <button className="trajectory-bar-tool" aria-label={t('gui.trajectory.bar.reset')} title={t('gui.trajectory.bar.reset')} onClick={onDoubleClick} disabled={timeline.fit}>{'⤢'}</button>
@@ -571,9 +571,10 @@ export function DurationBar(): JSX.Element {
           ? (
             <BandHover
               band={over.band}
+              sum={sum}
               bar={rect}
               clientX={over.clientX}
-              size={{ width: 240, height: 28 }}
+              size={{ width: 320, height: 44 }}
               viewport={{ width: document.documentElement.clientWidth || 1000, height: document.documentElement.clientHeight || 800 }}
             />
           )

@@ -1,9 +1,9 @@
 /* A message list as the pane shows it: every row from the gateway's outline,
  * folded to one line until it is opened, the rows this call added already
  * open. Nothing here asks the reader to load more: the outline's pages are
- * walked in the background, and a row's body is read when the row opens --
- * by the cursor the outline gave it, so the first message of a thousand and
- * the last are one request each.
+ * walked in the background, and a row's body is read when the row is open
+ * and in view -- by the cursor the outline gave it, so the first message of
+ * a thousand and the last are one request each.
  *
  * Which rows open on their own is the row's delta (`meta.delta`): the new
  * messages of a continued call, every message of a first or an independent
@@ -11,9 +11,14 @@
  * no delta (a stored conversation) starts folded. The two controls at the
  * top open or fold everything; a row the reader opened or folded by hand
  * keeps that choice when the delta is decided later.
+ *
+ * Only the rows near the pane's viewport are in the DOM: the list measures
+ * the rows it draws, estimates the rest, and stands empty height in for
+ * them, so a thousand-message prompt costs what a screen of it costs. A row
+ * whose page the cache let go folds again until the reader asks for it.
  */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as details from './detailStore'
@@ -23,8 +28,15 @@ import type { OutlineItem } from './detailStore'
 import type { TrajectoryBlockDescriptor } from './types'
 import type { JSX, ReactNode } from 'react'
 
-/** How many open rows load their bodies at once; the rest load as they come into view. */
-const EAGER_ROWS = 6
+/** A folded row's height and an open row's, until the row is measured. */
+export const FOLD_H = 30
+export const OPEN_EST = 96
+/** The gap the list puts between rows. */
+export const ROW_GAP = 6
+/** How far beyond the pane's edges rows are still drawn, in pixels. */
+export const OVERSCAN_PX = 240
+/** The pane's height while it cannot be measured, so the first rows are drawn and read. */
+export const DEFAULT_VIEW_H = 600
 
 interface Delta {
   state: 'first' | 'continued' | 'independent' | 'unknown' | null
@@ -65,6 +77,14 @@ function FoldedRow({ item, onOpen }: { item: OutlineItem; onOpen: () => void }):
   )
 }
 
+/* Where the pane's viewport stands over the list: its scroll offset, its
+   height, and the list's own offset inside the scrolled content. */
+interface View {
+  top: number
+  height: number
+  listTop: number
+}
+
 export function MessagesView({ block, entryId, render }: {
   block: TrajectoryBlockDescriptor
   entryId: string
@@ -87,10 +107,18 @@ export function MessagesView({ block, entryId, render }: {
     }
   }, [permitted, identityKey, outline])
 
-  /* The reader's choices start over with another entry. */
+  /* The reader's choices and the measured heights start over with another entry. */
+  const heights = useRef(new Map<number, number>())
+  const estimates = useRef<{ open: number; fold: number }>({ open: OPEN_EST, fold: FOLD_H })
   const seen = useRef(entryId)
   useEffect(() => {
-    if (seen.current !== entryId) { seen.current = entryId; setChoices({}); setExpandedAll(false) }
+    if (seen.current !== entryId) {
+      seen.current = entryId
+      heights.current = new Map()
+      estimates.current = { open: OPEN_EST, fold: FOLD_H }
+      setChoices({})
+      setExpandedAll(false)
+    }
   }, [entryId])
 
   const isOpen = (item: OutlineItem): boolean => {
@@ -98,49 +126,112 @@ export function MessagesView({ block, entryId, render }: {
     if (chosen !== undefined) return chosen
     return expandedAll || openByDefault(item, delta)
   }
+  /* A row whose page the window let go: folded again, read only when the reader asks. */
+  const evicted = (item: OutlineItem): boolean => record !== null && details.onEvictedPage(record, item.index)
+  const drawnOpen = (item: OutlineItem): boolean => isOpen(item) && !evicted(item)
 
+  /* The pane that scrolls this list: its viewport is the window. */
+  const box = useRef<HTMLDivElement>(null)
+  const [view, setView] = useState<View>({ top: 0, height: 0, listTop: 0 })
+  useEffect(() => {
+    const el = box.current
+    const pane = el?.closest<HTMLElement>('.trajectory-pane') ?? null
+    if (!el || !pane) return
+    const measure = (): void => {
+      /* Layout offsets, which the pane's scrolling does not move, as the list view's anchor reads them. */
+      const listTop = el.offsetTop - pane.offsetTop
+      setView((v) => (v.top === pane.scrollTop && v.height === pane.clientHeight && v.listTop === listTop ? v : { top: pane.scrollTop, height: pane.clientHeight, listTop }))
+    }
+    measure()
+    pane.addEventListener('scroll', measure, { passive: true })
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    ro?.observe(pane)
+    return () => { pane.removeEventListener('scroll', measure); ro?.disconnect() }
+  }, [identityKey])
+
+  /* The window: the rows whose estimated extent meets the viewport, with the overscan. */
   const items = outline?.items ?? []
-  const open = items.filter(isOpen)
-  const missingBodies = open.filter((item) => !record || details.pageHolding(record, item.index) === null)
+  const rowH = (item: OutlineItem): number =>
+    (heights.current.get(item.index) ?? (drawnOpen(item) ? estimates.current.open : estimates.current.fold)) + ROW_GAP
+  const viewH = view.height > 0 ? view.height : DEFAULT_VIEW_H
+  const from = view.top - view.listTop - OVERSCAN_PX
+  const to = view.top - view.listTop + viewH + OVERSCAN_PX
+  let y = 0
+  let first = -1
+  let last = -1
+  let topPad = 0
+  for (let k = 0; k < items.length; k += 1) {
+    const h = rowH(items[k]!)
+    if (y + h > from && y < to) {
+      if (first < 0) { first = k; topPad = y }
+      last = k
+    }
+    y += h
+  }
+  const total = y
+  const shown = first < 0 ? [] : items.slice(first, last + 1)
+  const bottomPad = first < 0 ? 0 : Math.max(0, total - topPad - shown.reduce((n, item) => n + rowH(item), 0))
+
+  /* The rows drawn are measured once they stand -- a skeleton waiting for its body is not a
+     height -- and a changed height redraws once. The rows not drawn are estimated from the
+     measured ones of their kind, so the list's extent settles after the first screen. The key
+     names what is drawn (which rows, folded, open or with a body), so a paint that changed
+     nothing of that is not measured again. */
+  const [, remeasured] = useState(0)
+  const drawnKey = shown.map((item) => `${item.index}${drawnOpen(item) ? (record && details.pageHolding(record, item.index) ? 'b' : 'o') : 'f'}`).join(',')
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    let changed = false
+    const seenOpen: number[] = []
+    const seenFold: number[] = []
+    for (const node of el.querySelectorAll<HTMLElement>('[data-index]')) {
+      const h = node.offsetHeight
+      const index = Number(node.dataset.index)
+      if (!(h > 0) || !Number.isFinite(index) || node.querySelector('.trajectory-skel-line')) continue
+      ;(node.classList.contains('trajectory-msg-fold') ? seenFold : seenOpen).push(h)
+      if (Math.abs((heights.current.get(index) ?? 0) - h) > 1) {
+        heights.current.set(index, h)
+        changed = true
+      }
+    }
+    const median = (xs: number[]): number | null => (xs.length ? [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]! : null)
+    const open = median(seenOpen) ?? estimates.current.open
+    const fold = median(seenFold) ?? estimates.current.fold
+    if (open !== estimates.current.open || fold !== estimates.current.fold) {
+      estimates.current = { open, fold }
+      changed = true
+    }
+    if (changed) remeasured((n) => n + 1)
+  }, [drawnKey])
+
   /* A body is read with the page it sits on: the page is asked for by the
      row that starts it, so twenty open rows of one page ask once. */
   const pageOf = (item: OutlineItem): { cursor: string; index: number } => {
     const start = item.index - (item.index % details.MESSAGES_PAGE)
-    const first = items.find((it) => it.index === start)
-    return first ? { cursor: first.cursor, index: first.index } : { cursor: item.cursor, index: item.index }
+    const head = items.find((it) => it.index === start)
+    return head ? { cursor: head.cursor, index: head.index } : { cursor: item.cursor, index: item.index }
   }
-  /* A page the window let go of is not asked for again on its own account:
-     the rows it held come back when the reader scrolls to them. */
-  const letGo = (index: number): boolean => {
-    if (!record || record.pages.length < details.PAGE_WINDOW) return false
-    const first = details.firstHeldOffset(record)
-    return first !== null && index < first
-  }
-  /* Open rows read their bodies: the first few at once, the rest as they come into view. */
   const wanted = useRef(new Set<string>())
+  const ask = (item: OutlineItem): void => {
+    const page = pageOf(item)
+    if (wanted.current.has(page.cursor)) return
+    wanted.current.add(page.cursor)
+    void details.loadPageAt(block.id, page.cursor, page.index).finally(() => wanted.current.delete(page.cursor))
+  }
+  /* Open rows in the window read their bodies; nothing beyond the window is asked for,
+     and a page that failed waits for the reader's retry rather than being asked again. */
+  const faulted = details.fault({ blockId: block.id, more: true }, s) !== null || details.fault({ blockId: block.id }, s) !== null
   useEffect(() => {
-    if (!permitted) return
-    for (const item of missingBodies.filter((it) => !letGo(it.index)).slice(0, EAGER_ROWS)) {
-      const page = pageOf(item)
-      if (wanted.current.has(page.cursor)) continue
-      wanted.current.add(page.cursor)
-      void details.loadPageAt(block.id, page.cursor, page.index).finally(() => wanted.current.delete(page.cursor))
+    if (!permitted || faulted) return
+    for (const item of shown) {
+      if (drawnOpen(item) && (!record || details.pageHolding(record, item.index) === null)) ask(item)
     }
   })
 
-  const onSight = (item: OutlineItem) => (el: HTMLDivElement | null): void => {
-    const page = pageOf(item)
-    if (!el || typeof IntersectionObserver === 'undefined') {
-      if (el && permitted && !letGo(item.index)) void details.loadPageAt(block.id, page.cursor, page.index)
-      return
-    }
-    const io = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) {
-        io.disconnect()
-        void details.loadPageAt(block.id, page.cursor, page.index)
-      }
-    })
-    io.observe(el)
+  const open = (item: OutlineItem): void => {
+    setChoices((c) => ({ ...c, [item.index]: true }))
+    if (permitted) ask(item)
   }
 
   const note = delta.state === 'unknown'
@@ -167,14 +258,15 @@ export function MessagesView({ block, entryId, render }: {
           <button className="trajectory-link" onClick={() => { void details.retryOutline() }}>{t('gui.trajectory.details.retry')}</button>
         </p>
       ) : null}
-      <div className="trajectory-msgs">
-        {items.map((item) => {
-          if (!isOpen(item)) {
-            return <FoldedRow key={item.index} item={item} onOpen={() => setChoices((c) => ({ ...c, [item.index]: true }))} />
+      <div className="trajectory-msgs" ref={box}>
+        {topPad > 0 ? <div className="trajectory-msg-space" style={{ height: topPad - ROW_GAP }} aria-hidden="true" /> : null}
+        {shown.map((item) => {
+          if (!drawnOpen(item)) {
+            return <FoldedRow key={item.index} item={item} onOpen={() => open(item)} />
           }
           const body = record ? details.messageAt(record, item.index) : undefined
           return (
-            <div key={item.index} className="trajectory-msg-open" data-index={item.index} ref={body === undefined ? onSight(item) : undefined}>
+            <div key={item.index} className="trajectory-msg-open" data-index={item.index}>
               <button className="trajectory-msg-close" aria-label={t('gui.trajectory.details.collapse_one')} onClick={() => setChoices((c) => ({ ...c, [item.index]: false }))}>
                 {'−'}
               </button>
@@ -184,6 +276,7 @@ export function MessagesView({ block, entryId, render }: {
             </div>
           )
         })}
+        {bottomPad > 0 ? <div className="trajectory-msg-space" style={{ height: bottomPad - ROW_GAP }} aria-hidden="true" /> : null}
         {outline === null || (items.length === 0 && outline.loading) ? <div className="trajectory-skel-line" aria-busy="true" /> : null}
         {outline !== null && items.length === 0 && !outline.loading && !outline.fault ? <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p> : null}
       </div>
