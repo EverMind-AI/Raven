@@ -704,6 +704,13 @@ def test_the_capability_steps_stay_above_the_closing_launch() -> None:
     assert "libreoffice" not in closing
 
 
+def _installer_job() -> str:
+    """The installer job's text in ci.yml, up to the job after it."""
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    job = workflow[workflow.index("  installer:") :]
+    return job[: job.index("\n  windows-upgrade:")]
+
+
 def test_the_ci_gate_installs_the_latest_release_the_way_users_do() -> None:
     """The text pins above cannot catch the class of defect that shipped: a
     script on main calling something the latest release lacks. Only a real
@@ -711,9 +718,7 @@ def test_the_ci_gate_installs_the_latest_release_the_way_users_do() -> None:
     `curl | sh` and `irm | iex` arrive, which is what selects remote mode; run
     as a file, the script would detect the checkout and install it editable
     instead, and the gate would be measuring the wrong thing."""
-    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    job = workflow[workflow.index("  installer:") :]
-    job = job[: job.index("\n  windows-upgrade:")]
+    job = _installer_job()
     assert "cat install.sh | sh" in job
     assert "Get-Content install.ps1 -Raw | Invoke-Expression" in job
     assert 'RAVEN_NO_LAUNCH: "1"' in job
@@ -726,9 +731,7 @@ def test_the_ci_gate_runs_the_windows_install_under_both_powershells() -> None:
     lookup that only worked the pwsh way passed this gate while every install
     from the stock shell failed, so the gate runs both -- each into its own
     tool directory, so that each version check answers for its own install."""
-    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    job = workflow[workflow.index("  installer:") :]
-    job = job[: job.index("\n  windows-upgrade:")]
+    job = _installer_job()
     steps = [step for step in job.split("\n      - ") if "Get-Content install.ps1 -Raw | Invoke-Expression" in step]
     assert sorted(re.search(r"\n        shell: (\S+)", step).group(1) for step in steps) == ["powershell", "pwsh"]
     assert len({re.search(r"\n          UV_TOOL_DIR: (.+)", step).group(1) for step in steps}) == 2
