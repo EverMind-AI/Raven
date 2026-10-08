@@ -295,6 +295,97 @@ def test_anthropic_repairs_the_thinking_mode_a_400_complains_about() -> None:
     assert not rewrite_on_400(level, "something else entirely")
 
 
+_VERDICT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "review_verdict",
+            "description": "Record the verdict.",
+            "parameters": {"type": "object", "properties": {"pass": {"type": "boolean"}}, "required": ["pass"]},
+        },
+    }
+]
+_FORCED_VERDICT = {"type": "function", "function": {"name": "review_verdict"}}
+_FORCED_TOOL_REFUSAL = 'tool_choice: type "tool" and "any" are not supported for this model.'
+
+
+def test_anthropic_repairs_a_forced_tool_choice_a_400_refuses() -> None:
+    """A model that thinks refuses a call it is forced to make, and the 400 says so.
+    The tool stays on offer under ``auto``; only a forced choice is rewritten."""
+    from raven.providers.anthropic_messages_provider import rewrite_on_400
+
+    for choice, forced_type in ((_FORCED_VERDICT, "tool"), ("required", "any")):
+        body = _anthropic_body(
+            model="claude-sonnet-5-5", reasoning_effort="low", tools=_VERDICT_TOOLS, tool_choice=choice
+        )
+        assert body["tool_choice"]["type"] == forced_type
+        assert rewrite_on_400(body, _FORCED_TOOL_REFUSAL) == "tool_choice"
+        assert body["tool_choice"] == {"type": "auto"} and body["tools"][0]["name"] == "review_verdict"
+
+    already_auto = _anthropic_body(tools=_VERDICT_TOOLS, tool_choice="auto")
+    assert rewrite_on_400(already_auto, _FORCED_TOOL_REFUSAL) is None
+    no_tools = _anthropic_body()
+    assert "tool_choice" not in no_tools and rewrite_on_400(no_tools, _FORCED_TOOL_REFUSAL) is None
+
+    unrelated = _anthropic_body(tools=_VERDICT_TOOLS, tool_choice=_FORCED_VERDICT)
+    assert rewrite_on_400(unrelated, "something else entirely") is None
+    assert unrelated["tool_choice"]["type"] == "tool"
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+async def test_a_forced_tool_choice_the_model_refuses_is_retried_under_auto(monkeypatch, streaming) -> None:
+    """The research reviewer forces ``review_verdict``; on a model that refuses that,
+    every review failed open and the report shipped unreviewed. Both call sites
+    (``chat`` and ``chat_stream``) answer the 400 with one retry under ``auto``."""
+    from raven.providers import anthropic_messages_provider as mod
+
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body)
+        if body["tool_choice"]["type"] in {"tool", "any"}:
+            return httpx.Response(
+                400,
+                json={"type": "error", "error": {"type": "invalid_request_error", "message": _FORCED_TOOL_REFUSAL}},
+            )
+        if streaming:
+            return httpx.Response(200, content=_stream_ok("pass"))
+        return httpx.Response(
+            200,
+            json={
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "pass"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+        )
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        mod.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=httpx.MockTransport(handler))
+    )
+    monkeypatch.setattr(mod, "send_max_tokens", lambda gen, model, pinned=None, allow_fetch=True: pinned or 64000)
+    provider = AnthropicMessagesProvider(
+        api_key="k", api_base="https://api.anthropic.com/v1", default_model="claude-sonnet-5-5"
+    )
+    asked = dict(tools=_VERDICT_TOOLS, tool_choice=_FORCED_VERDICT, reasoning_effort="low")
+    messages = [{"role": "user", "content": "review this draft"}]
+
+    if streaming:
+        deltas = [d async for d in provider.chat_stream(messages, **asked)]
+        text, finish = "".join(d.content or "" for d in deltas), deltas[-1].finish_reason
+    else:
+        response = await provider.chat(messages, **asked)
+        text, finish = response.content, response.finish_reason
+
+    assert [b["tool_choice"]["type"] for b in seen] == ["tool", "auto"]
+    assert seen[1]["tools"] == seen[0]["tools"]
+    assert text == "pass" and finish == "stop"
+    assert provider._ceilings == {}
+
+
 def test_anthropic_answers_a_refused_effort_label_with_litellms_number() -> None:
     """A vendor that takes no label has to be answered in tokens, and the number is
     litellm's -- the only place in this transport where a budget is a number at all.

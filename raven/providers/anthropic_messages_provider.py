@@ -487,10 +487,11 @@ def clamp_to_model_limit(body: dict[str, Any], error_text: str) -> bool:
 def rewrite_on_400(body: dict[str, Any], error_text: str) -> str | None:
     """Repair the one thing a 400 complained about; the repair's name when a retry is worth it.
 
-    Five complaints are known: a ceiling above the model's (``"ceiling"``), a
+    The complaints it knows: a ceiling above the model's (``"ceiling"``), a
     budgeted thinking request to a model that thinks adaptively or the reverse
     (``"thinking"``), an effort level the model does not offer (``"effort"``),
-    and a temperature beside thinking (``"temperature"``). The name matters to
+    a temperature beside thinking (``"temperature"``), and a forced tool choice
+    the model refuses (``"tool_choice"``). The name matters to
     the caller: only a ceiling complaint teaches the model's ceiling, the others
     leave ``max_tokens`` as the caller pinned it and must not be remembered as one.
 
@@ -501,6 +502,12 @@ def rewrite_on_400(body: dict[str, Any], error_text: str) -> str | None:
     text = error_text or ""
     if clamp_to_model_limit(body, text):
         return "ceiling"
+    forced = body.get("tool_choice")
+    if "tool_choice" in text and isinstance(forced, dict) and forced.get("type") in {"tool", "any"}:
+        # Models that think refuse a forced call; under ``auto`` the tool stays on
+        # offer and a model that declines it answers in plain text.
+        body["tool_choice"] = {"type": "auto"}
+        return "tool_choice"
     if isinstance(body.get("reasoning"), dict) and "reasoning" in text:
         effort = str((body.pop("reasoning") or {}).get("effort") or "high")
         budget = _thinking_budget(int(body.get("max_tokens") or DEFAULT_MAX_OUTPUT_TOKENS), effort)
