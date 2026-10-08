@@ -258,6 +258,12 @@ TWIN_DRFLOW_PRODUCT_ONLY = {
         "rather than inheriting it: the class default is on, and a default that can move "
         "is not the same as a file that says what ships"
     ),
+    "measuredGuidance": (
+        "the guidance block's numbers (short runs, one named answer) were measured on a "
+        "short-answer benchmark, where they hold; this product writes long reports, and "
+        "max's evidence floor asks for more reading than the block calls healthy. The fork "
+        "inherits the class default (on) and its arm was measured with it"
+    ),
     "plainFirst": (
         "medium and high answer settled general knowledge without a research round: "
         "web tools withheld for the first model call, the plain draft judged, anything "
@@ -430,8 +436,8 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high"
-    assert digest == "baf5019c4141a463", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
+    assert digest == "6e5fde8bdf1085ae", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():
@@ -452,8 +458,8 @@ def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
     grounded.render_config(RUN_PY.parent / "config.json")
     profile = tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile"
     soul = (profile / "soul.md").read_text()
-    assert "## What actually decides this task" in soul, "measured guidance rendered into the identity"
-    assert soul.index("## What actually decides this task") < soul.index("## Reading")
+    assert "## What actually decides this task" not in soul, "the shipped config turns measured guidance off"
+    assert soul.rstrip("\n") == (RUN_PY.parent / "soul.md").read_text().rstrip("\n")
     contract = profile / "agent.md"
     text = contract.read_text()
     assert "## Reading" not in text, "the identity is soul.md's; agent.md carries only the contract"

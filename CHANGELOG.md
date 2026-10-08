@@ -54,6 +54,17 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Research reports are written for a reader rather than for a grader. The
+  `## Answer` section states the answer and then why it holds and what it
+  means, in a few sentences instead of one or two; prose cites through
+  markdown links on the words a source supports instead of bare URLs
+  mid-sentence; and the report is told to carry its argument in prose, define
+  terms the question does not already use, ground abstract points in a
+  concrete case and drop filler. The identity no longer carries the
+  measured-guidance block, whose short-run and one-answer numbers came from a
+  short-answer benchmark (`measuredGuidance` off). The product label moves to
+  `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader`.
+
 - A running EverOS whose version no longer matches the installed one is
   replaced rather than reused, through the same precheck, stop and spawn
   chain a rotated credential takes. An upgrade used to leave the old server

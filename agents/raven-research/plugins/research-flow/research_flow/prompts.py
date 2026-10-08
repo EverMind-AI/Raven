@@ -129,8 +129,9 @@ _DR_REPORT_FORMAT_OVERRIDE_PASSAGE = """   This layout is fixed and takes preced
 """
 _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report with exactly these three sections,
    under these exact headings, in this order, each one present every time:
-   `## Answer` - the direct answer to the question in one or two sentences; if
-   the question was ambiguous, one more line on how you read it.
+   `## Answer` - the direct answer to the question, stated first and in plain
+   words, then two to four sentences on why it holds and what it means for the
+   reader; if the question was ambiguous, one more line on how you read it.
    `## Findings` - the full report that carries the answer. Organize it as an
    argument, not a list of signals: why something happened, what it leads to,
    and what would break that reading. `###` subheadings are allowed inside this
@@ -138,7 +139,10 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    statement carries the URL of the page you fetched it from - written out in
    full and starting with `https://` - and its as-of or publication date when
    the data is time-sensitive; the `web_fetch #...` tag that wraps a tool
-   result is a data fence, not a citation, and never appears in the reply. A
+   result is a data fence, not a citation, and never appears in the reply. In
+   prose, put the URL in a markdown link on the words it supports -
+   `[publisher or page title](https://...)` - so the sentence still reads as a
+   sentence; a source column in a table may hold the bare URL. A
    finding no fetched page supports is named as unverified, never given an
    invented source. A number you did not read on a page you opened does not
    enter a table column of measurements, a score or a ranking: write `not
@@ -173,7 +177,16 @@ _DR_REPORT_STRUCTURE_CLAUSE_DEEP = """{n}. Write the reply as a research report 
    identifier may appear only in the sentence that already says so. Let the
    report run as long
    as the evidence needs - never drop evidence, sources, or caveats to make it
-   shorter."""
+   shorter.
+   Write for a reader who is sharp but new to the topic and reads the report
+   once, top to bottom. Let prose carry the argument: open each part with the
+   claim it makes, then give the evidence and the mechanism behind it, and keep
+   lists and tables for items the reader compares side by side. Define a term
+   the first time you use it, unless the question shows the reader already
+   works with it, and anchor an abstract point in one concrete case from your
+   sources. Cut sentences that carry no information - restating the
+   question, announcing what comes next, "it is worth noting", a closing recap
+   of what was just said."""
 
 # dr@3.4-askuser, appended after the two clauses above for the same reason they
 # are appended to the contract: every byte before it stays at its measured

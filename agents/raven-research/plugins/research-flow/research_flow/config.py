@@ -412,6 +412,11 @@ PRODUCT_SUPERSEDED_PROFILES: dict[str, str] = {
     # running at high. A high report that cites nothing is now a possible output of the
     # label, and every default-tier run reasons at a lower effort, so the label moves.
     "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high",
+    # 2026-10-08: the deep report clause gained reader-facing writing rules (a fuller
+    # Answer section, markdown-link citations in prose, prose over lists), and the
+    # identity dropped the measured-guidance block, whose short-run and one-answer
+    # numbers came from a short-answer benchmark rather than from reports.
+    "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader",
     # The interim label this branch's 2026-09-07 batches ran under before it rebased onto
     # the cite-rank clause and the dr@3.7 rung; never shipped, retired so those bench
     # configs still load.

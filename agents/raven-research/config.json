@@ -33,6 +33,7 @@
       "research-flow": {
         "enabled": true,
         "thinkClosingTagRequired": false,
+        "measuredGuidance": false,
         "maxIterations": 20,
         "wallClockSeconds": 3600,
         "deadEndRetry": {
@@ -113,7 +114,7 @@
           "enabled": true,
           "judge": true
         },
-        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high"
+        "version": "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
       }
     }
   },
