@@ -82,6 +82,10 @@ def _clear_login_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(env_mod, "_LOGIN_ENV", None)
     monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
     monkeypatch.setenv("SHELL", "/bin/bash")
+    # These tests capture from a POSIX login shell. On a Windows runner the
+    # platform would route them to `_capture_windows` (PowerShell) and their
+    # patched `bash -lic ...` would never be invoked, so pin the platform too.
+    monkeypatch.setattr(env_mod.sys, "platform", "linux")
 
 
 def test_login_shell_env_parses_nul_separated_output(

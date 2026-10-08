@@ -37,12 +37,22 @@ same profile + rc chain the user's own terminal does.
 
 Known limitation: if the login shell's profile prints a banner to stdout, that
 banner corrupts the first parsed variable. This is not worked around here.
+
+Windows has no login shell to ask: explorer.exe holds the interactive
+environment, and installers refresh a terminal opened afterwards by
+broadcasting WM_SETTINGCHANGE. `_capture_windows` reads the persisted User
+and Machine stores that broadcast refreshes, merging them over raven's
+inherited environment so a child keeps the process environment a service
+already had and only the installer-refreshed entries -- Path above all --
+are rebuilt from the store that is actually current.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
+import sys
 
 from loguru import logger
 
@@ -64,10 +74,22 @@ _DRIVABLE_SHELLS = frozenset({"bash", "zsh"})
 
 
 def _login_shell() -> str | None:
-    """The user's login shell if this module can drive it, else ``None``."""
-    shell = os.environ.get("SHELL", "").strip()
+    r"""The user's login shell if this module can drive it, else ``None``.
 
-    return shell if shell and os.path.basename(shell) in _DRIVABLE_SHELLS else None
+    ``basename`` alone leaves a Windows-shaped bash unread: git-bash exports
+    ``SHELL=C:\Program Files\Git\usr\bin\bash.exe`` with backslashes, and
+    POSIX ``basename`` sees no separator. Both flavors of path are split so
+    that spelling drives the shell it names rather than falling back and
+    losing git-bash's profile-installed PATH entries on a POSIX host that is
+    not Windows.
+    """
+    shell = os.environ.get("SHELL", "").strip()
+    if not shell:
+        return None
+    name = shell.replace("\\", "/").rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    return shell if name in _DRIVABLE_SHELLS else None
 
 
 def login_shell_env() -> dict[str, str]:
@@ -86,7 +108,11 @@ def login_shell_env() -> dict[str, str]:
         return dict(_LOGIN_ENV)
     if _LOGIN_ENV_FAILED:
         return dict(os.environ)
-    captured = _capture(consequence="subagents inherit raven's environment")
+    captured = (
+        _capture_windows(consequence="subagents inherit raven's environment")
+        if sys.platform == "win32"
+        else _capture(consequence="subagents inherit raven's environment")
+    )
     if captured is None:
         _LOGIN_ENV_FAILED = True
         return dict(os.environ)
@@ -119,6 +145,113 @@ def refresh_login_shell_env() -> bool:
         return False
     _LOGIN_ENV = captured
     return True
+
+
+def _capture_windows(*, consequence: str) -> dict[str, str] | None:
+    """The environment a freshly opened Windows terminal would start with.
+
+    Windows has no login shell to ask: explorer.exe holds the interactive
+    environment, and installers refresh a terminal opened afterwards by
+    broadcasting WM_SETTINGCHANGE (measured 2026-10-08: a `uv tool install`
+    made an agent resolvable from every new terminal minutes before the
+    running gateway, a service with a frozen `os.environ`, could see it --
+    and the WebUI probe answered "not on the login shell PATH" while the
+    file sat on disk).
+
+    Rather than round-trip a PowerShell (which needs quoting, base64, and
+    a WM broadcast), read the persisted stores the shell itself reassembles
+    a terminal from: HKCU\\Environment for the user's own variables and
+    HKLM\\...\\Environment for the machine's. Both are merged over raven's
+    inherited ``os.environ`` so a child keeps the process environment a
+    service already had (proxy, temp, SystemRoot, conda) and only the
+    installer-refreshed entries -- ``Path`` above all -- are rebuilt from
+    the store that is actually current.
+
+    ``None`` when neither store can be read, which is the "capture failed"
+    signal the caller falls back on. A store that reads but has no ``Path``
+    is still a valid capture: the probe of an absent agent then names the
+    registry it was looked up in, which is the same sentence the POSIX arm
+    gives for a profile with no PATH export.
+    """
+    import winreg
+
+    def _read_store(hive: int, subkey: str) -> dict[str, str]:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                entries = {}
+                for i in range(winreg.QueryInfoKey(key)[1]):
+                    name, value, _vtype = winreg.EnumValue(key, i)
+                    if name and isinstance(value, str):
+                        entries[name] = value
+                return entries
+        except OSError as exc:
+            logger.warning(
+                "Windows login environment capture could not read {} ({}); {}",
+                subkey,
+                exc,
+                consequence,
+            )
+            return {}
+
+    machine = _read_store(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+    user = _read_store(winreg.HKEY_CURRENT_USER, r"Environment")
+    if not machine and not user:
+        return None
+
+    machine_path = next((v for k, v in machine.items() if k.lower() == "path"), "")
+    user_path = next((v for k, v in user.items() if k.lower() == "path"), "")
+    # Expand %VAR% against the same machine-then-user precedence Windows
+    # applies when it assembles a terminal's environment -- registry Path
+    # entries hold unexpanded references, and passing them on raw hands the
+    # child a PATH whose entries never existed (the gateway's own measured
+    # log shows a launcher script dying on `%USERPROFILE%/go/bin`).
+    context: dict[str, str] = {}
+    for source in (os.environ, machine, user):
+        context.update({k.lower(): v for k, v in source.items()})
+    context.pop("path", None)
+    machine_path = _expand_windows(machine_path, context)
+    user_path = _expand_windows(user_path, context)
+
+    # Windows environment names are case-insensitive, so the merge keys on the
+    # fold: os.environ < machine < user, with one entry per name -- a child's
+    # env block carrying both `Path` and `PATH` resolves unpredictably.
+    merged: dict[str, str] = {}
+    known: dict[str, str] = {}
+    for source in (os.environ, machine, user):
+        for name, value in source.items():
+            low = name.lower()
+            if low in known:
+                merged.pop(known[low], None)
+            known[low] = name
+            merged[name] = value
+    if machine_path or user_path:
+        merged.pop(known.get("path", ""), None)
+        # Union rather than replace: the machine+user stores are the PATH a
+        # *new* terminal gets, but raven's own launcher's bin (MinGit/usr/bin,
+        # conda) reached this process's PATH without touching the stores, and
+        # a child spawned from the gateway needs every one of them.
+        live = os.environ.get("PATH", "")
+        joined = [p for p in (machine_path, user_path) if p]
+        if live:
+            joined.append(live)
+        merged["Path"] = ";".join(joined)
+    return merged
+
+
+def _expand_windows(value: str, context: dict[str, str], _depth: int = 0) -> str:
+    r"""``%VAR%`` references in a registry value, folded the way Windows folds them.
+
+    The registry is what a terminal's Path is built from, so the references
+    resolve against the case-folded registry context (machine-then-user
+    shadowing the process's inherited env) rather than ``os.environ`` --
+    a literal ``%USERPROFILE%\go\bin`` would otherwise reach a child as a
+    directory named exactly that.
+    """
+    if not value or "%" not in value or _depth > 16:
+        return value
+
+    expanded = re.sub(r"%([^%]+)%", lambda m: context.get(m.group(1).lower(), m.group(0)), value)
+    return value if expanded == value else _expand_windows(expanded, context, _depth + 1)
 
 
 def _capture(*, consequence: str) -> dict[str, str] | None:

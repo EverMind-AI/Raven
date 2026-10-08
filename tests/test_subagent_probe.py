@@ -55,6 +55,52 @@ def _openai(base_url: str, model: str = "m1", api_key: str = "k") -> ThirdPartyO
 # --- cli probe -----------------------------------------------------------
 
 
+def test_windows_argv_keeps_backslash_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The resolver that parses a row's command answers the argv Windows gives it.
+
+    ``shlex.split`` defaults to POSIX: a backslash before a letter is an escape,
+    so every Windows absolute path resolved by ``{PYTHON}`` -- its only spelling
+    -- read as `C:Users...` to the probe and spawned that way too, whatever
+    PowerShell itself would have answered. ``posix=False`` parses a command
+    CommandLineToArgvW's way: backslashes are literal, and argv[0] is what
+    `PsiElement` starts.
+
+    The check is argv[0] only. Arguments are never asked of this resolver --
+    they reach the process raven spawns, whose own argv is the launch's, not
+    this file's -- and a probe of a Windows path from a POSIX host has to
+    answer the Windows answer.
+    """
+    monkeypatch.setattr(probe_mod, "_is_windows", lambda: True)
+    assert probe_mod._split_command(r"C:\Users\me\AppData\Roaming\uv\tools\raven\Scripts\python.exe -m raven acp") == [
+        r"C:\Users\me\AppData\Roaming\uv\tools\raven\Scripts\python.exe",
+        "-m",
+        "raven",
+        "acp",
+    ]
+
+
+async def test_windows_command_reaches_which_intact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    r"""A Windows absolute path reaches shutil.which with its backslashes, or it resolves to nothing.
+
+    ``{PYTHON}`` resolves to ``C:\...\python.exe``. shlex.split in POSIX mode
+    reads every ``\X`` as an escape and drops it, so the probe asked which for
+    ``C:Users...python.exe`` -- a bare name, looked up on PATH, reported
+    missing while the file sat on disk. CommandLineToArgvW, which is what a
+    Windows spawn actually parses with, keeps backslashes literal.
+    """
+    command = r"C:\venv\Scripts\python.exe -m raven acp"
+    asked: list[str] = []
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: asked.append(exe) or None)
+    cfg = ThirdPartyAcpSubagentConfig(name="Agent", command=command)
+
+    monkeypatch.setattr(probe_mod, "_is_windows", lambda: False)
+    await probe_one(cfg, source="config", path=str(tmp_path))
+    monkeypatch.setattr(probe_mod, "_is_windows", lambda: True)
+    await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert asked == ["C:venvScriptspython.exe", r"C:\venv\Scripts\python.exe"]
+
+
 async def test_cli_probe_reports_the_resolved_absolute_path(tmp_path: Path) -> None:
     exe = tmp_path / "faux-agent"
     exe.write_text("#!/bin/sh\nexit 0\n")

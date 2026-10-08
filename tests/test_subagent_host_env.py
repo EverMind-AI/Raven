@@ -13,9 +13,11 @@ import os
 import shlex
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import raven.agent.subagent.backends.env as backend_env_mod
 from raven.acp_client.client import AcpClient
 from raven.agent.subagent.backends import env as backend_env
 from raven.agent.subagent.role import SUBAGENT_ENV_VAR, is_subagent_process
@@ -92,3 +94,159 @@ async def test_acp_child_is_told_it_serves_as_a_subagent(tmp_path: Path, monkeyp
     # the written form alone would pass while the child ignored it.
     monkeypatch.setenv(SUBAGENT_ENV_VAR, arrived)
     assert is_subagent_process(), f"the child was handed {arrived!r}, which it does not read as a sub-agent role"
+
+
+# --- Windows login environment capture -----------------------------------
+#
+# Windows has no login shell. The capture reads the two registry stores a
+# terminal is assembled from (machine, then user), merged over raven's own
+# inherited environment, with Path concatenated the way Windows builds it.
+
+
+class _FakeKey:
+    def __init__(self, values: dict[str, str], *, fail: bool = False) -> None:
+        self.values = values
+        self.fail = fail
+
+    def __enter__(self) -> "_FakeKey":
+        if self.fail:
+            raise OSError("access denied")
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+
+class _FakeWinreg:
+    """``import winreg`` is Windows-only, so the registry is faked here exactly.
+
+    Only the three calls the capture makes are honest: ``OpenKey`` hands a key
+    over a store a test seeded, and the enumeration returns that store. The
+    dict keeps insertion order, so user-after-machine remains visible.
+    """
+
+    HKEY_LOCAL_MACHINE = 0x80000002
+    HKEY_CURRENT_USER = 0x80000001
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, machine: dict[str, str] | bool, user: dict[str, str] | bool) -> None:
+        self._stores = {self.HKEY_LOCAL_MACHINE: machine, self.HKEY_CURRENT_USER: user}
+
+    def OpenKey(self, hive: int, _subkey: str) -> _FakeKey:
+        store = self._stores[hive]
+        return _FakeKey({}, fail=True) if store is False else _FakeKey(dict(store))
+
+    def QueryInfoKey(self, key: _FakeKey) -> tuple[int, int, int]:
+        return (0, len(key.values), 0)
+
+    def EnumValue(self, key: _FakeKey, index: int) -> tuple[str, str, int]:
+        name = list(key.values)[index]
+        return (name, key.values[name], 1)
+
+
+def _fake_winreg(
+    monkeypatch: pytest.MonkeyPatch,
+    machine: dict[str, str] | bool,
+    user: dict[str, str] | bool,
+) -> None:
+    monkeypatch.setattr(sys, "winreg", _FakeWinreg(machine, user), raising=False)
+    monkeypatch.setitem(sys.modules, "winreg", _FakeWinreg(machine, user))
+
+
+def test_windows_capture_refreshes_a_frozen_process_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reported failure: an installer ran after the gateway started.
+
+    A service keeps the PATH it started with. A terminal opened after
+    `uv tool install` reads the store the installer wrote, and so does this
+    capture: the merged answer carries every inherited variable and the
+    store's Path -- not the process's stale one.
+    """
+    monkeypatch.setenv("PATH", r"C:\stale\service-bin")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy:8888")
+    _fake_winreg(
+        monkeypatch,
+        machine={"Path": r"C:\Windows\system32", "ComSpec": r"C:\Windows\system32\cmd.exe"},
+        user={"Path": r"C:\Users\me\AppData\Roaming\uv\tools\raven\Scripts"},
+    )
+    captured = backend_env_mod._capture_windows(consequence="subagents inherit raven's environment")
+    assert captured is not None
+    assert captured["Path"] == (
+        r"C:\Windows\system32;C:\Users\me\AppData\Roaming\uv\tools\raven\Scripts;C:\stale\service-bin"
+    )
+    assert captured["HTTP_PROXY"] == "http://proxy:8888", "a child keeps the process vars the store knows nothing of"
+    assert captured["ComSpec"] == r"C:\Windows\system32\cmd.exe"
+    assert sum(1 for k in captured if k.lower() == "path") == 1, "no duplicate Path spellings beside Path"
+
+
+def test_windows_capture_environments_names_fold_case_insensitively(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One name, one entry: `TEMP` from the process and `Temp` from the store are the same variable.
+
+    A child env block carrying both spellings resolves to an arbitrary one on
+    Windows -- and to the later-written one, which the store's refresh would
+    then silently contradict.
+    """
+    monkeypatch.setenv("TEMP", r"C:\stale-tmp")
+    _fake_winreg(monkeypatch, machine=False, user={"Temp": r"C:\Users\me\AppData\Local\Temp"})
+    captured = backend_env_mod._capture_windows(consequence="...")
+    assert captured is not None
+    assert captured.get("Temp") == r"C:\Users\me\AppData\Local\Temp"
+    assert "TEMP" not in captured
+
+
+def test_windows_capture_keeps_up_when_only_one_store_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HKLM can refuse a non-elevated read; the user's entries must not be lost with it."""
+    monkeypatch.setenv("PATH", r"C:\legacy")
+    _fake_winreg(monkeypatch, machine=False, user={"Path": r"C:\user-only"})
+    captured = backend_env_mod._capture_windows(consequence="...")
+    assert captured is not None
+    assert captured["Path"] == r"C:\user-only;C:\legacy"
+
+
+def test_windows_capture_reports_failure_when_no_store_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both stores refusing is the one case the driver must fall back on ``os.environ``."""
+    _fake_winreg(monkeypatch, machine=False, user=False)
+    assert backend_env_mod._capture_windows(consequence="subagents inherit raven's environment") is None
+
+
+def test_windows_capture_expands_percent_vars_in_the_stored_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    r"""`%USERPROFILE%\go\bin` in the registry is a path; left raw it is not one.
+
+    The gateway's measured log shows a launcher script dying on exactly that:
+    the store writes the reference, the read-before mine passed it on, and a
+    terminal got the expanded form. Machine-level references resolve against
+    machine values first (USERPROFILE is the service account's there), then
+    against the process's inherited env -- SHELL-adjusted var precedence.
+    """
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\me")
+    monkeypatch.setenv("PATH", r"C:\legacy")
+    _fake_winreg(
+        monkeypatch,
+        machine={"Path": r"C:\tools;%ProgramFiles%\App", "ProgramFiles": r"C:\Program Files"},
+        user={"Path": r"%USERPROFILE%\AppData\Roaming\uv\tools\raven\Scripts"},
+    )
+    captured = backend_env_mod._capture_windows(consequence="...")
+    assert captured is not None
+    assert captured["Path"] == r"C:\tools;C:\Program Files\App;C:\Users\me\AppData\Roaming\uv\tools\raven\Scripts;C:\legacy"
+
+
+def test_windows_capture_runs_in_place_of_the_posix_one_on_win32(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The platform decides the capture; on win32 the registry-built path beats raven's frozen one."""
+    monkeypatch.setenv("PATH", r"C:\service-legacy-bin")
+    _fake_winreg(monkeypatch, machine={"Path": r"C:\system32"}, user={"Path": r"C:\user"})
+    monkeypatch.setattr(backend_env_mod.sys, "platform", "win32")
+    monkeypatch.setattr(backend_env_mod, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env_mod, "_LOGIN_ENV_FAILED", False)
+    env = backend_env_mod.login_shell_env()
+    assert env["Path"] == r"C:\system32;C:\user;C:\service-legacy-bin"
+
+
+def test_login_shell_reads_a_windows_shaped_bash_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """basename alone dropped it: git-bash's `SHELL` has backslashes, and POSIX split sees no separator.
+
+    The gateway's log had SHELL=`C:\\Program Files\\Git\\usr\\bin\\bash.exe` be "not one this
+    build can drive" and every probe ran on raven's own PATH -- invisible to the
+    README's own install-from-git-bash recipe, which then answered "agent missing".
+    """
+    shell = r"C:\Program Files\Git\usr\bin\bash.exe"
+    monkeypatch.setenv("SHELL", shell)
+    assert backend_env_mod._login_shell() == shell
