@@ -11,7 +11,7 @@
  * reader to ask for it again; nothing reads it back on its own.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import { reasonKey } from './blocks'
@@ -24,11 +24,6 @@ import type { JSX, ReactNode } from 'react'
 export const FILES_OVERSCAN_PX = 400
 /** How many files are read at once. */
 export const FILES_CONCURRENCY = 2
-/** A section's height until it is measured: its heading alone, and with a body. */
-export const FILE_HEAD_H = 44
-export const FILE_BODY_EST = 240
-/** The pane's height while it cannot be measured, so the first files are read. */
-const DEFAULT_VIEW_H = 600
 
 interface FileItem {
   kind?: 'json' | 'text' | 'none'
@@ -61,14 +56,6 @@ function cutNote(item: FileItem): string | null {
   return null
 }
 
-interface View {
-  top: number
-  height: number
-  listTop: number
-  /** The pane was found and measured: until then nothing is known to be in view. */
-  measured: boolean
-}
-
 export function FilesView({ renderJson, renderText, settled }: {
   /** The block view's own renderers, so a file reads like the blocks around it. */
   renderJson: (value: unknown) => ReactNode
@@ -88,96 +75,64 @@ export function FilesView({ renderJson, renderText, settled }: {
     }
   }, [permitted, identityKey, dir])
 
-  /* Sections the reader folded, and the measured heights, start over with another entry. */
+  /* Sections the reader folded start over with another entry. */
   const [closed, setClosed] = useState<Record<number, boolean>>({})
-  const heights = useRef(new Map<number, number>())
   const seen = useRef(identityKey)
   useEffect(() => {
     if (seen.current !== identityKey) {
       seen.current = identityKey
-      heights.current = new Map()
       setClosed({})
     }
   }, [identityKey])
 
-  /* The pane that scrolls this list: its viewport decides which files are read.
-     The list's own place is measured again whenever it may have moved -- the
-     raw record above it arrives later and grows as its tree is opened -- so a
-     list measured before the record arrived is not read at the wrong height. */
+  /* Where each file stands is read off the page, never added up: a section
+     grows and shrinks as the tree inside it opens and folds, the window's
+     width reflows it, and the list's own gaps count. What changes the page
+     without changing this component -- the pane scrolled or resized, the list
+     or the record above it resized -- asks for one more look. */
   const box = useRef<HTMLDivElement>(null)
-  const [view, setView] = useState<View>({ top: 0, height: 0, listTop: 0, measured: false })
-  const measure = useRef<() => void>(() => {})
+  const [, look] = useState(0)
   useEffect(() => {
     const el = box.current
     const pane = el?.closest<HTMLElement>('.trajectory-pane') ?? null
     if (!el || !pane) return
-    measure.current = (): void => {
-      const listTop = el.offsetTop - pane.offsetTop
-      setView((v) => (v.measured && v.top === pane.scrollTop && v.height === pane.clientHeight && v.listTop === listTop
-        ? v
-        : { top: pane.scrollTop, height: pane.clientHeight, listTop, measured: true }))
-    }
-    const onChange = (): void => { measure.current() }
-    onChange()
-    pane.addEventListener('scroll', onChange, { passive: true })
-    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onChange)
+    const again = (): void => { look((n) => n + 1) }
+    pane.addEventListener('scroll', again, { passive: true })
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(again)
     ro?.observe(pane)
+    ro?.observe(el)
     if (el.parentElement) ro?.observe(el.parentElement)
-    return () => { pane.removeEventListener('scroll', onChange); ro?.disconnect(); measure.current = () => {} }
+    return () => { pane.removeEventListener('scroll', again); ro?.disconnect() }
   }, [identityKey])
-  useLayoutEffect(() => { measure.current() })
 
   const items = dir?.items ?? []
   const open = (file: FileEntry): boolean => closed[file.index] !== true
-  const sectionH = (file: FileEntry): number =>
-    heights.current.get(file.index) ?? (open(file) ? FILE_HEAD_H + FILE_BODY_EST : FILE_HEAD_H)
 
-  /* Measured once they stand; a changed height redraws once. */
-  const [, remeasured] = useState(0)
-  const drawnKey = items.map((f) => `${f.index}${open(f) ? (details.fileBody(f.index, s) ? 'b' : 'o') : 'c'}`).join(',')
-  useLayoutEffect(() => {
+  /* The open sections whose box meets the pane's viewport, with the overscan. */
+  const inView = (): FileEntry[] => {
     const el = box.current
-    if (!el) return
-    let changed = false
-    for (const node of el.querySelectorAll<HTMLElement>('[data-file-index]')) {
-      const h = node.offsetHeight
-      const index = Number(node.dataset.fileIndex)
-      if (h > 0 && Number.isFinite(index) && Math.abs((heights.current.get(index) ?? 0) - h) > 1) {
-        heights.current.set(index, h)
-        changed = true
-      }
-    }
-    if (changed) remeasured((n) => n + 1)
-  }, [drawnKey])
-
-  /* The open sections whose extent meets a viewport, with the overscan. */
-  const inViewOf = (at: View): FileEntry[] => {
-    const viewH = at.height > 0 ? at.height : DEFAULT_VIEW_H
-    const from = at.top - at.listTop - FILES_OVERSCAN_PX
-    const to = at.top - at.listTop + viewH + FILES_OVERSCAN_PX
+    const pane = el?.closest<HTMLElement>('.trajectory-pane') ?? null
+    if (!el || !pane) return []
+    const frame = pane.getBoundingClientRect()
+    const top = frame.top - FILES_OVERSCAN_PX
+    const bottom = frame.top + pane.clientHeight + FILES_OVERSCAN_PX
+    const byIndex = new Map(items.map((f) => [f.index, f]))
     const out: FileEntry[] = []
-    let y = 0
-    for (const file of items) {
-      const h = sectionH(file)
-      if (open(file) && y + h > from && y < to) out.push(file)
-      y += h
+    for (const node of el.querySelectorAll<HTMLElement>('[data-file-index]')) {
+      const file = byIndex.get(Number(node.dataset.fileIndex))
+      if (!file || !open(file)) continue
+      const r = node.getBoundingClientRect()
+      if (r.bottom > top && r.top < bottom) out.push(file)
     }
     return out
   }
 
   /* Read what is in view and not held, released or failed, two at a time --
-     once the list's place is known and the record above it has arrived. The
-     place is taken from the page as it stands now: the commit that brought
-     the record has moved the list, and the measured state has not caught up. */
+     once the record above has arrived, so the list stands where it will stay. */
   useEffect(() => {
-    if (!permitted || !view.measured || !settled) return
-    const el = box.current
-    const pane = el?.closest<HTMLElement>('.trajectory-pane') ?? null
-    const now: View = el && pane
-      ? { top: pane.scrollTop, height: pane.clientHeight, listTop: el.offsetTop - pane.offsetTop, measured: true }
-      : view
+    if (!permitted || !settled) return
     let reading = items.filter((f) => details.fileLoading(f.index, s)).length
-    for (const file of inViewOf(now)) {
+    for (const file of inView()) {
       if (reading >= FILES_CONCURRENCY) break
       if (details.fileBody(file.index, s) || details.fileLoading(file.index, s)
         || details.isReleased(file.index, s) || details.fileFault(file.index, s) !== null) continue

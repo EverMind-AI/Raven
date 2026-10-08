@@ -513,7 +513,72 @@ describe('relations, usage and skills', () => {
 })
 
 
+/* A layout as a browser would give the file sections: each its height, the
+   list's gap between them, the pane's scroll moving them. Section heights are
+   read through `heights` each time, so a test can fold or reflow one. */
+function layOut(pane: HTMLElement, heights: () => number[], gap = 14): () => void {
+  const original = HTMLElement.prototype.getBoundingClientRect
+  const rect = (top: number, height: number): DOMRect =>
+    ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement): DOMRect {
+    if (this === pane) return rect(0, pane.clientHeight)
+    const index = this.dataset?.fileIndex
+    if (index === undefined) return original.call(this)
+    const hs = heights()
+    let top = 0
+    for (let k = 0; k < Number(index); k += 1) top += (hs[k] ?? 100) + gap
+    return rect(top - pane.scrollTop, hs[Number(index)] ?? 100)
+  }
+  return () => { HTMLElement.prototype.getBoundingClientRect = original }
+}
+
+/* A resize observer the test fires by hand, as the browser would on a size change. */
+let observers: Array<{ fire: () => void }> = []
+function fakeResizeObserver(): void {
+  observers = []
+  /* Only what is observed is fired: an observer created and never pointed at anything stays silent. */
+  vi.stubGlobal('ResizeObserver', class {
+    private readonly entry: { fire: () => void }
+    constructor(callback: () => void) { this.entry = { fire: () => callback() } }
+    observe(): void { if (!observers.includes(this.entry)) observers.push(this.entry) }
+    unobserve(): void {}
+    disconnect(): void { observers = observers.filter((o) => o !== this.entry) }
+  })
+}
+
+describe('a message list whose rows change size by themselves', () => {
+  it('measures a row again when it shrinks by itself, and draws the rows that come into view', async () => {
+    fakeResizeObserver()
+    const heights = new Map<number, number>([[0, 4000]])
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) { const i = this.dataset?.index; return i === undefined ? 0 : (heights.get(Number(i)) ?? 100) },
+    })
+    try {
+      await ready()
+      act(() => { list.set({ ...list.get(), ...list.rowsOf([{ ...row, meta: { delta: 'first', new_from: 0, message_count: 40 } }]) }) })
+      render(<BlockView block={descriptor.blocks[0]!} />, { container: paneOf(300) })
+      await flush()
+      await answer(body('outline', { items: outlineItems(0, 40), offset: 0 }, { renderer: 'items', total_items: 40 }))
+      await answer(body('messages', { items: messages(0, 20), offset: 0 }, { renderer: 'messages', next_cursor: 'c20', total_items: 40 }))
+      await flush()
+      /* The first message is tall: it fills the window alone. */
+      expect([...document.querySelectorAll('.trajectory-msgs [data-index]')].map((e) => (e as HTMLElement).dataset.index)).toEqual(['0'])
+      /* Its tree folds: nothing in the list re-rendered, but the browser says the list resized. */
+      heights.set(0, 100)
+      act(() => { for (const o of [...observers]) o.fire() })
+      await flush()
+      expect(document.querySelectorAll('.trajectory-msgs [data-index]').length).toBeGreaterThan(3)
+    } finally {
+      if (original) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', original)
+    }
+  })
+})
+
 describe('the files under the raw record', () => {
+  let undo: (() => void) | null = null
+  afterEach(() => { undo?.(); undo = null })
   const withFiles: TrajectoryDetailResult = {
     ...descriptor,
     blocks: [
@@ -529,11 +594,12 @@ describe('the files under the raw record', () => {
     body('file', { items: [{ index, key: `f${index}.artifact_path`, path: `/logs/f${index}.json`, size: 2048, kind: 'json', value: { n: index }, shown_bytes: 9, truncated: null, ...over }], offset: index }, { renderer: 'items', total_items: 20 })
   const rawBlock = () => withFiles.blocks[1]!
 
-  async function openRaw(height: number, files: number): Promise<HTMLElement> {
+  async function openRaw(height: number, files: number, heights: () => number[] = () => []): Promise<HTMLElement> {
     detailResult = { ...withFiles, blocks: withFiles.blocks.map((b) => (b.id === 'files' || b.id === 'file' ? { ...b, total_items: files } : b)) }
     await ready()
     act(() => { details.setTab('r0', 'raw') })
     const pane = paneOf(height)
+    undo = layOut(pane, heights)
     render(<BlockView block={rawBlock()} />, { container: pane })
     await flush()
     await settleCall('raw|', { ok: body('raw', { value: { attributes: { 'f0.artifact_path': '/logs/f0.json' } } }, { renderer: 'json' }) })
@@ -545,7 +611,9 @@ describe('the files under the raw record', () => {
     detailResult = withFiles
     await ready()
     act(() => { details.setTab('r0', 'raw') })
-    render(<BlockView block={rawBlock()} />, { container: paneOf(300) })
+    const pane = paneOf(300)
+    undo = layOut(pane, () => [])
+    render(<BlockView block={rawBlock()} />, { container: pane })
     await flush()
     /* The directory lands before the record: its headings are drawn, nothing is read yet. */
     await settleCall('files|', { ok: directory(3) })
@@ -556,7 +624,8 @@ describe('the files under the raw record', () => {
   })
 
   it('heads every file, reads only the open ones in view two at a time, and reads the others when the pane scrolls to them', async () => {
-    const pane = await openRaw(300, 20)
+    let folded = new Set<number>()
+    const pane = await openRaw(300, 20, () => Array.from({ length: 20 }, (_, k) => (folded.has(k) ? 40 : 280)))
     expect([...document.querySelectorAll('.trajectory-file-h')].map((h) => h.textContent)).toEqual(Array.from({ length: 20 }, (_, k) => `f${k}.artifact_path`))
     expect(q('.trajectory-file-path')?.textContent).toBe('/logs/f0.json · 2.0 KiB')
     expect(pendingFiles()).toEqual(['file|c0', 'file|c1'])
@@ -571,6 +640,7 @@ describe('the files under the raw record', () => {
     expect(q('[data-file-index="0"] .trajectory-json')).not.toBeNull()
     /* A folded section is not read; scrolling brings the next ones in. */
     act(() => { fireEvent.click(q('[data-file-index="3"] .trajectory-file-toggle') as HTMLElement) })
+    folded = new Set([3])
     pane.scrollTop = 600
     act(() => { fireEvent.scroll(pane) })
     await flush()
@@ -647,5 +717,55 @@ describe('the files under the raw record', () => {
     await flush()
     expect(q('[data-file-index="0"] .trajectory-json')).not.toBeNull()
     expect(blockCalls.filter((c) => c === 'file|c0')).toHaveLength(1)
+  })
+
+  it('counts the list\'s gaps: at the bottom of a hundred files, the last ones are read', async () => {
+    const pane = await openRaw(300, 100, () => Array.from({ length: 100 }, () => 100))
+    /* The top is read first: the sections in view and the overscan, two at a time. */
+    for (let guard = 0; pendingFiles().length && guard < 20; guard += 1) {
+      const call = pendingFiles()[0]!
+      await settleCall(call, { ok: fileOf(Number(call.slice('file|c'.length))) })
+    }
+    expect(blockCalls.filter((c) => c.startsWith('file|'))).toEqual(['file|c0', 'file|c1', 'file|c2', 'file|c3', 'file|c4', 'file|c5', 'file|c6'])
+    /* The list's real bottom, gaps included: sections 93 to 99 are in view or within the overscan. */
+    pane.scrollTop = 100 * 100 + 99 * 14 - 300
+    act(() => { fireEvent.scroll(pane) })
+    await flush()
+    expect(pendingFiles()).toEqual(['file|c93', 'file|c94'])
+  })
+
+  it('reads what comes into view when a file\'s own tree folds, or the window\'s width reflows it, without a scroll', async () => {
+    fakeResizeObserver()
+    const heights = [4000, 100, 100]
+    await openRaw(300, 3, () => heights)
+    expect(pendingFiles()).toEqual(['file|c0'])
+    await settleCall('file|c0', { ok: fileOf(0) })
+    expect(pendingFiles()).toEqual([])
+    /* The tree inside the first file folds: the list shrinks, the browser says so, and the next files are read. */
+    heights[0] = 100
+    act(() => { for (const o of [...observers]) o.fire() })
+    await flush()
+    expect(pendingFiles()).toEqual(['file|c1', 'file|c2'])
+    await settleCall('file|c1', { ok: fileOf(1) })
+    await settleCall('file|c2', { ok: fileOf(2) })
+    expect(blockCalls.filter((c) => c.startsWith('file|'))).toEqual(['file|c0', 'file|c1', 'file|c2'])
+  })
+
+  it('does not read a file a reflow pushed out of view', async () => {
+    fakeResizeObserver()
+    /* Wide, the first file is short and the second is in view; narrowed before anything is read, the first wraps tall. */
+    const heights = [100, 100, 100]
+    detailResult = { ...withFiles, blocks: withFiles.blocks.map((b) => (b.id === 'files' || b.id === 'file' ? { ...b, total_items: 3 } : b)) }
+    await ready()
+    act(() => { details.setTab('r0', 'raw') })
+    const pane = paneOf(300)
+    undo = layOut(pane, () => heights)
+    render(<BlockView block={rawBlock()} />, { container: pane })
+    await flush()
+    await settleCall('files|', { ok: directory(3) })
+    heights[0] = 5000
+    act(() => { for (const o of [...observers]) o.fire() })
+    await settleCall('raw|', { ok: body('raw', { value: { attributes: {} } }, { renderer: 'json' }) })
+    expect(pendingFiles()).toEqual(['file|c0'])
   })
 })

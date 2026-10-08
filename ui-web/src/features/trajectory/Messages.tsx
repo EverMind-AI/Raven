@@ -18,7 +18,7 @@
  * whose page the cache let go folds again until the reader asks for it.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { t } from '../../i18n/t'
 import * as details from './detailStore'
@@ -177,10 +177,11 @@ export function MessagesView({ block, entryId, render }: {
      height -- and a changed height redraws once. The rows not drawn are estimated from the
      measured ones of their kind, so the list's extent settles after the first screen. The key
      names what is drawn (which rows, folded, open or with a body), so a paint that changed
-     nothing of that is not measured again. */
+     nothing of that is not measured again; a row that changed size by itself -- a tree in a
+     body opened or folded, the pane's width reflowing it -- is caught by the list's resize. */
   const [, remeasured] = useState(0)
   const drawnKey = shown.map((item) => `${item.index}${drawnOpen(item) ? (record && details.pageHolding(record, item.index) ? 'b' : 'o') : 'f'}`).join(',')
-  useLayoutEffect(() => {
+  const measureRows = useCallback((): void => {
     const el = box.current
     if (!el) return
     let changed = false
@@ -204,7 +205,15 @@ export function MessagesView({ block, entryId, render }: {
       changed = true
     }
     if (changed) remeasured((n) => n + 1)
-  }, [drawnKey])
+  }, [])
+  useLayoutEffect(() => { measureRows() }, [drawnKey, measureRows])
+  useEffect(() => {
+    const el = box.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => { measureRows() })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [identityKey, measureRows])
 
   /* A body is read with the page it sits on: the page is asked for by the
      row that starts it, so twenty open rows of one page ask once. */
