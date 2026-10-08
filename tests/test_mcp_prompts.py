@@ -23,9 +23,16 @@ class _Session:
         self._fail = fail
         self.calls: list[tuple[str, dict | None]] = []
 
-    async def list_prompts(self):
+    async def list_prompts(self, params=None):
         if self._fail:
             raise self._fail
+        # Support paginated responses: if prompts is a list of lists, treat each
+        # inner list as a page. Otherwise, return all as a single page.
+        if self._prompts and isinstance(self._prompts[0], list):
+            # Multi-page: we need to track which page we're on
+            # For simplicity in tests, we'll just return the first page
+            # and the test will need to use _PaginatedSession
+            return types.ListPromptsResult(prompts=self._prompts[0], nextCursor=None)
         return types.ListPromptsResult(prompts=self._prompts)
 
     async def get_prompt(self, name, arguments=None):
@@ -33,6 +40,50 @@ class _Session:
         if self._fail:
             raise self._fail
         return self._result
+
+
+class _PaginatedSession(_Session):
+    """Session that simulates paginated list_prompts responses."""
+
+    def __init__(
+        self,
+        *,
+        pages: list[list[types.Prompt]],
+        fail: Exception | None = None,
+    ) -> None:
+        # Don't call super().__init__ since we have a different structure
+        self._pages = pages
+        self._fail = fail
+        self._page_index = 0
+        self.calls: list[tuple[str, dict | None]] = []
+
+    async def list_prompts(self, params=None):
+        if self._fail:
+            raise self._fail
+        # Get cursor from params
+        cursor = getattr(params, "cursor", None) if params else None
+
+        # If cursor is provided, advance to that page
+        if cursor is not None:
+            try:
+                self._page_index = int(cursor)
+            except ValueError:
+                self._page_index = 0
+
+        if self._page_index >= len(self._pages):
+            return types.ListPromptsResult(prompts=[], nextCursor=None)
+
+        current_page = self._pages[self._page_index]
+        next_cursor = str(self._page_index + 1) if self._page_index + 1 < len(self._pages) else None
+        self._page_index += 1
+
+        return types.ListPromptsResult(prompts=current_page, nextCursor=next_cursor)
+
+    async def get_prompt(self, name, arguments=None):
+        self.calls.append((name, arguments))
+        if self._fail:
+            raise self._fail
+        return None
 
 
 class _Manager:
@@ -199,3 +250,88 @@ class TestTheSchema:
         by_name = {t.name: t for t in prompt_tools(mgr)}
         assert by_name["list_mcp_prompts"].parameters["required"] == []
         assert by_name["get_mcp_prompt"].parameters["required"] == ["server", "name"]
+
+
+class TestPagination:
+    """Tests for paginated list_prompts handling."""
+
+    def _prompts_page(self, count: int, start: int = 0) -> list[types.Prompt]:
+        """Generate a page of prompts."""
+        return [
+            types.Prompt(
+                name=f"prompt_{i}",
+                description=f"Description for prompt {i}",
+                arguments=[types.PromptArgument(name="arg", description="test", required=False)],
+            )
+            for i in range(start, start + count)
+        ]
+
+    async def test_single_page_returns_all_prompts(self):
+        """A single page returns all prompts without pagination."""
+        page = self._prompts_page(5)
+        mgr = _Manager({"gh": _PaginatedSession(pages=[page])})
+        rows = json.loads(await ListMcpPromptsTool(mgr).execute())
+        assert len(rows) == 5
+        assert rows[0]["name"] == "prompt_0"
+        assert rows[4]["name"] == "prompt_4"
+
+    async def test_multiple_pages_are_aggregated(self):
+        """Multiple pages are aggregated into a single result."""
+        page1 = self._prompts_page(3, 0)
+        page2 = self._prompts_page(3, 3)
+        page3 = self._prompts_page(2, 6)  # Last page with fewer items
+
+        mgr = _Manager({"gh": _PaginatedSession(pages=[page1, page2, page3])})
+        rows = json.loads(await ListMcpPromptsTool(mgr).execute())
+
+        assert len(rows) == 8, f"Expected 8 prompts, got {len(rows)}"
+        assert rows[0]["name"] == "prompt_0"
+        assert rows[7]["name"] == "prompt_7"
+
+    async def test_empty_page_ends_pagination(self):
+        """An empty page ends the pagination walk."""
+        page1 = self._prompts_page(2)
+        page2 = []  # Empty page
+        page3 = self._prompts_page(2, 5)  # Should not be reached
+
+        mgr = _Manager({"gh": _PaginatedSession(pages=[page1, page2, page3])})
+        rows = json.loads(await ListMcpPromptsTool(mgr).execute())
+
+        assert len(rows) == 2, f"Expected 2 prompts, got {len(rows)}"
+        assert rows[0]["name"] == "prompt_0"
+        assert rows[1]["name"] == "prompt_1"
+
+    async def test_repeated_cursor_ends_pagination(self):
+        """A repeated cursor ends the pagination walk (server bug guard)."""
+        # This test simulates a buggy server that keeps returning the same cursor
+        page1 = self._prompts_page(2)
+        page2 = self._prompts_page(2, 2)
+
+        # Custom session that repeats the cursor
+        class RepeatingCursorSession(_PaginatedSession):
+            async def list_prompts(self, params=None):
+                if self._fail:
+                    raise self._fail
+                cursor = getattr(params, "cursor", None) if params else None
+
+                if cursor is not None:
+                    try:
+                        self._page_index = int(cursor)
+                    except ValueError:
+                        self._page_index = 0
+
+                if self._page_index >= len(self._pages):
+                    return types.ListPromptsResult(prompts=[], nextCursor=None)
+
+                current_page = self._pages[self._page_index]
+                # Bug: always return cursor "0" instead of incrementing
+                next_cursor = "0" if self._page_index == 0 else None
+                self._page_index += 1
+
+                return types.ListPromptsResult(prompts=current_page, nextCursor=next_cursor)
+
+        mgr = _Manager({"gh": RepeatingCursorSession(pages=[page1, page2])})
+        rows = json.loads(await ListMcpPromptsTool(mgr).execute())
+
+        # Should only get first page because cursor "0" repeats
+        assert len(rows) == 2, f"Expected 2 prompts (first page only), got {len(rows)}"

@@ -19,7 +19,7 @@ other tool result gets, with no special handling here.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from loguru import logger
 
@@ -27,7 +27,51 @@ from raven.contracts.tool import Tool, ToolResult
 from raven.utils.images import image_block, text_block
 
 if TYPE_CHECKING:
+
     from raven.mcp.manager import MCPConnectionManager
+
+# ── pagination helper ──────────────────────────────────────────────
+# Shared by resources/list, resources/templates/list, and prompts/list.
+# Mirrors the tools/list walk in client.py: iterate until cursor is empty or repeats.
+T = TypeVar("T")
+PageResult = TypeVar("PageResult")
+
+
+async def _walk_paginated_list(
+    *,
+    list_method: Callable[[Any], Awaitable[PageResult]],
+    item_extractor: Callable[[PageResult], list[T]],
+    cursor_getter: Callable[[PageResult], str | None],
+) -> list[T]:
+    """Walk an MCP list operation page by page, following `nextCursor`.
+
+    Args:
+        list_method: Async callable taking `PaginatedRequestParams(cursor=...)`.
+        item_extractor: Function to get the list of items from a page result.
+        cursor_getter: Function to get the next cursor string from a page result.
+
+    Returns:
+        Aggregated list of all items across all pages.
+
+    Stops when the cursor is empty/None or when a cursor repeats (server bug
+    guard against infinite paging).
+    """
+    from mcp import types as mcp_types
+
+    all_items: list[T] = []
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+
+    while True:
+        page = await list_method(params=mcp_types.PaginatedRequestParams(cursor=cursor))
+        all_items.extend(item_extractor(page))
+        cursor = cursor_getter(page)
+        if not cursor or cursor in seen_cursors:
+            break
+        seen_cursors.add(cursor)
+
+    return all_items
+
 
 LIST_RESOURCES_NAME = "list_mcp_resources"
 LIST_RESOURCE_TEMPLATES_NAME = "list_mcp_resource_templates"
@@ -127,12 +171,18 @@ class ListMcpResourcesTool(_ResourceTool):
                 errors.append(refusal)
                 continue
             try:
-                result = await _with_timeout(session.list_resources())
+                resources = await _with_timeout(
+                    _walk_paginated_list(
+                        list_method=session.list_resources,
+                        item_extractor=lambda p: p.resources,
+                        cursor_getter=lambda p: p.nextCursor,
+                    )
+                )
             except Exception as exc:  # noqa: BLE001 -- one bad server must not hide the others
                 logger.warning("MCP resources: list on '{}' failed: {}", target, exc)
                 errors.append(f"Error: listing '{target}' failed: {type(exc).__name__}.")
                 continue
-            for res in result.resources:
+            for res in resources:
                 rows.append(
                     {
                         # Carried on every row, not just when several servers were
@@ -186,12 +236,18 @@ class ListMcpResourceTemplatesTool(_ResourceTool):
                 errors.append(refusal)
                 continue
             try:
-                result = await _with_timeout(session.list_resource_templates())
+                templates = await _with_timeout(
+                    _walk_paginated_list(
+                        list_method=session.list_resource_templates,
+                        item_extractor=lambda p: p.resourceTemplates,
+                        cursor_getter=lambda p: p.nextCursor,
+                    )
+                )
             except Exception as exc:  # noqa: BLE001 -- see ListMcpResourcesTool
                 logger.warning("MCP resources: template list on '{}' failed: {}", target, exc)
                 errors.append(f"Error: listing templates on '{target}' failed: {type(exc).__name__}.")
                 continue
-            for tpl in result.resourceTemplates:
+            for tpl in templates:
                 rows.append(
                     {
                         "server": target,

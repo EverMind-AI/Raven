@@ -36,12 +36,12 @@ class _Session:
         self._contents = list(contents)
         self._fail = fail
 
-    async def list_resources(self):
+    async def list_resources(self, params=None):
         if self._fail:
             raise self._fail
         return types.ListResourcesResult(resources=self._resources)
 
-    async def list_resource_templates(self):
+    async def list_resource_templates(self, params=None):
         if self._fail:
             raise self._fail
         return types.ListResourceTemplatesResult(resourceTemplates=self._templates)
@@ -50,6 +50,63 @@ class _Session:
         if self._fail:
             raise self._fail
         return types.ReadResourceResult(contents=self._contents)
+
+
+class _PaginatedResourcesSession(_Session):
+    """Session that simulates paginated list_resources/list_resource_templates responses."""
+
+    def __init__(
+        self,
+        *,
+        resource_pages: list[list[types.Resource]] | None = None,
+        template_pages: list[list[types.ResourceTemplate]] | None = None,
+        fail: Exception | None = None,
+    ) -> None:
+        self._resource_pages = resource_pages or [[]]
+        self._template_pages = template_pages or [[]]
+        self._fail = fail
+        self._resource_page_index = 0
+        self._template_page_index = 0
+
+    async def list_resources(self, params=None):
+        if self._fail:
+            raise self._fail
+        cursor = getattr(params, "cursor", None) if params else None
+        if cursor is not None:
+            try:
+                self._resource_page_index = int(cursor)
+            except ValueError:
+                self._resource_page_index = 0
+
+        if self._resource_page_index >= len(self._resource_pages):
+            return types.ListResourcesResult(resources=[], nextCursor=None)
+
+        current_page = self._resource_pages[self._resource_page_index]
+        next_cursor = (
+            str(self._resource_page_index + 1) if self._resource_page_index + 1 < len(self._resource_pages) else None
+        )
+        self._resource_page_index += 1
+        return types.ListResourcesResult(resources=current_page, nextCursor=next_cursor)
+
+    async def list_resource_templates(self, params=None):
+        if self._fail:
+            raise self._fail
+        cursor = getattr(params, "cursor", None) if params else None
+        if cursor is not None:
+            try:
+                self._template_page_index = int(cursor)
+            except ValueError:
+                self._template_page_index = 0
+
+        if self._template_page_index >= len(self._template_pages):
+            return types.ListResourceTemplatesResult(resourceTemplates=[], nextCursor=None)
+
+        current_page = self._template_pages[self._template_page_index]
+        next_cursor = (
+            str(self._template_page_index + 1) if self._template_page_index + 1 < len(self._template_pages) else None
+        )
+        self._template_page_index += 1
+        return types.ListResourceTemplatesResult(resourceTemplates=current_page, nextCursor=next_cursor)
 
 
 class _Manager:
@@ -231,3 +288,117 @@ class TestTheSchema:
         assert "read_mcp_resource" in by_name["list_mcp_resources"].description
         assert "list_mcp_resource_templates" in by_name["list_mcp_resources"].description
         assert "list_mcp_resources" in by_name["read_mcp_resource"].description
+
+
+class TestPagination:
+    """Tests for paginated list_resources and list_resource_templates handling."""
+
+    def _resource_page(self, count: int, start: int = 0) -> list[types.Resource]:
+        """Generate a page of resources."""
+        return [
+            types.Resource(
+                uri=AnyUrl(f"file:///resource_{i}"),
+                name=f"resource_{i}",
+                mimeType="text/plain",
+                description=f"Resource {i}",
+            )
+            for i in range(start, start + count)
+        ]
+
+    def _template_page(self, count: int, start: int = 0) -> list[types.ResourceTemplate]:
+        """Generate a page of resource templates."""
+        return [
+            types.ResourceTemplate(
+                uriTemplate=f"file:///template_{i}/{{param}}",
+                name=f"template_{i}",
+                mimeType="text/plain",
+                description=f"Template {i}",
+            )
+            for i in range(start, start + count)
+        ]
+
+    async def test_single_page_resources_returns_all(self):
+        """A single page returns all resources without pagination."""
+        page = self._resource_page(5)
+        mgr = _Manager({"a": _PaginatedResourcesSession(resource_pages=[page])})
+        rows = json.loads(await ListMcpResourcesTool(mgr).execute())
+        assert len(rows) == 5
+        assert rows[0]["uri"] == "file:///resource_0"
+        assert rows[4]["uri"] == "file:///resource_4"
+
+    async def test_multiple_pages_resources_are_aggregated(self):
+        """Multiple resource pages are aggregated into a single result."""
+        page1 = self._resource_page(3, 0)
+        page2 = self._resource_page(3, 3)
+        page3 = self._resource_page(2, 6)
+
+        mgr = _Manager({"a": _PaginatedResourcesSession(resource_pages=[page1, page2, page3])})
+        rows = json.loads(await ListMcpResourcesTool(mgr).execute())
+
+        assert len(rows) == 8, f"Expected 8 resources, got {len(rows)}"
+        assert rows[0]["uri"] == "file:///resource_0"
+        assert rows[7]["uri"] == "file:///resource_7"
+
+    async def test_single_page_templates_returns_all(self):
+        """A single page returns all templates without pagination."""
+        page = self._template_page(4)
+        mgr = _Manager({"a": _PaginatedResourcesSession(template_pages=[page])})
+        rows = json.loads(await ListMcpResourceTemplatesTool(mgr).execute())
+        assert len(rows) == 4
+        assert rows[0]["uriTemplate"] == "file:///template_0/{param}"
+        assert rows[3]["uriTemplate"] == "file:///template_3/{param}"
+
+    async def test_multiple_pages_templates_are_aggregated(self):
+        """Multiple template pages are aggregated into a single result."""
+        page1 = self._template_page(2, 0)
+        page2 = self._template_page(3, 2)
+
+        mgr = _Manager({"a": _PaginatedResourcesSession(template_pages=[page1, page2])})
+        rows = json.loads(await ListMcpResourceTemplatesTool(mgr).execute())
+
+        assert len(rows) == 5, f"Expected 5 templates, got {len(rows)}"
+        assert rows[0]["uriTemplate"] == "file:///template_0/{param}"
+        assert rows[4]["uriTemplate"] == "file:///template_4/{param}"
+
+    async def test_empty_page_ends_pagination(self):
+        """An empty page ends the pagination walk."""
+        page1 = self._resource_page(2)
+        page2 = []  # Empty page
+
+        mgr = _Manager({"a": _PaginatedResourcesSession(resource_pages=[page1, page2])})
+        rows = json.loads(await ListMcpResourcesTool(mgr).execute())
+
+        assert len(rows) == 2, f"Expected 2 resources, got {len(rows)}"
+
+    async def test_repeated_cursor_ends_pagination(self):
+        """A repeated cursor ends the pagination walk (server bug guard)."""
+
+        # Custom session that repeats the cursor
+        class RepeatingCursorSession(_PaginatedResourcesSession):
+            async def list_resources(self, params=None):
+                if self._fail:
+                    raise self._fail
+                cursor = getattr(params, "cursor", None) if params else None
+                if cursor is not None:
+                    try:
+                        self._resource_page_index = int(cursor)
+                    except ValueError:
+                        self._resource_page_index = 0
+
+                if self._resource_page_index >= len(self._resource_pages):
+                    return types.ListResourcesResult(resources=[], nextCursor=None)
+
+                current_page = self._resource_pages[self._resource_page_index]
+                # Bug: always return cursor "0" instead of incrementing
+                next_cursor = "0" if self._resource_page_index == 0 else None
+                self._resource_page_index += 1
+                return types.ListResourcesResult(resources=current_page, nextCursor=next_cursor)
+
+        page1 = self._resource_page(2)
+        page2 = self._resource_page(2, 2)
+
+        mgr = _Manager({"a": RepeatingCursorSession(resource_pages=[page1, page2])})
+        rows = json.loads(await ListMcpResourcesTool(mgr).execute())
+
+        # Should only get first page because cursor "0" repeats
+        assert len(rows) == 2, f"Expected 2 resources (first page only), got {len(rows)}"

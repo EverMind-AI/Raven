@@ -22,14 +22,58 @@ that route needs a per-server trust level and this one does not.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from loguru import logger
 
 from raven.contracts.tool import Tool
 
 if TYPE_CHECKING:
+
     from raven.mcp.manager import MCPConnectionManager
+
+# ── pagination helper ──────────────────────────────────────────────
+# Shared by prompts/list. Mirrors the tools/list walk in client.py:
+# iterate until cursor is empty or repeats.
+T = TypeVar("T")
+PageResult = TypeVar("PageResult")
+
+
+async def _walk_paginated_list(
+    *,
+    list_method: Callable[[Any], Awaitable[PageResult]],
+    item_extractor: Callable[[PageResult], list[T]],
+    cursor_getter: Callable[[PageResult], str | None],
+) -> list[T]:
+    """Walk an MCP list operation page by page, following `nextCursor`.
+
+    Args:
+        list_method: Async callable taking `PaginatedRequestParams(cursor=...)`.
+        item_extractor: Function to get the list of items from a page result.
+        cursor_getter: Function to get the next cursor string from a page result.
+
+    Returns:
+        Aggregated list of all items across all pages.
+
+    Stops when the cursor is empty/None or when a cursor repeats (server bug
+    guard against infinite paging).
+    """
+    from mcp import types as mcp_types
+
+    all_items: list[T] = []
+    cursor: str | None = None
+    seen_cursors: set[str] = set()
+
+    while True:
+        page = await list_method(params=mcp_types.PaginatedRequestParams(cursor=cursor))
+        all_items.extend(item_extractor(page))
+        cursor = cursor_getter(page)
+        if not cursor or cursor in seen_cursors:
+            break
+        seen_cursors.add(cursor)
+
+    return all_items
+
 
 LIST_PROMPTS_NAME = "list_mcp_prompts"
 GET_PROMPT_NAME = "get_mcp_prompt"
@@ -112,12 +156,18 @@ class ListMcpPromptsTool(_PromptTool):
                 errors.append(refusal)
                 continue
             try:
-                result = await _with_timeout(session.list_prompts())
+                prompts = await _with_timeout(
+                    _walk_paginated_list(
+                        list_method=session.list_prompts,
+                        item_extractor=lambda p: p.prompts,
+                        cursor_getter=lambda p: p.nextCursor,
+                    )
+                )
             except Exception as exc:  # noqa: BLE001 -- one bad server must not hide the others
                 logger.warning("MCP prompts: list on '{}' failed: {}", target, exc)
                 errors.append(f"Error: listing prompts on '{target}' failed: {type(exc).__name__}.")
                 continue
-            for prompt in result.prompts:
+            for prompt in prompts:
                 rows.append(
                     {
                         # On every row, because get_mcp_prompt needs it: a row the
