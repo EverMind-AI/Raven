@@ -73,6 +73,15 @@ describe('settings source', () => {
     ])
   })
 
+  it('reads one provider\'s saved key back on request, and null when it keeps none', async () => {
+    const mod = await load({ 'model.reveal_key': { api_key: 'sk-or-saved' } })
+    expect(await mod.settingsSource.revealKey('openrouter')).toBe('sk-or-saved')
+    expect(seen).toEqual([['model.reveal_key', { slug: 'openrouter' }]])
+
+    const none = await load({ 'model.reveal_key': { api_key: null } })
+    expect(await none.settingsSource.revealKey('openrouter')).toBeNull()
+  })
+
   it('a settings write reloads the config and leaves the provider catalogue alone', async () => {
     /* `model.options` is a live read of every configured vendor -- seconds on
        a home with several -- and no settings key changes what it answers.

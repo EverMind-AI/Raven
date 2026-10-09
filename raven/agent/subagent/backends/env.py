@@ -37,12 +37,25 @@ same profile + rc chain the user's own terminal does.
 
 Known limitation: if the login shell's profile prints a banner to stdout, that
 banner corrupts the first parsed variable. This is not worked around here.
+
+Windows has no login shell to ask: explorer.exe holds the interactive
+environment, and installers refresh a terminal opened afterwards by
+broadcasting WM_SETTINGCHANGE. `_capture_windows` rebuilds PATH from the
+persisted User and Machine stores that broadcast refreshes and keeps every
+other value of raven's own environment. A launch finds a bare program name
+differently there too, so `resolve_program` lives beside the capture whose
+PATH it reads.
 """
 
 from __future__ import annotations
 
+import ntpath
 import os
+import re
+import shutil
 import subprocess
+import sys
+from collections.abc import Mapping
 
 from loguru import logger
 
@@ -61,6 +74,32 @@ _BOOTSTRAP_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # does, and which print nothing of their own on the way. Keyed by basename so a
 # homebrew or nix `$SHELL` path still matches; the path itself is what gets run.
 _DRIVABLE_SHELLS = frozenset({"bash", "zsh"})
+
+
+def _on_windows() -> bool:
+    """Whether this is Windows, the one switch the capture and the launch lookup below read."""
+    return sys.platform == "win32"
+
+
+def resolve_program(argv: list[str], env: Mapping[str, str]) -> list[str]:
+    r"""``argv`` with a bare program name looked up on the PATH of the env the child gets.
+
+    POSIX needs nothing here: its exec resolves the name on that PATH itself.
+    CreateProcess searches the gateway's own PATH instead and never the block it is
+    handed, so on Windows an agent installed after raven started -- found by the
+    refreshed capture and by the probe -- would still not start. The lookup follows
+    CreateProcess's own rule that a name with no extension means ``.exe``, and only
+    a program CreateProcess runs natively is put in its place: CreateProcess never
+    turns a bare name into a ``.cmd`` or ``.bat`` shim, and doing it here would put
+    the shim's arguments, a cli agent's prompt among them, through cmd.exe's parser.
+    """
+    if not _on_windows() or not argv or ntpath.dirname(argv[0]):
+        return argv
+    program = argv[0] if ntpath.splitext(argv[0])[1] else f"{argv[0]}.exe"
+    if ntpath.splitext(program)[1].lower() not in (".exe", ".com"):
+        return argv
+    found = shutil.which(program, path=env.get("PATH"))
+    return [found, *argv[1:]] if found else argv
 
 
 def _login_shell() -> str | None:
@@ -86,7 +125,7 @@ def login_shell_env() -> dict[str, str]:
         return dict(_LOGIN_ENV)
     if _LOGIN_ENV_FAILED:
         return dict(os.environ)
-    captured = _capture(consequence="subagents inherit raven's environment")
+    captured = _capture_now(consequence="subagents inherit raven's environment")
     if captured is None:
         _LOGIN_ENV_FAILED = True
         return dict(os.environ)
@@ -114,11 +153,108 @@ def refresh_login_shell_env() -> bool:
     returns. Returns whether a capture landed.
     """
     global _LOGIN_ENV
-    captured = _capture(consequence="keeping the environment captured earlier")
+    captured = _capture_now(consequence="keeping the environment captured earlier")
     if captured is None:
         return False
     _LOGIN_ENV = captured
     return True
+
+
+def _capture_now(*, consequence: str) -> dict[str, str] | None:
+    """This platform's capture: the registry's PATH on Windows, the login shell elsewhere.
+
+    The first capture and every refresh both come here, so a refresh cannot go
+    looking for a login shell on a host whose first capture never had one.
+    """
+    if _on_windows():
+        return _capture_windows(consequence=consequence)
+    return _capture(consequence=consequence)
+
+
+def _capture_windows(*, consequence: str) -> dict[str, str] | None:
+    r"""Raven's own environment, with the PATH a freshly opened Windows terminal would start with.
+
+    Windows has no login shell to ask: explorer.exe holds the interactive
+    environment, and installers refresh a terminal opened afterwards by
+    broadcasting WM_SETTINGCHANGE (measured 2026-10-08: a `uv tool install`
+    made an agent resolvable from every new terminal minutes before the
+    running gateway, a service with a frozen `os.environ`, could see it --
+    and the WebUI probe answered "not on the login shell PATH" while the
+    file sat on disk).
+
+    Rather than round-trip a PowerShell (which needs quoting, base64, and
+    a WM broadcast), read the persisted stores the shell itself reassembles
+    a terminal from: HKCU\Environment for the user's own variables and
+    HKLM\...\Environment for the machine's.
+
+    Only PATH is taken from them. The rest of a store is what Windows builds an
+    environment *from*, not what it hands a process: ``ComSpec`` and ``TEMP``
+    sit there unexpanded, and the machine's ``USERNAME`` is ``SYSTEM`` until a
+    logon replaces it. Raven's own values are those, already resolved, so the
+    child keeps them -- proxy, temp, SystemRoot and conda included -- under the
+    upper-case names ``os.environ`` gives them on Windows, which is the spelling
+    every reader of this capture asks for.
+
+    ``None`` when neither store can be read, which is the "capture failed"
+    signal the caller falls back on.
+    """
+    import winreg
+
+    def _read_store(hive: int, subkey: str) -> dict[str, str]:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                entries = {}
+                for i in range(winreg.QueryInfoKey(key)[1]):
+                    name, value, _vtype = winreg.EnumValue(key, i)
+                    if name and isinstance(value, str):
+                        entries[name.upper()] = value
+                return entries
+        except OSError as exc:
+            logger.warning(
+                "Windows login environment capture could not read {} ({}); {}",
+                subkey,
+                exc,
+                consequence,
+            )
+            return {}
+
+    machine = _read_store(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+    user = _read_store(winreg.HKEY_CURRENT_USER, r"Environment")
+    if not machine and not user:
+        return None
+
+    captured = dict(os.environ)
+    # Raven's own values outrank the stores' in a stored Path's references: they
+    # are what this logon resolved, and the child carries them beside the result.
+    # A variable an installer added after raven started is only in the stores,
+    # where the user's shadows the machine's, the order Windows layers them in.
+    context = {**machine, **user, **{name.upper(): value for name, value in captured.items()}}
+    context.pop("PATH", None)
+    stored = [path for entries in (machine, user) if (path := _expand_windows(entries.get("PATH", ""), context))]
+    if stored:
+        # Union rather than replace: the machine+user stores are the PATH a
+        # *new* terminal gets, but raven's own launcher's bin (MinGit/usr/bin,
+        # conda) reached this process's PATH without touching the stores, and
+        # a child spawned from the gateway needs every one of them.
+        live = captured.get("PATH", "")
+        captured["PATH"] = ";".join([*stored, live] if live else stored)
+    return captured
+
+
+def _expand_windows(value: str, context: dict[str, str], _depth: int = 0) -> str:
+    r"""``%VAR%`` references in a stored value, resolved against ``context`` whatever their case.
+
+    Stored Path entries hold unexpanded references, and passed on raw they hand
+    the child a PATH whose entries never existed (the gateway's own measured log
+    shows a launcher script dying on `%USERPROFILE%/go/bin`). A reference whose
+    value holds another is resolved again; one with no value stays as written,
+    which is what Windows does with it.
+    """
+    if not value or "%" not in value or _depth > 16:
+        return value
+
+    expanded = re.sub(r"%([^%]+)%", lambda m: context.get(m.group(1).upper(), m.group(0)), value)
+    return value if expanded == value else _expand_windows(expanded, context, _depth + 1)
 
 
 def _capture(*, consequence: str) -> dict[str, str] | None:
@@ -194,4 +330,4 @@ def host_identity_env() -> dict[str, str]:
     return {HOME_ENV_VAR: home} if home else {}
 
 
-__all__ = ["host_identity_env", "login_shell_env", "refresh_login_shell_env"]
+__all__ = ["host_identity_env", "login_shell_env", "refresh_login_shell_env", "resolve_program"]

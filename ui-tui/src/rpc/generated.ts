@@ -3228,6 +3228,23 @@ export interface ModelDisconnectResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelRevealKeyParams".
+ */
+export interface ModelRevealKeyParams {
+  slug: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelRevealKeyResult".
+ */
+export interface ModelRevealKeyResult {
+  /**
+   * The key saved in the provider's own section -- the one `model.save_key` writes -- or null when none is saved there, or when an endpoints list or key list replaces it and requests do not carry it. A key the provider takes from the environment is not read back.
+   */
+  api_key?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ModelFetchModelsParams".
  */
 export interface ModelFetchModelsParams {

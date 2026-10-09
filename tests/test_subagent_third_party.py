@@ -16,7 +16,7 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 from aiohttp import web
@@ -82,6 +82,10 @@ def _clear_login_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(env_mod, "_LOGIN_ENV", None)
     monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
     monkeypatch.setenv("SHELL", "/bin/bash")
+    # These tests capture from a POSIX login shell. On a Windows host the
+    # capture is a registry read instead and their patched `bash -lic ...` would
+    # never run, so the platform is pinned too.
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: False)
 
 
 def test_login_shell_env_parses_nul_separated_output(
@@ -363,6 +367,38 @@ async def test_cli_backend_uses_login_env_and_per_agent_env_wins(
     )
     out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
     assert out == "yes/agent"
+
+
+async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cli launch looks a bare name up on the child's PATH, as the acp launch does.
+
+    CreateProcess searches the gateway's own PATH and never the env block it is
+    handed, so an agent installed after raven started would be found by the probe
+    and still not start.
+    """
+    fresh_bin = tmp_path / "fresh-bin"
+    fresh_bin.mkdir()
+    (fresh_bin / "fresh-agent.exe").write_text("", encoding="utf-8")
+    (fresh_bin / "fresh-agent.exe").chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(fresh_bin)})
+    started: list[tuple[str, ...]] = []
+
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse)
+    be = CliAgentBackend(
+        name="fresh", command="fresh-agent -p {prompt}", registry=InstanceRegistry(path=tmp_path / "inst.json")
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert started == [(str(fresh_bin / "fresh-agent.exe"), "-p", "task")]
 
 
 async def test_cli_backend_exposes_parent_model_binding(

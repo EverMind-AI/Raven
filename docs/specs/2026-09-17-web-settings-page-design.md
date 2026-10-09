@@ -18,7 +18,10 @@ numbers of the architecture note listed under Sources.
   `warning` for such a key and the page shows that text.
 - **masked**: a secret reads back as bullets plus its last four characters
   (provider keys, header values); a plugin credential reads back only as set
-  or not set. The page never sends a masked value as a new value.
+  or not set. The page never sends a masked value as a new value. Amended
+  2026-10-09: a provider's own key is shown in full when the eye beside its
+  field is pressed (model-section design C10), and is still never sent back
+  unedited.
 - **connected**: what `model.options` reports as `on`: a key for key-shaped
   providers, an address for local ones, `authenticated` for OAuth ones. No
   connectivity probe is made; connected means written.
@@ -124,7 +127,7 @@ belong here. `BASE` below is `$(git merge-base HEAD refactor/ui_web_architecture
 | # | Constraint | How to check |
 |---|---|---|
 | C9 | A control never pretends. A reload-only key returns `warning` from `settings.set`, and the toast shows that text instead of "saved". | A46 |
-| C10 | Secrets never round-trip (see "masked" above). | A10, A17, A37 |
+| C10 | Secrets never round-trip (see "masked" above). Amended 2026-10-09: a provider key the eye reveals on request is shown, and still never sent back unedited (model-section design C10). | A10, A17, A37 |
 | C11 | The old page goes, it does not hide. `SettingsPage.tsx`, its test, its snapshot and `ImageModelPicker.tsx` are deleted; no nav entry or component of the dropped pages remains in the bundle; every `gui.set.*` key left in `i18n/messages.json` is referenced by a file outside `ui-web/src/features/settings/` (in `ui-web/src` or `ui-tui/src`). | A50; a one-line script over the remaining `gui.set.*` keys and `grep -rl` outside the settings directory. |
 | C12 | Behaviour behind the dropped pages is untouched on the backend: `permissions.mode`, channel, exec and memory keys stay in the `settings.set` whitelist and keep their tests. | `tests/test_rpc_settings.py` passes with no test removed. |
 | C13 | Skill on/off applies on the next turn without a restart. | A25 |

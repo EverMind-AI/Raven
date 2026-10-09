@@ -150,6 +150,11 @@ export function createModel(_env: FixtureEnv): ModelFixture {
         if (row) row.authenticated = false
         return { disconnected: true }
       },
+      /* A made-up key per connected row, so the eye has something to show. */
+      'model.reveal_key': (p) => {
+        const row = find(p.slug)
+        return { api_key: row && row.authenticated ? `sk-fixture-${row.slug}-0000` : null }
+      },
       'model.add_model': (p) => {
         const params = p as { slug: string; model: string }
         const row = find(params.slug)
