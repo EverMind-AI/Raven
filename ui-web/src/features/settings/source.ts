@@ -43,6 +43,7 @@ let RAW: Record<string, unknown> = {}
 
 let configPathLive = '~/.raven/config.json'
 let everosLive: ResultOf<'settings.everos'> | null = null
+let everosCloudLive: ResultOf<'settings.everosCloud'> | null = null
 
 /* The three members that need page chrome no island owns: the version the foot
    learned from `system.version`, the check that drives the update notice and
@@ -81,6 +82,16 @@ async function loadEveros(): Promise<void> {
     everosLive = await gateway().call('settings.everos', {})
   } catch {
     everosLive = null
+  }
+}
+
+/* The cloud card's probe. Asked beside the roles, and again after its own key
+   is saved -- the answer is a health check of what is on disk now. */
+async function loadEverosCloud(): Promise<void> {
+  try {
+    everosCloudLive = await gateway().call('settings.everosCloud', {})
+  } catch {
+    everosCloudLive = null
   }
 }
 
@@ -154,7 +165,7 @@ export async function loadSettingsWithProviders(): Promise<void> {
 }
 
 export const settingsSnapshot = (): SettingsSnapshot => ({
-  raw: RAW, configPath: configPathLive, everos: everosLive,
+  raw: RAW, configPath: configPathLive, everos: everosLive, everosCloud: everosCloudLive,
   // Both default-scoped on purpose: the settings page describes what new
   // conversations start on, so pairing the default model with the visible
   // session's provider badged the wrong row whenever the two scopes differ.
@@ -237,11 +248,13 @@ export const settingsSource: SettingsSource = {
     await loadSettingsWithProviders()
     void pushPermMode()
     await loadEveros()
+    await loadEverosCloud()
     return settingsSnapshot()
   },
   set: (key, value) => run((async () => {
     const r = await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })
     await loadSettings()
+    if (key.startsWith('plugins.config.everos-cloud-memory.')) await loadEverosCloud()
     void pushPermMode()
     /* Only when the server says a save costs something -- a reload-only key,
        a swapped embedding model that invalidates every stored vector. A plain
@@ -434,5 +447,6 @@ export function _resetForTests(): void {
   RAW = {}
   configPathLive = '~/.raven/config.json'
   everosLive = null
+  everosCloudLive = null
   chrome = { version: () => null, checkUpdate: async () => {}, newerVersion: () => null, upgrade: () => {}, setLang: () => {} }
 }

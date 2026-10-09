@@ -468,3 +468,75 @@ describe('model roles', () => {
       .toEqual(['gui.settings.roles.ctx_auto', 'gui.settings.roles.ctx_pin'])
   })
 })
+
+describe('another memory backend', () => {
+  const cloud = {
+    available: true, selected: true, api_key_set: true, key_source: 'file', base_url: 'http://fake', status: 'ok', hint: 'http://fake',
+  }
+
+  it('hides the three EverOS-only rows when the roles RPC says other_backend, keeps embedding, and draws the card', async () => {
+    const data = snap()
+    data.everos = {
+      ...data.everos,
+      reason: 'other_backend',
+      sections: { embedding: { model: 'text-embedding-3-small', provider: 'openrouter', api_key_set: true } },
+    }
+    data.everosCloud = cloud
+    install(data)
+    await mount('model')
+
+    expect(screen.queryByText(/gui\.settings\.roles\.memllm$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.rerank$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.multimodal$/)).toBe(null)
+    expect(screen.queryByText('gui.settings.roles.everos_missing')).toBe(null)
+    expect(screen.getAllByText(/gui\.settings\.roles\.embedding$/).length).toBeGreaterThan(0)
+    expect(screen.getByText('gui.settings.cloud.title')).toBeTruthy()
+    expect(screen.getByText('gui.settings.cloud.chip_connected')).toBeTruthy()
+    expect(screen.getByText('http://fake')).toBeTruthy()
+  })
+
+  it('keeps the four rows and the not-installed pill when available is false without a reason', async () => {
+    const data = snap()
+    data.everos = { available: false, sections: {}, note: 'not here', config_path: '' }
+    install(data)
+    await mount('model')
+
+    for (const id of ['memllm', 'embedding', 'rerank', 'multimodal']) {
+      expect(screen.getAllByText(new RegExp(`gui\\.settings\\.roles\\.${id}$`)).length).toBeGreaterThan(0)
+    }
+    expect(screen.getAllByText('gui.settings.roles.everos_missing').length).toBe(4)
+    expect(screen.queryByText('gui.settings.cloud.title')).toBe(null)
+  })
+
+  it('draws the cloud card only when the cloud backend is the selected one', async () => {
+    const data = snap()
+    data.everosCloud = { ...cloud, selected: false }
+    install(data)
+    await mount('model')
+    expect(screen.queryByText('gui.settings.cloud.title')).toBe(null)
+  })
+
+  it('the card says a key is needed, then connected, from the probe', async () => {
+    const data = snap()
+    data.everos = { ...data.everos, reason: 'other_backend', sections: {} }
+    data.everosCloud = { ...cloud, api_key_set: false, status: 'missing', hint: 'no API key' }
+    install(data)
+    await mount('model')
+    expect(screen.getByText('gui.settings.cloud.chip_needs_key')).toBeTruthy()
+  })
+
+  it("the card's key row writes plugins.config.everos-cloud-memory.api_key through settings.set", async () => {
+    const data = snap()
+    data.everos = { ...data.everos, reason: 'other_backend', sections: {} }
+    data.everosCloud = cloud
+    const { calls } = install(data)
+    await mount('model')
+
+    const input = screen.getByLabelText('gui.settings.cloud.key') as HTMLInputElement
+    await act(async () => { fireEvent.change(input, { target: { value: 'ecm-key-rot8' } }) })
+    const save = input.closest('.settings-taglist')!.querySelector('button.mini') as HTMLButtonElement
+    await act(async () => { fireEvent.click(save) })
+
+    expect(calls).toContainEqual(['set', { key: 'plugins.config.everos-cloud-memory.api_key', value: 'ecm-key-rot8' }])
+  })
+})

@@ -3360,7 +3360,16 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.trajectory.details.file_cut_file_nosize': 'Shown up to the 512 KiB read limit',
     'gui.trajectory.details.file_cut_response': 'Cut to fit one response; {shown} of {size} shown',
     'gui.trajectory.details.file_cut_response_nosize': 'Cut to fit one response; {shown} shown',
-    'gui.trajectory.details.file_released': 'Released to stay within memory; click to read it again'
+    'gui.trajectory.details.file_released': 'Released to stay within memory; click to read it again',
+    'gui.settings.cloud.title': 'Long-term memory: EverOS Cloud',
+    'gui.settings.cloud.status': 'Status',
+    'gui.settings.cloud.key': 'API key',
+    'gui.settings.cloud.endpoint': 'Endpoint',
+    'gui.settings.cloud.restart_hint': 'A changed key is used by the running gateway after its next start.',
+    'gui.settings.cloud.chip_connected': 'Connected',
+    'gui.settings.cloud.chip_needs_key': 'Needs a key',
+    'gui.settings.cloud.chip_rate_limited': 'Rate limited',
+    'gui.settings.cloud.chip_probing': 'Checking'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -6356,6 +6365,15 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.trajectory.details.file_cut_file_nosize': '只显示前 512 KiB（读取上限）',
     'gui.trajectory.details.file_cut_response': '超过单次响应上限，已截断：显示 {shown} / {size}',
     'gui.trajectory.details.file_cut_response_nosize': '超过单次响应上限，已截断：显示 {shown}',
-    'gui.trajectory.details.file_released': '内容已释放（内存上限），点击重新读取'
+    'gui.trajectory.details.file_released': '内容已释放（内存上限），点击重新读取',
+    'gui.settings.cloud.title': '长期记忆：EverOS Cloud',
+    'gui.settings.cloud.status': '状态',
+    'gui.settings.cloud.key': 'API 密钥',
+    'gui.settings.cloud.endpoint': '服务地址',
+    'gui.settings.cloud.restart_hint': '更换密钥后，运行中的网关下次启动才会使用新密钥。',
+    'gui.settings.cloud.chip_connected': '已连接',
+    'gui.settings.cloud.chip_needs_key': '需要密钥',
+    'gui.settings.cloud.chip_rate_limited': '被限流',
+    'gui.settings.cloud.chip_probing': '检查中'
   }
 } as Record<Locale, Record<string, string>>
