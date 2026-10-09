@@ -29,7 +29,6 @@ import os
 import signal
 import socket
 import subprocess
-import sys
 import time
 import urllib.request
 import webbrowser
@@ -137,39 +136,21 @@ def _pid_is_viewer(pid: int) -> bool:
     """True only when ``pid`` is alive and looks like our node viewer.
 
     A pid from the pid file may have been recycled by the OS for an unrelated
-    process, so liveness alone is never enough to signal it. POSIX checks the
-    command line via ps (``node .../server.js``); native Windows has no
-    ps.exe (the FileNotFoundError would read as "not our viewer" and disable
-    stop / start-reuse entirely), so tasklist filters the pid and the image
-    name must be node — command lines are not visible there.
+    process, so liveness alone is never enough to signal it. The shared process
+    reader must identify both Node and the viewer script on every platform.
     """
-    if sys.platform == "win32":
-        try:
-            out = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"],  # noqa: S607 -- system tool; PATH lookup intended
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout
-        except OSError:
-            return False
-        return "node" in out.lower()
-    try:
-        out = subprocess.run(
-            # -ww: `server.js` sits at the end of the argv, and ps truncates to
-            # $COLUMNS (80 when unset), so without it a deep install reads as not
-            # ours and the viewer is never stopped.
-            ["ps", "-ww", "-p", str(pid), "-o", "command="],  # noqa: S607 -- ps location varies across POSIX; PATH lookup intended
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-    except OSError:
-        return False
+    import re
+
+    from raven.utils.processes import command_line
+
+    out = command_line(pid)
     if not out:
         return False
-    argv0 = out.split()[0]
-    return "node" in Path(argv0).name and "server.js" in out
+    match = re.match(r'"([^"]+)"|(\S+)', out)
+    if match is None:
+        return False
+    name = re.split(r"[/\\]", match.group(1) or match.group(2))[-1].lower()
+    return name in {"node", "node.exe"} and "server.js" in out
 
 
 def _stop_viewer() -> None:

@@ -21,6 +21,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from raven.cli import tracing_commands as tc
@@ -205,68 +206,31 @@ def test_pid_is_viewer_rejects_foreign_process():
     assert tc._pid_is_viewer(os.getpid()) is False
 
 
-class _FakeCompleted:
-    def __init__(self, stdout: str):
-        self.stdout = stdout
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("node /opt/raven/cli/tracing_viewer/server.js", True),
+        ('"C:\\Program Files\\nodejs\\node.exe" "C:\\Raven\\tracing_viewer\\server.js"', True),
+        ('"/opt/node runtime/node" /opt/raven/cli/tracing_viewer/server.js', True),
+        (None, False),
+        ("", False),
+        ("node.exe unrelated.js", False),
+        ("python server.js", False),
+        ("notnode server.js", False),
+    ],
+)
+def test_pid_is_viewer_uses_the_shared_command_line_reader(monkeypatch, line, expected):
+    from raven.utils import processes
 
+    seen: list[int] = []
 
-def _windows_run(calls: list, tasklist_stdout: str):
-    """subprocess.run stand-in for a native Windows host: ps.exe does not
-    exist (FileNotFoundError), tasklist answers with the given output."""
+    def read(pid):
+        seen.append(pid)
+        return line
 
-    def run(argv, **kwargs):
-        calls.append(list(argv))
-        if argv[0] == "ps":
-            raise FileNotFoundError("ps")
-        assert argv[0] == "tasklist"
-        return _FakeCompleted(tasklist_stdout)
-
-    return run
-
-
-def test_pid_is_viewer_windows_detects_node_via_tasklist(monkeypatch):
-    """On win32 the check must not shell out to the missing ps.exe (whose
-    FileNotFoundError used to be swallowed into a blanket False): tasklist
-    filters the pid and a node image means the viewer is alive."""
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr(tc.subprocess, "run", _windows_run(calls, "node.exe                     4242 Console"))
-    assert tc._pid_is_viewer(4242) is True
-    assert calls == [["tasklist", "/FI", "PID eq 4242"]]
-
-
-def test_pid_is_viewer_windows_no_node_match_is_false(monkeypatch):
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr(
-        tc.subprocess,
-        "run",
-        _windows_run(calls, "INFO: No tasks are running which match the specified criteria."),
-    )
-    assert tc._pid_is_viewer(4242) is False
-
-
-def test_pid_is_viewer_windows_tasklist_missing_is_false(monkeypatch):
-    monkeypatch.setattr("sys.platform", "win32")
-
-    def raise_missing(argv, **kwargs):
-        raise FileNotFoundError(argv[0])
-
-    monkeypatch.setattr(tc.subprocess, "run", raise_missing)
-    assert tc._pid_is_viewer(4242) is False
-
-
-def test_pid_is_viewer_posix_keeps_ps_command_check(monkeypatch):
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "linux")
-
-    def run(argv, **kwargs):
-        calls.append(list(argv))
-        return _FakeCompleted("node /opt/raven/cli/tracing_viewer/server.js\n")
-
-    monkeypatch.setattr(tc.subprocess, "run", run)
-    assert tc._pid_is_viewer(4242) is True
-    assert calls and calls[0][0] == "ps"
+    monkeypatch.setattr(processes, "command_line", read)
+    assert tc._pid_is_viewer(4242) is expected
+    assert seen == [4242]
 
 
 def _aged_artifact(state_dir: Path, name: str, text: str) -> Path:
