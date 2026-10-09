@@ -136,8 +136,9 @@ def raven_identity(pid: int) -> Optional[bool]:
     line = command_line(pid)
     if not line:
         return None
-    if re.search(r"(?<![\w/\\.-])-m\s+raven(?![\w.-])", line, re.IGNORECASE):
-        return True
+    module = re.search(r"""(?<![\w/\\.-])-m\s+["']?raven(?![\w.-])["']?(?=\s|$)""", line, re.IGNORECASE)
+    if module is not None:
+        return _has_resident_subcommand(line[module.end() :])
     return _is_console_serve(line)
 
 
@@ -151,7 +152,14 @@ def _is_console_serve(line: str) -> bool:
     """
     import re
 
-    match = re.match(r'.*?(?:^|[/\\])raven(?:\.exe)?"?\s+(\w+)', line, re.IGNORECASE)
+    match = re.match(r'.*?(?:^|[/\\])raven(?:\.exe)?"?(?=\s)', line, re.IGNORECASE)
+    return match is not None and _has_resident_subcommand(line[match.end() :])
+
+
+def _has_resident_subcommand(arguments: str) -> bool:
+    import re
+
+    match = re.match(r"""\s+(?:--\s+)?["']?(\w+)["']?(?=\s|$)""", arguments)
     return match is not None and match.group(1).lower() in _RESIDENT_SUBCOMMANDS
 
 

@@ -69,6 +69,44 @@ def test_an_unreadable_command_line_has_an_unknown_identity(monkeypatch, line) -
     assert processes.raven_identity(1234) is None
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        "python -P -m raven serve --port 18792",
+        "python -m raven -- gateway --page-port 18792",
+        'python -m "raven" web --supervise',
+        '"C:/Program Files/Raven/raven.exe" serve --port 18792',
+        "/usr/local/bin/raven -- web --supervise",
+    ],
+)
+def test_a_resident_command_has_a_positive_identity(monkeypatch, line: str) -> None:
+    monkeypatch.setattr(processes, "command_line", lambda _pid: line)
+    assert processes.raven_identity(1234) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "python -m raven acp",
+        "python -m raven tui",
+        "python -m raven --version serve",
+        "python -m raven --help web",
+        "python -m raven_tools serve",
+        "python -m ravenx serve",
+        "python -m raven.other serve",
+        "python -m raven-tools serve",
+        "python -m raven serve_other",
+        "python -m raven serve-other",
+        "python -m raven",
+        "python app.py",
+    ],
+)
+def test_a_foreign_command_has_a_negative_identity(monkeypatch, line: str) -> None:
+    monkeypatch.setattr(processes, "command_line", lambda _pid: line)
+    assert processes.raven_identity(1234) is False
+    assert processes.looks_like_raven(1234) is False
+
+
 @pytest.mark.parametrize("reader", [processes._command_line_posix, processes._command_line_windows])
 def test_undecodable_argv_does_not_crash_the_reader(monkeypatch, reader) -> None:
     monkeypatch.setattr("shutil.which", lambda _name: "powershell.exe")
