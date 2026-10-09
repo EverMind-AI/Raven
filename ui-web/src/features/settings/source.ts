@@ -248,7 +248,9 @@ export const settingsSource: SettingsSource = {
     await loadSettingsWithProviders()
     void pushPermMode()
     await loadEveros()
-    await loadEverosCloud()
+    /* Not awaited: the probe can take up to five seconds against a slow or absent
+       service, and the card draws its own checking state until the answer lands. */
+    void loadEverosCloud()
     return settingsSnapshot()
   },
   set: (key, value) => run((async () => {

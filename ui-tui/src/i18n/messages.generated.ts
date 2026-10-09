@@ -2890,6 +2890,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.cloud.title': 'Long-term memory: EverOS Cloud',
     'gui.settings.cloud.status': 'Status',
     'gui.settings.cloud.key': 'API key',
+    'gui.settings.cloud.key_env':
+      'Using EVEROS_CLOUD_API_KEY from the environment; the key row above is for a key kept in config.json.',
     'gui.settings.cloud.endpoint': 'Endpoint',
     'gui.settings.cloud.restart_hint': 'A changed key is used by the running gateway after its next start.',
     'gui.settings.cloud.chip_connected': 'Connected',
@@ -5458,6 +5460,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.cloud.title': '长期记忆：EverOS Cloud',
     'gui.settings.cloud.status': '状态',
     'gui.settings.cloud.key': 'API 密钥',
+    'gui.settings.cloud.key_env':
+      '正在使用环境变量 EVEROS_CLOUD_API_KEY 里的密钥；上面的密钥行用于写进 config.json 的密钥。',
     'gui.settings.cloud.endpoint': '服务地址',
     'gui.settings.cloud.restart_hint': '更换密钥后，运行中的网关下次启动才会使用新密钥。',
     'gui.settings.cloud.chip_connected': '已连接',

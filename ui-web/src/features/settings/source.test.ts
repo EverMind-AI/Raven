@@ -277,14 +277,19 @@ describe('the cloud memory card', () => {
       available: true, selected: true, api_key_set: false, key_source: null, base_url: 'http://fake', status: 'missing', hint: 'no API key',
     }
     const mod = await load({ 'settings.everosCloud': cloud, 'settings.set': { applied: true, previous: null } })
-    const snapshot = await mod.settingsSource.load()
-    expect(snapshot.everosCloud).toEqual(cloud)
-    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(1)
+    const first = await mod.settingsSource.load()
+    /* The probe is not awaited by load (a slow service must not hold the page): the
+       snapshot load hands back does not carry it yet, it lands right after. */
+    expect(first.everosCloud ?? null).toBe(null)
+    await vi.waitFor(() => expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(1))
+    const second = await mod.settingsSource.load()
+    expect(second.everosCloud).toEqual(cloud)
+    await vi.waitFor(() => expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(2))
 
     await mod.settingsSource.set('plugins.config.everos-cloud-memory.api_key', 'ecm-key-rot8')
-    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(2)
+    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(3)
 
     await mod.settingsSource.set('cron.defaultTimezone', 'UTC')
-    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(2)
+    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(3)
   })
 })

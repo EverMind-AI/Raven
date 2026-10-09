@@ -10499,6 +10499,10 @@
       "en": "API key",
       "zh": "API 密钥"
     },
+    "gui.settings.cloud.key_env": {
+      "en": "Using EVEROS_CLOUD_API_KEY from the environment; the key row above is for a key kept in config.json.",
+      "zh": "正在使用环境变量 EVEROS_CLOUD_API_KEY 里的密钥；上面的密钥行用于写进 config.json 的密钥。"
+    },
     "gui.settings.cloud.endpoint": {
       "en": "Endpoint",
       "zh": "服务地址"
