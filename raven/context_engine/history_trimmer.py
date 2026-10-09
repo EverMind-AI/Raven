@@ -248,26 +248,43 @@ class HistoryTrimmer:
         """
         if not ids:
             return None
+
+        def option(group: set[int]) -> tuple[set[int], list[int], list[int]]:
+            remaining = [mid for mid in ids if mid not in group]
+            return group, remaining, cls.canonical_ids(messages, remaining)
+
+        def anchored(choice: tuple[set[int], list[int], list[int]]) -> bool:
+            _group, remaining, reclosed = choice
+            return not (protected_ids & set(remaining)) - set(reclosed)
+
+        # Unprotected groups first, then protected ones, each only if it leaves
+        # every other protected id anchored; when nothing goes cleanly the first
+        # candidate goes anyway, so a prompt that cannot fit still shrinks.
+        # Re-closing walks the whole session, so a group is re-closed only when
+        # it is the next that could go, and the search stops at the first clean one.
         seen: set[int] = set()
-        unprotected: list[tuple[set[int], list[int], list[int]]] = []
-        protected: list[tuple[set[int], list[int], list[int]]] = []
+        protected: list[set[int]] = []
+        first: tuple[set[int], list[int], list[int]] | None = None
         for candidate in ids:
             if candidate in seen:
                 continue
             group = cls.tool_group(messages, candidate)
             seen |= group
-            remaining = [mid for mid in ids if mid not in group]
-            choice = (group, remaining, cls.canonical_ids(messages, remaining))
-            (protected if group & protected_ids else unprotected).append(choice)
-        # Unprotected groups first, then protected ones, each only if it leaves
-        # every other protected id anchored; when nothing goes cleanly the first
-        # candidate goes anyway, so a prompt that cannot fit still shrinks.
-        for tier in (unprotected, protected):
-            for group, remaining, reclosed in tier:
-                lost = (protected_ids & set(remaining)) - set(reclosed)
-                if not lost:
-                    return group, remaining, reclosed
-        return (unprotected + protected)[0]
+            if group & protected_ids:
+                protected.append(group)
+                continue
+            choice = option(group)
+            if anchored(choice):
+                return choice
+            if first is None:
+                first = choice
+        for group in protected:
+            choice = option(group)
+            if anchored(choice):
+                return choice
+            if first is None:
+                first = choice
+        return first
 
     # ------------------------------------------------------------------
     # Budget-driven trimming

@@ -412,3 +412,35 @@ def test_the_closing_sweep_looks_at_each_tool_group_once(monkeypatch):
     assert outcome.included_ids == list(range(40))
     assert HistoryTrimmer.structural_errors(built) == []
     assert len(looks) == 20  # one look per group, not one per selected message
+
+
+# --- A drop re-closes only the candidates it tries -----------------------------
+#
+# Re-closing walks the whole session, and ``trim`` runs synchronously inside
+# context assembly, so choosing a drop re-closes candidates one at a time in the
+# order they could go and stops at the first clean one: one re-closing per drop,
+# not one per group per drop.
+
+
+def test_a_budget_drop_re_closes_only_the_candidate_it_takes(monkeypatch):
+    messages = [{"role": ("user", "assistant")[i % 2], "content": "x" * 40} for i in range(40)]
+    trimmer = _trimmer(monkeypatch, window=300)  # 40 messages cost 400 tokens: ten must go
+    canonical_ids = HistoryTrimmer.canonical_ids
+    closures: list[None] = []
+
+    def counted(session_messages, ids):
+        closures.append(None)
+        return canonical_ids(session_messages, ids)
+
+    monkeypatch.setattr(HistoryTrimmer, "canonical_ids", staticmethod(counted))
+
+    _built, outcome = trimmer.trim(
+        session_messages=messages,
+        ids=list(range(40)),
+        protected_ids={0},
+        reserved_output=0,
+        build_messages=lambda h: [{"role": "system", "content": "s"}, *h, {"role": "user", "content": "u"}],
+    )
+
+    assert outcome.included_ids == [0, *range(11, 40)]
+    assert len(closures) == 11  # the selection's own closure, then one per drop
