@@ -361,3 +361,54 @@ def test_trim_ends_when_a_later_turn_reuses_a_call_id(monkeypatch):
     assert outcome.ok
     assert outcome.included_ids == [0, 1, 2, 3, 4, 5, 10]
     assert HistoryTrimmer.structural_errors(built) == []
+
+
+# --- The closing sweep looks at each group once --------------------------------
+#
+# Every member of a group answers ``tool_group`` with that same group, and each
+# answer is a pass over the session, so the sweep that refuses a broken pairing
+# asks once per group rather than once per selected message.
+
+
+def _tool_heavy_session(turns: int) -> list[dict]:
+    messages: list[dict] = []
+    for b in range(turns):
+        messages += [
+            {"role": "user", "content": f"q{b}"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": f"a{b}", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+                    {"id": f"b{b}", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": f"a{b}", "content": "r"},
+            {"role": "tool", "tool_call_id": f"b{b}", "content": "r"},
+        ]
+    return messages
+
+
+def test_the_closing_sweep_looks_at_each_tool_group_once(monkeypatch):
+    messages = _tool_heavy_session(10)  # ten user messages, ten calls with two results each
+    trimmer = _trimmer(monkeypatch, window=10_000)  # everything fits: no drop, only the sweep
+    tool_group = HistoryTrimmer.tool_group
+    looks: list[int] = []
+
+    def counted(session_messages, mid):
+        looks.append(mid)
+        return tool_group(session_messages, mid)
+
+    monkeypatch.setattr(HistoryTrimmer, "tool_group", staticmethod(counted))
+
+    built, outcome = trimmer.trim(
+        session_messages=messages,
+        ids=list(range(40)),
+        protected_ids=set(),
+        reserved_output=0,
+        build_messages=lambda h: [{"role": "system", "content": "s"}, *h, {"role": "user", "content": "u"}],
+    )
+
+    assert outcome.included_ids == list(range(40))
+    assert HistoryTrimmer.structural_errors(built) == []
+    assert len(looks) == 20  # one look per group, not one per selected message

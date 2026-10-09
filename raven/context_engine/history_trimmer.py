@@ -186,8 +186,13 @@ class HistoryTrimmer:
         selected. Empty when the selection is provider-safe."""
         selected = set(ids)
         offenders: set[int] = set()
+        seen: set[int] = set()
         for mid in ids:
+            # Every member answers ``tool_group`` with the same group, so one look covers it.
+            if mid in seen:
+                continue
             group = cls.tool_group(messages, mid)
+            seen |= group
             if len(group) > 1 and not group <= selected:
                 offenders |= group & selected
             elif messages[mid].get("role") == "tool" and group == {mid}:
