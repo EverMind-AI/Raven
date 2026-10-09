@@ -1345,7 +1345,7 @@ def _recorded_serve_pid() -> Optional[int]:
 
 
 def _read_serve_pid() -> Optional[int]:
-    """The pid ``_write_serve_state`` recorded, while it still names raven.
+    """The live recorded pid unless its identity is proven to be foreign.
 
     Alive was never the question -- a pid the kernel has since handed to
     somebody else answers that exactly as a live gateway does, and reading
