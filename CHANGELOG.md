@@ -64,13 +64,21 @@ All notable changes to Raven are documented here.
   fetched, before the limits), and the report is told to carry its
   argument in prose, define terms the question does not already use, ground
   abstract points in a concrete case and drop filler. When the turn also saved
-  the report with `write_file`, the delivered reply is written over that file,
-  so the chat reply and the file are the same report; the research trail stays
-  on the reply only, and its query, page and open-point listings are plain
-  labelled lists instead of `<details>` folds, which a terminal shows as raw
-  tags. The shape gate, the clarify exemption and
+  the report with `write_file`, the delivered reply is written over the last
+  markdown file it wrote, so the chat reply and the file are the same report.
+  The file is left as the model wrote it when the reply is not a report, and
+  when the reply is under 80% of the file's length - a brief that asks for a
+  summary reply gets that summary, and it must not replace the report. The
+  research trail stays on the reply only, and its query, page and open-point
+  listings are plain labelled lists instead of `<details>` folds, which a
+  terminal shows as raw tags. The shape gate, the clarify exemption and
   `scripts/research_report_audit.py` read the new layout, and the old
   three-heading layout stays the class default (`finalShape.reportLayout`).
+  An install that has already run Raven-Research keeps the contract it seeded
+  into its workspace (`agent_memory/profile/agent.md`), because seeding is
+  once-only so that an operator's edits survive; it moves to the new layout
+  when that file is deleted, and until then the gate still accepts its
+  three-heading replies.
   The identity no longer carries the measured-guidance block, whose short-run
   and one-answer numbers came from a short-answer benchmark
   (`measuredGuidance` off). The product label moves to
