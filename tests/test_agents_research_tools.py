@@ -970,6 +970,34 @@ async def test_the_targets_own_status_and_a_captcha_wall_come_back_with_the_page
 
 
 @pytest.mark.asyncio
+async def test_a_refused_fallback_is_its_own_refusal_and_the_stub_keeps_its_own_status(monkeypatch):
+    """The trail reads each row's status: swapping them would count the stub as refused
+    and the fallback the site refused as read."""
+    refused = (
+        "Title: Not Found\n\nURL Source: https://arxiv.org/html/2410.04728\n\n"
+        "Warning: Target URL returned error 404: Not Found\n"
+        "Warning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.\n\n"
+        "Markdown Content:\n" + "This page does not exist. " * 40
+    )
+    _patch_client(
+        monkeypatch,
+        _PerUrlTransport(
+            {"https://arxiv.org/abs/2410.04728": "Abstract page shell", "https://arxiv.org/html/2410.04728": refused}
+        ),
+    )
+    rows = _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://arxiv.org/abs/2410.04728"))
+
+    assert answer["served_url"] == "https://arxiv.org/html/2410.04728"
+    by_url = {r["url"]: r for r in rows if r["op"] == "fetch"}
+    fallback, stub = by_url["https://arxiv.org/html/2410.04728"], by_url["https://arxiv.org/abs/2410.04728"]
+    assert (fallback["status"], fallback.get("blocked")) == (404, "captcha")
+    assert (stub["status"], stub.get("blocked")) == (200, None)
+
+
+@pytest.mark.asyncio
 async def test_a_warning_quoted_in_the_page_body_is_not_the_readers(monkeypatch):
     page = "Title: Notes\n\nMarkdown Content:\n" + "Warning: Target URL returned error 404 is a log line. " * 10
     _patch_client(monkeypatch, _PerUrlTransport({"https://example.com/notes": page}))

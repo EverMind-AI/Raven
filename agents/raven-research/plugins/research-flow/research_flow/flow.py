@@ -388,7 +388,7 @@ class TurnFrame(Gate):
 
     async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if self._report_file:
-            paths = written_markdown((ctx.messages or [])[ctx.turn_base or 0 :])
+            paths = written_markdown(ctx.messages or [], since=ctx.turn_base or 0)
             if paths:
                 ctx.metadata[_REPORT_FILES_KEY] = paths
         return HookDecision()

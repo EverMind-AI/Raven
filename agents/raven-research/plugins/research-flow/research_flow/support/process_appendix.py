@@ -396,10 +396,12 @@ class ResearchTrail:
     replays: int = 0
     zero_hit: int = 0
     pages: list[tuple[str, int, bool]] = field(default_factory=list)  # url, chars, ok
-    refused: set[str] = field(default_factory=set)
-    """Pages the reader delivered but the site refused: a CAPTCHA wall, or an error
-    status the reader reported for the target. Opened all the same - the request
-    went out - so citing one is not a citation of a page never opened."""
+    refused: set[int] = field(default_factory=set)
+    """Indices into ``pages`` of fetches the reader delivered but the site refused: a
+    CAPTCHA wall, or an error status the reader reported for the target. Per fetch, not
+    per URL, so a page refused once and read on a retry counts as read. Opened all the
+    same - the request went out - so citing one is not a citation of a page never
+    opened."""
     verify_outcome: str | None = None
     verify_model: str | None = None
     """Which model reviewed, off the verify rows. A mode may move the reviewer per
@@ -494,8 +496,10 @@ class ResearchTrail:
         counter, so the one number that says "this fetch returned a stub, not a page"
         was human-readable and machine-invisible. Two implementations of the same
         split is the shape this repo keeps paying for; one is enough."""
-        refused = sum(1 for u, _, ok in self.pages if ok and u in self.refused)
-        substantive = [p for p in self.pages if p[2] and p[1] >= _THIN_PAGE_CHARS and p[0] not in self.refused]
+        refused = sum(1 for i, (_, _, ok) in enumerate(self.pages) if ok and i in self.refused)
+        substantive = [
+            p for i, p in enumerate(self.pages) if p[2] and p[1] >= _THIN_PAGE_CHARS and i not in self.refused
+        ]
         opened_ok = sum(1 for _, _, ok in self.pages if ok)
         return substantive, opened_ok - len(substantive) - refused, len(self.pages) - opened_ok, refused
 
@@ -759,7 +763,11 @@ class ResearchTrail:
             if failed:
                 lines.append(f"- ({failed} page(s) could not be retrieved)")
             if refused:
-                lines.append(f"- ({refused} page(s) the site refused: {', '.join(sorted(self.refused))})")
+                urls = sorted({self.pages[i][0] for i in self.refused})
+                shown = ", ".join(urls[:_MAX_LISTED])
+                if len(urls) > _MAX_LISTED:
+                    shown += f", ... and {len(urls) - _MAX_LISTED} more"
+                lines.append(f"- ({refused} page(s) the site refused: {shown})")
             lines.append("")
 
         if self.unsupported:
@@ -843,10 +851,10 @@ def build_trail(
             if not url:
                 continue
             ok = bool(r.get("ok"))
-            t.pages.append((url, int(r.get("chars") or 0), ok))
             status = r.get("status")
             if ok and (r.get("blocked") or (isinstance(status, int) and status >= 400)):
-                t.refused.add(url)
+                t.refused.add(len(t.pages))
+            t.pages.append((url, int(r.get("chars") or 0), ok))
             if ok:
                 opened.add(url)
         elif op == "verify":

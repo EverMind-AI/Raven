@@ -5,6 +5,7 @@ import difflib
 import mimetypes
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,10 @@ def resolve_path(
     allowed_dirs: tuple[Path, ...] = (),
 ) -> Path:
     """Resolve path against workspace (if relative) and enforce the allowed roots."""
+    # The tools echo the path into their result lines, and readers take a file back
+    # out of those lines; a line break in a path would let it forge another one.
+    if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in str(path)):
+        raise PermissionError(f"Path {path!r} contains a line break or control character")
     p = Path(path).expanduser()
     if not p.is_absolute() and workspace:
         p = workspace / p

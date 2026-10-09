@@ -806,6 +806,32 @@ def test_a_page_the_site_refused_is_not_counted_as_read():
     assert "- https://a.example/wall" not in rendered
 
 
+def test_a_refusal_is_per_fetch_so_a_retry_that_reads_the_page_counts_as_read():
+    """A page refused once and read on a retry was read; one refused twice is two refusals
+    of one URL, listed once."""
+    rows = [
+        {"op": "fetch", "url": "https://a.example/p", "chars": 300, "ok": True, "status": 403},
+        {"op": "fetch", "url": "https://a.example/p", "chars": 9000, "ok": True, "status": 200},
+        {"op": "fetch", "url": "https://b.example/q", "chars": 300, "ok": True, "status": 403},
+        {"op": "fetch", "url": "https://b.example/q", "chars": 300, "ok": True, "status": 403},
+    ]
+    t = build_trail(rows, "[a](https://a.example/p)")
+    c = t.counters()
+    assert (c["pages_ok"], c["pages_refused"], c["thin_pages"]) == (4, 3, 0)
+    rendered = t.render()
+    assert "1 pages read, 3 refused by the site" in rendered
+    assert "- https://a.example/p (9,000 chars)" in rendered
+    assert "- (3 page(s) the site refused: https://a.example/p, https://b.example/q)" in rendered
+
+
+def test_the_refused_listing_is_capped_like_the_others():
+    rows = [
+        {"op": "fetch", "url": f"https://a.example/{i:02d}", "chars": 300, "ok": True, "status": 403} for i in range(45)
+    ]
+    line = next(ln for ln in build_trail(rows, "").render().splitlines() if "the site refused" in ln)
+    assert line.endswith("https://a.example/39, ... and 5 more)")
+
+
 def test_a_truncated_fence_tag_is_still_a_fence_tag():
     """The ``{4,16}`` width. ``token_hex(4)`` mints exactly 8, so ``{8}`` looks
     right and passes every other test here; a clipped quote is still a fence tag."""
@@ -845,14 +871,47 @@ def _module_body(path: Path) -> str:
     return ast.unparse(_Strip().visit(ast.parse(path.read_text(encoding="utf-8"))))
 
 
-def test_the_appendix_twin_is_the_forks_module_body():
+# The record is frozen at dr@3.5 and is never edited to make this green
+# (tests/fixtures/vendored_fork/README.md); the twin's deliberate lead over it is
+# named here, definition by definition. A difference outside these sets is drift,
+# and an entry that has stopped differing is a stale allowance.
+
+#: Top-level definitions the twin has that the record does not.
+TWIN_LEADS_ADDED: frozenset[str] = frozenset(
+    {"_TRACKING_KEYS", "_is_tracking", "_drop_tracking"}  # click-tracking parameters dropped before matching
+)
+#: Definitions in both whose bodies the twin changed.
+TWIN_LEADS_CHANGED: frozenset[str] = frozenset(
+    {"_norm", "ResearchTrail", "build_trail"}  # the tracking drop, and pages the site refused counted apart
+)
+
+
+def _definitions(path: Path) -> dict[str, str]:
+    """Each top-level definition of :func:`_module_body`'s stripped module, by name."""
+    import ast
+
+    out: dict[str, str] = {}
+    for i, node in enumerate(ast.parse(_module_body(path)).body):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            name = node.name
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name = node.targets[0].id
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name = node.target.id
+        else:
+            name = f"{i}:{type(node).__name__}"
+        out[name] = ast.unparse(node)
+    return out
+
+
+def test_the_appendix_twin_is_the_forks_module_body_plus_its_named_lead():
     """The third layer of the twin, after config values and class defaults.
 
     A fix that lands on the fork's appendix and not here ships a launcher whose
     integrity appendix says something the fork's no longer does - the fence-tag
     disclosure did exactly that for one review round. Docstrings and comments
     are stripped before comparing, so the two files may explain themselves in
-    their own words; the code has to be one.
+    their own words; the code has to be one, apart from the lead named above.
     """
     fork = (
         REPO
@@ -866,7 +925,15 @@ def test_the_appendix_twin_is_the_forks_module_body():
         / "process_appendix.py"
     )
     twin = PLUGIN_DIR / "research_flow" / "support" / "process_appendix.py"
-    assert _module_body(twin) == _module_body(fork), "port the fork's change or the twin's, so the two agree"
+    record, ours = _definitions(fork), _definitions(twin)
+    assert set(ours) - set(record) == TWIN_LEADS_ADDED, set(ours) ^ set(record)
+    assert not (set(record) - set(ours)), "the twin dropped a definition the record has: " + repr(
+        set(record) - set(ours)
+    )
+    changed = {name for name in record if record[name] != ours[name]}
+    assert changed == TWIN_LEADS_CHANGED, "changed outside the named lead (or a stale entry): " + repr(
+        changed ^ TWIN_LEADS_CHANGED
+    )
 
 
 # ── fence-tag citations, and the unreviewed banner ─────────────────────

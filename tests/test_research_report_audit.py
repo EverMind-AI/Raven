@@ -244,6 +244,14 @@ def test_a_chinese_reader_report_names_its_missing_limits(tmp_path):
     assert "missing_template_section" not in {f.kind for f in audit(report).findings}
 
 
+def test_a_reader_report_whose_limits_are_in_other_words_has_them(tmp_path):
+    """The flow's gate reads the last section as the limits when no word names them; the
+    audit grading the same reply must not report them missing."""
+    report = tmp_path / "reader_es.md"
+    report.write_text("> x\n\n## Body\n\ny\n\n## Lo que no se pudo verificar\n\nz\n", encoding="utf-8")
+    assert "missing_template_section" not in {f.kind for f in audit(report).findings}
+
+
 def test_prose_before_the_answer_quote_is_still_a_preamble(tmp_path):
     report = tmp_path / "leak_reader.md"
     report.write_text("Here is the corrected report.\n\n> **Conclusion:** x\n\n## A\n\ny\n", encoding="utf-8")
@@ -585,7 +593,7 @@ def test_the_parser_reads_past_the_producers_refused_page_clause(tmp_path):
         distinct_queries=[f"q{i}" for i in range(4)],
         pages=[("https://a.example/real", 5_000, True), ("https://a.example/stub", 38, True)]
         + [(f"https://a.example/wall{i}", 862, True) for i in range(2)],
-        refused={"https://a.example/wall0", "https://a.example/wall1"},
+        refused={2, 3},
         cited=["https://a.example/real"],
         span_seconds=130,
         verify_outcome="pass",

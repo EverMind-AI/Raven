@@ -53,7 +53,8 @@ REQUIRED_SECTIONS = ("Answer", "Findings", "Limitations")
 
 #: The reader layout's limits heading: the last ``##`` section, in English or in Chinese
 #: ("limitations", "restrictions", "shortcomings", and three forms of "could not be
-#: verified"). The flow's ``report_shape`` matcher, kept in sync by eye for the reason
+#: verified"); in any other wording, the last ``##`` with a section above it. The
+#: flow's ``report_shape`` matcher, kept in sync by eye for the reason
 #: ``THIN_PAGE_CHARS`` is.
 _READER_LIMITS_RE = re.compile(
     "limitation|\u5c40\u9650|\u9650\u5236|\u4e0d\u8db3|\u672a\u80fd\u6838\u5b9e|\u672a\u6838\u5b9e|\u65e0\u6cd5\u6838\u5b9e",
@@ -782,9 +783,13 @@ def audit(path: Path) -> Audit:
     heads = [ln[3:].strip() for ln in body if ln.startswith("## ")]
     result.sections = heads
     if result.layout == "reader":
-        # Answer is the opening quote; the limits are the last matching section; every
-        # other `##` is the body, which is where the reader layout puts its headings.
+        # Answer is the opening quote; the limits are the last matching section, or the
+        # last `##` when none matches and a section stands above it (the flow's
+        # ``report_shape`` reads it the same way); every other `##` is the body, which
+        # is where the reader layout puts its headings.
         limits_at = next((i for i in range(len(heads) - 1, -1, -1) if _READER_LIMITS_RE.search(heads[i])), None)
+        if limits_at is None and len(heads) >= 2:
+            limits_at = len(heads) - 1
         present = {"Answer", *(["Limitations"] if limits_at is not None else [])}
         if any(i != limits_at and (limits_at is None or i < limits_at) for i in range(len(heads))):
             present.add("Findings")

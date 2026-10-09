@@ -189,6 +189,13 @@ def _reader_sections(text: str) -> tuple[dict[str, tuple[float, bool, bool]], bo
     labels = [_LABEL_NOISE_RE.sub("", label) for _, _, label in heads]
 
     limits_at = next((i for i in range(len(heads) - 1, -1, -1) if _SECTION_RE["Limitations"].search(labels[i])), None)
+    if limits_at is None:
+        # The contract puts the limits in the last ``##`` section, in the reply's own
+        # language, so no word list names every heading it allows: with a section
+        # above it, the last ``##`` heading is the limits.
+        level_two = [i for i, (_, hashes, _) in enumerate(heads) if len(hashes) == 2]
+        if len(level_two) >= 2:
+            limits_at = level_two[-1]
     answer_at = None
     if "Answer" not in found:
         answer_at = next(

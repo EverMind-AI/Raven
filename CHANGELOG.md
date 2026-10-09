@@ -64,15 +64,18 @@ All notable changes to Raven are documented here.
   headings - the brief's own section names, numbering included, when it gives
   them - and the last section names what could not be verified
   (`## Limitations` in English, with no English word in the heading
-  otherwise). A length the brief sets bounds the body: every markdown file the
-  turn writes or edits gets a `[report length: ...]` line on its tool result -
-  CJK characters and other words, a total with prose and tables apart, by
-  `##` section, link targets not counted - and the report checks its length
+  otherwise; the shape gate reads the last `##` section as the limits when
+  no word it knows names them). A length the brief sets bounds the body:
+  every markdown file the turn writes or edits gets a `[report length: ...]`
+  line on its tool result - CJK characters and other words, a total with
+  prose and tables apart, by `##` section, link targets not counted - and
+  the report checks its length
   and states any count from that line rather than from an estimate. Unless
   the brief says otherwise, a length covers prose and tables alike and leaves
   out only a link-check table. The same line counts the distinct URLs the
-  report cites, which is the number of sources the report states and the
-  number of rows a link-check table has. Prose cites through markdown links on the words a source supports
+  report cites, read the way the research trail reads them, which is the
+  number of sources the report states and the number of rows a link-check
+  table has. Prose cites through markdown links on the words a source supports
   instead of bare URLs mid-sentence, with no fetch status or HTTP code beside
   a link (a brief that asks for link checks gets one table of every cited
   URL as fetched with its status, marked blocked where the site blocked the
@@ -80,9 +83,14 @@ All notable changes to Raven are documented here.
   argument in prose, define terms the question does not already use, ground
   abstract points in a concrete case and drop filler. When the turn also saved
   the report with `write_file`, the delivered reply is written over that
-  file, so the chat reply and the file are the same report. A turn that wrote
-  several markdown files (a report beside notes, say) syncs only the one the
-  reply names, and leaves them all alone when it names none or several.
+  file, so the chat reply and the file are the same report, and the file
+  keeps its `#` title when the reply opens without one. Only a file whose
+  `##` headings are mostly the reply's counts as the report, so a notes
+  file or a source index saved beside it is left alone; of several such
+  files the reply's named one is synced, and none when it names none or
+  several. A file the session did not write whole (a log the user keeps,
+  appended or edited) is not synced, since the rest of it was there before;
+  a later turn that only edits the report an earlier turn wrote syncs it.
   The file is left as the model wrote it when the reply is not a report, and
   when the reply is under 80% of the file's length - a brief that asks for a
   summary reply gets that summary, and it must not replace the report. The
@@ -228,9 +236,14 @@ All notable changes to Raven are documented here.
 - The research fetch tool reports the status the target site returned and
   marks a CAPTCHA wall as blocked, instead of the reader service's own 200;
   the research trail counts such pages as refused by the site, not as read.
+  When a thin page is re-read at another address, each address keeps its
+  own status in the trail.
 
-- A research report file keeps the `#` title it was written with when the
-  delivered reply, which the file is synced to, opens without one.
+- The file tools refuse a path that carries a line break or other control
+  character. They echo the path into their result lines, and the research
+  report sync reads a file back out of those lines, so such a path could
+  name a second file that no call wrote. The sync also reads only the
+  first line of a `write_file` result.
 
 - `write_file` reports the bytes it wrote. Its success line said "N bytes"
   and counted characters, so a model sizing a Chinese report off it read
