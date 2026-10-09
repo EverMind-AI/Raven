@@ -494,7 +494,7 @@ class EverosCloudBackend:
         size = 0
         dropped = False
         for index, message in enumerate(payload):
-            item_size = len(json.dumps(message, ensure_ascii=False))
+            item_size = len(json.dumps(message, ensure_ascii=False).encode("utf-8"))
             if item_size > ADD_MAX_BYTES:
                 dropped = True
                 self._logger.warning(

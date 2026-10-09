@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -194,6 +195,29 @@ async def test_oversize_message_fails_its_own_add_and_logs_index(tmp_path: Path,
     adds = _requests(fake, "/add")
     assert len(adds) == 1 and len(adds[0]["body"]["messages"]) == 4
     assert "message 2 of session over" in caplog.text
+
+
+async def test_batches_are_sized_in_utf8_bytes_not_code_points(tmp_path: Path, caplog) -> None:
+    """Two-byte characters: 30 messages of 5,000 code points are 300 KB on the wire,
+    over the 250 KB ceiling, so the slice must split; counted as code points it
+    would go out as one 413."""
+    fake = FakeCloud()
+    b = _backend(tmp_path, fake)
+    msgs = [{"role": "user", "content": "\u00e9" * 5_000} for _ in range(30)]
+    assert await b.store("wide-utf8", msgs) is True
+    adds = _requests(fake, "/add")
+    assert len(adds) >= 2 and sum(len(a["body"]["messages"]) for a in adds) == 30
+    assert all(a["status"] == 202 for a in adds)
+    assert all(len(json.dumps(a["body"], ensure_ascii=False).encode("utf-8")) <= 300_000 for a in adds)
+
+    fake2 = FakeCloud()
+    b2 = _backend(tmp_path, fake2)
+    big = [{"role": "user", "content": "\u00e9" * 150_000}, {"role": "user", "content": "small"}]
+    with caplog.at_level(logging.WARNING, logger="t"):
+        assert await b2.store("over-utf8", big) is False
+    adds2 = _requests(fake2, "/add")
+    assert len(adds2) == 1 and len(adds2[0]["body"]["messages"]) == 1
+    assert "message 0 of session over-utf8 is 300" in caplog.text
 
 
 # ── recall_session (A15) ────────────────────────────────────────────
