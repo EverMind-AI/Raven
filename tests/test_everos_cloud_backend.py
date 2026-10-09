@@ -16,6 +16,8 @@ from raven_everos_cloud import backend as mod
 from raven_everos_cloud.backend import EverosCloudBackend, resolve_api_key
 from tests._everos_cloud_fake import FakeCloud
 
+pytestmark = pytest.mark.everos_cloud
+
 KEY = "ecm-key-7f3a"
 
 
@@ -220,6 +222,37 @@ async def test_batches_are_sized_in_utf8_bytes_not_code_points(tmp_path: Path, c
     assert "message 0 of session over-utf8 is 300" in caplog.text
 
 
+async def test_a_malformed_flush_timeout_in_the_environment_falls_back_to_the_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C8: store never raises -- a typo in the test hook must not become a ValueError."""
+    monkeypatch.setenv("RAVEN_EVEROS_CLOUD_FLUSH_TIMEOUT_S", "5s")
+    fake = FakeCloud()
+    b = _backend(tmp_path, fake)
+    assert await b.store("typo", [{"role": "user", "content": "hi"}], metadata={"flush": True}) is True
+    assert [r["path"] for r in fake.ledger if r["path"].endswith(("/add", "/flush"))] == [
+        "/api/v2/memory/add",
+        "/api/v2/memory/flush",
+    ]
+
+
+async def test_a_tool_call_only_turn_is_stored_with_empty_content(tmp_path: Path) -> None:
+    """The local plugin's rule: ``None`` content is a tool-call-only turn, not the word None."""
+    fake = FakeCloud()
+    b = _backend(tmp_path, fake)
+    msgs = [
+        {"role": "user", "content": "run it"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "x", "arguments": "{}"}}],
+        },
+    ]
+    assert await b.store("tools", msgs) is True
+    sent = _requests(fake, "/add")[0]["body"]["messages"]
+    assert sent[1]["content"] == "" and sent[1]["role"] == "assistant"
+
+
 # ── recall_session (A15) ────────────────────────────────────────────
 
 
@@ -230,11 +263,27 @@ async def test_recall_session_filters_by_session_and_track(tmp_path: Path) -> No
     body = _requests(fake, "/get")[0]["body"]
     assert body == {"memory_type": "episode", "filters": {"session_id": "sid-1"}, "page_size": 100, "user_id": "u2"}
     assert hits and hits[0].metadata["session_id"] == "sid-1" and hits[0].metadata["type"] == "episode"
+    # The read-back carries the whole episode under its subject, not the 200-character summary.
+    assert hits[0].text == "ECM-EP-5c1d - The reader prefers short answers and names the file they mean."
     await b.recall_session("sid-1", agent_id="a2")
     assert _requests(fake, "/get")[1]["body"]["memory_type"] == "agent_case"
 
 
 # ── stop (A18, A34) ─────────────────────────────────────────────────
+
+
+async def test_stop_keeps_sweeping_past_a_refused_flush(tmp_path: Path, caplog) -> None:
+    """One 500 at shutdown must not abandon the other sessions' flushes, and the
+    warning says what happened rather than blaming the budget."""
+    fake = FakeCloud()
+    b = _backend(tmp_path, fake)
+    for sid in ("s1", "s2", "s3"):
+        assert await b.store(sid, [{"role": "user", "content": sid}]) is True
+    fake.set_mode("500")
+    with caplog.at_level(logging.WARNING, logger="t"):
+        await b.stop()
+    assert [r["body"]["session_id"] for r in _requests(fake, "/flush")] == ["s1", "s2", "s3"]
+    assert "3 session(s) left unflushed" in caplog.text and "budget 5.0s exhausted" not in caplog.text
 
 
 async def test_stop_flushes_only_unflushed_sessions_and_closes(tmp_path: Path, caplog) -> None:
@@ -265,7 +314,7 @@ async def test_stop_hang_returns_within_budget_and_warns(
         t0 = time.monotonic()
         await b.stop()
         assert time.monotonic() - t0 < 1.0
-    assert "unflushed: ['s1', 's2']" in caplog.text
+    assert "2 session(s) left unflushed" in caplog.text and "['s1', 's2']" in caplog.text
 
 
 async def test_hung_flush_keeps_the_session_for_the_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
