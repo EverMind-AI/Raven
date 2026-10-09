@@ -157,25 +157,6 @@ class TestResult:
         }
 
 
-def _split_command(command: str) -> list[str]:
-    r"""``shlex.split`` resolved the way the OS that will run it resolves.
-
-    POSIX is the default because every real spawn goes through it that way.
-    Windows PowerShell answers CommandLineToArgvW instead: no `\U`-strip of a
-    path, and the difference decides whether `C:\...\python.exe` reads as the
-    executable it names or as `C:Users...python.exe`. Only argv[0] is asked for
-    everywhere this helper runs, and Windows quotes drive alone anyway, so
-    ``posix=False`` answering with the quotes still on is fine.
-    """
-    return shlex.split(command, posix=not _is_windows())
-
-
-def _is_windows() -> bool:
-    import sys
-
-    return sys.platform == "win32"
-
-
 def _login_path() -> str:
     return login_shell_env().get("PATH", "")
 
@@ -534,7 +515,7 @@ def _stale_node(cfg: Any) -> NodeTooOld | None:
     if not runs_on_node(cfg):
         return None
     try:
-        argv = _split_command((getattr(cfg, "command", None) or "").strip())
+        argv = shlex.split((getattr(cfg, "command", None) or "").strip())
     except ValueError:
         return None
     if not argv:
@@ -556,7 +537,7 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     if not command:
         return done("unknown", "command is empty")
     try:
-        argv = _split_command(command)
+        argv = shlex.split(command)
     except ValueError as exc:
         return done("unknown", f"command cannot be parsed: {exc}")
     if not argv:
@@ -602,7 +583,7 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     if not command:
         return done("unknown", "command is empty")
     try:
-        argv = _split_command(command)
+        argv = shlex.split(command)
     except ValueError as exc:
         return done("unknown", f"command cannot be parsed: {exc}")
     if not argv:
@@ -1291,7 +1272,7 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
     here = []
     for preset in wanted:
         try:
-            argv = _split_command((preset.get("command") or "").strip())
+            argv = shlex.split((preset.get("command") or "").strip())
         except ValueError:
             continue
         if argv and shutil.which(argv[0], path=path or None) is not None:
