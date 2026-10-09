@@ -28,6 +28,7 @@ way.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -96,11 +97,14 @@ def resolve_api_key(config: Mapping[str, Any]) -> tuple[str, str | None]:
     one the settings page edits; a key that came from the environment is never
     written back, so the file records only what a person typed.
     """
-    key = str(config.get("api_key") or "")
-    if key:
-        return key, "file"
-    key = os.environ.get(ENV_KEY, "")
-    return (key, "env") if key else ("", None)
+    for raw, source in ((config.get("api_key"), "file"), (os.environ.get(ENV_KEY), "env")):
+        key = str(raw or "").strip()
+        if key:
+            # A control character cannot travel in a header: the HTTP layer refuses
+            # it by quoting the whole Authorization value in its error, and every
+            # hint and log line that prints that error would show the key.
+            return (key, source) if key.isprintable() else ("", None)
+    return "", None
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +165,9 @@ def convert_messages(
             content = ""  # a tool-call-only turn; "None" would be read by the extraction model as a reply
         elif not isinstance(content, str):
             content = str(content)
+        # A lone surrogate (a Claude Code transcript can carry one) cannot be encoded;
+        # it becomes U+FFFD here so the slice is sendable and ``store`` never raises.
+        content = content.encode("utf-8", errors="replace").decode("utf-8")
         tool_calls = m.get("tool_calls") if role == "assistant" else None
         if not content and not tool_calls:
             continue
@@ -241,6 +248,21 @@ def _score(row: dict[str, Any], default: float = 0.0) -> float:
         return float(value) if value is not None else default
     except (TypeError, ValueError):
         return default
+
+
+def _digest(body: dict[str, Any]) -> str:
+    """Identity of one add for the retry memo: the content, not the clock.
+
+    A row without a timestamp is stamped with "now" on every conversion, so a
+    retry of the same slice would never match if the stamp took part.
+    """
+    stable = {
+        "session_id": body.get("session_id"),
+        "messages": [{k: v for k, v in m.items() if k != "timestamp"} for m in body.get("messages", [])],
+    }
+    return hashlib.sha256(
+        json.dumps(stable, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="replace")
+    ).hexdigest()
 
 
 def _joined(*parts: Any) -> str:
@@ -370,6 +392,7 @@ class EverosCloudBackend:
         self._client: httpx.AsyncClient | None = client
         self._owns_client = client is None
         self._unflushed: set[str] = set()
+        self._landed: dict[str, set[str]] = {}
         self._stopping = False
         self._no_key_logged = False
 
@@ -527,32 +550,44 @@ class EverosCloudBackend:
             return True
         if not self._has_key("store"):
             return False
-        batches, dropped = self._batches(session_id, payload)
+        batches, _dropped = self._batches(session_id, payload)
         explicit_end = bool(metadata and (metadata.get("flush") or metadata.get("is_final")))
         self._unflushed.add(session_id)
         for batch in batches:
             body = {"session_id": session_id, "mode": "agent", "messages": batch}
+            # Both callers re-send a slice that answered False (contracts/memory.py);
+            # a batch the service accepted on the failed attempt is not sent twice.
+            # The memo lives only until the slice lands, so a later store of the
+            # same content is a new write, not a retry.
+            digest = _digest(body)
+            if digest in self._landed.get(session_id, ()):
+                continue
             if not await self._send("add", "/api/v2/memory/add", body, ADD_TIMEOUT_S):
                 return False
+            self._landed.setdefault(session_id, set()).add(digest)
         if explicit_end:
             if not await self._send("flush", "/api/v2/memory/flush", {"session_id": session_id}, flush_timeout_s()):
                 return False
             self._unflushed.discard(session_id)
-        return not dropped
+        self._landed.pop(session_id, None)
+        # A dropped oversize message is logged by _batches and is not a reason to
+        # answer False: no retry can make it fit, and a False here would only make
+        # both callers store the rest of the slice again on every attempt.
+        return True
 
     def _batches(self, session_id: str, payload: list[dict[str, Any]]) -> tuple[list[list[dict[str, Any]]], bool]:
         """Split a slice at the service's limits; a single oversize message is dropped and named.
 
         A message over the byte ceiling cannot be made to fit without storing
         words the user never said, so it is left out and the rest goes on; the
-        caller hears ``False`` for the slice.
+        slice still reports landed (see ``store``).
         """
         batches: list[list[dict[str, Any]]] = []
         current: list[dict[str, Any]] = []
         size = 0
         dropped = False
         for index, message in enumerate(payload):
-            item_size = len(json.dumps(message, ensure_ascii=False).encode("utf-8"))
+            item_size = len(json.dumps(message, ensure_ascii=False).encode("utf-8", errors="replace"))
             if item_size > ADD_MAX_BYTES:
                 # ponytail: a single message over the ceiling is dropped whole; chunk one
                 # message across adds if real turns ever hit this.

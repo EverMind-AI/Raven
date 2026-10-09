@@ -13,7 +13,7 @@ import pytest
 from raven.contracts.memory import BackendHealth, Memory
 from raven.plugins import PluginContext, ServiceLocator
 from raven_everos_cloud import backend as mod
-from raven_everos_cloud.backend import EverosCloudBackend, resolve_api_key
+from raven_everos_cloud.backend import EverosCloudBackend, convert_messages, resolve_api_key
 from tests._everos_cloud_fake import FakeCloud
 
 pytestmark = pytest.mark.everos_cloud
@@ -38,6 +38,14 @@ _TURN = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": 
 
 
 # ── key resolution (C7) ──────────────────────────────────────────────
+
+
+def test_key_resolution_strips_whitespace_and_refuses_a_control_character(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A trailing newline would make the HTTP layer quote the whole Authorization value in its error."""
+    monkeypatch.setenv("EVEROS_CLOUD_API_KEY", "from-env\n")
+    assert resolve_api_key({"api_key": " from-file \n"}) == ("from-file", "file")
+    assert resolve_api_key({}) == ("from-env", "env")
+    assert resolve_api_key({"api_key": "from\x00file"}) == ("", None)
 
 
 def test_key_resolution_prefers_the_file(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,7 +201,9 @@ async def test_oversize_message_fails_its_own_add_and_logs_index(tmp_path: Path,
         + [{"role": "user", "content": "small"}] * 2
     )
     with caplog.at_level(logging.WARNING, logger="t"):
-        assert await b.store("over", msgs) is False
+        # The slice lands: no retry can make the dropped message fit, and a False
+        # would make both callers store the other four again on every attempt.
+        assert await b.store("over", msgs) is True
     adds = _requests(fake, "/add")
     assert len(adds) == 1 and len(adds[0]["body"]["messages"]) == 4
     assert "message 2 of session over" in caplog.text
@@ -216,7 +226,7 @@ async def test_batches_are_sized_in_utf8_bytes_not_code_points(tmp_path: Path, c
     b2 = _backend(tmp_path, fake2)
     big = [{"role": "user", "content": "\u00e9" * 150_000}, {"role": "user", "content": "small"}]
     with caplog.at_level(logging.WARNING, logger="t"):
-        assert await b2.store("over-utf8", big) is False
+        assert await b2.store("over-utf8", big) is True
     adds2 = _requests(fake2, "/add")
     assert len(adds2) == 1 and len(adds2[0]["body"]["messages"]) == 1
     assert "message 0 of session over-utf8 is 300" in caplog.text
@@ -251,6 +261,60 @@ async def test_a_tool_call_only_turn_is_stored_with_empty_content(tmp_path: Path
     assert await b.store("tools", msgs) is True
     sent = _requests(fake, "/add")[0]["body"]["messages"]
     assert sent[1]["content"] == "" and sent[1]["role"] == "assistant"
+
+
+async def test_a_lone_surrogate_is_replaced_and_the_slice_still_lands(tmp_path: Path) -> None:
+    fake = FakeCloud()
+    b = _backend(tmp_path, fake)
+    assert await b.store("surrogate", [{"role": "user", "content": "half \ud83d emoji"}]) is True
+    sent = _requests(fake, "/add")[0]["body"]["messages"][0]["content"]
+    assert "\ud83d" not in sent and "half" in sent and "emoji" in sent
+
+
+async def test_a_retry_after_a_transient_failure_skips_the_batches_that_landed(tmp_path: Path) -> None:
+    """StorePipeline re-sends a slice that answered False; the batches the service
+    already accepted must not be stored twice for it."""
+    fake = FakeCloud()
+    inner = fake.transport()
+    adds = {"n": 0}
+
+    async def flaky(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/add"):
+            adds["n"] += 1
+            if adds["n"] == 2:
+                return httpx.Response(500, json={"error": {"message": "ECM-TRANSIENT"}})
+        return await inner.handle_async_request(request)
+
+    b = EverosCloudBackend(_ctx(tmp_path), client=httpx.AsyncClient(transport=httpx.MockTransport(flaky)))
+    msgs = [{"role": "user", "content": f"m{i}"} for i in range(600)]
+    assert await b.store("retry", msgs) is False
+    assert await b.store("retry", msgs) is True
+    sent = [len(a["body"]["messages"]) for a in _requests(fake, "/add")]
+    assert sent == [500, 100]  # the 500-message batch once, the 100-message batch once (its first try never landed)
+
+
+async def test_message_translation_matches_the_local_plugin() -> None:
+    """The cloud copy of convert_messages must not drift from raven_everos (the boundary forbids importing it)."""
+    from raven_everos.backend import convert_messages as local_convert
+
+    rows = [
+        {"role": "user", "content": "hello", "timestamp": 1_760_000_000_000},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "x", "arguments": "{}"}}],
+            "timestamp": 1_760_000_000_001,
+        },
+        {
+            "role": "tool",
+            "content": [{"type": "text", "text": "ok"}, {"type": "image", "url": "x"}],
+            "tool_call_id": "c1",
+            "timestamp": 1_760_000_000_002,
+        },
+        {"role": "system", "content": "dropped", "timestamp": 1_760_000_000_003},
+        {"role": "assistant", "content": 42, "timestamp": "2026-10-09T00:00:00Z"},
+    ]
+    assert convert_messages(rows, agent_id="a", user_id="u") == local_convert(rows, agent_id="a", user_id="u")
 
 
 # ── recall_session (A15) ────────────────────────────────────────────
