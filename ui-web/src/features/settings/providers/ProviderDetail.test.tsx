@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
@@ -41,6 +41,85 @@ async function open(slug: string): Promise<void> {
   await mount('provider')
   await act(async () => { store.set({ provider: slug }) })
 }
+
+/* The connection card's key field and the eye beside it. */
+const keyField = (): HTMLInputElement =>
+  document.querySelector('.settings-tp-main input[aria-label="gui.settings.providers.api_key"]') as HTMLInputElement
+const keyEye = (): HTMLButtonElement => keyField().parentElement!.querySelector('button.peek') as HTMLButtonElement
+
+describe('the eye beside a connected provider\'s key', () => {
+  /* What the page asked to read back, and what it is answered. */
+  const asked: string[] = []
+  const answering = (key: string | null | Error) => async (slug: string): Promise<string | null> => {
+    asked.push(slug)
+    if (key instanceof Error) throw key
+    return key
+  }
+  beforeEach(() => { asked.length = 0 })
+
+  it('shows the saved key in the empty field, and empties it again when shut', async () => {
+    /* The field stands for a key saved elsewhere ("type a new one to replace
+       it"), so the eye over it showed an empty box: the one key a reader
+       could not check was the one in use. */
+    install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    expect(keyField().value).toBe('')
+
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('sk-or-saved')
+    expect(asked).toEqual(['openrouter'])
+
+    /* Shut, it is a placeholder again rather than a "new" key that is the old one. */
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('password'))
+    expect(keyField().value).toBe('')
+  })
+
+  it('reads a typed key back as typed, and fetches nothing', async () => {
+    install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    fireEvent.change(keyField(), { target: { value: 'sk-or-new' } })
+
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('sk-or-new')
+    expect(asked).toEqual([])
+  })
+
+  it('keeps a revealed key the reader edited when the eye shuts: it is theirs now', async () => {
+    install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().value).toBe('sk-or-saved'))
+    fireEvent.change(keyField(), { target: { value: 'sk-or-saved-2' } })
+
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('password'))
+    expect(keyField().value).toBe('sk-or-saved-2')
+  })
+
+  it('fetches nothing for a provider that is not connected', async () => {
+    install(snap(), { revealKey: answering('sk-should-not-show') })
+    await open('openai')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('')
+    expect(asked).toEqual([])
+  })
+
+  it.each([
+    ['keeps no key of its own', null],
+    ['cannot be read', new Error('refused')],
+  ])('leaves the field empty when the provider %s', async (_case, answer) => {
+    install(snap(), { revealKey: answering(answer) })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('')
+    expect(asked).toEqual(['openrouter'])
+  })
+})
 
 describe('provider detail', () => {
   const many = (): ReturnType<typeof snap> => {

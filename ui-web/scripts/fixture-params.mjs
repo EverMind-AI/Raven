@@ -69,6 +69,7 @@ export const PARAMS = {
   'memory.list': { kind: 'episodes', page: 1, page_size: 20, q: null },
   'model.save_key': { slug: 'openai', api_key: 'sk-x' },
   'model.disconnect': { slug: 'openai' },
+  'model.reveal_key': { slug: 'anthropic' },
   'model.add_model': { slug: 'openai', model: 'gpt-5.2' },
   'model.remove_model': { slug: 'openai', model: 'gpt-5.1' },
   'model.fetch_models': { slug: 'openai' },

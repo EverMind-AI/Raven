@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 205 methods, 119 component schemas.
+// 206 methods, 119 component schemas.
 
 /* eslint-disable */
 /**
@@ -2506,6 +2506,15 @@ export interface ModelDisconnectParams {
 }
 export interface ModelDisconnectResult {
   disconnected: boolean;
+}
+export interface ModelRevealKeyParams {
+  slug: string;
+}
+export interface ModelRevealKeyResult {
+  /**
+   * The key saved in the provider's own section -- the one `model.save_key` writes -- or null when none is saved there. A key the provider takes from the environment or from its endpoints list is not read back.
+   */
+  api_key?: string | null;
 }
 export interface ModelFetchModelsParams {
   slug: string;
@@ -5162,6 +5171,7 @@ export interface RpcMethods {
   'model.set_protocol': { params: ModelSetProtocolParams; result: ModelSetProtocolResult };
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult };
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
+  'model.reveal_key': { params: ModelRevealKeyParams; result: ModelRevealKeyResult };
   'model.fetch_models': { params: ModelFetchModelsParams; result: ModelFetchModelsResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
   'model.add_models': { params: ModelAddModelsParams; result: ModelAddModelsResult };
@@ -5437,6 +5447,7 @@ export const RPC_METHODS = [
   "model.options",
   "model.remove_endpoint",
   "model.remove_model",
+  "model.reveal_key",
   "model.save_key",
   "model.set_fields",
   "model.set_protocol",

@@ -168,6 +168,7 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     usage: async (range) => { calls.push(['usage', range]); return null },
     provider: async (op, params) => rec('provider', { op, ...params }),
     fetchModels: async (slug, verify) => { calls.push([verify ? 'fetchModels:verify' : 'fetchModels', slug]); return { models: [], status: 'ok' } },
+    revealKey: async (slug) => { calls.push(['revealKey', slug]); return null },
     reloadProviders: async () => data,
     addModels: async (slug, models) => rec('addModels', { slug, models }),
     setFields: async (slug, fields) => rec('setFields', { slug, fields }),

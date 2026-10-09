@@ -1914,6 +1914,21 @@ class ModelDisconnectResult(_Strict):
     disconnected: bool
 
 
+class ModelRevealKeyParams(_Strict):
+    slug: str
+
+
+class ModelRevealKeyResult(_Strict):
+    api_key: str | None = Field(
+        None,
+        description=(
+            "The key saved in the provider's own section -- the one `model.save_key` writes -- or null when none "
+            "is saved there. A key the provider takes from the environment or from its endpoints list is not "
+            "read back."
+        ),
+    )
+
+
 class ModelFetchModelsParams(_Strict):
     """Ask a provider what it serves right now."""
 
@@ -5593,6 +5608,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.set_protocol": (ModelSetProtocolParams, ModelSetProtocolResult),
     "model.save_key": (ModelSaveKeyParams, ModelSaveKeyResult),
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
+    "model.reveal_key": (ModelRevealKeyParams, ModelRevealKeyResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
     "model.add_models": (ModelAddModelsParams, ModelAddModelsResult),
     "model.set_fields": (ModelSetFieldsParams, ModelSetFieldsResult),

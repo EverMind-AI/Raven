@@ -5,6 +5,8 @@ Nine methods drive the picker:
 * ``model.options`` — current model/provider + one row per provider.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
 * ``model.disconnect`` — clear a provider's stored credentials.
+* ``model.reveal_key`` — read back the one key ``save_key`` stored, for a
+  reader who pressed the eye beside it.
 * ``model.add_model`` / ``model.remove_model`` — edit a provider's curated
   model list.
 * ``model.endpoints`` / ``model.add_endpoint`` / ``model.remove_endpoint`` —
@@ -70,6 +72,7 @@ from raven.rpc.models import (
     ModelOptionsParams,
     ModelRemoveEndpointParams,
     ModelRemoveModelParams,
+    ModelRevealKeyParams,
     ModelSaveKeyParams,
     ModelSetFieldsParams,
     ModelSetProtocolParams,
@@ -655,6 +658,31 @@ async def model_disconnect(params: dict, *, agent_loop_factory: "AgentLoopFactor
     return {"disconnected": True}
 
 
+async def model_reveal_key(params: dict) -> dict:
+    """The API key a provider has saved, read back for the reader who asked to see it.
+
+    Nothing else sends the page a key: `model.options` says whether one is set
+    and stops there, on every poll. This is the one way back, for one provider
+    at a time and only when the eye beside its key field is pressed, and it
+    answers with that key alone -- the flat ``api_key`` the field edits and
+    `model_save_key` writes, never the rest of the section, an endpoint's key
+    or one taken from the environment.
+
+    It reaches no further than a signed-in page already does: the same sheet
+    can point the provider at another address, and the next call carries the
+    key there. What staying out of `model.options` buys is a key that does not
+    ride along on every snapshot, log and screenshot of a page nobody asked to
+    unmask.
+    """
+    parsed = _parse(ModelRevealKeyParams, params)
+    try:
+        section = await asyncio.to_thread(get_provider_config, parsed.slug, redact_secrets=False)
+    except KeyError as exc:
+        raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    key = section.get("api_key")
+    return {"api_key": key if isinstance(key, str) and key else None}
+
+
 def _stored_spelling(slug: str, model: str) -> str:
     """The id to store for a model the user typed. See ``providers.wire``.
 
@@ -985,6 +1013,7 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
     dispatcher.register("model.set_protocol", model_set_protocol)
     dispatcher.register("model.save_key", partial(model_save_key, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.disconnect", partial(model_disconnect, agent_loop_factory=agent_loop_factory))
+    dispatcher.register("model.reveal_key", model_reveal_key)
     dispatcher.register("model.fetch_models", model_fetch_models)
     dispatcher.register("model.add_model", model_add_model)
     dispatcher.register("model.add_models", model_add_models)

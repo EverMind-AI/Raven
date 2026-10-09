@@ -1199,6 +1199,37 @@
       "errors": []
     },
     {
+      "name": "model.reveal_key",
+      "summary": "Read back the API key a provider has saved, for a reader who asked to see it.",
+      "params": [
+        {
+          "name": "slug",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "ModelRevealKeyResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "api_key": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The key saved in the provider's own section -- the one `model.save_key` writes -- or null when none is saved there. A key the provider takes from the environment or from its endpoints list is not read back."
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    {
       "name": "model.fetch_models",
       "summary": "What a provider can serve: the bundled catalogue unioned with whatever the vendor names when it can be reached. Each row carries the registry's name and tags, its window, the bucket it filters into, whether this provider's list already has it, and which source it came from. A read -- nothing is written until a row is added.",
       "params": [
