@@ -1956,9 +1956,10 @@ async def test_dispatch_streams_the_answer_and_nothing_else(tmp_path: Path) -> N
     assert reply == "pong"
 
 
-async def test_dispatch_streams_no_more_than_it_returns(tmp_path: Path) -> None:
-    """The reply is truncated to ``max_output_chars``; an uncapped stream would
-    render text the record never stores."""
+async def test_a_streamed_message_is_capped_like_the_reply(tmp_path: Path) -> None:
+    """The reply is truncated to ``max_output_chars``, and so is each message
+    the stream carries; an uncapped stream would render text the record never
+    stores."""
     seen: list[str] = []
 
     async def on_delta(text: str) -> None:
