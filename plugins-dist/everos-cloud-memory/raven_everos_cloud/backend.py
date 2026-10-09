@@ -496,6 +496,8 @@ class EverosCloudBackend:
         for index, message in enumerate(payload):
             item_size = len(json.dumps(message, ensure_ascii=False).encode("utf-8"))
             if item_size > ADD_MAX_BYTES:
+                # ponytail: a single message over the ceiling is dropped whole; chunk one
+                # message across adds if real turns ever hit this.
                 dropped = True
                 self._logger.warning(
                     "EverosCloudBackend.store: message %d of session %s is %d bytes, over the %d-byte ceiling; not stored",
