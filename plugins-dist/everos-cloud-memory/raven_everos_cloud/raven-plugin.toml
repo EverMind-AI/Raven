@@ -1,0 +1,26 @@
+[plugin]
+id           = "everos-cloud-memory"
+version      = "0.1.0"
+display_name = "EverOS Cloud memory"
+raven        = ">=0.1"
+bundled      = false
+
+[[plugin.contributes.memory_backends]]
+name    = "everos-cloud"
+factory = "raven_everos_cloud.backend:make_backend"
+
+# Step 4 of ``raven onboard``: one screen that asks for the key (unless the
+# file or the environment already holds one), probes it, and records it under
+# this plugin's slice. Named after the backend it configures, which is what
+# lets the host resolve this plugin's config slice for it.
+[[plugin.contributes.onboard]]
+name    = "everos-cloud"
+factory = "raven_everos_cloud.onboard:make_onboard_step"
+
+# The backend reads plugins.config["everos-cloud-memory"]. api_key is read
+# first; EVEROS_CLOUD_API_KEY in the environment is the fallback. Identity is
+# not declared here: user_id / agent_id come from the host through
+# ServiceLocator, never from a plugin's own slice.
+[plugin.config_schema]
+api_key  = { type = "string" }
+base_url = { type = "string" }
