@@ -1436,6 +1436,17 @@ async def test_everos_roles_answer_other_backend_for_the_cloud_and_for_a_stale_n
         assert set(out["sections"]) == {"embedding"} and set(out["required"]) <= {"embedding"}
 
 
+async def test_everos_roles_hide_every_everos_row_on_a_cloud_only_install(memory_cfg, monkeypatch):
+    """The local plugin absent: still reason other_backend, so the page draws no EverOS row and
+    not the 'plugin isn't installed' pill on each of them; sections is empty because nothing can
+    describe the embedding pin there."""
+    memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    monkeypatch.setattr("raven.core.plugin_stack.everos_plugin_installed", lambda: False)
+    out = await rpc_console.settings_everos({})
+    assert out["available"] is False and out["reason"] == "other_backend" and "everos-cloud" in out["note"]
+    assert out["sections"] == {} and out.get("required", []) == []
+
+
 async def test_everos_roles_unchanged_for_everos_and_none(memory_cfg):
     for backend in ("everos", None):
         memory_cfg(backend)
@@ -1466,6 +1477,9 @@ async def test_settings_set_refuses_undeclared_wrong_type_and_unknown_plugin(mem
         ("plugins.config.everos-cloud-memory", {"api_key": "x"}),
         # Declared, but not settable: the endpoint decides where the stored key goes.
         ("plugins.config.everos-cloud-memory.base_url", "http://attacker.test"),
+        # A dotted field and an empty plugin id never reach the slice.
+        ("plugins.config.everos-cloud-memory.api_key.x", "x"),
+        ("plugins.config..api_key", "x"),
     ):
         with pytest.raises(ConfigValidationError) as exc:
             await rpc_console.settings_set({"key": key, "value": value})
@@ -1513,6 +1527,12 @@ async def test_provider_save_does_not_restart_everos_for_the_cloud_backend(memor
         "everos-cloud",
         everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}},
         providers=providers,
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert applied == []
+    # Memory off: nothing runs on EverOS, so a provider save restarts nothing (spec C9's one exception, H15).
+    memory_cfg(
+        None, everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}}, providers=providers
     )
     rpc_console.everos_follows_provider("openrouter", object())
     assert applied == []
