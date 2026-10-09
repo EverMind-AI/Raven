@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+import raven.agent.subagent.backends.env as env_mod
 from raven.agent.subagent import kimi_code
 from raven.agent.subagent.probe_state import Remedy
 from raven.config.schema import ThirdPartyAcpSubagentConfig
@@ -462,3 +463,26 @@ def test_the_plan_and_config_kinds_travel_to_the_page() -> None:
     assert Remedy.from_wire(Remedy("plan", PRICING).to_wire()) == Remedy("plan", PRICING)
     assert Remedy.from_wire(Remedy("config", "kimi doctor config").to_wire()) == Remedy("config", "kimi doctor config")
     assert Remedy.from_wire({"kind": "plan"}) == Remedy("plan")
+
+
+async def test_on_windows_the_kimi_asked_is_the_one_on_the_childs_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ask runs the ``kimi`` the connect started, so it is looked up the way the launch looks it up.
+
+    On Windows that is the child's own PATH, under CreateProcess's rule that a name
+    with no extension means ``.exe``; the gateway's PATH is the one CreateProcess
+    would have searched, and an agent installed after raven started is not on it.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    kimi = bin_dir / "kimi.exe"
+    kimi.write_text("#!/bin/sh\nprintf '%s\\n' 'kimi, version 9.9.9'\n", encoding="utf-8")
+    kimi.chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(bin_dir)})
+
+    assert await kimi_code._run(ThirdPartyAcpSubagentConfig(name="Kimi Code", command="kimi acp"), "--version") == (
+        0,
+        "kimi, version 9.9.9\n",
+    )
