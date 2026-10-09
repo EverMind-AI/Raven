@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from raven.cli import onboard_commands, subagent_setup
@@ -577,6 +578,19 @@ def test_configure_own_key_writes_it(tmp_path: Path, monkeypatch: pytest.MonkeyP
     )
     assert subagent_setup.configure_subagents(warnings=[]) == 1
     assert "CODE_API_KEY=sk-mine" in (tmp_path / "raven-code" / ".env").read_text(encoding="utf-8")
+
+
+def test_the_key_probe_names_a_refused_certificate_for_what_it_is(tmp_path: Path) -> None:
+    """The key prompt shows this status and offers to re-enter the key, which a
+    certificate this machine does not trust has nothing to do with."""
+    from raven.cli._key_probe import probe_models
+    from tests._tls import OpenAIModels, https_endpoint, private_ca
+
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        result = probe_models("sk-mine", f"{origin}/v1", transport=httpx.HTTPTransport())
+
+    assert result["status"] == "certificate_untrusted", result
 
 
 def test_configure_skip_writes_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import functools
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -678,6 +680,56 @@ def test_a_certificate_refused_through_an_environment_proxy_is_not_an_unreachabl
         result = probe_provider("custom", config_path=cfg_path, timeout_s=5)
 
     assert result["status"] == "certificate_untrusted"
+
+
+_PROXY_VARIABLES = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+
+
+def test_a_codex_catalogue_behind_an_untrusted_certificate_is_named_for_what_it_is(
+    cfg_path: Path, oauth_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex is checked by asking its backend for the account's models, not through the generic probe.
+
+    The reader this matters to sits behind a proxy that inspects TLS, and a
+    refusal reported as a network error sends them to check the network.
+    """
+    for var in _PROXY_VARIABLES:
+        monkeypatch.delenv(var, raising=False)
+    _codex_credential()
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("live", None))
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        monkeypatch.setattr("raven.providers.codex_catalog.CATALOG_URL", f"{origin}/backend-api/codex/models")
+        result = probe_provider("openai_codex", config_path=cfg_path, timeout_s=5)
+
+    assert result["status"] == "certificate_untrusted", result
+
+
+def test_a_minimax_token_renewal_behind_an_untrusted_certificate_is_named_for_what_it_is(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An expired token is renewed before the check, and the renewal meets the certificate first.
+
+    Reported as a missing token it sends the reader to sign in again, which meets
+    the same certificate.
+    """
+    from raven.providers import minimax_oauth
+
+    for var in _PROXY_VARIABLES:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path / "minimax"))
+    minimax_oauth.save_token(
+        "global",
+        minimax_oauth.MiniMaxOAuthToken("old-access", "old-refresh", 0, "https://api.minimax.io/anthropic/v1"),
+    )
+    monkeypatch.setattr(minimax_oauth, "get_token", functools.partial(minimax_oauth.get_token, sleep_fn=lambda _: None))
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        renewing_here = dataclasses.replace(minimax_oauth.CONFIGS["global"], auth_base_url=origin)
+        monkeypatch.setitem(minimax_oauth.CONFIGS, "global", renewing_here)
+        result = probe_provider("minimax_global", config_path=cfg_path, timeout_s=5)
+
+    assert result["status"] == "certificate_untrusted", result
 
 
 def test_a_proxy_error_that_quotes_the_proxy_is_redacted_too(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

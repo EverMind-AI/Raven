@@ -1359,7 +1359,11 @@ def test_provider(
        render as ``http_{code}``. Network errors → ``network_error``, with
        two named apart: a server certificate that fails verification →
        ``certificate_untrusted``, and a proxy from the environment that
-       cannot be reached → ``proxy_unreachable``.
+       cannot be reached → ``proxy_unreachable``. The certificate is named
+       on every path whose failure still carries the handshake's error,
+       OAuth token renewal included; LiteLLM's Copilot token exchange and
+       ChatGPT renewal drop that error, so those still read as the
+       credential.
 
     Returns a dict, never raises. ``transport`` is injectable so unit tests
     can mount an ``httpx.MockTransport`` without touching real network.
@@ -1441,7 +1445,9 @@ def test_provider(
         except Exception as exc:
             return {
                 "ok": False,
-                "status": "oauth_token_missing",
+                # A renewal refused at the handshake is not a missing token:
+                # signing in again meets the same certificate.
+                "status": "certificate_untrusted" if is_untrusted_certificate(exc) else "oauth_token_missing",
                 "elapsed_ms": 0,
                 "http_status": None,
                 "models_count": None,
@@ -2129,7 +2135,7 @@ def _probe_codex_catalog(*, timeout_s: float) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         return {
             "ok": False,
-            "status": "network_error",
+            "status": "certificate_untrusted" if is_untrusted_certificate(exc) else "network_error",
             "elapsed_ms": int((time.monotonic() - start) * 1000),
             "http_status": None,
             "models_count": None,
