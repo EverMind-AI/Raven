@@ -345,7 +345,7 @@ async def test_reveal_key_is_null_for_a_provider_with_no_key_saved(fake_home: Pa
 
 
 async def test_reveal_key_answers_with_the_key_alone(fake_home: Path) -> None:
-    """Not the section around it: not a header that can carry a secret of its own, not an endpoint's key."""
+    """Not the section around it: not the address, not a header that can carry a secret of its own."""
     _write_config(
         fake_home,
         {
@@ -354,12 +354,44 @@ async def test_reveal_key_answers_with_the_key_alone(fake_home: Path) -> None:
                     "apiKey": "sk-or-flat",
                     "apiBase": "https://relay.example/v1",
                     "extraHeaders": {"X-Relay-Token": "hdr-secret"},
-                    "endpoints": [{"label": "second", "apiKey": "sk-or-second"}],
                 }
             }
         },
     )
     assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": "sk-or-flat"}
+
+
+@pytest.mark.parametrize(
+    "slug, section",
+    [
+        # `endpoint add` leaves the flat key in place; requests carry the endpoint's.
+        ("openrouter", {"apiKey": "sk-or-left-behind", "endpoints": [{"label": "rotated", "apiKey": "sk-or-in-use"}]}),
+        ("gemini", {"apiKey": "g-left-behind", "apiKeyList": ["g-in-use-1", "g-in-use-2"]}),
+    ],
+)
+async def test_reveal_key_does_not_show_a_flat_key_requests_do_not_carry(
+    fake_home: Path, slug: str, section: dict
+) -> None:
+    """An endpoints list or a key list replaces the flat key outright (`provider_endpoints`).
+
+    Shown beside a provider marked connected, a flat key left behind would read
+    as the key in use, possibly the very one the endpoint was added to replace.
+    """
+    _write_config(fake_home, {"providers": {slug: section}})
+    assert await model_reveal_key({"slug": slug}) == {"api_key": None}
+
+
+async def test_reveal_key_shows_a_flat_key_an_endpoint_still_carries(fake_home: Path) -> None:
+    """Decided by what requests carry, not by the section's shape: a lone endpoint holding the same key uses it."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "openrouter": {"apiKey": "sk-or-same", "endpoints": [{"label": "only", "apiKey": "sk-or-same"}]}
+            }
+        },
+    )
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": "sk-or-same"}
 
 
 async def test_reveal_key_reads_what_is_saved_not_the_environment(fake_home: Path, monkeypatch) -> None:

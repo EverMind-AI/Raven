@@ -112,7 +112,10 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
      field for, and sending it stored an address nobody typed. */
   const basePlace = kind === 'oauth' ? null : !needsKey(p) && takesBase(p) ? 'above' : !takesKey(p) ? 'alone' : null
   const save = (): void => {
-    const k = key.trim()
+    /* A key the eye put there, unedited, is the stored one: saving it again
+       would rewrite the config (and restart EverOS when one of its roles runs
+       here) for no change, so it goes as an empty field does. */
+    const k = key === revealed ? '' : key.trim()
     const b = base.trim()
     if (needsKey(p) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }

@@ -1,6 +1,6 @@
 """``model.*`` RPC handlers — backend for the TUI ``/model`` v1 picker.
 
-Nine methods drive the picker:
+These handlers back the TUI ``/model`` picker and the page's provider pane:
 
 * ``model.options`` — current model/provider + one row per provider.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
@@ -46,6 +46,7 @@ from raven.config.update_providers import (
 )
 from raven.providers.auth import credential_status
 from raven.providers.common_models import common_models_for, litellm_models_for
+from raven.providers.endpoints import provider_endpoints
 from raven.providers.registry import (
     SHAPE_ENDPOINT,
     SHAPE_LOCAL,
@@ -661,18 +662,21 @@ async def model_disconnect(params: dict, *, agent_loop_factory: "AgentLoopFactor
 async def model_reveal_key(params: dict) -> dict:
     """The API key a provider has saved, read back for the reader who asked to see it.
 
-    Nothing else sends the page a key: `model.options` says whether one is set
-    and stops there, on every poll. This is the one way back, for one provider
-    at a time and only when the eye beside its key field is pressed, and it
-    answers with that key alone -- the flat ``api_key`` the field edits and
-    `model_save_key` writes, never the rest of the section, an endpoint's key
-    or one taken from the environment.
+    `model.options` says whether a key is set and stops there, on every poll.
+    This reads one provider's key back when the eye beside its key field is
+    pressed, and answers with that key alone -- the flat ``api_key`` the field
+    edits and `model_save_key` writes, never the rest of the section, an
+    endpoint's key or one taken from the environment.
 
-    It reaches no further than a signed-in page already does: the same sheet
-    can point the provider at another address, and the next call carries the
-    key there. What staying out of `model.options` buys is a key that does not
-    ride along on every snapshot, log and screenshot of a page nobody asked to
-    unmask.
+    Only when it is the key requests carry: an ``endpoints`` list or Gemini's
+    ``api_key_list`` replaces the flat key outright (`provider_endpoints`), and
+    a flat key left behind under one is not a key in use, so that section
+    answers null rather than show it beside a provider marked connected.
+
+    It reaches no further than a signed-in page already did: the CLI bridge
+    answers `provider get --show-secrets` to the same page. What staying out
+    of `model.options` buys is a key that does not ride along on every
+    snapshot, log and screenshot of a page nobody asked to unmask.
     """
     parsed = _parse(ModelRevealKeyParams, params)
     try:
@@ -680,7 +684,10 @@ async def model_reveal_key(params: dict) -> dict:
     except KeyError as exc:
         raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
     key = section.get("api_key")
-    return {"api_key": key if isinstance(key, str) and key else None}
+    if not isinstance(key, str) or not key:
+        return {"api_key": None}
+    in_use = [endpoint.api_key for endpoint in provider_endpoints(section)]
+    return {"api_key": key if in_use == [key] else None}
 
 
 def _stored_spelling(slug: str, model: str) -> str:

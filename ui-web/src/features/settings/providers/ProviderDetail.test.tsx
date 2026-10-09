@@ -119,6 +119,35 @@ describe('the eye beside a connected provider\'s key', () => {
     expect(keyField().value).toBe('sk-or-new')
   })
 
+  it.each([
+    ['Update', (): void => {
+      fireEvent.click(keyField().closest('.settings-taglist')!.querySelector(':scope > button.mini')!)
+    }],
+    ['Enter', (): void => { fireEvent.keyDown(keyField(), { key: 'Enter' }) }],
+  ])('sends no key on %s while the revealed one is unedited: the stored key does not go back', async (_how, press) => {
+    /* What the empty field sends, so it is refused the way the empty field is,
+       rather than rewriting the config with the key it already holds. */
+    const { calls } = install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().value).toBe('sk-or-saved'))
+
+    await act(async () => { press() })
+    expect(calls.filter(([name]) => name === 'provider').map(([, args]) => args))
+      .toEqual([{ op: 'save_key', slug: 'openrouter' }])
+  })
+
+  it('saves an edited revealed key as the new key', async () => {
+    const { calls } = install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().value).toBe('sk-or-saved'))
+    fireEvent.change(keyField(), { target: { value: 'sk-or-saved-2' } })
+    await act(async () => { fireEvent.keyDown(keyField(), { key: 'Enter' }) })
+    expect(calls.filter(([name]) => name === 'provider').map(([, args]) => args))
+      .toEqual([{ op: 'save_key', slug: 'openrouter', api_key: 'sk-or-saved-2' }])
+  })
+
   it('fetches nothing for a provider that is not connected', async () => {
     install(snap(), { revealKey: answering('sk-should-not-show') })
     await open('openai')
