@@ -17,9 +17,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOST_DIR = REPO_ROOT / "raven"
-# Every distribution beside the host wheel, by its package directory; a second
-# memory plugin landed beside the first, and a scan that knew one by name
-# would have let the other import whatever it liked.
+# Every distribution beside the host wheel, by its package directory: a scan
+# that knew one plugin by name would let any other import whatever it liked.
 PLUGIN_DIRS = sorted(d for d in (REPO_ROOT / "plugins-dist").glob("*/raven_*") if d.is_dir())
 
 _PLUGIN_IMPORT = re.compile(r"^\s*(from|import)\s+raven_everos(_cloud)?\b", re.M)

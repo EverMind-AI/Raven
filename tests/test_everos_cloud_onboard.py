@@ -14,6 +14,8 @@ from raven.plugins import OnboardUI, PluginContext, ServiceLocator, StepOutcome
 from raven_everos_cloud.onboard import CloudKeyScreen, make_onboard_step
 from tests._everos_cloud_fake import FakeCloud
 
+pytestmark = pytest.mark.everos_cloud
+
 BACK = object()
 
 

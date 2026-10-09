@@ -1094,13 +1094,11 @@ def _one_memory_plugin_in_discovery(request: pytest.FixtureRequest, monkeypatch:
     walks ``raven onboard``'s memory step through the real registry met the
     backend chooser -- a question those tests never scripted an answer to,
     because they describe an install with one memory plugin. The fixture keeps
-    that world for them; the cloud plugin's own tests (``tests/test_everos_cloud_*``)
-    and any test marked ``everos_cloud`` see both. Only discovery is touched:
+    that world for them; a test marked ``everos_cloud`` (the cloud plugin's own
+    files carry the mark module-wide) sees both. Only discovery is touched:
     ``import raven_everos_cloud`` and ``find_spec`` answer as installed everywhere.
     """
-    if request.node.get_closest_marker("everos_cloud") or Path(str(request.node.fspath)).name.startswith(
-        "test_everos_cloud"
-    ):
+    if request.node.get_closest_marker("everos_cloud"):
         return
     from importlib import metadata
 
