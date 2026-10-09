@@ -279,17 +279,15 @@ describe('the cloud memory card', () => {
     const mod = await load({ 'settings.everosCloud': cloud, 'settings.set': { applied: true, previous: null } })
     const first = await mod.settingsSource.load()
     /* The probe is not awaited by load (a slow service must not hold the page): the
-       snapshot load hands back does not carry it yet, it lands right after. */
+       snapshot load hands back does not carry it yet; everosCloud() resolves when it lands. */
     expect(first.everosCloud ?? null).toBe(null)
-    await vi.waitFor(() => expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(1))
-    const second = await mod.settingsSource.load()
-    expect(second.everosCloud).toEqual(cloud)
-    await vi.waitFor(() => expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(2))
+    expect(await mod.settingsSource.everosCloud()).toEqual(cloud)
+    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(1)
 
     await mod.settingsSource.set('plugins.config.everos-cloud-memory.api_key', 'ecm-key-rot8')
-    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(3)
+    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(2)
 
     await mod.settingsSource.set('cron.defaultTimezone', 'UTC')
-    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(3)
+    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(2)
   })
 })

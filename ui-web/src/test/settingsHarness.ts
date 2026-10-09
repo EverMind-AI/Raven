@@ -163,6 +163,7 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
   const rec = (name: string, args: unknown): SettingsSnapshot => { calls.push([name, args]); return data }
   const built: SettingsSource = {
     load: async () => data,
+    everosCloud: async () => data.everosCloud ?? null,
     set: async (key, value) => rec('set', { key, value }),
     everosSet: async (section, model, provider, protocol) =>
       rec('everosSet', { section, model, provider, ...(protocol ? { protocol } : {}) }),
