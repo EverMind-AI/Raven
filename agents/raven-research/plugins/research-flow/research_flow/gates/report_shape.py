@@ -4,7 +4,11 @@
 (``## Answer`` / ``## Findings`` / ``## Limitations``) and the same label added the rule
 that the template outranks a format the question itself asks for. Both live in
 the system prompt, and a system prompt is the weakest place to put an
-instruction that a conversation can argue with:
+instruction that a conversation can argue with. Under
+``final_shape.report_layout = "reader"`` the same three parts take the reader's
+form - the answer as the opening blockquote, the body under its own ``##``
+headings, the limits as the last one - and are read back under the same three
+names, so everything below applies to both layouts:
 
 * **Recency loses to it.** Measured on this repo's own demo sessions (30 turns
   carrying the template, dr@3.4): 8/14 research turns well-formed, but only
