@@ -319,8 +319,9 @@ class _TurnCollector:
                 self.answer_at = self._now()
             texts = content_texts(update.get("content"))
             said = "".join(texts)
-            if texts and self._tool_ran and self.answer:
-                texts.insert(0, _MESSAGE_BREAK)
+            broke = bool(texts) and self._tool_ran and bool(self.answer)
+            if broke:
+                self.answer.append(_MESSAGE_BREAK)
                 self._on_delta = self._budgeted()
             if texts:
                 self._tool_ran = False
@@ -334,6 +335,11 @@ class _TurnCollector:
                     self.events[-1]["text"] += said
                 else:
                     self.events.append({"t": "say", "text": said, "at": self._now()})
+            if broke and self._deliver is not None:
+                # Raven's separator, not the agent's words, so it rides past the
+                # message's budget the way the partial-turn notice does: counted,
+                # it would cut the last characters of a reply that fits its cap.
+                await self._deliver(_MESSAGE_BREAK)
             if self._on_delta is not None:
                 for text in texts:
                     await self._on_delta(text)

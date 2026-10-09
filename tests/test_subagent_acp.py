@@ -2133,9 +2133,11 @@ async def test_the_live_budget_is_spent_per_message_like_the_reply(tmp_path: Pat
 
     Spent across the whole turn, narration would use up the budget and cut a
     direct chat's report short on screen -- with no notice, because the reply it
-    stands for fits and is never capped.
+    stands for fits and is never capped. The break between messages is raven's
+    own, so it spends no message's budget either: the cap here is exactly the
+    reply's length, the one size at which a break that counted would cut it.
     """
-    cfg = stub_config("a", mode="two_messages", max_output_chars=len("\n\nit is a repo."))
+    cfg = stub_config("a", mode="two_messages", max_output_chars=len("it is a repo."))
     backend = build_third_party_backend(cfg)
     seen: list[str] = []
 
