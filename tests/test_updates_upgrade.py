@@ -1793,6 +1793,21 @@ def test_handoff_carries_a_present_boxlite_into_the_helper_env(
     assert env["RAVEN_UPGRADE_KEEP_SANDBOX"] == "1"
 
 
+def test_boxlite_installed_reads_the_running_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both faces of the lookup: the handoff flag follows what the environment
+    actually holds, because that is what the rebuild can drop."""
+    monkeypatch.setattr(upgrade_commands.metadata, "version", lambda name: "0.9.5")
+    assert upgrade_commands._boxlite_installed() is True
+
+    def missing(name: str) -> str:
+        raise upgrade_commands.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(upgrade_commands.metadata, "version", missing)
+    assert upgrade_commands._boxlite_installed() is False
+
+
 def test_windows_handoff_starts_external_helper(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
