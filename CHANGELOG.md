@@ -190,6 +190,13 @@ All notable changes to Raven are documented here.
   provider key, which was untrue when the host's key sits on a provider
   other than the one its selected model uses.
 
+- The research reviewer runs on providers that refuse a forced tool call.
+  DeepSeek in thinking mode, served through LiteLLM and so outside the
+  Anthropic transport's own retry, answers a named `tool_choice` with HTTP
+  400, so every review on it failed open and the report shipped marked
+  unreviewed; the reviewer now asks again with `tool_choice=auto` and keeps
+  doing so.
+
 - `raven doctor` warns when `permissions.mode` is `full` and when
   `tools.sandbox.backend` is `none`. Ask-tier calls then run without asking,
   and commands run on the host with no isolation. The exit code stays 0.
