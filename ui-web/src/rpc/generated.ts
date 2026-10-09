@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 206 methods, 119 component schemas.
+// 207 methods, 119 component schemas.
 
 /* eslint-disable */
 /**
