@@ -34,6 +34,7 @@ import math
 import os
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Literal
 
@@ -77,8 +78,16 @@ _STALE_IDENTITY_KEYS = ("user_id", "agent_id", "userId", "agentId")
 
 
 def flush_timeout_s() -> float:
-    """Read at call time so the environment hook works in a running process."""
-    return float(os.environ.get(FLUSH_TIMEOUT_ENV) or DEFAULT_FLUSH_TIMEOUT_S)
+    """Read at call time so the environment hook works in a running process.
+
+    A malformed value falls back to the default: ``store`` must never raise
+    (C8), and this is the one place a typo in the environment could make it.
+    """
+    raw = os.environ.get(FLUSH_TIMEOUT_ENV, "")
+    try:
+        return float(raw) if raw else DEFAULT_FLUSH_TIMEOUT_S
+    except ValueError:
+        return DEFAULT_FLUSH_TIMEOUT_S
 
 
 def resolve_api_key(config: Mapping[str, Any]) -> tuple[str, str | None]:
@@ -149,7 +158,9 @@ def convert_messages(
                 for part in content
                 if isinstance(part, dict) and part.get("type") == "text"
             ).strip()
-        if not isinstance(content, str):
+        if content is None:
+            content = ""  # a tool-call-only turn; "None" would be read by the extraction model as a reply
+        elif not isinstance(content, str):
             content = str(content)
         tool_calls = m.get("tool_calls") if role == "assistant" else None
         if not content and not tool_calls:
@@ -231,6 +242,34 @@ def _score(row: dict[str, Any], default: float = 0.0) -> float:
         return float(value) if value is not None else default
     except (TypeError, ValueError):
         return default
+
+
+def _joined(*parts: Any) -> str:
+    return " - ".join(str(part).strip() for part in parts if part)
+
+
+def session_data_to_memories(data: Any, owner_type: _OwnerType) -> list[Memory]:
+    """One session's rows as the lines a reader gets back (``recall_session``).
+
+    Episodes are rendered as ``subject - episode``: ``summary`` is a hard
+    200-character prefix of ``episode`` (as the local plugin's ``_session_text``
+    records), so it is the fallback, never the choice -- taking it would hand
+    the sub-agent memory record a sentence cut mid-word. Search hits keep the
+    summary, as the local plugin's do.
+    """
+    memories = search_data_to_memories(data, owner_type)
+    if owner_type != "user" or not isinstance(data, dict):
+        return memories
+    rows = [ep for ep in data.get("episodes") or [] if isinstance(ep, dict)]
+    episodes = iter(rows)
+    out: list[Memory] = []
+    for memory in memories:
+        if memory.metadata.get("type") != "episode":
+            out.append(memory)
+            continue
+        row = next(episodes)
+        out.append(replace(memory, text=_joined(row.get("subject"), row.get("episode") or row.get("summary"))))
+    return out
 
 
 def search_data_to_memories(data: Any, owner_type: _OwnerType) -> list[Memory]:
@@ -399,17 +438,25 @@ class EverosCloudBackend:
             try:
                 r = await self._post("/api/v2/memory/flush", {"session_id": session_id}, timeout=remaining)
                 r.raise_for_status()
-            except Exception as exc:  # noqa: BLE001 - a sweep must not fail the shutdown
-                self._logger.warning("EverOS Cloud stop: flush of session %s failed (%s)", session_id, exc)
+            except (httpx.TimeoutException, asyncio.TimeoutError):
+                # The budget is spent waiting on this one; the rest get no turn.
+                self._logger.warning(
+                    "EverOS Cloud stop: flush of session %s timed out; the budget is spent", session_id
+                )
                 break
+            except Exception as exc:  # noqa: BLE001 - a sweep must not fail the shutdown
+                # A refusal costs no time: the next session still gets its flush,
+                # as the local plugin's sweep does.
+                self._logger.warning("EverOS Cloud stop: flush of session %s failed (%s)", session_id, exc)
+                continue
             self._unflushed.discard(session_id)
             flushed += 1
         self._logger.info("flushed %d session(s) at stop", flushed)
         if self._unflushed:
             self._logger.warning(
-                "EverOS Cloud stop: flush budget %ss exhausted with %d session(s) unflushed: %s",
-                SHUTDOWN_FLUSH_BUDGET_S,
+                "EverOS Cloud stop: %d session(s) left unflushed (budget %ss): %s",
                 len(self._unflushed),
+                SHUTDOWN_FLUSH_BUDGET_S,
                 sorted(self._unflushed),
             )
 
@@ -554,7 +601,7 @@ class EverosCloudBackend:
         except Exception as exc:  # noqa: BLE001 - a read-back must not fail the caller
             self._logger.warning("EverosCloudBackend.recall_session failed (%s); returning empty", exc)
             return []
-        return search_data_to_memories(payload.get("data"), owner_type)
+        return session_data_to_memories(payload.get("data"), owner_type)
 
     async def delete(self, memory_id: str, *, kind: str | None = None) -> bool:
         # The cloud deletes by scope, not by memory id, and no caller remains.
