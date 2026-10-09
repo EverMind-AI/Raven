@@ -108,9 +108,20 @@ def current_delegate() -> DelegateTable | None:
     return _TABLE.get()
 
 
+def bind_delegate_for_turn(table: DelegateTable | None) -> None:
+    """Replace the table inside the caller's existing turn scope.
+
+    ``load_playbook`` runs after the outer scope has opened; setting the same
+    ContextVar here makes a loaded durable Harness visible for the remainder of
+    that turn, and the outer scope's token still restores the previous value.
+    """
+    _TABLE.set(table or None)
+
+
 __all__ = [
     "DelegateTable",
     "Worker",
+    "bind_delegate_for_turn",
     "current_delegate",
     "delegate_scope",
     "dispatch_charter",

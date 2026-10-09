@@ -25,7 +25,15 @@ from raven.agent.subagent.prompt_capabilities import AgentCapabilities
 from raven.agent.subagent.prompt_errors import DagValidationError
 from raven.config.schema import PlaybookConfig
 from raven.playbook import NodeSpec, PlaybookSpec, Triggers
-from raven.playbook.agent_generator import WorkerTableGenerator, build_table, emit_tool, render_charter
+from raven.playbook.agent_generator import (
+    PERSONA_SYSTEM_PROMPT,
+    TASK_SYSTEM_PROMPT,
+    WorkerTableGenerator,
+    build_table,
+    persona_tool,
+    render_charter,
+    task_tool,
+)
 from raven.playbook.agent_spec import AgentPlaybookSpec
 from raven.providers.base import LLMProvider, LLMResponse
 
@@ -451,13 +459,40 @@ def test_the_brief_stands_in_when_no_prompt_was_written() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def test_task_and_persona_generation_have_distinct_instructions() -> None:
+    task = " ".join(TASK_SYSTEM_PROMPT.split())
+    persona = " ".join(PERSONA_SYSTEM_PROMPT.split())
+
+    assert "one task instance, not a persona specification" in task
+    assert "Do not invent a DAG here" in task
+    assert "digital-person Harness" in persona
+    assert "Do not design a Workflow" in persona
+    assert "participant functions" not in task.lower()
+    assert "participant functions" in persona.lower()
+
+
 def test_the_roster_and_the_tools_are_enums_not_prose() -> None:
     """A name the host cannot resolve is refused at the boundary rather than
     diagnosed after, which is what keeps it out of the repair budget."""
-    schema = emit_tool(["Raven-Research"], ["web_search"])[0]["function"]["parameters"]
+    schema = task_tool(["Raven-Research"], ["web_search"])[0]["function"]["parameters"]
     worker = schema["properties"]["workers"]["items"]["properties"]
-    assert worker["name"]["enum"] == ["Raven-Research"]
+    assert worker["agent"]["enum"] == ["Raven-Research"]
     assert worker["tools"]["items"]["enum"] == ["web_search"]
+    assert set(worker) <= {"as", "agent", "prompt", "tools"}
+
+
+def test_persona_tool_exposes_rich_harness_fields_and_one_function_surface() -> None:
+    schema = persona_tool(["Raven-Research"], ["web_search"])[0]["function"]["parameters"]
+    coordinator = schema["properties"]["coordinator"]["properties"]
+    worker = schema["properties"]["workers"]["items"]["properties"]
+
+    assert {"brief", "systemPrompt", "stopWhen", "functions"} <= set(coordinator)
+    assert "agent" not in coordinator and "as" not in coordinator
+    assert "coordinator" in schema["required"]
+    assert {"agent", "brief", "systemPrompt", "stopWhen", "functions"} <= set(worker)
+    assert set(worker["functions"]["properties"]) == {"intake", "advise", "judge", "salvage"}
+    assert set(coordinator["functions"]["properties"]) == set(worker["functions"]["properties"])
+    assert "code" not in worker
 
 
 def test_a_worker_off_the_roster_is_dropped_not_repaired() -> None:
@@ -631,10 +666,8 @@ async def test_the_setup_call_runs_on_the_binding_it_was_handed(workspace) -> No
 def test_the_roster_reaches_the_generator_with_what_each_agent_is_for(workspace) -> None:
     """An enum of names is only selectable when the names say what they are.
     The shipped roster reads that way; a deployment's own does not."""
-    from raven.playbook.agent_generator import emit_tool
-
-    schema = emit_tool(["alpha", "beta"], ["grep"], {"alpha": "owns legal research", "beta": "owns code review"})
-    described = schema[0]["function"]["parameters"]["properties"]["workers"]["items"]["properties"]["name"]
+    schema = persona_tool(["alpha", "beta"], ["grep"], {"alpha": "owns legal research", "beta": "owns code review"})
+    described = schema[0]["function"]["parameters"]["properties"]["workers"]["items"]["properties"]["agent"]
 
     assert described["enum"] == ["alpha", "beta"]
     assert "owns legal research" in described["description"]
@@ -642,11 +675,9 @@ def test_the_roster_reaches_the_generator_with_what_each_agent_is_for(workspace)
 
 
 def test_a_roster_that_says_nothing_still_renders(workspace) -> None:
-    from raven.playbook.agent_generator import emit_tool
-
-    described = emit_tool(["alpha"], ["grep"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
+    described = persona_tool(["alpha"], ["grep"])[0]["function"]["parameters"]["properties"]["workers"]["items"][
         "properties"
-    ]["name"]
+    ]["agent"]
     assert described["description"] == "Which sub-agent this worker is."
 
 
@@ -671,14 +702,14 @@ def test_two_agents_with_blank_descriptions_are_still_told_apart(workspace) -> N
     is about, and a generator shown only names can drop the one that can.
     ``spawn`` gates on these same capabilities, which is why they are shown.
     """
-    from raven.playbook.agent_generator import emit_tool, roster_note
+    from raven.playbook.agent_generator import roster_note
 
     metas = [_Meta("alpha"), _Meta("beta", stateful=True, reads_local_files=True, live_progress=True)]
     notes = {m.name: roster_note(m) for m in metas}
 
-    described = emit_tool(["alpha", "beta"], ["grep"], notes)[0]["function"]["parameters"]["properties"]["workers"][
+    described = persona_tool(["alpha", "beta"], ["grep"], notes)[0]["function"]["parameters"]["properties"]["workers"][
         "items"
-    ]["properties"]["name"]["description"]
+    ]["properties"]["agent"]["description"]
 
     assert "beta: reads local files" in described
     assert "resumable across dispatches" in described
@@ -692,3 +723,44 @@ def test_prose_and_capabilities_ride_together_when_a_row_has_both(workspace) -> 
     note = roster_note(_Meta("Raven-Research", owns="research: the live web read.", reads_local_files=True))
 
     assert note == "research: the live web read (reads local files)"
+
+
+def test_a_persona_is_told_to_converse_before_it_is_told_to_gate() -> None:
+    """Required inputs are a precondition on the work, not a filter on talking.
+
+    Caught in the app twice, and the second time was the lesson. A generated
+    travel Persona answered "hi" by counting the five trip details it did not
+    have -- first from an intake gate that ended the turn with no model call,
+    then, once that was fixed, from a systemPrompt that read its own input rule
+    as something to apply to every message.
+
+    The prompt used to REQUIRE the gate ("the coordinator must implement that
+    gate with intake"), which is what made a form out of a conversation: a
+    function that runs on every inbound message cannot tell a request for the
+    work from a greeting. So what is asserted here is the rule, not the two
+    phrasings that went wrong: a Persona converses, and its inputs gate the
+    work.
+    """
+    from raven.playbook.agent_generator import PERSONA_SYSTEM_PROMPT
+
+    assert "preconditions on the WORK, not a filter on the conversation" in PERSONA_SYSTEM_PROMPT
+    assert "raises missing inputs at no other time" in PERSONA_SYSTEM_PROMPT
+    # The mandate that produced the gate is gone, and stays gone.
+    assert "must implement that gate with intake" not in PERSONA_SYSTEM_PROMPT
+    # Functions are still demanded where prose cannot hold: a tool-argument
+    # boundary is judge's, and that is the distinction the rule turns on.
+    assert "belongs in judge on the seat making the call" in PERSONA_SYSTEM_PROMPT
+
+
+def test_the_intake_contract_states_when_it_runs() -> None:
+    """Whatever a generated intake does, it runs on every message.
+
+    A fact about the runtime rather than an example: a function that ends the
+    turn before any model call has to know it sees greetings too, or the first
+    thing it refuses is hello.
+    """
+    from raven.playbook.agent_generator import participant_function_guide
+
+    when = participant_function_guide()["intake"]["when"]
+    assert "EVERY inbound user text" in when
+    assert "return None" in when
