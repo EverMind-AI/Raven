@@ -269,6 +269,26 @@ async def test_recall_session_filters_by_session_and_track(tmp_path: Path) -> No
     assert _requests(fake, "/get")[1]["body"]["memory_type"] == "agent_case"
 
 
+async def test_recall_session_keeps_each_episode_text_with_its_own_id(tmp_path: Path) -> None:
+    """Service order and score order differ: the text must stay with the row it came from."""
+    rows = [
+        {"id": "low", "subject": "LOW", "episode": "low body", "summary": "low", "score": 0.1, "session_id": "sid-2"},
+        {
+            "id": "high",
+            "subject": "HIGH",
+            "episode": "high body",
+            "summary": "high",
+            "score": 0.9,
+            "session_id": "sid-2",
+        },
+    ]
+    fake = FakeCloud(rows={"episodes": rows})
+    b = _backend(tmp_path, fake)
+    hits = await b.recall_session("sid-2", user_id="u2")
+    by_id = {h.metadata["id"]: h.text for h in hits}
+    assert by_id == {"low": "LOW - low body", "high": "HIGH - high body"}
+
+
 # ── stop (A18, A34) ─────────────────────────────────────────────────
 
 
