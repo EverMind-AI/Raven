@@ -85,7 +85,7 @@ RES_DIR = Path(__file__).resolve().parent / "res"
 DICTIONARY = "huqie.txt"
 """The word list, as Infinity's resource repository names it (MIT; see
 NOTICES.md). Roughly 8 MB, which is why it is downloaded rather than tracked --
-see ``scripts/fetch_resources.py``."""
+see :mod:`raven.resources`."""
 
 
 class DictionaryMissingError(RuntimeError):
@@ -102,8 +102,7 @@ def dictionary_path(*, required: bool = False) -> Path:
     path = RES_DIR / DICTIONARY
     if required and not path.is_file():
         raise DictionaryMissingError(
-            f"the word dictionary is not installed at {path}; run `make fetch-resources` "
-            "(or `uv run python scripts/fetch_resources.py`) to download it"
+            f"the word dictionary is not installed at {path}; run `raven resources` to download it"
         )
     return path
 

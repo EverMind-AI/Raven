@@ -22,7 +22,7 @@ from typing import Any
 
 from loguru import logger
 
-#: Where `scripts/fetch_resources.py` puts the weights. Beside the package that
+#: Where `raven.resources` puts the weights. Beside the package that
 #: reads them, like the tokenizer's dictionary, so an install is one tree.
 RES_DIR = Path(__file__).resolve().parent.parent.parent / "res"
 
@@ -50,8 +50,7 @@ def model_path(name: str, *, required: bool = False) -> Path:
     path = RES_DIR / f"{name}.onnx"
     if required and not path.is_file():
         raise ModelsMissingError(
-            f"the deepdoc model {name!r} is not installed at {path}; run `make fetch-resources` "
-            "(or `uv run python scripts/fetch_resources.py`) to download it"
+            f"the deepdoc model {name!r} is not installed at {path}; run `raven resources` to download it"
         )
     return path
 

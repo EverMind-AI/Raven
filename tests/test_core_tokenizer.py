@@ -106,5 +106,5 @@ def test_a_missing_dictionary_names_the_command_that_fixes_it(monkeypatch, tmp_p
     with pytest.raises(tok.DictionaryMissingError) as caught:
         tok.dictionary_path(required=True)
 
-    assert "fetch_resources" in str(caught.value)
+    assert "raven resources" in str(caught.value)
     assert not tok.available()
