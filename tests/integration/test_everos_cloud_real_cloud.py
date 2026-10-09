@@ -27,9 +27,10 @@ from raven.plugins import PluginContext, ServiceLocator
 from raven_everos_cloud.backend import DEFAULT_BASE_URL, EverosCloudBackend
 
 KEY = os.environ.get("EVEROS_CLOUD_API_KEY", "")
-pytestmark = pytest.mark.skipif(
-    not KEY, reason="EVEROS_CLOUD_API_KEY is not set; the live EverOS Cloud tests need a key"
-)
+pytestmark = [
+    pytest.mark.everos_cloud,
+    pytest.mark.skipif(not KEY, reason="EVEROS_CLOUD_API_KEY is not set; the live EverOS Cloud tests need a key"),
+]
 
 _ROUTE = f"{DEFAULT_BASE_URL}/api/v2/memory"
 

@@ -13,6 +13,8 @@ from raven.plugins import PluginContext, ServiceLocator
 from raven_everos_cloud.backend import EverosCloudBackend
 from tests._everos_cloud_fake import FakeCloud
 
+pytestmark = pytest.mark.everos_cloud
+
 
 @pytest.fixture(autouse=True)
 def _workspace(request: pytest.FixtureRequest, tmp_path: Path) -> None:

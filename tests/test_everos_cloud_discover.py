@@ -7,8 +7,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from raven.contracts.memory import MemoryBackend
 from raven.plugins import ManifestOrigin, PluginDiscovery, ServiceLocator, assemble_plugin_registry
+
+pytestmark = pytest.mark.everos_cloud
 
 _GROUP = "raven.plugins"
 

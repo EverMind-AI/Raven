@@ -17,6 +17,11 @@ Scripted answers come in modes (``ok``, ``empty``, ``401``, ``403``, ``429``,
 ``500``, ``418``, ``hang``) switchable at run time through ``POST /_fake/mode``,
 so one server can serve a whole acceptance journey. The ``ok`` data carries
 sentinel values nothing in Raven's configuration contains.
+
+The ledger keeps request headers verbatim, Authorization included: point only
+fake keys at a fake that writes one. ``--with-health`` and ``auth: false`` are
+the OSS face: the local plugin's acceptance cases run against this same process
+so the ledger can show what *it* sends; nothing in the cloud's own tests uses them.
 """
 
 from __future__ import annotations

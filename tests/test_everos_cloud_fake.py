@@ -9,8 +9,11 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
 from tests._everos_cloud_fake import EPISODE_SUBJECT, MODE_ROUTE, REFUSED_MESSAGE, TOTALS, FakeCloud
+
+pytestmark = pytest.mark.everos_cloud
 
 _MSG = {"sender_id": "u", "role": "user", "timestamp": 1_700_000_000_000, "content": "x"}
 
