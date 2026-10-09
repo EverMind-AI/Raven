@@ -72,6 +72,19 @@ def _tool_parents(messages: list[dict[str, Any]]) -> dict[int, int]:
     return parents
 
 
+def _group_index(messages: list[dict[str, Any]]) -> dict[int, frozenset[int]]:
+    """Every paired call and result mapped to the whole group it belongs to.
+
+    One :func:`_tool_parents` pass builds it; a message that pairs with nothing
+    has no entry. Pairing walks the whole session, so ``trim`` builds this once
+    and every group lookup reads it, rather than each lookup walking again.
+    """
+    members: dict[int, set[int]] = {}
+    for rid, pid in _tool_parents(messages).items():
+        members.setdefault(pid, {pid}).add(rid)
+    return {mid: frozenset(group) for group in members.values() for mid in group}
+
+
 @dataclass
 class TrimOutcome:
     """Result of a :meth:`HistoryTrimmer.trim` call."""
@@ -156,7 +169,9 @@ class HistoryTrimmer:
         return history
 
     @staticmethod
-    def tool_group(messages: list[dict[str, Any]], mid: int) -> set[int]:
+    def tool_group(
+        messages: list[dict[str, Any]], mid: int, index: dict[int, frozenset[int]] | None = None
+    ) -> set[int]:
         """The ids that stand or fall with ``mid``.
 
         An assistant carrying ``tool_calls`` goes with every result answering
@@ -166,21 +181,16 @@ class HistoryTrimmer:
         backend refuses outright -- measured 2026-09-11 on DeepSeek's API,
         where one such request failed every turn until the history was
         re-selected.
+
+        ``index`` is :func:`_group_index` of ``messages``; a caller asking
+        about many ids passes it, since building it is a pass over the session.
         """
-        if not (0 <= mid < len(messages)):
-            return {mid}
-        msg = messages[mid]
-        is_call = msg.get("role") == "assistant" and msg.get("tool_calls")
-        if not is_call and msg.get("role") != "tool":
-            return {mid}
-        parents = _tool_parents(messages)
-        parent = mid if is_call else parents.get(mid)
-        if parent is None:
-            return {mid}
-        return {parent} | {rid for rid, pid in parents.items() if pid == parent}
+        if index is None:
+            index = _group_index(messages)
+        return set(index.get(mid, (mid,)))
 
     @classmethod
-    def _offenders(cls, messages: list[dict[str, Any]], ids: list[int]) -> set[int]:
+    def _offenders(cls, messages: list[dict[str, Any]], ids: list[int], index: dict[int, frozenset[int]]) -> set[int]:
         """Selected ids whose tool pairing is broken *within the selection*:
         a parent missing any of its results, or a result whose parent is not
         selected. Empty when the selection is provider-safe."""
@@ -191,7 +201,7 @@ class HistoryTrimmer:
             # Every member answers ``tool_group`` with the same group, so one look covers it.
             if mid in seen:
                 continue
-            group = cls.tool_group(messages, mid)
+            group = cls.tool_group(messages, mid, index)
             seen |= group
             if len(group) > 1 and not group <= selected:
                 offenders |= group & selected
@@ -225,6 +235,7 @@ class HistoryTrimmer:
         messages: list[dict[str, Any]],
         ids: list[int],
         protected_ids: set[int],
+        index: dict[int, frozenset[int]],
     ) -> tuple[set[int], list[int], list[int]] | None:
         """The next drop: ``(group, remaining, reclosed)`` or None when ``ids`` is empty.
 
@@ -268,7 +279,7 @@ class HistoryTrimmer:
         for candidate in ids:
             if candidate in seen:
                 continue
-            group = cls.tool_group(messages, candidate)
+            group = cls.tool_group(messages, candidate, index)
             seen |= group
             if group & protected_ids:
                 protected.append(group)
@@ -334,8 +345,9 @@ class HistoryTrimmer:
         max_prompt = max(1, self.context_window_tokens - reserved_output)
         warnings: list[str] = []
         trimmed_ids = list(canon)
+        index = _group_index(session_messages)
         while estimated > max_prompt and trimmed_ids:
-            choice = self._choose_drop(session_messages, trimmed_ids, protected_ids)
+            choice = self._choose_drop(session_messages, trimmed_ids, protected_ids, index)
             if choice is None:
                 break
             group, remaining, reclosed = choice
@@ -357,7 +369,7 @@ class HistoryTrimmer:
         # A selection that arrived broken -- a plan naming a result whose parent
         # the session no longer holds -- is not shipped either; each pass drops
         # at least one id, so this ends.
-        offenders = self._offenders(session_messages, trimmed_ids)
+        offenders = self._offenders(session_messages, trimmed_ids, index)
         while offenders:
             trimmed_ids = [mid for mid in trimmed_ids if mid not in offenders]
             for mid in sorted(offenders):
@@ -370,7 +382,7 @@ class HistoryTrimmer:
                 messages,
                 self.get_tool_definitions(),
             )
-            offenders = self._offenders(session_messages, trimmed_ids)
+            offenders = self._offenders(session_messages, trimmed_ids, index)
 
         return messages, TrimOutcome(
             history=history,

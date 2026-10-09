@@ -395,9 +395,9 @@ def test_the_closing_sweep_looks_at_each_tool_group_once(monkeypatch):
     tool_group = HistoryTrimmer.tool_group
     looks: list[int] = []
 
-    def counted(session_messages, mid):
+    def counted(session_messages, mid, index=None):
         looks.append(mid)
-        return tool_group(session_messages, mid)
+        return tool_group(session_messages, mid, index)
 
     monkeypatch.setattr(HistoryTrimmer, "tool_group", staticmethod(counted))
 
@@ -444,3 +444,70 @@ def test_a_budget_drop_re_closes_only_the_candidate_it_takes(monkeypatch):
 
     assert outcome.included_ids == [0, *range(11, 40)]
     assert len(closures) == 11  # the selection's own closure, then one per drop
+
+
+# --- A trim that drops nothing pairs the session a fixed number of times -------
+#
+# Pairing is a pass over the whole session, and the closing sweep asks for the
+# group of every call it selected. The groups are indexed once per trim, so twice
+# the calls cost the same number of passes rather than twice as many.
+
+
+def test_a_trim_without_drops_pairs_the_session_a_fixed_number_of_times(monkeypatch):
+    from raven.context_engine import history_trimmer as module
+
+    tool_parents = module._tool_parents
+    passes: list[None] = []
+
+    def counted(session_messages):
+        passes.append(None)
+        return tool_parents(session_messages)
+
+    monkeypatch.setattr(module, "_tool_parents", counted)
+
+    def passes_for(turns: int) -> int:
+        messages = _tool_heavy_session(turns)
+        trimmer = _trimmer(monkeypatch, window=10_000)  # everything fits: no drop
+        passes.clear()
+        _built, outcome = trimmer.trim(
+            session_messages=messages,
+            ids=list(range(len(messages))),
+            protected_ids=set(),
+            reserved_output=0,
+            build_messages=lambda h: [{"role": "system", "content": "s"}, *h, {"role": "user", "content": "u"}],
+        )
+        assert outcome.included_ids == list(range(len(messages)))
+        return len(passes)
+
+    assert passes_for(20) == passes_for(10)
+
+
+def test_a_drop_pairs_the_session_no_more_often_behind_a_larger_protected_head(monkeypatch):
+    from raven.context_engine import history_trimmer as module
+
+    tool_parents = module._tool_parents
+    passes: list[None] = []
+
+    def counted(session_messages):
+        passes.append(None)
+        return tool_parents(session_messages)
+
+    monkeypatch.setattr(module, "_tool_parents", counted)
+
+    def passes_for(head_turns: int) -> int:
+        head = _tool_heavy_session(head_turns)  # protected: every drop looks past these groups first
+        tail = [{"role": ("user", "assistant")[i % 2], "content": "x" * 40} for i in range(20)]
+        messages = head + tail
+        trimmer = _trimmer(monkeypatch, window=108)  # exactly ten tail messages must go
+        passes.clear()
+        _built, outcome = trimmer.trim(
+            session_messages=messages,
+            ids=list(range(len(messages))),
+            protected_ids=set(range(len(head))),
+            reserved_output=0,
+            build_messages=lambda h: [{"role": "system", "content": "s"}, *h, {"role": "user", "content": "u"}],
+        )
+        assert outcome.included_ids == [*range(len(head)), *range(len(head) + 10, len(messages))]
+        return len(passes)
+
+    assert passes_for(6) == passes_for(2)
