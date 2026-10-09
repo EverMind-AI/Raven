@@ -33,7 +33,6 @@ whose only content is a description is a label the table lends false authority t
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -57,6 +56,7 @@ from raven.config.agent_names import (
     is_builtin_agent_name as is_builtin_agent_name,
 )
 from raven.config.loader import get_config_path
+from raven.utils.commands import command_quote
 
 if TYPE_CHECKING:
     from raven.config.schema import BuiltinAgentConfig
@@ -250,15 +250,15 @@ def host_raven_acp_command() -> str:
     The console script beside the running interpreter wins -- an editable
     checkout's ``.venv/bin/raven`` -- with ``$PATH`` as the fallback, so an acp
     redeclaration of a seed row names the raven build that is actually running,
-    not whichever ``raven`` comes first on the login shell's PATH. ``shlex.quote``
-    keeps a path with a space one argv token.
+    not whichever ``raven`` comes first on the login shell's PATH. Platform
+    quoting keeps the executable path one argv token for the launch parser.
     """
     exe = "raven.exe" if os.name == "nt" else "raven"
     candidate = Path(sys.executable).with_name(exe)
     if candidate.is_file():
-        return f"{shlex.quote(str(candidate))} acp"
+        return f"{command_quote(str(candidate))} acp"
     found = shutil.which(exe)
-    return f"{shlex.quote(found)} acp" if found else ""
+    return f"{command_quote(found)} acp" if found else ""
 
 
 _ACP_HOST_DESCRIPTION = (
@@ -307,7 +307,7 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
                 name,
             )
         elif not row_named_its_own_home and (config_path := get_config_path()) != home / CONFIG_FILENAME:
-            command = f"{command} --config {shlex.quote(str(config_path))}"
+            command = f"{command} --config {command_quote(str(config_path))}"
     description = str(getattr(cfg, "description", "") or "").strip()
     if not description:
         description = _ACP_HOST_DESCRIPTION
