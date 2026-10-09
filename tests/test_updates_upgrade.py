@@ -1264,6 +1264,65 @@ def test_upgrade_helper_walks_both_axes_and_lands_on_the_largest_install(
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in captured.out
 
 
+def test_upgrade_helper_carries_the_sandbox_extra_when_boxlite_was_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rebuild syncs the tool environment to the requirement set it is
+    given, so a boxlite the sandbox advice installed survives only when the
+    rung that names it comes first."""
+    run = Mock(side_effect=[Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setenv("RAVEN_UPGRADE_KEEP_SANDBOX", "1")
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    assert _ladder(run) == [(REINSTALL, PLUGIN_LIST, f"raven[channels,sandbox] @ {WHEEL_URL}")]
+
+
+def test_upgrade_helper_falls_back_to_the_plain_rung_and_warns_when_boxlite_cannot_come_along(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A platform that cannot take the sandbox extra must not lose the upgrade
+    over it: the plain rung follows as the fallback, and the reader learns a
+    configured boxlite backend will not start."""
+    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=9), Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setenv("RAVEN_UPGRADE_KEEP_SANDBOX", "1")
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    sandbox = f"raven[channels,sandbox] @ {WHEEL_URL}"
+    channels = f"raven[channels] @ {WHEEL_URL}"
+    assert _ladder(run) == [
+        (REINSTALL, PLUGIN_LIST, sandbox),
+        (FORCE, PLUGIN_LIST, sandbox),
+        (REINSTALL, PLUGIN_LIST, channels),
+    ]
+    err = capsys.readouterr().err
+    assert "boxlite" in err and "could not be reinstalled" in err
+
+
+def test_upgrade_helper_without_boxlite_walks_exactly_todays_rungs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the keep flag the ladder is the one that shipped before sandbox
+    preservation existed: first rung unchanged."""
+    monkeypatch.delenv("RAVEN_UPGRADE_KEEP_SANDBOX", raising=False)
+    run = Mock(side_effect=[Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    assert _ladder(run) == [(REINSTALL, PLUGIN_LIST, f"raven[channels] @ {WHEEL_URL}")]
+
+
 def test_upgrade_helper_returns_final_uv_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1695,6 +1754,42 @@ def test_handoff_replaces_process_with_isolated_base_python(
     assert env["UV_TOOL_DIR"] == str(target.tool_dir)
     assert env["UV_TOOL_BIN_DIR"] == str(target.bin_dir)
     assert env["PATH"] == os.environ["PATH"]
+    assert env["RAVEN_UPGRADE_KEEP_SANDBOX"] == "0", "no boxlite in this environment"
+
+
+def test_handoff_carries_a_present_boxlite_into_the_helper_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The helper runs under -I with the base interpreter, so it cannot see the
+    tool environment's packages itself; whether boxlite must survive the
+    rebuild is decided here and handed over in the environment."""
+    prefix = tmp_path / "tools" / "raven"
+    base_python = tmp_path / "python" / "python"
+    uv_path = tmp_path / "bin" / "uv"
+    base_python.parent.mkdir(parents=True)
+    uv_path.parent.mkdir()
+    prefix.mkdir(parents=True)
+    base_python.touch()
+    uv_path.touch()
+    target = upgrade_commands.ToolInstallTarget(tmp_path / "tools", tmp_path / "tool-bin")
+    monkeypatch.setattr(upgrade_commands.sys, "platform", "linux")
+    monkeypatch.setattr(upgrade_commands.sys, "prefix", str(prefix))
+    monkeypatch.setattr(upgrade_commands.sys, "_base_executable", str(base_python))
+    monkeypatch.setattr(upgrade_commands.shutil, "which", lambda executable: str(uv_path))
+    monkeypatch.setattr(upgrade_commands, "_boxlite_installed", lambda: True)
+    execve = Mock(side_effect=OSError("handoff failed"))
+    monkeypatch.setattr(upgrade_commands.os, "execve", execve)
+
+    with pytest.raises(upgrade_commands.UpgradeError, match="handoff failed"):
+        upgrade_commands._handoff_upgrade(
+            upgrade_commands.ReleaseInfo("0.1.4", WHEEL_URL),
+            "0.1.3",
+            target,
+        )
+
+    _, _, env = execve.call_args.args
+    assert env["RAVEN_UPGRADE_KEEP_SANDBOX"] == "1"
 
 
 def test_windows_handoff_starts_external_helper(

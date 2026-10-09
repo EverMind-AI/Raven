@@ -711,8 +711,13 @@ def run(argv=None):
     lost_plugins = (
         "No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
     )
+    lost_sandbox = (
+        "The sandbox runtime (boxlite) could not be reinstalled; a configured boxlite backend "
+        "will fail to start (raven doctor explains)."
+    )
     full = write_list(plugin_lines, "raven-plugins-") if plugin_lines else None
     memory = write_list(memory_lines, "raven-plugins-memory-") if memory_lines and memory_lines != plugin_lines else None
+    keep_sandbox = os.environ.get("RAVEN_UPGRADE_KEEP_SANDBOX") == "1"
     rungs = [(full, "raven[channels]", []), (full, "raven", [lost_channels])]
     if memory is not None:
         rungs.append((memory, "raven[channels]", [lost_engines]))
@@ -720,6 +725,21 @@ def run(argv=None):
     if full is not None:
         rungs.append((None, "raven[channels]", [lost_plugins]))
         rungs.append((None, "raven", [lost_plugins, lost_channels]))
+    # The rebuild syncs the tool environment to the requirement set it is given,
+    # so a boxlite the sandbox advice installed survives only when the rung
+    # that names it comes first. Per rung rather than once at the top, because
+    # the extras and the plugins fail on independent axes; the plain rung stays
+    # behind each sandbox variant as the fallback, and the platform gate on the
+    # extra makes this a no-op where boxlite never installs at all.
+    if keep_sandbox:
+        rungs = [
+            stepped
+            for plugin_list, spec, losses in rungs
+            for stepped in (
+                (plugin_list, f"{spec[:-1]},sandbox]" if spec.endswith("]") else f"{spec}[sandbox]", losses),
+                (plugin_list, spec, losses),
+            )
+        ]
 
     try:
         status = 0
@@ -745,6 +765,8 @@ def run(argv=None):
             if status == 0:
                 for loss in losses:
                     print(f"Warning: {loss}", file=sys.stderr)
+                if keep_sandbox and "sandbox" not in spec:
+                    print(f"Warning: {lost_sandbox}", file=sys.stderr)
                 break
         else:
             why = f"uv exited with status {status}."
@@ -1191,6 +1213,18 @@ def _external_executable(value: object, *, label: str) -> Path:
     return executable
 
 
+def _boxlite_installed() -> bool:
+    """Whether this raven's environment holds a boxlite install the rebuild would drop.
+
+    Read here, in the parent, rather than in the helper: the helper runs under
+    ``-I`` with the base interpreter, so importlib.metadata there sees the base
+    environment, not the tool environment this answer is about.
+    """
+    try:
+        metadata.version("boxlite")
+    except metadata.PackageNotFoundError:
+        return False
+    return True
 def _hand_over_system_ca(env: dict[str, str]) -> Path | None:
     """Hand the helper the certificate store this process verifies against.
 
@@ -1238,6 +1272,7 @@ def _handoff_upgrade(
     env["UV_TOOL_BIN_DIR"] = str(target.bin_dir)
     env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=release.version))
     trust_copy = _hand_over_system_ca(env)
+    env["RAVEN_UPGRADE_KEEP_SANDBOX"] = "1" if _boxlite_installed() else "0"
     argv = [
         str(base_python),
         "-I",
