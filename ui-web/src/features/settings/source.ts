@@ -44,6 +44,7 @@ let RAW: Record<string, unknown> = {}
 let configPathLive = '~/.raven/config.json'
 let everosLive: ResultOf<'settings.everos'> | null = null
 let everosCloudLive: ResultOf<'settings.everosCloud'> | null = null
+let cloudProbe: Promise<ResultOf<'settings.everosCloud'> | null> = Promise.resolve(null)
 
 /* The three members that need page chrome no island owns: the version the foot
    learned from `system.version`, the check that drives the update notice and
@@ -87,12 +88,13 @@ async function loadEveros(): Promise<void> {
 
 /* The cloud card's probe. Asked beside the roles, and again after its own key
    is saved -- the answer is a health check of what is on disk now. */
-async function loadEverosCloud(): Promise<void> {
+async function loadEverosCloud(): Promise<ResultOf<'settings.everosCloud'> | null> {
   try {
     everosCloudLive = await gateway().call('settings.everosCloud', {})
   } catch {
     everosCloudLive = null
   }
+  return everosCloudLive
 }
 
 /* Read the permission mode the gate applies to the visible conversation --
@@ -249,14 +251,16 @@ export const settingsSource: SettingsSource = {
     void pushPermMode()
     await loadEveros()
     /* Not awaited: the probe can take up to five seconds against a slow or absent
-       service, and the card draws its own checking state until the answer lands. */
-    void loadEverosCloud()
+       service; the card draws its checking state until the store patches the
+       answer in through `everosCloud()`. */
+    cloudProbe = loadEverosCloud()
     return settingsSnapshot()
   },
+  everosCloud: () => cloudProbe,
   set: (key, value) => run((async () => {
     const r = await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })
     await loadSettings()
-    if (key.startsWith('plugins.config.everos-cloud-memory.')) await loadEverosCloud()
+    if (key.startsWith('plugins.config.everos-cloud-memory.')) { cloudProbe = loadEverosCloud(); await cloudProbe }
     void pushPermMode()
     /* Only when the server says a save costs something -- a reload-only key,
        a swapped embedding model that invalidates every stored vector. A plain
@@ -450,5 +454,6 @@ export function _resetForTests(): void {
   configPathLive = '~/.raven/config.json'
   everosLive = null
   everosCloudLive = null
+  cloudProbe = Promise.resolve(null)
   chrome = { version: () => null, checkUpdate: async () => {}, newerVersion: () => null, upgrade: () => {}, setLang: () => {} }
 }

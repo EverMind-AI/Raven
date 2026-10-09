@@ -222,6 +222,10 @@ export interface McpDetail {
 
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
+  /* The cloud probe `load` started without waiting for it (a slow or absent
+     service must not hold the page): resolves when it lands, null when it failed,
+     so the store can patch the snapshot the moment the answer is in. */
+  everosCloud(): Promise<EverosCloudInfo | null>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
   /* A role is a pair: a model and the vendor serving it. No credential travels
      -- the address and key stay on the provider and are resolved at spawn, so
