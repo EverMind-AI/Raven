@@ -495,6 +495,21 @@ describe('another memory backend', () => {
     expect(screen.getByText('http://fake')).toBeTruthy()
   })
 
+  it('draws no EverOS row at all on a cloud-only install: other_backend with empty sections', async () => {
+    const data = snap()
+    data.everos = { available: false, note: 'not here', config_path: '', reason: 'other_backend', sections: {} }
+    data.everosCloud = cloud
+    install(data)
+    await mount('model')
+
+    expect(screen.queryByText(/gui\.settings\.roles\.memllm$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.rerank$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.multimodal$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.embedding$/)).toBe(null)
+    expect(screen.queryByText('gui.settings.roles.everos_missing')).toBe(null)
+    expect(screen.getByText('gui.settings.cloud.title')).toBeTruthy()
+  })
+
   it('keeps the four rows and the not-installed pill when available is false without a reason', async () => {
     const data = snap()
     data.everos = { available: false, sections: {}, note: 'not here', config_path: '' }

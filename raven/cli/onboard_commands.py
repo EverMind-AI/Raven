@@ -2008,7 +2008,9 @@ def _step4_memory(
         return None
 
     ui = _onboard_ui()
-    chosen = _choose_memory_screen(steps) if len(steps) > 1 else steps[0][0]
+    chosen = _choose_memory_backend(steps) if len(steps) > 1 else steps[0][0]
+    if chosen is _BACK:
+        return _BACK
     if chosen is None:
         set_memory_backend(None)
         return None
@@ -2030,15 +2032,15 @@ def _step4_memory(
 _MEMORY_OFF = object()
 
 
-def _choose_memory_screen(steps: list[tuple[str, "OnboardStep"]]) -> Optional[str]:
-    """Which plugin screen to run when more than one memory backend is installed.
+def _choose_memory_backend(steps: list[tuple[str, "OnboardStep"]]) -> Any:
+    """Which memory backend's screen to run when more than one plugin is installed.
 
     One backend is active at a time, so the wizard asks rather than walking
     every screen in registry order -- the second install would otherwise have
     to decline the first backend to reach its own. Returns the contribution
-    name, or ``None`` for "off". A dismissed question (Esc, Ctrl-C) ends the
-    wizard without writing anything: a question nobody answered must not turn
-    memory off.
+    name, ``None`` for "off", or ``_BACK`` for the previous step. A dismissed
+    question (Esc, Ctrl-C) ends the wizard without writing anything: a question
+    nobody answered must not turn memory off.
     """
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
@@ -2047,6 +2049,7 @@ def _choose_memory_screen(steps: list[tuple[str, "OnboardStep"]]) -> Optional[st
     current = _selected_backend()
     choices = [questionary.Choice(name, value=name) for name in names]
     choices.append(questionary.Choice(t("Off"), value=_MEMORY_OFF))
+    choices.append(questionary.Choice(t("Back"), value=_BACK))
     chosen = questionary.select(
         t("Which memory backend?"),
         choices=choices,

@@ -260,6 +260,9 @@ class PluginManifest(_ManifestBase):
     bundled: bool = False
     contributes: Contributes = Field(default_factory=Contributes)
     config_schema: dict[str, Any] = Field(default_factory=dict)
+    """Per-key declarations admission reads (type, default, required, choices,
+    fields); ``settable = true`` additionally lets ``settings.set`` write that one
+    key over RPC -- credentials, never the endpoint they are sent to."""
 
     @model_validator(mode="after")
     def _contribution_names_unique(self) -> "PluginManifest":

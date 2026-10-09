@@ -1325,25 +1325,28 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
     del params
     from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 
-    if not everos_plugin_installed():
-        return {
-            "available": False,
-            "note": everos_plugin_missing_note(),
-            "sections": {},
-            "config_path": "",
-        }
-    from raven_everos.config import describe_roles
+    installed = everos_plugin_installed()
+    roles: dict[str, Any] = {
+        "available": False,
+        "note": everos_plugin_missing_note(),
+        "sections": {},
+        "config_path": "",
+    }
+    if installed:
+        from raven_everos.config import describe_roles
 
-    roles = describe_roles()
+        roles = describe_roles()
     other = _other_memory_backend()
     if other is None:
         return roles
     # llm, rerank and multimodal are EverOS's own extraction models, which no
-    # other backend reads; ``reason`` tells the page to draw none of them (a
-    # bare ``available: false`` already means "plugin not installed" there and
-    # renders that sentence on every row). Embedding stays: its pin is raven's
-    # top-level block, and a knowledge base embeds with it whatever the memory
-    # backend is.
+    # other backend reads; ``reason`` tells the page to draw none of them --
+    # whether or not the local plugin is installed, since a cloud-only install
+    # is the common one and a bare ``available: false`` would put "plugin not
+    # installed" on every row. The page draws an EverOS row only when it is in
+    # ``sections``: embedding stays when the local plugin can describe it (its
+    # pin is raven's top-level block, and a knowledge base embeds with it
+    # whatever the memory backend is).
     sections = roles.get("sections") or {}
     return {
         **roles,

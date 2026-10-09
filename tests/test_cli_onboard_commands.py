@@ -1499,7 +1499,7 @@ def test_step4_memory_with_two_screens_runs_only_the_chosen_one(tmp_env: Path, m
     assert calls == [None]  # b was chosen and declined; a never ran
     assert step_a.run_calls == 0 and step_b.run_calls == 1
     assert captured["message"] == "Which memory backend?"
-    assert [c.title for c in captured["choices"]] == ["a", "b", "Off"]
+    assert [c.title for c in captured["choices"]] == ["a", "b", "Off", "Back"]
 
 
 def test_step4_memory_chosen_screen_declining_clears_backend(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1583,6 +1583,26 @@ def test_step4_memory_one_screen_runs_without_a_question(tmp_env: Path, monkeypa
 
     assert onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[]) is None
     assert calls == ["everos"] and step.run_calls == 1
+
+
+def test_step4_memory_back_on_the_chooser_returns_to_the_previous_step(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chooser offers Back like the other steps' pickers: nothing runs, nothing is written."""
+    from raven.plugins import StepOutcome
+
+    step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    monkeypatch.setattr(
+        onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", _FakeMemoryStep(StepOutcome.CONFIGURED))]
+    )
+    calls: list = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+    _choose(monkeypatch, onboard_commands._BACK)
+    assert (
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[])
+        is onboard_commands._BACK
+    )
+    assert calls == [] and step_a.run_calls == 0
 
 
 def test_step4_memory_a_cancelled_choice_exits_one_and_writes_nothing(

@@ -29,7 +29,6 @@ class CloudKeyScreen:
 
     def __init__(self, ctx: PluginContext, *, client_factory: Callable[[], httpx.AsyncClient] | None = None) -> None:
         self._ctx = ctx
-        # Tests hand the probe a transport; the wizard lets the backend open its own.
         self._client_factory = client_factory
 
     def run(
@@ -67,7 +66,7 @@ class CloudKeyScreen:
                 if health is None or not health.ready:
                     hint = health.checks[0].hint if health and health.checks else ""
                     ui.console.print(
-                        ui.t("  [yellow]x Couldn't verify EverOS Cloud: {detail}[/yellow]", detail=hint or "")
+                        ui.t("  [yellow]✗ Couldn't verify EverOS Cloud: {detail}[/yellow]", detail=hint or "")
                     )
                     options = [(ui.t("Skip long-term memory"), "skip")]
                     if source != "env":
@@ -76,7 +75,7 @@ class CloudKeyScreen:
                         key, source = "", None
                         continue
                     return StepOutcome.DISABLED
-                ui.console.print(ui.t("  [green]v EverOS Cloud connected.[/green]"))
+                ui.console.print(ui.t("  [green]✓ EverOS Cloud connected.[/green]"))
             if source == "typed":
                 config_update.set_plugin_config_fields(PLUGIN_ID, {"api_key": key})
             return StepOutcome.CONFIGURED

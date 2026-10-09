@@ -1151,6 +1151,7 @@ identity -- the **owner id** is the host's.
 backend through `ServiceLocator`. On the wire it is the `user_id` or `agent_id` of a
 search and the `sender_id` of a stored user message. The same two values on two
 machines sharing one cloud key name one memory.
+_Avoid_: owner identity (the older wording in `raven/contracts/plugin_surface.py`).
 
 **memory backend chooser** (`cli/onboard_commands.py:_choose_memory_screen`):
 The `raven onboard` question asked only when more than one memory plugin is
@@ -1483,7 +1484,8 @@ pass-through. Failures name the owner and the key at the door, not deep inside a
 
 **Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
 A cargo declares the config keys only it consumes -- types, defaults, secrecy,
-requiredness, choices, nested `fields` -- next to the code that consumes them. The
+requiredness, choices, nested `fields`, and `settable = true` on the few fields
+the settings page may write over RPC (a key, never an endpoint) -- next to the code that consumes them. The
 declaration is the only truth: the door
 dispenses from it, the writer (`config/update_channels.py`) validates through the same
 door, and the declaration guard (`tests/test_channels_config_declaration.py`) pins the
