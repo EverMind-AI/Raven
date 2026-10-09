@@ -118,20 +118,24 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
        here) for no change, so it goes as an empty field does. */
     const k = key === revealed ? '' : key.trim()
     const b = base.trim()
-    /* The server takes no save of a key-shaped provider, nor of an endpoint
-       (custom, Azure), without a key: an endpoint's address is saved with it. */
+    /* A key-shaped provider, or an endpoint (custom, Azure), connects by its
+       key: `model.save_key` refuses such a save without one -- all but
+       Bedrock's, which takes an ambient credential, accepts it and changes
+       nothing. */
     const endpointKey = p.kind === 'endpoint' && takesKey(p)
     if ((needsKey(p) || endpointKey) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
-    /* Connected, with no new key and nothing else this save could carry: the
-       server could only refuse it, in English, so the page says what pressing
-       it would have needed instead -- for an endpoint whose address was
-       edited, that the key goes with it. */
     if (!k && (endpointKey || (needsKey(p) && !(b && basePlace)))) {
-      const button = t('gui.settings.update')
-      store.refuse(endpointKey && b !== shownBase.trim()
-        ? t('gui.settings.providers.key_with_base', { button })
-        : t('gui.settings.providers.key_unchanged', { button }))
+      /* An endpoint's edited address with no new key goes on its own, the way
+         any other field does (`model.set_fields`, as AddressRow sends it):
+         `model.save_key` would demand the key again. */
+      if (endpointKey && b !== shownBase.trim()) {
+        void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
+        return
+      }
+      /* Nothing new to send: the save could only be refused, in English, or
+         change nothing, so the page says what pressing it would have needed. */
+      store.refuse(t('gui.settings.providers.key_unchanged', { button: t('gui.settings.update') }))
       return
     }
     const params: Record<string, unknown> = { slug: p.id }

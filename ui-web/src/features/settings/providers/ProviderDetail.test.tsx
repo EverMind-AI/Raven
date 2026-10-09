@@ -660,10 +660,10 @@ describe('provider detail, the address of a direct vendor', () => {
 })
 
 describe('an endpoint provider (custom, Azure) saved without a new key', () => {
-  /* Every save of one carries its key: the server refuses custom, Azure and
-     MiniMax CN without it, address change or not, so the page says what is
-     missing instead of sending a save that can only come back in English. */
-  const KEY_WITH_BASE = 'gui.settings.providers.key_with_base {"button":"gui.settings.update"}'
+  /* `model.save_key` refuses custom, Azure and MiniMax CN without a key, so a
+     press with nothing new says so instead of sending a save that can only come
+     back in English -- and an address edited on its own goes the way any other
+     field does, through `model.set_fields`, with no key asked for again. */
   const withCustom = (on: boolean): ReturnType<typeof snap> => {
     const data = snap()
     data.providers = [...data.providers, { id: 'custom', name: 'Custom', models: [], configured: [], on, kind: 'endpoint', acceptsKey: true, needsBase: true }]
@@ -683,13 +683,29 @@ describe('an endpoint provider (custom, Azure) saved without a new key', () => {
     expect(screen.getByRole('alert').textContent).toBe(UNCHANGED)
   })
 
-  it('says the key goes with an edited address', async () => {
+  it('saves an edited address on its own, without asking for the key again', async () => {
     const { calls } = install(withCustom(true))
     await open('custom')
     fireEvent.change(baseField(), { target: { value: 'https://relay2.example/v1' } })
     await act(async () => { fireEvent.click(keyUpdate()) })
     expect(saves(calls)).toEqual([])
-    expect(screen.getByRole('alert').textContent).toBe(KEY_WITH_BASE)
+    expect(calls.filter(([name]) => name === 'setFields'))
+      .toEqual([['setFields', { slug: 'custom', fields: { api_base: 'https://relay2.example/v1' } }]])
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('saves an edited address on its own with the revealed key still unedited in the field', async () => {
+    /* The stored key on screen as text is still no new key (C10): it does not
+       go back, and the address goes without it. */
+    const { calls } = install(withCustom(true), { revealKey: async () => 'cu-saved' })
+    await open('custom')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().value).toBe('cu-saved'))
+    fireEvent.change(baseField(), { target: { value: 'https://relay2.example/v1' } })
+    await act(async () => { fireEvent.click(keyUpdate()) })
+    expect(saves(calls)).toEqual([])
+    expect(calls.filter(([name]) => name === 'setFields'))
+      .toEqual([['setFields', { slug: 'custom', fields: { api_base: 'https://relay2.example/v1' } }]])
   })
 
   it('saves an edited address with a key typed beside it', async () => {
