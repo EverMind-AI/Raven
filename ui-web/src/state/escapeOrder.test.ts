@@ -13,7 +13,7 @@
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
  * fullscreen -> node -> pane -> collapse retreat). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all seventy-eight pairs of layers. The three
+ * fixture page, and all seventy-seven ordered pairs of layers. The three
  * capture-phase handlers
  * each open sheet registers run *before* the table and two of them act on
  * Escape without stopping propagation, so one Escape can both deny an approval
@@ -130,9 +130,11 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#detail': { up: flag('detail'), taken: lowered('detail') },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.pageShow) },
-  /* Closed by `page.show(null)` rather than by a verb of the domain's, so what
-     says it was taken back is the flag going down rather than a spy. */
-  '#knowledgePage': { up: flag('knowledgePage'), taken: lowered('knowledgePage') },
+  /* Closed by `page.show(null)` rather than by a verb of the domain's -- the
+     same generic close connections has, because the import-direction gate
+     pins the upward edges and will not take a new one. Both pages therefore
+     answer by the same spy, which is why PAIRS below leaves their pair out. */
+  '#knowledgePage': { up: flag('knowledgePage'), taken: called(spies.pageShow) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
   /* Its four-rung retreat (fullscreen -> node -> pane -> collapse) is
      store.test.ts's to prove; this fixture only needs one rung on screen and
@@ -229,11 +231,25 @@ describe('the Escape priority order', () => {
   /* The table's whole point: with two layers up, which one goes is the table's
      order and not the order they were raised in. A stack would answer the
      second of each pair. */
+  /* Every pair but one. The two pages with no close verb of their own are both
+     taken back by `page.show(null)`, so one spy answers for both and no
+     assertion here can tell which of the two the order reached -- the case
+     below pins that instead, by the one thing that does differ. Not a state
+     the page can be in either way: `page.show` opens one page and clears the
+     rest, so two pages are never up at once outside this fixture. */
+  const SHARED_CLOSE: ReadonlyArray<readonly [string, string]> = [['#connectionsPage', '#knowledgePage']]
+  const shared = (a: string, b: string): boolean =>
+    SHARED_CLOSE.some(([x, y]) => (x === a && y === b) || (x === b && y === a))
   const pairs = LAYER_IDS.flatMap((first, i) =>
-    LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
+    LAYER_IDS.slice(i + 1).filter((second) => !shared(first, second)).map((second) => ({ first, second })))
 
-  it('has seventy-eight pairs to answer for', () => {
-    expect(pairs).toHaveLength(78)
+  it('has seventy-seven pairs to answer for, every pair but the one that shares a close', () => {
+    expect(pairs).toHaveLength(77)
+  })
+
+  it('reaches the two pages that share a close in table order', () => {
+    const ids = escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)
+    expect(ids.indexOf('#connectionsPage')).toBeLessThan(ids.indexOf('#knowledgePage'))
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {
