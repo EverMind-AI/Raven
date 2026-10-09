@@ -146,6 +146,7 @@ _TRAIL_RE = re.compile(
     r"\*\*Research trail\*\*\s*[-—]\s*(?P<searches>\d+)\s+searches\s*"
     r"\((?P<unique>\d+)\s+unique query strings\),\s*(?P<pages>\d+)\s+pages read"
     r"(?:\s*\((?P<thin>\d+)\s+returned almost nothing\))?"
+    r"(?:,\s*(?P<refused>\d+)\s+refused by the site)?"
     r"(?:,\s*(?P<minutes>\d+)m of research)?"
     r"(?:,\s*reviewer:\s*(?P<reviewer>[a-z_ ]+?)(?:\s*\(|,|$))?",
     re.MULTILINE,
@@ -169,6 +170,7 @@ _LISTING_RE = re.compile(
 )
 _THIN_NOTE_RE = re.compile(r"^-\s+\((?P<n>\d+) fetch\(es\) returned almost nothing\)")
 _FAILED_NOTE_RE = re.compile(r"^-\s+\((?P<n>\d+) page\(s\) could not be retrieved\)")
+_REFUSED_NOTE_RE = re.compile(r"^-\s+\((?P<n>\d+) page\(s\) the site refused:")
 _APPENDIX_START_RE = re.compile(r"^(?:>[^*]*\*\*This answer shipped unreviewed|\*\*Research trail\*\*)")
 
 
@@ -666,6 +668,7 @@ def parse_trail(lines: list[str]) -> tuple[dict[str, Any], dict[str, Any], dict[
         trail["unique_queries"] = int(m.group("unique"))
         trail["pages_read"] = int(m.group("pages"))
         trail["thin_pages"] = int(m.group("thin") or 0)
+        trail["pages_refused"] = int(m.group("refused") or 0)
         trail["research_minutes"] = int(m.group("minutes")) if m.group("minutes") else None
         trail["reviewer"] = (m.group("reviewer") or "").strip() or None
 
@@ -712,6 +715,8 @@ def parse_trail(lines: list[str]) -> tuple[dict[str, Any], dict[str, Any], dict[
                 pages["thin_unlisted"] = int(m.group("n"))
             elif m := _FAILED_NOTE_RE.match(line):
                 pages["failed"] = int(m.group("n"))
+            elif m := _REFUSED_NOTE_RE.match(line):
+                pages["refused"] = int(m.group("n"))
             elif m := _MORE_RE.match(line):
                 pages["unlisted"] = int(m.group("n"))
         elif section == "queries run":
@@ -880,6 +885,8 @@ def _render(result: Audit) -> str:
         ]
         if t.get("thin_pages"):
             parts.append(f"{t['thin_pages']} thin")
+        if t.get("pages_refused"):
+            parts.append(f"{t['pages_refused']} refused")
         if t.get("research_minutes") is not None:
             parts.append(f"{t['research_minutes']}m")
         parts.append(f"reviewer: {t.get('reviewer') or 'not recorded'}")

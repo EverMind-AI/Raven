@@ -577,6 +577,30 @@ def test_the_parser_reads_the_producers_own_clean_trail(tmp_path):
     assert [f.kind for f in result.findings if f.hard] == []
 
 
+def test_the_parser_reads_past_the_producers_refused_page_clause(tmp_path):
+    """The refused clause sits between "pages read" and the duration; the head regex is
+    not end-anchored, so a clause it did not know cut the duration and verdict off."""
+    trail = ResearchTrail(
+        searches=4,
+        distinct_queries=[f"q{i}" for i in range(4)],
+        pages=[("https://a.example/real", 5_000, True), ("https://a.example/stub", 38, True)]
+        + [(f"https://a.example/wall{i}", 862, True) for i in range(2)],
+        refused={"https://a.example/wall0", "https://a.example/wall1"},
+        cited=["https://a.example/real"],
+        span_seconds=130,
+        verify_outcome="pass",
+    )
+    result = audit(_rendered(trail, tmp_path))
+    assert "2 pages read (1 returned almost nothing), 2 refused by the site, 2m of research" in trail.render()
+    assert result.trail["pages_read"] == 2
+    assert result.trail["thin_pages"] == 1
+    assert result.trail["pages_refused"] == 2
+    assert result.trail["research_minutes"] == 2
+    assert result.trail["reviewer"] == "pass"
+    assert result.pages["refused"] == 2
+    assert result.pages["urls"] == ["https://a.example/real"]
+
+
 def test_the_parser_reads_the_producers_own_untraceable_trail(tmp_path):
     """The outcome with no count in its sentence: pages read, nothing cited."""
     trail = ResearchTrail(
