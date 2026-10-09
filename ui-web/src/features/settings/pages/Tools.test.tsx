@@ -152,6 +152,6 @@ describe('tools page', () => {
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.roles.change {"role":"gui.settings.roles.image"}')) })
     /* The image slot offers image models, here and on the model page alike. */
     await act(async () => { fireEvent.click(screen.getByText('gemini-2.5-flash-image')) })
-    expect(calls[0]).toEqual(['set', { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '' } }])
+    expect(calls[0]).toEqual(['set', { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '', provider: '' } }])
   })
 })

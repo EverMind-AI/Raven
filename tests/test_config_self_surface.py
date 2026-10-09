@@ -1,0 +1,510 @@
+"""The self-configuration catalog against the schema, the live readers and the writers."""
+
+from __future__ import annotations
+
+import importlib
+import inspect
+import json
+from pathlib import Path
+
+import pytest
+
+from raven.config import self_surface as surface
+from raven.config.self_surface import Effect
+
+# Where each next-turn claim is honoured: the module and the name that re-reads
+# the setting while the process serves. A new NEXT_TURN entry must add its
+# evidence here, or say in the catalog that it is not next-turn.
+_NEXT_TURN_READERS: dict[str, tuple[str, str]] = {
+    "agents.defaults.reasoningEffort": ("raven.config.live", "reasoning_effort"),
+    "agents.defaults.maxToolIterations": ("raven.config.live", "max_tool_iterations"),
+    "agents.defaults.contextWindowTokens": ("raven.config.live", "context_window_tokens"),
+    "agents.defaults.enablePersonalization": ("raven.config.live", "personalization_enabled"),
+    "routing.profile": ("raven.config.live", "routing_profile"),
+    "providers.*.apiKey": ("raven.providers.resolving_provider", "ResolvingProvider"),
+    "providers.*.apiBase": ("raven.providers.resolving_provider", "ResolvingProvider"),
+    "providers.*.models": ("raven.rpc.methods.model", "model_options"),
+    "tools.disabledTools": ("raven.config.live", "disabled_tool_names"),
+    "tools.exec.timeout": ("raven.config.live", "exec_timeout"),
+    "tools.exec.extraDenyPatterns": ("raven.config.live", "exec_extra_deny_patterns"),
+    "tools.web.search.provider": ("raven.config.live", "web_providers"),
+    "tools.web.fetch.provider": ("raven.config.live", "web_providers"),
+    "tools.mcpServers.*.enabled": ("raven.config.live", "mcp_server_configs"),
+    "memory.memoryTopK": ("raven.config.live", "memory_top_k"),
+    "skillForge.blocklist": ("raven.config.live", "skill_blocklist"),
+    "skillForge": ("raven.config.live", "skill_gate_pin"),
+    "context": ("raven.config.live", "curator_pin"),
+    "playbooks.disabled": ("raven.config.live", "disabled_playbook_names"),
+    "tracing.enabled": ("raven.tracing.config", "def enabled"),
+    "tracing.previewLen": ("raven.tracing.config", "preview_len"),
+    "sessionTitle.enabled": ("raven.rpc.methods.turn", "load_raven_config"),
+    "sessions.autoArchiveAfterDays": ("raven.rpc.methods.session", "load_raven_config"),
+    "permissions.mode": ("raven.config.live", "permissions_config"),
+    "permissions.judgeModel": ("raven.config.live", "permissions_config"),
+    "language": ("raven.i18n", "set_language"),
+    "session.model": ("raven.agent.loop.wiring", "set_session_binding"),
+}
+
+
+def _next_turn_paths() -> set[str]:
+    out = set()
+    for s in surface.all_settings():
+        if s.effect is not Effect.NEXT_TURN:
+            continue
+        if s.path.startswith(("tools.web.providers.", "tools.media.")):
+            continue
+        out.add(s.path)
+    return out
+
+
+def test_every_next_turn_claim_names_a_live_reader():
+    assert _next_turn_paths() == set(_NEXT_TURN_READERS)
+    for path, (module, name) in _NEXT_TURN_READERS.items():
+        source = inspect.getsource(importlib.import_module(module))
+        assert name in source, f"{path}: {module} no longer carries {name}"
+
+
+def test_the_media_and_vendor_key_claims_ride_the_live_readers():
+    live = importlib.import_module("raven.config.live")
+    assert hasattr(live, "media_tool_config")
+    assert hasattr(live, "web_provider_keys")
+
+
+def test_every_concrete_path_is_a_schema_field():
+    missing = []
+    for s in surface.all_settings():
+        if "*" in s.path or s.kind == "pin" or s.session or s.stored_at:
+            continue
+        if surface.default_of(s.path) is None and not s.nullable and s.path != "agents.defaults.reasoningEffort":
+            missing.append(s.path)
+    assert missing == []
+
+
+def test_paths_are_unique():
+    paths = [s.path for s in surface.all_settings()]
+    assert len(paths) == len(set(paths))
+
+
+def test_settings_writer_paths_are_ones_settings_set_accepts():
+    from raven.rpc.methods import console
+
+    source = inspect.getsource(console.settings_set)
+    for s in surface.all_settings():
+        if s.writer != "settings":
+            continue
+        assert s.path in console._SETTINGS_SIMPLE_KEYS or f'"{s.path}"' in source, s.path
+
+
+def test_no_catalog_entry_composes_a_command():
+    for s in surface.all_settings():
+        assert not s.path.endswith((".command", ".env", ".args")), s.path
+
+
+def test_find_prefers_an_exact_entry_and_binds_wildcards():
+    setting, bound = surface.find("tools.web.providers.jina.apiKey")
+    assert setting.path == "tools.web.providers.jina.apiKey" and bound == []
+    setting, bound = surface.find("providers.openrouter.apiBase")
+    assert setting.path == "providers.*.apiBase" and bound == ["openrouter"]
+    assert surface.find("providers.openrouter") is None
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "ok"),
+    [
+        ("tools.exec.timeout", 30, True),
+        ("tools.exec.timeout", 2, False),
+        ("tools.exec.timeout", "30", False),
+        ("tools.exec.timeout", 30.5, False),
+        ("tools.exec.timeout", True, False),
+        ("routing.profile", "eco", True),
+        ("routing.profile", "cheap", False),
+        ("tools.disabledTools", ["exec"], True),
+        ("tools.disabledTools", "exec", False),
+        ("agents.defaults.contextWindowTokens", None, True),
+        ("tools.exec.timeout", None, False),
+        ("agents.defaults.model", {"provider": "openrouter", "model": "x/y"}, True),
+        ("agents.defaults.model", {"provider": "openrouter"}, False),
+    ],
+)
+def test_check_value(path, value, ok):
+    setting, _ = surface.find(path)
+    if ok:
+        surface.check_value(setting, value)
+    else:
+        with pytest.raises(ValueError):
+            surface.check_value(setting, value)
+
+
+def test_change_line_states_the_effect_and_the_risk():
+    line = surface.change_line({"action": "set", "path": "permissions.mode", "value": "full"})
+    assert "permissions.mode" in line and "full" in line
+    assert "next turn" in line
+    assert "without asking" in line
+    assert "Reload" in surface.change_line({"action": "restart", "value": "reload"})
+    assert "whole Raven process" in surface.change_line({"action": "restart", "value": '"restart"'})
+
+
+def _home(tmp_path: Path, monkeypatch, data: dict) -> Path:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.json").write_text(json.dumps(data))
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    return home / "config.json"
+
+
+def test_write_keeps_the_spelling_already_in_the_file(tmp_path, monkeypatch):
+    path = _home(tmp_path, monkeypatch, {"tools": {"exec": {"timeout": 60}}, "agents": {"defaults": {}}})
+    previous = surface.write_value("tools.exec.timeout", 90)
+    surface.write_value("agents.defaults.maxToolIterations", 12)
+    data = json.loads(path.read_text())
+    assert previous == 60
+    assert data["tools"]["exec"] == {"timeout": 90}
+    assert data["agents"]["defaults"] == {"maxToolIterations": 12}
+
+
+def test_write_follows_a_snake_case_file(tmp_path, monkeypatch):
+    path = _home(tmp_path, monkeypatch, {"agents": {"defaults": {"max_tool_iterations": 5}}})
+    surface.write_value("agents.defaults.maxToolIterations", 7)
+    assert json.loads(path.read_text())["agents"]["defaults"] == {"max_tool_iterations": 7}
+
+
+def test_a_write_the_schema_rejects_is_refused_and_nothing_changes(tmp_path, monkeypatch):
+    path = _home(tmp_path, monkeypatch, {"tools": {"exec": {"timeout": 60}}})
+    before = path.read_text()
+    with pytest.raises(ValueError, match="would not load"):
+        surface.write_value("tools.exec.timeout", "soon")
+    assert path.read_text() == before
+
+
+def test_a_file_that_was_already_broken_does_not_block_a_write(tmp_path, monkeypatch):
+    path = _home(tmp_path, monkeypatch, {"bogusTopLevel": 1})
+    surface.write_value("tools.exec.timeout", 45)
+    assert json.loads(path.read_text())["tools"]["exec"]["timeout"] == 45
+
+
+def test_remove_restores_the_default(tmp_path, monkeypatch):
+    path = _home(tmp_path, monkeypatch, {"tools": {"exec": {"timeout": 90}}})
+    assert surface.remove_value("tools.exec.timeout") == 90
+    assert json.loads(path.read_text())["tools"]["exec"] == {}
+    assert surface.remove_value("tools.exec.timeout") is None
+
+
+def test_extension_blocks_validate_too(tmp_path, monkeypatch):
+    path = _home(tmp_path, monkeypatch, {})
+    surface.write_value("tracing.enabled", False)
+    assert json.loads(path.read_text()) == {"tracing": {"enabled": False}}
+    with pytest.raises(ValueError, match="would not load"):
+        surface.write_value("sentinel.nudgePolicy.maxNudgesPerHour", "many")
+
+
+@pytest.mark.parametrize(
+    "path", ["tools.web.proxy", "tools.media.proxy", "providers.openai.apiBase", "permissions.judgeModel"]
+)
+def test_a_setting_that_redirects_keyed_traffic_stays_with_the_user(path):
+    """Smart mode's reviewer settles anything not marked sensitive, and each of
+    these sends Raven's keys and traffic to a host the call names."""
+    assert surface.touches_sensitive({"action": "set", "path": path, "value": "http://127.0.0.1:9"})
+
+
+@pytest.mark.parametrize("spelled", [" {}", "{} ", "{}.", ".{}", " {}. "])
+def test_the_gate_classifies_the_path_the_tool_writes(spelled):
+    """The tool trims spaces and dots before it writes; classifying the raw
+    argument let one trailing space turn a secret into an ordinary setting."""
+    from raven.permissions.rules import self_config_tier
+
+    sensitive = {"action": "set", "path": spelled.format("tools.restrictToWorkspace"), "value": False}
+    assert surface.touches_sensitive(sensitive)
+    secret = {"action": "set", "path": spelled.format("channels.telegram.token"), "value": "123:PLAINTEXT"}
+    assert self_config_tier("raven_config", secret).value == "deny"
+    assert "PLAINTEXT" not in surface.change_line(secret)
+
+
+def test_a_batch_names_its_settings_the_way_the_tool_writes_them():
+    assert surface.touches_sensitive({"action": "set", "path": " ", "value": {"tools.restrictToWorkspace": False}})
+    assert surface.touches_sensitive({"action": "set", "value": {"tools.restrictToWorkspace ": False}})
+
+
+def test_every_field_a_channel_declares_secret_is_secret_to_the_gate():
+    """The adapter's spec decides; Feishu's encrypt_key names no credential marker."""
+    from pydantic.alias_generators import to_camel
+
+    from raven.config.update_channels import channel_field_specs, channel_names
+
+    declared = [
+        f"channels.{name}.{to_camel(field)}"
+        for name in channel_names()
+        for field, spec in channel_field_specs(name).items()
+        if spec.get("is_secret")
+    ]
+    assert "channels.feishu.encryptKey" in declared
+    assert [path for path in declared if not surface.is_secret_path(path)] == []
+    assert not surface.is_secret_path("channels.feishu.appId")
+    assert not surface.is_secret_path("channels.nosuchchannel.encryptKey")
+
+
+def test_a_channel_secret_inside_an_object_is_refused_and_never_shown():
+    from raven.permissions.rules import self_config_tier
+
+    whole = {"action": "set", "path": "channels.feishu", "value": {"encryptKey": "FEISHU-PLAINTEXT", "appId": "cli_1"}}
+    assert self_config_tier("raven_config", whole).value == "deny"
+    shown = surface.change_line(whole)
+    assert "FEISHU-PLAINTEXT" not in shown and "cli_1" in shown
+
+
+def _wrappings(core: str) -> list[str]:
+    import itertools
+
+    ends = ["".join(chars) for n in range(3) for chars in itertools.product(" \t.", repeat=n)]
+    return [f"{before}{core}{after}" for before in ends for after in ends]
+
+
+def test_the_path_spelling_settles_in_one_pass_whatever_wraps_it():
+    """Trimming spaces then dots left ``token .`` as ``token `` -- a secret read as
+    an ordinary setting -- so every order of them must come off at once."""
+    from raven.permissions.rules import self_config_tier
+
+    for spelled in _wrappings("channels.telegram.token"):
+        assert surface.canonical_path(spelled) == "channels.telegram.token", repr(spelled)
+        call = {"action": "set", "path": spelled, "value": "123:PLAINTEXT"}
+        assert self_config_tier("raven_config", call).value == "deny", repr(spelled)
+        assert "PLAINTEXT" not in surface.change_line(call), repr(spelled)
+    for spelled in _wrappings("tools.restrictToWorkspace"):
+        assert surface.touches_sensitive({"action": "set", "path": spelled, "value": False}), repr(spelled)
+
+
+def test_every_field_the_provider_schema_treats_as_secret_is_secret_to_the_gate(monkeypatch, tmp_path):
+    """The provider writer redacts by the schema's own marker (``extraHeaders``) and
+    its patch list (Gemini's ``apiKeyList``); the gate and the scrub read the same."""
+    from pydantic.alias_generators import to_camel
+
+    from raven.config import held_secrets
+    from raven.config.schema import GeminiProviderConfig, ProviderConfig
+    from raven.config.update_providers import _is_secret_field
+
+    declared = [
+        name
+        for model in (ProviderConfig, GeminiProviderConfig)
+        for name, info in model.model_fields.items()
+        if _is_secret_field(name, info)
+    ]
+    assert {"extra_headers", "api_key_list"} <= set(declared)
+    assert [n for n in declared if not surface.is_secret_path(f"providers.gemini.{to_camel(n)}")] == []
+    assert not surface.is_secret_path("providers.gemini.models")
+
+    config = tmp_path / "config.json"
+    header, listed, per_endpoint = "hdr-0123456789abcdef", "AIza-listed-0123456789", "hdr-endpoint-0123456789"
+    config.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "aihubmix": {
+                        "extraHeaders": {"APP-Code": header},
+                        "endpoints": [{"label": "b", "extraHeaders": {"APP-Code": per_endpoint}}],
+                    },
+                    "gemini": {"apiKeyList": [listed]},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
+    monkeypatch.setattr(held_secrets, "_cache", None)
+    scrubbed = held_secrets.scrub_held_secrets(f"APP-Code: {header}; key {listed}; {per_endpoint}")
+    assert header not in scrubbed and listed not in scrubbed and per_endpoint not in scrubbed
+    assert not surface.is_secret_path("providers.aihubmix.endpoints.0.label")
+
+
+def test_a_channel_field_that_sends_its_traffic_somewhere_stays_with_the_user():
+    """A proxy or server address carries the channel's credential to whatever host
+    it names; the adapter declares it, the way it declares a secret."""
+    import re
+
+    from pydantic.alias_generators import to_camel
+
+    from raven.config.update_channels import channel_field_specs, channel_names
+
+    addresses = [
+        f"channels.{name}.{to_camel(field)}"
+        for name in channel_names()
+        for field in channel_field_specs(name)
+        if re.search(r"(url|host|proxy|homeserver)$", field)
+    ]
+    assert "channels.telegram.proxy" in addresses and "channels.matrix.homeserver" in addresses
+    unmarked = [p for p in addresses if not surface.touches_sensitive({"action": "set", "path": p, "value": "x"})]
+    assert unmarked == [], "declare these sensitive in the adapter's spec"
+    line = surface.change_line({"action": "set", "path": "channels.telegram.proxy", "value": "http://h:1"})
+    assert "Note: sends this channel's credentials" in line
+    assert not surface.touches_sensitive({"action": "set", "path": "channels.telegram.replyToMessage", "value": True})
+
+
+_TRIMMED_NOT_JSON = [c for c in map(chr, range(0x3001)) if c.isspace() and c not in " \t\n\r"]
+
+
+@pytest.mark.parametrize("lead", _TRIMMED_NOT_JSON, ids=lambda c: f"U+{ord(c):04X}")
+def test_the_gate_decodes_a_value_the_way_the_tool_does(lead):
+    """The tool trimmed before parsing and the gate did not, so a batch led by a
+    character JSON does not count as space was an object to one and text to the
+    other -- and switched approval to full with only the reviewer asked."""
+    from raven.agent.tools.raven_config import _parse_value
+    from raven.permissions.rules import self_config_tier
+
+    raw = lead + '{"permissions.mode": "full", "tools.restrictToWorkspace": false}'
+    assert (
+        _parse_value(raw)
+        == surface.decode_value(raw)
+        == {"permissions.mode": "full", "tools.restrictToWorkspace": False}
+    )
+    assert surface.touches_sensitive({"action": "set", "value": raw})
+    keyed = lead + '{"providers.openai.apiKey": "sk-LEAKED-123"}'
+    assert self_config_tier("raven_config", {"action": "set", "value": keyed}).value == "deny"
+    lent = lead + '{"preset": "claude-code", "lend_key": "anthropic", "model": null}'
+    assert surface.touches_sensitive({"action": "add", "path": "subagents", "value": lent})
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"path": "channels.telegram.allow_from", "value": '["*"]'},
+        {"path": "channels.telegram.AllowFrom", "value": '["*"]'},
+        {"path": "channels.Telegram.allowFrom", "value": '["*"]'},
+        {"path": "channels.telegram", "value": '{"allow_from": ["*"]}'},
+        {"value": '{"channels.telegram.allow_from": ["*"]}'},
+        {"path": "channels.slack", "value": '{"dm.allow_from": ["*"], "dm.policy": "open"}'},
+        {"path": "channels.slack.groupPolicy", "value": "open"},
+        {"path": "channels.telegram.enabled", "value": "true"},
+        {"path": "channels.telegram.workspace", "value": "/"},
+        {"path": "channels.email.imapUseSsl", "value": "false"},
+        {"path": "channels.matrix.e2ee_enabled", "value": "false"},
+        {"path": "channels.slack.userTokenReadOnly", "value": "false"},
+        {"path": "channels.weixin.state_dir", "value": '"/tmp/x"'},
+    ],
+)
+def test_who_may_instruct_raven_on_a_channel_stays_with_the_user_however_it_is_spelled(call):
+    """The catalog's camelCase ``allowFrom`` was the only spelling the gate knew;
+    the adapter's declaration now decides, read through the tool's own spelling."""
+    assert surface.touches_sensitive({"action": "set", **call}), call
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tools.disabledTools",
+        "tools.mcpServers.gh.enabled",
+        "skillForge.blocklist",
+        "skillForge.autoInstall",
+        "subagents.pi.description",
+    ],
+)
+def test_a_setting_that_hands_back_something_the_user_took_away_stays_with_them(path):
+    assert surface.touches_sensitive({"action": "set", "path": path, "value": "x"})
+    assert surface.touches_sensitive({"action": "unset", "path": path}) or path.startswith("subagents.")
+
+
+@pytest.mark.parametrize(
+    ("path", "secret"),
+    [
+        ("tools.mcpServers.gh.env.AWS_SECRET_ACCESS_KEY", True),
+        ("tools.mcpServers.gh.env.GH_PAT", True),
+        ("tools.mcpServers.gh.env.LANGFUSE_SECRET_KEY", True),
+        ("subagents.agents.0.env.OPENAI_KEY", True),
+        ("tools.mcpServers.gh.headers.Authorization", True),
+        ("tools.mcpServers.gh.headers.X-Anything", True),
+        ("channels.FEISHU.encryptKey", True),
+        ("a2a.peers.0.credential", True),
+        ("tools.mcpServers.gh.env.BEARER", True),
+        ("tools.mcpServers.gh.env.JWT", True),
+        ("tools.mcpServers.gh.env.SENTRY_DSN", True),
+        ("tools.mcpServers.gh.env.SESSION_DIR", False),
+        ("tools.mcpServers.gh.env.PATH", False),
+        ("tools.mcpServers.gh.env.NODE_OPTIONS", False),
+        ("tools.mcpServers.gh.command", False),
+    ],
+)
+def test_a_credential_is_found_wherever_the_config_keeps_one(path, secret):
+    assert surface.is_secret_path(path) is secret
+
+
+def test_a_call_carrying_a_credential_anywhere_in_its_value_is_refused_and_never_shown():
+    from raven.permissions.rules import self_config_tier
+
+    calls = [
+        {"action": "set", "path": "providers.openai", "value": {"apiKey": "PLAINTEXT-k1"}},
+        {"action": "set", "value": {"providers.openai": {"apiKey": "PLAINTEXT-k2"}}},
+        {
+            "action": "add",
+            "path": "subagents",
+            "value": {"preset": "codex", "env": {"AWS_SECRET_ACCESS_KEY": "PLAINTEXT-k5"}},
+        },
+        {
+            "action": "add",
+            "path": "tools.mcpServers",
+            "value": {"x": {"headers": {"Authorization": "Bearer PLAINTEXT-k6"}}},
+        },
+        {"action": "set", "path": "channels.FEISHU.encryptKey", "value": "PLAINTEXT-k8"},
+    ]
+    for call in calls:
+        assert self_config_tier("raven_config", call).value == "deny", call
+        assert "PLAINTEXT" not in surface.change_line(call), call
+        assert "PLAINTEXT" not in json.dumps(surface.change_view(call, {})), call
+
+
+def test_a_key_named_with_only_spaces_is_asked_for_on_the_card():
+    from raven.permissions.rules import self_config_tier
+
+    call = {"action": "set", "path": "providers.openai.apiKey", "value": "   "}
+    assert self_config_tier("raven_config", call).value != "deny"
+    assert surface.only_asks_for_secrets(call)
+
+
+def test_every_credential_the_config_holds_is_scrubbed_in_every_spelling_it_prints_in(monkeypatch, tmp_path):
+    """Measured: an MCP server's AWS key, a Bearer header, a key in a URL's query
+    or userinfo, a seven-character mailbox password and a password JSON escapes
+    all came back through `jq . config.json` untouched."""
+    from raven.config import held_secrets
+
+    config = tmp_path / "config.json"
+    raw = {
+        "tools": {
+            "mcpServers": {
+                "gh": {
+                    "env": {"AWS_SECRET_ACCESS_KEY": "aws-secret-value-1", "PATH": "/usr/bin:/bin"},
+                    "headers": {"Authorization": "Bearer tok-abcdef123"},
+                    "url": "https://mcp.example/x?api_key=urlkey12345",
+                }
+            }
+        },
+        "channels": {
+            "email": {"imapPassword": "hunter2", "smtpPassword": 'pa"ss\\word'},
+            "telegram": {"proxy": "http://user:proxypass99@h:1"},
+        },
+        "providers": {"openai": {"apiBase": "https://h/v1?key=basekey9876"}, "vllm": {"apiKey": "EMPTY"}},
+    }
+    config.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
+    monkeypatch.setattr(held_secrets, "_cache", None)
+
+    printed = held_secrets.scrub_held_secrets(json.dumps(raw, indent=1))
+    for value in ("aws-secret-value-1", "tok-abcdef123", "urlkey12345", "proxypass99", "basekey9876", "hunter2"):
+        assert value not in printed, value
+    assert 'pa\\"ss\\\\word' not in printed
+    assert "/usr/bin:/bin" in printed and '"EMPTY"' in printed
+
+
+def test_a_url_with_a_credential_in_it_is_one_to_the_gate_the_card_and_the_scrub(monkeypatch, tmp_path):
+    """The scrub alone knew `mongodb://u:pw@host` held a password, so the gate asked
+    and the card printed it; a Sentry DSN keeps its key as the username."""
+    from raven.config import held_secrets
+    from raven.permissions.rules import self_config_tier
+
+    call = {"action": "set", "path": "providers.openai.apiBase", "value": "https://u:PLAINTEXT-c1@h/v1"}
+    assert self_config_tier("raven_config", call).value == "deny"
+    assert "PLAINTEXT" not in surface.change_line(call)
+    assert surface.redacted({"uri": "mongodb://u:PLAINTEXT-c2@h/db"}) == {"uri": "mongodb://u:***@h/db"}
+
+    dsn = "https://0123456789abcdef0123456789abcdef@o1.ingest.sentry.io/42"
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"tools": {"mcpServers": {"s": {"url": dsn}}}}), encoding="utf-8")
+    monkeypatch.setattr(held_secrets, "get_config_path", lambda: config)
+    monkeypatch.setattr(held_secrets, "_cache", None)
+    assert "0123456789abcdef0123456789abcdef" not in held_secrets.scrub_held_secrets(f"dsn={dsn}")
+    assert "https://api.openai.com/v1" == held_secrets.scrub_held_secrets("https://api.openai.com/v1")

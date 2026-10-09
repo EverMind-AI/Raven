@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
 import shlex
 import sys
 import time
@@ -57,10 +58,66 @@ PACKAGE_INSTALL_HINT = (
     f"reinstall raven via {'install.ps1' if sys.platform == 'win32' else 'install.sh'} "
     "(engines carry the browser library); from a source checkout: uv sync --all-extras"
 )
+# When the browser is on disk but the host lacks the system libraries it links
+# against: Playwright's own command, which installs them with apt as root.
+CHROMIUM_DEPS_HINT = f"{_quote_interpreter(sys.executable)} -m playwright install-deps chromium"
+
+
+def _host_library_gap(text: str) -> str | None:
+    """What a launch failure says this host lacks, when that is what it says.
+
+    Two Linux shapes, and nothing else:
+
+    - the dynamic loader's refusal as the browser starts, naming the first
+      library it could not load -- what a host without one reports whenever
+      Playwright's own dependency check has not caught it first;
+    - that check's report, which suggests ``playwright install-deps`` and so
+      would otherwise read as a browser that is not installed at all. Where it
+      cannot map a library to a package it suggests nothing and lists the
+      libraries instead, so those are named.
+
+    Playwright's Windows check is neither: its report reads "missing
+    dependencies!" rather than "... to run browsers." and carries remedies of
+    its own -- a Visual C++ runtime among them, which no install-deps line
+    brings -- so it is left for the caller to pass through whole.
+    """
+    loader = re.search(r"error while loading shared libraries: ([^\s:]+)", text)
+    if loader:
+        return f"the system library {loader.group(1)} is missing"
+    if "Host system is missing dependencies to run browsers" not in text:
+        return None
+    listed = re.findall(r"\S+\.so(?:\.\S+)?", text.partition("Missing libraries:")[2])
+    if len(listed) == 1:
+        return f"the system library {listed[0]} is missing"
+    if listed:
+        return f"the system libraries {', '.join(listed)} are missing"
+    return "the host is missing system libraries it needs"
+
+
+def _cannot_start_at_all(text: str) -> bool:
+    """Whether a launch failure stops the browser under any profile, so that a
+    throwaway one cannot get past it. Three such failures, and only these:
+
+    - a host missing a system library, in either shape Linux reports it
+      (``_host_library_gap``);
+    - Playwright's own host check on any platform -- the Windows report is
+      not a Linux shape, but no profile supplies a Visual C++ runtime either;
+    - no browser at the path Playwright resolved.
+    """
+    return (
+        _host_library_gap(text) is not None
+        or "Host system is missing dependencies" in text
+        or "Executable doesn't exist" in text
+    )
+
 
 # One profile on disk: logins survive restarts, and -- because pop-out is a
-# relaunch -- they survive the panel/window switch too.
-PROFILE_DIR = Path.home() / ".raven" / "browser-profile"
+# relaunch -- they survive the panel/window switch too. Read at launch rather
+# than at import: a process that moves HOME after importing this module (the
+# test suite gives every test its own) must not open the profile it left.
+def _profile_dir() -> Path:
+    return Path.home() / ".raven" / "browser-profile"
+
 
 DEFAULT_VIEWPORT = (1280, 800)
 NAV_TIMEOUT_MS = 30_000
@@ -283,18 +340,26 @@ class Browser:
             self._s.playwright = await async_playwright().start()
             context = None
             try:
-                PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+                profile = _profile_dir()
+                profile.mkdir(parents=True, exist_ok=True)
                 context = await self._s.playwright.chromium.launch_persistent_context(
-                    str(PROFILE_DIR), **launch, **ctx_opts
+                    str(profile), **launch, **ctx_opts
                 )
             except Exception as exc:
                 # Another Raven (an old TUI, a second serve) may hold the
                 # profile's singleton lock; browsing must still work, just
-                # without the shared cookie jar.
+                # without the shared cookie jar. Chromium words that failure per
+                # platform and per locale, and only its English Linux words are
+                # known here, so every failure gets the one relaunch except
+                # those no profile can fix, where it would only bury the first
+                # error under the same one again.
                 text = str(exc)
-                if "SingletonLock" not in text and "profile" not in text.lower():
+                if _cannot_start_at_all(text):
                     raise
-                logger.warning("browser: profile is busy, using a throwaway one ({})", text.splitlines()[0])
+                logger.warning(
+                    "browser: launch with the profile failed, retrying with a throwaway one ({})",
+                    text.partition("\n")[0] or type(exc).__name__,
+                )
             if context is None:
                 self._s.browser = await self._s.playwright.chromium.launch(**launch)
                 context = await self._s.browser.new_context(**ctx_opts)
@@ -317,8 +382,29 @@ class Browser:
         except Exception as exc:
             await self.close()
             hint = f"{exc}"
+            # Ahead of the not-installed test: Playwright's dependency report
+            # suggests `playwright install-deps`, which that test also matches.
+            gap = _host_library_gap(hint)
+            if gap is not None:
+                raise BrowserUnavailableError(
+                    f"Chromium is installed but cannot start here: {gap}. Installing system "
+                    f"libraries needs root, so it is the user's step: on Debian or Ubuntu, {CHROMIUM_DEPS_HINT}"
+                ) from None
             if "Executable doesn't exist" in hint or "playwright install" in hint:
-                raise BrowserUnavailableError(f"Chromium is not installed. Run: {CHROMIUM_INSTALL_HINT}") from None
+                # "Not installed" is the right reading only when nothing is on
+                # disk. The same error comes back when a browser is installed
+                # where this process does not look -- Playwright resolves its
+                # cache from HOME, which a sandboxed run or another account
+                # moves -- and then the install line sends the reader to fetch
+                # what they already have. Playwright's error names the path it
+                # tried, which is the one fact that tells the two apart.
+                looked = re.search(r"Executable doesn't exist at (.+)", hint)
+                where = f" ({looked.group(1).strip()})" if looked else ""
+                raise BrowserUnavailableError(
+                    f"Chromium is not installed where this process looks for it{where}; if it is "
+                    "installed elsewhere, set PLAYWRIGHT_BROWSERS_PATH to its ms-playwright directory. "
+                    f"Otherwise run: {CHROMIUM_INSTALL_HINT}"
+                ) from None
             raise BrowserUnavailableError(f"could not start Chromium: {hint}") from None
         logger.info("browser: chromium started ({}x{})", w, h)
         return self._s.page
@@ -497,13 +583,42 @@ class Browser:
                 return key
         return None
 
+    def _landing(self, owner: str, now: float) -> Any | None:
+        """The page a call for ``owner`` lands on now, or None for a new tab.
+
+        The one rule both questions about it go through: ``_page_for`` binds
+        the answer and ``url_for`` reports it without binding. The permission
+        gate keys an acting call on that report before the call runs, so the
+        site a person is asked about is only the site acted on if the same
+        rule picks the page both times. Only live bindings count, which is the
+        view ``_page_for`` acts on once it has reaped.
+        """
+        rec = self._s.owners.get(owner)
+        if rec is not None and self._owner_live(rec, now):
+            return rec.page
+        active = self._s.page
+        held = {id(r.page) for k, r in self._s.owners.items() if k != owner and self._owner_live(r, now)}
+        if id(active) not in held:
+            return active
+        return None
+
     def url_for(self, owner: str | None) -> str:
-        """Where an owner's tab is, without starting anything or rebinding."""
-        if owner is not None:
-            rec = self._s.owners.get(owner)
-            if rec is not None and self._owner_live(rec, time.monotonic()):
-                return rec.page.url
-        return self.url
+        """Where a call for this owner would act, without starting or binding.
+
+        The owner's own tab while it holds a live one; otherwise the page
+        ``_page_for`` would hand it -- the front tab, unless another live owner
+        holds that -- and empty when the call would have to open a tab of its
+        own, which no site describes yet, or when no browser is running and the
+        call would start one. A prediction, made before the call:
+        whatever moves in between (the reader switches tabs, another owner
+        takes the front one, the binding idles past ``OWNER_IDLE_S`` while a
+        person decides) moves the call with it. The reader, ``None``, reads
+        the front tab.
+        """
+        if owner is None:
+            return self.url
+        page = self._landing(owner, time.monotonic())
+        return page.url if page is not None else ""
 
     async def _page_for(self, owner: str | None, *, act: bool = True) -> Any:
         """The page a caller works on, binding an owner on its first call.
@@ -524,12 +639,10 @@ class Browser:
             rec.seen = now
             page = rec.page
         else:
-            held = {id(r.page) for k, r in self._s.owners.items() if k != owner}
-            if id(active) not in held:
-                page = active
-            elif len(self._pages()) >= MAX_TABS:
-                raise BrowserBusyError(f"tab limit reached ({MAX_TABS}); close one before opening another")
-            else:
+            page = self._landing(owner, now)
+            if page is None:
+                if len(self._pages()) >= MAX_TABS:
+                    raise BrowserBusyError(f"tab limit reached ({MAX_TABS}); close one before opening another")
                 self._s.spawning += 1
                 try:
                     page = await self._s.context.new_page()

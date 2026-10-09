@@ -75,21 +75,85 @@ function AddressRow({ p, label, sub, placeholder }: {
 
 function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [key, setKey] = useState('')
-  const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
+  /* The saved key the eye put in the field, while it is still there as it came:
+     shut, the field empties again rather than holding a "new" key that is the
+     old one. Edited, it is the reader's own and stays. A read that fails has
+     already said so (the source's toast), and the eye opens on the field as it
+     is. */
+  const [revealed, setRevealed] = useState('')
+  /* Which read is the current one. Typing, or pressing the eye again, retires
+     the one in flight: its answer arriving after a reader started typing a
+     replacement would overwrite what they typed with the key they are
+     replacing. */
+  const asked = useRef(0)
+  const peek = async (shown: boolean): Promise<void> => {
+    const ask = ++asked.current
+    if (!shown) {
+      if (revealed && key === revealed) setKey('')
+      setRevealed('')
+      return
+    }
+    if (key) return
+    const saved = await store.source().revealKey(p.id)
+    if (ask !== asked.current || !saved) return
+    setKey(saved)
+    setRevealed(saved)
+  }
+  const shownBase = p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || ''
+  const [base, setBase] = useState(shownBase)
   const kind = kindOf(p)
   const checking = store.isBusy(busy(p.id))
+  /* Where this block draws the address field, if anywhere: above the key for a
+     provider reached by address, or alone for a vendor that takes no key. One
+     answer serves both places and the send. Two conditions once let a local
+     server that takes an address and no key meet both and show "Server address"
+     twice, each with its own Connect. And the address goes out only from a field
+     drawn here: `base` also holds the address `model.options` hands over for
+     display -- Gemini's bare host -- which a key-only vendor's block draws no
+     field for, and sending it stored an address nobody typed. */
+  const basePlace = kind === 'oauth' ? null : !needsKey(p) && takesBase(p) ? 'above' : !takesKey(p) ? 'alone' : null
   const save = (): void => {
-    const k = key.trim()
+    /* A key the eye put there, unedited, is the stored one: saving it again
+       would rewrite the config (and restart EverOS when one of its roles runs
+       here) for no change, so it goes as an empty field does. */
+    const k = key === revealed ? '' : key.trim()
     const b = base.trim()
-    if (needsKey(p) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
+    /* A key-shaped provider, or an endpoint (custom, Azure), connects by its
+       key: `model.save_key` refuses such a save without one -- all but
+       Bedrock's, which takes an ambient credential, accepts it and changes
+       nothing. */
+    const endpointKey = p.kind === 'endpoint' && takesKey(p)
+    if ((needsKey(p) || endpointKey) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
+    if (!k && (endpointKey || (needsKey(p) && !(b && basePlace)))) {
+      /* An endpoint's edited address with no new key goes on its own, the way
+         any other field does (`model.set_fields`, as AddressRow sends it):
+         `model.save_key` would demand the key again. */
+      if (endpointKey && b !== shownBase.trim()) {
+        void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
+        return
+      }
+      /* Nothing new to send: the save could only be refused, in English, or
+         change nothing, so the page says what pressing it would have needed. */
+      store.refuse(t('gui.settings.providers.key_unchanged', { button: t('gui.settings.update') }))
+      return
+    }
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
-    if (b) params.api_base = b
-    void store.connect(busy(p.id), p.id, params).then((ok) => { if (ok) setKey('') })
+    if (b && basePlace) params.api_base = b
+    void store.connect(busy(p.id), p.id, params).then((ok) => { if (ok) { setKey(''); setRevealed('') } })
   }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')
   const tested = !!store.get().probes[p.id] || store.isBusy(`probe:${p.id}`)
+  const baseField = (
+    <Sec label={t('gui.settings.providers.base')}>
+      <span className="settings-taglist">
+        <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
+          onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
+        <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
+      </span>
+    </Sec>
+  )
   return (
     <>
       {kind === 'oauth' && (
@@ -106,21 +170,15 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           <Sec label={t('gui.settings.providers.billing')}><Rov>{t('gui.settings.providers.subscription')}</Rov></Sec>
         </>
       )}
-      {kind !== 'oauth' && !needsKey(p) && takesBase(p) && (
-        <Sec label={t('gui.settings.providers.base')}>
-          <span className="settings-taglist">
-            <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
-              onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-            <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
-          </span>
-        </Sec>
-      )}
+      {basePlace === 'above' && baseField}
       {kind !== 'oauth' && takesKey(p) && (
         <Sec label={<>{t(needsKey(p) ? 'gui.settings.providers.api_key' : 'gui.settings.providers.api_key_optional')}<KeyGet url={p.keyUrl} /></>}>
           <span className="settings-taglist">
             <KeyInput className="settings-tbox" value={key} aria-label={t('gui.settings.providers.api_key')}
               placeholder={p.on ? t('gui.settings.key_set_ph') : t('gui.settings.providers.paste_key')}
-              onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !checking) save() }} />
+              onPeek={p.on ? peek : undefined}
+              onChange={(e) => { asked.current++; setKey(e.currentTarget.value) }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !checking) save() }} />
             {needsKey(p) && <button type="button" className="mini" disabled={checking} onClick={save}>{btn}</button>}
             {!needsKey(p) && <button type="button" className="mini ghost" disabled={checking} onClick={save}>{t('gui.settings.update')}</button>}
           </span>
@@ -135,19 +193,7 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           )}
         </div>
       )}
-      {/* The address for a provider that takes no key -- unless the block above
-          has already drawn it: a local server that takes an address and no
-          key met both conditions and showed "Server address" twice, each with
-          its own Connect. */}
-      {kind !== 'oauth' && !takesKey(p) && !(!needsKey(p) && takesBase(p)) && (
-        <Sec label={t('gui.settings.providers.base')}>
-          <span className="settings-taglist">
-            <input className="settings-tbox" value={base} aria-label={t('gui.settings.providers.base')} placeholder="http://localhost:11434"
-              onChange={(e) => setBase(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter') save() }} />
-            <button type="button" className="mini" disabled={store.isBusy(busy(p.id))} onClick={save}>{btn}</button>
-          </span>
-        </Sec>
-      )}
+      {basePlace === 'alone' && baseField}
       {kind !== 'oauth' && needsKey(p) && (takesBase(p) || p.gateway || p.kind === 'endpoint') && (
         <AddressRow p={p} label={t('gui.settings.providers.api_base')}
           placeholder={p.needsBase ? 'https://' : (p.defaultApiBase || t('gui.settings.providers.base_default'))} />

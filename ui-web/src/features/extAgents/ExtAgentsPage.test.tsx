@@ -849,15 +849,44 @@ describe('the sheet', () => {
     expect(ledOf('off_bad')).toBeNull()
   })
 
-  it("says in the sheet what the card's gold dot means, with the probe's own words folded under", async () => {
+  /* One line in the head, like every other state; what the check found is the
+     note at the top of the body, in the warning colour, its words folded. */
+  const said = (key: string, vars: Record<string, string>): string => `${key} ${JSON.stringify(vars)}`
+  it("says in the sheet what the card's gold dot means, in a note of its own", async () => {
     install([row({ name: 'on_warn', probe_status: 'attention', probe_detail: 'launch config changed since the last test -- run a test' })])
     await mount()
     expect(ledOf('on_warn')).toBe('extAgents-led extAgents-led-warn')
     await openSheet('on_warn')
     const line = sheet()!.querySelector('.extAgents-by')!
     expect(line.querySelector('.extAgents-led')!.className).toBe('extAgents-led extAgents-led-warn')
-    expect(line.textContent).toContain('gui.agent.hd_on_attention')
-    expect(line.querySelector('details.extAgents-raw')!.textContent).toContain('launch config changed since the last test')
+    expect(line.textContent).toBe('gui.agent.hd_on_attention')
+    expect(line.querySelector('details')).toBeNull()
+    const note = sheet()!.querySelector('.extAgents-note')!
+    expect(note.className).toBe('extAgents-note extAgents-note-warn')
+    expect(note.querySelector('.extAgents-note-t')!.textContent).toBe(said('gui.agent.warn_title', { agent: 'on_warn' }))
+    expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
+      said('gui.agent.warn_lead', { agent: 'on_warn', button: 'gui.agent.test_label' }),
+    )
+    expect(note.querySelector('details summary')!.textContent).toBe('gui.agent.probe_raw')
+    expect(note.querySelector('details')!.textContent).toContain('launch config changed since the last test')
+
+    const handed: Array<[string, string, Record<string, string>]> = []
+    store.lendAskRaven((key, name, vars) => handed.push([key, name, vars]))
+    await click(note.querySelector('.extAgents-note-ask'))
+    store.lendAskRaven(null)
+    expect(handed).toEqual([['gui.agent.ask_check', 'on_warn', { reason: 'launch config changed since the last test -- run a test' }]])
+  })
+
+  it('reads a check that found no credential as a sign-in', async () => {
+    install([row({ name: 'Pi', probe_status: 'attention', needs_auth: true, probe_detail: 'connected, but no session could be opened' })])
+    await mount()
+    await openSheet('Pi')
+    const note = sheet()!.querySelector('.extAgents-note')!
+    expect(note.querySelector('.extAgents-note-t')!.textContent).toBe(said('gui.agent.bad_sign_in', { agent: 'Pi' }))
+    expect(note.querySelector('.extAgents-note-p')!.textContent).toBe(
+      said('gui.agent.fix_sign_in_bare', { agent: 'Pi', button: 'gui.agent.test_label' }),
+    )
+    expect(sheetActs()).toContain('gui.agent.test_label')
   })
 
   it('names the dot for a reader who cannot see its colour', async () => {
@@ -1006,6 +1035,37 @@ describe('a refusal that names its fix', () => {
     await click(note()!.querySelector('.extAgents-cmd button'))
     expect(writeText).toHaveBeenCalledWith('npx -y @openai/codex login')
     expect(note()!.querySelector('.extAgents-cmd button')!.textContent).toBe('gui.agent.copied')
+  })
+
+  /* The note's link opens a conversation whose first message names the agent
+     and the reason -- the classified title when there is one, else the
+     server's own sentence -- for the reader to send. */
+  it('hands a refused connect or a failed test to Raven with its reason', async () => {
+    const handed: Array<[string, string, Record<string, string>]> = []
+    store.lendAskRaven((key, name, vars) => handed.push([key, name, vars]))
+    const codex = row({ name: 'Codex', preset: 'codex', configured: false, enabled: false })
+    install([codex, row({ name: 'failed', last_test_ok: false, last_test_at_ms: 1, last_test_detail: 'it returned nothing\nstderr: -' })], {
+      act: async (op) => {
+        if (op === 'connect') throw { data: { detail: 'no usable credential', remedy: { kind: 'sign_in', command: 'codex login' } } }
+        return [codex]
+      },
+    })
+    await mount()
+    await openSheet('Codex')
+    expect(note()).toBeNull()
+    await click([...sheet()!.querySelectorAll('.extAgents-act button')].find((b) => b.textContent === 'gui.agent.connect'))
+    const ask = note()!.querySelector<HTMLButtonElement>('.extAgents-note-ask')!
+    expect(ask.textContent).toBe('gui.agent.ask_raven')
+    await click(ask)
+    expect(handed).toEqual([['gui.agent.ask_connect', 'Codex', { reason: say('gui.agent.bad_sign_in', { agent: 'Codex' }) }]])
+
+    await act(async () => {
+      detail.close()
+    })
+    await openSheet('failed')
+    await click(note()!.querySelector('.extAgents-note-ask'))
+    expect(handed[1]).toEqual(['gui.agent.ask_test', 'failed', { reason: 'it returned nothing' }])
+    store.lendAskRaven(null)
   })
 
   it('gives an endpoint row no command, since its key is fixed here and not in a terminal', async () => {

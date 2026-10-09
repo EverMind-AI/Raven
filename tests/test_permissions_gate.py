@@ -1636,3 +1636,34 @@ async def test_a_refusal_answered_by_a_person_is_recorded_with_its_own_source():
 
     assert [r.source for r in turn.refusals] == ["approval_denied", "denied_earlier"]
     assert "not in prod" in turn.refusals[0].reason
+
+
+@pytest.mark.asyncio
+async def test_plugin_reads_run_without_asking_and_its_changes_ask():
+    """Checking whether GitHub is connected must not cost the user a prompt; connecting it must."""
+    gate = gate_for(PermissionsConfig())
+    bind(None)
+    assert await gate.enforce("plugin", {"action": "list"}) is None
+    assert await gate.enforce("plugin", {"action": "find", "query": "github"}) is None
+    for action in ("connect", "authorize", "remove"):
+        assert await gate.enforce("plugin", {"action": action, "name": "github"}) is not None
+
+
+def test_package_manager_queries_read_only_and_their_installs_still_ask():
+    """Seen connecting agents: `npm view <pkg> bin` and `npm ls -g` asked in every
+    turn beside the one install that should."""
+    from raven.permissions.rules import exec_reads_only
+
+    for command in ("npm view @moonshot-ai/kimi-code bin", "npm -g ls --depth=0", "pip show requests", "brew info x"):
+        assert exec_reads_only(command), command
+    for command in ("npm i -g x", "npm config set a b", "npm exec x", "npm --prefix /x view y", "brew install x"):
+        assert not exec_reads_only(command), command
+    # A global option that takes a value put a read-only word where the verb is
+    # read: npm runs `install evil` with `--prefix ls`.
+    for command in (
+        "npm --prefix ls install evil",
+        "pip --log show install evil",
+        "yarn --cwd info add evil",
+        "docker -H ps run evil",
+    ):
+        assert not exec_reads_only(command), command

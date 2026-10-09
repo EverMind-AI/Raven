@@ -24,6 +24,23 @@ export const hostIsLocal = (): boolean => /^(127\.0\.0\.1|localhost|\[::1\])$/.t
 
 export const modKey = (): string => (isMac() ? '⌘' : 'Ctrl +')
 
+/* The chord a sheet that blocks the turn is answered with, the way agent
+   products spell "go ahead": Cmd+Enter, and with Shift for the broader grant.
+   A modifier rather than a bare key, because a bare Enter or a digit is what a
+   reader types into the composer beneath the sheet. Either modifier is read on
+   every platform, as the page's other chords are. */
+export function sendChord(e: KeyboardEvent): 'plain' | 'shift' | null {
+  if (e.key !== 'Enter' || e.altKey || !(e.metaKey || e.ctrlKey)) return null
+  return e.shiftKey ? 'shift' : 'plain'
+}
+
+/* The same chords as a key cap reads them. */
+export const chordLabel = (shift = false): string => (isMac()
+  ? (shift ? '\u21e7\u2318\u21b5' : '\u2318\u21b5')
+  : (shift ? 'Ctrl+Shift+Enter' : 'Ctrl+Enter'))
+
+export const ESC_LABEL = 'Esc'
+
 /* The language declaration, from the store that writes it rather than off the
    element. Same answer either way, including before any pick has been applied:
    the store hands back the document's own declaration until then. */

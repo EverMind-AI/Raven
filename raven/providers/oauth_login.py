@@ -12,6 +12,7 @@ the code expires. ``model.options`` reports the outcome the way it always did:
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from typing import Any, Callable
 
@@ -24,9 +25,16 @@ Resolve = Callable[[str, str, int], None]
 #: do not say how long theirs last get this.
 DEFAULT_TTL_S = 900
 
-#: The one attempt per provider that may be in flight. A second start while the
-#: first is polling would hand out a second code the first poller never sees.
+#: The newest attempt per provider, until it ends. While it runs and its code
+#: is still valid, a second start answers with that code rather than minting
+#: one the first poller never sees. Once the code has expired a start mints
+#: another, and the attempt it replaces can still be winding down its poll.
 _PENDING: dict[str, asyncio.Task[Any]] = {}
+
+#: What each attempt in ``_PENDING`` answered, or will: its pair, and the
+#: monotonic instant its code stops being valid. A second start that reuses
+#: the attempt answers with it.
+_HANDOFFS: dict[str, asyncio.Future[tuple[dict[str, str], float]]] = {}
 
 #: The handoff wait: how long the vendor gets to answer the device-code request
 #: before the page is told to try again.
@@ -117,24 +125,28 @@ def pending() -> dict[str, asyncio.Task[Any]]:
 async def start(slug: str) -> dict[str, Any]:
     """Begin ``slug``'s device flow; answer with the pair once the vendor has it.
 
-    Raises ``LookupError`` for a provider with no device flow, ``RuntimeError``
-    when one is already in flight for it, and whatever the vendor raised when
-    the code could not be requested.
+    A start while one is already polling and its code is still valid answers
+    with that one's pair and the time the code has left: a second click is a
+    reader who lost the vendor's tab, and a refusal left the page showing a
+    code it had stopped watching.
+
+    Raises ``LookupError`` for a provider with no device flow, and whatever the
+    vendor raised when the code could not be requested.
     """
     starter = _STARTERS.get(slug)
     if starter is None:
         raise LookupError(f"{slug} has no device-code sign-in")
     live = _PENDING.get(slug)
-    if live is not None and not live.done():
-        raise RuntimeError(f"a sign-in for {slug} is already waiting for its code to be entered")
+    if live is not None and not live.done() and _still_valid(_HANDOFFS[slug]):
+        return await _answer(_HANDOFFS[slug])
 
     loop = asyncio.get_running_loop()
-    handoff: asyncio.Future[dict[str, Any]] = loop.create_future()
+    handoff: asyncio.Future[tuple[dict[str, str], float]] = loop.create_future()
 
     def resolve(uri: str, code: str, ttl: int) -> None:
         def _set() -> None:
             if not handoff.done():
-                handoff.set_result({"verification_uri": uri, "user_code": code, "expires_in": int(ttl)})
+                handoff.set_result(({"verification_uri": uri, "user_code": code}, time.monotonic() + int(ttl)))
 
         loop.call_soon_threadsafe(_set)
 
@@ -152,11 +164,47 @@ async def start(slug: str) -> dict[str, Any]:
                 loop.call_soon_threadsafe(_fail)
                 return
             logger.info("device sign-in for {} ended without a token: {}", slug, err)
+        else:
+            # What `provider login` does after every handler: the drivers write
+            # these files under the process umask.
+            from raven.config.paths import restrict_to_owner
+            from raven.config.update_providers import oauth_credential_files
+
+            try:
+                restrict_to_owner(*oauth_credential_files(slug))
+            except OSError as exc:
+                logger.warning("could not make the {} credential owner-only: {}", slug, exc)
 
     task = asyncio.create_task(asyncio.to_thread(run))
     _PENDING[slug] = task
-    task.add_done_callback(lambda _t: _PENDING.pop(slug, None))
-    return await asyncio.wait_for(handoff, _HANDOFF_TIMEOUT_S)
+    _HANDOFFS[slug] = handoff
+    task.add_done_callback(lambda done: _forget(slug, done))
+    return await _answer(handoff)
+
+
+def _still_valid(handoff: asyncio.Future[tuple[dict[str, str], float]]) -> bool:
+    # Unanswered, its code is as fresh as any. Answered, it can be dead while the
+    # attempt still runs: the driver's poll outlives its code by up to one interval.
+    if not handoff.done():
+        return True
+    if handoff.cancelled() or handoff.exception() is not None:
+        return False
+    return handoff.result()[1] > time.monotonic()
+
+
+async def _answer(handoff: asyncio.Future[tuple[dict[str, str], float]]) -> dict[str, Any]:
+    # Shielded: one caller giving up on a slow vendor must not cancel the answer
+    # a second caller is still waiting for.
+    pair, deadline = await asyncio.wait_for(asyncio.shield(handoff), _HANDOFF_TIMEOUT_S)
+    return {**pair, "expires_in": max(1, math.ceil(deadline - time.monotonic()))}
+
+
+def _forget(slug: str, task: asyncio.Task[Any]) -> None:
+    # A done callback runs after the task has ended, and a new start may hold
+    # the slot by then.
+    if _PENDING.get(slug) is task:
+        del _PENDING[slug]
+        _HANDOFFS.pop(slug, None)
 
 
 __all__ = ["DEFAULT_TTL_S", "pending", "start", "supports"]

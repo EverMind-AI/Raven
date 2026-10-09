@@ -66,6 +66,10 @@ class FeaturesInfo:
     channels_enabled: list[str] = field(default_factory=list)
     channels_missing_deps: list[str] = field(default_factory=list)
     skill_forge_enabled: bool = False
+    # The global config, which is the file this command reads. A conversation
+    # can override the mode for its own turns; that override is not here.
+    permission_mode: str = ""
+    sandbox_backend: str = ""
 
 
 @dataclass
@@ -641,6 +645,8 @@ def _gather_static_checks() -> DoctorReport:
         channels_enabled=enabled,
         channels_missing_deps=missing_dependency_channels(config),
         skill_forge_enabled=skill_forge_on,
+        permission_mode=config.permissions.mode,
+        sandbox_backend=config.tools.sandbox.backend,
     )
 
     report.external_tools = _gather_external_tools()
@@ -831,6 +837,31 @@ def _describe_window(routing) -> str:
     return f"auto -> {DEFAULT_CONTEXT_WINDOW_TOKENS:,} default [yellow](no catalogue knows this model)[/yellow]"
 
 
+def _render_permission_and_sandbox(features: FeaturesInfo) -> None:
+    """Say how the ask tier is read, and whether commands run on this machine.
+
+    ``full`` skips the ask tier only: built-in denials and user deny rules
+    still hold. ``none`` runs commands here; ``auto`` and ``boxlite`` do not,
+    and the remedy is the one the startup log already gives.
+    """
+    if features.permission_mode == "full":
+        console.print(
+            f"  Permissions: {features.permission_mode}  "
+            "[yellow]⚠ ask-tier calls run without asking; "
+            "built-in denials and deny rules still hold[/yellow]"
+        )
+    elif features.permission_mode:
+        console.print(f"  Permissions: {features.permission_mode}")
+    if features.sandbox_backend == "none":
+        console.print(
+            f"  Sandbox:     {features.sandbox_backend}  "
+            "[yellow]⚠ commands run on this machine with no isolation[/yellow]  "
+            "[dim]set tools.sandbox.backend to auto or boxlite[/dim]"
+        )
+    elif features.sandbox_backend:
+        console.print(f"  Sandbox:     {features.sandbox_backend}")
+
+
 def _render_human_output(report: DoctorReport) -> None:
     console.print(f"\n{__logo__} Raven Doctor\n")
 
@@ -903,6 +934,7 @@ def _render_human_output(report: DoctorReport) -> None:
             console.print(f"               [yellow]⚠ SDK missing: {names}[/yellow]  [dim]{missing_dep_hint()}[/dim]")
         sf_label = "enabled" if features.skill_forge_enabled else "[dim]disabled[/dim]"
         console.print(f"  Skill forge: {sf_label}")
+        _render_permission_and_sandbox(features)
 
     external = report.external_tools
     if external is not None:

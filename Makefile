@@ -13,6 +13,12 @@ DOCKER_IMAGE ?= raven:local
 COVERAGE_REPORT_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
 # One slice of the suite, K/N; the shard writes its .coverage data and no report.
 COVERAGE_SHARD ?= 1/1
+# Without an explicit encoding= Python opens text files in the locale encoding.
+# On a GBK-locale Windows checkout, the suite would read and write cp936
+# wherever a test forgot encoding=. Exported, so every recipe runs in UTF-8
+# mode; a bare `uv run pytest` does not go through this file, and
+# tests/conftest.py refuses that run instead.
+export PYTHONUTF8 := 1
 # Extra pytest flags for a shard; CI passes --idle-ceiling-strict, a local run stays warning-only.
 PYTEST_ARGS ?=
 COVERAGE_DATA_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=

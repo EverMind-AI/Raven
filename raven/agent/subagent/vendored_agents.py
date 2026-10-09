@@ -384,34 +384,41 @@ def _folder_addresses_openrouter(folder: Path) -> bool:
 def host_can_lend_a_key() -> bool:
     """Whether ``inherit_llm`` in the launchers would find anything to inherit.
 
-    A folder with no key of its own is not stranded: each launcher reads the
-    host raven's ``config.json`` (through ``raven.config.product_render``) and
-    copies its whole provider block, so the common case needs no credential
-    anywhere near the tree.
+    Asks ``inherit_llm`` itself, on the host file the launchers read, so an
+    OAuth sign-in counts exactly when a launcher would accept it. An agent
+    reaches a sign-in stored under the host's OAuth directory because it
+    normally resolves the same home: it is spawned with the host's
+    ``RAVEN_HOME`` when the host has one set, and with none set both fall back
+    to ``~/.raven``.
 
-    Mirrors ``inherit_llm``'s own test rather than asking ``providers.auth``,
-    and the difference is the whole point. ``inherit_llm`` accepts exactly one
-    shape -- a literal ``apiKey`` on some provider section. A host signed in
-    through OAuth is configured by auth's rule and has nothing to lend by the
-    launcher's, because those credentials live under ``~/.raven/oauth/``.
-    Asking auth here would advertise an agent that dies at the first dispatch.
+    It can still answer True for a launch that is then refused, because the
+    agent's environment and config are not this process's. It is spawned with
+    the login shell's environment, and with raven's own environment only when
+    that shell cannot be captured, so a token-location override
+    (``CHATGPT_TOKEN_DIR``, ``CHATGPT_AUTH_FILE``) set only in this process's
+    environment reaches it only in that fallback. A ``RAVEN_HOME`` that the
+    login profile exports while this process has none, or that the agent's
+    stored row carries in ``env`` (merged last, over the host's), sends it to
+    that home's config and sign-ins instead of the host's. And a host config
+    that names no ``agents.defaults.provider`` leaves an agent's own
+    configured provider in force, which this check, reading only the host
+    file, does not see; ``raven onboard`` writes the provider before it asks.
 
-    The same file the launcher reads (``$RAVEN_HOME`` or ``~/.raven``), for
-    the same reason: two readers of one credential that disagree would have
-    the roster offer what the launcher then refuses.
+    Invalid host settings leave nothing to inherit rather than preventing the
+    setup wizard from opening.
     """
-    from raven.contracts.path_policy import CONFIG_FILENAME
-    from raven.home import raven_home
+    from raven.config.product_render import host_config, inherit_llm
 
-    config = raven_home() / CONFIG_FILENAME
+    raw = host_config()
+    if not isinstance(raw, dict) or not isinstance(raw.get("providers", {}), dict):
+        return False
+    agents = raw.get("agents") or {}
+    if not isinstance(agents, dict) or not isinstance(agents.get("defaults") or {}, dict):
+        return False
     try:
-        raw = json.loads(config.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return bool(inherit_llm({}, raw))
+    except (OSError, TypeError, ValueError):
         return False
-    providers = raw.get("providers") if isinstance(raw, dict) else None
-    if not isinstance(providers, dict):
-        return False
-    return any(isinstance(p, dict) and str(p.get("apiKey") or "").strip() for p in providers.values())
 
 
 def _resolved_python() -> str:

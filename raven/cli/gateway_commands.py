@@ -309,19 +309,40 @@ def _retire_generation_watchers(swaps: "SwapCoordinator", agent) -> None:
             logger.exception("skill watcher stop failed during shutdown; continuing")
 
 
-def _work_in_flight(agent, brokers, scheduler) -> dict | None:
+def _work_in_flight(agent, brokers, scheduler, page_turns=None) -> dict | None:
     """What a config swap or an upgrade restart would cut off, or None when idle.
 
     Both refuse on this one answer rather than each keeping a copy: turns in
     flight, sub-agents still running, and questions waiting on any surface --
-    the IM round-trip's broker and the page's.
+    the IM round-trip's broker and the page's. ``page_turns`` answers for the
+    page's turns, which run on the page's own spine and hold neither the
+    agent's lock nor the gateway's scheduler.
     """
     questions = sum(broker.pending_count() for broker in brokers if broker is not None)
     subagents = agent.subagents.get_running_count()
-    in_flight = agent.is_processing or (scheduler is not None and scheduler.has_running())
+    in_flight = (
+        agent.is_processing
+        or (scheduler is not None and scheduler.has_running())
+        or (page_turns is not None and page_turns())
+    )
     if in_flight or questions or subagents:
         return {"subagents": subagents, "questions": questions}
     return None
+
+
+async def _await_idle(busy, *, poll_s: float = 2.0, limit_s: float = 600.0, sleep=asyncio.sleep) -> bool:
+    """Wait until ``busy()`` reports nothing in flight; False once ``limit_s`` passes.
+
+    The first poll waits too: the caller is a tool inside the turn it wants to
+    outlive, and that turn is still busy at the moment it asks.
+    """
+    waited = 0.0
+    while waited < limit_s:
+        await sleep(poll_s)
+        waited += poll_s
+        if busy() is None:
+            return True
+    return False
 
 
 def _hand_page_the_gateway(stop, busy) -> None:
@@ -541,7 +562,11 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             policy=TurnPolicy(
                 max_iterations=config.agents.defaults.max_tool_iterations,
                 empty_recovery=limits_from_defaults(config.agents.defaults),
-                interactive=False,
+                # The page and the chat apps hold multi-turn conversations, so
+                # the default checkpoint policy covers them: exec measures what
+                # a command wrote against the turn's shadow repo, and without
+                # one a written file reaches the desk with counts and no diff.
+                interactive=True,
                 now_fn=parse_fake_now(fake_now),
             ),
             host=HostWiring(
@@ -809,6 +834,11 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # Wire the broker into the mid-turn askers.
                 if callable(getattr(ask_tool := agent.tools.get("ask_user"), "set_broker", None)):
                     ask_tool.set_broker(question_broker)
+                # The agent's own restart, per generation because each one has
+                # its own tool. `_restart_when_idle` is bound later in `run`,
+                # before any bind runs, like `_busy` below.
+                if callable(getattr(config_tool := agent.tools.get("raven_config"), "set_restarter", None)):
+                    config_tool.set_restarter(_restart_when_idle)  # pragma: no cover
 
                 # The served page, on this same engine. Mounted after the broker
                 # wiring above on purpose: build_rpc_stack rebinds the streaming
@@ -1009,7 +1039,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                         policy=TurnPolicy(
                             max_iterations=new_config.agents.defaults.max_tool_iterations,
                             empty_recovery=limits_from_defaults(new_config.agents.defaults),
-                            interactive=False,
+                            interactive=True,
                             now_fn=parse_fake_now(fake_now),
                         ),
                         host=HostWiring(
@@ -1129,7 +1159,14 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
             def _busy() -> dict | None:  # pragma: no cover - closure over run(); logic in _work_in_flight
                 page_questions = page_mount.question_broker if page_mount is not None else None
-                return _work_in_flight(agent, [question_broker, page_questions], gw_scheduler)
+                from raven.rpc.methods.turn import any_turn_in_flight
+
+                return _work_in_flight(
+                    agent,
+                    [question_broker, page_questions],
+                    gw_scheduler,
+                    any_turn_in_flight if page_mount is not None else None,
+                )
 
             async def _reload(force: bool) -> dict:
                 if not force:
@@ -1137,6 +1174,36 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     if busy is not None:  # pragma: no cover
                         return {"ok": False, "reason": "busy", **busy}
                 return await _request_swap()
+
+            async def _restart_when_idle(target: str) -> str:  # pragma: no cover - closure over run()
+                # Asked from inside a turn, so it cannot run now: a swap would
+                # refuse as busy, a forced one would cancel the very turn that
+                # asked. It waits for the gateway to go idle -- that turn
+                # answered, nothing else in flight -- in the background.
+                async def _when_idle() -> None:
+                    if not await _await_idle(_busy):
+                        logger.warning("raven_config {}: the gateway never went idle; not applied", target)
+                        return
+                    if target == "reload":
+                        reply = await _request_swap()
+                        if not reply.get("ok"):
+                            logger.warning("raven_config reload refused: {}", reply.get("reason"))
+                        return
+                    import os
+                    import sys
+
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+                swaps.track(asyncio.create_task(_when_idle()))
+                if target == "reload":
+                    return (
+                        "Scheduled a gateway reload: it runs once this turn has answered and nothing else is "
+                        "in flight. Channels stay connected; this conversation continues on the new generation."
+                    )
+                return (
+                    "Scheduled a full restart: it runs once this turn has answered and nothing else is in "
+                    "flight. Channels reconnect after a few seconds."
+                )
 
             control_dispatcher = Dispatcher()
             register_control_methods(

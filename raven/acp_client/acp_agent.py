@@ -133,6 +133,17 @@ class AcpEmptyTurnError(RuntimeError):
 _RESULT_TEXT_CAP = 2000
 
 
+def _holds_session(exc: AcpRemoteError) -> bool:
+    """Whether the agent refused ``session/load`` because this process already holds the session.
+
+    Measured on GitHub Copilot CLI 1.0.88: the refusal is ``-32602`` ``Session <id>
+    is already loaded``, it comes only from the process that holds the session (a
+    second process loads it without complaint), and the session keeps its context.
+    That is a live session, not a pruned one, and there is no replay to read.
+    """
+    return exc.code == -32602 and "already loaded" in exc.message.lower()
+
+
 @asynccontextmanager
 async def _replay_dropped(router: Any, session_id: str) -> AsyncIterator[None]:
     """Hold ``session_id`` with a sink that throws its frames away.
@@ -1804,13 +1815,19 @@ class AcpAgentBackend:
                     # a second time. A sink that drops them holds the session for
                     # the length of the call; the turn's collector takes it over
                     # immediately after.
-                    async with _replay_dropped(router, known):
-                        loaded = await request_or_busy(
-                            "session/load",
-                            {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
-                        )
-                    self._relearn_modes(loaded)
-                    self._note_session_model(known, loaded)
+                    try:
+                        async with _replay_dropped(router, known):
+                            loaded = await request_or_busy(
+                                "session/load",
+                                {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
+                            )
+                    except AcpRemoteError as exc:
+                        if not _holds_session(exc):
+                            raise
+                        loaded = None
+                    if loaded is not None:
+                        self._relearn_modes(loaded)
+                        self._note_session_model(known, loaded)
                     await self._set_mode(client, known, mode, budget=budget)
                     await self._set_model(client, known, session_model, budget=budget)
                     return known, True

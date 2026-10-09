@@ -13,6 +13,8 @@
 
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
 import { open as approveSheet } from '../features/composer/approve'
+import { closeCredential, openCredential } from '../features/composer/credential'
+import { startTaskWith } from '../features/composer/startTaskWith'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
@@ -55,7 +57,9 @@ import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
 import { onDocument } from '../state/reveal'
-import { clarifyRequest, dispatch, installPipeline, replayPendingApprovals } from '../state/session/pipeline'
+import {
+  clarifyRequest, dispatch, installPipeline, registerCredentialCard, replayPendingApprovals, replayPendingCredentials,
+} from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
 import { installComposerActions, installSlashActions } from '../state/session/runtime'
 import * as settingsDialog from '../state/settings'
@@ -304,6 +308,8 @@ export function installPushes(): void {
      pipeline: the turn stream by the subscription it names, and the five
      side-channel requests by the conversation whose turn is blocked on the
      answer. */
+  registerCredentialCard({ open: openCredential, close: closeCredential })
+  extAgentsStore.lendAskRaven(startTaskWith)
   installPipeline()
 
   gateway().on('system.update_available', onUpdateAvailable)
@@ -333,6 +339,7 @@ async function afterReconnect(): Promise<void> {
   /* The sheets a question was waiting in are gone with the old socket; the
      questions are not. */
   await replayPendingApprovals()
+  await replayPendingCredentials()
   /* The installed skills, plugins and tools are read once at boot into
      module state and served from there, so a socket that was down when boot
      ran leaves all three empty for the life of the tab -- an empty page
@@ -359,13 +366,13 @@ export function installActions(): void {
      Registered here because state/page.ts does not import features/ -- it
      declares the slot and when it runs (state/page.ts's `show`). */
   page.onShow('markNav', markNew)
-  /* What raises the settings dialog for the three domains that are sections of
-     it (schedules, channels, memory). Registered here for the same reason the
-     slot above is: state/settings.ts declares it and does not import the island
-     that fills it. What arriving at one of those three sections costs, and what
+  /* What raises the settings dialog for the two domains that are sections of
+     it (schedules, memory). Registered here for the same reason the slot above
+     is: state/settings.ts declares it and does not import the island that
+     fills it. What arriving at one of those two sections costs, and what
      leaving it costs, each domain registers at its own module evaluation --
-     three island stores in the page's wiring for three lines is three island
-     graphs it does not otherwise carry. */
+     two island stores in the page's wiring for two lines is two island graphs
+     it does not otherwise carry. */
   settingsDialog.onOpen(() => { void settingsStore.open() })
   /* A different conversation is a different set of tasks: carrying them across
      would attribute one conversation's background work to another, and the

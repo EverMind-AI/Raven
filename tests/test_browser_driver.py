@@ -349,8 +349,259 @@ async def test_launch_reports_missing_chromium_with_the_interpreter_command(monk
         await b._ensure()
 
     why = str(exc.value)
-    assert "Chromium is not installed" in why
-    assert f"{shlex.quote(sys.executable)} -m playwright install chromium" in why
+    assert "Chromium is not installed where this process looks for it" in why
+    assert why.endswith(f"{shlex.quote(sys.executable)} -m playwright install chromium"), "the fix closes the line"
+    # The path Playwright searched, quoted back, and the knob that moves the
+    # search: without them the message reads as "not installed" whichever of
+    # the two it was, and a sandboxed HOME sends the reader to download a
+    # browser they already have.
+    assert "(/nowhere/chrome)" in why
+    assert "PLAYWRIGHT_BROWSERS_PATH" in why
+    assert "\n" not in why, "the panel shows this in one block, where a newline collapses to a space"
+
+
+# Playwright's report when the browser process cannot load a library, trimmed
+# from a real launch against a binary built to need one that is absent. Its
+# logged command line carries the profile path, as every launch failure's does.
+_LOADER_FAILURE = (
+    "BrowserType.launch_persistent_context: Target page, context or browser has been closed\n"
+    "Browser logs:\n\n"
+    "<launching> /cache/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell "
+    "--disable-field-trial-config --user-data-dir=/home/u/.raven/browser-profile --remote-debugging-pipe\n"
+    "<launched> pid=4242\n"
+    "[pid=4242][err] /cache/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell: "
+    "error while loading shared libraries: libatk-1.0.so.0: cannot open shared object file: No such file or directory\n"
+    "Call log:\n"
+    "  - [pid=4242] <process did exit: exitCode=127, signal=null>\n"
+)
+
+
+def _boxed(*lines: str) -> str:
+    """playwright-core 1.62's ``wrapInASCIIBox`` at padding 1: the frame its
+    Linux dependency check puts around every report."""
+    width = max(map(len, lines))
+    rule = "\u2550" * (width + 2)
+    rows = [f"\u2551 {line.ljust(width)} \u2551" for line in lines]
+    return "\n".join(["\u2554" + rule + "\u2557", *rows, "\u255a" + rule + "\u255d"])
+
+
+# Playwright's own Linux dependency check, in the shapes a real launch gives
+# outside Docker. In playwright-core 1.62 only its linux-arm64 Chromium builds
+# run it -- x64 builds unpack to a folder the check does not scan, so a missing
+# library reaches the loader instead. When every missing library maps to an apt
+# package it offers `install-deps`; when one does not, it lists the libraries
+# and offers nothing.
+_DEPENDENCY_REPORT = "BrowserType.launch_persistent_context: \n" + _boxed(
+    "Host system is missing dependencies to run browsers.",
+    "Please install them with the following command:",
+    "",
+    "    playwright install-deps",
+    "",
+    "Alternatively, use apt:",
+    "    apt-get install libgtk-4-1",
+    "",
+    "<3 Playwright Team",
+)
+
+
+def _unmapped_report(*libraries: str) -> str:
+    return "BrowserType.launch_persistent_context: \n" + _boxed(
+        "Host system is missing dependencies to run browsers.",
+        "Missing libraries:",
+        *(f"    {library}" for library in libraries),
+    )
+
+
+# Its Windows check, as its source assembles the report: "dependencies!", and
+# remedies of its own -- a Visual C++ runtime among them, which no install-deps
+# line brings.
+_WINDOWS_REPORT = (
+    "BrowserType.launch_persistent_context: Host system is missing dependencies!\n\n"
+    "Some of the Universal C Runtime files cannot be found on the system. You can fix\n"
+    "that by installing Microsoft Visual C++ Redistributable for Visual Studio from:\n"
+    "https://support.microsoft.com/en-us/help/2977003/the-latest-supported-visual-c-downloads\n\n"
+    "Full list of missing libraries:\n"
+    "    vcruntime140.dll\n"
+)
+
+
+def _playwright_whose_persistent_launch_fails(
+    monkeypatch: pytest.MonkeyPatch, text: str, calls: list[str], profiles: list[str] | None = None
+) -> None:
+    """A playwright module whose persistent launch raises ``text``, and whose
+    throwaway relaunch is recorded and then fails too. ``profiles``, when
+    given, collects the directory each persistent launch was handed."""
+    import sys
+    import types
+
+    class _Chromium:
+        async def launch_persistent_context(self, user_data_dir: str, *args: Any, **kwargs: Any) -> Any:
+            calls.append("persistent")
+            if profiles is not None:
+                profiles.append(user_data_dir)
+            raise RuntimeError(text)
+
+        async def launch(self, **kwargs: Any) -> Any:
+            calls.append("throwaway")
+            raise RuntimeError("the throwaway relaunch failed as well")
+
+    class _Playwright:
+        chromium = _Chromium()
+
+        async def stop(self) -> None:
+            pass
+
+    class _Starter:
+        async def start(self) -> _Playwright:
+            return _Playwright()
+
+    fake_api = types.ModuleType("playwright.async_api")
+    fake_api.async_playwright = _Starter
+    fake_pkg = types.ModuleType("playwright")
+    fake_pkg.async_api = fake_api
+    monkeypatch.setitem(sys.modules, "playwright", fake_pkg)
+    monkeypatch.setitem(sys.modules, "playwright.async_api", fake_api)
+
+
+@pytest.mark.parametrize(
+    ("report", "lacks"),
+    [
+        pytest.param(_LOADER_FAILURE, "the system library libatk-1.0.so.0 is missing", id="loader-refusal"),
+        pytest.param(_DEPENDENCY_REPORT, "the host is missing system libraries it needs", id="dependency-check"),
+        pytest.param(
+            _unmapped_report("libgbm.so.1"),
+            "the system library libgbm.so.1 is missing",
+            id="dependency-check-unmapped-one",
+        ),
+        pytest.param(
+            _unmapped_report("libatk-1.0.so.0", "libgbm.so.1"),
+            "the system libraries libatk-1.0.so.0, libgbm.so.1 are missing",
+            id="dependency-check-unmapped-two",
+        ),
+    ],
+)
+async def test_a_host_missing_a_library_is_told_so_and_given_install_deps(
+    monkeypatch: pytest.MonkeyPatch, report: str, lacks: str
+) -> None:
+    """Installing Chromium again cannot fix a missing system library, so the
+    reader is told what the host lacks and the command that supplies it. The
+    dependency check's own text suggests `playwright install-deps`, which is
+    why the not-installed reading used to claim it."""
+    import shlex
+    import sys
+
+    calls: list[str] = []
+    _playwright_whose_persistent_launch_fails(monkeypatch, report, calls)
+
+    with pytest.raises(BrowserUnavailableError) as exc:
+        await get_browser()._ensure()
+
+    why = str(exc.value)
+    assert why.startswith(f"Chromium is installed but cannot start here: {lacks}.")
+    assert why.endswith(f"{shlex.quote(sys.executable)} -m playwright install-deps chromium")
+    assert "not installed" not in why
+    assert "the user's step" in why, "a root install is the user's to make, not the model's"
+    assert "\n" not in why, "the panel shows this in one block, where a newline collapses to a space"
+    assert calls == ["persistent"], "no profile supplies a missing library, so nothing relaunches"
+
+
+async def test_the_windows_dependency_report_keeps_its_own_remedies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows names a runtime to install, not a package command, so its
+    report reaches the reader whole rather than as the Linux advice."""
+    calls: list[str] = []
+    _playwright_whose_persistent_launch_fails(monkeypatch, _WINDOWS_REPORT, calls)
+
+    with pytest.raises(BrowserUnavailableError) as exc:
+        await get_browser()._ensure()
+
+    why = str(exc.value)
+    assert why.startswith("could not start Chromium: ")
+    assert "Microsoft Visual C++ Redistributable" in why
+    assert "vcruntime140.dll" in why
+    assert "install-deps" not in why
+    assert "Debian" not in why
+    assert calls == ["persistent"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "Failed to create a ProcessSingleton for your profile directory.",
+        "Opening in existing browser session. This usually means that the profile is already in use by "
+        "another instance of Chromium.",
+        "The profile appears to be in use by another Chromium process (4242) on another computer (box).",
+        "[err] SingletonLock: File exists",
+        "Target page, context or browser has been closed\n[pid=4242] <process did exit: exitCode=0, signal=null>",
+    ],
+    ids=["singleton", "in-use", "in-use-elsewhere", "lock-file", "in-use-under-another-locale"],
+)
+async def test_a_failure_the_profile_may_be_behind_is_retried_once_on_a_throwaway_profile(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """A profile another instance holds is what a throwaway profile gets past.
+    The first four lines are Chromium's English words for that on Linux. Under
+    another locale Chromium translates its line, Playwright's English rewrite
+    of it does not fire, and the last line is all that is left: the second
+    browser handed off to the first and exited cleanly. So a failure nobody
+    recognises gets the relaunch too -- any failure but one no profile can
+    fix."""
+    calls: list[str] = []
+    report = f"BrowserType.launch_persistent_context: {failure}\n--user-data-dir=/home/u/.raven/browser-profile"
+    _playwright_whose_persistent_launch_fails(monkeypatch, report, calls)
+
+    with pytest.raises(BrowserUnavailableError) as exc:
+        await get_browser()._ensure()
+
+    assert calls == ["persistent", "throwaway"]
+    assert "the throwaway relaunch failed as well" in str(exc.value)
+
+
+async def test_a_failure_with_no_message_is_retried_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare exception -- a timeout raised with no text -- says nothing about
+    the profile either way, and the warning before the relaunch must not be
+    what stops it."""
+    calls: list[str] = []
+    _playwright_whose_persistent_launch_fails(monkeypatch, "", calls)
+
+    with pytest.raises(BrowserUnavailableError) as exc:
+        await get_browser()._ensure()
+
+    assert calls == ["persistent", "throwaway"]
+    assert "the throwaway relaunch failed as well" in str(exc.value)
+
+
+async def test_a_missing_browser_is_not_retried_on_a_throwaway_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No profile puts a browser at the path Playwright resolved, so the
+    reader hears about the path rather than about a relaunch that failed."""
+    calls: list[str] = []
+    _playwright_whose_persistent_launch_fails(
+        monkeypatch, "BrowserType.launch_persistent_context: Executable doesn't exist at /nowhere/chrome", calls
+    )
+
+    with pytest.raises(BrowserUnavailableError) as exc:
+        await get_browser()._ensure()
+
+    assert calls == ["persistent"]
+    assert "Chromium is not installed where this process looks for it (/nowhere/chrome)" in str(exc.value)
+
+
+async def test_the_profile_is_the_one_under_the_home_in_effect_at_launch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The suite hands every test its own HOME after this module is imported,
+    so a profile path fixed at import was the runner's own: each real-browser
+    test wrote its cookies into the profile its runner browses with, and
+    parallel workers opened that one directory at once."""
+    calls: list[str] = []
+    profiles: list[str] = []
+    _playwright_whose_persistent_launch_fails(monkeypatch, _LOADER_FAILURE, calls, profiles)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    with pytest.raises(BrowserUnavailableError):
+        await get_browser()._ensure()
+
+    assert profiles == [str(home / ".raven" / "browser-profile")]
 
 
 # ── tabs ────────────────────────────────────────────────────────────────
@@ -379,6 +630,11 @@ class _FakePage:
 class _FakeContext:
     def __init__(self, pages: list[Any]) -> None:
         self.pages = pages
+
+    async def new_page(self) -> _FakePage:
+        page = _FakePage("about:blank", f"tab{len(self.pages)}")
+        self.pages.append(page)
+        return page
 
 
 def _with_pages(b: Browser, pages: list[_FakePage], active: int = 0) -> None:
@@ -947,3 +1203,47 @@ async def test_an_acting_owner_that_opens_a_tab_still_fronts_it() -> None:
 
     assert b._s.page is page and page is not held
     assert streams == ["restream"], "an act fronts the new tab exactly once"
+
+
+@pytest.mark.parametrize(
+    ("bindings", "lands_on"),
+    [
+        pytest.param({}, "front", id="front-tab-is-the-readers"),
+        pytest.param({"run:other": ("front", 0)}, "new", id="front-tab-held-by-another-owner"),
+        pytest.param({"run:x": ("mine", 0)}, "mine", id="caller-holds-its-own-tab"),
+        pytest.param({"run:x": ("mine", "idle")}, "front", id="caller-idled-out-front-tab-free"),
+        pytest.param(
+            {"run:x": ("mine", "idle"), "run:other": ("front", 0)}, "new", id="caller-idled-out-front-tab-held"
+        ),
+        pytest.param({"run:x": ("mine", "closed")}, "front", id="callers-tab-was-closed"),
+        pytest.param({"run:other": ("front", "idle")}, "front", id="front-tab-held-by-an-idled-out-owner"),
+    ],
+)
+async def test_the_url_reported_for_an_owner_is_where_its_call_lands(
+    bindings: dict[str, tuple[str, Any]], lands_on: str
+) -> None:
+    """The permission gate keys an acting call on ``url_for`` before the call
+    runs, so the site a person approves is the site acted on only if this
+    report and ``_page_for`` pick the same page. One case per branch of that
+    choice; a call that must open a tab of its own is reported empty, since no
+    site describes a page nobody has opened yet."""
+    b = get_browser()
+    pages = {"mine": _FakePage("https://mine.test/"), "front": _FakePage("https://bank.test/")}
+    _driving(b, [pages["mine"], pages["front"]], active=1)
+    b._wire = lambda page: None  # type: ignore[method-assign]
+    for owner, (name, age) in bindings.items():
+        if age == "closed":
+            pages[name]._closed = True
+        seen = time.monotonic() - (driver_module.OWNER_IDLE_S + 1 if age == "idle" else 0)
+        b._s.owners[owner] = _Owner(pages[name], seen)
+    before = set(map(id, pages.values()))
+
+    reported = b.url_for("run:x")
+    landed = await b._page_for("run:x")
+
+    if lands_on == "new":
+        assert id(landed) not in before, "the call opened a tab of its own"
+        assert reported == ""
+    else:
+        assert landed is pages[lands_on]
+        assert reported == landed.url

@@ -7,7 +7,7 @@ Fire-at-origin contract: every cron turn runs through the spine ``submit``
 with the job's creation-time binding ``(payload.channel, payload.to)`` as
 the request source — the hub routes the reply to that one outlet. There is
 no trigger-time resolution, forwarding, or broadcast to test anymore; what
-matters is the source binding, the read-back into the system event, and the
+matters is the source binding, reply read-back, heartbeat suppression, and the
 failure path.
 """
 
@@ -26,7 +26,7 @@ from raven.proactive_engine.schedulers.cron.types import (
     CronPayload,
     CronSchedule,
 )
-from raven.spine import Origin, TurnFailed
+from raven.spine import Origin, TurnFailed, TurnOutcome, Usage
 
 
 def _make_job(
@@ -67,7 +67,7 @@ def spine() -> SimpleNamespace:
 
     class _Handle:
         async def result(self):
-            return object()  # a completed turn resolves with its outcome; None means it was cut
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
     def _submit(req):
         captured.append(req)
@@ -127,11 +127,11 @@ async def test_reminder_note_carries_schedule_origin(spine):
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Read-back into the system event
+# Reply read-back and heartbeat suppression
 # ─────────────────────────────────────────────────────────────────────
 
 
-async def test_spine_path_reads_back_reply_into_system_event():
+async def test_spine_path_returns_reply_without_waking_heartbeat():
     system_events = MagicMock()
     wake = MagicMock()
     readback_texts: dict[str, str] = {}
@@ -141,7 +141,7 @@ async def test_spine_path_reads_back_reply_into_system_event():
         async def result(self):
             # The gateway runner stores the reply before result() resolves.
             readback_texts["cron:job_t1"] = "reminder done at 17:05"
-            return object()  # a completed turn resolves with its outcome; None means it was cut
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
     def _submit(req):
         captured["req"] = req
@@ -154,24 +154,24 @@ async def test_spine_path_reads_back_reply_into_system_event():
         wake=wake,
     )
 
-    await handler(_make_job(channel="telegram", to="c1", name="t1"))
+    response = await handler(_make_job(channel="telegram", to="c1", name="t1"))
 
     assert captured["req"].origin is Origin.CRON
     assert captured["req"].conversation == "cron:job_t1"
-    # Read back into the system event, then popped (no leak in the long-running map).
-    system_events.enqueue.assert_called_once()
-    assert "reminder done at 17:05" in system_events.enqueue.call_args.args[0].text
+    assert response == "reminder done at 17:05"
+    system_events.enqueue.assert_not_called()
     assert "cron:job_t1" not in readback_texts
-    wake.request_wake_now.assert_called_once()
+    wake.request_wake_now.assert_not_called()
 
 
-async def test_spine_path_no_reply_falls_back_to_no_response():
+@pytest.mark.parametrize("explicit_reply", [True, False])
+async def test_spine_path_missing_readback_uses_turn_reply_state(explicit_reply: bool):
     system_events = MagicMock()
     wake = MagicMock()
 
     class _Handle:
         async def result(self):
-            return object()  # a completed turn resolves with its outcome; None means it was cut
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=explicit_reply)
 
     handler = make_on_cron_job(
         submit=lambda req: _Handle(),
@@ -180,10 +180,15 @@ async def test_spine_path_no_reply_falls_back_to_no_response():
         wake=wake,
     )
 
-    await handler(_make_job(channel="telegram", to="c1", name="t2"))
+    assert await handler(_make_job(channel="telegram", to="c1", name="t2")) is None
 
-    system_events.enqueue.assert_called_once()
-    assert "(no response)" in system_events.enqueue.call_args.args[0].text
+    if explicit_reply:
+        system_events.enqueue.assert_not_called()
+        wake.request_wake_now.assert_not_called()
+    else:
+        system_events.enqueue.assert_called_once()
+        assert "(no response)" in system_events.enqueue.call_args.args[0].text
+        wake.request_wake_now.assert_called_once_with("cron:job_t2")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -214,6 +219,7 @@ async def test_turn_failure_emits_failed_event_and_reraises():
     assert "failed" in event.text
     assert "RuntimeError: provider down" in event.text
     assert event.context_key.endswith(":fail")
+    wake.request_wake_now.assert_called_once_with("cron:job_f1:fail")
 
 
 async def test_a_failed_turns_own_wording_is_what_the_job_records():
@@ -251,10 +257,16 @@ async def test_a_cancelled_turn_says_it_was_cut_rather_than_that_it_failed():
         async def result(self):
             return None
 
-    handler = make_on_cron_job(submit=lambda req: _Handle(), readback_texts={})
+    system_events = MagicMock()
+    wake = MagicMock()
+    handler = make_on_cron_job(submit=lambda req: _Handle(), readback_texts={}, system_events=system_events, wake=wake)
 
     with pytest.raises(RuntimeError, match="cancelled before it completed"):
         await handler(_make_job(name="f3"))
+
+    system_events.enqueue.assert_called_once()
+    assert "cancelled before it completed" in system_events.enqueue.call_args.args[0].text
+    wake.request_wake_now.assert_called_once_with("cron:job_f3:fail")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -304,7 +316,15 @@ async def test_auto_disable_flips_the_inflight_job(spine):
     would otherwise clobber the persisted disable."""
     cron_service = MagicMock()
     cron_service.record_fire.return_value = True
-    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, cron_service=cron_service)
+    system_events = MagicMock()
+    wake = MagicMock()
+    handler = make_on_cron_job(
+        submit=spine.submit,
+        readback_texts=spine.readback,
+        cron_service=cron_service,
+        system_events=system_events,
+        wake=wake,
+    )
 
     job = _make_job(name="r4", kind="cron")
     job.state.next_run_at_ms = 999_999
@@ -312,6 +332,9 @@ async def test_auto_disable_flips_the_inflight_job(spine):
 
     assert job.enabled is False
     assert job.state.next_run_at_ms is None
+    system_events.enqueue.assert_called_once()
+    assert system_events.enqueue.call_args.args[0].context_key == f"cron:{job.id}:autodisabled"
+    wake.request_wake_now.assert_called_once_with(f"cron:{job.id}:autodisabled")
 
 
 async def test_record_fire_error_does_not_fail_the_turn(spine):

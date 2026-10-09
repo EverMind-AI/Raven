@@ -443,6 +443,30 @@ describe('tool.start', () => {
 })
 
 describe('tool.complete', () => {
+  /* Seen live: the agent switched this conversation's model and the picker
+     went on naming the old one until the conversation was reopened. */
+  it('reads the model and permission chips back after raven_config writes, and only then', async () => {
+    const h = await harness()
+    const asked: Array<[string, unknown]> = []
+    await fakeGateway((method: string, params: unknown) => {
+      asked.push([method, params])
+      return Promise.resolve({})
+    })
+    const run = (id: string, args: Record<string, unknown>, ok: boolean): void => {
+      h.dispatch({ type: 'tool.start', payload: { name: 'raven_config', arguments: args, tool_call_id: id } })
+      h.dispatch({ type: 'tool.complete', payload: { tool_call_id: id, ok, result_preview: '', truncated: false } })
+    }
+    run('r1', { action: 'get', path: 'session.model' }, true)
+    run('r2', { action: 'set', path: 'session.model', value: '{}' }, false)
+    expect(asked).toEqual([])
+
+    run('r3', { action: 'set', path: 'session.model', value: '{}' }, true)
+    await Promise.resolve()
+    const methods = asked.map(([m]) => m)
+    expect(methods).toContain('model.options')
+    expect(asked).toContainEqual(['config.get', { keys: ['permissions.mode'], session_id: 's1' }])
+  })
+
   it('records a delivery before the early return, and closes the row it finds (050-turn.js:178)', async () => {
     const h = await harness()
     h.dispatch({

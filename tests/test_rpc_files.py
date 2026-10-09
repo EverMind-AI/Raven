@@ -122,6 +122,29 @@ async def test_pdf_is_sandboxed_but_may_run_its_viewer(client: TestClient, tmp_p
     assert "allow-same-origin" not in csp
 
 
+async def test_file_answers_a_range_with_the_head_and_the_whole_size(client: TestClient, tmp_path: Path) -> None:
+    """The viewer decides whether a file it has no kind for is text by reading
+    its head, and takes the size for the note from the same answer.
+
+    It relies on the route answering a Range with 206 and ``Content-Range``, and
+    an empty file with 416 -- the viewer reads that as empty text.
+    """
+    (tmp_path / "x.model").write_bytes(b"a" * 10_000)
+    (tmp_path / "empty.model").write_bytes(b"")
+
+    r = await client.get(
+        "/file", params={"path": str(tmp_path / "x.model")}, headers={**auth(), "Range": "bytes=0-8191"}
+    )
+    assert r.status == 206
+    assert r.headers["Content-Range"] == "bytes 0-8191/10000"
+    assert len(await r.read()) == 8192
+
+    r = await client.get(
+        "/file", params={"path": str(tmp_path / "empty.model")}, headers={**auth(), "Range": "bytes=0-8191"}
+    )
+    assert r.status == 416
+
+
 async def test_file_needs_a_session(client: TestClient, tmp_path: Path) -> None:
     """No cookie and no token: the endpoint is not a public file server."""
     (tmp_path / "secret.txt").write_text("s", encoding="utf-8")

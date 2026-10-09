@@ -98,14 +98,16 @@ export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
     return { model: sec.model, provider: sec.provider || '' }
   }
   if (r.media) {
-    const sel = dig(snap.raw, `tools.media.${r.media}`) as { model?: string } | undefined
-    return sel && sel.model ? { model: sel.model, provider: MEDIA_PROVIDER } : null
+    const sel = dig(snap.raw, `tools.media.${r.media}`) as { model?: string; provider?: string } | undefined
+    return sel && sel.model ? { model: sel.model, provider: sel.provider || MEDIA_PROVIDER } : null
   }
   return null
 }
 
-/* Which connected providers may serve a role: media runs on OpenRouter, an
-   EverOS role takes whichever vendors can actually serve it, the rest take any.
+/* Which connected providers may serve a role: the image role those the image
+   tool can run on (the registry's `image_api`, OpenRouter among them), speech
+   and video OpenRouter, whose request shapes they speak; an EverOS role takes
+   whichever vendors can actually serve it, the rest take any.
 
    Capability, not auth shape. The filter used to ask `kind === 'key'`, which is
    how the rerank slot came to offer OpenAI -- and, once a self-hosted endpoint
@@ -114,7 +116,7 @@ export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
    is a separate question, refused at the save with a sentence naming it. */
 export function roleProviders(r: Role, snap: SettingsSnapshot): ProviderRow[] {
   const on = snap.providers.filter((p) => p.on)
-  if (r.media) return on.filter((p) => p.id === MEDIA_PROVIDER)
+  if (r.media) return on.filter((p) => (r.media === 'image' ? !!p.imageApi : p.id === MEDIA_PROVIDER))
   if (r.everos) {
     if (snap.everos?.available === false) return []
     const role = r.everos
@@ -152,13 +154,21 @@ export function everosLocked(r: Role, snap: SettingsSnapshot): 'foreign' | 'env'
   return snap.everos?.sections?.[r.everos]?.env_managed ? 'env' : null
 }
 
+/* Whether an unset role runs on the chat model. A keyed role always does; the
+   memory LLM does when the server says so -- it cannot when the chat model's
+   provider has no key raven can hand EverOS, and then unset means memory off. */
+export function followsChat(r: Role, snap: SettingsSnapshot): boolean {
+  if (r.keys) return true
+  return !!r.everos && !!snap.everos?.sections?.[r.everos]?.follows_main
+}
+
 /* The roles a provider (and optionally one of its models) serves right now.
    A role that follows the chat model counts through the chat role. */
 export function rolesUsing(snap: SettingsSnapshot, slug: string, model?: string): Role[] {
   const chat = roleValue(ROLES[0]!, snap)
   return ROLES.filter((r) => {
     const own = roleValue(r, snap)
-    const v = own || (r.keys ? chat : null)
+    const v = own || (followsChat(r, snap) ? chat : null)
     return !!v && v.provider === slug && (model === undefined || v.model === model)
   })
 }
@@ -190,7 +200,7 @@ function withRole(r: Role, snap: SettingsSnapshot, model: string, provider: stri
     const sections = snap.everos.sections || {}
     return { ...snap, everos: { ...snap.everos, sections: { ...sections, [r.everos]: { ...sections[r.everos], model, provider } } } }
   }
-  if (r.media) return { ...snap, raw: setIn(snap.raw, `tools.media.${r.media}`, mediaSelection(r.media, model)) }
+  if (r.media) return { ...snap, raw: setIn(snap.raw, `tools.media.${r.media}`, mediaSelection(r.media, model, provider)) }
   return snap
 }
 
@@ -207,18 +217,20 @@ async function setRole(r: Role, model: string, provider: string, typed: boolean,
   if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
   if (r.everos) return src.everosSet(r.everos, model, provider)
   if (r.media) {
-    await src.set(`tools.media.${r.media}`, mediaSelection(r.media, model))
+    await src.set(`tools.media.${r.media}`, mediaSelection(r.media, model, provider))
     return src.set('tools.disabledTools', disabledTools(store.get().snap.raw).filter((x) => x !== r.tool))
   }
   return undefined
 }
 
-/* The whole selection the checker wants -- model and quality, nothing else --
-   keeping the quality already chosen. An empty model is how the selection is
-   cleared: the key takes no null. */
-function mediaSelection(kind: string, model: string): { model: string; quality: string } {
+/* The whole selection the checker wants -- model and quality, and for an image
+   pick the provider it runs on, empty for the OpenRouter default -- keeping the
+   quality already chosen. An empty model is how the selection is cleared: the
+   key takes no null, and a clear names no provider, so the one chosen stays. */
+function mediaSelection(kind: string, model: string, provider?: string): { model: string; quality: string; provider?: string } {
   const cur = (dig(store.get().snap.raw, `tools.media.${kind}`) as { quality?: unknown } | undefined) || {}
-  return { model, quality: typeof cur.quality === 'string' ? cur.quality : '' }
+  const sel = { model, quality: typeof cur.quality === 'string' ? cur.quality : '' }
+  return kind === 'image' && provider !== undefined ? { ...sel, provider: provider === MEDIA_PROVIDER ? '' : provider } : sel
 }
 
 async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
@@ -246,7 +258,7 @@ export function RolePill({ role, setup }: { role: Role; setup?: boolean }): JSX.
   const s = store.get()
   const val = roleValue(role, s.snap)
   const provs = roleProviders(role, s.snap)
-  const inherit = !!role.keys
+  const inherit = followsChat(role, s.snap)
   const chat = roleValue(ROLES[0]!, s.snap)
   /* No provider this role may use is connected: there is nothing to open onto,
      and the way out is the providers page rather than an empty popover. A
@@ -296,8 +308,9 @@ export function RolePill({ role, setup }: { role: Role; setup?: boolean }): JSX.
           /* The tab first: switching a section clears every drawer of the one it
              leaves, `provider` included, so naming the row before the switch
              names it into the state the switch is about to wipe.
-             A media role can only run on OpenRouter, so open that row rather than
-             leaving the reader to find it among fifty-five. */
+             A media role's default is OpenRouter, the one provider every media
+             tool runs on, so open that row rather than leaving the reader to
+             find it among fifty-five. */
           store.setTab('provider')
           if (role.media) store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })
         }}>

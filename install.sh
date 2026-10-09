@@ -149,28 +149,22 @@ provision_private_node() {
 
   # Supply-chain integrity: verify the tarball against the official
   # SHASUMS256.txt before extracting/executing it. Node publishes this file
-  # next to every release.
-  if curl -fsSL "https://nodejs.org/dist/${ver}/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt" 2>/dev/null; then
-    expected="$(awk -v f="${pkg}.tar.gz" '$2==f {print $1}' "$tmp/SHASUMS256.txt")"
-    if [ -n "$expected" ]; then
-      if have shasum; then
-        actual="$(shasum -a 256 "$tmp/node.tar.gz" | awk '{print $1}')"
-      elif have sha256sum; then
-        actual="$(sha256sum "$tmp/node.tar.gz" | awk '{print $1}')"
-      else
-        actual=""; warn "shasum/sha256sum not found; skipping verification"
-      fi
-      if [ -n "$actual" ] && [ "$actual" != "$expected" ]; then
-        rm -rf "$tmp"
-        die "Node checksum mismatch (expected $expected, got $actual)"
-      fi
-      [ -n "$actual" ] && ok "Node tarball SHA256 verified"
-    else
-      warn "SHASUMS256.txt did not list ${pkg}.tar.gz; skipping verification"
-    fi
-  else
-    warn "Could not fetch SHASUMS256.txt; skipping integrity check"
+  # next to every release. A tarball that cannot be verified is treated like
+  # one that fails verification: it is never extracted.
+  node_hint="Install Node.js >= ${MIN_NODE_MAJOR} with npm yourself and re-run; the installer then uses it instead of downloading one."
+  curl -fsSL "https://nodejs.org/dist/${ver}/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt" 2>/dev/null \
+    || { rm -rf "$tmp"; die "Could not fetch SHASUMS256.txt for Node ${ver}, so the download cannot be verified. $node_hint"; }
+  expected="$(awk -v f="${pkg}.tar.gz" '$2==f {print $1}' "$tmp/SHASUMS256.txt")"
+  [ -n "$expected" ] \
+    || { rm -rf "$tmp"; die "SHASUMS256.txt for Node ${ver} does not list ${pkg}.tar.gz, so the download cannot be verified. $node_hint"; }
+  actual="$(sha256_of "$tmp/node.tar.gz")"
+  [ -n "$actual" ] \
+    || { rm -rf "$tmp"; die "Neither sha256sum nor shasum is available to verify the Node download. $node_hint"; }
+  if [ "$actual" != "$expected" ]; then
+    rm -rf "$tmp"
+    die "Node checksum mismatch (expected $expected, got $actual)"
   fi
+  ok "Node tarball SHA256 verified"
 
   tar -xzf "$tmp/node.tar.gz" -C "$NODE_RUNTIME_DIR"
   rm -rf "$tmp"
@@ -700,7 +694,7 @@ install_linux_cjk_font() {
   # still parses and draws nothing, which is the failure this step exists for.
   if curl -fsSL --max-time 120 -o "$part" "$HAN_FONT_URL" \
     && [ "$(wc -c < "$part" | tr -d ' ')" = "$HAN_FONT_BYTES" ] \
-    && { actual="$(sha256_of "$part")"; [ -z "$actual" ] || [ "$actual" = "$HAN_FONT_SHA256" ]; } \
+    && [ "$(sha256_of "$part")" = "$HAN_FONT_SHA256" ] \
     && mv -f "$part" "$dir/$HAN_FONT_NAME"; then
     have fc-cache && fc-cache -f "$dir" >/dev/null 2>&1
     ok "Chinese font installed to $dir/$HAN_FONT_NAME"

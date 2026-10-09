@@ -91,6 +91,7 @@ describe('settings store', () => {
     })
     setSources({ settings: {
       load: async () => data(),
+      reloadProviders: async () => data(),
       oauthLogin: async () => ({ verification_uri: 'https://v.example/device', user_code: 'ABCD', expires_in: 900 }),
     } as unknown as SettingsSource })
     store.set({ provAdd: 'minimax_global' })
@@ -105,6 +106,86 @@ describe('settings store', () => {
     await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
     expect(store.get().oauth).toBeNull()
     expect(store.get().provAdd).toBeNull()
+    vi.useRealTimers()
+  })
+
+  it('a device flow that lands reloads the offer the pickers draw from', async () => {
+    /* The landing is the one provider write that does not go through this
+       store, so nothing else reloads the list the role slots and the composer's
+       picker read. Left alone, onboarding's Chat slot read the provider as
+       signed out and answered "no model added" until a reload. */
+    vi.useFakeTimers()
+    let on = false
+    const data = (): SettingsSnapshot => ({
+      ...snapOf('m'),
+      providers: [{ id: 'openai_codex', name: 'OpenAI Codex', models: [], configured: [], on, kind: 'oauth', acceptsKey: false }],
+    })
+    const reloadProviders = vi.fn(async () => data())
+    setSources({ settings: {
+      load: async () => data(),
+      reloadProviders,
+      oauthLogin: async () => ({ verification_uri: 'https://v.example/device', user_code: 'ABCD', expires_in: 900 }),
+    } as unknown as SettingsSource })
+    await store.oauthStart('openai_codex')
+    await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
+    expect(reloadProviders).not.toHaveBeenCalled()
+
+    on = true
+    await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
+    expect(reloadProviders).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
+  })
+
+  it('a refused start keeps watching the code already out', async () => {
+    /* A second click while a code is out: that code is still on screen, and
+       still the one the reader will type. Stopping the poll before asking left
+       it there with nothing watching for it to land. */
+    vi.useFakeTimers()
+    let on = false
+    let refuse = false
+    let loads = 0
+    const data = (): SettingsSnapshot => ({
+      ...snapOf('m'),
+      providers: [{ id: 'openai_codex', name: 'OpenAI Codex', models: [], configured: [], on, kind: 'oauth', acceptsKey: false }],
+    })
+    setSources({ settings: {
+      load: async () => { loads += 1; return data() },
+      reloadProviders: async () => data(),
+      oauthLogin: async () => {
+        if (refuse) throw { handled: true }
+        return { verification_uri: 'https://v.example/device', user_code: 'ABCD', expires_in: 900 }
+      },
+    } as unknown as SettingsSource })
+    await store.oauthStart('openai_codex')
+    refuse = true
+    await store.oauthStart('openai_codex')
+    expect(store.get().oauth?.code).toBe('ABCD')
+
+    const before = loads
+    await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
+    expect(loads).toBeGreaterThan(before)
+
+    on = true
+    await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
+    expect(store.get().oauth).toBeNull()
+    vi.useRealTimers()
+  })
+
+  it('a code answered with seconds left is watched only that long', async () => {
+    /* A second start is answered with the time the pending code has left. A
+       floor under it kept a dead code drawn as live, and polled, for half a
+       minute. */
+    vi.useFakeTimers()
+    setSources({ settings: {
+      load: async () => snapOf('m'),
+      reloadProviders: async () => snapOf('m'),
+      oauthLogin: async () => ({ verification_uri: 'https://v.example/device', user_code: 'ABCD', expires_in: 2 }),
+    } as unknown as SettingsSource })
+    await store.oauthStart('openai_codex')
+    expect(store.get().oauth?.expired).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(store.OAUTH_POLL_MS + 50)
+    expect(store.get().oauth?.expired).toBe(true)
     vi.useRealTimers()
   })
 

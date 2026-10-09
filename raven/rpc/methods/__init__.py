@@ -55,6 +55,7 @@ from raven.rpc.methods.turn import (
 if TYPE_CHECKING:
     from raven.rpc.approval_broker import ApprovalBroker
     from raven.rpc.confirm_broker import ConfirmBroker
+    from raven.rpc.credential_broker import CredentialBroker
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.errors import RpcError
     from raven.rpc.methods.session import AgentLoopFactory
@@ -69,6 +70,7 @@ def register_aligned_methods(
     emitter: "SubscriptionEmitter | None" = None,
     agent_loop_factory: "AgentLoopFactory | None" = None,
     approval_broker: "ApprovalBroker | None" = None,
+    credential_broker: "CredentialBroker | None" = None,
     confirm_broker: "ConfirmBroker | None" = None,
     question_broker: "QuestionBroker | None" = None,
     scheduler: "Scheduler | None" = None,
@@ -100,6 +102,7 @@ def register_aligned_methods(
         emitter=emitter,
         agent_loop_factory=agent_loop_factory,
         approval_broker=approval_broker,
+        credential_broker=credential_broker,
         confirm_broker=confirm_broker,
         question_broker=question_broker,
         scheduler=scheduler,
@@ -117,6 +120,7 @@ def register_aligned_methods_except_system(
     emitter: "SubscriptionEmitter | None" = None,
     agent_loop_factory: "AgentLoopFactory | None" = None,
     approval_broker: "ApprovalBroker | None" = None,
+    credential_broker: "CredentialBroker | None" = None,
     confirm_broker: "ConfirmBroker | None" = None,
     question_broker: "QuestionBroker | None" = None,
     scheduler: "Scheduler | None" = None,
@@ -188,6 +192,12 @@ def register_aligned_methods_except_system(
     # Register it only when this gateway owns an interactive approval broker.
     if approval_broker is not None:
         register_approval_methods(dispatcher, approval_broker=approval_broker)
+    # credential.{submit,skip,pending} write a secret, so like approval.respond
+    # they exist only where a broker that owns open requests does.
+    if credential_broker is not None:
+        from raven.rpc.methods.credential import register_credential_methods
+
+        register_credential_methods(dispatcher, credential_broker=credential_broker)
     # turn.{send,subscribe,unsubscribe,cancel}. The handlers
     # need a SubscriptionEmitter to push streaming events; when the caller
     # has not built one (demo runner / production path pre-wire) we skip

@@ -465,6 +465,40 @@ describe('a task pane', () => {
       expect((panes[0]! as { change: WsChange }).change.hunks.at(-1)).toMatchObject({ add: 0, del: 2 })
     })
 
+    /* A file with no text in it has no patch to build: the hunks would come
+       back empty and the pane would open onto nothing, so the chip opens the
+       file itself, the way a written file's chip already does. */
+    it('opens an edited picture as the file, not as an empty diff', () => {
+      const opened: string[] = []
+      setSources({
+        tasks: source(),
+        workspace: { shortPath: (p) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: (p) => opened.push(p) },
+      })
+      const withPicture = task({
+        id: 'a', kind: 'dag', status: 'completed',
+        nodes: [node({ node_id: 'n1', status: 'completed',
+          files: [{ path: '/w/out/chart.png', op: 'edit', add: 0, del: 0, size: 512 }] })],
+      })
+      render(<TaskPane task={withPicture} />)
+      act(() => { (document.querySelector('.tkchips .wchip') as HTMLElement).click() })
+
+      expect(opened).toEqual(['/w/out/chart.png'])
+      expect(desk.get().panes).toHaveLength(0)
+    })
+
+    /* And a picture the run removed draws no chip at all: there is no patch to
+       build and no file left to open, so the chip could only lead somewhere
+       empty. */
+    it('draws no chip for a removed picture', () => {
+      const withGone = task({
+        id: 'a', kind: 'dag', status: 'completed',
+        nodes: [node({ node_id: 'n1', status: 'completed',
+          files: [{ path: '/w/out/old.png', op: 'delete', add: 0, del: 0, size: null }] })],
+      })
+      render(<TaskPane task={withGone} />)
+      expect(document.querySelector('.tkchips')).toBeNull()
+    })
+
     describe('folding a long strip', () => {
       const manyFiles = (n: number): TaskRow => task({
         id: 'a', kind: 'dag', status: 'completed',

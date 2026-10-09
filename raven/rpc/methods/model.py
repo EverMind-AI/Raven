@@ -1,10 +1,12 @@
 """``model.*`` RPC handlers — backend for the TUI ``/model`` v1 picker.
 
-Nine methods drive the picker:
+These handlers back the TUI ``/model`` picker and the page's provider pane:
 
 * ``model.options`` — current model/provider + one row per provider.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
 * ``model.disconnect`` — clear a provider's stored credentials.
+* ``model.reveal_key`` — read back the one key ``save_key`` stored, for a
+  reader who pressed the eye beside it.
 * ``model.add_model`` / ``model.remove_model`` — edit a provider's curated
   model list.
 * ``model.endpoints`` / ``model.add_endpoint`` / ``model.remove_endpoint`` —
@@ -44,6 +46,7 @@ from raven.config.update_providers import (
 )
 from raven.providers.auth import credential_status
 from raven.providers.common_models import common_models_for, litellm_models_for
+from raven.providers.endpoints import provider_endpoints
 from raven.providers.registry import (
     SHAPE_ENDPOINT,
     SHAPE_LOCAL,
@@ -70,6 +73,7 @@ from raven.rpc.models import (
     ModelOptionsParams,
     ModelRemoveEndpointParams,
     ModelRemoveModelParams,
+    ModelRevealKeyParams,
     ModelSaveKeyParams,
     ModelSetFieldsParams,
     ModelSetProtocolParams,
@@ -412,6 +416,9 @@ def _build_provider_entry(
         "protocol_overrides": overrides,
         "total_models": len(models),
         "gateway": bool(spec and spec.is_gateway),
+        # Whether the image role may run here; the save that refuses a provider
+        # reads the same registry field.
+        "image_api": bool(spec and spec.image_api),
         # Every prefix that names this provider, for a client comparing two
         # spellings of one model: `route_names` is what `merge_key` strips, and
         # the spec says to compare against it rather than rebuild it, so it
@@ -650,6 +657,37 @@ async def model_disconnect(params: dict, *, agent_loop_factory: "AgentLoopFactor
 
     await asyncio.to_thread(forget, parsed.slug)
     return {"disconnected": True}
+
+
+async def model_reveal_key(params: dict) -> dict:
+    """The API key a provider has saved, read back for the reader who asked to see it.
+
+    `model.options` says whether a key is set and stops there, on every poll.
+    This reads one provider's key back when the eye beside its key field is
+    pressed, and answers with that key alone -- the flat ``api_key`` the field
+    edits and `model_save_key` writes, never the rest of the section, an
+    endpoint's key or one taken from the environment.
+
+    Only when it is the key requests carry: an ``endpoints`` list or Gemini's
+    ``api_key_list`` replaces the flat key outright (`provider_endpoints`), and
+    a flat key left behind under one is not a key in use, so that section
+    answers null rather than show it beside a provider marked connected.
+
+    It reaches no further than a signed-in page already did: the CLI bridge
+    answers `provider get --show-secrets` to the same page. What staying out
+    of `model.options` buys is a key that does not ride along on every
+    snapshot, log and screenshot of a page nobody asked to unmask.
+    """
+    parsed = _parse(ModelRevealKeyParams, params)
+    try:
+        section = await asyncio.to_thread(get_provider_config, parsed.slug, redact_secrets=False)
+    except KeyError as exc:
+        raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    key = section.get("api_key")
+    if not isinstance(key, str) or not key:
+        return {"api_key": None}
+    in_use = [endpoint.api_key for endpoint in provider_endpoints(section)]
+    return {"api_key": key if in_use == [key] else None}
 
 
 def _stored_spelling(slug: str, model: str) -> str:
@@ -982,6 +1020,7 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
     dispatcher.register("model.set_protocol", model_set_protocol)
     dispatcher.register("model.save_key", partial(model_save_key, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.disconnect", partial(model_disconnect, agent_loop_factory=agent_loop_factory))
+    dispatcher.register("model.reveal_key", model_reveal_key)
     dispatcher.register("model.fetch_models", model_fetch_models)
     dispatcher.register("model.add_model", model_add_model)
     dispatcher.register("model.add_models", model_add_models)

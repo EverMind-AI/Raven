@@ -202,12 +202,11 @@ function SettingsModal(): JSX.Element {
             </button>
           </header>
           <div className="spanels" id="spanels" />
-          {/* The three sections another domain's island fills. Beside #spanels
+          {/* The two sections another domain's island fills. Beside #spanels
               rather than inside it, because a React root in the settings
               island's own tree would be unmounted the moment the reader picked
               another section; the stylesheet shows whichever one `data-section`
               above names (features/settings/store.ts's HOSTED). */}
-          <div className="spanels" id="connectionsBody" data-for="channels" />
           <div className="spanels" id="cronBody" data-for="cron" />
           <div className="spanels" id="memoryBody" data-for="memory" />
         </div>

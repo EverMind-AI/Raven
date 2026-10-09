@@ -721,8 +721,13 @@ def set_transcript(activity: "RunActivity | None", messages: list[dict[str, Any]
     # this on every update the agent sends, the openai_api lane on every
     # reasoning step. Without the stamp neither lane ever moved
     # ``last_event_ms`` before its end-of-turn notes.
+    from raven.config.held_secrets import scrub_held_value
+
     _touch(activity)
-    activity.transcript = [m for m in messages[:_MAX_TRANSCRIPT_MESSAGES] if isinstance(m, dict)]
+    # A third-party agent's own words and tool output come back unfiltered --
+    # one handed Raven's key can print it -- and this is what the page draws
+    # and the run record keeps.
+    activity.transcript = [scrub_held_value(m) for m in messages[:_MAX_TRANSCRIPT_MESSAGES] if isinstance(m, dict)]
 
 
 def set_tool_calls(activity: "RunActivity | None", calls: list[str] | None, failures: list[str] | None = None) -> None:
@@ -736,9 +741,13 @@ def set_tool_calls(activity: "RunActivity | None", calls: list[str] | None, fail
     if activity is None or not isinstance(calls, list):
         return
     _touch(activity)
-    activity.tool_calls = [c for c in calls[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
+    from raven.config.held_secrets import scrub_held_secrets
+
+    # A third-party agent titles a call with its command (`curl -H 'Authorization:
+    # Bearer ...'`), and these labels reach meta.json, the DAG manifest and the chip.
+    activity.tool_calls = [scrub_held_secrets(c) for c in calls[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
     if isinstance(failures, list):
-        activity.tool_failures = [c for c in failures[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
+        activity.tool_failures = [scrub_held_secrets(c) for c in failures[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
 
 
 def note_closing(text: str | None) -> None:
@@ -748,10 +757,12 @@ def note_closing(text: str | None) -> None:
     reader of the record appends as the closing message, and the transcript is
     everything before that.
     """
+    from raven.config.held_secrets import scrub_held_secrets
+
     activity = _current.get()
     if activity is not None and text is not None:
         _touch(activity)
-        activity.closing = text
+        activity.closing = scrub_held_secrets(text)
 
 
 def append_closing(text: str) -> None:
@@ -762,9 +773,11 @@ def append_closing(text: str) -> None:
     sentence saying the answer is incomplete is missing from exactly the record
     a reader goes to for the answer.
     """
+    from raven.config.held_secrets import scrub_held_secrets
+
     activity = _current.get()
     if activity is not None and activity.closing is not None:
-        activity.closing = f"{activity.closing}{text}"
+        activity.closing = f"{activity.closing}{scrub_held_secrets(text)}"
 
 
 def note_output_truncation(full: str, *, returned: int, reason: str) -> None:
@@ -811,12 +824,15 @@ def persisted_output(activity: Any, delivered: str | None) -> str | None:
     no output row to write, and a truncation published before the failure
     describes an answer that never became the turn's result.
     """
+    from raven.config.held_secrets import scrub_held_secrets
+
     if delivered is None:
         return None
-    if not getattr(activity, "truncation", None):
-        return delivered
-    whole = getattr(activity, "full_output", None)
-    return whole if isinstance(whole, str) and len(whole) > len(delivered) else delivered
+    whole = getattr(activity, "full_output", None) if getattr(activity, "truncation", None) else None
+    # Scrubbed because this is what the record keeps and, for a DAG node, what a
+    # later node's prompt renders through `{{ id.output }}`: an agent handed
+    # Raven's key can print it in its answer.
+    return scrub_held_secrets(whole if isinstance(whole, str) and len(whole) > len(delivered) else delivered)
 
 
 def note_transcript(messages: list[dict[str, Any]] | None) -> None:

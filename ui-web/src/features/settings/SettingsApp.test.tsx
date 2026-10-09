@@ -87,7 +87,7 @@ describe('settings root', () => {
     expect([...nav].map((b) => b.textContent)).toEqual([
       'gui.settings.nav.general', 'gui.settings.nav.usage', 'gui.settings.nav.provider',
       'gui.settings.nav.model', 'gui.settings.nav.skills', 'gui.settings.nav.tools',
-      'gui.settings.nav.plugins', 'gui.settings.nav.channels', 'gui.settings.nav.cron',
+      'gui.settings.nav.plugins', 'gui.settings.nav.cron',
       'gui.settings.nav.memory', 'gui.settings.nav.archive', 'gui.settings.nav.about',
     ])
     expect(nav[0]!.getAttribute('aria-current')).toBe('true')

@@ -488,6 +488,136 @@ describe('recording the files a command left behind', () => {
     expect(store.shared().changes.map((c) => c.kind).sort()).toEqual(['delete', 'write'])
   })
 
+  /* The runtime read the file against the tree it staged in front of the
+     command, so the change comes measured, and the row is drawn like any file
+     tool's -- which is what sends a reader who opens it to the patch. */
+  it('draws a measured rewrite with its hunk and counts', () => {
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined, [{
+      path: '/w/log.json', created: false, size: 12, lines: null, added: 1, removed: 1,
+      diff: '--- log.json\n+++ log.json\n@@ -1,2 +1,2 @@\n a\n-b\n+B',
+    }])
+
+    const row = rowFor('/w/log.json')
+    expect(row?.kind).toBe('write')
+    expect(row?.hunks).toHaveLength(1)
+    expect([row?.add, row?.del]).toEqual([1, 1])
+    expect(row?.listed).toBe(true)
+  })
+
+  /* Past the event's budget the diff is dropped and the counts still arrive:
+     the row says how big the change was even with no patch to open. */
+  /* The runtime measured the change; the patch is for drawing. Where the two
+     disagree the runtime's numbers are the ones shown. */
+  it('shows the runtime\'s counts over ones re-read from the patch', () => {
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined, [{
+      path: '/w/log.json', created: false, size: 12, lines: null, added: 5, removed: 4,
+      diff: '--- log.json\n+++ log.json\n@@ -1,2 +1,2 @@\n a\n-b\n+B',
+    }])
+
+    const row = rowFor('/w/log.json')
+    expect(row?.hunks).toHaveLength(1)
+    expect([row?.add, row?.del]).toEqual([5, 4])
+  })
+
+  /* The same preference where a second change is added to a row the turn
+     already has: this is where a command writing one file several times sums
+     its counts, and where a wrong number is least likely to be noticed. */
+  it('adds the runtime\'s counts, not the patch\'s, to a row it already has', () => {
+    const args = { path: '/w/notes.md', content: 'a\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/notes.md\n+++ b/w/notes.md\n@@ -0,0 +1,1 @@\n+a', { path: '/w/notes.md', after: 'a\n' })
+
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined, [{
+      path: '/w/notes.md', created: false, size: 4, lines: null, added: 5, removed: 3,
+      diff: '--- notes.md\n+++ notes.md\n@@ -1,1 +1,2 @@\n a\n+b',
+    }])
+
+    const row = rowFor('/w/notes.md')
+    expect(row?.hunks).toHaveLength(2)
+    expect([row?.add, row?.del]).toEqual([1 + 5, 0 + 3])
+  })
+
+  it('carries the counts of a measured change that came without its diff', () => {
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined,
+      [{ path: '/w/log.json', created: false, size: 12, lines: null, added: 40, removed: 7 }])
+
+    const row = rowFor('/w/log.json')
+    expect(row?.hunks).toHaveLength(0)
+    expect([row?.add, row?.del]).toEqual([40, 7])
+  })
+
+  /* A command that changes a file a tool already wrote this turn: its diff is
+     against the file as the tool left it, so it is one more hunk on the row,
+     not a second row and not a replacement for the first. */
+  it('adds a measured change to the row a file tool already made', () => {
+    const args = { path: '/w/notes.md', content: 'a\n' }
+    wsOnTool('write_file', args)
+    wsOnToolDone('write_file', args, true, '', null,
+      '--- a/w/notes.md\n+++ b/w/notes.md\n@@ -0,0 +1,1 @@\n+a', { path: '/w/notes.md', after: 'a\n' })
+
+    wsOnToolDone('exec', { command: 'echo b >> notes.md' }, true, '', null, undefined, undefined, undefined, [{
+      path: '/w/notes.md', created: false, size: 4, lines: null, added: 1, removed: 0,
+      diff: '--- notes.md\n+++ notes.md\n@@ -1,1 +1,2 @@\n a\n+b',
+    }])
+
+    expect(store.shared().changes).toHaveLength(1)
+    const row = rowFor('/w/notes.md')
+    expect(row?.kind).toBe('add')
+    expect(row?.hunks).toHaveLength(2)
+    expect(row?.add).toBe(2)
+  })
+
+  /* A listing row that carries a hunk is still the listing's: a file tool that
+     follows under the path the model typed takes it over rather than opening a
+     second row for the same file. */
+  it('lets a file tool take over a command\'s measured row', () => {
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined, [{
+      path: '/w/notes.md', created: true, size: 2, lines: 1, added: 1, removed: 0,
+      diff: '--- notes.md\n+++ notes.md\n@@ -0,0 +1,1 @@\n+b',
+    }])
+
+    const args = { path: 'notes.md', old_text: 'b', new_text: 'B' }
+    wsOnTool('edit_file', args)
+
+    expect(store.shared().changes).toHaveLength(1)
+    const row = rowFor('notes.md')
+    expect(row?.kind).toBe('add')
+    expect(row?.hunks).toHaveLength(2)
+  })
+
+  /* The row's change so far was never measured, so a measured second change
+     would put a partial count on it and a patch that shows only the half the
+     reader did not ask about. */
+  it('leaves an unmeasured row bare when a later command is measured', () => {
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined,
+      [{ path: '/w/.env', created: false, size: 4, lines: null }])
+    wsOnToolDone('exec', { command: 'python3 gen.py' }, true, '', null, undefined, undefined, undefined, [{
+      path: '/w/.env', created: false, size: 4, lines: null, added: 1, removed: 1,
+      diff: '--- .env\n+++ .env\n@@ -1,1 +1,1 @@\n-A=1\n+A=2',
+    }])
+
+    const row = rowFor('/w/.env')
+    expect(row?.hunks).toHaveLength(0)
+    expect([row?.add, row?.del]).toEqual([0, 0])
+  })
+
+  it('replays a stored measured change as the same row', () => {
+    const written = {
+      path: '/w/log.json', created: false, size: 12, lines: null, added: 1, removed: 1,
+      diff: '--- log.json\n+++ log.json\n@@ -1,2 +1,2 @@\n a\n-b\n+B',
+    }
+    wsOnHistory([
+      { role: 'user', text: 'regenerate it' },
+      { role: 'assistant', tool_calls: [{ id: 'c1', name: 'exec', arguments: JSON.stringify({ command: 'make' }) }] },
+      { role: 'tool', tool_call_id: 'c1', file_written: [written] },
+    ])
+
+    const row = rowFor('/w/log.json')
+    expect(row?.hunks).toHaveLength(1)
+    expect([row?.add, row?.del]).toEqual([1, 1])
+  })
+
   /* A reload reads the same shape back: unlike a removal there is nothing to
      reduce, so live and replayed rows are identical. */
   it('replays the stored listing as the same rows', () => {

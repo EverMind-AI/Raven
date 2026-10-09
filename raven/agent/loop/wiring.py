@@ -941,6 +941,8 @@ class WiringMixin:
                 path_append=self.exec_config.path_append,
                 executor=self._executor,
                 extra_allowed_dirs=(self.workspace,),
+                record_writes=True,
+                shadow=self._command_shadow,
             )
         )
         # The registry writer beside exec's machine channel, for the products
@@ -1051,6 +1053,20 @@ class WiringMixin:
         from raven.agent.tools.plughub import PluginTool
 
         self.tools.register(PluginTool(loop=self, registry=self.tools))
+        # Its settings writers and its restart are lent later by the entrance
+        # (rpc bootstrap, gateway); until then it reads and writes raw settings.
+        # A sub-agent is not given it: the configuration is the host's.
+        if not is_subagent_process():
+            from raven.agent.tools.raven_config import GUIDE_SKILL_ID as _CONFIG_GUIDE
+            from raven.agent.tools.raven_config import RavenConfigTool
+
+            self.tools.register(
+                RavenConfigTool(
+                    guide_skill_id=self._shipped_guide(_CONFIG_GUIDE),
+                    session_model=lambda key: (self.session_model(key), self.has_session_binding(key)),
+                    tool_names=lambda: self.tools.names(),
+                )
+            )
         if self.cron_service:
             # Function-scope import on purpose: the cron tool is cargo the loop must
             # not name at module level (tests/test_l3_open_world.py counts module-level
@@ -1067,6 +1083,13 @@ class WiringMixin:
         # ``_bind_plugin_runtime``, not here: the handles carry organs (the
         # playbook funnel) assembled after even this registry is populated.
         for tool in self.plugin_tools:
+            # A same-name replacement of ``exec`` reports the files its commands
+            # wrote and removed, as the built-in does. Asked before the door:
+            # measuring raises the tool's ceiling, and the registry reads the
+            # ceiling off the spec it admits, never off the tool afterwards.
+            measure_writes = getattr(tool, "measure_writes", None)
+            if tool.name == "exec" and callable(measure_writes):
+                measure_writes(self._command_shadow)
             self.tools.register(tool)
 
         # Skill retrieval tools (body -> scripts). Both are source-agnostic and
@@ -1648,14 +1671,22 @@ class WiringMixin:
         """
         from raven.agent.subagent.dag_tool import GUIDE_SKILL_ID
 
+        return self._shipped_guide(GUIDE_SKILL_ID)
+
+    def _shipped_guide(self, skill_id: str) -> str | None:
+        """``skill_id`` when the skill registry can resolve it, else None.
+
+        The same rule for every tool that points at a companion skill; see
+        :meth:`_dag_guide_skill_id` for why an unreachable registry keeps it.
+        """
         registry = getattr(getattr(self.context, "skills", None), "registry", None)
         if registry is None:
-            return GUIDE_SKILL_ID
+            return skill_id
         try:
-            found = registry.get(GUIDE_SKILL_ID.split("/", 1)[1]) is not None
+            found = registry.get(skill_id.split("/", 1)[1]) is not None
         except Exception:  # noqa: BLE001 - a registry hiccup must not unregister the guide
-            return GUIDE_SKILL_ID
-        return GUIDE_SKILL_ID if found else None
+            return skill_id
+        return skill_id if found else None
 
     @staticmethod
     def _build_skill_hub_client(

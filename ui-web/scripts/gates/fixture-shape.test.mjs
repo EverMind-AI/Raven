@@ -149,6 +149,8 @@ function optionals(schema, value, path, declared, sent) {
    found are carried only by a Node.js agent that quit on an old Node.js; the
    one Qwen Code row here shows its two-step fix instead. */
 const UNSENT = new Set([
+  // credential.submit: 1 -- the offline card always saves, and an error is the refusal's alone
+  'credential.submit.error',
   // browser.close: 7
   'browser.close.can_back', 'browser.close.can_forward', 'browser.close.error', 'browser.close.headful', 'browser.close.loading', 'browser.close.title', 'browser.close.url',
   // browser.frame: 8

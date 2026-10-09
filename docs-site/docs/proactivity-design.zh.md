@@ -235,6 +235,11 @@ HeartbeatService（`schedulers/heartbeat/service.py`）通过结构化模型决�
 `HEARTBEAT.md`，仅在结果为 `run` 时执行 Agent 工作。`wake.py` 合并提前唤醒请求、
 限制频率，并在用户工作繁忙时延后。Wake 驱动 Heartbeat，不驱动 Sentinel 的节拍循环。
 
+已明确回复的成功 Cron 轮次通过 Spine 投递，不再生成完成事件或唤醒 Heartbeat 重复提醒。
+成功但未回复的轮次、失败、错过的提醒以及自动禁用仍会唤醒 Heartbeat。
+任务重试成功后会清除自身待处理的失败事件；明确回复后也会清除此前排队的静默完成事件。
+其他事件仍保留在队列中。
+
 Spine 的 Scheduler 将轮次路由到按会话划分的 Lane 与按来源划分的并发池；
 DeliveryHub 将输出投递到出口。用户入站与响应修饰钩子区分真实用户轮次和系统来源工作。
 用户确认后的任务发现动作带独立标记，避免对一次选择重复计数。

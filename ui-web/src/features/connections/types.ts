@@ -24,6 +24,10 @@ export interface ConnChannel {
   running?: boolean | null
   connected?: boolean | null
   qrLogin?: boolean
+  /* The gateway's reason, in the reader's words, for the last start this page
+     asked for and did not get. Kept on the row so the sheet can show it for as
+     long as the entrance stays down; a status read carries no reason. */
+  refusal?: string
 }
 
 /* One channels.qr answer. `connected: true` ends the island's polling, and
@@ -39,7 +43,7 @@ export interface ConnQr {
 /* The DS.connections contract both the offline fixture library and the rpc
    source (live layer) implement. The island only ever talks to this.
    `rows(true)` is the page-open fetch: the rpc source reserves its
-   gateway-not-running warning for that one call. `qr` resolving null means
+   failed-load toast for that one call. `qr` resolving null means
    "nothing to show yet"; the island keeps polling while the dialog is up. */
 export interface ConnectionsSource {
   rows(initial?: boolean): Promise<ConnChannel[]>

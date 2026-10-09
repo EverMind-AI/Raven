@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import http.server
 import os
-import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -34,8 +33,15 @@ from raven.agent.tools.browser import (
 )
 from raven.browser import get_browser
 from raven.browser.driver import Browser
+from tests._browser_cache import chromium_installed, chromium_launch_failure, point_at_login_cache
 
-pytestmark = pytest.mark.skipif(not Browser.probe()[0], reason="browser extra not installed")
+# Both halves matter: the package can import with no browser downloaded, and a
+# skip that only asks about the package reports that as failures rather than as
+# a skip.
+pytestmark = pytest.mark.skipif(
+    not Browser.probe()[0] or not chromium_installed(),
+    reason="playwright or its Chromium is not installed (see test_browser_real_web.py)",
+)
 
 FORM = b"""<!doctype html><html><head><title>Raven Form Test</title></head><body>
 <h1>Sign up</h1>
@@ -66,28 +72,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-try:
-    import pwd
-except ImportError:  # pragma: no cover - Windows has no pwd module
-    pwd = None  # type: ignore[assignment]
-
-
-def _playwright_cache(home: str) -> str:
-    """Where ``playwright install`` put the browsers, by platform.
-
-    Playwright picks this directory by OS, and this fixture only has to name
-    the same one: hard-coded to macOS it sent a Linux run looking in
-    ``~/Library/Caches``, which the documented install never writes -- the
-    suite then reported Chromium missing and suggested an install that would
-    write somewhere else again.
-    """
-    if sys.platform == "darwin":
-        return os.path.join(home, "Library", "Caches", "ms-playwright")
-    if sys.platform == "win32":
-        return os.path.join(home, "AppData", "Local", "ms-playwright")
-    return os.path.join(home, ".cache", "ms-playwright")
-
-
 @pytest.fixture(autouse=True)
 def _browsers_from_the_real_home(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point Playwright at the human's cache rather than a sandboxed HOME.
@@ -95,13 +79,17 @@ def _browsers_from_the_real_home(monkeypatch: pytest.MonkeyPatch) -> None:
     An explicit ``PLAYWRIGHT_BROWSERS_PATH`` always wins, so CI that installs
     browsers elsewhere is untouched.
     """
-    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
-        return
-    try:
-        home = pwd.getpwuid(os.getuid()).pw_dir if pwd is not None else os.path.expanduser("~")
-    except (KeyError, AttributeError):
-        home = os.path.expanduser("~")
-    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", _playwright_cache(home))
+    point_at_login_cache(monkeypatch)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _chromium_can_start() -> None:
+    """A browser that is downloaded but cannot start here -- a host missing a
+    system library it links against -- can run none of these tests. Skip them
+    with its reason instead of failing each one at launch."""
+    why = chromium_launch_failure()
+    if why is not None:
+        pytest.skip(f"Chromium cannot start here: {why}")
 
 
 @pytest.fixture

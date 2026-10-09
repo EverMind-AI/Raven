@@ -160,7 +160,6 @@ class BoxliteExecutor(SandboxExecutor):
         except Exception as exc:
             raise SandboxInitError(
                 f"Cannot initialise sandbox (image pre-pull failed): {exc}\n"
-                f"  • Ensure boxlite is installed:  pip install raven[sandbox]\n"
                 f"  • macOS: requires Apple Silicon M1+ and macOS 12+\n"
                 f"  • Linux: requires /dev/kvm accessible to the current user"
             ) from exc
@@ -197,7 +196,6 @@ class BoxliteExecutor(SandboxExecutor):
         except Exception as exc:
             raise SandboxInitError(
                 f"Cannot initialise sandbox: {exc}\n"
-                f"  • Ensure boxlite is installed:  pip install raven[sandbox]\n"
                 f"  • macOS: requires Apple Silicon M1+ and macOS 12+\n"
                 f"  • Linux: requires /dev/kvm accessible to the current user"
             ) from exc
@@ -237,12 +235,12 @@ class BoxliteExecutor(SandboxExecutor):
                 {"host": str(self._workspace), "guest": self.WORKSPACE_MOUNT, "readonly": False},
                 *[{"host": e[0], "guest": e[1], "readonly": e[2] == "ro"} for e in self._extra_volumes],
             ]
-            # network is a string field and allow_net a separate list field.
+            # boxlite 0.9.5: BoxOptions.network takes a NetworkSpec instance.
             extra_kwargs: dict = {}
             if self._allow_net is False:
-                extra_kwargs["network"] = "none"
+                extra_kwargs["network"] = boxlite.NetworkSpec(mode="disabled")
             elif isinstance(self._allow_net, list):
-                extra_kwargs["allow_net"] = self._allow_net
+                extra_kwargs["network"] = boxlite.NetworkSpec(mode="enabled", allow_net=self._allow_net)
             # else: allow_net is True → fully open, no kwargs needed
 
             options = boxlite.BoxOptions(

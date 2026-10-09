@@ -9,6 +9,7 @@ so tests never touch the network.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -225,6 +226,58 @@ def test_doctor_json_with_probe_structure(healthy_config: Path, monkeypatch: pyt
     assert data["probe"]["ok"] is True
     assert data["probe"]["text"] == "hi"
     assert data["probe"]["tokens"] == 10
+
+
+def _save_safety(mode: str, backend: str) -> None:
+    from raven.config.loader import load_config
+
+    cfg = load_config()
+    cfg.permissions.mode = mode
+    cfg.tools.sandbox.backend = backend
+    save_config(cfg)
+
+
+def test_doctor_warns_for_the_default_sandbox_and_not_for_smart_mode(healthy_config: Path) -> None:
+    """A fresh config leaves the sandbox off. That is a warning, not a failure,
+    and the default permission mode is not the one that skips asking."""
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 0, r.stdout
+    assert "commands run on this machine with no isolation" in r.stdout
+    assert "tools.sandbox.backend" in r.stdout
+    assert "ask-tier calls run without asking" not in r.stdout
+    assert "Permissions: smart" in r.stdout
+
+
+def test_doctor_warns_for_full_permission_and_not_for_an_enabled_sandbox(healthy_config: Path) -> None:
+    """``full`` skips the ask tier. ``auto`` is a sandbox, so only the first warns."""
+    _save_safety("full", "auto")
+    r = runner.invoke(app, ["doctor"])
+    plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", r.stdout))
+    assert r.exit_code == 0, plain
+    assert "ask-tier calls run without asking" in plain
+    assert "built-in denials and deny rules still hold" in plain
+    assert "commands run on this machine with no isolation" not in plain
+    assert "Sandbox: auto" in plain
+
+
+def test_doctor_is_quiet_when_permission_mode_asks_and_sandbox_is_boxlite(healthy_config: Path) -> None:
+    _save_safety("ask", "boxlite")
+    r = runner.invoke(app, ["doctor"])
+    assert r.exit_code == 0, r.stdout
+    assert "ask-tier calls run without asking" not in r.stdout
+    assert "commands run on this machine with no isolation" not in r.stdout
+    assert "Permissions: ask" in r.stdout
+    assert "Sandbox:     boxlite" in r.stdout
+
+
+def test_the_safety_settings_reach_the_json_output(healthy_config: Path) -> None:
+    _save_safety("full", "none")
+    r = runner.invoke(app, ["doctor", "--json"])
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", r.stdout)
+    assert r.exit_code == 0, plain
+    data = json.loads(plain)
+    assert data["features"]["permission_mode"] == "full"
+    assert data["features"]["sandbox_backend"] == "none"
 
 
 # --------------------------------------------------------------------------- memory

@@ -21,7 +21,8 @@ curl -fsSL https://raven.evermind.ai/install.sh | bash
 irm https://raven.evermind.ai/install.ps1 | iex
 ```
 
-如果 Windows PowerShell 5.1 无法处理重定向，请使用直连安装地址：
+Windows 自带的 Windows PowerShell 5.1 无法跟随这个地址的重定向，会报错
+`(308) Permanent Redirect`。遇到这个错误时，请使用直连安装地址：
 
 ```powershell
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex

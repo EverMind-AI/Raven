@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, snap, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
-import { ROLES, everosLocked, roleProviders, roleValue, rolesUsing } from './Roles'
+import { ROLES, everosLocked, followsChat, roleProviders, roleValue, rolesUsing } from './Roles'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -39,6 +39,16 @@ const pick = async (roleName: string, model: string, providerName?: string): Pro
   await act(async () => { fireEvent.click(within(scope).getAllByText(model)[0]!) })
 }
 const sets = (calls: Array<[string, unknown]>) => calls.filter(([m]) => m === 'set').map(([, a]) => a)
+/* OpenAI connected with one image model, as `model.options` answers a key whose
+   list carries gpt-image-2. */
+const withOpenAI = (): ReturnType<typeof snap> => {
+  const data = snap()
+  data.providers = data.providers.map((p) => (p.id === 'openai'
+    ? { ...p, on: true, models: ['gpt-image-2'], configured: ['gpt-image-2'],
+        labels: { 'gpt-image-2': { label: 'gpt-image-2', kind: 'image' } } }
+    : p))
+  return data
+}
 
 describe('model roles', () => {
   it('a keyed role writes its model then its provider; clearing writes null to both', async () => {
@@ -75,17 +85,41 @@ describe('model roles', () => {
     expect(store.get().needsRestart).toBe(true)
   })
 
-  it('a media role offers OpenRouter only, writes the selection first and then unhides the tool', async () => {
+  it('an OpenRouter image pick writes the selection, naming no provider, then unhides the tool', async () => {
     const { calls } = install()
     await mount('model')
-    expect(roleProviders(role('image'), snap()).map((p) => p.id)).toEqual(['openrouter'])
     /* The image slot lists image models: a text model on the same provider is
        not offered for it any more. */
     await pick('gui.settings.roles.image', 'gemini-2.5-flash-image')
     expect(sets(calls)).toEqual([
-      { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '' } },
+      { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '', provider: '' } },
       { key: 'tools.disabledTools', value: ['write_file'] },
     ])
+  })
+
+  it('the image role offers the connected providers the image tool can run on; speech and video keep to OpenRouter', () => {
+    const data = withOpenAI()
+    expect(roleProviders(role('image'), data).map((p) => p.id)).toEqual(['openrouter', 'openai'])
+    expect(roleProviders(role('speech'), data).map((p) => p.id)).toEqual(['openrouter'])
+    expect(roleProviders(role('video'), data).map((p) => p.id)).toEqual(['openrouter'])
+  })
+
+  it('an image pick on another provider writes that provider into the selection', async () => {
+    const { calls } = install(withOpenAI())
+    await mount('model')
+    await pick('gui.settings.roles.image', 'gpt-image-2', 'OpenAI')
+    expect(sets(calls)[0]).toEqual({ key: 'tools.media.image', value: { model: 'gpt-image-2', quality: '', provider: 'openai' } })
+  })
+
+  it('the image slot reads its provider off the selection, OpenRouter when it names none', () => {
+    const data = withOpenAI()
+    const media = data.raw.tools as { media?: unknown }
+    media.media = { image: { model: 'gpt-image-2', quality: '', provider: 'openai' } }
+    expect(roleValue(role('image'), data)).toEqual({ model: 'gpt-image-2', provider: 'openai' })
+    /* Counted where a disconnect asks which roles still run on the provider. */
+    expect(rolesUsing(data, 'openai').map((r) => r.id)).toContain('image')
+    media.media = { image: { model: 'google/gemini-2.5-flash-image', quality: '' } }
+    expect(roleValue(role('image'), data)).toEqual({ model: 'google/gemini-2.5-flash-image', provider: 'openrouter' })
   })
 
   it('clearing a media role empties the model, keeps the quality, and puts the tool back on the disabled list', async () => {
@@ -170,6 +204,25 @@ describe('model roles', () => {
     expect(screen.queryByLabelText(clearLabel('memllm'))).toBe(null)
     expect(screen.queryByLabelText(clearLabel('embedding'))).toBe(null)
     expect(screen.queryByLabelText(clearLabel('rerank'))).not.toBe(null)
+  })
+
+  it('an unset memory model the server says follows the chat model reads that way, and counts through it', async () => {
+    /* "Use the chat model" is what leaving it alone means. The slot said
+       "not set" and the memory switched off; now the server resolves it to the
+       chat model and the slot has to say so, or the page and memory disagree. */
+    const data = snap()
+    data.everos = { ...data.everos, sections: { llm: { model: '', provider: '', api_key_set: true, follows_main: true } } }
+    expect(followsChat(role('memllm'), data)).toBe(true)
+    expect(rolesUsing(data, 'anthropic').map((r) => r.id)).toContain('memllm')
+    install(data)
+    await mount('model')
+    expect(pill('gui.settings.roles.memllm').textContent).toContain('gui.settings.roles.follows_chat')
+
+    /* The control: a chat model EverOS cannot use leaves the slot unset. */
+    const cannot = snap()
+    cannot.everos = { ...cannot.everos, sections: { llm: { model: '', provider: '', api_key_set: false } } }
+    expect(followsChat(role('memllm'), cannot)).toBe(false)
+    expect(rolesUsing(cannot, 'anthropic').map((r) => r.id)).not.toContain('memllm')
   })
 
   it('the slot shows the vendor as stored, with no address to match', async () => {

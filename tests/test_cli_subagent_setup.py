@@ -753,13 +753,8 @@ def test_host_openrouter_key_is_empty_when_no_provider_is_set_up(
     assert subagent_setup.host_openrouter_key() == ""
 
 
-def test_an_oauth_host_is_not_offered_its_own_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The launchers accept a literal key and nothing else.
-
-    An OAuth sign-in leaves `providers` with no `apiKey`, so `inherit_llm`
-    returns "" and the run exits -- after the wizard has already said
-    "registered". Offering the option at all is the defect.
-    """
+def test_an_unconfigured_host_is_not_offered_its_own_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setup withholds inheritance when the launcher has no usable host model."""
     _folder(tmp_path, "raven-code")
     monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
     monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
@@ -781,11 +776,36 @@ def test_a_host_with_a_literal_key_keeps_the_option(tmp_path: Path, monkeypatch:
     assert scripted.offered[0] == ["own", "inherit", "skip"]
 
 
-def test_an_oauth_sign_in_is_not_a_key_to_lend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Mirrors `inherit_llm`, not `providers.auth`: auth calls this host
-    # configured, and the launcher still has nothing to inherit.
+def test_an_unsigned_oauth_provider_is_not_lendable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _host_config(tmp_path, monkeypatch, {"openai_codex": {"models": []}})
     assert subagent_setup.host_can_lend_a_key() is False
+
+
+def test_a_signed_in_oauth_host_is_offered_its_own_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _host_config(tmp_path, monkeypatch, {"openai_codex": {}})
+    home = tmp_path / ".raven"
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"openai_codex": {}},
+                "agents": {"defaults": {"provider": "openai_codex", "model": "openai-codex/gpt-5.6-sol"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    token_dir = home / "oauth" / "chatgpt"
+    token_dir.mkdir(parents=True)
+    (token_dir / "auth.json").write_text(json.dumps({"refresh_token": "synthetic-token"}), encoding="utf-8")
+    _folder(tmp_path, "raven-code")
+    monkeypatch.setattr(subagent_setup, "agents_root", lambda: tmp_path)
+    monkeypatch.setattr(subagent_setup, "host_openrouter_key", lambda: "")
+    scripted = _ScriptedSelect([("Set up", "skip")])
+    monkeypatch.setattr(onboard_commands, "_require_questionary", lambda: scripted)
+
+    subagent_setup.configure_subagents(warnings=[])
+
+    assert subagent_setup.host_can_lend_a_key() is True
+    assert scripted.offered[0] == ["own", "inherit", "skip"]
 
 
 def test_a_literal_key_anywhere_is_a_key_to_lend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

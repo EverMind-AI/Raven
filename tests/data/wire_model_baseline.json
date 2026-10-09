@@ -156,7 +156,7 @@
     },
     "gemini": {
       "gemini-probe": "gemini/gemini-probe",
-      "gemini/gemini-2.5-flash": "gemini/gemini-2.5-flash",
+      "gemini/gemini-3.8-flash": "gemini/gemini-3.8-flash",
       "gemini/vendorx/zz-probe-1": "gemini/vendorx/zz-probe-1",
       "gemini/zz-probe-1": "gemini/zz-probe-1",
       "vendorx/zz-probe-1": "vendorx/zz-probe-1",

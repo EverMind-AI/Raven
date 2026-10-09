@@ -1830,16 +1830,29 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .pile .cnt::before { content: '\00d7'; margin-right: 1px; opacity: .7; }
 
-/* one way to look at an image, wherever it was clicked from */
+/* one way to look at an image, wherever it was clicked from: at its own size,
+   scrolling both ways inside the overlay when it is bigger than the window.
+   The tracks stay auto, so a big image grows its own track and it is the grid
+   that overflows -- toward the end, where scrolling reaches it. A cell fixed
+   to the window would leave the image overflowing around its centre, and the
+   part above and to the left past where any scroll can go. */
 .lightbox {
   position: fixed; inset: 0; z-index: var(--z-lightbox); display: grid; place-items: center; padding: 32px;
+  overflow: auto;
   background: color-mix(in oklab, var(--ink) 82%, transparent); backdrop-filter: blur(4px);
   cursor: zoom-out; border: 0;
 }
 .lightbox img {
-  max-width: 100%; max-height: 100%; width: auto; height: auto;
+  width: auto; height: auto;
   border-radius: 12px; box-shadow: var(--shadow);
 }
+/* The scrollbar layer sits under every overlay, and the lightbox is the one
+   above it that scrolls. While it is open the layer stands over it, showing
+   only the thumbs chrome/behaviour/scrollbars.ts marks as the lightbox's own:
+   the rest would be lifted over the image too -- the transcript's, scrolled a
+   moment before the image was clicked, or a reply's still streaming in. */
+body:has(> .lightbox) .sbars { z-index: calc(var(--z-lightbox) + 1); }
+body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .achip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 240px;
   background: var(--ink); border: 1px solid var(--line); border-radius: 8px;
@@ -3168,17 +3181,6 @@ textarea:focus, textarea:focus-visible,
   border: 1px solid var(--line-soft); padding: 4px 9px; text-align: left; white-space: nowrap;
 }
 .fview table.csvt th { background: var(--surface); font-weight: 600; position: sticky; top: 0; }
-.fview .binote { padding: 20px 16px; display: grid; gap: 8px; justify-items: start; }
-.fview .binote .h { font-size: 13px; }
-.fview .binote .w { font-size: 12px; color: var(--muted); line-height: 1.6; }
-/* The note's grid stacks its rows; the two open actions belong on one line.
-
-   NOT `.acts`, which this used to be called: that is the transcript answer's
-   icon bar (`.acts button` is a 27px square with `display: grid`), and these
-   two are text buttons. Sharing the name squeezed both labels into 27x27
-   boxes, where they overflowed and drew on top of each other -- the note read
-   as a font or encoding fault rather than as two buttons. */
-.fview .binote .binacts { display: flex; flex-wrap: wrap; gap: 7px; }
 .fview .vspin { padding: 22px 16px; font-size: 12px; color: var(--faint); }
 .fview .verr { padding: 18px 16px; font-size: 12.5px; color: var(--clay); line-height: 1.6; }
 
@@ -3400,17 +3402,26 @@ details[open] summary { margin-bottom: 8px; }
 
 /* ── plugin market (pm*) — rides the hub grid, adds status language ── */
 /* page hero: the market's one big line -- everything else stays quiet */
-/* Every module page opens with the same hero: h3 title, muted sub, one
-   rhythm (10px above, 18px down to the page's controls). */
-.pmhero { margin: 10px 0 22px; display: flex; align-items: center;
-  justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 #pageHero { margin: 10px 0 18px; }
 #pageHero[hidden] { display: none; }
-.pmhero h3 {
-  margin: 0; font-family: var(--mono); font-size: var(--step-2); font-weight: 700;
-  letter-spacing: -.01em; line-height: 1.3;
+/* The connections hub's header (components/HubHead.tsx): the two modules as
+   underlined tabs over a hairline, the top of the page with no title above
+   and no counts beside them.
+   Both tabs keep one weight so the row does not shift when the pick moves;
+   the colour and the rule under the current one are the whole difference. */
+.hub-head { display: flex; gap: 28px; margin: 10px 0 16px; border-bottom: 1px solid var(--line-soft); }
+.hub-head-tab {
+  position: relative; padding: 0 0 11px; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 16px; font-weight: 600; color: var(--muted);
+  transition: color .15s ease;
 }
-.pmhero p { margin: 5px 0 0; font-size: 12.5px; color: var(--muted); }
+.hub-head-tab:hover { color: var(--text); }
+.hub-head-tab[aria-selected="true"] { color: var(--text); cursor: default; }
+.hub-head-tab[aria-selected="true"]::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px; background: var(--text);
+}
+.hub-head-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 4px; }
+.hub-head-sub { margin: -4px 0 16px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
 .pmchips { display: flex; gap: 7px; flex-wrap: wrap; margin: 14px 0 18px; }
 .pmcard { cursor: pointer; }
 .pmcard.dim { opacity: .68; }
@@ -3714,19 +3725,6 @@ details[open] summary { margin-bottom: 8px; }
   padding-top: 14px; border-top: 1px solid var(--line);
 }
 .sufoot .n { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--faint); }
-/* The credentials heading, and the one link that answers "where do I get
-   these" -- a channel's secrets are minted in its own console, and the reader
-   should not have to guess which of a vendor's portals issues this token. */
-.sucreds { display: flex; align-items: baseline; gap: 10px; margin-top: 16px; }
-.sucreds .k { font-family: var(--mono); font-size: var(--xs, 10.5px); letter-spacing: .1em;
-  text-transform: uppercase; color: var(--faint); }
-.sucreds .k .n { margin-left: 8px; letter-spacing: 0; text-transform: none; color: var(--muted);
-  font-variant-numeric: tabular-nums; }
-.jump { display: inline-flex; align-items: center; gap: 4px; margin-left: auto;
-  font-family: var(--mono); font-size: 11.5px; color: var(--gold); text-decoration: none; flex: none; }
-.jump:hover { text-decoration: underline; }
-.jump svg { width: 10px; height: 10px; stroke: currentColor; stroke-width: 2; fill: none;
-  stroke-linecap: round; stroke-linejoin: round; }
 
 /* The dialog's one-line subject, between title and fields. */
 .sheet .dsub { padding: 3px 20px 0; font-size: 12px; color: var(--faint); }
@@ -3881,10 +3879,13 @@ details[open] summary { margin-bottom: 8px; }
   transition: transform .3s cubic-bezier(.22, .61, .36, 1);
 }
 .detail[data-open="true"] .dpanel { transform: none; }
-/* The agents sheet is a fixed box the domain fills to its edges: the panel takes
-   its size from the owner, and the body's padding is the sheet's to spend. */
-.detail[data-owner="extAgents"] .dpanel { width: 520px; height: min(500px, 78vh); }
-.detail[data-owner="extAgents"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* The agent and channel sheets are fixed boxes the domain fills to its edges:
+   the panel takes its size from the owner, and the body's padding is the
+   sheet's to spend. */
+.detail[data-owner="extAgents"] .dpanel,
+.detail[data-owner="connections"] .dpanel { width: 520px; height: min(500px, 78vh); }
+.detail[data-owner="extAgents"] .body,
+.detail[data-owner="connections"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* A card whose body is fetched when it opens gets a settled box instead of one
    that sizes to its content: it went 63px (a line of loading text) -> 640px
    (the card), and a skeleton of any fixed height only moves that jump
@@ -3960,7 +3961,7 @@ details[open] summary { margin-bottom: 8px; }
    cards is not a form.
 
    Keyed on the dialog rather than on the settings island's own root, because
-   channels, schedules and memory are three other domains' islands, rooted in
+   schedules and memory are two other domains' islands, rooted in
    boxes of their own beside #spanels: a rule hung on .settings-panel never
    reached them, and their buttons stayed 28px next to 32px fields. The setup
    step bodies, which render in the onboarding wizard instead, take the same
@@ -4012,32 +4013,28 @@ details[open] summary { margin-bottom: 8px; }
 .shd .sub { font-size: 12.5px; color: var(--muted); margin: 3px 0 0; line-height: 1.5; }
 .spanels { overflow-y: auto; min-height: 0; padding: 18px 20px 26px; }
 
-/* Three sections are another domain's island, rooted in a box of its own
-   beside #spanels rather than inside it (src/App.tsx renders all four, and
+/* Two sections are another domain's island, rooted in a box of its own
+   beside #spanels rather than inside it (src/App.tsx renders all three, and
    features/settings/store.ts's HOSTED says why the roots stay separate). One
-   of the four is on screen, and the section the dialog stands on is what picks
+   of the three is on screen, and the section the dialog stands on is what picks
    it -- `data-section` on the veil, written by the settings island on every
    draw. Rows: .sbody is a two-row grid, and `display: none` takes the other
-   three out of it rather than leaving three empty tracks. */
+   two out of it rather than leaving two empty tracks. */
 .sbody > .spanels[data-for] { display: none; }
-.setveil[data-section="channels"] .spanels[data-for="channels"],
 .setveil[data-section="cron"] .spanels[data-for="cron"],
 .setveil[data-section="memory"] .spanels[data-for="memory"] { display: block; }
-.setveil[data-section="channels"] #spanels,
 .setveil[data-section="cron"] #spanels,
 .setveil[data-section="memory"] #spanels { display: none; }
 
 /* ── the two-pane section frame ─────────────────────────────────────────
-   Three sections are a list and what the picked row is: channels, schedules
-   and memory. The frame is src/components/TwoPane.tsx, which owns these names
-   and is why all three read as one dialog rather than three pages that
-   happened to move. Beside the dialog's own rules, not in a domain's sheet,
-   because no one domain owns it.
+   Two sections are a list and what the picked row is: schedules and memory.
+   The frame is src/components/TwoPane.tsx, which owns these names and is why
+   both read as one dialog rather than two pages that happened to move. Beside
+   the dialog's own rules, not in a domain's sheet, because no one domain owns
+   it.
 
    The hosted panel does not scroll: the two columns inside it do, each on its
-   own, so a long channel list never carries the form on the right down with
-   it. */
-.setveil[data-section="channels"] .spanels[data-for="channels"],
+   own, so a long list never carries the form on the right down with it. */
 .setveil[data-section="cron"] .spanels[data-for="cron"],
 .setveil[data-section="memory"] .spanels[data-for="memory"] {
   display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden;
@@ -4469,7 +4466,6 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
 
 /* ── scheduled work: job cards ride the market card language ───────── */
 .herorow { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 10px 0 18px; }
-.herorow .pmhero { margin: 0; }
 .cronlist { display: grid; gap: 12px; }
 .cronjob {
   display: grid; grid-template-columns: 1fr auto; gap: 5px 14px; align-items: start;
@@ -4953,28 +4949,60 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .csheet .other input { flex: 1; min-width: 0; border: 0; background: none;
   font: inherit; font-size: 13px; color: var(--text); outline: 0; }
 .csheet .foot { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
-.csheet .foot .btn { padding: 5px 12px; font-size: 12px; }
-/* An approval request is the same sheet with the agent's own sentence quoted
-   above the two answers -- what it wants to do is the thing being judged. */
+.csheet .foot .btn { padding: 5px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 8px; }
+/* The key that answers a control, drawn on it so nobody has to remember it:
+   an outlined cap after the label, and on a filled button the ground colour
+   standing in for the line and the ink. */
+.chrome-keycap {
+  flex: none; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px;
+  font-family: var(--mono); font-size: 10px; line-height: 15px; color: var(--faint);
+}
+.csheet.perm .cp-acts .opt:last-child .chrome-keycap,
+.csheet .foot .btn.key .chrome-keycap {
+  border-color: color-mix(in oklab, var(--ink) 28%, transparent);
+  color: color-mix(in oklab, var(--ink) 72%, transparent);
+}
+.csheet .foot .btn.key:disabled .chrome-keycap { border-color: currentColor; color: inherit; }
+/* An approval request, drawn as a tool-approval card: the question, one line
+   of why, the evidence in a box of its own, and the answers along the foot.
+   Solid rather than the rack's frosted glass -- the reader is judging what is
+   in it -- and capped, so a long diff scrolls inside the evidence box and the
+   card does not grow; the answers stay pinned to its foot. */
+.csheet.perm {
+  display: flex; flex-direction: column; max-height: 300px; overflow: hidden;
+  border-radius: 16px; padding: 15px 16px 13px;
+  background: var(--ink); -webkit-backdrop-filter: none; backdrop-filter: none; border: 0;
+  box-shadow: 0 2px 14px var(--sh-soft), 0 0 0 1px var(--ring-2);
+}
+.csheet.perm .q { font-size: 15px; }
+/* Everything between the question and the answers scrolls as one when it has
+   to -- a long why and a long rule on a narrow window -- and the answers are a
+   sibling of it, not a child, so no amount of text can push them out of the
+   card: a blocking prompt whose buttons were clipped would leave Esc as the
+   only way out. The evidence keeps a cap of its own and scrolls inside it, so
+   in the ordinary case the outer area never needs to. */
+.csheet.perm .body { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; gap: 0; margin-top: 4px; }
 .csheet.perm .what {
-  font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--text);
-  background: var(--surface); border-left: 2px solid var(--amber);
-  border-radius: 0 7px 7px 0; padding: 8px 10px; margin-bottom: 8px;
-  overflow-wrap: anywhere; max-height: 168px; overflow-y: auto;
+  flex: none; max-height: 140px; overflow: auto; margin-top: 11px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.75; color: var(--text);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px;
+  overflow-wrap: anywhere;
 }
-.csheet.perm .opt.go .n { background: var(--amber-dp); color: var(--amber); }
-/* The permission sheet's answers in one row: deny on the left, allow once as
-   the primary on the right. The row's own name is the composer's; what it lays
-   out is the rack's `.opt`, so the rule lives with the rack's. */
-.csheet.perm .cp-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 4px; }
-.csheet.perm .cp-acts .opt { width: auto; flex: none; }
+/* The answers in one row: deny on the left, allow once as the solid one on
+   the right. The row's own name is the composer's; what it lays out is the
+   rack's `.opt`, so the rule lives with the rack's. */
+.csheet.perm .cp-acts { flex: none; display: flex; gap: 8px; justify-content: flex-end; padding-top: 12px; }
+.csheet.perm .cp-acts .opt {
+  width: auto; flex: none; gap: 6px; height: 30px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--ink); font-size: 13px;
+}
+.csheet.perm .cp-acts .opt:hover, .csheet.perm .cp-acts .opt:focus-visible {
+  border-color: var(--muted); background: var(--surface);
+}
 .csheet.perm .cp-acts .opt:first-child { margin-right: auto; }
-.csheet.perm .cp-acts .opt:last-child { background: var(--text); color: var(--surface); }
+.csheet.perm .cp-acts .opt:last-child { background: var(--black); border-color: var(--black); color: var(--ink); }
 .csheet.perm .cp-acts .opt:last-child:hover, .csheet.perm .cp-acts .opt:last-child:focus-visible {
-  background: var(--text); opacity: .88;
-}
-.csheet.perm .cp-acts .opt:last-child .n {
-  background: color-mix(in oklab, var(--surface) 25%, transparent); color: var(--surface);
+  background: var(--black); filter: brightness(1.18);
 }
 
 /* The page behind is dimmed and blurred the way the settings dialog's is
@@ -5506,7 +5534,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-dlv-row .dlv-kind[data-kind="img"],
 .desk-dlv-row .dlv-kind[data-kind="svg"],
 .desk-dlv-row .dlv-kind[data-kind="pdf"],
-.desk-dlv-row .dlv-kind[data-kind="pptx"] { color: var(--clay); }
+.desk-dlv-row .dlv-kind[data-kind="office"] { color: var(--clay); }
 .desk-dlv-row .dlv-kind[data-kind="csv"],
 .desk-dlv-row .dlv-kind[data-kind="json"] { color: var(--moss); }
 .desk-dlv-row .desk-name { display: grid; gap: 2px; }
@@ -5881,7 +5909,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 /* The agent connector's column is the composer's: the same `--col` cap and
    the same 36px gutters `.dock` gives it, so the grid's edges line up with the
    input box the reader just left rather than sitting inside a narrower one. */
-#extAgentsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
+#extAgentsPage .wrap, #connectionsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
 #kbPage .wrap {
   max-width: none; height: 100%; min-height: 0;
   display: flex; flex-direction: column; padding: 18px 22px 22px;

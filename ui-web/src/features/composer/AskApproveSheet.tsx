@@ -34,22 +34,33 @@ export function SheetHead(
 
 export interface ApproveProps {
   readonly title: string
-  readonly deny: string
   readonly prompt: string
   readonly opts: readonly SheetOptionRow[]
-  readonly onDeny: () => void
 }
 
-export function AskApproveSheet({ title, deny, prompt, opts, onDeny }: ApproveProps): JSX.Element {
+/* The answers along a sheet's foot, each with the key that gives it. Shared by
+   the sheets that dock above the composer so their feet read alike. */
+export function SheetActs({ opts }: { opts: readonly SheetOptionRow[] }): JSX.Element {
+  return (
+    <div className="cp-acts">
+      {opts.map((row, i) => <SheetOption key={i} row={row} />)}
+    </div>
+  )
+}
+
+/* The same card as the permission gate's (GateSheet.tsx): the question, the
+   request in the evidence box, the answers along the foot, and no corner
+   cross -- refusing is Deny and Esc. */
+export function AskApproveSheet({ title, prompt, opts }: ApproveProps): JSX.Element {
   return (
     <>
-      <SheetHead title={title} deny={deny} onDeny={onDeny} />
+      <div className="hd"><div className="q">{title}</div></div>
       {/* The request itself is the agent's own words about what it wants to do,
           so it is quoted rather than restated. */}
       <div className="body">
         <div className="what">{prompt}</div>
-        {opts.map((row, i) => <SheetOption key={i} n={i + 1} row={row} />)}
       </div>
+      <SheetActs opts={opts} />
     </>
   )
 }

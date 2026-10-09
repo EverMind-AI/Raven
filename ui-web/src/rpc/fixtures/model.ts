@@ -30,6 +30,8 @@ interface Entry {
   key_url?: string
   /** Resells other vendors' models; the catalogue page filters on it. */
   gateway?: boolean
+  /** The image tool can run here; the roles card offers the image role these. */
+  image_api?: boolean
   /** The kind per model id, where it is not text. The live reply carries one
       for every described model; offline, only the rows a page filters on need
       to differ, and text is what a missing label means. */
@@ -56,7 +58,7 @@ const PROVIDERS: Entry[] = [
   { slug: 'anthropic', name: 'Anthropic', homepage: 'https://anthropic.com/', key_url: 'https://console.anthropic.com/settings/keys',
     models: ['claude-opus-4-5', 'claude-sonnet-4-6'], authenticated: true, auth_type: 'key' },
   { slug: 'openai', name: 'OpenAI', homepage: 'https://openai.com/', key_url: 'https://platform.openai.com/api-keys',
-    models: ['gpt-5.1', 'gpt-5-mini'], authenticated: false, auth_type: 'key' },
+    models: ['gpt-5.1', 'gpt-5-mini'], authenticated: false, auth_type: 'key', image_api: true },
   { slug: 'deepseek', name: 'DeepSeek', homepage: 'https://deepseek.com/', key_url: 'https://platform.deepseek.com/api_keys',
     models: ['deepseek-v3.2'], authenticated: false, auth_type: 'key' },
   { slug: 'nvidia_nim', name: 'NVIDIA', homepage: 'https://build.nvidia.com/explore/discover',
@@ -68,7 +70,7 @@ const PROVIDERS: Entry[] = [
   /* A gateway with one model of each kind a role slot filters on, so the
      offline page can open every slot's picker and show the filter working. */
   { slug: 'openrouter', name: 'OpenRouter', homepage: 'https://openrouter.ai/',
-    key_url: 'https://openrouter.ai/keys', gateway: true, authenticated: true, auth_type: 'key',
+    key_url: 'https://openrouter.ai/keys', gateway: true, image_api: true, authenticated: true, auth_type: 'key',
     models: ['anthropic/claude-sonnet-4-5', 'openai/text-embedding-3-small', 'BAAI/bge-reranker-v2-m3', 'google/gemini-2.5-flash-image'],
     kinds: {
       'openai/text-embedding-3-small': 'embedding',
@@ -113,6 +115,7 @@ const wire = (e: Entry, current: string): Provider => ({
   key_url: e.key_url ?? null,
   extra_headers: {},
   gateway: !!e.gateway,
+  image_api: !!e.image_api,
   /* The prefixes this provider answers to. Canned rows are named once and
      never renamed, so that is the slug itself. */
   route_names: [e.slug],
@@ -146,6 +149,11 @@ export function createModel(_env: FixtureEnv): ModelFixture {
         const row = find(p.slug)
         if (row) row.authenticated = false
         return { disconnected: true }
+      },
+      /* A made-up key per connected row, so the eye has something to show. */
+      'model.reveal_key': (p) => {
+        const row = find(p.slug)
+        return { api_key: row && row.authenticated ? `sk-fixture-${row.slug}-0000` : null }
       },
       'model.add_model': (p) => {
         const params = p as { slug: string; model: string }

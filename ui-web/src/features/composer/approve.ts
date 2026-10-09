@@ -2,7 +2,11 @@
  *
  * An approval request is the same kind of interruption as ask_user -- the turn
  * is blocked on the reader -- so it wears the same clothes: the sheet above the
- * composer, numbered options, Esc or the close button means no. A centred modal
+ * composer, Esc or the close button means no. It is answered with the chords
+ * agent products answer a tool call with -- Cmd+Enter to allow, Shift added
+ * for the broader grant -- each drawn on its button. Digits were the answer
+ * keys once, and read backwards to anyone used to a terminal agent: deny was
+ * 1 here and yes is 1 there. A centred modal
  * made the two read as different classes of event and put the answer somewhere
  * the reader was not already looking.
  *
@@ -26,14 +30,15 @@
 import { createElement } from 'react'
 
 import { t } from '../../i18n/t'
+import { ESC_LABEL, chordLabel, sendChord } from '../../lib/platform'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { ds } from '../../state/sources'
 import { AskApproveSheet } from './AskApproveSheet'
-import { GateSheet, LandedSheet } from './GateSheet'
+import { configRows, GateSheet, LandedSheet } from './GateSheet'
 import { composing } from './store'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
-import type { Evidence, GateWords, LandedProps, LandedWords } from './GateSheet'
+import type { ConfigAgentWords, Evidence, GateWords, LandedProps, LandedWords } from './GateSheet'
 
 /* The permission gate's approval, keyed so approval.closed can withdraw the
    exact request it retires (a teardown, an answer from another surface)
@@ -109,22 +114,24 @@ export function open(
      mattering, so neither side is told. */
   const withdraw = (): void => close()
 
+  /* Deny first and focused, allow last, as on the permission gate's card: the
+     sheet arrives unasked, and a bare Enter pressed at that moment must not
+     grant. */
   const opts: SheetOptionRow[] = [
-    { label: t('gui.confirm.allow'), run: () => close(onAllow), go: true },
-    { label: t('gui.confirm.deny'), run: () => close(onDeny) },
+    { label: t('gui.confirm.deny'), run: () => close(onDeny), go: true, keys: ESC_LABEL },
+    { label: t('gui.confirm.allow'), run: () => close(onAllow), keys: chordLabel() },
   ]
 
   function onKey(e: KeyboardEvent): void {
     /* A sheet parked with another conversation is still listening: the handler
        is on the document, and the rack detaches the element rather than
        destroying it so the reader comes back to the same question. Only the
-       mounted one may be answered from the keyboard, or "1" typed here would
-       allow something another conversation asked. */
+       mounted one may be answered from the keyboard, or a chord pressed here
+       would allow something another conversation asked. */
     if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
     if (e.key === 'Escape') { e.preventDefault(); close(onDeny); return }
     if (typing(e)) return
-    const n = Number(e.key)
-    if (n === 1 || n === 2) { e.preventDefault(); opts[n - 1]!.run() }
+    if (sendChord(e) === 'plain') { e.preventDefault(); close(onAllow) }
   }
   document.addEventListener('keydown', onKey, true)
 
@@ -133,10 +140,8 @@ export function open(
      module -- and a second copy of who-owns-what could only disagree with it. */
   sheetAdd(sheet, key, withdraw, createElement(AskApproveSheet, {
     title: t('gui.confirm.title'),
-    deny: t('gui.confirm.deny'),
     prompt: prompt || '',
     opts,
-    onDeny: () => close(onDeny),
   }))
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()
@@ -158,7 +163,7 @@ export interface ApprovalReq {
      when there is none, and then the sheet offers no such choice. */
   suggestedPattern?: string
   /* The prompt's view, as the engine sent it: the layout (`shell.exec`,
-     `file.write`, `mcp.call`, `unknown`), the shell command family that words
+     `file.write`, `mcp.call`, `config.change`, `unknown`), the shell command family that words
      it, who is asking, and the tool's own account of the call. */
   kind?: string
   family?: string
@@ -188,17 +193,29 @@ const landings = new Set<ReturnType<typeof setTimeout>>()
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
-/* A key pressed into a field is text, not an answer: the composer sits under
-   every sheet, and a message that starts with a digit must not allow a command
-   -- or, worse, save a rule. Escape is not guarded: leaving a field and refusing
-   the question is what it has always done. */
+/* The agents an add connects, each as the card says it: who, and whose key it
+   starts with when it borrows Raven's. */
+const agentsAdded = (row: Evidence): ConfigAgentWords[] =>
+  (Array.isArray(row.agents) ? (row.agents as Evidence[]) : []).map((agent) => {
+    const name = str(agent.title) || str(agent.name) || str(agent.preset)
+    const key = str(agent.lend_key)
+    return {
+      said: key ? t('gui.confirm.cfg.add_lend', { name, key }) : t('gui.confirm.cfg.add', { name }),
+      model: str(agent.model) ? t('gui.confirm.cfg.add_model', { model: str(agent.model) }) : '',
+    }
+  })
+
+/* A key pressed into a field is the field's, not an answer: the composer sits
+   under every sheet, and its own Cmd+Enter sends a message -- it must not allow
+   a command, or worse, save a rule. Escape is not guarded: leaving a field and
+   refusing the question is what it has always done. */
 const typing = (e: KeyboardEvent): boolean => {
   const el = e.target as HTMLElement | null
   return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
 }
 
 /* The newest sheet owns the keyboard: a question docked above this one takes
-   the digits until it is answered, or "1" would answer both. */
+   the keys until it is answered, or one chord would answer both. */
 const topmost = (sheet: HTMLElement): boolean =>
   !sheet.parentElement || sheet.parentElement.firstElementChild === sheet
 
@@ -209,6 +226,17 @@ const shortened = (p: string): string => {
     /* Before the workspace domain is wired, and in a test that never wires it. */
     return p
   }
+}
+
+/* The rule sentence around its pattern. The catalogue places the pattern, so
+   the sentence is asked for with a mark in the pattern's place and cut there;
+   a sentence that lost its mark still shows, with the pattern after it. */
+function ruleWords(pattern: string | undefined): [string, string, string] | undefined {
+  if (!pattern) return undefined
+  const MARK = '\u0000'
+  const said = t('gui.confirm.always_rule', { pattern: MARK })
+  const at = said.indexOf(MARK)
+  return at < 0 ? [`${said} `, pattern, ''] : [said.slice(0, at), pattern, said.slice(at + MARK.length)]
 }
 
 /* The words a request is asked in. The family names the sentence when the
@@ -236,14 +264,36 @@ function wordsFor(req: ApprovalReq): GateWords {
   }
   const slot = kind === 'shell.exec' ? (req.family || 'shell')
     : kind === 'file.write' ? 'file_write'
-      : kind === 'mcp.call' ? 'mcp_call' : 'unknown'
+      : kind === 'mcp.call' ? 'mcp_call'
+        : kind === 'config.change' ? 'config_change' : 'unknown'
+  const cfg = kind === 'config.change'
+    ? {
+      reset: t('gui.confirm.cfg.reset'),
+      reload: t('gui.confirm.cfg.reload'),
+      restart: t('gui.confirm.cfg.restart'),
+      keyField: t('gui.confirm.cfg.key_field'),
+      keyIsSet: t('gui.confirm.cfg.key_is_set'),
+      keyNoField: t('gui.confirm.cfg.key_no_field'),
+      rows: configRows(ev).map((row) => ({
+        effect: str(row.effect) ? t('gui.confirm.cfg.effect.' + str(row.effect), {}, '') : '',
+        sensitive: str(row.sensitive) ? t('gui.confirm.cfg.sensitive', { note: str(row.sensitive) }) : '',
+        unsetTo: str(row.unset_to) ? t('gui.confirm.cfg.unset_to.' + str(row.unset_to), {}, '') : '',
+        test: str(row.action) === 'test'
+          ? t('gui.confirm.cfg.test', { name: str(row.setting).replace(/^subagents\./, '') })
+          : '',
+        agents: agentsAdded(row),
+      })),
+    }
+    : undefined
   return {
+    rule: ruleWords(req.suggestedPattern),
     title: t('gui.confirm.title.' + slot, vars, t('gui.confirm.title.unknown', vars)),
     why: t('gui.confirm.why.' + slot, vars, t('gui.confirm.why.unknown', vars)),
     deny: t('gui.confirm.deny'),
     created: t('gui.confirm.ev.created'),
     nodiff: t('gui.confirm.ev.nodiff'),
     cut: t('gui.confirm.ev.cut'),
+    cfg,
   }
 }
 
@@ -293,12 +343,23 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
   }
   openApprovals.set(req.approvalId, withdraw)
 
+  /* A change to Raven's own configuration asks every time (the gate grants no
+     session key for it), so offering to stop asking would promise nothing. */
+  const once = req.kind === 'config.change'
+  /* The broader grant: a saved rule when the runtime suggested one, the
+     conversation otherwise. One of the two, and Shift+Cmd+Enter is it. */
+  const broader = once
+    ? null
+    : req.suggestedPattern
+      ? () => answer('allow_always', req.suggestedPattern)
+      : () => answer('allow_session')
   const opts: SheetOptionRow[] = [
-    { label: t('gui.confirm.deny'), run: () => answer('deny'), go: true },
-    ...(req.suggestedPattern
+    { label: t('gui.confirm.deny'), run: () => answer('deny'), go: true, keys: ESC_LABEL },
+    ...(!broader ? [] : req.suggestedPattern
       ? [{
-        label: t('gui.confirm.always', { pattern: req.suggestedPattern }),
-        run: () => answer('allow_always', req.suggestedPattern),
+        label: t('gui.confirm.always'),
+        run: broader,
+        keys: chordLabel(true),
       }]
       /* Nothing to save: a file write and an MCP call have no rule table to
          land in (permissions.tools takes prefix patterns for exec alone), so
@@ -307,16 +368,19 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
          saved rule's place, never beside it -- two "don't ask again" answers
          side by side is a question about storage the reader did not come here
          to answer. */
-      : [{ label: t('gui.confirm.allow_session'), run: () => answer('allow_session') }]),
-    { label: t('gui.confirm.allow'), run: () => answer('allow') },
+      : [{ label: t('gui.confirm.allow_session'), run: broader, keys: chordLabel(true) }]),
+    { label: t('gui.confirm.allow'), run: () => answer('allow'), keys: chordLabel() },
   ]
 
   function onKey(e: KeyboardEvent): void {
     if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
     if (e.key === 'Escape') { e.preventDefault(); answer('deny'); return }
     if (typing(e)) return
-    const n = Number(e.key)
-    if (n >= 1 && n <= opts.length) { e.preventDefault(); opts[n - 1]!.run() }
+    const chord = sendChord(e)
+    if (!chord) return
+    e.preventDefault()
+    if (chord !== 'shift') answer('allow')
+    else if (broader) broader()
   }
   document.addEventListener('keydown', onKey, true)
 
@@ -326,7 +390,6 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
     command: req.command || '',
     words,
     opts,
-    onDeny: () => answer('deny'),
   }))
   const first = sheet.querySelector<HTMLElement>('.opt')
   if (first && sheet.isConnected) first.focus()

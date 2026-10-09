@@ -343,7 +343,7 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
     if not can_inherit:
         console.print(
             t(
-                "  [dim]This raven has no provider key to lend (an OAuth sign-in is not one):"
+                "  [dim]This raven has no usable model provider to inherit:"
                 " an agent tuned for its own model needs a key of its own, and one that runs on"
                 " this raven's LLM is not ready until a provider is configured.[/dim]"
             )
@@ -367,8 +367,8 @@ def configure_subagents(*, non_interactive: bool = False, warnings: Optional[lis
             # A folder that recommends no model of its own runs on this raven's
             # LLM and nothing else: there is no key to take (the launcher would
             # not read it) and no model to recommend. It is ready exactly when
-            # this raven has a key to lend; otherwise the launcher refuses to
-            # start, and a tick here would certify a product that cannot.
+            # this raven has usable model credentials; otherwise the launcher
+            # refuses to start, and a tick here would certify a product that cannot.
             if can_inherit:
                 set_up += 1
                 console.print(f"  [green]\u2713[/green] {t('ready')} {t("(runs on this raven's LLM)")}")

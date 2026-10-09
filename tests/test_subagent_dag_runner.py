@@ -3711,6 +3711,7 @@ async def test_an_outer_cancellation_reaps_this_runs_memory_pollers(monkeypatch:
             raise
 
     monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
+    monkeypatch.setattr(runner_mod, "_memory_backend", _LifecycleBackend)
 
     identity = MemoryScope(block={"user_id": "raven-code"}, session_prefix="cli:")
     blocked = asyncio.Event()
@@ -4938,6 +4939,7 @@ async def test_a_node_leaves_a_memory_record(tmp_path: Path, monkeypatch: pytest
         await kwargs["write"]('{"agent": "Raven-Code", "status": "settled", "memories": []}')
 
     monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
+    monkeypatch.setattr(runner_mod, "_memory_backend", _LifecycleBackend)
 
     identity = MemoryScope(block={"user_id": "raven-code"}, session_prefix="cli:")
     result = await _run_one_node_dag(tmp_path, memory_for=lambda _name: identity)
@@ -4995,6 +4997,7 @@ async def test_a_node_passes_its_instance_to_the_record(tmp_path: Path, monkeypa
         await kwargs["write"]("{}")
 
     monkeypatch.setattr(runner_mod, "record_memories", _fake_record)
+    monkeypatch.setattr(runner_mod, "_memory_backend", _LifecycleBackend)
     identity = MemoryScope(block={"user_id": "u"}, session_prefix="cli:")
     await _run_one_node_dag(tmp_path, memory_for=lambda _name: identity, instance="audit-a3f9c1")
     await _drain_record_tasks()

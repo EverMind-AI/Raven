@@ -26,6 +26,7 @@ from raven.rpc.methods.model import (
     model_options,
     model_remove_endpoint,
     model_remove_model,
+    model_reveal_key,
     model_save_key,
 )
 
@@ -147,6 +148,15 @@ async def test_options_rows_carry_the_gateway_flag(fake_home: Path) -> None:
     assert _entry(result, "openrouter")["gateway"] is True
     assert _entry(result, "custom")["gateway"] is True
     assert _entry(result, "anthropic")["gateway"] is False
+
+
+async def test_options_rows_say_which_providers_the_image_tool_runs_on(fake_home: Path) -> None:
+    """The roles card offers the image role exactly these, and the save checks the
+    same flag, so the two cannot disagree about a provider."""
+    _write_config(fake_home, {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5"}}})
+    result = await model_options({})
+    serving = sorted(row["slug"] for row in result["providers"] if row["image_api"])
+    assert serving == ["custom", "openai", "openrouter"]
 
 
 async def test_options_rows_carry_every_prefix_that_names_the_provider(fake_home: Path) -> None:
@@ -315,6 +325,86 @@ async def test_disconnect_clears_creds(fake_home: Path) -> None:
 
     options = await model_options({})
     assert _entry(options, "anthropic")["authenticated"] is False
+
+
+# ----------------------------------------------------------------------------
+# model.reveal_key
+# ----------------------------------------------------------------------------
+
+
+async def test_reveal_key_reads_back_the_key_save_key_stored(fake_home: Path) -> None:
+    await model_save_key({"slug": "openrouter", "api_key": "sk-or-v1-abc"})
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": "sk-or-v1-abc"}
+
+
+async def test_reveal_key_is_null_for_a_provider_with_no_key_saved(fake_home: Path) -> None:
+    assert await model_reveal_key({"slug": "anthropic"}) == {"api_key": None}
+    await model_save_key({"slug": "anthropic", "api_key": "sk-ant-xxx"})
+    await model_disconnect({"slug": "anthropic"})
+    assert await model_reveal_key({"slug": "anthropic"}) == {"api_key": None}
+
+
+async def test_reveal_key_answers_with_the_key_alone(fake_home: Path) -> None:
+    """Not the section around it: not the address, not a header that can carry a secret of its own."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "openrouter": {
+                    "apiKey": "sk-or-flat",
+                    "apiBase": "https://relay.example/v1",
+                    "extraHeaders": {"X-Relay-Token": "hdr-secret"},
+                }
+            }
+        },
+    )
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": "sk-or-flat"}
+
+
+@pytest.mark.parametrize(
+    "slug, section",
+    [
+        # `endpoint add` leaves the flat key in place; requests carry the endpoint's.
+        ("openrouter", {"apiKey": "sk-or-left-behind", "endpoints": [{"label": "rotated", "apiKey": "sk-or-in-use"}]}),
+        ("gemini", {"apiKey": "g-left-behind", "apiKeyList": ["g-in-use-1", "g-in-use-2"]}),
+    ],
+)
+async def test_reveal_key_does_not_show_a_flat_key_requests_do_not_carry(
+    fake_home: Path, slug: str, section: dict
+) -> None:
+    """An endpoints list or a key list replaces the flat key outright (`provider_endpoints`).
+
+    Shown beside a provider marked connected, a flat key left behind would read
+    as the key in use, possibly the very one the endpoint was added to replace.
+    """
+    _write_config(fake_home, {"providers": {slug: section}})
+    assert await model_reveal_key({"slug": slug}) == {"api_key": None}
+
+
+async def test_reveal_key_shows_a_flat_key_an_endpoint_still_carries(fake_home: Path) -> None:
+    """Decided by what requests carry, not by the section's shape: a lone endpoint holding the same key uses it."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "openrouter": {"apiKey": "sk-or-same", "endpoints": [{"label": "only", "apiKey": "sk-or-same"}]}
+            }
+        },
+    )
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": "sk-or-same"}
+
+
+async def test_reveal_key_reads_what_is_saved_not_the_environment(fake_home: Path, monkeypatch) -> None:
+    """The field the eye sits in edits the saved key, so a key the environment supplies is not the one to show."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-env")
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": None}
+
+
+async def test_reveal_key_refuses_a_provider_nobody_knows(fake_home: Path) -> None:
+    with pytest.raises(ConfigValidationError):
+        await model_reveal_key({"slug": "no_such_provider"})
+    with pytest.raises(ConfigValidationError):
+        await model_reveal_key({})
 
 
 # ----------------------------------------------------------------------------
@@ -1891,17 +1981,17 @@ async def test_oauth_login_hands_the_pair_from_the_starter(fake_home: Path, monk
     }
 
 
-async def test_oauth_login_refuses_a_key_provider_and_a_second_start(fake_home: Path, monkeypatch) -> None:
+async def test_oauth_login_refuses_a_key_provider_and_a_failed_start(fake_home: Path, monkeypatch) -> None:
     from raven.providers import oauth_login
     from raven.rpc.methods.model import model_oauth_login
 
     with pytest.raises(NotSupportedError):
         await model_oauth_login({"slug": "deepseek"})
 
-    async def busy(slug: str) -> dict:
-        raise RuntimeError("already waiting")
+    async def refused(slug: str) -> dict:
+        raise RuntimeError("vendor refused the device code")
 
-    monkeypatch.setattr(oauth_login, "start", busy)
+    monkeypatch.setattr(oauth_login, "start", refused)
     with pytest.raises(ConfigValidationError):
         await model_oauth_login({"slug": "openai_codex"})
 
@@ -1939,7 +2029,7 @@ async def test_add_models_and_set_fields_name_an_unknown_provider(fake_home: Pat
     ("raised", "expected", "text"),
     [
         (LookupError("no device flow"), NotSupportedError, "no device flow"),
-        (RuntimeError("already waiting"), ConfigValidationError, "already waiting"),
+        (RuntimeError("vendor refused the device code"), ConfigValidationError, "vendor refused"),
         (ValueError("vendor said no"), ConfigValidationError, "could not start"),
     ],
 )
@@ -2042,3 +2132,25 @@ class TestEverosFollowsACredentialChange:
         monkeypatch.setattr(builtins, "__import__", no_everos)
         result = await model_save_key({"slug": "deepseek", "api_key": "new-key"})
         assert result["provider"]["slug"] == "deepseek"
+
+
+async def test_add_model_preserves_metadata_under_a_bare_id(fake_home: Path) -> None:
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "hosted_vllm": {
+                    "apiBase": "http://localhost:9999/v1",
+                    "models": ["team-model"],
+                    "modelOverlay": {"team-model": {"label": "Team model", "description": "Keep this description"}},
+                }
+            }
+        },
+    )
+
+    result = await model_add_model({"slug": "hosted_vllm", "model": "team-model", "capabilities": ["reasoning"]})
+
+    row = result["provider"]["model_labels"]["team-model"]
+    assert row["label"] == "Team model"
+    assert row["description"] == "Keep this description"
+    assert row["capabilities"] == ["reasoning"]

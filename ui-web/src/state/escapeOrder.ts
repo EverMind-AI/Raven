@@ -1,6 +1,6 @@
 /* What Escape takes back, and in which order.
  *
- * Ten layers can be on screen at once, and one key closes one of them.
+ * Eleven layers can be on screen at once, and one key closes one of them.
  * Which one was a fourteen-branch if chain in the page's chrome: a list of
  * selectors read top to bottom, each branch returning so the ones below it
  * never ran.
@@ -23,7 +23,9 @@
  * The three capture-phase handlers each open sheet registers run before this
  * table and two of them act on Escape without stopping propagation, so one
  * Escape can both deny an approval and interrupt the turn behind it. That is
- * the behaviour, not an accident of where the listener sits.
+ * the behaviour, not an accident of where the listener sits. The credential
+ * card (features/composer/credential.ts) is the one that stops it: skipping a
+ * key is not stopping the turn, which goes on to say where it can be entered.
  */
 
 import { busy as turnBusy } from '../features/composer/turn'
@@ -67,6 +69,7 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
    silence. The verb is the domain's; the order is the table's. */
 const CLOSERS: Record<PageId, () => void> = {
   extAgentsPage: () => extAgents.close(),
+  connectionsPage: () => page.show(null),
   /* The generic close rather than the domain's own verb. `close()` there IS
      `page.show(null)`, and reaching for it would put an upward edge into this
      file that scripts/gates/import-direction.test.mjs refuses -- rightly: a
@@ -134,7 +137,7 @@ const BELOW: readonly EscapeLayer[] = [
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The ten, in the order Escape reaches them. */
+/** The eleven, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

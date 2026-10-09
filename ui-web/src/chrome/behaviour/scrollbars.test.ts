@@ -116,6 +116,16 @@ describe('overlay scrollbars', () => {
     expect(vert()).toBeTruthy()
   })
 
+  /* page.css lifts the layer over an open lightbox and shows only the thumbs
+     marked as its own there (state/lightbox.test.ts reads that half). */
+  it('marks the lightbox\'s thumbs as its own, and nobody else\'s', () => {
+    show(scroller())
+    const box = scroller({}, 'button')
+    box.className = 'lightbox'
+    show(box)
+    expect(thumbs().map((t) => t.dataset.over)).toEqual([undefined, 'lightbox'])
+  })
+
   it('shows the bar, then takes it back after SB_HIDE', () => {
     show(scroller())
     expect(vert()!.dataset.on).toBe('true')

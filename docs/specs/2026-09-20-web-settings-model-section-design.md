@@ -108,6 +108,8 @@ Shapes rejected in the discussion round:
   class family so the later pages can lift it, without abstracting for them.
 - Media roles beyond OpenRouter (prior C14 holds). The kind filter narrows
   OpenRouter's list to the slot's kind; it does not widen the provider set.
+  (C14's 2026-10-06 amendment later widened the image role to the providers
+  marked `image_api`.)
 - Restyling anything outside the two pages and the picker; the composer chip's
   label; the sub-agent instance model chip (`features/subagents/InstanceModel.tsx`),
   which lists the agent's own menu and is not a picker over our catalogue.
@@ -143,7 +145,7 @@ Each constraint says how it is checked. `BASE` below is
 |---|---|---|
 | C8 | A slot offers its kind and nothing else, per the table in "Frontend": text slots list `text`, the embedding slot `embedding`, rerank `reranker`, image `image`, speech `audio`, video `video`; the composer offers `text`. Every connected provider the role allows is listed; one with no model of the kind shows an empty column that says so and the typed-id row. The model a slot (or the conversation) currently holds is listed in its provider's column even when that provider's list does not carry it. | A22-A25, A28 |
 | C9 | The catalogue is every row `model.options` returns, `hosted_vllm` and `custom` included; the composer still lists connected providers only, which is what hid the two generic rows in practice. Confirmed by the owner 2026-09-20: people running their own servers must not be shut out. | A3; `grep -rn HIDDEN_PROVIDERS ui-web/src` prints nothing. |
-| C10 | Secrets never round-trip (prior C10). The key pane sends a key only when the person typed one; the eye toggle reveals typed text, never a stored key. | A8 |
+| C10 | Secrets never round-trip (prior C10). The key pane sends a key only when the person typed one -- a stored key the eye revealed goes back only once edited; the eye toggle reveals typed text, and over the empty field of a connected provider the stored key, read for that press alone. Amended 2026-10-09: the eye used to reveal typed text only, never a stored key; the owner asked to read the key in use back from it, so `model.reveal_key` answers one provider's flat key on a press -- only when it is the key requests carry, never in `model.options` or any other snapshot -- and the key still never returns to the wire unedited. | A8 |
 | C11 | The composer's picker keeps every behaviour its test file pins except the two this change adds (a kind filter, a typed-id row). | `ModelPicker.test.tsx`: no case deleted; each changed expectation named in the commit body; the diff of `__snapshots__/ModelPicker.test.tsx.snap` is read line by line and every changed line belongs to the kind filter, the typed row or the title -- a regenerated snapshot carrying any other change fails this. |
 | C12 | A model a role uses cannot be removed from its provider (prior A15). The add-model popover's per-row toggle honours it. | A13, A14 |
 
@@ -186,7 +188,7 @@ number.
 ### Model providers, right column
 
 - A7. The head shows the mark, the name, a link out when the registry carries a homepage or key page, and one status line: connected / needs an API key / needs authorisation / needs an address, by shape and connection.
-- A8. Key pane: pasting a key and "connect" (or "update" when connected) writes it and the status turns connected; the eye toggle shows and hides the typed text; the stored key is never shown and never sent back; the environment-variable hint names `key_env` when there is one. (prior A10)
+- A8. Key pane: pasting a key and "connect" (or "update" when connected) writes it and the status turns connected; the eye toggle shows and hides the typed text, and over the empty field of a connected provider shows the stored key, emptying the field again when pressed back with the key unedited; the stored key is never sent back unless edited; the environment-variable hint names `key_env` when there is one. (prior A10, amended 2026-10-09: the stored key used to be never shown)
 - A9. Address: gateways and `needs_api_base` providers show the address field in the main body; every other key provider shows it under Advanced as "override"; a reset button appears when a default exists and the stored value differs, and restores it. One component draws it in both places. (prior A16)
 - A10. Azure keeps deployment name and API version (prior A12) in the body under the address.
 - A11. An OAuth provider shows the browser device flow of prior A13 in the prototype's pane layout; disconnect reads "disconnect authorisation". (*)
@@ -205,7 +207,7 @@ number.
 
 - A22. A role pill opens the shared picker -- the same `.mpick` element the composer opens -- under the pill; its left column lists every connected provider the role may use (prior A21 / A22 rules) with the count of its models of the slot's kind, and its right column lists only that kind; a provider with none shows the empty-kind text and the typed-id row. Fails if an allowed connected provider is missing or a model of another kind appears.
 - A23. The embedding slot lists embedding models only and the rerank slot reranker models only: a chat model configured on the same provider does not appear in either. (*)
-- A24. Image, speech and video slots offer OpenRouter only (prior A22) and, within it, `image`, `audio` and `video` models respectively.
+- A24. Speech and video slots offer OpenRouter only and the image slot the connected providers marked `image_api` (prior A22, amended 2026-10-06); within them, `image`, `audio` and `video` models respectively.
 - A25. Chat, curator, session naming, EverOS llm, gate and multimodal list `text` models only; an embedding model configured on a connected provider does not appear.
 - A26. Picking writes exactly what prior A19-A22 describe, through the roles card's own write path: chat updates `agents.defaults` and the composer chip repaints; curator, skill gate and session naming write model then provider; EverOS roles call `settings.everosSet`; media roles write `tools.media.<kind>` then the tool switch.
 - A27. A typed id in a slot's picker shows "use `<id>` · add to `<provider>`" with a kind chip that starts on the slot's kind, not on the name guess; choosing it adds the model to the provider first, with that kind's stated tags as A17 describes, then assigns it.
@@ -545,7 +547,9 @@ Non-goals).
 - **The OAuth pane keeps the browser device flow in the prototype's layout.**
   The prototype regressed to a CLI instruction; the prior design built the
   flow from the page on the owner's decision. Rejected: the CLI text.
-- **Media slots stay OpenRouter-only, narrowed by kind.** Prior C14.
+- **Speech and video slots stay OpenRouter-only and the image slot keeps to the
+  providers marked `image_api`, each narrowed by kind.** Prior C14, amended
+  2026-10-06.
 - **No two-column abstraction for pages that do not exist yet.** The class
   family is named `settings-tp*` after the prototype's `tp-*` so channels and
   memory can lift it; it is one page's CSS until a second page needs it.

@@ -23,15 +23,36 @@ export function splitMcp(name: string): McpSplit {
 
 export const rawVerb = (n: string): string => splitMcp(n).bare.split('_').join(' ')
 
+/* A tool that bundles reads and changes under one name reads as what the call
+   did: a run of `raven_config` rows otherwise says nothing about which were
+   looks and which changed something. The key is the tool name plus the kind
+   of action, and the catalogue words each; anything else keeps its own name. */
+const BY_ACTION: Record<string, Record<string, string>> = {
+  raven_config: { describe: 'read', get: 'read', set: 'change', unset: 'change', add: 'change', restart: 'restart' },
+  plugin: { find: 'read', list: 'read', connect: 'connect', authorize: 'connect', remove: 'remove' },
+}
+
+export function actName(name: string, args?: unknown): string {
+  const kinds = BY_ACTION[name]
+  if (!kinds) return name
+  let a = args
+  if (typeof a === 'string') {
+    try { a = JSON.parse(a) } catch { a = null }
+  }
+  const action = a && typeof a === 'object' ? (a as Record<string, unknown>).action : undefined
+  const kind = typeof action === 'string' ? kinds[action] : undefined
+  return kind ? `${name}_${kind}` : name
+}
+
 export const verbOf = (n: string): string => t('gui.act.v.' + n, undefined, rawVerb(n))
 export const verbIngOf = (n: string): string => t('gui.act.ing.' + n, undefined, rawVerb(n))
 
 /* Verbs and counts only -- the folded line answers "what kind of work". Takes
    anything shaped like a call rather than the transcript's own `CallData`, so
    a caller with a lighter record does not have to fake the rest of it. */
-export function phraseOf(calls: Array<{ name: string }>): string {
+export function phraseOf(calls: Array<{ name: string; args?: unknown }>): string {
   const n = new Map<string, number>()
-  calls.forEach((c) => n.set(c.name, (n.get(c.name) || 0) + 1))
+  calls.forEach((c) => { const k = actName(c.name, c.args); n.set(k, (n.get(k) || 0) + 1) })
   return [...n].map(([name, k]) => (k === 1
     ? verbOf(name)
     : t('gui.act.n.' + name, { n: k }, `${verbOf(name)} ×${k}`))).join(' · ')

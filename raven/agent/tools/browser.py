@@ -37,6 +37,13 @@ ACTION_TEXT_CHARS = 3_000
 SNAPSHOT_TEXT_CHARS = 8_000
 MAX_REFS_SHOWN = 120
 
+# How many owners' stamps ``_acted`` keeps, most recent first. The stamps only
+# answer "did the reader touch the page since this owner last acted", which the
+# owners acting lately can answer as well as all of them, so the cap is what
+# bounds the map: one key per delegated run cannot accumulate for the
+# process's life.
+_ACTED_MAX = 512
+
 # Carried by browser_navigate alone. Every tool's description is paid for on
 # every turn of every conversation, and the one place the model decides whether
 # a page is its business at all is when it opens one.
@@ -50,7 +57,10 @@ HANDOFF_NOTE = (
 # person approves for a click is the site, not the ref id -- so the site the
 # call will land on is written into the parameters before the gate reads them.
 # ``raven.permissions.builtin.session_keys`` keys a browser grant on it, and
-# the approval prompt shows it.
+# the approval prompt shows it. The driver's ``url_for`` predicts that page by
+# the rule ``_page_for`` then binds by. When the call would open a tab of its
+# own, no site describes it yet and none is written: the grant is keyed on the
+# call itself, which no later call to a real site can present.
 
 
 def _browser():
@@ -175,7 +185,12 @@ class _BrowserTool(Tool):
     timeout_seconds = 90.0
 
     # The last time this owner acted, so a readback can say whether a hand
-    # other than the model's touched the browser in between.
+    # other than the model's touched the browser in between. Bounded by
+    # ``_ACTED_MAX`` and by nothing else: the end of an owner's tab binding is
+    # not the end of the owner -- a reap, its tab closing and the browser
+    # closing all leave an owner that reads again, and its next readback must
+    # still be able to say whether the reader touched the page since its last
+    # act.
     _acted: dict[str, float] = {}
 
     @staticmethod
@@ -188,7 +203,14 @@ class _BrowserTool(Tool):
         return current_owner()
 
     def _mark(self, owner: str) -> None:
-        _BrowserTool._acted[owner] = time.monotonic()
+        acted = _BrowserTool._acted
+        # Re-inserted rather than updated, so the dict's own order is the order
+        # owners last acted in and the cap can evict from the front: no sort,
+        # and no tie to break between two stamps one clock tick apart.
+        acted.pop(owner, None)
+        acted[owner] = time.monotonic()
+        while len(acted) > _ACTED_MAX:
+            acted.pop(next(iter(acted)))
 
     def _touched(self, owner: str) -> bool:
         last = _BrowserTool._acted.get(owner)
@@ -550,7 +572,8 @@ class BrowserTabsTool(_BrowserTool):
         return (
             "List, open, switch or close tabs of the shared browser. Your calls always land on your own "
             "tab; a tab marked held is another agent's and cannot be taken. new opens a fresh tab (with "
-            "an optional url) and makes it yours; activate makes an unheld tab yours."
+            "an optional url) and makes it yours; activate makes an unheld tab yours. close takes only a "
+            "tab you hold: a tab with no mark at all is the user's, and closing it needs activate first."
         )
 
     @property

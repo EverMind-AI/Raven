@@ -37,8 +37,8 @@ export const settingsTab: { id: string | null } = { id: 'general' }
 
 /* What opens the dialog once a section is picked, filled by the page's wiring
    (src/app/install.ts) with the island's own open -- which draws, raises the
-   veil and reloads. A slot rather than an import: three domains are sections
-   of this dialog now (schedules, channels, memory) and each opens itself
+   veil and reloads. A slot rather than an import: two domains are sections
+   of this dialog now (schedules, memory) and each opens itself
    through `openSection` below, so an import from here would put the settings
    island in every one of their closures. Unfilled it falls through to `open`,
    which is a dialog on whatever the island last drew: enough for a test that
@@ -50,16 +50,15 @@ export function onOpen(fn: () => void): void {
   opener = fn
 }
 
-/* What a section leaves behind: the channel the channels pane was showing, and
-   the new-job sheet the schedules section raises over the dialog. Left alone
-   both survive a section pick and a close, and come back over whatever the
-   reader opens next, still on the entry they were left on -- which is what
-   these slots take back. What a slot may NOT do is throw work away: the
+/* What a section leaves behind: the new-job sheet the schedules section raises
+   over the dialog. Left alone it survives a section pick and a close, and
+   comes back over whatever the reader opens next, still on the entry it was
+   left on -- which is what these slots take back. What a slot may NOT do is throw work away: the
    schedules one parks its sheet rather than closing it, because the link a
    reader follows out of that form is inside the form (features/cron/store.ts).
    Each is registered by the domain that owns it, at its own module evaluation,
    because state/ does not import an island; unfilled, a leave asks nothing. */
-const SLOTS = ['clearConnChannel', 'parkCronSheet'] as const
+const SLOTS = ['parkCronSheet'] as const
 
 /** One of the sheets a section leaves behind. */
 export type LeaveSlot = (typeof SLOTS)[number]
@@ -76,7 +75,7 @@ export function leaveSection(): void {
   for (const name of SLOTS) slots.get(name)?.()
 }
 
-/* What arriving at a section asks of the domain that fills it. Three sections
+/* What arriving at a section asks of the domain that fills it. Two sections
    are another domain's island (features/settings/store.ts's HOSTED), and each
    holds rows it has to fetch: nothing else on this page would ask for them,
    because the nav row that used to is a section pick now. Keyed by section id

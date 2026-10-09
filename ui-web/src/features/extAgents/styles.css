@@ -235,19 +235,11 @@
 .extAgents-by { font-size: 11.5px; color: var(--faint); margin-top: 1px; display: flex; align-items: center; gap: 6px; }
 .extAgents-by .extAgents-led { width: 5px; height: 5px; }
 .extAgents-by-bad { color: var(--clay); }
-/* A caveat on a connected row: the sheet's line, with the probe's own words
-   folded under it. The dot sits on the first line rather than centred against
-   the block. */
-.extAgents-by-fix { align-items: flex-start; }
-.extAgents-by-fix .extAgents-led { margin-top: 5px; }
-.extAgents-fix { flex: 1; min-width: 0; line-height: 1.5; }
 /* A fix made inside the agent, in the note: the command that opens it, then
    what to type there. Numbered, each label over its own command. */
 .extAgents-steps { margin: 8px 0 0; padding-left: 18px; color: var(--text); font-size: 12.5px; }
 .extAgents-steps li + li { margin-top: 6px; }
 .extAgents-note .extAgents-steps .extAgents-cmd { margin: 4px 0 0; }
-.extAgents-raw { color: var(--faint); }
-.extAgents-raw summary { cursor: pointer; }
 
 .extAgents-body { flex: 1; overflow-y: auto; padding: 18px 20px 4px; min-height: 0; }
 
@@ -263,8 +255,26 @@
   background: color-mix(in oklab, var(--clay) 4%, var(--paper));
 }
 .extAgents-note-t { font-size: 13px; font-weight: 600; color: var(--clay); display: flex; align-items: center; gap: 7px; }
+/* A caveat on a connected row: the same block, in the warning colour. */
+.extAgents-note-warn {
+  border-color: color-mix(in oklab, var(--amber) 28%, var(--line));
+  background: color-mix(in oklab, var(--amber) 5%, var(--paper));
+}
+.extAgents-note-warn .extAgents-note-t { color: var(--amber); }
+.extAgents-note-warn .extAgents-note-ask:hover { background: color-mix(in oklab, var(--amber) 10%, transparent); }
 .extAgents-note-when { font-weight: 400; font-size: 11.5px; color: var(--faint); }
 .extAgents-note-p { font-size: 12.5px; color: var(--text); line-height: 1.6; margin-top: 4px; }
+/* The title row: what went wrong, and at its right the hand-off to Raven --
+   out of the reading line, so the lead and the server's sentence stay one
+   block, and the note grows by nothing. */
+.extAgents-note-h { display: flex; align-items: flex-start; gap: 10px; }
+.extAgents-note-h .extAgents-note-t { flex: 1; min-width: 0; }
+.extAgents-note-ask {
+  flex: none; margin: -2px -7px 0 0; padding: 1px 7px; border: 0; border-radius: 6px; background: none;
+  font: inherit; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--text); white-space: nowrap; cursor: pointer;
+}
+.extAgents-note-ask:hover { background: color-mix(in oklab, var(--clay) 8%, transparent); }
+.extAgents-note-ask:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 .extAgents-note .extAgents-cmd { margin-top: 9px; background: var(--paper); }
 .extAgents-note-raw { margin-top: 9px; font-size: 11.5px; color: var(--faint); }
 .extAgents-note-raw summary { cursor: pointer; }

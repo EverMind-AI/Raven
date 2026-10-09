@@ -13,7 +13,6 @@
  */
 
 import { SheetOption } from '../../chrome/SheetRack'
-import { SheetHead } from './AskApproveSheet'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
 import type { JSX } from 'react'
@@ -24,10 +23,100 @@ export type Evidence = Record<string, unknown>
 export interface GateWords {
   readonly title: string
   readonly why: string
+  /** The sentence naming the rule the broader grant saves, split around the
+      pattern so the pattern can be set as code. Absent when there is no rule. */
+  readonly rule?: readonly [string, string, string]
   readonly deny: string
   readonly created: string
   readonly nodiff: string
   readonly cut: string
+  /* A configuration change's own words, present only for `config.change`. */
+  readonly cfg?: ConfigWords
+}
+
+export interface ConfigWords {
+  readonly reset: string
+  readonly reload: string
+  readonly restart: string
+  /* One per row of `configRows`, in its order. */
+  readonly rows: readonly ConfigRowWords[]
+  /* A key row's note: typed on the credential card once the change is
+     allowed, or, where no card can save it, in Settings. */
+  readonly keyField: string
+  readonly keyIsSet: string
+  readonly keyNoField: string
+}
+
+export interface ConfigRowWords {
+  readonly effect: string
+  readonly sensitive: string
+  readonly unsetTo?: string
+  readonly test?: string
+  /* An add's agents, one sentence each, in place of a before and after. */
+  readonly agents?: readonly ConfigAgentWords[]
+}
+
+export interface ConfigAgentWords {
+  readonly said: string
+  readonly model: string
+}
+
+/* A change to Raven's own configuration as the card lays it out: one row per
+   setting, a batch being several. */
+export const configRows = (evidence: Evidence): Evidence[] =>
+  Array.isArray(evidence.changes) ? (evidence.changes as Evidence[]) : [evidence]
+
+function ConfigRow({ row, words, line }: {
+  row: Evidence; words: ConfigWords; line?: ConfigRowWords
+}): JSX.Element {
+  const action = str(row.action)
+  const setting = str(row.setting)
+  if (action === 'restart') return <div>{str(row.target) === 'restart' ? words.restart : words.reload}</div>
+  if (action === 'test') return <div>{line?.test || str(row.change)}</div>
+  if (action === 'add' && line?.agents?.length) {
+    return (
+      <div className="cp-ev">
+        {line.agents.map((agent, i) => (
+          <div key={i}>
+            <div>{agent.said}</div>
+            {agent.model ? <div className="cp-cfg-note">{agent.model}</div> : null}
+          </div>
+        ))}
+        {line.sensitive ? <div className="cp-cfg-warn">{line.sensitive}</div> : null}
+      </div>
+    )
+  }
+  /* No field here: the value is typed on a card of its own once this change
+     is allowed (features/composer/credential.ts), so this card only says so. */
+  if (row.secret === true) {
+    return (
+      <div className="cp-ev">
+        <div className="cp-ev-path">{setting}</div>
+        <div className="cp-cfg-note">{row.enterable === true ? words.keyField : words.keyNoField}</div>
+        {str(row.was) === 'set' ? <div className="cp-cfg-note">{words.keyIsSet}</div> : null}
+      </div>
+    )
+  }
+  /* Old and new value as the two sides of a diff, so the reader answers
+     about the change rather than about the arguments that spell it. */
+  /* A setting whose unset is a choice ("follows the main model", "off") says
+     that, rather than "(default)", on whichever side of the diff is unset. */
+  const unsetTo = line?.unsetTo || ''
+  const was = row.was_unset === true && unsetTo
+    ? unsetTo
+    : str(row.was) + (row.was_default === true ? ' ' + words.reset : '')
+  const now = action === 'unset' ? unsetTo || words.reset : str(row.value)
+  return (
+    <div className="cp-ev">
+      {setting ? <div className="cp-ev-path">{setting}</div> : null}
+      <pre className="cp-diff">
+        {was ? <span className="cp-del">{'- ' + was + '\n'}</span> : null}
+        <span className="cp-add">{'+ ' + now}</span>
+      </pre>
+      {line?.effect ? <div className="cp-cfg-note">{line.effect}</div> : null}
+      {line?.sensitive ? <div className="cp-cfg-warn">{line.sensitive}</div> : null}
+    </div>
+  )
 }
 
 export interface GateProps {
@@ -36,7 +125,6 @@ export interface GateProps {
   readonly command: string
   readonly words: GateWords
   readonly opts: readonly SheetOptionRow[]
-  readonly onDeny: () => void
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
@@ -88,6 +176,18 @@ function EvidenceBlock(
     </>
     )
   }
+  if (kind === 'config.change' && words.cfg) {
+    const cfg = words.cfg
+    const rows = configRows(evidence)
+    return (
+    <>
+      <div className="what cp-ev">
+        {rows.map((row, i) => <ConfigRow key={i} row={row} words={cfg} line={cfg.rows[i]} />)}
+      </div>
+      {cut}
+    </>
+    )
+  }
   if (kind === 'shell.exec') {
     return <>
       <div className="what">{str(evidence.command) || command}</div>
@@ -104,16 +204,25 @@ function EvidenceBlock(
   )
 }
 
-export function GateSheet({ kind, evidence, command, words, opts, onDeny }: GateProps): JSX.Element {
+/* No close cross in the corner: refusing is the Deny button and Esc, both on
+   the card's foot, and a second way to say no that looks like dismissing the
+   card read as "not now" rather than as the refusal it sends. */
+export function GateSheet({ kind, evidence, command, words, opts }: GateProps): JSX.Element {
   return (
     <>
-      <SheetHead title={words.title} deny={words.deny} onDeny={onDeny} />
+      <div className="hd"><div className="q">{words.title}</div></div>
       <div className="body">
         <div className="cp-why">{words.why}</div>
         <EvidenceBlock kind={kind} evidence={evidence} command={command} words={words} />
-        <div className="cp-acts">
-          {opts.map((row, i) => <SheetOption key={i} n={i + 1} row={row} />)}
-        </div>
+        {/* What "Always allow" writes, said before it is pressed: the button is
+            one word, and a rule outlives the conversation. */}
+        {words.rule ? (
+          <div className="cp-rule">{words.rule[0]}<code>{words.rule[1]}</code>{words.rule[2]}</div>
+        ) : null}
+      </div>
+      {/* Outside the body, which scrolls: see `.csheet.perm .body`. */}
+      <div className="cp-acts">
+        {opts.map((row, i) => <SheetOption key={i} row={row} />)}
       </div>
     </>
   )

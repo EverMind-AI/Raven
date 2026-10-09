@@ -164,7 +164,7 @@ def _open_db() -> sqlite3.Connection:
     db = _db_path()
     if not db.exists():
         print(f"Error: boxlite database not found at {db}", file=sys.stderr)
-        print("Is boxlite installed? Run: pip install raven[sandbox]", file=sys.stderr)
+        print("Is boxlite installed? Run: uv sync --extra sandbox", file=sys.stderr)
         sys.exit(1)
     return sqlite3.connect(str(db))
 
@@ -622,7 +622,7 @@ def main() -> None:
     try:
         import boxlite as _  # noqa: F401
     except ImportError:
-        print("Error: boxlite is not installed. Run: pip install raven[sandbox]", file=sys.stderr)
+        print("Error: boxlite is not installed. Run: uv sync --extra sandbox", file=sys.stderr)
         sys.exit(1)
 
     if args.home_dir is not None:

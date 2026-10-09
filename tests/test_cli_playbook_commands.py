@@ -433,6 +433,82 @@ def test_run_wires_the_playbooks_own_servers_over_the_hosts(library, monkeypatch
     assert "hunter2" not in r.stdout
 
 
+def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, monkeypatch):
+    """SubagentManager in playbook run receives tools.sandbox and tools.restrict_to_workspace (#798)."""
+    _write_dag_md(library["user"], "audit")
+    library["config"].write_text(
+        json.dumps(
+            {
+                "playbooks": {"dir": str(library["user"])},
+                "tools": {
+                    "restrict_to_workspace": True,
+                    "sandbox": {"backend": "none", "allow_net": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: _FakeProvider())
+    monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
+
+    from raven.agent.subagent.manager import SubagentManager
+
+    captured = {}
+    orig_init = SubagentManager.__init__
+
+    def recording_init(self, *args, **kwargs):
+        captured["manager"] = self
+        captured["kwargs"] = kwargs
+        return orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubagentManager, "__init__", recording_init)
+
+    r = runner.invoke(app, ["playbook", "run", "audit"])
+    assert r.exit_code == 0, r.stdout
+
+    manager = captured["manager"]
+    assert manager.restrict_to_workspace is True
+    assert manager._sandbox_config is not None
+    assert manager._sandbox_config.backend == "none"
+    assert manager._sandbox_config.allow_net is False
+    assert manager.provider_pool is not None
+
+
+def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(tmp_path, monkeypatch):
+    """SubagentManager in _stint_driver receives tools.sandbox and tools.restrict_to_workspace (#798)."""
+    from raven.agent.subagent.manager import SubagentManager
+    from raven.cli.playbook_commands import _stint_driver
+    from raven.config.schema import Config, SandboxConfig, ToolsConfig
+
+    config = Config()
+    config.tools = ToolsConfig(
+        restrict_to_workspace=True,
+        sandbox=SandboxConfig(backend="none", allow_net=False),
+    )
+
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda cfg: _FakeProvider())
+    monkeypatch.setattr("raven.playbook.executor.PlaybookExecutor.rounds", property(lambda self: object()))
+
+    captured = {}
+    orig_init = SubagentManager.__init__
+
+    def recording_init(self, *args, **kwargs):
+        captured["manager"] = self
+        captured["kwargs"] = kwargs
+        return orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubagentManager, "__init__", recording_init)
+
+    driver = _stint_driver(config, tmp_path)
+    assert driver is not None
+
+    manager = captured["manager"]
+    assert manager.restrict_to_workspace is True
+    assert manager._sandbox_config is not None
+    assert manager._sandbox_config.backend == "none"
+    assert manager.provider_pool is not None
+
+
 def test_run_reports_a_server_waiting_on_authorization_and_does_not_wait_for_it(library, monkeypatch):
     """The pre-flight is the last moment a person is around to be told. It says
     so and moves on; it must not hold the run open on a browser click."""

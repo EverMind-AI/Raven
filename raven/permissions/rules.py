@@ -9,7 +9,9 @@ read-only tools run, everything else asks -- with one exception, and
 a file they asked for, which is not a read and is not an effect they approve.
 ``exec`` is the one tool whose default reads its argument: a command every
 segment of which only reads (``READ_ONLY_COMMANDS`` and its three companions)
-allows, everything else asks.
+allows, everything else asks. A tool that both reads and changes defaults by
+action instead (``DEFAULT_ALLOW_ACTIONS``): ``plugin`` finds and lists without
+asking, and connects, authorizes and removes only after a human says so.
 
 Exec pattern matching is prefix-by-token on the raw command, deliberately
 without wrapper stripping: ``git *`` must not allow ``sudo git push``. A
@@ -50,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
+from raven.config.self_surface import carries_secret_value
 from raven.contracts.permissions import Tier
 from raven.permissions.shell_policy import (
     _COMMAND_RUNNERS,
@@ -314,6 +317,33 @@ READ_ONLY_MAX_POSITIONAL: dict[str, int] = {"uniq": 1}
 
 READ_ONLY_SUBCOMMANDS: dict[str, frozenset[str]] = {
     "docker": frozenset({"images", "inspect", "logs", "ps"}),
+    # Package managers' queries: what is installed, what a package is and ships.
+    # Seen asking in turn after turn of connecting an agent (`npm view <pkg> bin`,
+    # `npm ls -g`) while the install beside them rightly asked once. `config`,
+    # `exec`, `run` and friends are absent: they set or run.
+    "npm": frozenset(
+        {
+            "view",
+            "v",
+            "info",
+            "show",
+            "ls",
+            "list",
+            "ll",
+            "la",
+            "outdated",
+            "search",
+            "root",
+            "prefix",
+            "why",
+            "explain",
+        }
+    ),
+    "pnpm": frozenset({"view", "info", "ls", "list", "ll", "outdated", "root", "why"}),
+    "yarn": frozenset({"info", "list", "why"}),
+    "pip": frozenset({"show", "list", "freeze"}),
+    "pip3": frozenset({"show", "list", "freeze"}),
+    "brew": frozenset({"info", "list", "ls", "search", "deps", "leaves", "outdated"}),
     "git": frozenset(
         {
             "blame",
@@ -499,6 +529,10 @@ def _redirection_writes_nothing(operator: str, target: str | None) -> bool:
     return operator in _INPUT_REDIRECTIONS or target is None or target == "/dev/null"
 
 
+#: Global flags that take no value, allowed before a read-only subcommand.
+_VALUELESS_GLOBAL_FLAGS = frozenset({"-g", "--global", "--json"})
+
+
 def _segment_reads_only_tokens(tokens: tuple[str, ...]) -> bool:
     if not tokens:
         return False
@@ -508,14 +542,22 @@ def _segment_reads_only_tokens(tokens: tuple[str, ...]) -> bool:
     if "/" in name:
         return False
     if name in READ_ONLY_SUBCOMMANDS:
-        if name == "git":
-            args = _git_args_after_global_options(args)
-            if args is None:
-                return False
+        if name != "git":
+            # The subcommand comes first, after flags known to take no value:
+            # these tools take global options with one (`npm --prefix ls install
+            # x`, `docker -H ps run x`), so the first argument that is not a flag
+            # can be an option's value rather than the verb.
+            rest = list(args)
+            while rest and rest[0] in _VALUELESS_GLOBAL_FLAGS:
+                rest.pop(0)
+            return bool(rest) and rest[0] in READ_ONLY_SUBCOMMANDS[name]
+        args = _git_args_after_global_options(args)
+        if args is None:
+            return False
         positional = [arg for arg in args if not arg.startswith("-")]
         if not positional or positional[0] not in READ_ONLY_SUBCOMMANDS[name]:
             return False
-        return name != "git" or _git_query_only_lists(positional, args)
+        return _git_query_only_lists(positional, args)
     if name in READ_ONLY_ZERO_ARG:
         return not args
     if name not in READ_ONLY_COMMANDS:
@@ -602,8 +644,38 @@ def _strictest(tiers: "list[Tier]") -> Tier | None:
     return max(tiers, key=lambda t: _STRICTNESS[t])
 
 
+#: The agent's own configuration tool, and the actions of it that only read.
+SELF_CONFIG_TOOL = "raven_config"
+SELF_CONFIG_READ_ACTIONS = frozenset({"describe", "get"})
+
+
+def self_config_tier(tool_name: str, params: dict[str, Any] | None = None) -> Tier | None:
+    """The fixed tier for a ``raven_config`` call, or ``None`` for any other tool.
+
+    Reads allow. A call carrying a credential's value is refused in every mode:
+    that value came through the chat, and a key goes in only through the
+    credential card. Everything else -- a write, a reset, a connect, a restart
+    -- asks. In a turn someone is at (never an unattended one) the gate lets
+    the user's allow rule, full access, and the smart-mode reviewer through;
+    the reviewer only for settings the catalog does not mark sensitive. A
+    grant for the session never carries a change.
+    """
+    if tool_name != SELF_CONFIG_TOOL:
+        return None
+    action = (params or {}).get("action")
+    if action in SELF_CONFIG_READ_ACTIONS:
+        return Tier.ALLOW
+    return Tier.DENY if carries_secret_value(params or {}) else Tier.ASK
+
+
+#: Tools that both read and change, and the actions of each that only read.
+DEFAULT_ALLOW_ACTIONS: dict[str, frozenset[str]] = {"plugin": frozenset({"find", "list"})}
+
+
 def default_tier(tool_name: str, params: dict[str, Any] | None = None) -> Tier:
     if tool_name in DEFAULT_ALLOW_TOOLS:
+        return Tier.ALLOW
+    if (params or {}).get("action") in DEFAULT_ALLOW_ACTIONS.get(tool_name, ()):
         return Tier.ALLOW
     if tool_name == "exec" and params is not None:
         command = params.get("command")

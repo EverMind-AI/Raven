@@ -17,7 +17,7 @@ from raven.agent.subagent.backends.base import ABORTED_ACTION_RESULT, IN_SUBAGEN
 from raven.agent.subagent.backends.cli_agent import CliAgentBackend
 from raven.agent.subagent.backends.openai_api import OpenAIApiBackend
 from raven.agent.subagent.backends.raven_loop import RavenLoopBackend, build_subagent_prompt
-from raven.agent.subagent.presets import session_mcp_for
+from raven.agent.subagent.presets import lendable_keys, session_mcp_for
 from raven.contracts.subagent_backend import SubagentActionAbortedError, SubagentBackend
 
 
@@ -315,6 +315,32 @@ third_party_agent_meta = agent_meta
 enabled_third_party = enabled_agents
 
 
+def lent_key_env(cfg: Any) -> dict[str, str]:
+    """The variables carrying the keys ``cfg`` borrows from Raven, read from Raven's config now.
+
+    Only a provider the preset reads a key for, and only one Raven holds a key
+    for; anything else lends nothing rather than failing the start, and the
+    agent then answers with its own credentials or its own refusal.
+    """
+    wanted = list(getattr(cfg, "lend_keys", None) or [])
+    if not wanted:
+        return {}
+    from raven.config.self_surface import lookup, read_raw
+
+    variables = lendable_keys(getattr(cfg, "preset", None))
+    try:
+        raw = read_raw()
+    except (OSError, ValueError) as exc:
+        logger.warning("subagent {!r}: Raven's config could not be read to lend its keys: {}", cfg.name, exc)
+        return {}
+    env: dict[str, str] = {}
+    for provider in wanted:
+        _, key = lookup(raw, f"providers.{provider}.apiKey")
+        if provider in variables and isinstance(key, str) and key.strip():
+            env[variables[provider]] = key.strip()
+    return env
+
+
 def build_third_party_backend(
     cfg: Any,
     *,
@@ -370,7 +396,7 @@ def build_third_party_backend(
             name=cfg.name,
             command=cfg.command,
             cwd=cfg.cwd,
-            env=dict(cfg.env),
+            env={**lent_key_env(cfg), **cfg.env},
             ready_timeout_ms=cfg.ready_timeout_ms if ready_timeout_ms is None else ready_timeout_ms,
             timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,

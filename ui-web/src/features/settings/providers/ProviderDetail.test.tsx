@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, fireEvent, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../../state/sources'
@@ -41,6 +41,149 @@ async function open(slug: string): Promise<void> {
   await mount('provider')
   await act(async () => { store.set({ provider: slug }) })
 }
+
+/* What Update over a connected provider's key field says when it holds no new key. */
+const UNCHANGED = 'gui.settings.providers.key_unchanged {"button":"gui.settings.update"}'
+
+/* The connection card's key field and the eye beside it. */
+const keyField = (): HTMLInputElement =>
+  document.querySelector('.settings-tp-main input[aria-label="gui.settings.providers.api_key"]') as HTMLInputElement
+const keyEye = (): HTMLButtonElement => keyField().parentElement!.querySelector('button.peek') as HTMLButtonElement
+
+describe('the eye beside a connected provider\'s key', () => {
+  /* What the page asked to read back, and what it is answered. */
+  const asked: string[] = []
+  const answering = (key: string | null | Error) => async (slug: string): Promise<string | null> => {
+    asked.push(slug)
+    if (key instanceof Error) throw key
+    return key
+  }
+  beforeEach(() => { asked.length = 0 })
+
+  it('shows the saved key in the empty field, and empties it again when shut', async () => {
+    /* The field stands for a key saved elsewhere ("type a new one to replace
+       it"), so the eye over it showed an empty box: the one key a reader
+       could not check was the one in use. */
+    install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    expect(keyField().value).toBe('')
+
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('sk-or-saved')
+    expect(asked).toEqual(['openrouter'])
+
+    /* Shut, it is a placeholder again rather than a "new" key that is the old one. */
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('password'))
+    expect(keyField().value).toBe('')
+  })
+
+  it('reads a typed key back as typed, and fetches nothing', async () => {
+    install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    fireEvent.change(keyField(), { target: { value: 'sk-or-new' } })
+
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('sk-or-new')
+    expect(asked).toEqual([])
+  })
+
+  it('keeps a revealed key the reader edited when the eye shuts: it is theirs now', async () => {
+    install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().value).toBe('sk-or-saved'))
+    fireEvent.change(keyField(), { target: { value: 'sk-or-saved-2' } })
+
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('password'))
+    expect(keyField().value).toBe('sk-or-saved-2')
+  })
+
+  it('keeps a key typed while the saved one is still on its way', async () => {
+    /* The read is a round trip; a reader who presses the eye and starts typing
+       the replacement before it lands keeps what they typed. */
+    let answer = (_key: string): void => {}
+    install(snap(), {
+      revealKey: (slug) => {
+        asked.push(slug)
+        return new Promise<string | null>((done) => { answer = done })
+      },
+    })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    expect(asked).toEqual(['openrouter'])
+    fireEvent.change(keyField(), { target: { value: 'sk-or-new' } })
+
+    await act(async () => { answer('sk-or-saved') })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('sk-or-new')
+  })
+
+  it.each([
+    ['Update', (): void => {
+      fireEvent.click(keyField().closest('.settings-taglist')!.querySelector(':scope > button.mini')!)
+    }],
+    ['Enter', (): void => { fireEvent.keyDown(keyField(), { key: 'Enter' }) }],
+  ])('sends nothing on %s while the revealed key is unedited, and says there is no new key', async (_how, press) => {
+    /* The stored key does not go back, and nothing else would: the server
+       could only refuse an empty save, in English. */
+    const { calls } = install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().value).toBe('sk-or-saved'))
+
+    await act(async () => { press() })
+    expect(calls.filter(([name]) => name === 'provider')).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(UNCHANGED)
+    expect(keyField().value).toBe('sk-or-saved')
+  })
+
+  it('sends nothing on Update over the empty field of a connected provider, and says why', async () => {
+    const { calls } = install(snap())
+    await open('openrouter')
+    expect(keyField().value).toBe('')
+    await act(async () => {
+      fireEvent.click(keyField().closest('.settings-taglist')!.querySelector(':scope > button.mini')!)
+    })
+    expect(calls.filter(([name]) => name === 'provider')).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(UNCHANGED)
+  })
+
+  it('saves an edited revealed key as the new key', async () => {
+    const { calls } = install(snap(), { revealKey: answering('sk-or-saved') })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().value).toBe('sk-or-saved'))
+    fireEvent.change(keyField(), { target: { value: 'sk-or-saved-2' } })
+    await act(async () => { fireEvent.keyDown(keyField(), { key: 'Enter' }) })
+    expect(calls.filter(([name]) => name === 'provider').map(([, args]) => args))
+      .toEqual([{ op: 'save_key', slug: 'openrouter', api_key: 'sk-or-saved-2' }])
+  })
+
+  it('fetches nothing for a provider that is not connected', async () => {
+    install(snap(), { revealKey: answering('sk-should-not-show') })
+    await open('openai')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('')
+    expect(asked).toEqual([])
+  })
+
+  it.each([
+    ['keeps no key of its own', null],
+    ['cannot be read', new Error('refused')],
+  ])('leaves the field empty when the provider %s', async (_case, answer) => {
+    install(snap(), { revealKey: answering(answer) })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('')
+    expect(asked).toEqual(['openrouter'])
+  })
+})
 
 describe('provider detail', () => {
   const many = (): ReturnType<typeof snap> => {
@@ -176,6 +319,25 @@ describe('provider detail', () => {
     expect(calls).toEqual([['provider', { op: 'save_key', slug: 'openai', api_key: 'sk-new' }], ['fetchModels:verify', 'openai']])
   })
 
+  it('a key-only vendor connects with its key alone, whatever address it was handed', async () => {
+    /* `model.options` hands over a direct vendor's address for display --
+       Gemini's is Google's bare host -- and the Connection block draws no
+       address field for a key-only vendor. Sending it anyway stored an address nobody typed: the
+       key probe took the section for a proxy and Gemini's driver for its
+       versioned root. */
+    const data = snap()
+    data.providers = [...data.providers, {
+      id: 'gemini', name: 'Gemini', models: [], configured: [], on: false, kind: 'key', acceptsKey: true,
+      defaultApiBase: 'https://generativelanguage.googleapis.com',
+    }]
+    const { calls } = install(data)
+    await open('gemini')
+    const box = screen.getByLabelText('gui.settings.providers.api_key') as HTMLInputElement
+    await act(async () => { fireEvent.change(box, { target: { value: 'AIza-new' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'gemini', api_key: 'AIza-new' }], ['fetchModels:verify', 'gemini']])
+  })
+
   it('a local provider connects by address alone and refuses an empty one', async () => {
     const { calls } = install()
     await open('ollama')
@@ -186,6 +348,26 @@ describe('provider detail', () => {
     await act(async () => { fireEvent.change(box, { target: { value: 'http://localhost:11434' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
     expect(calls).toEqual([['provider', { op: 'save_key', slug: 'ollama', api_base: 'http://localhost:11434' }], ['fetchModels:verify', 'ollama']])
+  })
+
+  it('sends the address from the field it draws alone for a vendor that takes no key', async () => {
+    /* The other place the address field is drawn: alone, for a vendor that takes
+       no key. `model.options` sends no such row today -- only OAuth and local
+       rows take none -- but the block still draws the field for one, and the
+       address typed there has to go out the way the one above the key does. The
+       row is connected, since Connect on a key-shaped row asks for a key first. */
+    const data = snap()
+    data.providers = [...data.providers, {
+      id: 'keyless', name: 'Keyless', models: [], configured: [], on: true, kind: 'key', acceptsKey: false,
+    }]
+    const { calls } = install(data)
+    await open('keyless')
+    const boxes = document.querySelectorAll('.settings-tp-main input[aria-label="gui.settings.providers.base"]')
+    expect(boxes).toHaveLength(1)
+    const box = boxes[0] as HTMLInputElement
+    await act(async () => { fireEvent.change(box, { target: { value: 'https://keyless.test/v1' } }) })
+    await act(async () => { fireEvent.click(box.parentElement!.querySelector('button')!) })
+    expect(calls).toEqual([['provider', { op: 'save_key', slug: 'keyless', api_base: 'https://keyless.test/v1' }], ['fetchModels:verify', 'keyless']])
   })
 
   it('a header is added as a one-name patch and removed as a one-name null', async () => {
@@ -474,6 +656,73 @@ describe('provider detail, the address of a direct vendor', () => {
     await open('openrouter')
     await openAdv()
     expect(screen.queryByText('GPT-4o')).toBeNull()
+  })
+})
+
+describe('an endpoint provider (custom, Azure) saved without a new key', () => {
+  /* `model.save_key` refuses custom, Azure and MiniMax CN without a key, so a
+     press with nothing new says so instead of sending a save that can only come
+     back in English -- and an address edited on its own goes the way any other
+     field does, through `model.set_fields`, with no key asked for again. */
+  const withCustom = (on: boolean): ReturnType<typeof snap> => {
+    const data = snap()
+    data.providers = [...data.providers, { id: 'custom', name: 'Custom', models: [], configured: [], on, kind: 'endpoint', acceptsKey: true, needsBase: true }]
+    ;(data.raw.providers as Record<string, unknown>).custom = { apiBase: 'https://relay.example/v1' }
+    return data
+  }
+  const baseField = (): HTMLInputElement => screen.getByLabelText('gui.settings.providers.base') as HTMLInputElement
+  const keyUpdate = (): HTMLButtonElement =>
+    keyField().closest('.settings-taglist')!.querySelector(':scope > button.mini') as HTMLButtonElement
+  const saves = (calls: Call[]): unknown[] => calls.filter(([name]) => name === 'provider').map(([, args]) => args)
+
+  it('says there is no new key when nothing was changed', async () => {
+    const { calls } = install(withCustom(true))
+    await open('custom')
+    await act(async () => { fireEvent.click(keyUpdate()) })
+    expect(saves(calls)).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(UNCHANGED)
+  })
+
+  it('saves an edited address on its own, without asking for the key again', async () => {
+    const { calls } = install(withCustom(true))
+    await open('custom')
+    fireEvent.change(baseField(), { target: { value: 'https://relay2.example/v1' } })
+    await act(async () => { fireEvent.click(keyUpdate()) })
+    expect(saves(calls)).toEqual([])
+    expect(calls.filter(([name]) => name === 'setFields'))
+      .toEqual([['setFields', { slug: 'custom', fields: { api_base: 'https://relay2.example/v1' } }]])
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('saves an edited address on its own with the revealed key still unedited in the field', async () => {
+    /* The stored key on screen as text is still no new key (C10): it does not
+       go back, and the address goes without it. */
+    const { calls } = install(withCustom(true), { revealKey: async () => 'cu-saved' })
+    await open('custom')
+    await act(async () => { fireEvent.click(keyEye()) })
+    await waitFor(() => expect(keyField().value).toBe('cu-saved'))
+    fireEvent.change(baseField(), { target: { value: 'https://relay2.example/v1' } })
+    await act(async () => { fireEvent.click(keyUpdate()) })
+    expect(saves(calls)).toEqual([])
+    expect(calls.filter(([name]) => name === 'setFields'))
+      .toEqual([['setFields', { slug: 'custom', fields: { api_base: 'https://relay2.example/v1' } }]])
+  })
+
+  it('saves an edited address with a key typed beside it', async () => {
+    const { calls } = install(withCustom(true))
+    await open('custom')
+    fireEvent.change(baseField(), { target: { value: 'https://relay2.example/v1' } })
+    fireEvent.change(keyField(), { target: { value: 'sk-relay' } })
+    await act(async () => { fireEvent.click(keyUpdate()) })
+    expect(saves(calls)).toEqual([{ op: 'save_key', slug: 'custom', api_key: 'sk-relay', api_base: 'https://relay2.example/v1' }])
+  })
+
+  it('asks for the key first on a provider not yet connected', async () => {
+    const { calls } = install(withCustom(false))
+    await open('custom')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(saves(calls)).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe('gui.settings.providers.key_first')
   })
 })
 

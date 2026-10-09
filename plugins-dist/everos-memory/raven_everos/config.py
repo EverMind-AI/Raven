@@ -817,14 +817,49 @@ every stored vector -- and every knowledge base -- was written under. Neither
 should go because a wizard lane was skipped.
 """
 
-UNCLEARABLE_ROLES: tuple[str, ...] = ("llm",)
-"""The required roles a person cannot clear on purpose either.
+FOLLOWS_MAIN_ROLES: tuple[str, ...] = ("llm",)
+"""Roles that, left unset, run on raven's main chat model.
 
-``embedding`` is not among them: it is optional (without it recall falls back
-to keyword search), and the page's clear button is a deliberate act, not the
-stray skip ``REQUIRED_ROLES`` guards against. ``llm`` stays: EverOS refuses to
-start without it.
+"Use the same model as the chat" is what a person means by leaving the memory
+model alone, so unset reads that way rather than as memory off. Resolved on
+every spawn, so changing the main model moves memory with it; a pin of its own
+still wins. Only ``llm``: embedding and rerank are different kinds of model, and
+a chat model is not guaranteed to read images.
 """
+
+
+def main_model_pin() -> tuple[str, str] | None:
+    """The main chat model and the vendor serving it, as ``agents.defaults`` holds them."""
+    agents = _raven_config_raw().get("agents") or {}
+    defaults = agents.get("defaults") if isinstance(agents, dict) else None
+    if not isinstance(defaults, dict):
+        return None
+    model, provider = str(defaults.get("model") or ""), str(defaults.get("provider") or "")
+    return (model, provider) if model and provider else None
+
+
+def unclearable_roles() -> list[str]:
+    """The roles a person cannot clear on purpose right now.
+
+    ``llm`` only while the main model cannot stand in for it -- no main model, or
+    one on an OAuth seat whose token raven does not hand out -- because EverOS
+    refuses to start without it. Otherwise clearing it means "follow the main
+    model", which is a choice and not a loss. ``embedding`` is never among them:
+    it is optional (without it recall falls back to keyword search), and the
+    page's clear button is a deliberate act, not the stray skip
+    ``REQUIRED_ROLES`` guards against.
+    """
+    return [s for s in FOLLOWS_MAIN_ROLES if _endpoint_for(s, main_model_pin(), quiet=True) is None]
+
+
+def follows_main_model(section: str) -> bool:
+    """Whether ``section`` is unset and running on the main model instead."""
+    return (
+        section in FOLLOWS_MAIN_ROLES
+        and role_pin(section) is None
+        and not role_is_env_managed(section)
+        and _endpoint_for(section, main_model_pin(), quiet=True) is not None
+    )
 
 
 @dataclass(frozen=True)
@@ -872,9 +907,19 @@ def resolve_role(section: str) -> RoleEndpoint | None:
     would take down a path that merely wanted to know.
 
     Rerank asks the vendor table for its address, because the endpoint that
-    serves reranking is not always the one that serves chat.
+    serves reranking is not always the one that serves chat. A role in
+    ``FOLLOWS_MAIN_ROLES`` with no pin resolves to the main model.
     """
     pin = role_pin(section)
+    if pin is None and section in FOLLOWS_MAIN_ROLES:
+        return _endpoint_for(section, main_model_pin(), quiet=True)
+    return _endpoint_for(section, pin)
+
+
+def _endpoint_for(section: str, pin: tuple[str, str] | None, *, quiet: bool = False) -> RoleEndpoint | None:
+    # ``quiet`` for the main model standing in: one on an OAuth seat is an
+    # ordinary install, not a misconfigured role, and warning on every read of
+    # it would fill the log.
     if pin is None:
         return None
     model, provider = pin
@@ -888,10 +933,12 @@ def resolve_role(section: str) -> RoleEndpoint | None:
     except KeyError:
         # A pin naming a provider that has since been removed. Ordinary enough
         # that it must not take the gate down: unconfigured, not broken.
-        logger.warning("everos: the %s role names provider %r, which is not configured", section, provider)
+        if not quiet:
+            logger.warning("everos: the %s role names provider %r, which is not configured", section, provider)
         return None
     if resolved is None:
-        logger.warning("everos: the %s role names provider %r, which has no usable credential", section, provider)
+        if not quiet:
+            logger.warning("everos: the %s role names provider %r, which has no usable credential", section, provider)
         return None
     base_url, api_key = resolved
     if section == "rerank":
@@ -963,17 +1010,23 @@ def clear_role(section: str, *, deliberate: bool = False) -> None:
     into force the moment raven stopped naming a model.
 
     ``deliberate`` is a person asking for exactly this -- the page's clear
-    button -- and lets a required role outside ``UNCLEARABLE_ROLES`` go.
+    button -- and lets a required role outside :func:`unclearable_roles` go.
+    For ``llm`` that is "follow the main model" from then on.
     """
     if section not in ROLES:
         raise KeyError(f"unknown everos role {section!r}; roles: {ROLES}")
-    if section in REQUIRED_ROLES and (not deliberate or section in UNCLEARABLE_ROLES):
+    if section in REQUIRED_ROLES and (not deliberate or section in unclearable_roles()):
         # The rule lives here, with the operation, rather than only at the RPC
         # door that used to be its only reader. The wizard reaches this function
         # too, and its own table answers a different question -- `optional`
         # means "may be left unset", not "may be erased" -- so it cleared the
         # one endpoint every knowledge base embeds with.
-        raise RoleRequiredError(f"{section} is required for EverOS memory and cannot be cleared")
+        why = (
+            ": the main model cannot stand in for it (none is set, or its provider has no API key raven can pass on)"
+            if deliberate and section in FOLLOWS_MAIN_ROLES
+            else ""
+        )
+        raise RoleRequiredError(f"{section} is required for EverOS memory and cannot be cleared{why}")
     _require_owned(f"clear the {section} role")
     if section == "embedding":
         from raven.config.update import set_embedding_endpoint
@@ -1186,7 +1239,9 @@ def describe_roles() -> dict[str, Any]:
 
     ``required`` names the roles that cannot be cleared, because the page has to
     know which slots get a clear control and guessing put one on a slot whose
-    clear the write refuses.
+    clear the write refuses. ``follows_main`` marks a role left unset that runs
+    on the main model; ``model`` and ``provider`` stay what is stored (empty),
+    so the page says "follows the main model" instead of naming a pin.
     """
     sections: dict[str, Any] = {}
     for section in ROLES:
@@ -1196,6 +1251,7 @@ def describe_roles() -> dict[str, Any]:
             "provider": pin[1] if pin else "",
             "api_key_set": everos_role_configured(section),
             "env_managed": role_is_env_managed(section),
+            "follows_main": follows_main_model(section),
         }
     supports: dict[str, list[str]] = {}
     for row in vendors():
@@ -1211,5 +1267,5 @@ def describe_roles() -> dict[str, Any]:
         # The roles the page may not clear. Sent rather than mirrored, because
         # the page was mirroring it and had drifted from what the write refuses.
         # A contract the caller has to remember is a contract that goes stale.
-        "required": list(UNCLEARABLE_ROLES),
+        "required": unclearable_roles(),
     }

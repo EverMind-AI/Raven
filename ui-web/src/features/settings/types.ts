@@ -46,6 +46,9 @@ export interface ProviderRow {
      `is_gateway`). The catalogue's filter reads it; no client can derive it
      from a slug. */
   gateway?: boolean
+  /* The image tool can run on this provider's address and key (the registry's
+     `image_api`); the roles card offers the image role exactly these. */
+  imageApi?: boolean
   needsBase?: boolean
   /* Whether the provider takes an API key at all. Absent from a source that
      predates the field, where every non-local provider took one. */
@@ -73,6 +76,9 @@ export interface EverosSection {
   /* Set from exported EVEROS_<ROLE>__* variables, which outrank raven. The
      slot is read-only: raven cannot edit a shell. */
   env_managed?: boolean
+  /* Unset and running on the chat model, which it follows. Only the memory
+     LLM, and only while that model's provider has a key EverOS can use. */
+  follows_main?: boolean
 }
 
 export interface EverosInfo {
@@ -223,6 +229,10 @@ export interface SettingsSource {
   /* Ask the provider what it serves right now. A read: nothing is written
      until a row is added. */
   fetchModels(slug: string, verify?: boolean): Promise<ModelCatalogue>
+  /* The key a connected provider saved, for the eye beside its empty key
+     field; null when it keeps none in its own section. Asked for one provider
+     on a press, never part of the snapshot. */
+  revealKey(slug: string): Promise<string | null>
   /* The provider offer again, with no write before it: what a live read put in
      the server's served-models cache changes it. */
   reloadProviders(): Promise<SettingsSnapshot>

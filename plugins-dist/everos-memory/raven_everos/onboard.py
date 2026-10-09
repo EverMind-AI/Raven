@@ -843,7 +843,7 @@ def _config_everos_role(
     Returns ``None`` normally; returns ``_ABORT_EVEROS`` when the user gives up a
     required role (the caller then disables EverOS, leaving no long-term memory)."""
     questionary = _UI.require_questionary()
-    from raven_everos.config import clear_role, set_role
+    from raven_everos.config import FOLLOWS_MAIN_ROLES, clear_role, role_pin, set_role, unclearable_roles
 
     role = _EVEROS_ROLES[section]
     label = _UI.t(role["label"])
@@ -886,6 +886,8 @@ def _config_everos_role(
             # embedding cleared the endpoint every knowledge base embeds with.
             if optional and section not in REQUIRED_ROLES:
                 choices.append(questionary.Choice(_UI.t("Skip"), value="off"))
+            if section in FOLLOWS_MAIN_ROLES and role_pin(section) and section not in unclearable_roles():
+                choices.append(questionary.Choice(_UI.t("Follow the main model"), value="follow"))
             action = questionary.select(
                 _UI.t("Already configured — what now?"),
                 choices=choices,
@@ -895,6 +897,10 @@ def _config_everos_role(
             if action is None:
                 raise typer.Exit(1)
             if action == "keep":
+                return
+            if action == "follow":
+                clear_role(section, deliberate=True)
+                _UI.console.print(_UI.t("  [dim]{label} now follows the main model.[/dim]", label=label))
                 return
             if action == "off":
                 clear_role(section)
@@ -1074,14 +1080,19 @@ def _configured_model(section: str) -> str | None:
     """
     import os
 
-    from raven_everos.config import role_is_env_managed, role_pin
+    from raven_everos.config import follows_main_model, main_model_pin, role_is_env_managed, role_pin
 
     if not _everos_role_configured(section):
         return None
     if role_is_env_managed(section):
         return os.environ.get(f"EVEROS_{section.upper()}__MODEL") or None
     pin = role_pin(section)
-    return pin[0] if pin else None
+    if pin:
+        return pin[0]
+    # Unset and served by the main model: "keep" is a real choice here, and
+    # falling into the picker would read as if memory had no model at all.
+    main = main_model_pin() if follows_main_model(section) else None
+    return _UI.t("{model} (follows the main model)", model=main[0]) if main else None
 
 
 def _lock_holder(root: Path | str):

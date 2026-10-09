@@ -182,7 +182,9 @@ def resolve(cap: Capability, config: "Config") -> Capability:
 
 
 def _resolved_media(cap: Capability, config: "Config") -> Any:
-    """This tool's media section with the OpenRouter borrow already applied."""
+    """This tool's media section with what it borrows already applied: the named
+    provider's address, key and headers, or the OpenRouter key for a section calling
+    OpenRouter."""
     return getattr(config.effective_media_config(), cap.media_attr)
 
 
@@ -302,12 +304,24 @@ def configured_from(cap: Capability, config: "Config") -> str:
     if cap.need is Need.NOTHING or not is_configured(cap, config):
         return ""
     if cap.media_attr:
-        if getattr(config.tools.media, cap.media_attr).api_key:
+        from raven.config.schema import media_provider
+
+        section = getattr(config.tools.media, cap.media_attr)
+        runs_on = media_provider(section)
+        # A section on a named provider runs on that provider's key, never its
+        # own, so its own key is not the source even when one is written there.
+        if runs_on and runs_on != "openrouter":
+            return f"borrowed: providers.{runs_on}.apiKey" if _resolved_media(cap, config).api_key else ""
+        if section.api_key:
             return cap.key_path
         # effective_media_config resolves the borrow, so a key present after it
         # but absent in the raw section came from the provider entry.
         if _resolved_media(cap, config).api_key:
             return f"borrowed: {_OPENROUTER_KEY}"
+        # The exported key below is OpenRouter's: it never reaches a section
+        # whose address is somewhere else.
+        if not runs_on:
+            return ""
     else:
         # Name the slot that actually holds the key: the vendor slot first, then
         # the pre-vendor Serper leaf a config written before the vendor layout
@@ -334,9 +348,20 @@ def borrowable_credential(cap: Capability, config: "Config") -> str:
     the tool is registered because a model alone counts, and every call then
     fails on a credential they were told they already had.
 
-    Empty for the other families, whose own rows already name what to set.
+    Empty for the other families, whose own rows already name what to set, and
+    for a section pointed at an address no configured provider serves.
     """
     if not cap.media_attr:
+        return ""
+    from raven.config.schema import media_provider
+
+    runs_on = media_provider(getattr(config.tools.media, cap.media_attr))
+    if runs_on and runs_on != "openrouter":
+        from raven.config.update_providers import provider_connection
+
+        api_base, api_key, _ = provider_connection(runs_on, config.providers.get(runs_on))
+        return f"providers.{runs_on}.apiKey" if api_base and api_key else ""
+    if not runs_on:
         return ""
     openrouter = config.providers.get("openrouter")
     if openrouter and openrouter.api_key:

@@ -660,6 +660,9 @@ def _set_model(
         # engine and the consolidator each hold a fallback for work that runs
         # outside a turn, and this is what re-points them.
         loop.set_default_binding(binding)
+        from raven.rpc.methods.console import everos_follows_main_model
+
+        everos_follows_main_model(agent_loop_factory)
 
     out = {
         "applied": True,

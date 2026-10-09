@@ -50,6 +50,7 @@
       "find_skill",
       "load_playbook",
       "plugin",
+      "raven_config",
       "run_subagent_dag",
       "browser_click",
       "browser_navigate",

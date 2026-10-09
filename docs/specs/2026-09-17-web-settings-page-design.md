@@ -18,7 +18,10 @@ numbers of the architecture note listed under Sources.
   `warning` for such a key and the page shows that text.
 - **masked**: a secret reads back as bullets plus its last four characters
   (provider keys, header values); a plugin credential reads back only as set
-  or not set. The page never sends a masked value as a new value.
+  or not set. The page never sends a masked value as a new value. Amended
+  2026-10-09: a provider's own key is shown in full when the eye beside its
+  field is pressed (model-section design C10), and is still never sent back
+  unedited.
 - **connected**: what `model.options` reports as `on`: a key for key-shaped
   providers, an address for local ones, `authenticated` for OAuth ones. No
   connectivity probe is made; connected means written.
@@ -124,7 +127,7 @@ belong here. `BASE` below is `$(git merge-base HEAD refactor/ui_web_architecture
 | # | Constraint | How to check |
 |---|---|---|
 | C9 | A control never pretends. A reload-only key returns `warning` from `settings.set`, and the toast shows that text instead of "saved". | A46 |
-| C10 | Secrets never round-trip (see "masked" above). | A10, A17, A37 |
+| C10 | Secrets never round-trip (see "masked" above). Amended 2026-10-09: a provider key the eye reveals on request is shown, and still never sent back unedited (model-section design C10). | A10, A17, A37 |
 | C11 | The old page goes, it does not hide. `SettingsPage.tsx`, its test, its snapshot and `ImageModelPicker.tsx` are deleted; no nav entry or component of the dropped pages remains in the bundle; every `gui.set.*` key left in `i18n/messages.json` is referenced by a file outside `ui-web/src/features/settings/` (in `ui-web/src` or `ui-tui/src`). | A50; a one-line script over the remaining `gui.set.*` keys and `grep -rl` outside the settings directory. |
 | C12 | Behaviour behind the dropped pages is untouched on the backend: `permissions.mode`, channel, exec and memory keys stay in the `settings.set` whitelist and keep their tests. | `tests/test_rpc_settings.py` passes with no test removed. |
 | C13 | Skill on/off applies on the next turn without a restart. | A25 |
@@ -133,7 +136,7 @@ belong here. `BASE` below is `$(git merge-base HEAD refactor/ui_web_architecture
 
 | # | Assumption | Status |
 |---|---|---|
-| C14 | Image, speech and video generation only run against OpenRouter, so the three media roles offer OpenRouter alone. | Verified 2026-09-17: `MediaGenConfig` docstring "OpenRouter is the only backend"; `raven/agent/tools/media_gen.py` `_OpenRouterMediaTool` posts `{base}/chat/completions` with `modalities` and `{base}/videos`; key falls back to `providers.openrouter.apiKey`. |
+| C14 | Image, speech and video generation only run against OpenRouter, so the three media roles offer OpenRouter alone. | Verified 2026-09-17: `MediaGenConfig` docstring "OpenRouter is the only backend"; `raven/agent/tools/media_gen.py` `_OpenRouterMediaTool` posts `{base}/chat/completions` with `modalities` and `{base}/videos`; key falls back to `providers.openrouter.apiKey`. Amended 2026-10-06: the image tool also calls an OpenAI-compatible Images API, so the image role offers every connected provider the registry marks `image_api` and runs on that provider's address and key; speech and video still run only against OpenRouter. |
 | C15 | Listing sessions already reads every session file's metadata, and saving metadata appends one record. A lazy auto-archive pass adds one appended line per stale session and nothing otherwise. | Verified 2026-09-17: `raven/session/manager.py` `list_sessions` globs `*/*.jsonl`; `save()` docstring "appends a fresh metadata record". The pass must not go through `get_or_create`, which loads the transcript. |
 | C16 | An MCP server installed from the catalog is named by its catalog entry id and recorded in the install ledger, so its form template can be fetched again to rewrite a credential. | Verified 2026-09-17: `raven/market/install.py` `servers[entry_id] = _build_mcp_config(contrib, form)`; `read_ledger(entry_id)`. Hand-written servers have no ledger and get no credential panel. |
 | C17 | Each of the three provider OAuth device flows can be started without a console and yields a verification URL and a user code that the page can show. | **Unverified.** `raven/providers/minimax_oauth.py` `_login_locked` exposes `verification_uri` and `user_code` behind a `print_fn`; the Codex flow is LiteLLM's driver, which prints the URL; Copilot is a device flow in `raven/cli/provider_commands.py`. Spike S1 in the plan before the RPC is designed in detail. |
@@ -181,7 +184,7 @@ Numbering is stable once referenced. A withdrawn item keeps its number.
 - A19. Roles, chat: picking a model from another connected provider writes `agents.defaults.model` and `.provider`; the composer's default chip shows the new pair.
 - A20. Roles, curator / skill gate / session naming: each writes its model and provider pair; "follow the chat model" clears both to null. `settings.set` returns a `warning` for curator and gate (reload-only) and none for session naming (live).
 - A21. Roles, memory (EverOS llm / embedding / rerank / multimodal): picking a provider and model calls `settings.everosSet` with `borrow_from`, and the section reads back with that model; a provider without a key of its own (OAuth, local) is not offered. Embedding shows the re-index warning the server returns.
-- A22. Roles, media: image, speech and video offer OpenRouter only; when it is not connected the row offers "connect OpenRouter"; picking a model writes `tools.media.<kind>` first and then removes the tool from `tools.disabledTools`; clearing writes null and then adds the tool back. If the second write fails its error is shown and the first stays.
+- A22. Roles, media: speech and video offer OpenRouter only, and image every connected provider the registry marks `image_api` (C14, amended 2026-10-06); when none is connected the row offers "connect OpenRouter"; picking a model writes `tools.media.<kind>` first -- the image selection naming the provider it runs on, empty for OpenRouter -- and then removes the tool from `tools.disabledTools`; clearing writes null and then adds the tool back. If the second write fails its error is shown and the first stays.
 - A23. Chat parameters: reasoning effort is written to `agents.defaults.reasoningEffort` (an existing key; timing unchanged); a tool-iteration cap outside 1-200 is refused; a context window below 1024 is refused, one above the model's window (from `model.options`) saves and the row shows a red note computed by the page while the toast shows the server's reload warning; "follow the model" writes null and the row shows the model's window.
 
 ### Skills
@@ -459,7 +462,7 @@ on the page (would need the control channel exposed to `/rpc`).
 - **Scalars through the `settings.set` whitelist, lists through its raw-list path, structured operations through dedicated methods.** One writer per shape, matching how the existing keys are done. Rejected: one `settings.set` that hides structured operations behind dotted keys.
 - **`skillForge.evolveModel` is not offered.** No reader in the host or in `plugins-dist` (D1). Rejected: exposing a knob that does nothing.
 - **Session naming keeps its existing model and provider fields; no config field is added, the two keys join the whitelist.** `SessionTitleConfig.provider` exists and `turn.py` reads it.
-- **Media roles offer OpenRouter only.** C14. Rejected: listing every provider and failing at generation time.
+- **Speech and video offer OpenRouter only; image offers the providers marked `image_api`.** C14, amended 2026-10-06. Rejected: listing every provider and failing at generation time.
 - **Auto-archive is built, lazily, on the last message time.** The PRD marks it optional; the owner asked for it. Lazy inside `session.list` because listing already scans every file and metadata saves append (C15); no scheduler. "Last message" rather than "last opened" because only the former is recorded; the label says so. Pinned sessions are exempt; a restored session writes `archived: false` and is exempt for good. Rejected: a daily timer; a new "last opened" record.
 - **The skill blocklist becomes live, reversing row 10 of the hot-reload design for this key.** A settings switch that silently needs a restart is worse than either option; the tool switch beside it is live already; a name filter is not the composition-level change row 10 was protecting. Rejected: a "restart to apply" toast.
 - **Reload-only keys say so.** `settings.set` returns `warning` for the tool-iteration cap, the context window, the curator and gate models; the toast shows it (C9). Rejected: making them live in this change; a reload button (C18).

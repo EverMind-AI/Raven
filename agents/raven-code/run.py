@@ -412,10 +412,14 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
     else:
         taken = render.inherit_llm(config, host)
         if not taken:
+            # A home tree copied out by a newer wheel also serves an older checkout, so this
+            # can run on a raven that predates inherit_refusal; that one refuses without the reason.
+            explain = getattr(render, "inherit_refusal", None)
+            reason = f" ({explain(config, host)})" if explain else ""
             raise SystemExit(
-                f"error: {llm_key} is not set and the host config has no provider key to "
-                f"inherit from; put the key in {HERE / '.env'} (see .env.example), export "
-                f"it, or configure a provider in the host raven"
+                f"error: {llm_key} is not set and the host's model cannot be inherited{reason}; "
+                f"put the key in {HERE / '.env'} (see .env.example), export it, or configure a "
+                f"provider in the host raven"
             )
         log(f"[run] llm: inherited from the host ({taken})")
 

@@ -565,8 +565,23 @@ _Avoid_: a fourth door -- a tool reaching the table any other way skips admissio
 **Checkpoint** (`agent/loop/checkpoint.py`):
 A once-per-turn commit of the session workspace into a shadow git repo (separate from the
 user's `.git`), so an interrupted or failed turn can be rolled back. One `CheckpointService`
-per working directory, cached by `AgentLoop._turn_checkpoint()` and keyed on the directory
-the running turn is bound to.
+per working directory, cached by `AgentLoop._checkpoint_for()` and keyed on the directory
+it covers: the running turn's (`_turn_checkpoint()`), or for an `exec` command and the
+session-open warm-up (`_command_shadow()`) the directory a turn is bound to or, with none
+bound, the one the command runs in. The same repo also answers what a file an `exec` command rewrote or removed held
+before it. `ExecTool` holds it through `command_writes.ShadowTree`,
+handed in by the loop, and does the measuring itself: `ExecTool.warm` starts staging the tree
+in the background when a session opens on the directory (`session.create` /
+`session.resume`, or the first turn where a session opens without either), and every
+command stages it afresh inside its own call with `stage_tree`, into a per-process index of
+its own (never the index the turn commit reads), waiting up to 120s for the staging itself
+(a first use also sets the repo up, before that wait starts); a tree it cannot stage, or not
+within that wait, leaves the command to run without a diff. `read_blobs` reads the old
+contents back for the command's `file_written` diff and `file_removed` body.
+A file's text leaves only where it is *trackable*: `CheckpointService.trackable`, the repo's
+own rules (its default excludes and the user's `.gitignore`, `git check-ignore --no-index`),
+judged without a tree, so a file the checkpoint would not store has no diff and a removal of
+it goes out `withheld`, which nothing else may fill in.
 _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it produces.
 
 **Empty-Response Recovery** (`agent/loop/recovery.py`):
@@ -1522,6 +1537,24 @@ _Avoid_: reading `config.json` keys ad hoc outside this module; treating a live
 preference as a door (doors reconcile members after a durable write; this lane never
 touches member identity).
 
+**Self-configuration surface** (`config/self_surface.py`, tool `raven_config`):
+The catalog of settings the agent may read and change about itself: each entry is a
+dotted `config.json` path, its value kind, the writer that owns it (the catalog's own
+validated raw writer, or a settings-page RPC lent by the entrance), and its effect --
+next turn (a Live preference reader), immediate (a door, or a writer that applies), a
+Generation reload, a whole-process restart, the memory server's restart, or inert. The
+effect is a claim about the runtime, pinned against the schema and the Live preference
+roster by `tests/test_config_self_surface.py`. Every mutating call of the tool asks
+(`permissions.rules.self_config_tier`); in a turn someone is at, an allow rule, full
+access, or smart mode's reviewer (never for a setting the catalog marks sensitive) lets
+it through, and a grant for the session never does. Secrets are reported as set / not
+set and never carried through a call; the user types one on a credential card. A
+**lent key** is a Raven provider key a sub-agent is started with (`lendKeys` on its row):
+the row names the provider, and each start reads the key into the variable the preset
+reads it from (`presets.LENDABLE_KEYS`), so it never passes through the model.
+_Avoid_: "config tool" for the catalog (the tool is one reader of it; the permission
+gate is another); editing `config.json` with file tools as a way to configure Raven.
+
 **Wire Schema** (`rpc-schema/openrpc.json` at repo root):
 The hand-maintained OpenRPC contract for the terminal dialect every interactive client
 speaks (TUI, the served page, ACP). Cross-language neutral ground, machine-read by both
@@ -1758,7 +1791,8 @@ is the fallback -- with read-only tools defaulting to allow and everything
 else, unknown tools included, to ask. `exec` is the one tool whose default
 reads its argument: a command whose every segment only reads (`ls`, `cat`,
 `git status`; no redirection, no command substitution, no wrapper) defaults to
-allow, and every other command asks. A grant from the approval prompt outlasts
+allow, and every other command asks. `plugin` defaults by action: `find` and
+`list` allow, the actions that connect or remove something ask. A grant from the approval prompt outlasts
 the click two ways. `allow_session` remembers the still-asking parts of the
 action on the conversation (`permissions/session.py`: for `exec` one key per
 segment no rule covers, with the machine and the directory it runs in; for a

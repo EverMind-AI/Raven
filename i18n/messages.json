@@ -615,6 +615,30 @@
       "en": "writing",
       "zh": "正在写入"
     },
+    "gui.act.ing.raven_config_read": {
+      "en": "checking settings",
+      "zh": "正在查看配置"
+    },
+    "gui.act.ing.raven_config_change": {
+      "en": "changing settings",
+      "zh": "正在修改配置"
+    },
+    "gui.act.ing.raven_config_restart": {
+      "en": "reloading Raven",
+      "zh": "正在重载 Raven"
+    },
+    "gui.act.ing.plugin_read": {
+      "en": "checking plugins",
+      "zh": "正在查看插件"
+    },
+    "gui.act.ing.plugin_connect": {
+      "en": "connecting a plugin",
+      "zh": "正在连接插件"
+    },
+    "gui.act.ing.plugin_remove": {
+      "en": "removing a plugin",
+      "zh": "正在移除插件"
+    },
     "gui.act.n.edit_file": {
       "en": "edited {n} files",
       "zh": "修改 {n} 个文件"
@@ -658,6 +682,30 @@
     "gui.act.n.write_file": {
       "en": "wrote {n} files",
       "zh": "写入 {n} 个文件"
+    },
+    "gui.act.n.raven_config_read": {
+      "en": "checked settings {n} times",
+      "zh": "查看配置 {n} 次"
+    },
+    "gui.act.n.raven_config_change": {
+      "en": "changed settings {n} times",
+      "zh": "修改配置 {n} 次"
+    },
+    "gui.act.n.raven_config_restart": {
+      "en": "reloaded Raven {n} times",
+      "zh": "重载 Raven {n} 次"
+    },
+    "gui.act.n.plugin_read": {
+      "en": "checked plugins {n} times",
+      "zh": "查看插件 {n} 次"
+    },
+    "gui.act.n.plugin_connect": {
+      "en": "connected {n} plugins",
+      "zh": "连接插件 {n} 次"
+    },
+    "gui.act.n.plugin_remove": {
+      "en": "removed {n} plugins",
+      "zh": "移除插件 {n} 次"
     },
     "gui.act.v.ask_user": {
       "en": "asked",
@@ -742,6 +790,30 @@
     "gui.act.v.write_file": {
       "en": "wrote",
       "zh": "写入"
+    },
+    "gui.act.v.raven_config_read": {
+      "en": "checked settings",
+      "zh": "查看配置"
+    },
+    "gui.act.v.raven_config_change": {
+      "en": "changed settings",
+      "zh": "修改配置"
+    },
+    "gui.act.v.raven_config_restart": {
+      "en": "reloaded Raven",
+      "zh": "重载 Raven"
+    },
+    "gui.act.v.plugin_read": {
+      "en": "checked plugins",
+      "zh": "查看插件"
+    },
+    "gui.act.v.plugin_connect": {
+      "en": "connected a plugin",
+      "zh": "连接插件"
+    },
+    "gui.act.v.plugin_remove": {
+      "en": "removed a plugin",
+      "zh": "移除插件"
     },
     "gui.add": {
       "en": "Add",
@@ -1388,8 +1460,8 @@
       "zh": "接入"
     },
     "gui.conn.field_set": {
-      "en": "set - leave blank to keep",
-      "zh": "已设置 · 留空则保持不变"
+      "en": "Saved",
+      "zh": "已设置"
     },
     "gui.conn.saved_x": {
       "en": "{name} saved",
@@ -1400,32 +1472,20 @@
       "zh": "登录二维码"
     },
     "gui.conn.qr_done": {
-      "en": "Signed in.",
-      "zh": "已登录。"
+      "en": "Signed in",
+      "zh": "已登录"
     },
     "gui.conn.qr_noenc": {
-      "en": "A code is pending, but this install cannot draw it. Reinstall Raven to pick up the encoder.",
-      "zh": "有待扫的登录码，但这个安装画不出来。重装 Raven 即可带上编码器。"
+      "en": "Couldn't draw the code. Reinstalling Raven fixes this.",
+      "zh": "二维码生成失败，重新安装 Raven 可以修复"
     },
     "gui.conn.qr_scan": {
-      "en": "Scan it with the app on your phone.",
-      "zh": "用手机上的 App 扫这个码。"
+      "en": "Scan with the app on your phone",
+      "zh": "用手机上的 App 扫一扫"
     },
     "gui.conn.qr_wait": {
-      "en": "Waiting for a sign-in code...",
-      "zh": "正在等待登录码…"
-    },
-    "gui.conn.st_down": {
-      "en": "Turned on, but not running",
-      "zh": "已开启，但没有在运行"
-    },
-    "gui.conn.st_unknown": {
-      "en": "Cannot tell - the gateway is not answering",
-      "zh": "状态未知 —— gateway 没有应答"
-    },
-    "gui.conn.st_unpaired": {
-      "en": "Running, waiting to be signed in",
-      "zh": "已运行，等待登录"
+      "en": "Getting a code...",
+      "zh": "正在生成二维码…"
     },
     "gui.conn.disconnect": {
       "en": "Disconnect",
@@ -1443,34 +1503,6 @@
       "en": "No channels available yet",
       "zh": "还没有可用的渠道"
     },
-    "gui.conn.none_match": {
-      "en": "No channel matches.",
-      "zh": "没有匹配的渠道。"
-    },
-    "gui.conn.pick": {
-      "en": "Pick a channel on the left",
-      "zh": "在左边选一个渠道"
-    },
-    "gui.conn.search": {
-      "en": "Search channels…",
-      "zh": "搜索渠道…"
-    },
-    "gui.conn.g_on": {
-      "en": "In service",
-      "zh": "已接入"
-    },
-    "gui.conn.g_off": {
-      "en": "Available",
-      "zh": "可接入"
-    },
-    "gui.conn.cost_scan": {
-      "en": "scan to sign in",
-      "zh": "扫码登录"
-    },
-    "gui.conn.cost_n": {
-      "en": "{n} credentials",
-      "zh": "{n} 项凭据"
-    },
     "gui.conn.st_off": {
       "en": "switched off",
       "zh": "已停用"
@@ -1487,13 +1519,21 @@
       "en": "Receiving on {n} entries",
       "zh": "{n} 个入口在收消息"
     },
-    "gui.conn.creds": {
-      "en": "Credentials",
-      "zh": "凭据"
-    },
     "gui.conn.apply": {
-      "en": "Where to get these",
-      "zh": "去申请"
+      "en": "Open console",
+      "zh": "前往"
+    },
+    "gui.conn.guide": {
+      "en": "Create these in {name}'s developer console, then paste them below.",
+      "zh": "凭据要在{name}的开发者后台创建，拿到后填在下面"
+    },
+    "gui.conn.keep_hint": {
+      "en": "Leave a saved field blank to keep it.",
+      "zh": "已设置的项留空即保持不变"
+    },
+    "gui.conn.qr_idle": {
+      "en": "The code appears here",
+      "zh": "二维码会显示在这里"
     },
     "gui.conn.toggled": {
       "en": "{name} {state} - reopen the Raven app to apply",
@@ -1502,10 +1542,6 @@
     "gui.conn.toggled_now": {
       "en": "{name} {state}",
       "zh": "{name} 已{state}"
-    },
-    "gui.conn.toggle_failed": {
-      "en": "{name} did not start - {detail}",
-      "zh": "{name} 没有启动 —— {detail}"
     },
     "gui.conn.out_missing_dep": {
       "en": "its package is not installed.",
@@ -3215,9 +3251,17 @@
       "en": "{n} failed",
       "zh": "{n} 失败"
     },
-    "gui.nav.agents": {
-      "en": "Agent Connector",
-      "zh": "智能体连接"
+    "gui.nav.hub": {
+      "en": "Connectors",
+      "zh": "连接"
+    },
+    "gui.hub.agents": {
+      "en": "Agents",
+      "zh": "智能体"
+    },
+    "gui.hub.channels": {
+      "en": "Channels",
+      "zh": "渠道"
     },
     "gui.nav.conn": {
       "en": "Channels",
@@ -3442,6 +3486,10 @@
     "gui.page.conn": {
       "en": "Channels",
       "zh": "入口"
+    },
+    "gui.page.conn_sub": {
+      "en": "Raven joins the chat apps you already use, so you can hand it work and get results back from WeChat, Feishu, Telegram and more.",
+      "zh": "Raven 可以接入你常用的聊天应用，在微信、飞书、Telegram 里也能直接给它派活、收结果"
     },
     "gui.page.cron": {
       "en": "Schedules",
@@ -4636,12 +4684,12 @@
       "zh": "用 {a} 打开"
     },
     "gui.ws.open_with_host": {
-      "en": "Open this {k} in its app",
-      "zh": "用系统默认程序打开这个 {k}"
+      "en": "Open in default app",
+      "zh": "用默认应用打开"
     },
     "gui.ws.open_with_pick": {
-      "en": "Open with...",
-      "zh": "换个应用打开…"
+      "en": "Choose another app",
+      "zh": "选择其他应用"
     },
     "gui.ws.open_with_default": {
       "en": "Host default",
@@ -4676,8 +4724,20 @@
       "zh": "太大了，没法在这里渲染。"
     },
     "gui.ws.file_binary": {
-      "en": "Nothing to render for this kind of file.",
-      "zh": "这种文件没有可渲染的形式。"
+      "en": "No preview for this kind of file",
+      "zh": "暂不支持预览这种文件"
+    },
+    "gui.ws.file_kind": {
+      "en": "{k} file",
+      "zh": "{k} 文件"
+    },
+    "gui.ws.file_not_text": {
+      "en": "This file is not text",
+      "zh": "这个文件不是文本"
+    },
+    "gui.ws.img_broken": {
+      "en": "This picture could not be drawn here.",
+      "zh": "这张图片没法在这里显示。"
     },
     "gui.ws.file_denied": {
       "en": "Raven is confined to the workspace, so this file cannot be opened here.",
@@ -4975,14 +5035,6 @@
       "en": "Signs in by scanning a code on your phone.",
       "zh": "手机扫码登录"
     },
-    "gui.conn.foot_need": {
-      "en": "{n} required boxes left",
-      "zh": "还需 {n} 项必填"
-    },
-    "gui.conn.foot_clean": {
-      "en": "unchanged",
-      "zh": "未修改"
-    },
     "gui.conn.foot_dirty": {
       "en": "unsaved",
       "zh": "未保存"
@@ -4996,12 +5048,12 @@
       "zh": "发件（SMTP）"
     },
     "gui.conn.w1_done": {
-      "en": "Entry is on",
-      "zh": "入口已启用"
+      "en": "Started",
+      "zh": "已启动"
     },
     "gui.conn.w1_idle": {
-      "en": "Turn the entry on",
-      "zh": "启用入口"
+      "en": "Press Connect",
+      "zh": "点「接入」启动"
     },
     "gui.conn.w2": {
       "en": "Scan with your phone",
@@ -5016,8 +5068,8 @@
       "zh": "开始收消息"
     },
     "gui.conn.w_wait": {
-      "en": "Waiting for the scan. Closing this card does not cancel it.",
-      "zh": "等待扫描 · 关掉卡片不会取消"
+      "en": "Waiting for the scan. Closing this won't stop it.",
+      "zh": "等待扫码，关掉这张卡片不会中断"
     },
     "gui.conn.w_done": {
       "en": "Done",
@@ -5028,12 +5080,12 @@
       "zh": "关闭"
     },
     "gui.conn.w2_blocked": {
-      "en": "Raven App is not running - open it and the code appears here",
-      "zh": "Raven 后台没在运行 · 打开 Raven App 就会启动并出现二维码"
+      "en": "Raven isn't running in the background. The code appears once it is.",
+      "zh": "Raven 后台没在运行，运行后这里会出现二维码"
     },
     "gui.conn.w2_down": {
-      "en": "It started and then stopped - a code nobody scanned expires. Try again.",
-      "zh": "入口启动过又停了 —— 没人扫的码会过期。可以重试。"
+      "en": "The code expired. Try again for a new one.",
+      "zh": "二维码过期了，点「重试」重新生成"
     },
     "gui.conn.w_retry": {
       "en": "Try again",
@@ -5042,18 +5094,6 @@
     "gui.agent.stale_to": {
       "en": "the preset now uses {to}",
       "zh": "预设现在走 {to}"
-    },
-    "gui.conn.tag_down": {
-      "en": "not started",
-      "zh": "未启动"
-    },
-    "gui.conn.tag_unknown": {
-      "en": "state unknown",
-      "zh": "状态未知"
-    },
-    "gui.conn.tag_nohost": {
-      "en": "nothing is running it",
-      "zh": "后台未运行"
     },
     "gui.conn.retry": {
       "en": "Try again",
@@ -5162,6 +5202,38 @@
     "gui.agent.fix_raw": {
       "en": "Original error",
       "zh": "原始报错"
+    },
+    "gui.agent.ask_raven": {
+      "en": "Hand it to Raven →",
+      "zh": "交给 Raven →"
+    },
+    "gui.agent.ask_connect": {
+      "en": "Connect the agent {name} for me. The last try failed: {reason}. Fix what you can yourself, and tell me only when something needs me.",
+      "zh": "帮我把智能体 {name} 接进来。刚才接入失败：{reason}。能自己排查和修的先修好，确实需要我操作的时候再告诉我。"
+    },
+    "gui.agent.ask_test": {
+      "en": "The agent {name} failed its last test: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+      "zh": "智能体 {name} 最近一次测试没通过：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+    },
+    "gui.agent.ask_fix": {
+      "en": "A change to the agent {name} did not go through: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+      "zh": "智能体 {name} 刚才的操作没成功：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+    },
+    "gui.agent.ask_check": {
+      "en": "The agent {name} is connected, but its check found a problem: {reason}. Look into it and fix what you can yourself; tell me only when something needs me.",
+      "zh": "智能体 {name} 已接入，但检查发现了问题：{reason}。帮我排查一下，能修的直接修好，确实需要我操作的时候再告诉我。"
+    },
+    "gui.agent.warn_title": {
+      "en": "{agent} is connected, but its check found a problem",
+      "zh": "{agent} 连上了，但检查发现了问题"
+    },
+    "gui.agent.warn_lead": {
+      "en": "What the check found is below; once that is fixed, press {button}.",
+      "zh": "检查结果在下面，处理好后点「{button}」。"
+    },
+    "gui.agent.warn_lead_bare": {
+      "en": "What the check found is below.",
+      "zh": "检查结果在下面。"
     },
     "gui.agent.fix_download": {
       "en": "{agent} could not be downloaded. Its first connect downloads it, so check the network, the npm registry or the proxy, then press {button}. On a slow network, download it first by running this command in a terminal (once it is downloaded it waits for input; press Ctrl-C to leave), then press {button}:",
@@ -5904,8 +5976,12 @@
       "zh": "一个操作等待批准超时未回应 · 该操作没有执行"
     },
     "gui.confirm.always": {
-      "en": "Always allow: {pattern} (every directory)",
-      "zh": "始终允许：{pattern}（所有工作目录）"
+      "en": "Always allow",
+      "zh": "始终允许"
+    },
+    "gui.confirm.always_rule": {
+      "en": "Always allow saves the rule {pattern}, for every working directory",
+      "zh": "始终允许会保存规则 {pattern}，在所有工作目录生效"
     },
     "gui.confirm.title.shell": {
       "en": "Allow {who} to run this command?",
@@ -5994,6 +6070,90 @@
     "gui.confirm.why.unknown": {
       "en": "{who} wants to do this; you have not allowed it yet.",
       "zh": "{who} 要执行这个操作，你还没授权过。"
+    },
+    "gui.confirm.title.config_change": {
+      "en": "Allow {who} to change its own settings?",
+      "zh": "允许 {who} 修改自己的配置吗？"
+    },
+    "gui.confirm.why.config_change": {
+      "en": "{who} wants to change its own configuration. Allowing it covers this change only.",
+      "zh": "{who} 要修改自己的配置。允许只对这一次改动有效。"
+    },
+    "gui.confirm.cfg.reset": {
+      "en": "(default)",
+      "zh": "（默认值）"
+    },
+    "gui.confirm.cfg.unset_to.main_model": {
+      "en": "(follows the main model)",
+      "zh": "（跟随主模型）"
+    },
+    "gui.confirm.cfg.unset_to.off": {
+      "en": "(off)",
+      "zh": "（关闭）"
+    },
+    "gui.confirm.cfg.test": {
+      "en": "Run {name} once to check that it works. It spends that agent's own quota.",
+      "zh": "试运行 {name} 一次，检查它能否工作（会用掉它自己的额度）"
+    },
+    "gui.confirm.cfg.add": {
+      "en": "Connect {name}",
+      "zh": "接入 {name}"
+    },
+    "gui.confirm.cfg.add_lend": {
+      "en": "Connect {name}, started with Raven's {key} key",
+      "zh": "接入 {name}，用 Raven 的 {key} key 启动"
+    },
+    "gui.confirm.cfg.add_model": {
+      "en": "Model: {model}",
+      "zh": "模型：{model}"
+    },
+    "gui.confirm.cfg.reload": {
+      "en": "Reload Raven so the pending changes take effect. The process stays up; running work finishes first.",
+      "zh": "重新加载 Raven，让待生效的改动生效。进程不中断，正在跑的任务会先跑完。"
+    },
+    "gui.confirm.cfg.restart": {
+      "en": "Restart the whole Raven process so the pending changes take effect. Channels reconnect after a few seconds.",
+      "zh": "重启整个 Raven 进程，让待生效的改动生效。渠道会断开几秒后重连。"
+    },
+    "gui.confirm.cfg.key_field": {
+      "en": "After you allow, a card of its own asks you for this key. It is saved directly and never goes through Raven.",
+      "zh": "允许后会单独弹出一张卡片让你填这个 key，直接保存，不经过 Raven"
+    },
+    "gui.confirm.cfg.key_is_set": {
+      "en": "A key is already set; entering a new one replaces it.",
+      "zh": "已经设置过 key，填新的会替换它"
+    },
+    "gui.confirm.cfg.key_no_field": {
+      "en": "This key cannot be entered here; set it in Settings.",
+      "zh": "这个 key 不能在这里填，请去设置里填写"
+    },
+    "gui.confirm.cfg.sensitive": {
+      "en": "Security: {note}",
+      "zh": "涉及安全：{note}"
+    },
+    "gui.confirm.cfg.effect.next_turn": {
+      "en": "Takes effect from the next message, no restart",
+      "zh": "下一条消息起生效，不用重启"
+    },
+    "gui.confirm.cfg.effect.immediate": {
+      "en": "Takes effect at once",
+      "zh": "立即生效"
+    },
+    "gui.confirm.cfg.effect.reload": {
+      "en": "Takes effect after a reload",
+      "zh": "需要重新加载（reload）后生效"
+    },
+    "gui.confirm.cfg.effect.restart": {
+      "en": "Takes effect after Raven restarts",
+      "zh": "需要重启 Raven 后生效"
+    },
+    "gui.confirm.cfg.effect.memory_server": {
+      "en": "Restarts the memory server to take effect",
+      "zh": "会重启记忆服务使其生效"
+    },
+    "gui.confirm.cfg.effect.inert": {
+      "en": "Nothing reads this setting yet",
+      "zh": "目前没有代码读取这个设置"
     },
     "gui.confirm.ev.created": {
       "en": "new file",
@@ -6170,10 +6330,6 @@
     "gui.op.saved_restart": {
       "en": "Saved. It applies once the engine restarts.",
       "zh": "已保存 · 重启引擎后生效"
-    },
-    "gui.conn.not_receiving": {
-      "en": "The enabled entry is not receiving yet - open the Raven app and it starts.",
-      "zh": "已启用的入口还没在收消息——打开 Raven App 就会启动"
     },
     "gui.sess.branch_empty": {
       "en": "This session has no content yet, so it cannot be branched",
@@ -7386,6 +7542,10 @@
     "gui.settings.providers.key_first": {
       "en": "Enter the API key first",
       "zh": "先填入 API Key"
+    },
+    "gui.settings.providers.key_unchanged": {
+      "en": "No new API key to save. To replace the saved one, type a new key in the API key field, then press {button}.",
+      "zh": "没有新的 API Key 要保存。要更换，先在「API 密钥」框里填入新的，再点「{button}」。"
     },
     "gui.settings.providers.key_not_ascii": {
       "en": "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",
@@ -10234,6 +10394,114 @@
     "gui.pb.stint_status_finished": {
       "en": "finished",
       "zh": "已完成"
+    },
+    "gui.confirm.cred.title": {
+      "en": "Enter a key",
+      "zh": "填写密钥"
+    },
+    "gui.confirm.cred.hint": {
+      "en": "Saved straight into the settings. Raven never sees it.",
+      "zh": "直接保存到设置里，Raven 看不到它"
+    },
+    "gui.confirm.cred.replaces": {
+      "en": "One is already set; what you enter replaces it.",
+      "zh": "已经设置过，填入的新值会替换它"
+    },
+    "gui.confirm.cred.placeholder": {
+      "en": "Paste it here",
+      "zh": "粘贴到这里"
+    },
+    "gui.confirm.cred.save": {
+      "en": "Save",
+      "zh": "保存"
+    },
+    "gui.confirm.cred.skip": {
+      "en": "Skip",
+      "zh": "跳过"
+    },
+    "gui.confirm.cred.saving": {
+      "en": "Saving...",
+      "zh": "正在保存..."
+    },
+    "gui.confirm.cred.unsent": {
+      "en": "It could not be sent; try again.",
+      "zh": "没有发送出去，请再试一次"
+    },
+    "gui.conn.page": {
+      "en": "Channels",
+      "zh": "渠道"
+    },
+    "gui.conn.tab_all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.conn.tab_on": {
+      "en": "Connected",
+      "zh": "已接入"
+    },
+    "gui.conn.tab_off": {
+      "en": "Not connected",
+      "zh": "未接入"
+    },
+    "gui.conn.foot_off": {
+      "en": "Not connected",
+      "zh": "未接入"
+    },
+    "gui.conn.foot_on": {
+      "en": "Connected",
+      "zh": "已接入"
+    },
+    "gui.conn.foot_bad": {
+      "en": "Connection problem",
+      "zh": "连接异常"
+    },
+    "gui.conn.line_bad_creds": {
+      "en": "Credentials may be wrong. Open to update them.",
+      "zh": "凭据可能有误，点开重新填写"
+    },
+    "gui.conn.line_bad_scan": {
+      "en": "Sign-in didn't finish. Open to scan again.",
+      "zh": "登录没成功，点开重新扫码"
+    },
+    "gui.conn.st_bad": {
+      "en": "Couldn't connect",
+      "zh": "没能连上"
+    },
+    "gui.conn.st_bad_why": {
+      "en": "Couldn't connect: {why}",
+      "zh": "没能连上：{why}"
+    },
+    "gui.conn.host_down": {
+      "en": "Raven isn't running in the background, so channels can't receive messages right now.",
+      "zh": "Raven 后台没在运行，渠道暂时收不到消息"
+    },
+    "gui.conn.line_live": {
+      "en": "Messages you send there reach Raven",
+      "zh": "在这里发的消息 Raven 都能收到"
+    },
+    "gui.conn.line_scan": {
+      "en": "Sign in by scanning a code with your phone",
+      "zh": "用手机扫码登录即可接入"
+    },
+    "gui.conn.line_creds": {
+      "en": "Needs keys from its developer console",
+      "zh": "需要从开发者后台拿 {n} 项凭据"
+    },
+    "gui.conn.line_ready": {
+      "en": "Credentials saved, not switched on",
+      "zh": "凭据已填好，还没开启"
+    },
+    "gui.conn.line_saved": {
+      "en": "Credentials saved",
+      "zh": "凭据已填好"
+    },
+    "gui.conn.none_on": {
+      "en": "No channel connected yet",
+      "zh": "还没有接入任何渠道"
+    },
+    "gui.conn.none_off": {
+      "en": "Every channel is connected",
+      "zh": "所有渠道都已接入"
     },
     "gui.nav.knowledge": {
       "en": "Knowledge",

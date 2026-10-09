@@ -24,6 +24,8 @@ from typing import Any, Literal, get_args
 
 from loguru import logger
 
+from raven.config.held_secrets import scrub_held_secrets
+
 _FILENAME = "subagent_test_state.json"
 
 # Only the fields that decide how the agent runs. `name`, `description`, `preset`
@@ -191,6 +193,10 @@ def fingerprint(cfg: Any) -> str:
         # verdict on upgrade, and the per-kind field names already differ enough
         # that two kinds cannot collide.
         payload = {name: getattr(cfg, name, None) for name in fields}
+        # A key lent or withdrawn changes what the agent can reach; only when
+        # set, so every verdict recorded before the field existed holds.
+        if getattr(cfg, "lend_keys", None):
+            payload["lend_keys"] = list(cfg.lend_keys)
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -243,7 +249,9 @@ class TestStateStore:
                 "source": source,
                 "name": name,
                 "ok": bool(ok),
-                "detail": detail,
+                # The agent's stderr tail, shown on the settings page: an agent
+                # started with Raven's key can print it there.
+                "detail": scrub_held_secrets(detail),
                 "fingerprint": fingerprint(cfg),
                 "testedAtMs": int(tested_at_ms),
                 **({"remedy": remedy.to_wire()} if remedy is not None else {}),

@@ -42,7 +42,8 @@
     "resolve_dag_node",
     "ask_user",
     "cron",
-    "plugin"
+    "plugin",
+    "raven_config"
   ],
   "skills": [
     "read_skill",

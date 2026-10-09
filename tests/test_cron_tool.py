@@ -98,3 +98,15 @@ async def test_cron_tool_context_isolation() -> None:
 
     assert seen["a"] == ("telegram", "chat-a")
     assert seen["b"] == ("discord", "chat-b")
+
+
+async def test_an_add_without_a_message_says_what_to_put_there() -> None:
+    """Seen live: asked for a daily gold-price push, the model sent add eight
+    times without `message`, reading it as "reminder text" when the job was a
+    task; the bare "message is required" never said what belongs there."""
+    tool, cron = _tool()
+    described = tool.parameters["properties"]["message"]["description"]
+    assert "Required for add" in described and "task" in described and "instruction" in described
+    reply = await tool.execute(action="add", cron_expr="0 12 * * *", tz="Asia/Shanghai")
+    assert "nothing was scheduled" in reply and "the instruction Raven runs" in reply
+    cron.add_job.assert_not_called()

@@ -49,6 +49,7 @@
       "deliver_files",
       "load_playbook",
       "plugin",
+      "raven_config",
       "run_subagent_dag",
       "cron",
       "browser_click",

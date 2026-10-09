@@ -32,6 +32,8 @@ leave the process should not be put on the wire in the first place.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from typing import Any
 
@@ -105,6 +107,44 @@ def redact(text: str) -> str:
     for _, pattern in _PATTERNS:
         text = pattern.sub(lambda m: m.group(1) + REPLACEMENT, text)
     return text
+
+
+def _home_config() -> re.Pattern[str]:
+    """A path into a dot-directory of the home, Raven's own home excepted.
+
+    Raven's home holds the default workspace and the channels' scratch
+    directories, where a coding turn reads its own source; rewriting that
+    source's ``token = ...`` lines breaks every edit built from them. Raven's
+    own keys are taken out by the exact-match pass in ``held_secrets`` instead.
+    """
+    from raven.home import raven_home
+
+    home_dir = os.path.expanduser("~").rstrip("/")
+    home = re.escape(home_dir)
+    own = raven_home()
+    skip = ""
+    if str(own.parent) == home_dir and own.name.startswith("."):
+        skip = r"(?!" + re.escape(own.name[1:]) + r"(?:/|\\|$|[\"'\s]))"
+    return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")/\." + skip + r"[A-Za-z0-9_-]")
+
+
+def redact_home_config_read(arguments: Any, text: str) -> str:
+    """``text`` redacted when the call that produced it reached into a dot-directory of the home.
+
+    Another program's settings (``~/.qwen/settings.json``, ``~/.openclaw``,
+    ``~/.aws``) hold its keys, and a turn diagnosing that program reads them
+    whole more often than it is told not to -- measured, a model asked to
+    connect an agent ran ``read_file`` on its settings and read its key back.
+    Only those calls: the patterns here would also rewrite placeholders in a
+    project's source and tests, which a coding turn then fails to edit.
+    """
+    if not text:
+        return text
+    try:
+        blob = arguments if isinstance(arguments, str) else json.dumps(arguments, ensure_ascii=False)
+    except (TypeError, ValueError):
+        blob = str(arguments)
+    return redact(text) if _home_config().search(blob) else text
 
 
 # A mapping key that names its value a secret. The structure carries the label

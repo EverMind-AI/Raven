@@ -118,6 +118,22 @@ def add_files_routes(
             headers={
                 "Content-Type": record.media_type,
                 "Content-Disposition": _attachment(record.name),
+                # `register` reuses the token when a conversation delivers the
+                # same path again, so a rewritten file keeps its URL -- and the
+                # delivery card points an <img> straight at this route. Without
+                # a directive the browser invents a freshness lifetime from
+                # Last-Modified (about a tenth of the file's age) and answers
+                # from its own copy without asking, so an image the agent
+                # replaced went on rendering as the one it replaced.
+                # `no-cache` would also close that window: `web.FileResponse`
+                # derives its validator from the file now at this path, so a
+                # conditional request after a rewrite does get the new bytes.
+                # `no-store` is chosen for the two reasons that do separate
+                # them: it matches `/file` and `/knowledge/file`, which serve
+                # the same kind of file, and it is the only directive that
+                # keeps an agent's output out of the reader's disk cache. This
+                # route has no size ceiling, unlike those two.
+                "Cache-Control": "no-store",
             },
         )
 
@@ -134,6 +150,10 @@ def add_files_routes(
             headers={
                 "Content-Type": "application/zip",
                 "Content-Disposition": _attachment("deliverables.zip"),
+                # Same reason as the single-file route: a token names a
+                # delivery, not a fixed set of files, and the members behind it
+                # can be rewritten between two downloads of the same URL.
+                "Cache-Control": "no-store",
             }
         )
         if request.method == "HEAD":

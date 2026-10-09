@@ -63,9 +63,11 @@ def env_value(name: str, *, env_file: Path | None = None) -> str | None:
 def host_config() -> dict:
     """The host raven's config, or an empty dict when there is none to read.
 
-    Read as JSON through the path paper's answer -- the host propagates its
-    ``RAVEN_HOME`` into a launcher process (builtin_agents does), so
-    ``raven_home()`` here is the host's home.
+    Read as JSON through the path paper's answer. ``raven_home()`` here is the
+    host's home because the host passes its ``RAVEN_HOME`` to a launcher when
+    it has one set, and with none set both normally resolve ``~/.raven``; a
+    ``RAVEN_HOME`` the login profile exports while the host has none sends the
+    launcher elsewhere.
     """
     try:
         return json.loads((raven_home() / CONFIG_FILENAME).read_text(encoding="utf-8"))
@@ -118,34 +120,15 @@ def apply_secret_slots(
             put(config, path, value)
 
 
-def inherit_llm(config: dict, host: dict) -> str:
-    """Take the host raven's whole LLM configuration; return what was taken.
+def _inherited_defaults(config: dict, host: dict) -> dict:
+    """The ``agents.defaults`` an agent would run on after taking the host's LLM.
 
-    Only reached when the product has no key of its own. The provider block
-    is copied wholesale rather than matched by name -- two providers spelled
-    the same can be two different endpoints. What is inherited is which
-    brains are reachable, which one is chosen, how a model name routes, and
-    the host's reasoning effort; deliberately not the rest of
-    ``agents.defaults``, which are the product's own operating limits. ``""``
-    when the host has no provider key to lend, which the caller treats as a
-    refusal to launch.
-
-    ``RAVEN_PARENT_MODEL`` / ``RAVEN_PARENT_REASONING_EFFORT`` are honoured
-    on this branch, the fork launchers' own riders: the trunk cli dispatcher
-    injects them per spawn so a cli-hosted child follows the parent session's
-    model. For a pooled acp product this is a LAUNCH-TIME capture -- the env
-    is read once, when the server starts, so a parent ``/model`` switch made
-    mid-session does not follow into an already-running child (the fork's
-    per-turn form was a cli-lane property; ledgered, D3). On the own-key
-    branch the riders are deliberately ignored, as they always were.
+    The agent's own defaults with the host's provider, model and reasoning
+    effort over them, then the dispatcher's riders, then a provider derived
+    from the model when none is named. Reads both arguments, changes neither.
     """
     providers = host.get("providers") or {}
-    if not any(isinstance(p, dict) and p.get("apiKey") for p in providers.values()):
-        return ""
-    for key in ("providers", "routing"):
-        if key in host:
-            config[key] = host[key]
-    defaults = config.setdefault("agents", {}).setdefault("defaults", {})
+    defaults = dict((config.get("agents") or {}).get("defaults") or {})
     host_defaults = (host.get("agents") or {}).get("defaults") or {}
     for key in ("provider", "model", "reasoningEffort"):
         if key in host_defaults:
@@ -170,10 +153,68 @@ def inherit_llm(config: dict, host: dict) -> str:
             # Failing that, the host's own choice beats launching with none.
             from raven.providers.registry import split_model_id
 
-            head = split_model_id(model)[0]
+            # A non-string model names no provider. It is left to ``Config``
+            # validation, whose ValueError host_can_lend_a_key catches; splitting
+            # it would raise an AttributeError that escapes that except clause.
+            head = split_model_id(model)[0] if isinstance(model, str) else ""
             defaults["provider"] = head if head in providers else host_defaults.get("provider", "")
+    return defaults
+
+
+def _credential_refusal(host: dict, defaults: dict) -> str | None:
+    """What the inherited binding is missing, or ``None`` when it can authenticate."""
+    from raven.config.schema import Config
+    from raven.providers.auth import MissingCredentialsError
+    from raven.providers.factory import check_provider_credentials
+
+    inherited = Config.model_validate(
+        {
+            "providers": host.get("providers") or {},
+            "agents": {
+                "defaults": {key: defaults[key] for key in ("provider", "model", "reasoningEffort") if key in defaults}
+            },
+        }
+    )
+    try:
+        check_provider_credentials(inherited)
+    except MissingCredentialsError as exc:
+        return exc.summary or "the inherited model has no usable credentials"
+    return None
+
+
+def inherit_llm(config: dict, host: dict) -> str:
+    """Take the host raven's whole LLM configuration; return what was taken.
+
+    Only reached when the product has no key of its own. The provider block
+    is copied wholesale rather than matched by name -- two providers spelled
+    the same can be two different endpoints. What is inherited is which
+    brains are reachable, which one is chosen, how a model name routes, and
+    the host's reasoning effort; deliberately not the rest of
+    ``agents.defaults``, which are the product's own operating limits. ``""``
+    when the inherited model binding has no usable credentials, which the
+    caller treats as a refusal to launch (:func:`inherit_refusal` says why).
+    Only the LLM settings are parsed for that check; the original sections
+    are copied so newer fields survive.
+
+    ``RAVEN_PARENT_MODEL`` / ``RAVEN_PARENT_REASONING_EFFORT`` are honoured
+    on this branch, the fork launchers' own riders: the trunk cli dispatcher
+    injects them per spawn so a cli-hosted child follows the parent session's
+    model. For a pooled acp product this is a LAUNCH-TIME capture -- the env
+    is read once, when the server starts, so a parent ``/model`` switch made
+    mid-session does not follow into an already-running child (the fork's
+    per-turn form was a cli-lane property; ledgered, D3). On the own-key
+    branch the riders are deliberately ignored, as they always were.
+    """
+    defaults = _inherited_defaults(config, host)
+    if _credential_refusal(host, defaults) is not None:
+        return ""
+    for key in ("providers", "routing"):
+        if key in host:
+            config[key] = host[key]
+    config.setdefault("agents", {}).setdefault("defaults", {}).update(defaults)
+    parent_model = os.environ.get("RAVEN_PARENT_MODEL", "").strip()
     if parent_protocol := os.environ.get("RAVEN_PARENT_PROTOCOL", "").strip():
-        provider = providers.get(defaults.get("provider") or "")
+        provider = (host.get("providers") or {}).get(defaults.get("provider") or "")
         if isinstance(provider, dict) and parent_model:
             overrides = provider.setdefault("modelProtocols", {})
             if isinstance(overrides, dict):
@@ -182,6 +223,18 @@ def inherit_llm(config: dict, host: dict) -> str:
         f"provider={defaults.get('provider')} model={defaults.get('model')} "
         f"reasoning_effort={defaults.get('reasoningEffort')}"
     )
+
+
+def inherit_refusal(config: dict, host: dict) -> str:
+    """Why :func:`inherit_llm` would refuse ``config`` and ``host``, or ``""`` when it would not.
+
+    The launchers' refusal message names the missing credential through
+    this call rather than through ``inherit_llm``'s return value: that value
+    being ``""`` on a refusal is a contract every launcher branches on,
+    scaffolded copies outside this repository included. Changes neither
+    argument.
+    """
+    return _credential_refusal(host, _inherited_defaults(config, host)) or ""
 
 
 _DENY = "deny"
@@ -262,11 +315,12 @@ def inherit_host_denials(config: dict, host: dict) -> list[str]:
 def inherit_plugin_opt_outs(config: dict, host: dict, *, own: Iterable[str] = ()) -> list[str]:
     """Carry the host's ``plugins.disabled`` into the product config.
 
-    A product engine scans the host's plugin roots -- the launcher inherits
-    ``RAVEN_HOME``, so ``<home>/plugins`` is the host's -- and the entry points
-    of the interpreter they share, but it reads its opt-outs only from the
-    rendered file. So a plugin the host operator switched off, most often one
-    that fails to load, came back in every product the host dispatched.
+    An agent's engine scans the host's plugin roots -- ``<home>/plugins`` is
+    the host's, since the launcher normally resolves the host's home -- and
+    the entry points of the interpreter they share, but it reads its opt-outs
+    only from the rendered file. So a plugin the host operator switched off,
+    most often one that fails to load, came back in every agent the host
+    dispatched.
 
     ``own`` names the product's own engine plugins, which never travel: the
     product is that plugin, and a host turning it off for its own agent is not
@@ -298,8 +352,9 @@ def inherit_media_image(config: dict, host: dict) -> dict:
     """Take the host raven's image-generation section, and keep following it.
 
     The section is resolved the way the host resolves it for its own
-    ``image_generate`` -- ``tools.media.image`` with the OpenRouter key borrowed
-    where it names none -- then written whole into the product config, and
+    ``image_generate`` -- ``tools.media.image`` with what it borrows, the named
+    provider's address and key or, for a keyless section calling OpenRouter, the
+    OpenRouter key -- then written whole into the agent's config, and
     ``selectionConfig`` is pointed at the host's config file so a model or
     quality changed in Settings later reaches the product's next generation
     without a re-render. A host with no image section leaves an empty section,
@@ -313,7 +368,7 @@ def inherit_media_image(config: dict, host: dict) -> dict:
 
     host_tools = host.get("tools") or {}
     host_image = (host_tools.get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
+    section = live_media_tool_config(host_image, host.get("providers"), "image")
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
     image["selectionConfig"] = str(raven_home() / CONFIG_FILENAME)
     media = config.setdefault("tools", {}).setdefault("media", {})

@@ -27,6 +27,11 @@ section moved: the corpus is built from each spec's own fields, so withdrawing
 a default withdraws the id it contributed. No wire form changed, which is the
 claim this file actually makes.
 
+And again when Gemini's default moved from ``gemini-2.5-flash``, which Google
+no longer serves to new projects, to ``gemini-3.8-flash``. One entry under
+``gemini`` gave way to the other, each sent exactly as stored; nothing else in
+any section moved, for the reason the Poe entry gives.
+
 So these tests are a snapshot, not a specification. They assert that today's
 answer for every provider and every shape of model id is byte-for-byte what it
 was before the refactor -- including the answers that are arguably wrong. A

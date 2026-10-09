@@ -274,6 +274,7 @@ export const settingsSource: SettingsSource = {
      state. What it taught the server's cache reaches the offer through
      `reloadProviders`, which the store runs once the read succeeds. */
   fetchModels: (slug, verify) => gateway().call('model.fetch_models', verify ? { slug, verify: true } : { slug }),
+  revealKey: (slug) => run(gateway().call('model.reveal_key', { slug }).then((r) => r.api_key ?? null)),
   reloadProviders: afterProviders,
   addModels: (slug, models) => run(gateway().call('model.add_models', { slug, models }).then(afterProviders)),
   setFields: (slug, fields) => run(

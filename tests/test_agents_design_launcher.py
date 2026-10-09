@@ -84,6 +84,7 @@ TRUNK_HELD_OUT = {
     "hub",
     "load_playbook",
     "plugin",
+    "raven_config",
     "run_subagent_dag",
 }
 
@@ -357,6 +358,12 @@ def test_no_host_llm_key_refuses_even_with_own_key(grounded, tmp_path):
         grounded.render_config(RUN_PY.parent / "config.json")
 
 
+def test_unconfigured_host_model_refuses_even_with_another_provider_key(grounded, tmp_path):
+    _host_config(tmp_path, {"providers": {"openrouter": {"apiKey": "sk-host-or"}}})
+    with pytest.raises(SystemExit, match=r"host Raven settings before starting Design \(.+\)"):
+        grounded.render_config(RUN_PY.parent / "config.json")
+
+
 def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path):
     _host_config(
         tmp_path,
@@ -410,9 +417,12 @@ def test_image_inherits_custom_host_settings(grounded, tmp_path):
         {
             "tools": {"media": {"image": {"apiKey": "sk-foreign", "apiBase": "https://images.example/v1"}}},
             "providers": {"openrouter": {"apiKey": "sk-host-or"}},
+            "agents": {"defaults": {"provider": "openrouter", "model": "openrouter/openai/gpt-5.6-sol"}},
         },
     )
     data = _render(grounded)
+    assert data["agents"]["defaults"]["provider"] == "openrouter"
+    assert data["agents"]["defaults"]["model"] == "openrouter/openai/gpt-5.6-sol"
     image = data["tools"]["media"]["image"]
     assert image["apiKey"] == "sk-foreign"
     assert image["apiBase"] == "https://images.example/v1"

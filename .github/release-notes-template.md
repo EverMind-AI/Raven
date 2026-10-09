@@ -18,8 +18,9 @@ New install on native Windows, in PowerShell:
 irm https://raven.evermind.ai/install.ps1 | iex
 ```
 
-Windows PowerShell 5.1 (the version built into Windows) rejects that URL with
-`Permanent Redirect`; use the direct one instead:
+Windows PowerShell 5.1 (the version built into Windows) cannot follow that URL's
+redirect and stops with `(308) Permanent Redirect`. If you see that error, use the
+direct one instead:
 
 ```powershell
 irm https://raw.githubusercontent.com/EverMind-AI/Raven/refs/heads/main/install.ps1 | iex

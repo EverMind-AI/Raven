@@ -845,6 +845,167 @@ async def test_login_returns_once_the_bridge_reports_a_paired_session(tmp_path, 
     assert proc.terminated is True
 
 
+async def test_unscanned_pairing_codes_stop_the_channel_and_its_bridge(tmp_path, monkeypatch):
+    """Nobody scanning means nobody will: once the bridge gives up issuing codes
+    the adapter stops, so the page offers a retry instead of the gateway printing
+    a fresh code every twenty seconds forever."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+
+    task = asyncio.create_task(ch.start())
+    try:
+        await _wait_for(lambda: ch._bridge_up)
+        await fake.emit({"type": "qr", "qr": "2@abc"})
+        await _wait_for(lambda: ch.pending_qr == "2@abc")
+
+        await fake.emit({"type": "status", "status": "pairing_expired"})
+        await asyncio.wait_for(task, timeout=5)
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        await fake.stop()
+
+    assert ch.is_running is False
+    assert ch.connected is False
+    assert ch.pending_qr is None
+    assert proc.terminated is True
+
+
+async def test_login_fails_when_the_pairing_codes_expire(tmp_path, monkeypatch):
+    """The wizard's retry/skip menu only appears once login returns."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+
+    login = asyncio.create_task(ch.login())
+    try:
+        await _wait_for(lambda: bool(fake.clients))
+        await fake.emit({"type": "status", "status": "pairing_expired"})
+        assert await asyncio.wait_for(login, timeout=5) is False
+    finally:
+        login.cancel()
+        with suppress(asyncio.CancelledError):
+            await login
+        await fake.stop()
+
+    assert proc.terminated is True
+
+
+async def test_cancelling_the_channel_task_does_not_orphan_its_bridge(tmp_path, monkeypatch):
+    """A cancel with no stop() first must still take down the bridge we spawned;
+    an orphaned one keeps pairing and printing codes into the terminal."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+
+    task = asyncio.create_task(ch.start())
+    try:
+        await _wait_for(lambda: ch._bridge_up)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+    finally:
+        await fake.stop()
+
+    assert proc.terminated is True
+
+
+async def test_cancelling_during_the_reconnect_wait_does_not_orphan_its_bridge(tmp_path, monkeypatch):
+    """The five-second wait after a dropped bridge socket is outside the read
+    loop's own cancel handling, so it is the one place a cancel used to skip the
+    teardown."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+    reconnecting = asyncio.Event()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    from raven.channels.adapters.whatsapp import channel as wa_channel
+
+    real_sleep = asyncio.sleep
+
+    async def _sleep(seconds, *args, **kwargs):
+        if seconds == wa_channel._RECONNECT_SECONDS:
+            reconnecting.set()
+        await real_sleep(seconds, *args, **kwargs)
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+    monkeypatch.setattr("raven.channels.adapters.whatsapp.channel.asyncio.sleep", _sleep)
+
+    task = asyncio.create_task(ch.start())
+    try:
+        await _wait_for(lambda: ch._bridge_up)
+        for ws in fake.clients:
+            await ws.close()
+        await asyncio.wait_for(reconnecting.wait(), timeout=5)
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+    finally:
+        await fake.stop()
+
+    assert proc.terminated is True
+
+
+async def test_a_restart_after_expiry_pairs_again(tmp_path, monkeypatch):
+    """An expired run leaves the adapter stopped, not wedged: starting it again
+    reconnects and pairs rather than inheriting the stop."""
+    port = _free_port()
+    fake = _FakeBridge()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        if fake._server is None:
+            await fake.start(spawn_port)
+        return _FakeProcess()
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+
+    first = asyncio.create_task(ch.start())
+    await _wait_for(lambda: ch._bridge_up)
+    await fake.emit({"type": "status", "status": "pairing_expired"})
+    await asyncio.wait_for(first, timeout=5)
+    fake.clients.clear()
+
+    second = asyncio.create_task(ch.start())
+    try:
+        await _wait_for(lambda: bool(fake.clients))
+        await fake.emit({"type": "status", "status": "connected"})
+        await _wait_for(lambda: ch.connected)
+        assert ch.is_running is True
+    finally:
+        await _stop_adapter(ch, second)
+        await fake.stop()
+
+
 # ---------------------------------------------------------------------------
 # bridge process helpers and the adapter's branches around them
 # ---------------------------------------------------------------------------

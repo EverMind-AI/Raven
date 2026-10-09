@@ -33,28 +33,28 @@ import type {
 
 export type SectionId =
   | 'general' | 'usage' | 'provider' | 'model' | 'skills' | 'tools' | 'plugins'
-  | 'channels' | 'cron' | 'memory' | 'archive' | 'about'
+  | 'cron' | 'memory' | 'archive' | 'about'
 
 /* The nav's order, which is also the reading: what the dialog is about first
    (the page itself, what it cost), then what it is made of (the accounts, the
-   models each role takes, skills, tools, plugins), then the three surfaces a
-   reader sets up once and leaves alone, then the record and the version. */
+   models each role takes, skills, tools, plugins), then the two surfaces a
+   reader sets up once and leaves alone, then the record and the version.
+   Channels were a third and are a page on the rail now (state/pages.ts). */
 export const SECTIONS: SectionId[] = [
   'general', 'usage', 'provider', 'model', 'skills', 'tools', 'plugins',
-  'channels', 'cron', 'memory', 'archive', 'about',
+  'cron', 'memory', 'archive', 'about',
 ]
 
-/* The three sections another domain's island fills, as the box it fills.
+/* The two sections another domain's island fills, as the box it fills.
  *
- * Schedules, channels and memory were module pages of their own and are
- * sections here now. Their islands did not move with them: each still mounts
+ * Schedules and memory were module pages of their own and are sections here
+ * now. Their islands did not move with them: each still mounts
  * into a box of its own (features/<domain>/manifest.ts's host, rendered by
  * src/App.tsx inside the dialog), because a React root inside this island's
  * tree would be unmounted the moment the reader picked another section. So
- * this island draws nothing for these three -- the pane beside it is theirs --
+ * this island draws nothing for these two -- the pane beside it is theirs --
  * and the stylesheet shows whichever box the open section names. */
 export const HOSTED: Partial<Record<SectionId, string>> = {
-  channels: 'connectionsBody',
   cron: 'cronBody',
   memory: 'memoryBody',
 }
@@ -478,14 +478,18 @@ export function sheetPatch(patch: Partial<Sheet>): void {
    on a later `model.options`, so the page polls that read until it does or the
    code expires. */
 export async function oauthStart(slug: string): Promise<void> {
-  oauthStop()
   let r
   try {
     r = await source().oauthLogin(slug)
   } catch {
+    /* A code already out stays watched: it is still on screen, and still the
+       one the reader will type. */
     return
   }
-  const until = Date.now() + Math.max(30, r.expires_in) * 1000
+  oauthStop()
+  /* `expires_in` is the time the code has left, and a second start can be
+     answered with seconds: watching any longer draws a dead code as live. */
+  const until = Date.now() + r.expires_in * 1000
   set({ oauth: { slug, uri: r.verification_uri, code: r.user_code, until, expired: false } })
   oauthTimer = setInterval(() => { void oauthPoll() }, OAUTH_POLL_MS)
 }
@@ -503,6 +507,10 @@ async function oauthPoll(): Promise<void> {
        slug that is now connected, it silently redrew itself for the next
        unconnected vendor. */
     set({ oauth: null, provAdd: get().provAdd === o.slug ? null : get().provAdd })
+    /* The one provider write that does not go through this store, so no
+       write's reload carries it to the pickers: onboarding's role slots read
+       the provider as signed out and said it had no model added. */
+    reloadOffer()
     return
   }
   if (Date.now() > o.until) { oauthStop(); set({ oauth: { ...o, expired: true } }) }

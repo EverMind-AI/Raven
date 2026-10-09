@@ -1,21 +1,22 @@
 /* The two-pane frame a settings section is drawn in: a list on the left, and
  * what the picked row is on the right.
  *
- * Three domains draw one -- channels, schedules and memory -- and each used to
- * be a module page of its own, where the list ran the width of the window and
+ * Two domains draw one -- schedules and memory -- and each used to be a
+ * module page of its own, where the list ran the width of the window and
  * the detail was a place you navigated TO: a modal over the list, a second
  * screen behind a back button, a drawer sliding in from the right. Inside the
  * settings dialog none of those fit: the dialog is already a layer, and a
  * second one over it is a layer over a layer. So the detail stands beside the
  * list instead, which is also what makes the two readable at once -- picking
- * another channel is a click rather than a close and a reopen.
+ * another schedule is a click rather than a close and a reopen. (Channels were
+ * a third, and left the dialog for a page of their own, drawn as cards.)
  *
- * Here rather than in any of the three because all three draw the same frame,
+ * Here rather than in either domain because both draw the same frame,
  * and a class name is shared state: these are `two-pane*`, this file owns them,
  * and the rules are in src/styles/page.css beside the dialog they sit in
  * (scripts/check-class-namespace.mjs reads the ownership off this file's name).
- * What a row HOLDS is still the domain's -- a channel has a logo and a switch,
- * a schedule has a next-run time, a memory has a date -- so the row below takes
+ * What a row HOLDS is still the domain's -- a schedule has a next-run time and
+ * a switch, a memory has a date -- so the row below takes
  * those as children and decides only the shape.
  */
 import { t } from '../i18n/t'
@@ -79,15 +80,15 @@ export function TwoPaneList({ children }: { children: ReactNode }): JSX.Element 
 
 /* The list before its rows are in.
  *
- * All three sections drawn in this frame answered the wait with nothing at
- * all -- `!loaded && !rows.length ? null` in channels and schedules, a line of
- * grey text in memory -- so opening one of them showed an empty column beside
- * an empty pane, which is what "there are no channels" looks like. The rows
+ * Every section drawn in this frame used to answer the wait with nothing at
+ * all -- `!loaded && !rows.length ? null` in schedules, a line of grey text in
+ * memory -- so opening one of them showed an empty column beside an empty
+ * pane, which is what "there are no schedules" looks like. The rows
  * this becomes are two lines and a trailing control, so that is what waits
  * here, at the row's own height.
  *
- * Here rather than in each of the three: the frame owns `two-pane*` (see this
- * file's header), and a domain drawing its own bars would be a fourth name for
+ * Here rather than in each domain: the frame owns `two-pane*` (see this
+ * file's header), and a domain drawing its own bars would be a third name for
  * one shape.
  */
 export function TwoPaneWait({ rows = 7 }: { rows?: number }): JSX.Element {

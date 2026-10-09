@@ -6,10 +6,38 @@ declaration.
 
 from __future__ import annotations
 
+import codecs
+import locale
+import os
+
+
+def _is_utf8_codec(encoding: str) -> bool:
+    """Whether ``encoding`` names the UTF-8 codec. Compared by codec rather than
+    by name: Windows calls UTF-8 ``cp65001`` when it is the system code page,
+    and every default open() there already decodes UTF-8."""
+    return codecs.lookup(encoding).name == "utf-8"
+
+
+# The suite must run with UTF-8 as the default text encoding. Without an
+# explicit encoding=, text I/O follows the locale code page, so a Windows
+# checkout under GBK decodes and encodes cp936 wherever a test forgot
+# encoding= -- the mechanism behind
+# test_no_workflow_step_enters_the_removed_page_directory. This repo documents
+# `uv run pytest` in AGENTS.md, and that caller does not read the Makefile, so
+# Makefile exports alone cannot close the gap. Any conftest-loaded run on a
+# non-UTF-8 interpreter stops here, with the fix on the message.
+if not _is_utf8_codec(locale.getpreferredencoding(False)):
+    raise RuntimeError(
+        "raven's tests must run in UTF-8 mode (set 'PYTHONUTF8=1' or add "
+        "'-X utf8' to the python call) so text I/O without an explicit encoding= decodes "
+        "consistently on every platform. The current interpreter's preferred "
+        "encoding is "
+        f"{locale.getpreferredencoding(False)!r}."
+    )
+
 import contextlib
 import fnmatch
 import functools
-import os
 import shutil
 import tempfile
 import threading
@@ -321,6 +349,20 @@ def _spent(started: _Clocks, now: _Clocks) -> tuple[float, float, float]:
         queued += waited - started.queues.get(tid, 0)
     queued_s = max(0.0, queued / 1e9)
     return wall, wall - cpu - queued_s, queued_s
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
+    """Let a checkpoint warm-up the test started finish before its fixtures go.
+
+    A turn stages its working directory into the shadow repo on a thread of its
+    own (``CheckpointService.warm``), and a fixture removing that directory
+    under a git still writing into it fails the cleanup. Ahead of the fixture
+    finalizers, which run in the default teardown after this one.
+    """
+    for thread in threading.enumerate():
+        if thread.name == "raven-stage":
+            thread.join(30)
 
 
 @pytest.hookimpl(hookwrapper=True)

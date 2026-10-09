@@ -7,8 +7,10 @@ so the next product inherits tested parts rather than a copy of run.py.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -74,6 +76,377 @@ def test_inherit_llm_takes_the_hosts_brains_not_its_limits():
 
 def test_inherit_llm_declines_without_a_host_key():
     assert render.inherit_llm({}, {"providers": {"open": {"baseUrl": "u"}}}) == ""
+
+
+@pytest.fixture()
+def oauth_host(tmp_path, monkeypatch):
+    home = tmp_path / "host"
+    token_dir = home / "oauth" / "chatgpt"
+    token_dir.mkdir(parents=True)
+    monkeypatch.setenv("RAVEN_HOME", str(home))
+    monkeypatch.delenv("CHATGPT_TOKEN_DIR", raising=False)
+    monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+    for name in ("MODEL", "PROVIDER", "PROTOCOL", "REASONING_EFFORT"):
+        monkeypatch.delenv(f"RAVEN_PARENT_{name}", raising=False)
+    token = token_dir / "auth.json"
+    token.write_text(json.dumps({"refresh_token": "synthetic-refresh-token"}), encoding="utf-8")
+    host = {
+        "providers": {
+            "openai_codex": {
+                "models": ["openai-codex/gpt-5.6-sol"],
+                "futureSetting": {"opaque": True},
+            }
+        },
+        "agents": {
+            "defaults": {
+                "provider": "openai_codex",
+                "model": "openai-codex/gpt-5.6-sol",
+                "reasoningEffort": "low",
+                "maxToolIterations": 40,
+            }
+        },
+        "routing": {"rules": []},
+        "tools": {"web": {"providers": {"serper": {"apiKey": "synthetic-search-key"}}}},
+    }
+    return host, token
+
+
+@pytest.mark.parametrize("name", ["openai_codex", "openaiCodex", "openai-codex"])
+@pytest.mark.parametrize(
+    "credentials",
+    [
+        {"access_token": "synthetic-access-token"},
+        {"refresh_token": "synthetic-refresh-token"},
+        {"access_token": "expired-access-token", "refresh_token": "synthetic-refresh-token", "expires_at": 0},
+    ],
+)
+def test_inherit_llm_accepts_stored_oauth_credentials(oauth_host, name, credentials):
+    host, token = oauth_host
+    token.write_text(json.dumps(credentials), encoding="utf-8")
+    host["providers"][name] = host["providers"].pop("openai_codex")
+    host["agents"]["defaults"]["provider"] = name
+    config = {"agents": {"defaults": {"maxToolIterations": 20}}}
+
+    taken = render.inherit_llm(config, host)
+
+    assert taken
+    assert config["providers"] == host["providers"]
+    assert config["routing"] == host["routing"]
+    assert config["agents"]["defaults"] == {
+        "provider": name,
+        "model": "openai-codex/gpt-5.6-sol",
+        "reasoningEffort": "low",
+        "maxToolIterations": 20,
+    }
+    assert "synthetic-refresh-token" not in json.dumps(config)
+    assert "synthetic-access-token" not in json.dumps(config)
+
+
+@pytest.mark.parametrize("provider", ["openai_codex", "auto", None])
+def test_inherit_llm_accepts_oauth_without_an_explicit_provider_section(oauth_host, provider):
+    host, _ = oauth_host
+    host["providers"] = {}
+    if provider is None:
+        host["agents"]["defaults"].pop("provider")
+    else:
+        host["agents"]["defaults"]["provider"] = provider
+
+    config = {}
+    assert render.inherit_llm(config, host)
+    assert config["agents"]["defaults"]["model"] == "openai-codex/gpt-5.6-sol"
+
+
+@pytest.mark.parametrize("contents", [None, "{}", '{"device_code_requested_at": 1}', "invalid json"])
+@pytest.mark.parametrize("other_key", [False, True])
+def test_inherit_llm_declines_unusable_oauth_even_with_another_provider_key(oauth_host, contents, other_key):
+    host, token = oauth_host
+    if contents is None:
+        token.unlink()
+    else:
+        token.write_text(contents, encoding="utf-8")
+    if other_key:
+        host["providers"]["openrouter"] = {"apiKey": "synthetic-other-key"}
+    config = {"agents": {"defaults": {"maxToolIterations": 20}}}
+
+    assert render.inherit_llm(config, host) == ""
+    assert config == {"agents": {"defaults": {"maxToolIterations": 20}}}
+
+
+@pytest.mark.parametrize("parent_key", ["", "synthetic-parent-key"])
+def test_inherit_llm_checks_the_parent_binding_instead_of_the_host_default(oauth_host, monkeypatch, parent_key):
+    host, _ = oauth_host
+    host["providers"]["openrouter"] = {"apiKey": parent_key}
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "openrouter/openai/gpt-5.6-sol")
+    monkeypatch.setenv("RAVEN_PARENT_PROVIDER", "openrouter")
+    config = {}
+
+    taken = render.inherit_llm(config, host)
+
+    assert bool(taken) == bool(parent_key)
+    if parent_key:
+        assert config["agents"]["defaults"]["provider"] == "openrouter"
+        assert config["agents"]["defaults"]["model"] == "openrouter/openai/gpt-5.6-sol"
+    else:
+        assert config == {}
+
+
+@pytest.mark.parametrize(
+    "provider, model, section",
+    [
+        ("openrouter", "openrouter/openai/gpt-5.6-sol", {"apiKey": "synthetic-key"}),
+        ("openrouter", "openrouter/openai/gpt-5.6-sol", {"api_key": "synthetic-key"}),
+        ("openrouter", "openrouter/openai/gpt-5.6-sol", {"endpoints": [{"label": "primary", "apiKey": "k"}]}),
+        ("gemini", "gemini/gemini-2.5-pro", {"apiKeyList": ["synthetic-key"]}),
+        ("ollama_chat", "ollama_chat/llama3", {"apiBase": "http://localhost:11434"}),
+    ],
+)
+def test_inherit_llm_uses_runtime_credential_rules(provider, model, section):
+    host = {
+        "providers": {provider: section},
+        "agents": {"defaults": {"provider": provider, "model": model}},
+    }
+    config = {}
+
+    assert render.inherit_llm(config, host)
+    assert config["providers"] == host["providers"]
+    assert config["agents"]["defaults"]["model"] == model
+
+
+@pytest.fixture()
+def oauth_launcher(oauth_host, monkeypatch, product):
+    import importlib.util
+
+    host, _ = oauth_host
+    home = Path(os.environ["RAVEN_HOME"])
+    (home / "config.json").write_text(json.dumps(host), encoding="utf-8")
+    path = Path(render.__file__).resolve().parents[2] / "agents" / product / "run.py"
+    spec = importlib.util.spec_from_file_location(f"oauth_{product.replace('-', '_')}", path)
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+    monkeypatch.setattr(launcher, "env_value", lambda name: None)
+    monkeypatch.setattr(launcher, "log", lambda message: None)
+    if product == "raven-ppt":
+        monkeypatch.setattr(launcher, "resolve_context_window", lambda *args: None)
+
+    def capture_rendered(config, root, **_kwargs):
+        target = root / ".config.rendered.json"
+        target.write_text(json.dumps(config), encoding="utf-8")
+        return target
+
+    monkeypatch.setattr(render, "write_rendered", capture_rendered)
+    return launcher
+
+
+@pytest.mark.parametrize("product", ["raven-code", "raven-design", "raven-oncall", "raven-research", "raven-ppt"])
+@pytest.mark.parametrize("custom_token_dir", [False, True])
+def test_launchers_inherit_oauth_and_resolve_host_credentials(
+    oauth_host, oauth_launcher, tmp_path, monkeypatch, product, custom_token_dir
+):
+    from raven.config.loader import load_config
+    from raven.providers.auth import credential_files
+    from raven.providers.factory import check_provider_credentials
+
+    host, token = oauth_host
+    if custom_token_dir:
+        custom = tmp_path / "custom-auth"
+        custom.mkdir()
+        relocated = custom / "account.json"
+        token.replace(relocated)
+        token = relocated
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(custom))
+        monkeypatch.setenv("CHATGPT_AUTH_FILE", "account.json")
+    home = Path(os.environ["RAVEN_HOME"])
+    if product == "raven-code":
+        rendered = oauth_launcher.render_acp_config(oauth_launcher.DEFAULT_CONFIG)
+    else:
+        rendered = oauth_launcher.render_config(oauth_launcher.DEFAULT_CONFIG)
+    data = json.loads(rendered.read_text(encoding="utf-8"))
+
+    assert data["providers"] == host["providers"]
+    assert data["routing"] == host["routing"]
+    assert data["agents"]["defaults"]["provider"] == "openai_codex"
+    assert data["agents"]["defaults"]["model"] == "openai-codex/gpt-5.6-sol"
+    assert data["agents"]["defaults"]["reasoningEffort"] == "low"
+    assert "synthetic-refresh-token" not in rendered.read_text(encoding="utf-8")
+    assert rendered.parent != home
+    loaded = load_config(rendered)
+    check_provider_credentials(loaded)
+    assert credential_files("openai_codex") == [token]
+
+
+@pytest.mark.parametrize("product", ["raven-code", "raven-oncall", "raven-research", "raven-ppt"])
+def test_launchers_own_keys_do_not_require_host_oauth(oauth_host, oauth_launcher, monkeypatch, product):
+    from raven.config.loader import load_config
+    from raven.providers.factory import check_provider_credentials
+
+    _, token = oauth_host
+    token.unlink()
+    own_key = oauth_launcher.REQUIRED_SECRETS[0]
+    monkeypatch.setattr(oauth_launcher, "env_value", lambda name: "synthetic-own-key" if name == own_key else None)
+
+    def refuse_inheritance(*_args):
+        raise AssertionError("an own-key launcher must not consult the host model")
+
+    monkeypatch.setattr(render, "inherit_llm", refuse_inheritance)
+    if product == "raven-code":
+        rendered = oauth_launcher.render_acp_config(oauth_launcher.DEFAULT_CONFIG)
+    else:
+        rendered = oauth_launcher.render_config(oauth_launcher.DEFAULT_CONFIG)
+    loaded = load_config(rendered)
+
+    assert loaded.get_provider_name() != "openai_codex"
+    assert loaded.get_api_key() == "synthetic-own-key"
+    check_provider_credentials(loaded)
+
+
+@pytest.mark.parametrize(
+    "variant, reason",
+    [
+        ("signed-in", ""),
+        ("signed-out", "raven provider login openai-codex"),
+        ("signed-out with an OpenRouter key", "raven provider login openai-codex"),
+        ("API key", ""),
+    ],
+)
+def test_inherit_refusal_names_what_inherit_llm_refuses_on(oauth_host, variant, reason):
+    host, token = oauth_host
+    if variant.startswith("signed-out"):
+        token.unlink()
+    if variant.endswith("OpenRouter key"):
+        host["providers"]["openrouter"] = {"apiKey": "synthetic-other-key"}
+    if variant == "API key":
+        host["providers"] = {"openrouter": {"apiKey": "synthetic-key"}}
+        host["agents"]["defaults"].update(provider="openrouter", model="openrouter/openai/gpt-5.6-sol")
+    config = {"agents": {"defaults": {"maxToolIterations": 20}}}
+
+    refusal = render.inherit_refusal(copy.deepcopy(config), copy.deepcopy(host))
+    taken = render.inherit_llm(copy.deepcopy(config), copy.deepcopy(host))
+
+    assert bool(refusal) == (taken == "")
+    if reason:
+        assert reason in refusal
+    else:
+        assert refusal == ""
+
+
+@pytest.mark.parametrize("name", ["openaiCodex", "openai-codex"])
+def test_inherit_refusal_agrees_with_inherit_llm_on_an_aliased_section(oauth_host, name):
+    host, _ = oauth_host
+    host["providers"][name] = host["providers"].pop("openai_codex")
+    host["agents"]["defaults"]["provider"] = name
+
+    assert render.inherit_refusal({}, copy.deepcopy(host)) == ""
+    assert render.inherit_llm({}, copy.deepcopy(host))
+
+
+def test_inherit_refusal_changes_neither_argument(oauth_host, monkeypatch):
+    host, _ = oauth_host
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "openai-codex/gpt-5.6-sol")
+    monkeypatch.setenv("RAVEN_PARENT_PROVIDER", "openai_codex")
+    monkeypatch.setenv("RAVEN_PARENT_PROTOCOL", "responses")
+    config = {"agents": {"defaults": {"maxToolIterations": 20}}}
+    config_before, host_before = copy.deepcopy(config), copy.deepcopy(host)
+
+    assert render.inherit_refusal(config, host) == ""
+    assert (config, host) == (config_before, host_before)
+    render.inherit_llm(config, host)
+    assert "modelProtocols" in host["providers"]["openai_codex"], "the write inherit_refusal must not make"
+
+
+def test_inherit_refusal_explains_the_riders_binding_not_the_host_default(oauth_host, monkeypatch):
+    host, _ = oauth_host
+    host["providers"]["openrouter"] = {"apiKey": ""}
+    monkeypatch.setenv("RAVEN_PARENT_MODEL", "openrouter/openai/gpt-5.6-sol")
+    monkeypatch.setenv("RAVEN_PARENT_PROVIDER", "openrouter")
+
+    assert render.inherit_llm({}, copy.deepcopy(host)) == ""
+    assert "raven provider set openrouter" in render.inherit_refusal({}, host)
+
+
+def test_inherit_refusal_reads_the_config_when_the_host_names_no_provider(oauth_host):
+    host, _ = oauth_host
+    del host["agents"]["defaults"]["provider"]
+    configured = {"agents": {"defaults": {"provider": "openrouter"}}}
+
+    assert render.inherit_refusal({}, copy.deepcopy(host)) == ""
+    assert render.inherit_llm(copy.deepcopy(configured), copy.deepcopy(host)) == ""
+    assert "raven provider set openrouter" in render.inherit_refusal(configured, host)
+
+
+def test_an_empty_credential_summary_still_refuses_with_a_reason(oauth_host, monkeypatch):
+    from raven.providers import factory
+    from raven.providers.auth import MissingCredentialsError
+
+    def refuse(_config, model=None):
+        raise MissingCredentialsError("")
+
+    monkeypatch.setattr(factory, "check_provider_credentials", refuse)
+    host, _ = oauth_host
+
+    assert render.inherit_llm({}, copy.deepcopy(host)) == ""
+    assert render.inherit_refusal({}, host) == "the inherited model has no usable credentials"
+
+
+def test_a_host_with_no_providers_gets_a_one_line_reason(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    for name in ("MODEL", "PROVIDER", "PROTOCOL", "REASONING_EFFORT"):
+        monkeypatch.delenv(f"RAVEN_PARENT_{name}", raising=False)
+
+    reason = render.inherit_refusal({}, {})
+
+    assert reason
+    assert "\n" not in reason, "raven agents new reads a launcher's refusal one line at a time"
+
+
+def test_inherit_llm_refuses_a_non_string_model_through_config_validation(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    host = {"providers": {"openrouter": {"apiKey": "synthetic-key"}}, "agents": {"defaults": {"model": 42}}}
+
+    with pytest.raises(ValueError):
+        render.inherit_llm({}, host)
+
+
+@pytest.mark.parametrize("product", ["raven-code", "raven-design", "raven-oncall", "raven-research", "raven-ppt"])
+def test_launchers_name_why_they_cannot_inherit(oauth_host, oauth_launcher, product):
+    _, token = oauth_host
+    token.unlink()
+
+    with pytest.raises(SystemExit) as refused:
+        if product == "raven-code":
+            oauth_launcher.render_acp_config(oauth_launcher.DEFAULT_CONFIG)
+        else:
+            oauth_launcher.render_config(oauth_launcher.DEFAULT_CONFIG)
+
+    message = str(refused.value)
+    assert "raven provider login openai-codex" in message
+    if product == "raven-design":
+        assert re.search(r"before starting Design \(.+\)$", message), message
+    else:
+        assert f"{oauth_launcher.REQUIRED_SECRETS[0]} is not set" in message
+        assert re.search(r"cannot be inherited \(.+\); put the key in", message), message
+
+
+@pytest.mark.parametrize("product", ["raven-code", "raven-design", "raven-oncall", "raven-research", "raven-ppt"])
+def test_launchers_still_refuse_in_words_on_a_raven_without_inherit_refusal(
+    oauth_host, oauth_launcher, monkeypatch, product
+):
+    _, token = oauth_host
+    token.unlink()
+    monkeypatch.delattr(render, "inherit_refusal")
+
+    with pytest.raises(SystemExit) as refused:
+        if product == "raven-code":
+            oauth_launcher.render_acp_config(oauth_launcher.DEFAULT_CONFIG)
+        else:
+            oauth_launcher.render_config(oauth_launcher.DEFAULT_CONFIG)
+
+    message = str(refused.value)
+    if product == "raven-design":
+        assert message.endswith("before starting Design")
+    else:
+        assert (
+            f"{oauth_launcher.REQUIRED_SECRETS[0]} is not set and the host's model cannot be inherited; put" in message
+        )
 
 
 def test_inherit_llm_honours_the_parent_riders_on_the_inheritance_branch(monkeypatch):

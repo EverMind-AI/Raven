@@ -27,7 +27,8 @@ import aiohttp
 from loguru import logger
 
 from raven.agent.subagent import github_copilot, kimi_code
-from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend
+from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, lent_key_env
+from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.node_runtime import NodeTooOld, node_too_old
@@ -400,6 +401,7 @@ acp"; commander, which Kimi Code's CLI is built on, answers an unknown
 subcommand "error: unknown command 'acp'", and click "No such command 'acp'"."""
 
 _PROMPT_TIMEOUT = re.compile(r"session/prompt timed out after")
+_EMPTY_TURN = re.compile(r"ended its turn with no content")
 
 
 def _silent_detail(said: str, run: str) -> str:
@@ -417,9 +419,9 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
     An exit carries the agent's own last words on stderr; a flag it does not know
     means it predates the release its preset launches; a Node.js agent that quit
     on a Node.js older than its package declares was run on the wrong one
-    (`_stale_node`). A timed-out prompt carries nothing, and is named only for an
-    agent measured to go silent while it retries (`presets.DIAGNOSE_HINTS`), with
-    the command that makes it say why.
+    (`_stale_node`). A timed-out prompt or an empty turn carries nothing, and is
+    named only for an agent measured to go silent that way
+    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why.
 
     Runs ``node --version`` for a Node.js agent that quit, so its callers keep it
     off the event loop.
@@ -447,6 +449,12 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
         run = diagnose_hint_for(cfg)
         if run:
             return _silent_detail(shown, run), Remedy("silent", run)
+    if _EMPTY_TURN.search(shown) and (run := diagnose_hint_for(cfg)):
+        return (
+            f"{shown}: it ended the turn without a reply, which is how it relays a model call its provider "
+            f"refused (a key, a model, a quota), and its stderr warnings are usually unrelated; run `{run}`, "
+            f"which prints the provider's answer"
+        )[:_DETAIL_CAP], Remedy("silent", run)
     if getattr(cfg, "preset", None) in {"grok", "github_copilot"} and "initialize timed out" in shown:
         return (f"its ACP server did not start; connect again. It said: {shown}")[:_DETAIL_CAP], None
     return None
@@ -951,8 +959,19 @@ async def ping_agent(cfg: Any) -> PingResult:
                 ready_timeout_ms=ready_ms,
                 pool=pool,
             )
+            # The row's own model, the way every dispatch of it runs: without
+            # it the ping asked the agent's default, so a row pinned to another
+            # model -- the fix for a default its provider refuses -- was judged
+            # by the model it was pinned away from.
+            pinned = optional_keyword(backend, "session_model", getattr(cfg, "model", None) or None)
             reply = await asyncio.wait_for(
-                backend.run(PROBE_PROMPT, task_id=f"ping-{uuid.uuid4().hex[:8]}", workspace=Path(tmp), executor=None),
+                backend.run(
+                    PROBE_PROMPT,
+                    task_id=f"ping-{uuid.uuid4().hex[:8]}",
+                    workspace=Path(tmp),
+                    executor=None,
+                    **pinned,
+                ),
                 timeout=wait_s,
             )
     except asyncio.TimeoutError:
@@ -1054,6 +1073,17 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     return TestResult(cfg.name, source, "acp", answered.ok, detail, reply, elapsed(), answered.remedy)
 
 
+def _launch_kw(cfg: Any) -> dict[str, Any]:
+    """What a capability probe adds to start ``cfg`` the way the spawn path does.
+
+    Measured without the keys a row borrows from Raven, an agent that answers a
+    real task on Raven's key reports "Authentication required" and its row reads
+    as broken. Nothing for a row that borrows none, so that call is unchanged.
+    """
+    lent = lent_key_env(cfg)
+    return {"env": {**lent, **(getattr(cfg, "env", None) or {})}} if lent else {}
+
+
 async def record_capabilities(cfg: Any) -> Any:
     """Measure an acp entry's capabilities live and write them down; the snapshot.
 
@@ -1067,7 +1097,7 @@ async def record_capabilities(cfg: Any) -> Any:
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
-    snapshot = await verify_agent(cfg)
+    snapshot = await verify_agent(cfg, **_launch_kw(cfg))
     _note_menu_re_measured(snapshot, getattr(cfg, "name", "") or "")
     store = SnapshotStore()
     store.record(_test_record(snapshot, store.load([cfg], allow_stale=True).get(cfg.name)))
@@ -1337,7 +1367,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             menuless_own = _own_row_missing_its_menu(snapshot, name)
             if snapshot is not None and not snapshot.stale and not outdated_menu and not refused and not menuless_own:
                 continue
-            result = await verify_agent(cfg)
+            result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)
             # A pass, or a refusal the agent explained. Every other failure stays
             # unrecorded on purpose: a timeout or a crashed adapter is a fact

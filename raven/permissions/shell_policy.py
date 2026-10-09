@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePath
 
+from raven.sandbox.compat_bin import TIMEOUT_DURATION
+
 ApprovalMatcher = Callable[[str], bool]
 
 _WRAPPER_OPTIONS_WITH_VALUE = {
@@ -83,8 +85,9 @@ _COMMAND_RUNNERS: dict[str, frozenset[str]] = {
         }
     ),
 }
-# `timeout` alone takes a positional before the command it runs.
-_TIMEOUT_DURATION = re.compile(r"[0-9]+(?:\.[0-9]+)?[smhd]?")
+# `timeout` alone takes a positional before the command it runs, spelled as
+# the shim Raven supplies on a host without one accepts it.
+_TIMEOUT_DURATION = re.compile(TIMEOUT_DURATION)
 _ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*", re.DOTALL)
 # Whole tokens that are shell operators, and therefore command boundaries.
 # Matched as whole tokens and not character by character: ``shlex`` groups a run

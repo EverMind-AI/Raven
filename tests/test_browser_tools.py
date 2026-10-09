@@ -164,6 +164,29 @@ def test_acting_tools_write_the_site_into_the_call(monkeypatch: pytest.MonkeyPat
     assert BrowserClickTool().cast_params({"ref": "ref_2"})["site"] == "shop.example.com"
 
 
+def test_a_call_that_would_open_its_own_tab_carries_no_site(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the front tab another owner's, this owner's first call opens a tab
+    of its own, so no site describes where it acts yet. None is written -- not
+    the front tab's, and not one the model supplied -- and the grant is then
+    keyed on the call itself."""
+    b = get_browser()
+    held = _FakePage("https://bank.test/login")
+    _running(b, [held])
+    b._s.owners["session:parent"] = _Owner(held, time.monotonic())
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "run:child")
+
+    out = BrowserPressTool().cast_params({"key": "Enter", "site": "attacker.test"})
+
+    assert out == {"key": "Enter"}, "neither the panel's site nor the model's own"
+    from raven.permissions.builtin import BROWSER_SITE_KEYED_TOOLS, action_digest, session_keys
+
+    assert "browser_press" in BROWSER_SITE_KEYED_TOOLS
+    assert session_keys("browser_press", out) == (action_digest("browser_press", out),), (
+        "no site means the grant is this call's own, so a later click on bank.test "
+        "presents a different key and a site nobody approved cannot be banked"
+    )
+
+
 def test_no_page_means_no_site() -> None:
     assert "site" not in BrowserTypeTool().cast_params({"text": "hi"})
 
@@ -582,6 +605,65 @@ async def test_the_readers_touch_is_reported_until_the_owner_acts_again(monkeypa
     assert note not in after.model_text
 
 
+@pytest.mark.parametrize("ending", ["the owner closes its tab", "the reader closes it", "the binding idles out"])
+async def test_the_readers_touch_is_reported_however_the_owners_binding_ended(
+    monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    """The note is owed until the owner acts again, and the end of a binding
+    is not the end of its owner: after its tab closes or its binding idles
+    out, the owner reads again, and the reader's touch is still compared with
+    the owner's last act."""
+    b = get_browser()
+    _running(b, [_FakePage("https://a.test/", "A"), _FakePage("https://b.test/", "B")])
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "run:x")
+    tabs = BrowserTabsTool()
+    assert (await tabs.execute(action="activate", index=1)).ok
+    if ending == "the owner closes its tab":
+        assert (await tabs.execute(action="close", index=1)).ok
+    acted = tools_mod._BrowserTool._acted
+    assert "run:x" in acted, "the owner's last act is on record"
+    # A second between that act and the reader's touch, so their order does
+    # not rest on the clock's resolution.
+    acted["run:x"] -= 1.0
+    if ending == "the reader closes it":
+        await b.tab_close(1)
+    else:
+        b._s.touched = time.monotonic()
+    if ending == "the binding idles out":
+        b._s.owners["run:x"] = _Owner(b._s.owners["run:x"].page, time.monotonic() - driver_module.OWNER_IDLE_S - 1)
+        await b._page_for("run:y")
+    assert "run:x" not in b._s.owners
+
+    _stub_actions(b, [], {"url": "https://a.test/", "title": "A", "started": True})
+    monkeypatch.setattr(type(b), "started", property(lambda self: True))
+    read = await BrowserSnapshotTool().execute()
+
+    assert "the user interacted with the browser" in read.model_text
+
+
+async def test_closing_its_tab_is_an_act_that_answers_the_readers_touch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The note is owed until the owner acts again, and closing the tab it
+    holds is an act: a touch the owner's reads still report is not reported
+    once the owner has closed its tab after it."""
+    b = get_browser()
+    _running(b, [_FakePage("https://a.test/", "A"), _FakePage("https://b.test/", "B")])
+    monkeypatch.setattr(tools_mod, "current_owner", lambda: "run:x")
+    tabs = BrowserTabsTool()
+    assert (await tabs.execute(action="activate", index=1)).ok
+    tools_mod._BrowserTool._acted["run:x"] -= 1.0
+    b._s.touched = time.monotonic()
+    _stub_actions(b, [], {"url": "https://a.test/", "title": "A", "started": True})
+    monkeypatch.setattr(type(b), "started", property(lambda self: True))
+    note = "the user interacted with the browser"
+
+    before = await BrowserSnapshotTool().execute()
+    assert (await tabs.execute(action="close", index=1)).ok
+    after = await BrowserSnapshotTool().execute()
+
+    assert note in before.model_text
+    assert note not in after.model_text
+
+
 async def test_snapshot_and_screenshot_do_not_start_a_browser() -> None:
     assert "No page is open" in (await BrowserSnapshotTool().execute()).model_text
     assert "No page is open" in (await BrowserScreenshotTool().execute()).model_text
@@ -746,3 +828,36 @@ def test_site_keyed_permission_set_matches_the_acting_tool_hierarchy() -> None:
 
     acting = {cls().name for cls in tools_mod._ActingTool.__subclasses__()}
     assert acting == set(BROWSER_SITE_KEYED_TOOLS)
+
+
+def test_the_stamp_store_keeps_the_owners_that_acted_most_recently(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Owners are evicted once the store is full, least recent first, and
+    acting again moves an owner to the back."""
+    monkeypatch.setattr(tools_mod, "_ACTED_MAX", 3)
+    _running(get_browser(), [_FakePage("https://a.test/")])
+    tool = BrowserPressTool()
+
+    for owner in ("run:a", "run:b", "run:c"):
+        tool._mark(owner)
+    tool._mark("run:a")
+    tool._mark("run:d")
+
+    assert list(tools_mod._BrowserTool._acted) == ["run:c", "run:a", "run:d"]
+
+
+async def test_the_tabs_description_names_the_close_rule_the_driver_enforces() -> None:
+    """The driver refuses an owner's close of a tab nobody holds -- the
+    reader's, which may carry a login the model just asked them to finish --
+    and the listing marks that tab with neither ``yours`` nor ``held``. The
+    description is what the model reads before it calls; without the rule
+    there, the refusal is the first it hears of it."""
+    b = get_browser()
+    _running(b, [_FakePage("https://bank.test/")])
+
+    refused = await b.tab_close(0, owner="run:x")
+
+    assert "activate it first" in refused["error"], "the driver's own recovery, which the description must match"
+    said = " ".join(BrowserTabsTool().description.split())
+    assert "close takes only a tab you hold" in said
+    assert "a tab with no mark at all is the user's" in said
+    assert "closing it needs activate first" in said

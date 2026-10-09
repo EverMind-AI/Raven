@@ -40,7 +40,8 @@ function declared() {
 describe('the rail nav registry', () => {
   it('declares every button once, in the page table', () => {
     const buttons = declared()
-    /* The three the page has: the draft row, and the two module rows. */
+    /* The three the page has: the draft row, the one row both connection
+       pages light (state/hub.ts), and knowledge. */
     expect([...buttons].sort()).toEqual(['agentsBtn', 'knowledgeBtn', 'newBtn'])
   })
 

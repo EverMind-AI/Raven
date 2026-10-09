@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /* A key field is masked, readable on request, and still a plain input to its caller. */
 
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { createRef } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 
@@ -69,5 +69,33 @@ describe('the key field', () => {
   it('stays out of the tab order between the field and its save button', () => {
     const { eye } = mount()
     expect(eye.tabIndex).toBe(-1)
+  })
+
+  it('lets a caller that can fetch the saved key fill the field before the eye opens', async () => {
+    /* Turned first and filled after, the field would flash empty and then
+       jump; the caller is told what the eye turns to, and the turn waits. */
+    const told: boolean[] = []
+    let release = (): void => {}
+    const view = render(<KeyInput onPeek={(shown) => { told.push(shown); return new Promise<void>((done) => { release = done }) }} />)
+    const input = view.container.querySelector('input')!
+    const eye = view.container.querySelector('button.peek')!
+
+    fireEvent.click(eye)
+    expect(told).toEqual([true])
+    await Promise.resolve()
+    expect(input.type).toBe('password')
+    release()
+    await waitFor(() => expect(input.type).toBe('text'))
+
+    fireEvent.click(eye)
+    expect(told).toEqual([true, false])
+    release()
+    await waitFor(() => expect(input.type).toBe('password'))
+  })
+
+  it('still turns when the caller could not fetch anything', async () => {
+    const view = render(<KeyInput onPeek={() => Promise.reject(new Error('refused'))} />)
+    fireEvent.click(view.container.querySelector('button.peek')!)
+    await waitFor(() => expect(view.container.querySelector('input')!.type).toBe('text'))
   })
 })

@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 214 methods, 125 component schemas.
+// 218 methods, 125 component schemas.
 
 /* eslint-disable */
 /**
@@ -250,7 +250,7 @@ export interface TranscriptFileRemoval {
   del: number;
 }
 /**
- * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before.
+ * One file a command left behind, found by listing its working directory. Neither a FileChange nor a FileRemoval: a command reports its output and nothing else, so what is known of the file is that it is there, how big it is, and whether it was there before. What it changed from is known only when the working directory's shadow repo held a copy from just before the command; then the change rides along as counts and a unified diff. A file's text goes out only when the shadow repo's rules would store it: never for a file its excludes or the user's .gitignore keep out, even one the repo held a copy of before the rule named it. Such a created file carries its counts only, and such a rewrite neither.
  */
 export interface FileWritten {
   /**
@@ -269,6 +269,18 @@ export interface FileWritten {
    * Lines in a created file, when it could be counted. Null, not absent: the key is always sent, and null says the count is unknown. Too large to read, not text, or a file that already existed, whose change therefore has no number.
    */
   lines?: number | null;
+  /**
+   * Lines the command added to the file. Absent when the change could not be measured: not text, too large, or a rewrite whose previous contents were never captured.
+   */
+  added?: number | null;
+  /**
+   * Lines the command removed from the file. Absent exactly when added is.
+   */
+  removed?: number | null;
+  /**
+   * Unified diff of the change, when it was measured and small enough to carry. Absent past the event's budget even when the counts are present: a partial diff reads as a smaller change than the one that happened.
+   */
+  diff?: string | null;
 }
 /**
  * Why a turn's transcript stops where it does.
@@ -460,6 +472,10 @@ export interface EverosSection {
    * The endpoint came from exported EVEROS_<ROLE>__* variables, which outrank raven. The slot is read-only: raven cannot edit a shell.
    */
   env_managed?: boolean;
+  /**
+   * Nothing is pinned and the role runs on the main chat model, which it follows when that changes. Only the memory LLM does this.
+   */
+  follows_main?: boolean;
 }
 export interface ChannelField {
   key: string;
@@ -968,6 +984,10 @@ export interface ModelOptionProvider {
    * The registry's is_gateway: resells other vendors' models under vendor/model ids. The catalogue's gateway filter reads this; absent means false.
    */
   gateway?: boolean;
+  /**
+   * The registry's image_api: the image tool can run on this provider's address and key. The roles card offers the image role these providers; absent means false.
+   */
+  image_api?: boolean;
   /**
    * Every model-id prefix that names this provider: its own name plus the ones it used to answer to (ProviderSpec.route_names). A client comparing two spellings of one model strips any of them, the way providers/wire.py's merge_key does. Absent means the provider's own name alone.
    */
@@ -2652,6 +2672,15 @@ export interface ModelDisconnectParams {
 export interface ModelDisconnectResult {
   disconnected: boolean;
 }
+export interface ModelRevealKeyParams {
+  slug: string;
+}
+export interface ModelRevealKeyResult {
+  /**
+   * The key saved in the provider's own section -- the one `model.save_key` writes -- or null when none is saved there, or when an endpoints list or key list replaces it and requests do not carry it. A key the provider takes from the environment is not read back.
+   */
+  api_key?: string | null;
+}
 export interface ModelFetchModelsParams {
   slug: string;
   verify?: boolean;
@@ -2836,6 +2865,8 @@ export interface SubagentsAddParams {
   preset: string;
   name?: string;
   description?: string;
+  model?: string;
+  lend_key?: string;
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
@@ -2852,6 +2883,7 @@ export interface SubagentsUpdateParams {
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
+  lend_keys?: string[];
   model?: string;
   /**
    * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.
@@ -4278,6 +4310,60 @@ export interface ApprovalPendingResult {
     [k: string]: JsonValue;
   }[];
 }
+export interface CredentialSubmitParams {
+  request_id: string;
+  /**
+   * The credential as typed. Not logged, not returned, not kept once written.
+   */
+  value: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+export interface CredentialSubmitResult {
+  /**
+   * True once the value is written; the waiting tool then resumes.
+   */
+  ok: boolean;
+  /**
+   * Why it was not written, for the card to show; the request stays open.
+   */
+  error?: string;
+}
+export interface CredentialSkipParams {
+  request_id: string;
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+export interface CredentialSkipResult {
+  /**
+   * False for an unknown, answered or mis-bound request.
+   */
+  ok: boolean;
+}
+export interface CredentialPendingParams {
+  /**
+   * One conversation's requests; every conversation's when absent.
+   */
+  session_id?: string;
+  /**
+   * Compatibility spelling of session_id.
+   */
+  conversation_id?: string;
+}
+export interface CredentialPendingResult {
+  /**
+   * Each open request's credential.request params, exactly as they were first sent.
+   */
+  requests: {
+    [k: string]: JsonValue;
+  }[];
+}
 export interface ClarifyRespondParams {
   answer: string;
   request_id?: string;
@@ -5385,6 +5471,7 @@ export interface RpcMethods {
   'model.set_protocol': { params: ModelSetProtocolParams; result: ModelSetProtocolResult };
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult };
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
+  'model.reveal_key': { params: ModelRevealKeyParams; result: ModelRevealKeyResult };
   'model.fetch_models': { params: ModelFetchModelsParams; result: ModelFetchModelsResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
   'model.add_models': { params: ModelAddModelsParams; result: ModelAddModelsResult };
@@ -5497,6 +5584,9 @@ export interface RpcMethods {
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
   'approval.revoke': { params: ApprovalRevokeParams; result: ApprovalRevokeResult };
   'approval.pending': { params: ApprovalPendingParams; result: ApprovalPendingResult };
+  'credential.submit': { params: CredentialSubmitParams; result: CredentialSubmitResult };
+  'credential.skip': { params: CredentialSkipParams; result: CredentialSkipResult };
+  'credential.pending': { params: CredentialPendingParams; result: CredentialPendingResult };
   'clarify.respond': { params: ClarifyRespondParams; result: ClarifyRespondResult };
   'confirm.respond': { params: ConfirmRespondParams; result: ConfirmRespondResult };
   'slash.exec': { params: SlashExecParams; result: SlashExecResult };
@@ -5609,6 +5699,9 @@ export const RPC_METHODS = [
   "config.set",
   "config.unset",
   "confirm.respond",
+  "credential.pending",
+  "credential.skip",
+  "credential.submit",
   "cron.delete",
   "cron.list",
   "cron.run_now",
@@ -5677,6 +5770,7 @@ export const RPC_METHODS = [
   "model.options",
   "model.remove_endpoint",
   "model.remove_model",
+  "model.reveal_key",
   "model.save_key",
   "model.set_fields",
   "model.set_protocol",

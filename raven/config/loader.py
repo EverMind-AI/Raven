@@ -19,7 +19,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 11
+CURRENT_CONFIG_VERSION = 12
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -44,6 +44,7 @@ _EMBEDDING_HOME_MIGRATION = 8
 _EMBEDDING_SHAPE_MIGRATION = 9
 _RETIRED_DEEP_RESEARCH_MIGRATION = 10
 _SHIM_PIN_MIGRATION = 11
+_DISPLAY_ONLY_ADDRESS_MIGRATION = 12
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -391,6 +392,8 @@ def _persist_migrations(path: Path, from_version: int = 0) -> None:
                 changed = _migrate_retired_deep_research(raw) or changed
             if from_version < _SHIM_PIN_MIGRATION:
                 changed = _migrate_retired_shim_pins(raw) or changed
+            if from_version < _DISPLAY_ONLY_ADDRESS_MIGRATION:
+                changed = _migrate_display_only_addresses(raw) or changed
         if not changed:
             return None, True
         return json.dumps(raw, indent=2, ensure_ascii=False), True
@@ -1131,6 +1134,48 @@ def _migrate_retired_shim_pins(data: dict[str, Any], *, notify: bool = False) ->
     return changed
 
 
+def _migrate_display_only_addresses(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Clear a provider's address where it is only the one its settings field shows.
+
+    The settings dialog seeded its address with what ``model.options`` hands over
+    for display, and sent it on Connect from forms that draw no address field
+    for a key-only vendor. The section kept it, and for Gemini that broke both
+    halves: the provider probe took the section for a proxy and was refused 401
+    for a working key, and the driver took the bare host as its versioned root,
+    so every chat went to a path Google answers 404.
+
+    Only the flat field, and only that exact address (``ProviderSpec.is_display_only``):
+    the endpoint list is written by hand, and any other address -- a proxy, a
+    versioned root on the vendor's own host -- is the section's own. Silent, and
+    False, when it changes nothing, for the reason
+    ``_migrate_retired_deep_research`` gives.
+    """
+    from raven.providers.registry import find_by_name
+
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        return False
+    changed = False
+    for name, section in providers.items():
+        spec = find_by_name(name) if isinstance(section, dict) else None
+        if spec is None:
+            continue
+        for key in ("apiBase", "api_base"):
+            address = section.get(key)
+            if not spec.is_display_only(address):
+                continue
+            del section[key]
+            changed = True
+            notice = (
+                f"Removed `providers.{name}.{key}` ({address}) from your config: it is only the address the "
+                f"settings dialog shows for {spec.label}, and stored there it was sent as an override. "
+                f"{spec.label} is reached at its own endpoint without it."
+            )
+            if notify and notice not in _migration_notices:
+                _migration_notices.append(notice)
+    return changed
+
+
 def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
     data: dict,
     *,
@@ -1229,6 +1274,8 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _migrate_retired_deep_research(data, notify=True)
     if from_version < _SHIM_PIN_MIGRATION:
         _migrate_retired_shim_pins(data, notify=True)
+    if from_version < _DISPLAY_ONLY_ADDRESS_MIGRATION:
+        _migrate_display_only_addresses(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

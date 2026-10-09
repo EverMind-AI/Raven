@@ -1536,3 +1536,72 @@ async def test_an_observer_that_cannot_roll_back_keeps_the_chunks(tmp_path):
     assert observer.finished == observer.entered, "the observer raised inside the phase"
     deltas = [e.delta for e in sink.events if isinstance(e, EvStreamDelta)]
     assert deltas == ["Hel", "lo"], f"an observer that cannot roll back lost the reader the chunks: {deltas}"
+
+
+class _LeakyTool(Tool):
+    """Prints a key Raven holds, the way `cat ~/.raven/config.json` would."""
+
+    KEY = "sk-or-held-0123456789"
+
+    @property
+    def name(self) -> str:
+        return "leakytool"
+
+    @property
+    def description(self) -> str:
+        return "fake tool whose output carries a held credential"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs) -> ToolResult:
+        return ToolResult(model_text=f'"apiKey": "{self.KEY}"', display_text=f"apiKey {self.KEY}")
+
+
+async def test_a_held_key_reaches_neither_the_log_the_page_nor_the_model(tmp_path, monkeypatch):
+    """The scrub used to run only where the model's message is built, after the
+    preview had been logged and sent to the page as `result_preview`."""
+    from loguru import logger
+
+    monkeypatch.setattr(
+        "raven.config.held_secrets.held_secrets", lambda: [(_LeakyTool.KEY, "providers.openrouter.apiKey")]
+    )
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [{"index": 0, "id": "t7", "function": {"name": "leakytool", "arguments": "{}"}}]
+                    },
+                )
+            ],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_LeakyTool())
+    recorded: list[str] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, *, trusted_note=""):
+        recorded.append(result)
+        return original_add(messages, tool_call_id, tool_name, result)
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    logged: list[str] = []
+    handle = logger.add(lambda message: logged.append(str(message)), level="INFO")
+    try:
+        sink = _EmitCollector()
+        await loop.run_turn(_req("hi"), sink, _drain)
+    finally:
+        logger.remove(handle)
+
+    complete = next(e for e in sink.events if isinstance(e, EvToolEvent) and e.phase is ToolPhase.COMPLETE)
+    assert _LeakyTool.KEY not in complete.result_preview
+    assert "[redacted: providers.openrouter.apiKey]" in complete.result_preview
+    assert any("Tool result: leakytool" in line for line in logged)
+    assert not any(_LeakyTool.KEY in line for line in logged)
+    assert recorded and _LeakyTool.KEY not in recorded[0]

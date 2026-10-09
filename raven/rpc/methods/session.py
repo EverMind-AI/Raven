@@ -182,6 +182,26 @@ def _session_cwd(agent_loop: "AgentLoop | None", session_key: str | None) -> str
     return os.getcwd()
 
 
+async def _warm_workdir(agent_loop: "AgentLoop | None", session_key: str) -> None:
+    """Start the shadow-repo staging for the directory this session opens on.
+
+    As the session opens rather than inside its first command, which would
+    otherwise hash a large tree before it could run (``ExecTool.warm``).
+    Returns at once, and never fails the open.
+    """
+    if agent_loop is None:
+        return
+    try:
+        warm = getattr(agent_loop.tools.get("exec"), "warm", None)
+        if warm is None:
+            return
+        target = agent_loop.peek_session_workdir(session_key)
+        if target.is_dir():
+            await warm(target)
+    except Exception as exc:  # noqa: BLE001 -- a warm-up never breaks a session open
+        logger.debug("session: warm-up for {} failed: {}", session_key, exc)
+
+
 def _session_model(agent_loop: "AgentLoop | None", config: "Config", session_key: str | None) -> str:
     """The model a session runs on: its own when it has one, else the default.
 
@@ -313,7 +333,8 @@ def _map_to_wire(messages: list[dict[str, Any]], session_key: str) -> list[dict[
       Nothing else records a deletion: the arguments of the command that did it
       are a string, and the file it names is gone by the time anyone looks.
     * ``file_written`` — the files a command left behind, as
-      ``{path, created, size, lines}``. The other half of the same silence: a
+      ``{path, created, size, lines}``, with ``added`` / ``removed`` / ``diff``
+      where the change could be measured. The other half of the same silence: a
       command reports its output, never the files it wrote.
     * ``reasoning_ms`` / ``duration_ms`` — how long the thought on that
       assistant entry took, and how long the call that ``role="tool"`` entry
@@ -469,6 +490,7 @@ async def session_create(
     picked = params.get("knowledge_bases")
     if picked:
         info["knowledge_bases"] = _write_knowledge(agent_loop, config, session_id, picked)
+    await _warm_workdir(agent_loop, session_id)
     return {
         "session_id": session_id,
         "info": info,
@@ -589,6 +611,7 @@ async def session_resume(
                 title = (raw.metadata or {}).get("title")
                 if isinstance(title, str) and title:
                     info["title"] = title
+                await _warm_workdir(agent_loop, session_key)
                 return {
                     "session_id": session_key,
                     "info": info,

@@ -16,7 +16,7 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 from aiohttp import web
@@ -82,6 +82,10 @@ def _clear_login_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(env_mod, "_LOGIN_ENV", None)
     monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
     monkeypatch.setenv("SHELL", "/bin/bash")
+    # These tests capture from a POSIX login shell. On a Windows host the
+    # capture is a registry read instead and their patched `bash -lic ...` would
+    # never run, so the platform is pinned too.
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: False)
 
 
 def test_login_shell_env_parses_nul_separated_output(
@@ -363,6 +367,38 @@ async def test_cli_backend_uses_login_env_and_per_agent_env_wins(
     )
     out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
     assert out == "yes/agent"
+
+
+async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cli launch looks a bare name up on the child's PATH, as the acp launch does.
+
+    CreateProcess searches the gateway's own PATH and never the env block it is
+    handed, so an agent installed after raven started would be found by the probe
+    and still not start.
+    """
+    fresh_bin = tmp_path / "fresh-bin"
+    fresh_bin.mkdir()
+    (fresh_bin / "fresh-agent.exe").write_text("", encoding="utf-8")
+    (fresh_bin / "fresh-agent.exe").chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(fresh_bin)})
+    started: list[tuple[str, ...]] = []
+
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse)
+    be = CliAgentBackend(
+        name="fresh", command="fresh-agent -p {prompt}", registry=InstanceRegistry(path=tmp_path / "inst.json")
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert started == [(str(fresh_bin / "fresh-agent.exe"), "-p", "task")]
 
 
 async def test_cli_backend_exposes_parent_model_binding(
@@ -5026,6 +5062,27 @@ async def test_a_connect_that_outlasted_its_wait_says_how_to_hear_why(monkeypatc
     assert probe_mod._ping_refusal(qwen, timed_out)[1] == Remedy("silent", "qwen hi")
 
 
+def test_an_empty_turn_from_openclaw_names_the_command_that_prints_why() -> None:
+    """Seen live: OpenClaw's provider refused its key with a 401, and its ACP bridge
+    relayed that as an empty turn whose stderr held only a plugin warning, so the
+    connect reported nothing a reader could act on."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    empty = RuntimeError(
+        "acp agent 'OpenClaw' ended its turn with no content (stopReason='end_turn'); stderr tail: [config] "
+        "warnings: plugins.entries.@everme/openclaw: plugin disabled (disabled in config) but config is present"
+    )
+    claw = SimpleNamespace(name="OpenClaw", preset="openclaw", kind="acp", command="openclaw acp")
+    text, remedy = probe_mod._ping_refusal(claw, empty)
+    assert remedy == Remedy("silent", "openclaw agent --agent main -m hi --json")
+    assert "run `openclaw agent --agent main -m hi --json`" in text and "usually unrelated" in text
+    codex = SimpleNamespace(name="Codex", preset="codex", kind="acp", command="codex-acp")
+    assert probe_mod._ping_refusal(codex, empty)[1] is None
+
+
 async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test fails on the handshake first, and that verdict named no fix for a launch that quit.
 
@@ -5081,3 +5138,26 @@ def test_the_sign_in_command_is_one_the_machine_can_run(monkeypatch: pytest.Monk
     clean = probe_mod._refusal_detail(cfg, said)
     assert hint.anywhere in clean
     assert f"`{hint.local}`" not in clean, "a command that is not there to run is no better than a guess"
+
+
+async def test_a_ping_runs_on_the_model_the_row_is_pinned_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Seen live: Qwen Code's default model was withdrawn, and adding it with another
+    model it lists still failed with the same 404 -- the ping never sent the model,
+    so every retry asked the default again."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+
+    asked: list[object] = []
+
+    class _Backend:
+        async def run(self, prompt, *, task_id, workspace, executor, session_model=None):  # noqa: ANN001
+            asked.append(session_model)
+            return "PONG"
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda *args, **kwargs: _Backend())
+    pinned = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp", model="GPT-5.5")
+    assert (await probe_mod.ping_agent(pinned)).ok
+    unpinned = SimpleNamespace(name="Codex", preset="codex", kind="acp", command="codex-acp", model=None)
+    assert (await probe_mod.ping_agent(unpinned)).ok
+    assert asked == ["GPT-5.5", None]

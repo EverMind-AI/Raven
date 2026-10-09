@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlparse
 
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
@@ -355,7 +356,8 @@ class ProviderEndpoint(Base):
     label: str = Field(min_length=1)
     api_key: str = ""
     api_base: str | None = None
-    extra_headers: dict[str, str] | None = None
+    # Can carry a secret (APP-Code and the like), as the provider-level one can.
+    extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
 
 
 class ProviderConfig(Base):
@@ -1148,29 +1150,57 @@ class MediaToolConfig(Base):
     """Config for a media-generation tool (key + base + model).
 
     Empty fields fall back at call time: ``api_key`` → ``providers.openrouter``
-    / ``OPENROUTER_API_KEY``; ``api_base`` → OpenRouter; ``model`` → the tool's
-    default (gpt-image-2.5-sunburst for images). Empty quality uses the provider default.
+    / ``OPENROUTER_API_KEY``, borrowed only while the tool calls OpenRouter's own
+    address; ``api_base`` → OpenRouter; ``model`` → the tool's default
+    (gpt-image-2.5-sunburst for images). Empty quality uses the provider default.
     """
 
     api_key: str = ""
     api_base: str = ""  # defaults to https://openrouter.ai/api/v1
     model: str = ""
     quality: Literal["", "low", "medium", "high"] = ""
+    # Sent with every request, beside the key; secret like a provider's own.
+    extra_headers: dict[str, str] = Field(default_factory=dict, json_schema_extra={"secret": True})
     selection_config: str = Field(default="", description="Host config path for live model and quality inheritance")
+
+
+class ImageToolConfig(MediaToolConfig):
+    """The image tool's section, the one media section that can name a provider.
+
+    ``provider`` names another configured provider to run on instead, whose
+    address, key and headers replace this section's -- see
+    :func:`borrow_media_credentials`. Only the image tool has a request path for
+    such a provider (OpenAI's Images API); speech and video keep to OpenRouter's
+    request shapes, so their sections have no such field, and a ``provider``
+    written there is ignored like any key their class does not declare.
+    """
+
+    provider: str = ""  # empty (or "openrouter") is the OpenRouter default
 
 
 class MediaGenConfig(Base):
     """Multimodal generation tools configuration.
 
-    OpenRouter is the only backend: image + speech via chat-completions output
-    modalities, and video via the async ``/videos`` endpoint (Kling).
+    OpenRouter is the default backend: image + speech via chat-completions output
+    modalities, and video via the async ``/videos`` endpoint (Kling). The image
+    tool also runs on a provider serving OpenAI's Images API, named by
+    ``image.provider``; speech and video keep to OpenRouter's request shapes.
     """
 
-    image: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    image: ImageToolConfig = Field(default_factory=ImageToolConfig)
     speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
     video: MediaToolConfig = Field(default_factory=MediaToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
+
+    @field_validator("image", mode="before")
+    @classmethod
+    def _plain_section_is_an_image_section(cls, value: Any) -> Any:
+        """A plain ``MediaToolConfig`` is still an image section, one naming no
+        provider: an embedder handing ``AgentLoop`` one keeps working."""
+        if isinstance(value, MediaToolConfig) and not isinstance(value, ImageToolConfig):
+            return value.model_dump(exclude_unset=True)
+        return value
 
 
 class MCPOAuthConfig(Base):
@@ -1215,7 +1245,10 @@ class MCPServerConfig(Base):
     args: list[str] = Field(default_factory=list)  # Stdio: command arguments
     env: dict[str, str] = Field(default_factory=dict)  # Stdio: extra env vars
     url: str = ""  # HTTP/SSE: endpoint URL
-    headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
+    # Any header can carry a credential (Authorization, X-Custom-Auth), whatever it is called.
+    headers: dict[str, str] = Field(
+        default_factory=dict, json_schema_extra={"secret": True}
+    )  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
     # Disabled keeps the stanza and any stored credentials but never connects, so
     # turning a server off does not cost the user their re-authorisation.
@@ -1996,6 +2029,14 @@ class ThirdPartyAcpSubagentConfig(Base):
     the field on the write path."""
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    lend_keys: list[str] = Field(default_factory=list)
+    """Raven providers whose key this agent is started with, by name (``openrouter``).
+
+    A reference, not the key: each start reads the key from Raven's own
+    ``providers`` into the variable the preset reads it from
+    (:data:`raven.agent.subagent.presets.LENDABLE_KEYS`), so it never passes
+    through the model and a key Raven rotates is the one the agent gets next.
+    A variable ``env`` sets itself wins."""
     ready_timeout_ms: int = 30000
     """How long the ``initialize`` handshake may take before the agent is
     reported unreachable. Generous by default because a bridge-backed server can
@@ -2336,20 +2377,19 @@ class Config(BaseSettings):
         """Media config resolved for registration and auth.
 
         A media tool (image/speech/video) counts as configured only when the
-        user set its ``model`` or ``apiKey`` under ``tools.media.<tool>``. For
-        each configured tool we default a missing key to
-        ``providers.openrouter.apiKey`` so the chat key can be reused without
-        re-declaring it. Tools the user did not configure are left untouched
+        user set its ``model`` or ``apiKey`` under ``tools.media.<tool>``. Each
+        configured tool borrows what it lacks through :func:`borrow_media_credentials`
+        -- the named provider's address and key, or the ``providers.openrouter``
+        key for one calling OpenRouter -- so a key already configured need not
+        be declared twice. Tools the user did not configure are left untouched
         (no key, no model) — ``AgentLoop`` withholds a media tool until it has
-        a key or model, so an OpenRouter key set for chat alone never
-        surfaces image/speech/video to the agent. Returns a copy so this
-        resolution never mutates the raw config.
+        a key or model, so a key set for chat alone never surfaces
+        image/speech/video to the agent. Returns a copy so this resolution
+        never mutates the raw config.
         """
         media = self.tools.media.model_copy(deep=True)
-        openrouter = self.providers.get("openrouter")
-        or_key = openrouter.api_key if openrouter else ""
         for tool in (media.image, media.speech, media.video):
-            borrow_openrouter_key(tool, or_key)
+            borrow_media_credentials(tool, self.providers)
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
@@ -2566,18 +2606,102 @@ class Config(BaseSettings):
     )
 
 
-def borrows_openrouter_key(tool: MediaToolConfig) -> bool:
-    """Whether this section is in the one state that borrows: configured (it
-    names a model or a key) yet keyless. Unconfigured sections borrow nothing,
-    which is what keeps a chat credential from quietly enabling tools that
-    bill per call."""
-    return bool((tool.api_key or tool.model) and not tool.api_key)
+_OPENROUTER = "openrouter"
 
 
-def borrow_openrouter_key(tool: MediaToolConfig, openrouter_key: str) -> None:
-    """The media key-borrow rule, stated once, applied in place."""
-    if borrows_openrouter_key(tool) and openrouter_key:
-        tool.api_key = openrouter_key
+def is_openrouter_address(api_base: str) -> bool:
+    """Whether ``api_base`` is OpenRouter's own host. Parsed rather than matched
+    as text: ``https://openrouter.ai.gateway.test`` belongs to somebody else."""
+    try:
+        return urlparse(api_base).hostname == "openrouter.ai"
+    except ValueError:
+        return False
+
+
+def media_provider(tool: Any) -> str:
+    """The configured provider whose credential a media section runs on, or ``""``.
+
+    A section naming a provider other than OpenRouter runs on that provider. One
+    naming none, or OpenRouter itself, is the OpenRouter default, whose key it
+    borrows only while it calls OpenRouter's address: the key travels to whatever
+    ``api_base`` names, as its bearer token. ``""`` is a section pointed at some
+    other endpoint, which borrows from nobody. Read off the section alone, so the
+    tool's call-time fallback to ``OPENROUTER_API_KEY`` asks this same question.
+    """
+    from raven.providers.registry import canonical_provider_name
+
+    raw_name = str(getattr(tool, "provider", "") or "").strip()
+    named = canonical_provider_name(raw_name) if raw_name else ""
+    if named and named != _OPENROUTER:
+        return named
+    base = str(getattr(tool, "api_base", "") or "")
+    return _OPENROUTER if not base or is_openrouter_address(base) else ""
+
+
+def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
+    """The media borrowing rule, stated once, applied in place.
+
+    Only a configured section borrows anything -- one naming a model or a key of
+    its own -- which is what keeps a credential set for chat from quietly
+    enabling tools that bill per call. A section on a named provider takes that
+    provider's address, key and headers as one group, its own standing aside,
+    and takes no key or headers at all where it finds no address to send them
+    to. A keyless section calling OpenRouter takes ``providers.openrouter``'s key.
+
+    ``providers`` is anything answering ``get(name)`` with a provider section or
+    ``None``: the validated ``ProvidersConfig``, or that one provider's section.
+    """
+    if not (tool.api_key or tool.model):
+        return
+    runs_on = media_provider(tool)
+    if runs_on and runs_on != _OPENROUTER:
+        from raven.config.update_providers import provider_connection
+
+        try:
+            section = providers.get(runs_on)
+        except Exception:  # noqa: BLE001 - an undeclared section is validated only when read
+            section = None
+        api_base, api_key, headers = provider_connection(runs_on, section)
+        tool.api_base = api_base
+        tool.api_key = api_key if api_base else ""
+        tool.extra_headers = headers if api_base else {}
+        return
+    if runs_on and not tool.api_key:
+        openrouter = providers.get(_OPENROUTER)
+        if openrouter and openrouter.api_key:
+            tool.api_key = openrouter.api_key
+
+
+def media_section_class(kind: str) -> type[MediaToolConfig]:
+    """The class ``MediaGenConfig`` declares for ``kind``'s section, for a reader
+    validating a raw one: only the image section has a provider."""
+    return MediaGenConfig.model_fields[kind].annotation
+
+
+def _provider_section(providers_section: dict[str, Any], name: str) -> "ProviderConfig | None":
+    """``name``'s section out of a raw ``providers`` subtree, as ``ProvidersConfig``
+    resolves it at boot, or ``None`` when the file has none.
+
+    Every key that may spell this provider -- in another case, with LiteLLM's
+    hyphens, under a former name or a field alias -- goes through
+    ``ProvidersConfig`` itself, so the spellings fold into one section and the
+    name resolves exactly as :meth:`Config.effective_media_config` sees them.
+    Only those keys are validated, so an unrelated provider's bad edit cannot
+    hold a media answer back; a bad edit to this provider's raises, and the
+    caller turns that into "no new answer".
+    """
+    from raven.providers.registry import find_by_name, names_same_provider
+
+    spec = find_by_name(name)
+    spellings = spec.route_names if spec else frozenset({name})
+    field = ProvidersConfig.model_fields.get(name)
+    aliases = getattr(field.validation_alias, "choices", ()) if field is not None else ()
+    own = {
+        key: value
+        for key, value in providers_section.items()
+        if key in aliases or any(names_same_provider(key, spelling) for spelling in spellings)
+    }
+    return ProvidersConfig.model_validate(own).get(name) if own else None
 
 
 def live_web_search_key(section: Any) -> str | None:
@@ -2634,37 +2758,42 @@ def live_web_provider_key(section: Any, vendor: str) -> str | None:
         return None
 
 
-def live_media_tool_config(section: Any, openrouter_section: Any) -> "MediaToolConfig | None":
+def live_media_tool_config(section: Any, providers_section: Any, kind: str = "image") -> "MediaToolConfig | None":
     """One media tool's section as a live file has it, resolved by the same
     rule as :meth:`Config.effective_media_config`.
 
-    Takes raw file subtrees because the caller (``config.live``) holds no
-    validated ``Config``; validation happens here so the credential handling
-    stays in this module, next to the rule it applies. ``None`` is "no usable
-    answer" and the caller keeps what it had: the tool's own section failing
-    validation, and equally the borrow's input -- a configured-but-keyless
-    tool whose ``providers.openrouter`` slice is present but invalid gets no
-    new answer, never a valid-looking config with the borrowed key dropped.
+    Takes raw file subtrees -- the tool's section and the file's ``providers`` --
+    because the caller (``config.live``) holds no validated ``Config``, and the
+    tool's ``kind``, whose declared class (:func:`media_section_class`) the
+    section is validated with. ``kind`` defaults to the image tool, the one an
+    agent launcher inherits: a launcher copied out of an older raven calls this
+    with two arguments. Validation happens here so the credential
+    handling stays in this module, next to the rule it applies. ``None`` is "no
+    usable answer" and the caller keeps what it had: the tool's own section
+    failing validation, and equally the provider's it borrows from -- a section
+    whose provider is present but invalid gets no new answer, never a
+    valid-looking config with the borrowed credential dropped.
     """
     if section is not None and not isinstance(section, dict):
         return None
     try:
-        cfg = MediaToolConfig.model_validate(section or {})
+        cfg = media_section_class(kind).model_validate(section or {})
     except Exception:  # noqa: BLE001 - a torn read is not worth a turn
         return None
-    if borrows_openrouter_key(cfg):
-        # The borrow is a second input to the combined answer, so its slice is
-        # admitted on the same terms as the tool's own: absent means "nothing
-        # to lend" (a real, keyless answer), while present-but-invalid rejects
-        # the WHOLE answer -- degrading it to an empty borrow would hand the
-        # caller a valid-looking config that silently dropped the credential
-        # the last valid file lent.
-        if openrouter_section is not None:
-            if not isinstance(openrouter_section, dict):
-                return None
-            try:
-                openrouter_key = ProviderConfig.model_validate(openrouter_section).api_key
-            except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
-                return None
-            borrow_openrouter_key(cfg, openrouter_key)
+    runs_on = media_provider(cfg) if (cfg.api_key or cfg.model) else ""
+    if not runs_on or (runs_on == _OPENROUTER and cfg.api_key):
+        return cfg
+    # The provider's section is a second input to the combined answer, so it is
+    # admitted on the same terms as the tool's own: absent means "nothing to
+    # borrow" (a real, keyless answer), while present-but-invalid rejects the
+    # WHOLE answer -- degrading it to an empty borrow would hand the caller a
+    # valid-looking config that silently dropped the credential the last valid
+    # file supplied.
+    if providers_section is not None and not isinstance(providers_section, dict):
+        return None
+    try:
+        borrowed = _provider_section(providers_section or {}, runs_on)
+    except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
+        return None
+    borrow_media_credentials(cfg, {runs_on: borrowed})
     return cfg

@@ -26,6 +26,11 @@ SPEC = ChannelSpec(
         "encrypt_key": {"type": "string", "default": "", "secret": True},
         "verification_token": {"type": "string", "default": "", "secret": True},
         "react_emoji": {"type": "string", "default": "THUMBSUP"},
-        "group_policy": {"type": "string", "default": "mention", "choices": ["open", "mention"]},
+        "group_policy": {
+            "type": "string",
+            "default": "mention",
+            "choices": ["open", "mention"],
+            "sensitive": "widening it lets more people instruct Raven",
+        },
     },
 )

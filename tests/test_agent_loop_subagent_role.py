@@ -261,6 +261,51 @@ def test_the_ordinary_prompt_is_byte_identical_without_the_role(workspace, monke
     assert "\n\n\n## Raven Guidelines" in plain
 
 
+def test_the_reply_rules_are_the_host_s_alone(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The host's reader gets the reply rules; a launched child does not.
+
+    The agents under ``agents/`` render this identity too, and each carries its own
+    conduct for how it reports, so the section stays out of any process the host
+    launched to work for it.
+    """
+    plain = render.identity_text(workspace)
+    assert "## How you reply" in plain
+    assert plain.index("## Raven Guidelines") < plain.index("## How you reply")
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    assert "## How you reply" not in render.identity_text(workspace)
+
+
+def test_the_reply_rules_leave_one_blank_line_either_side(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The joint in both roles. The section is spliced in by a helper that renders
+    empty for a child, and a stray newline on either branch would ship unseen in
+    every prompt of that role."""
+    plain = render.identity_text(workspace)
+    assert "\n\n## How you reply\n" in plain
+    assert "\n\n\n## How you reply" not in plain
+    assert "overrides them.\n\nReply directly" in plain
+
+    monkeypatch.setenv("RAVEN_SUBAGENT", "1")
+    delegated = render.identity_text(workspace)
+    assert "\n\nReply directly" in delegated
+    assert "\n\n\nReply directly" not in delegated
+
+
+def test_the_reply_rules_do_not_choose_the_reply_language(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One English section serves both reply languages. On a zh install the
+    language line has to survive above it, and the section has to say it does not
+    decide the language, or English rules read as a request for English."""
+    from raven import i18n
+
+    monkeypatch.setattr(i18n, "_language", "zh")
+    plain = render.identity_text(workspace)
+
+    assert "Always respond in" in plain
+    assert plain.index("Always respond in") < plain.index("## How you reply")
+    section = plain.split("## How you reply", 1)[1].split("\n\nReply directly", 1)[0]
+    assert "not which language you write in" in section
+
+
 def test_both_sub_agent_paths_withhold_the_same_tools(workspace, monkeypatch: pytest.MonkeyPatch) -> None:
     """The drift lock between the in-process backend and an acp child.
 

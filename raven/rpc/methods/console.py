@@ -932,9 +932,37 @@ def _chk_pin_pair(parent: str, model_field: str, provider_field: str):
 
 
 def _chk_image_selection(value: Any) -> dict:
-    if not isinstance(value, dict) or set(value) != {"model", "quality"}:
-        raise ConfigValidationError("image selection must contain exactly model and quality")
+    """The image role's selection: model and quality, and the provider it runs on."""
+    if not isinstance(value, dict) or not {"model", "quality"} <= set(value) <= {"model", "quality", "provider"}:
+        raise ConfigValidationError("image selection must contain model and quality, and may name a provider")
     return {k: _SETTINGS_SIMPLE_KEYS[f"tools.media.image.{k}"](v) for k, v in value.items()}
+
+
+def _chk_media_selection(value: Any) -> dict:
+    """Speech and video name no provider: their request shapes are OpenRouter's own."""
+    if not isinstance(value, dict) or set(value) != {"model", "quality"}:
+        raise ConfigValidationError("media selection must contain exactly model and quality")
+    return {k: _SETTINGS_SIMPLE_KEYS[f"tools.media.image.{k}"](v) for k, v in value.items()}
+
+
+def _chk_image_provider(v: Any) -> str:
+    """The provider the image tool runs on, or empty for OpenRouter.
+
+    Only one the registry marks ``image_api``: any other connected provider would
+    save cleanly and then answer every picture with an error, which is the
+    failure the roles card exists to keep out of reach.
+    """
+    text = _chk_str("tools.media.image.provider", 100)(v).strip()
+    if not text:
+        return ""
+    from raven.providers.registry import PROVIDERS, canonical_provider_name, find_by_name
+
+    slug = canonical_provider_name(text)
+    spec = find_by_name(slug)
+    if spec is None or not spec.image_api:
+        serving = ", ".join(s.label for s in PROVIDERS if s.image_api)
+        raise ConfigValidationError(f"tools.media.image.provider: the image tool runs on {serving}, not {text!r}")
+    return slug
 
 
 # Low-risk hot-writable keys a settings surface may offer. Each entry is a
@@ -975,6 +1003,7 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.media.image.model": _chk_str("tools.media.image.model"),
     "tools.media.image.quality": _chk_enum("tools.media.image.quality", "", "low", "medium", "high"),
     "tools.media.image": _chk_image_selection,
+    "tools.media.image.provider": _chk_image_provider,
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
     "memory.memoryTopK": _chk_int("memory.memoryTopK", 1, 50),
@@ -1010,10 +1039,10 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     # written a key at a time can be left half-changed by a dropped connection.
     "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
     "skillForge": _chk_pin_pair("skillForge", "llmGateModel", "llmGateProvider"),
-    # The same selection object the image tool takes; the three media tools
-    # share one config shape.
-    "tools.media.speech": _chk_image_selection,
-    "tools.media.video": _chk_image_selection,
+    # The image tool's selection object without its provider: the three media
+    # tools share one config shape, and only the image tool runs elsewhere.
+    "tools.media.speech": _chk_media_selection,
+    "tools.media.video": _chk_media_selection,
     "sessions.autoArchiveAfterDays": _chk_int_or_null("sessions.autoArchiveAfterDays", 1, 3650),
 }
 
@@ -1383,18 +1412,45 @@ def everos_follows_provider(slug: str, agent_loop_factory: Any) -> None:
     """
     try:
         from raven.providers.registry import names_same_provider
-        from raven_everos.config import ROLES, role_pin
+        from raven_everos.config import FOLLOWS_MAIN_ROLES, ROLES, main_model_pin, role_pin
     except ImportError:
         return
     try:
         for section in ROLES:
             pin = role_pin(section)
+            if pin is None and section in FOLLOWS_MAIN_ROLES:
+                pin = main_model_pin()
             if pin is not None and names_same_provider(pin[1], slug):
                 break
         else:
             return
     except Exception:  # noqa: BLE001 - a save must not fail over this question
         logger.debug("settings/everos: could not tell whether {} serves a memory role", slug)
+        return
+    _everos_applied(agent_loop_factory)
+
+
+def everos_follows_main_model(agent_loop_factory: Any) -> None:
+    """Restart EverOS after the default model moved, when its memory model follows it.
+
+    An unset memory model resolves to the main model at spawn time, so the
+    running server still extracts with the old one until it is restarted --
+    the same gap ``everos_follows_provider`` closes for a key. Only while
+    EverOS is the memory backend: a switch of the chat model must not start a
+    memory server nobody uses.
+    """
+    try:
+        from raven.config.raven import load_raven_config
+        from raven_everos.config import FOLLOWS_MAIN_ROLES, role_is_env_managed, role_pin
+    except ImportError:
+        return
+    try:
+        if load_raven_config().memory.backend != "everos":
+            return
+        if not any(role_pin(s) is None and not role_is_env_managed(s) for s in FOLLOWS_MAIN_ROLES):
+            return
+    except Exception:  # noqa: BLE001 - a model switch must not fail over this question
+        logger.debug("settings/everos: could not tell whether the memory model follows the main model")
         return
     _everos_applied(agent_loop_factory)
 
