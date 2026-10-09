@@ -29,6 +29,9 @@ from raven_everos_cloud.backend import DEFAULT_BASE_URL, EverosCloudBackend
 KEY = os.environ.get("EVEROS_CLOUD_API_KEY", "")
 pytestmark = [
     pytest.mark.everos_cloud,
+    pytest.mark.slow(
+        reason="waits on the real EverOS Cloud's extraction between an add and the search that reads it back"
+    ),
     pytest.mark.skipif(not KEY, reason="EVEROS_CLOUD_API_KEY is not set; the live EverOS Cloud tests need a key"),
 ]
 
