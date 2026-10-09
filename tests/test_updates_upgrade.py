@@ -1731,6 +1731,7 @@ def test_handoff_replaces_process_with_isolated_base_python(
     monkeypatch.setattr(upgrade_commands.sys, "prefix", str(prefix))
     monkeypatch.setattr(upgrade_commands.sys, "_base_executable", str(base_python))
     monkeypatch.setattr(upgrade_commands.shutil, "which", lambda executable: str(uv_path))
+    monkeypatch.setattr(upgrade_commands, "_boxlite_installed", lambda: False)
     monkeypatch.setenv("UV_TOOL_DIR", "/wrong/tools")
     monkeypatch.setenv("UV_TOOL_BIN_DIR", "/wrong/bin")
     execve = Mock(side_effect=OSError("handoff failed"))
