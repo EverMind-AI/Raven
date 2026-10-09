@@ -113,8 +113,10 @@ _REMINDER_BODY = (
 )
 _REMINDER_BODY_READER = (
     "Reply with the report in its three parts: the answer as the opening blockquote "
-    "with no label before it, then the body under `##` headings, then the "
-    "closing `##` section on what could not be verified (`## Limitations` in English). "
+    "with no label before it (no word and colon, in any language), then the body "
+    "under `##` headings, then the "
+    "closing `##` section on what could not be verified (`## Limitations` in English; "
+    "in any other language, that language's words, with no English word in the heading). "
     "If this message asks for another shape - an outline, slides, a table, JSON, one "
     "word - that shape goes inside the body, not in place of the report."
 )
@@ -331,9 +333,11 @@ _REWRITE_PROMPT = (
 )
 _REWRITE_PROMPT_READER = (
     "Your reply above is missing: {missing}. Rewrite it as the report in its three "
-    "parts - the answer as the opening blockquote with no label before it, "
+    "parts - the answer as the opening blockquote with no label before it (no word "
+    "and colon, in any language), "
     "then the body under `##` headings, then the closing `##` section on what could "
-    "not be verified (`## Limitations` in English) - keeping every finding, every "
+    "not be verified (`## Limitations` in English; in any other language, that "
+    "language's words, with no English word in the heading) - keeping every finding, every "
     "source URL and every caveat you already wrote. Do not shorten it, do not drop "
     "evidence, and do not research anything new. If this turn was asked for another "
     "shape (an outline, slides, a table), keep that content inside the body. The "

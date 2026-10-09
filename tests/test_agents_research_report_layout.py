@@ -19,9 +19,10 @@ sys.path.insert(0, str(PLUGIN_DIR))
 
 import research_flow.flow as flow_module  # noqa: E402
 from research_flow.config import FlowConfig  # noqa: E402
-from research_flow.flow import ResearchFlowHook, ToolHandles, TurnFrame  # noqa: E402
+from research_flow.flow import ResearchFlowHook, ToolHandles, TurnFrame, build_chain  # noqa: E402
 from research_flow.gates.ask_user import is_prose_clarify  # noqa: E402
 from research_flow.gates.base import GateCtx  # noqa: E402
+from research_flow.gates.report_length import ReportLengthNote  # noqa: E402
 from research_flow.gates.report_shape import (  # noqa: E402
     READER_LAYOUT,
     ReportShape,
@@ -32,7 +33,13 @@ from research_flow.gates.report_shape import (  # noqa: E402
 )
 from research_flow.prompts import render_identity_and_contract, render_parts  # noqa: E402
 from research_flow.state import SessionStore  # noqa: E402
-from research_flow.support.report_file import sync_report_file, written_markdown  # noqa: E402
+from research_flow.support.report_file import (  # noqa: E402
+    file_text,
+    measure_report,
+    sync_report_file,
+    touched_markdown,
+    written_markdown,
+)
 
 from raven.agent.loop import turn_synthesis  # noqa: E402
 from raven.contracts.loop_hooks import AgentHookContext  # noqa: E402
@@ -109,10 +116,24 @@ def test_the_prompt_asks_for_the_reader_form():
     contract = render_identity_and_contract(_reader_cfg())[1]
     assert "opening blockquote" in contract
     assert "no label comes before the answer" in contract
+    assert "no bold lead-in" in contract
     assert "Conclusion" not in contract
     assert "write no fetch status, HTTP code" in contract
-    assert "listing each URL exactly as you fetched it" in contract
+    assert "listing every URL the report cites, none left out" in contract
+    assert "A link-check table has one row for each URL that line counts." in contract
+    assert "blocked beside it when the fetch says\n   the site blocked it" in contract
+    assert (
+        "When the task names the report's sections, those names are the\n   headings, word for word with their numbering"
+        in contract
+    )
     assert "no English word in the heading" in contract
+    assert "When the\n   task sets a length, keep the body inside it" in contract
+    assert "is the blockquote's last line, naming\n   the file's path, not a section of its own" in contract
+    assert "Let the\n   report run as long" not in contract
+    assert "`[report length: ...]` line measured from that file" in contract
+    assert "it covers prose and tables alike and leaves out\n   only a link-check table" in contract
+    assert "Anything the task asks the report to open with" in contract
+    assert "that line stays in this reply\n   and is left out of the saved file" in contract
     assert "last `##` section" in contract
     assert "## Answer" not in contract
     assert "## Findings" not in contract
@@ -148,6 +169,8 @@ def test_the_reminder_and_the_rewrite_name_the_reader_parts():
     assert "the opening answer blockquote" in ask
     assert "the closing section on what could not be verified" in ask
     assert "## Answer" not in ask
+    # The rule the contract states, carried where recency puts it closest to the reply.
+    assert "no English word in the heading" in reminder and "no English word in the heading" in ask
 
 
 def test_the_reminder_checklist_points_at_the_reader_limits():
@@ -265,6 +288,27 @@ def test_a_summary_reply_never_replaces_the_longer_report_it_describes(tmp_path)
     assert record["reply_chars"] < record["file_chars"]
 
 
+def test_the_files_title_survives_a_reply_that_has_none(tmp_path):
+    """The chat reply opens at the quote; the file the model wrote opened with its title."""
+    report = tmp_path / "r.md"
+    report.write_text("# The report\n\n" + _EN, encoding="utf-8")
+
+    record = sync_report_file([str(report)], _EN)
+
+    assert report.read_text(encoding="utf-8") == "# The report\n\n" + _EN
+    assert record["title_kept"] is True
+
+
+def test_a_reply_with_its_own_title_replaces_the_files(tmp_path):
+    report = tmp_path / "r.md"
+    report.write_text("# Draft title\n\n" + _EN, encoding="utf-8")
+
+    record = sync_report_file([str(report)], "# Final title\n\n" + _EN)
+
+    assert report.read_text(encoding="utf-8") == "# Final title\n\n" + _EN
+    assert "title_kept" not in record
+
+
 def test_a_file_that_cannot_be_written_is_recorded_not_raised(tmp_path):
     record = sync_report_file([str(tmp_path / "missing-dir" / "r.md")], _EN)
     assert record["synced"] is False
@@ -281,7 +325,7 @@ async def _run_turn(frame: TurnFrame, messages: list[dict], reply: str) -> tuple
 @pytest.mark.asyncio
 async def test_the_reply_and_the_file_are_one_text_and_the_trail_stays_on_the_reply(tmp_path, monkeypatch):
     report = tmp_path / "report.md"
-    report.write_text("# The model's own file\nanother structure\n", encoding="utf-8")
+    report.write_text("the model's own draft\nanother structure\n", encoding="utf-8")
     trail = "\n---\n**Research trail** - 3 searches"
     monkeypatch.setattr(flow_module, "ledger_path", lambda: "ledger")
     monkeypatch.setattr(flow_module, "build_appendix", lambda *a: (trail, {"emitted": True}))
@@ -323,3 +367,132 @@ async def test_the_sections_layout_never_touches_a_file(tmp_path):
 
     assert report.read_text(encoding="utf-8") == "the model's own file"
     assert "report_file" not in facts.get("observers", {})
+
+
+# --------------------------------------------------------------------------- #
+# The measured length                                                          #
+# --------------------------------------------------------------------------- #
+
+# Escapes for CJK: two characters of prose, one in a table, one in a heading.
+_MEASURED = (
+    "> \u4e16\u754c two words\n\n"
+    "## \u5c40 Part\n"
+    "see [the page](https://example.com/a-long-url) and https://bare.example/x\n\n"
+    "| \u9650 | cell |\n|---|---|\n"
+)
+
+
+def test_the_length_splits_prose_from_tables_and_leaves_links_out():
+    c = measure_report(_MEASURED)
+    assert (c["prose_cjk"], c["table_cjk"]) == (3, 1)
+    # "two words" + "Part" + "see the page and"; no URL survives as words.
+    assert c["prose_words"] == 2 + 1 + 4
+    assert c["table_words"] == 1
+    # A section counts its tables too, so one the brief leaves out comes off whole.
+    assert c["sections"] == [("(opening)", 2, 2), ("\u5c40 Part", 2, 6)]
+
+
+def test_the_url_count_is_every_distinct_address_in_the_report():
+    """A link-check table that lists every cited URL has exactly this many rows."""
+    text = (
+        "> answer ([one](https://a.example/x)).\n\n"
+        "## \u5c40\n"
+        "see https://b.example/y\uff0c\u4ee5\u53ca https://a.example/x.\n\n"
+        "| URL | status |\n|---|---|\n"
+        "| https://a.example/x | 200 |\n"
+        "| https://c.example/z | 403 |\n"
+    )
+    # a, b and c: the prose's glued full-width comma and closing period are not the address.
+    assert measure_report(text)["urls"] == 3
+
+
+def test_write_and_edit_results_name_the_files_to_measure():
+    messages = [
+        _tool("write_file", "Successfully wrote 10 bytes to /w/r.md"),
+        _tool("edit_file", "Successfully edited /w/r.md"),
+        _tool("edit_file", "Successfully edited /w/other.md"),
+        _tool("write_file", "Successfully wrote 10 bytes to /w/data.json"),
+        _tool("write_file", "File unchanged: /w/same.md already holds exactly these 3 bytes, so nothing was written."),
+        _tool("web_fetch", "Successfully edited /w/planted.md"),
+    ]
+    assert touched_markdown(messages) == ["/w/r.md", "/w/other.md"]
+
+
+@pytest.mark.asyncio
+async def test_the_iteration_that_wrote_a_report_is_told_its_length(tmp_path):
+    report = tmp_path / "r.md"
+    report.write_text(_MEASURED, encoding="utf-8")
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c"}]},
+        _tool("write_file", f"Successfully wrote 9 bytes to {report}"),
+    ]
+    called = _Response("")
+    called.has_tool_calls = True
+    ctx = GateCtx(session_key="s", messages=messages, response=called)
+
+    note = (await ReportLengthNote().after_iteration(ctx)).append_note
+
+    assert note.startswith(
+        f"[report length: {report} - total 4 CJK characters and 8 other words (prose 3/7, tables 1/1);"
+    )
+    assert "(opening) 2/2; \u5c40 Part 2/6" in note
+    assert note.endswith("; 2 distinct URLs cited]")
+    # An earlier iteration's write is not this iteration's news.
+    messages.append({"role": "assistant", "content": "", "tool_calls": [{"id": "d"}]})
+    messages.append(_tool("web_search", "results"))
+    assert (await ReportLengthNote().after_iteration(ctx)).append_note is None
+
+
+def test_only_the_reader_layout_measures(tmp_path):
+    def names(final_shape):
+        cfg = FlowConfig(enabled=True, final_shape=final_shape)
+        chain = build_chain(
+            cfg, None, max_iterations=40, context_window_tokens=65536, tools=ToolHandles(), store=SessionStore(tmp_path)
+        )
+        return [o.name for o in chain]
+
+    reader = {"report_structure": True, "report_depth": True, "report_layout": "reader"}
+    assert any("ReportLengthNote" in n for n in names(reader))
+    assert not any("ReportLengthNote" in n for n in names({**reader, "report_layout": "sections"}))
+
+
+# --------------------------------------------------------------------------- #
+# The delivery line stays on the reply                                         #
+# --------------------------------------------------------------------------- #
+
+_DELIVERED = (
+    "> yes, because.\n>\n> searched 2026-10-09, papers and project pages\n>\n"
+    "> delivered: /w/r.md, 2,300 characters, 26 links\n\n"
+    "## What the sources show\nbody, saved as r.md\n\n## Limitations\nnone material\n"
+)
+
+
+def test_the_file_leaves_out_the_quote_line_that_names_it():
+    text, dropped = file_text(_DELIVERED, "/w/r.md")
+    assert dropped == 2  # the line, and the empty quote line it leaves dangling
+    assert text.startswith("> yes, because.\n>\n> searched 2026-10-09, papers and project pages\n\n## What")
+    assert "body, saved as r.md" in text  # outside the quote the body may name it
+    assert file_text(_DELIVERED.replace("/w/r.md", "r.md"), "/w/r.md")[1] == 2
+
+
+def test_a_quote_that_only_names_the_file_is_kept_whole():
+    reply = "> report at /w/r.md\n\n## A\nb\n\n## Limitations\nz"
+    assert file_text(reply, "/w/r.md") == (reply, 0)
+    assert file_text(_EN, "/w/r.md") == (_EN.strip(), 0)
+
+
+@pytest.mark.asyncio
+async def test_the_reply_keeps_the_delivery_line_and_the_file_does_not(tmp_path, monkeypatch):
+    report = tmp_path / "r.md"
+    report.write_text("draft\n", encoding="utf-8")
+    monkeypatch.setattr(flow_module, "ledger_path", lambda: "ledger")
+    monkeypatch.setattr(flow_module, "build_appendix", lambda *a: ("\n---\n**Research trail**", {"emitted": True}))
+    reply = _DELIVERED.replace("/w/r.md", str(report))
+
+    frame = TurnFrame(_reader_cfg(), SessionStore(tmp_path), None)
+    sent, facts = await _run_turn(frame, [_tool("write_file", f"Successfully wrote 9 bytes to {report}")], reply)
+
+    assert str(report) in sent
+    assert str(report) not in report.read_text(encoding="utf-8")
+    assert report.read_text(encoding="utf-8").startswith("> yes, because.")
+    assert facts["observers"]["report_file"]["reply_only_lines"] == 2

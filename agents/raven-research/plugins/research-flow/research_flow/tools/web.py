@@ -1489,6 +1489,19 @@ def _encoding_lost(text: str) -> bool:
     return text.count("\ufffd") > max(8, len(text) // 200)
 
 
+# Jina answers 200 for the page it rendered and names the target's own failure in the
+# header above ``Markdown Content:``, so without these a CAPTCHA wall reads as a page.
+_READER_TARGET_ERROR_RE = re.compile(r"^Warning: Target URL returned error (\d{3})\b", re.M)
+_READER_CAPTCHA_RE = re.compile(r"^Warning: This page maybe requiring CAPTCHA\b", re.M)
+
+
+def reader_target_verdict(text: str) -> tuple[int | None, bool]:
+    """``(status, blocked)`` the reader reported for the target, from its header only."""
+    head = text.split("\nMarkdown Content:", 1)[0]
+    hit = _READER_TARGET_ERROR_RE.search(head)
+    return (int(hit.group(1)) if hit else None), _READER_CAPTCHA_RE.search(head) is not None
+
+
 _UNRESOLVED_REFUSAL = "Cannot resolve hostname:"
 """The trunk validator's one refusal that says nothing about the target. Pinned
 by the tool tests, which fail if the wording moves and takes the tolerance below
@@ -1758,6 +1771,8 @@ class WebFetchTool(Tool):
             ("extractor", "extractor"),
             ("served_url", "served_url"),
             ("fallbacks_tried", "fallbacks_tried"),
+            ("status", "status"),
+            ("blocked", "blocked"),
         ):
             if key in payload and out_key not in record:
                 record[out_key] = payload[key]
@@ -1877,6 +1892,12 @@ class WebFetchTool(Tool):
         self._record_source(url, text, self.spec.extractor)
 
         recovery: dict[str, Any] = {}
+        if self.provider == "jina":
+            target_status, blocked = reader_target_verdict(text)
+            if target_status is not None:
+                status = target_status
+            if blocked:
+                recovery["blocked"] = "captcha"
         if fallbacks_tried:
             recovery["fallbacks_tried"] = fallbacks_tried
             recovery["requested_chars"] = requested_chars

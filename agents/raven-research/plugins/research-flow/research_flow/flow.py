@@ -73,6 +73,7 @@ from research_flow.gates.plain_first import (
     PlainTurnGate,
     set_plain_turn,
 )
+from research_flow.gates.report_length import ReportLengthNote
 from research_flow.gates.report_shape import (
     READER_LAYOUT,
     ReportShape,
@@ -621,6 +622,8 @@ def build_chain(
                 warn_ratio=cfg.budget_note.warn_ratio,
             )
         )
+    if cfg.final_shape.report_structure and layout == READER_LAYOUT:
+        observers.append(ReportLengthNote())
     if cfg.fetch_floor.enabled:
         observers.append(
             FetchFloorObserver(

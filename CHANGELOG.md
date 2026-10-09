@@ -55,13 +55,28 @@ All notable changes to Raven are documented here.
 ### Changed
 
 - Research reports are written for a reader rather than for a grader. The
-  report opens with the answer as a blockquote, stated first and then why it
-  holds and what it means; the body follows under its own `##` headings, and
-  the last section names what could not be verified (`## Limitations` in
-  English). Prose cites through markdown links on the words a source supports
+  report opens with the answer as a blockquote, with no label or bold lead-in
+  before it, stated first and then why it
+  holds and what it means, then anything the brief asks the report to open
+  with (a retrieval date, the kinds of sources), and any delivery facts the
+  brief asks back (file path, counts) as its last line - a line the chat reply
+  keeps and the saved file leaves out; the body follows under its own `##`
+  headings - the brief's own section names, numbering included, when it gives
+  them - and the last section names what could not be verified
+  (`## Limitations` in English, with no English word in the heading
+  otherwise). A length the brief sets bounds the body: every markdown file the
+  turn writes or edits gets a `[report length: ...]` line on its tool result -
+  CJK characters and other words, a total with prose and tables apart, by
+  `##` section, link targets not counted - and the report checks its length
+  and states any count from that line rather than from an estimate. Unless
+  the brief says otherwise, a length covers prose and tables alike and leaves
+  out only a link-check table. The same line counts the distinct URLs the
+  report cites, which is the number of sources the report states and the
+  number of rows a link-check table has. Prose cites through markdown links on the words a source supports
   instead of bare URLs mid-sentence, with no fetch status or HTTP code beside
-  a link (a brief that asks for link checks gets one table of the URLs as
-  fetched, before the limits), and the report is told to carry its
+  a link (a brief that asks for link checks gets one table of every cited
+  URL as fetched with its status, marked blocked where the site blocked the
+  fetch, before the limits), and the report is told to carry its
   argument in prose, define terms the question does not already use, ground
   abstract points in a concrete case and drop filler. When the turn also saved
   the report with `write_file`, the delivered reply is written over the last
@@ -202,6 +217,18 @@ All notable changes to Raven are documented here.
   from the session's mode overlay.
 
 ### Fixed
+
+- The research trail no longer says a cited link "appears nowhere in this
+  run" when a search returned it with a click-tracking parameter
+  (`srsltid`, `utm_*`, `gclid`, `fbclid`, `msclkid`) that the citation left
+  off; such a link is reported as listed but not opened.
+
+- The research fetch tool reports the status the target site returned and
+  marks a CAPTCHA wall as blocked, instead of the reader service's own 200;
+  the research trail counts such pages as refused by the site, not as read.
+
+- A research report file keeps the `#` title it was written with when the
+  delivered reply, which the file is synced to, opens without one.
 
 - `write_file` reports the bytes it wrote. Its success line said "N bytes"
   and counted characters, so a model sizing a Chinese report off it read

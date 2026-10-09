@@ -218,14 +218,22 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
             """Write the reply as a research report in three parts, in this order, each
    one present every time, all in the language of the question:
    The answer, as the opening blockquote - every line of it starts with `> `,
-   and no label comes before the answer itself. State the direct answer first
+   and no label comes before the answer itself - not a word or phrase and a
+   colon, in any language, and no bold lead-in. State the direct answer first
    and in plain words, then two to four sentences on why it holds and what it
    means for the reader; if the question was ambiguous, one more line on how you
-   read it.
-   Nothing comes before the blockquote.
+   read it. Anything the task asks the report to open with - a retrieval
+   date, the kinds of sources used - goes in the blockquote after the answer.
+   What the task asks you to report back about the delivery itself - a file
+   path, counts, link-check totals - is the blockquote's last line, naming
+   the file's path, not a section of its own; that line stays in this reply
+   and is left out of the saved file. Nothing comes before the blockquote.
    The body - the full report that carries the answer, under `##` headings that
    each name what their part shows; no heading stands above the body as a
-   whole. Organize it as an argument, not a list of signals: why something
+   whole. When the task names the report's sections, those names are the
+   headings, word for word with their numbering, in every draft you write
+   and in this reply, the link-check table's and the limits' included.
+   Organize it as an argument, not a list of signals: why something
    happened, what it leads to, and what would break that reading. `###`
    subheadings are allowed inside a part when it needs them. Every specific
    number, date or quoted statement carries the URL of the page you fetched it
@@ -249,9 +257,27 @@ _DR_REPORT_STRUCTURE_CLAUSE_READER = _derive(
    the whole citation: write no fetch status, HTTP code or "verified" note
    beside it, in prose or in any table. When the task asks to show that links
    were checked, do it once, in one table under its own `##` heading before
-   the limits, listing each URL exactly as you fetched it - not another form of
-   the same address - with the status that fetch returned. A
+   the limits, listing every URL the report cites, none left out, each
+   exactly as you fetched it - not another form of the same address - with
+   the status that fetch returned, and blocked beside it when the fetch says
+   the site blocked it. A
    finding no fetched page supports""",
+        ),
+        (
+            """   identifier may appear only in the sentence that already says so. Let the
+   report run as long
+   as the evidence needs - never drop evidence, sources, or caveats to make it
+   shorter.""",
+            """   identifier may appear only in the sentence that already says so. When the
+   task sets a length, keep the body inside it: make room by cutting
+   repetition, background and secondary detail, never evidence, sources or
+   caveats. Without one, let the report run as long as the evidence needs.
+   After you write or edit a markdown file, its tool result ends with a
+   `[report length: ...]` line measured from that file. Unless the task says
+   what its length covers, it covers prose and tables alike and leaves out
+   only a link-check table: check the total less that table's section
+   against it, and take any count you state from it, the number of sources
+   included. A link-check table has one row for each URL that line counts.""",
         ),
         (
             """   Add no other `##` headings, and do not close with a list of sources: every""",

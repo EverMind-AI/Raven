@@ -784,6 +784,28 @@ def test_thin_pages_are_counted_not_only_rendered():
     assert "(1 returned almost nothing)" in t.render()
 
 
+def test_a_page_the_site_refused_is_not_counted_as_read():
+    """The reader answers 200 over a CAPTCHA wall; the trail said every page was read
+    while the report beside it listed two as blocked."""
+    rows = [
+        {"op": "search", "query": "q", "replay": False, "zero_hit": False},
+        {"op": "fetch", "url": "https://a.example/real", "chars": 12431, "ok": True, "status": 200},
+        {"op": "fetch", "url": "https://a.example/wall", "chars": 862, "ok": True, "status": 405, "blocked": "captcha"},
+        {"op": "fetch", "url": "https://a.example/gate", "chars": 491, "ok": True, "status": 200, "blocked": "captcha"},
+        {"op": "fetch", "url": "https://a.example/pixel", "chars": 38, "ok": True, "status": 200},
+    ]
+    t = build_trail(rows, "[a](https://a.example/real) [w](https://a.example/wall) [g](https://a.example/gate)")
+    c = t.counters()
+    assert (c["pages_ok"], c["pages_refused"], c["thin_pages"], c["pages_failed"]) == (4, 2, 1, 0)
+    # Requested all the same, so citing one is not citing a page never opened.
+    assert c["cited_not_opened"] == 0
+    rendered = t.render()
+    # The stub note stays beside "pages read", whose count it belongs to.
+    assert "2 pages read (1 returned almost nothing), 2 refused by the site" in rendered
+    assert "- (2 page(s) the site refused: https://a.example/gate, https://a.example/wall)" in rendered
+    assert "- https://a.example/wall" not in rendered
+
+
 def test_a_truncated_fence_tag_is_still_a_fence_tag():
     """The ``{4,16}`` width. ``token_hex(4)`` mints exactly 8, so ``{8}`` looks
     right and passes every other test here; a clipped quote is still a fence tag."""
@@ -1142,6 +1164,26 @@ def test_a_query_value_is_held_out_of_the_fold():
     t = build_trail(ledger, "see https://huggingface.co/datasets/o/D?config=wikitext for the split")
 
     assert t.cited_not_opened == ["https://huggingface.co/datasets/o/D?config=wikitext"]
+
+
+def test_a_search_results_tracking_parameter_does_not_make_a_citation_unseen():
+    """Google lists a shop page with ``?srsltid=...``; the model cites it without.
+    That is the page the search returned, so it is unopened, not never surfaced."""
+    listed = "https://www.shop.example/glasses/display/?srsltid=AU7gw4Wc0iu9"
+    ledger = [*LEDGER, {"op": "search", "query": "display glasses", "urls": [listed]}]
+    t = build_trail(ledger, "see https://www.shop.example/glasses/display/ for the price")
+
+    assert t.cited_not_opened == ["https://www.shop.example/glasses/display/"]
+    assert t.cited_never_surfaced == []
+
+
+def test_dropping_tracking_parameters_keeps_the_ones_that_name_the_page():
+    opened = "https://d.example/item?id=2&utm_source=x&gclid=y#notes"
+    ledger = [*LEDGER, {"op": "fetch", "url": opened, "chars": 6100, "ok": True}]
+
+    assert build_trail(ledger, "see https://d.example/item?id=2#notes").cited_not_opened == []
+    t = build_trail(ledger, "see https://d.example/item?id=3#notes")
+    assert t.cited_never_surfaced == ["https://d.example/item?id=3#notes"]
 
 
 def test_an_unlisted_host_keeps_every_character_of_its_path():

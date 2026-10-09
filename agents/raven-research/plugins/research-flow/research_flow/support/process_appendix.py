@@ -274,6 +274,27 @@ def _fold_path(host: str, path: str) -> str:
 # effective revision in the ledger, not a rule about which form is more general.
 
 
+# A search engine appends these to a result's address to attribute the click; the
+# page served is the same without them, so a citation that leaves them off cites a
+# page the run did see. Dropping one can only mark a citation seen, never accuse it.
+_TRACKING_KEYS = frozenset({"srsltid", "gclid", "fbclid", "msclkid"})
+
+
+def _is_tracking(param: str) -> bool:
+    key = param.partition("=")[0].lower()
+    return key in _TRACKING_KEYS or key.startswith("utm_")
+
+
+def _drop_tracking(url: str) -> str:
+    """``url`` without the click-attribution parameters a search result carries."""
+    head, mark, rest = url.partition("?")
+    if not mark or "#" in head:
+        return url
+    query, hash_, fragment = rest.partition("#")
+    kept = [p for p in query.split("&") if p and not _is_tracking(p)]
+    return head + ("?" + "&".join(kept) if kept else "") + hash_ + fragment
+
+
 def _norm(url: str) -> str:
     """Fold the differences a reader service introduces, and nothing more.
 
@@ -284,13 +305,14 @@ def _norm(url: str) -> str:
     cited in its decoded form - raw equality would accuse every such citation.
     Decoding does fold ``a%2Fb`` with ``a/b`` (and ``%23`` with ``#``), a known
     tension with keeping query/fragment distinctions; accepted because a false
-    fold marks a real citation opened, the harmless direction.
+    fold marks a real citation opened, the harmless direction. Click-attribution
+    parameters are the one part of a query dropped (``_drop_tracking``).
 
     The path is then handed to ``_fold_path``, which folds the parts of two named
     hosts' addresses that do not name the document - see it for why those two and
     why only those parts.
     """
-    u = unquote(_clean(url).strip())
+    u = unquote(_drop_tracking(_clean(url).strip()))
     for prefix in ("https://", "http://"):
         if u.lower().startswith(prefix):
             u = u[len(prefix) :]
@@ -374,6 +396,10 @@ class ResearchTrail:
     replays: int = 0
     zero_hit: int = 0
     pages: list[tuple[str, int, bool]] = field(default_factory=list)  # url, chars, ok
+    refused: set[str] = field(default_factory=set)
+    """Pages the reader delivered but the site refused: a CAPTCHA wall, or an error
+    status the reader reported for the target. Opened all the same - the request
+    went out - so citing one is not a citation of a page never opened."""
     verify_outcome: str | None = None
     verify_model: str | None = None
     """Which model reviewed, off the verify rows. A mode may move the reviewer per
@@ -460,21 +486,22 @@ class ResearchTrail:
     change without saying so is one nobody can compare across runs. ``0`` on every
     single-turn run, which is every measured arm."""
 
-    def _page_split(self) -> tuple[list[tuple[str, int, bool]], int, int]:
-        """``(substantive, thin, failed)``.
+    def _page_split(self) -> tuple[list[tuple[str, int, bool]], int, int, int]:
+        """``(substantive, thin, failed, refused)``.
 
         ★ 20260901 (Framework). Extracted so ``counters()`` and ``render()`` cannot
         drift: the thin-page count was rendered from dr@2.8 on but never emitted as a
         counter, so the one number that says "this fetch returned a stub, not a page"
         was human-readable and machine-invisible. Two implementations of the same
         split is the shape this repo keeps paying for; one is enough."""
-        substantive = [p for p in self.pages if p[2] and p[1] >= _THIN_PAGE_CHARS]
+        refused = sum(1 for u, _, ok in self.pages if ok and u in self.refused)
+        substantive = [p for p in self.pages if p[2] and p[1] >= _THIN_PAGE_CHARS and p[0] not in self.refused]
         opened_ok = sum(1 for _, _, ok in self.pages if ok)
-        return substantive, opened_ok - len(substantive), len(self.pages) - opened_ok
+        return substantive, opened_ok - len(substantive) - refused, len(self.pages) - opened_ok, refused
 
     def counters(self) -> dict[str, Any]:
         opened_ok = sum(1 for _, _, ok in self.pages if ok)
-        _, thin, failed = self._page_split()
+        _, thin, failed, refused = self._page_split()
         return {
             "emitted": True,
             "searches": self.searches,
@@ -503,6 +530,7 @@ class ResearchTrail:
             # lying, not about adding detectors.
             "thin_pages": thin,
             "pages_failed": failed,
+            "pages_refused": refused,
             "urls_cited": len(self.cited),
             # The integrity number. Null-safe on purpose: a rate over zero
             # citations is not 1.0, it is undefined, and reporting 1.0 would make
@@ -550,7 +578,7 @@ class ResearchTrail:
 
     def render(self) -> str:
         opened_ok = sum(1 for _, _, ok in self.pages if ok)
-        substantive, thin, failed = self._page_split()
+        substantive, thin, failed, refused = self._page_split()
         # ★ 20260901 (Framework). "N distinct" was read as "N different things were
         # looked for". It is not: the rule is whitespace/case folding, deliberately the
         # same key ``WebSearchTool.execute`` uses for its repeat cache, so that this
@@ -560,10 +588,12 @@ class ResearchTrail:
         # ``distinct_queries`` counter key do not, because that key has landed readings
         # and renaming a number while its definition stays put is how a metric loses
         # its history.
-        head = f"{self.searches} searches ({len(self.distinct_queries)} unique query strings), {opened_ok} pages read"
+        head = f"{self.searches} searches ({len(self.distinct_queries)} unique query strings), {opened_ok - refused} pages read"
         if thin:
             # Beside "pages read", because the number above counts the stubs too.
             head += f" ({thin} returned almost nothing)"
+        if refused:
+            head += f", {refused} refused by the site"
         if self.span_seconds is not None and self.span_seconds >= 60:
             # Minutes only, and only past a minute: a product answer that took half an
             # hour is a fact the reader is entitled to, and one that took 40 seconds is
@@ -728,6 +758,8 @@ class ResearchTrail:
                 lines.append(f"- ({thin} fetch(es) returned almost nothing)")
             if failed:
                 lines.append(f"- ({failed} page(s) could not be retrieved)")
+            if refused:
+                lines.append(f"- ({refused} page(s) the site refused: {', '.join(sorted(self.refused))})")
             lines.append("")
 
         if self.unsupported:
@@ -812,6 +844,9 @@ def build_trail(
                 continue
             ok = bool(r.get("ok"))
             t.pages.append((url, int(r.get("chars") or 0), ok))
+            status = r.get("status")
+            if ok and (r.get("blocked") or (isinstance(status, int) and status >= 400)):
+                t.refused.add(url)
             if ok:
                 opened.add(url)
         elif op == "verify":
