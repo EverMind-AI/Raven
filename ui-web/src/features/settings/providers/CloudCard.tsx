@@ -35,6 +35,7 @@ export function EverosCloudCard(): JSX.Element | null {
     <Card title={t('gui.settings.cloud.title')}>
       <Row label={t('gui.settings.cloud.status')}><CloudChip c={c} /></Row>
       <KeyRow label={t('gui.settings.cloud.key')} keyName={CLOUD_KEY} url={KEYS_URL} raw={s.snap.raw} />
+      {c.key_source === 'env' && <Row><Rov>{t('gui.settings.cloud.key_env')}</Rov></Row>}
       <Row label={t('gui.settings.cloud.endpoint')}><Rov>{c.base_url}</Rov></Row>
       <Row><Rov>{t('gui.settings.cloud.restart_hint')}</Rov></Row>
     </Card>

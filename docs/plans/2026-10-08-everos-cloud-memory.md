@@ -317,12 +317,12 @@ uv build --wheel plugins-dist/everos-cloud-memory -o $SCRATCH/dist && ls $SCRATC
 **Delivers**: A1, A3, A8, A9, A29, A38 (contract level; A1/A3/A8/A9/A29/A38 real-host halves in Task 10).
 
 **Files**:
-- modify: `raven/cli/onboard_commands.py:2010-2026` (`_step4_memory`'s loop) and a new `_choose_memory_screen(steps) -> str | None` beside `_memory_steps` (`:1929`)
+- modify: `raven/cli/onboard_commands.py:2010-2026` (`_step4_memory`'s loop) and a new `_choose_memory_backend(steps) -> str | None` beside `_memory_steps` (`:1929`)
 - modify: `tests/test_cli_onboard_commands.py` (append; AGENTS 5.4: no new file)
 
 **Interfaces**:
 - consumes `_memory_steps()`, `_selected_backend()`, `_require_questionary()`, `RAVEN_STYLE`, `_QMARK`, `t`, `set_memory_backend`.
-- produces `_choose_memory_screen(steps: list[tuple[str, OnboardStep]]) -> str | None`: `questionary.select(t("Which memory backend?"), choices=[Choice(name, value=name) for name in names] + [Choice(t("Off"), value=_MEMORY_OFF)], default=current if current in names else None, style=RAVEN_STYLE, qmark=_QMARK).ask()`; `None` from `.ask()` (Esc / Ctrl-C) -> `raise typer.Exit(1)`; `_MEMORY_OFF` -> return `None`; else the name. `_MEMORY_OFF = object()` module constant.
+- produces `_choose_memory_backend(steps: list[tuple[str, OnboardStep]]) -> str | None`: `questionary.select(t("Which memory backend?"), choices=[Choice(name, value=name) for name in names] + [Choice(t("Off"), value=_MEMORY_OFF)], default=current if current in names else None, style=RAVEN_STYLE, qmark=_QMARK).ask()`; `None` from `.ask()` (Esc / Ctrl-C) -> `raise typer.Exit(1)`; `_MEMORY_OFF` -> return `None`; else the name. `_MEMORY_OFF = object()` module constant.
 
 - [ ] **Step 1: tests first** (append to `tests/test_cli_onboard_commands.py`; the file already stubs `questionary.select` at `:306-319` -- copy that pattern):
 `test_two_memory_screens_ask_which_backend_and_run_only_the_chosen_one` (A1: fake steps `[("everos", s1), ("everos-cloud", s2)]`, select returns `"everos-cloud"`, only `s2.run` called, `set_memory_backend("everos-cloud")`), `test_choosing_off_writes_null_and_runs_no_screen` (A3), `test_one_memory_screen_runs_without_a_question` (A8: `questionary.select` patched to raise if called), `test_a_cancelled_choice_exits_one_and_writes_nothing` (A38: select returns `None` -> `typer.Exit` with code 1, `set_memory_backend` not called), `test_non_interactive_with_two_screens_never_asks` (A29).
@@ -333,7 +333,7 @@ uv build --wheel plugins-dist/everos-cloud-memory -o $SCRATCH/dist && ls $SCRATC
 
 Run: `uv run --frozen pytest tests/test_cli_onboard_commands.py -q -p no:cacheprovider`
 Expected: `353 passed` (348 + 5; if `test_onboard_cli_writes_the_keys_passed_as_flags` is red, rerun it alone per D1 and record both outputs).
-Mutation: make `_choose_memory_screen` return `None` on `.ask() is None` instead of raising -> `test_a_cancelled_choice_exits_one_and_writes_nothing` fails; restore.
+Mutation: make `_choose_memory_backend` return `None` on `.ask() is None` instead of raising -> `test_a_cancelled_choice_exits_one_and_writes_nothing` fails; restore.
 Edit check for A9: `git -C /Users/admin/Raven-b diff 3632e6040 -- tests/test_cli_onboard_commands.py` changes only `test_step4_memory_first_configured_wins`, `test_step4_memory_all_disabled_clears_backend` and `test_step4_memory_back_returns_sentinel_without_writing` (they pinned the retired run-every-screen behaviour with two fake plugins; deviations.md D2) and adds tests; no other existing test body changes.
 
 - [ ] **Step 4: record** -- nothing expected.
@@ -510,7 +510,7 @@ screenshots, the G4 package.
 
 1. Coverage: A1-A39 each appear in a task's Delivers (A1 A3 A8 A9 A29 A38 -> 4; A2 A4 A5 A6 A7 A27 A28 -> 2 + 10; A10-A18 A33 A34 -> 2 + 10; A19 A20 A21 A36 A37 -> 5 + 10; A22 A24 A26 -> 7 + 10; A23 A25 A35 A39 -> 6 + 10; A30 A31 -> 3; A32 -> 9). C1-C3 -> Task 3 and Task 2's discover tests; C4-C8, C10 -> Task 2; C9 -> Tasks 4-7 zero-edit checks; C11-C12 -> Tasks 7, 8; C13 -> Task 3; C14-C18 -> Task 9.
 2. Placeholders: none of the patterns the plan template forbids; expected outputs that can be measured today are the measured numbers above; the rest are counts the step defines (N added tests) and are to be replaced by the actual line in `run.md`.
-3. Names: `resolve_api_key`, `DEFAULT_BASE_URL`, `make_backend`, `_auth_headers`, `_choose_memory_screen`, `_MEMORY_OFF`, `settings_everos_cloud`, `settings.everosCloud`, `reason`, `EverosCloudCard`, `everosCloud` are spelled the same in every task that uses them.
+3. Names: `resolve_api_key`, `DEFAULT_BASE_URL`, `make_backend`, `_auth_headers`, `_choose_memory_backend`, `_MEMORY_OFF`, `settings_everos_cloud`, `settings.everosCloud`, `reason`, `EverosCloudCard`, `everosCloud` are spelled the same in every task that uses them.
 4. Ponytail ladder per task: Task 1 exists because every later test needs a counterparty and no real one is reachable; Task 2 copies rather than re-derives; Task 3 is three one-line edits; Task 4 is the smallest change that keeps one plugin's path identical; Task 5 keeps `_cfg`'s shape to leave 17 tests untouched; Task 6 adds one generic arm instead of a per-plugin setter; Task 7 reuses `KeyRow`, `Card`, `Chip`; Task 8 and 9 are the minimum the spec promises.
 5. Authorization and caps are in the header.
 6. `deviations.md` exists with D1.

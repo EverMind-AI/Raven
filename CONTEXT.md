@@ -1126,8 +1126,8 @@ and injects into the main agent's system prompt so evicted facts stay present.
 Raven's default memory-backend plugin (`everos-memory`; ships enabled, works out of
 the box). Its own distribution rather than part of the raven wheel, found through the
 `raven.plugins` entry-point group. (`plugins-dist/ppt-engine/` and
-`plugins-dist/design-engine/` ship the same way -- the group's other two
-distributed members, contributing a deck-building toolchain and a visual-design
+`plugins-dist/design-engine/` and `plugins-dist/everos-cloud-memory/` ship the same way -- the group's other
+distributed members, contributing a deck-building toolchain, a visual-design
 engine rather than memory.) Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
 SkillForge's three sources at RRF weight 0.9). The name refers to the external package
@@ -1153,7 +1153,7 @@ search and the `sender_id` of a stored user message. The same two values on two
 machines sharing one cloud key name one memory.
 _Avoid_: owner identity (the older wording in `raven/contracts/plugin_surface.py`).
 
-**memory backend chooser** (`cli/onboard_commands.py:_choose_memory_screen`):
+**memory backend chooser** (`cli/onboard_commands.py:_choose_memory_backend`):
 The `raven onboard` question asked only when more than one memory plugin is
 installed: which backend's screen to run. Off writes `memory.backend = null`; a
 dismissed question exits the wizard and writes nothing.

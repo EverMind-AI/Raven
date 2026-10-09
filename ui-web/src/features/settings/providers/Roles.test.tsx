@@ -510,6 +510,16 @@ describe('another memory backend', () => {
     expect(screen.getByText('gui.settings.cloud.title')).toBeTruthy()
   })
 
+  it('says the key comes from the environment when settings.everosCloud reports key_source env', async () => {
+    const data = snap()
+    data.everos = { ...data.everos, reason: 'other_backend', sections: {} }
+    data.everosCloud = { ...cloud, key_source: 'env' }
+    install(data)
+    await mount('model')
+
+    expect(screen.getByText('gui.settings.cloud.key_env')).toBeTruthy()
+  })
+
   it('keeps the four rows and the not-installed pill when available is false without a reason', async () => {
     const data = snap()
     data.everos = { available: false, sections: {}, note: 'not here', config_path: '' }
