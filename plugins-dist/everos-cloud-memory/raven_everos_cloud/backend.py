@@ -250,14 +250,17 @@ def _score(row: dict[str, Any], default: float = 0.0) -> float:
         return default
 
 
-def _digest(body: dict[str, Any]) -> str:
-    """Identity of one add for the retry memo: the content, not the clock.
+def _digest(body: dict[str, Any], index: int) -> str:
+    """Identity of one add for the retry memo: the content and its place, not the clock.
 
     A row without a timestamp is stamped with "now" on every conversion, so a
-    retry of the same slice would never match if the stamp took part.
+    retry of the same slice would never match if the stamp took part; the batch
+    index keeps two identical batches in one slice apart (a retry re-splits the
+    slice the same way, so the index is stable too).
     """
     stable = {
         "session_id": body.get("session_id"),
+        "index": index,
         "messages": [{k: v for k, v in m.items() if k != "timestamp"} for m in body.get("messages", [])],
     }
     return hashlib.sha256(
@@ -553,13 +556,13 @@ class EverosCloudBackend:
         batches, _dropped = self._batches(session_id, payload)
         explicit_end = bool(metadata and (metadata.get("flush") or metadata.get("is_final")))
         self._unflushed.add(session_id)
-        for batch in batches:
+        for index, batch in enumerate(batches):
             body = {"session_id": session_id, "mode": "agent", "messages": batch}
             # Both callers re-send a slice that answered False (contracts/memory.py);
             # a batch the service accepted on the failed attempt is not sent twice.
             # The memo lives only until the slice lands, so a later store of the
             # same content is a new write, not a retry.
-            digest = _digest(body)
+            digest = _digest(body, index)
             if digest in self._landed.get(session_id, ()):
                 continue
             if not await self._send("add", "/api/v2/memory/add", body, ADD_TIMEOUT_S):

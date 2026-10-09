@@ -293,6 +293,16 @@ async def test_a_retry_after_a_transient_failure_skips_the_batches_that_landed(t
     assert sent == [500, 100]  # the 500-message batch once, the 100-message batch once (its first try never landed)
 
 
+async def test_two_identical_batches_in_one_slice_are_both_sent(tmp_path: Path) -> None:
+    """The retry memo is keyed on content and batch index: identical batches in one
+    slice are two adds, not one skipped as 'already landed'."""
+    fake = FakeCloud()
+    b = _backend(tmp_path, fake)
+    row = {"role": "user", "content": "\u00e9" * 70_000, "timestamp": 1_760_000_000_000}  # 140 KB: one batch each
+    assert await b.store("twins", [row, dict(row)]) is True
+    assert [len(a["body"]["messages"]) for a in _requests(fake, "/add")] == [1, 1]
+
+
 async def test_message_translation_matches_the_local_plugin() -> None:
     """The cloud copy of convert_messages must not drift from raven_everos (the boundary forbids importing it)."""
     from raven_everos.backend import convert_messages as local_convert
