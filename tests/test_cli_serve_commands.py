@@ -1165,6 +1165,72 @@ class TestARecycledPid:
         assert not (home / "serve.json").exists()
 
 
+class TestAnUnreadableIdentity:
+    @pytest.fixture(autouse=True)
+    def _resident_without_argv(self, home: Path, monkeypatch) -> None:
+        from raven.utils import processes
+
+        TestStopping._resident(home)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: None)
+        monkeypatch.setattr(processes, "command_line", lambda _pid: None)
+
+    def test_the_live_serve_record_is_kept(self, home: Path) -> None:
+        assert serve_commands._read_serve_pid() == 222
+        assert json.loads((home / "serve.json").read_text(encoding="utf-8"))["pid"] == 222
+
+    def test_the_live_supervisor_still_counts(self, home: Path) -> None:
+        assert serve_commands._read_web_state() == 111
+        assert (home / "web.json").exists()
+
+    def test_a_stop_signals_neither_process_and_keeps_both_records(self, home: Path, monkeypatch, capsys) -> None:
+        monkeypatch.setattr("os.kill", lambda *_args: pytest.fail("signalled an unverified process"))
+
+        assert serve_commands._stop_resident() is False
+
+        assert (home / "serve.json").exists()
+        assert (home / "web.json").exists()
+        said = capsys.readouterr().out
+        assert "not stopping the supervisor (pid 111)" in said
+        assert "not stopping the gateway (pid 222)" in said
+
+    def test_a_start_waits_instead_of_spawning_another_supervisor(
+        self, home: Path, a_built_page, opened, supervised, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda: "http://127.0.0.1:18999/auth#t")
+
+        serve_commands._web(port=18999)
+
+        assert supervised == []
+        assert opened == ["http://127.0.0.1:18999/auth#t"]
+        assert (home / "web.json").exists()
+
+    def test_a_start_preserves_a_standalone_serve_and_refuses_a_second_engine(
+        self, home: Path, a_built_page, opened, supervised, monkeypatch
+    ) -> None:
+        (home / "web.json").unlink()
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda: None)
+
+        with pytest.raises(typer.Exit) as stopped:
+            serve_commands._web(port=18999)
+
+        assert stopped.value.exit_code == 1
+        assert supervised == []
+        assert opened == []
+        assert (home / "serve.json").exists()
+
+    def test_the_lock_holder_can_still_be_stopped(self, home: Path, monkeypatch) -> None:
+        stopped: list[int] = []
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: 222)
+        monkeypatch.setattr(serve_commands, "_stop_one", lambda _label, pid, _unresponsive: stopped.append(pid))
+
+        assert serve_commands._stop_resident() is True
+        assert stopped == [222]
+        assert (home / "web.json").exists()
+
+
 def test_web_is_registered_as_its_own_command() -> None:
     """A verb nobody can type is not a verb."""
     app = typer.Typer()
@@ -2465,6 +2531,7 @@ class TestAStopThatLosesItsTarget:
 
         monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242)
         monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
         monkeypatch.setattr(serve_commands, "_stop_one", refuse)
         monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: True)
         serve_commands._stop_resident()
@@ -2476,6 +2543,7 @@ class TestAStopThatLosesItsTarget:
 
         monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242)
         monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
         monkeypatch.setattr(serve_commands, "_stop_one", gone)
         monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: False)
         assert serve_commands._stop_resident() is True

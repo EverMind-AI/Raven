@@ -7,11 +7,9 @@ state files actually pose: pids are recycled by the kernel, so "alive" says
 nothing about whether the process is the raven one the record names.
 
 The discriminator is the recorded process's own command line, read back from
-the OS's process table. POSIX asks ``ps`` (which every documented platform
-ships -- macOS has no ``/proc`` to read instead); Windows asks CIM for its
-``Win32_Process`` row. Neither side invents a fallback when the read fails:
-a stranger the lookup cannot name is "not positively ours", and the stop
-keeps its hands off.
+the OS's process table. POSIX asks ``ps``; Windows asks CIM for its
+``Win32_Process`` row. An unreadable identity stays unknown: the stop keeps
+its hands off, and state readers keep the record of a process still alive.
 """
 
 from __future__ import annotations
@@ -119,11 +117,20 @@ def looks_like_raven(pid: int) -> bool:
     on a guess. The match is on the flag form, quoted or not -- a path that
     happens to spell ``/m raven/...`` is not a module invocation.
     """
+    return raven_identity(pid) is True
+
+
+def raven_identity(pid: int) -> Optional[bool]:
+    """True for a resident, False for a foreign command, None for an unreadable one.
+
+    Unknown does not license deleting a live process's record or starting a
+    second resident, and only a positive identity licenses signalling it.
+    """
     import re
 
     line = command_line(pid)
-    if line is None:
-        return False
+    if not line:
+        return None
     if re.search(r"(?<![\w/\\.-])-m\s+raven(?![\w.-])", line, re.IGNORECASE):
         return True
     return _is_console_serve(line)
@@ -143,4 +150,4 @@ def _is_console_serve(line: str) -> bool:
     return match is not None and match.group(1).lower() in _RESIDENT_SUBCOMMANDS
 
 
-__all__ = ["command_line", "looks_like_raven"]
+__all__ = ["command_line", "looks_like_raven", "raven_identity"]
