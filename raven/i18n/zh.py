@@ -151,7 +151,7 @@ MESSAGES: dict[str, str] = {
     "Account out of credits or not provisioned — top up and retry.": "账户余额不足或未开通 — 充值后重试。",
     "Rate limited — wait a bit and retry, or switch provider.": "触发限流 — 稍等后重试,或更换服务商。",
     "Network error reaching the provider — check network / proxy / VPN.": "连接服务商时网络出错 — 检查网络 / 代理 / VPN。",
-    "The provider's TLS certificate isn't trusted on this machine — if a corporate proxy or a private CA signs it, add that CA to the system certificate store.": "本机不信任服务商的 TLS 证书 — 如果它由公司代理或私有 CA 签发，请把该 CA 加入系统证书库。",
+    "The provider's TLS certificate was refused — if a corporate proxy or a private CA signs it, add that CA to the system certificate store. If SSL_CERT_FILE already trusts that CA, macOS and Windows may still refuse the certificate by their own rules; RAVEN_NO_SYSTEM_CA=1 turns those off. An expired certificate, or one for another host, is the server's to fix.": "服务商的 TLS 证书被拒绝 — 如果它由公司代理或私有 CA 签发，请把该 CA 加入系统证书库。如果 SSL_CERT_FILE 已经信任该 CA，macOS 和 Windows 仍可能按系统自身的规则拒绝该证书；设置 RAVEN_NO_SYSTEM_CA=1 可关闭这些规则。证书已过期或不属于该主机时，需要由服务端修复。",
     "Run: raven provider login {a0}": "请运行:raven provider login {a0}",
     "Verification failed: {status}": "验证失败:{status}",
     "Default model ({a0} available — type to filter, Tab to complete):": "默认模型(共 {a0} 个 — 输入可筛选,Tab 补全):",

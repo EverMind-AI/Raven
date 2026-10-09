@@ -4419,6 +4419,33 @@ def test_a_certificate_the_machine_does_not_trust_points_at_the_certificate_stor
     assert "VPN" not in out
 
 
+def test_a_refused_certificate_names_the_refusals_a_ca_does_not_fix(monkeypatch, capsys) -> None:
+    """Adding a CA is one remedy of three.
+
+    macOS and Windows refuse a certificate by their own rules even when the CA is
+    trusted through ``SSL_CERT_FILE``, and an expired certificate, or one for
+    another host, is the server's to fix.
+    """
+    from raven.cli import onboard_commands
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers,
+        "test_provider",
+        lambda provider: {
+            "ok": False,
+            "status": "certificate_untrusted",
+            "error": '"api.deepseek.com" certificate is not standards compliant',
+        },
+    )
+
+    onboard_commands._verify_provider("deepseek")
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "RAVEN_NO_SYSTEM_CA=1" in out
+    assert "expired" in out
+
+
 def test_managing_an_oauth_provider_explains_instead_of_exiting(monkeypatch, tmp_path, capsys) -> None:
     """Update and Remove both wrote credential fields, which OAuth providers refuse.
 

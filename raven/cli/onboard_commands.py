@@ -752,8 +752,10 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
         "rate_limited": t("Rate limited — wait a bit and retry, or switch provider."),
         "network_error": t("Network error reaching the provider — check network / proxy / VPN."),
         "certificate_untrusted": t(
-            "The provider's TLS certificate isn't trusted on this machine — if a corporate proxy or a "
-            "private CA signs it, add that CA to the system certificate store."
+            "The provider's TLS certificate was refused — if a corporate proxy or a private CA signs it, "
+            "add that CA to the system certificate store. If SSL_CERT_FILE already trusts that CA, macOS "
+            "and Windows may still refuse the certificate by their own rules; RAVEN_NO_SYSTEM_CA=1 turns "
+            "those off. An expired certificate, or one for another host, is the server's to fix."
         ),
         "oauth_token_missing": t("Run: raven provider login {a0}", a0=provider.replace("_", "-")),
     }
