@@ -99,7 +99,8 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     setKey(saved)
     setRevealed(saved)
   }
-  const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
+  const shownBase = p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || ''
+  const [base, setBase] = useState(shownBase)
   const kind = kindOf(p)
   const checking = store.isBusy(busy(p.id))
   /* Where this block draws the address field, if anywhere: above the key for a
@@ -117,13 +118,20 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
        here) for no change, so it goes as an empty field does. */
     const k = key === revealed ? '' : key.trim()
     const b = base.trim()
-    if (needsKey(p) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
+    /* The server takes no save of a key-shaped provider, nor of an endpoint
+       (custom, Azure), without a key: an endpoint's address is saved with it. */
+    const endpointKey = p.kind === 'endpoint' && takesKey(p)
+    if ((needsKey(p) || endpointKey) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
-    /* Connected, with no new key and no address drawn here to send: the server
-       could only refuse the save, in English, so the page says what pressing
-       it would have needed instead. */
-    if (needsKey(p) && !k && !(b && basePlace)) {
-      store.refuse(t('gui.settings.providers.key_unchanged', { button: t('gui.settings.update') }))
+    /* Connected, with no new key and nothing else this save could carry: the
+       server could only refuse it, in English, so the page says what pressing
+       it would have needed instead -- for an endpoint whose address was
+       edited, that the key goes with it. */
+    if (!k && (endpointKey || (needsKey(p) && !(b && basePlace)))) {
+      const button = t('gui.settings.update')
+      store.refuse(endpointKey && b !== shownBase.trim()
+        ? t('gui.settings.providers.key_with_base', { button })
+        : t('gui.settings.providers.key_unchanged', { button }))
       return
     }
     const params: Record<string, unknown> = { slug: p.id }

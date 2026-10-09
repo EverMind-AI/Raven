@@ -7563,6 +7563,10 @@
       "en": "No new key to save. To replace the saved one, type a new key here, then press {button}.",
       "zh": "没有新的密钥要保存。要换 key，先在框里填入新的，再点「{button}」。"
     },
+    "gui.settings.providers.key_with_base": {
+      "en": "This provider saves its address together with its API key: type the key in the key field, then press {button}.",
+      "zh": "这家服务商的地址要连同 API Key 一起保存：在密钥框里填入 key，再点「{button}」。"
+    },
     "gui.settings.providers.key_not_ascii": {
       "en": "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",
       "zh": "这不像是 API Key：里面有 Key 不会包含的字符，请检查粘贴的内容"

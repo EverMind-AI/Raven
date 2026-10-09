@@ -659,6 +659,57 @@ describe('provider detail, the address of a direct vendor', () => {
   })
 })
 
+describe('an endpoint provider (custom, Azure) saved without a new key', () => {
+  /* Every save of one carries its key: the server refuses custom, Azure and
+     MiniMax CN without it, address change or not, so the page says what is
+     missing instead of sending a save that can only come back in English. */
+  const KEY_WITH_BASE = 'gui.settings.providers.key_with_base {"button":"gui.settings.update"}'
+  const withCustom = (on: boolean): ReturnType<typeof snap> => {
+    const data = snap()
+    data.providers = [...data.providers, { id: 'custom', name: 'Custom', models: [], configured: [], on, kind: 'endpoint', acceptsKey: true, needsBase: true }]
+    ;(data.raw.providers as Record<string, unknown>).custom = { apiBase: 'https://relay.example/v1' }
+    return data
+  }
+  const baseField = (): HTMLInputElement => screen.getByLabelText('gui.settings.providers.base') as HTMLInputElement
+  const keyUpdate = (): HTMLButtonElement =>
+    keyField().closest('.settings-taglist')!.querySelector(':scope > button.mini') as HTMLButtonElement
+  const saves = (calls: Call[]): unknown[] => calls.filter(([name]) => name === 'provider').map(([, args]) => args)
+
+  it('says there is no new key when nothing was changed', async () => {
+    const { calls } = install(withCustom(true))
+    await open('custom')
+    await act(async () => { fireEvent.click(keyUpdate()) })
+    expect(saves(calls)).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(UNCHANGED)
+  })
+
+  it('says the key goes with an edited address', async () => {
+    const { calls } = install(withCustom(true))
+    await open('custom')
+    fireEvent.change(baseField(), { target: { value: 'https://relay2.example/v1' } })
+    await act(async () => { fireEvent.click(keyUpdate()) })
+    expect(saves(calls)).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(KEY_WITH_BASE)
+  })
+
+  it('saves an edited address with a key typed beside it', async () => {
+    const { calls } = install(withCustom(true))
+    await open('custom')
+    fireEvent.change(baseField(), { target: { value: 'https://relay2.example/v1' } })
+    fireEvent.change(keyField(), { target: { value: 'sk-relay' } })
+    await act(async () => { fireEvent.click(keyUpdate()) })
+    expect(saves(calls)).toEqual([{ op: 'save_key', slug: 'custom', api_key: 'sk-relay', api_base: 'https://relay2.example/v1' }])
+  })
+
+  it('asks for the key first on a provider not yet connected', async () => {
+    const { calls } = install(withCustom(false))
+    await open('custom')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    expect(saves(calls)).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe('gui.settings.providers.key_first')
+  })
+})
+
 describe('provider detail, Azure', () => {
   it('shows the stored deployment and API version from the config section', async () => {
     const data = snap()
