@@ -171,6 +171,8 @@ def test_the_reminder_and_the_rewrite_name_the_reader_parts():
     assert "## Answer" not in ask
     # The rule the contract states, carried where recency puts it closest to the reply.
     assert "no English word in the heading" in reminder and "no English word in the heading" in ask
+    # A rewrite regenerates the headings, so the brief's own section names ride along.
+    assert "every section name the task gave, word for word with its numbering" in ask
 
 
 def test_the_reminder_checklist_points_at_the_reader_limits():
