@@ -518,9 +518,14 @@ export function RoleRows({ ids, setup, needed }: { ids: RoleId[]; setup?: boolea
 
 export function Roles({ setup }: { setup?: boolean }): JSX.Element {
   const s = store.get()
+  /* Another memory backend reads none of EverOS's extraction models, so its
+     three slots are not drawn; embedding stays, because a knowledge base embeds
+     with that pin whatever the backend is. Keyed on the roles RPC's reason,
+     not on the cloud card, so a third backend hides them too. */
+  const other = s.snap.everos?.reason === 'other_backend'
   return (
     <Card title={t('gui.settings.roles.title_card')}>
-      {ROLES.map((r) => (
+      {ROLES.filter((r) => !(other && r.everos && r.everos !== 'embedding')).map((r) => (
         <div key={r.id}>
           <Row open={r.id === 'chat' && s.chatCfg} k={(
             <RoleLabel role={r} extra={r.id === 'chat' ? <ParamsDisc /> : undefined} />

@@ -33,10 +33,14 @@ if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
 
 _HTTP_TIMEOUT_S = 15.0
-# The backend contribution whose store this page reads. Named once: the page
+# The backend contributions whose store this page reads. Named once: the page
 # is EverOS-shaped down to its four tabs, so every check for "is this page
-# looking at the right store" has to mean the same thing.
+# looking at the right store" has to mean the same thing. Two plugins serve
+# that shape -- the local server and EverOS Cloud -- and the page follows
+# whichever ``memory.backend`` names; its slice and its package are looked up
+# here by that name.
 _EVEROS_BACKEND = "everos"
+_CLOUD_BACKEND = "everos-cloud"
 
 _USER_KINDS = ("episode", "profile")
 _AGENT_KINDS = ("agent_case", "agent_skill")
@@ -52,28 +56,54 @@ _KIND_FIELD = {
 }
 
 
+def _configured_backend() -> str | None:
+    """``memory.backend`` as configured; ``None`` when memory is off."""
+    from raven.config.raven import load_raven_config
+
+    return load_raven_config().memory.backend
+
+
 def _cfg() -> tuple[str, str, str]:
     """(base_url, user_id, agent_id) from raven's config.
 
     ``plugins`` / ``memory`` live on the composed :class:`RavenConfig`,
-    not the base channels ``Config`` — hence ``load_raven_config``.
+    not the base channels ``Config`` — hence ``load_raven_config``. The slice
+    and the default address follow the configured backend.
     """
     from raven.config.raven import load_raven_config
-    from raven_everos.server import DEFAULT_EVEROS_BASE_URL
 
     cfg = load_raven_config()
-    plug = (cfg.plugins.config or {}).get("everos-memory", {})
-    base_url = str(plug.get("base_url") or DEFAULT_EVEROS_BASE_URL).rstrip("/")
     user_id = cfg.memory.user_id or "default"
     agent_id = cfg.memory.agent_id or "default"
-    return base_url, user_id, agent_id
+    if cfg.memory.backend == _CLOUD_BACKEND:
+        from raven_everos_cloud.backend import DEFAULT_BASE_URL
+
+        plug = (cfg.plugins.config or {}).get("everos-cloud-memory", {})
+        return str(plug.get("base_url") or DEFAULT_BASE_URL).rstrip("/"), user_id, agent_id
+    from raven_everos.server import DEFAULT_EVEROS_BASE_URL
+
+    plug = (cfg.plugins.config or {}).get("everos-memory", {})
+    return str(plug.get("base_url") or DEFAULT_EVEROS_BASE_URL).rstrip("/"), user_id, agent_id
+
+
+def _auth_headers() -> dict[str, str]:
+    """The Bearer header for the cloud backend; nothing for the local one."""
+    from raven.config.raven import load_raven_config
+
+    cfg = load_raven_config()
+    if cfg.memory.backend != _CLOUD_BACKEND:
+        return {}
+    from raven_everos_cloud.backend import resolve_api_key
+
+    key, _source = resolve_api_key((cfg.plugins.config or {}).get("everos-cloud-memory", {}))
+    return {"Authorization": f"Bearer {key}"} if key else {}
 
 
 async def _post(base_url: str, path: str, body: dict[str, Any]) -> dict[str, Any]:
     import httpx
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(_HTTP_TIMEOUT_S)) as client:
-        r = await client.post(f"{base_url}{path}", json=body)
+        r = await client.post(f"{base_url}{path}", json=body, headers=_auth_headers())
         r.raise_for_status()
         return r.json() or {}
 
@@ -89,14 +119,17 @@ async def _search_tuning(base_url: str, kind: str) -> dict[str, Any]:
     server refuses the search with 422 and the page reported "everos
     unreachable" over a retry button.
     """
-    from raven_everos.health import probe_capabilities
-
-    report = await asyncio.to_thread(probe_capabilities, base_url)
     body: dict[str, Any] = {}
-    if report.available("embedding") is False:
-        body["method"] = "keyword"
-    elif kind in _AGENT_KINDS and report.available("rerank") is False:
-        body["method"] = "vector"
+    if _configured_backend() != _CLOUD_BACKEND:
+        # The cloud always embeds and reranks and has no OSS ``/health`` to ask;
+        # only the local server can lack a role.
+        from raven_everos.health import probe_capabilities
+
+        report = await asyncio.to_thread(probe_capabilities, base_url)
+        if report.available("embedding") is False:
+            body["method"] = "keyword"
+        elif kind in _AGENT_KINDS and report.available("rerank") is False:
+            body["method"] = "vector"
     if kind == "profile":
         body["include_profile"] = True
     return body
@@ -177,14 +210,22 @@ def _unavailable_note() -> str | None:
     to render as four zeros or a retry button, which reads as "your memories are
     gone" rather than "this page is not where they are".
     """
-    from raven.config.raven import load_raven_config
+    from importlib.util import find_spec
 
+    try:
+        backend = _configured_backend()
+    except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
+        backend = _EVEROS_BACKEND
+    if backend == _CLOUD_BACKEND:
+        distribution, package = "everos-cloud-memory", "raven_everos_cloud"
+        if find_spec(package) is None:
+            return (
+                f"the {distribution} distribution is not installed, so the {_CLOUD_BACKEND} memory "
+                f"backend has nothing behind it. Install {distribution}, or run raven onboard to pick another backend."
+            )
+        return None
     if not everos_plugin_installed():
         return everos_plugin_missing_note()
-    try:
-        backend = load_raven_config().memory.backend
-    except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
-        return None
     if backend == _EVEROS_BACKEND:
         return None
     if not backend:

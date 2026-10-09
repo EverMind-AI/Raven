@@ -228,8 +228,10 @@ const UNSENT = new Set([
   'session.create.info.config_notices', 'session.create.info.endpoint', 'session.create.info.running_ms', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
   // session.resume: 13
   'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.running_ms', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
-  // settings.everos: 1
-  'settings.everos.note',
+  // settings.everos: 2 -- reason is set only when another backend holds long-term memory; this library runs on EverOS
+  'settings.everos.note', 'settings.everos.reason',
+  // settings.everosCloud: 3 -- the cloud backend is not the selected one here, so no key is on file and nothing is probed
+  'settings.everosCloud.hint', 'settings.everosCloud.key_source', 'settings.everosCloud.status',
   // settings.everosSet: 1 -- the gateway's re-index warning, which only a real embedding move raises
   'settings.everosSet.warning',
   // settings.set: 1 -- the gateway's reload-only warning, which the key the gate writes (a live one) never raises

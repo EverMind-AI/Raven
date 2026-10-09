@@ -4907,6 +4907,13 @@
               ],
               "description": "Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted."
             },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Why available is false, when the page should draw none of the role slots: 'other_backend' means memory.backend names a backend that does not read EverOS's roles. Absent when the plugin is merely not installed, which keeps the slots drawn with their not-installed note."
+            },
             "owned": {
               "type": "boolean",
               "default": true,
@@ -5097,6 +5104,63 @@
           },
           "required": [
             "applied"
+          ],
+          "type": "object"
+        }
+      }
+    },
+    {
+      "name": "settings.everosCloud",
+      "summary": "The EverOS Cloud card: whether the hosted memory backend answers, which key it uses, where it points.",
+      "params": [],
+      "result": {
+        "name": "SettingsEverosCloudResult",
+        "schema": {
+          "additionalProperties": false,
+          "properties": {
+            "available": {
+              "type": "boolean",
+              "description": "Whether the everos-cloud-memory distribution is installed."
+            },
+            "selected": {
+              "type": "boolean",
+              "description": "Whether memory.backend names everos-cloud; the card is drawn only then."
+            },
+            "api_key_set": {
+              "type": "boolean",
+              "description": "Whether a key resolves, from the file or the environment."
+            },
+            "key_source": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "'file' or 'env' when a key resolves; null otherwise."
+            },
+            "base_url": {
+              "type": "string",
+              "default": "",
+              "description": "The cloud address in force: the slice's base_url or the default."
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The health probe's verdict when selected: 'ok', 'degraded' or 'missing'; null when not probed."
+            },
+            "hint": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "What a person should look at, in the backend's own words."
+            }
+          },
+          "required": [
+            "available",
+            "selected",
+            "api_key_set"
           ],
           "type": "object"
         }

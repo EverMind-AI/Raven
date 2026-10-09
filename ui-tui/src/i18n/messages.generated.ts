@@ -2886,7 +2886,16 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.conn.line_ready': 'Credentials saved, not switched on',
     'gui.conn.line_saved': 'Credentials saved',
     'gui.conn.none_on': 'No channel connected yet',
-    'gui.conn.none_off': 'Every channel is connected'
+    'gui.conn.none_off': 'Every channel is connected',
+    'gui.settings.cloud.title': 'Long-term memory: EverOS Cloud',
+    'gui.settings.cloud.status': 'Status',
+    'gui.settings.cloud.key': 'API key',
+    'gui.settings.cloud.endpoint': 'Endpoint',
+    'gui.settings.cloud.restart_hint': 'A changed key is used by the running gateway after its next start.',
+    'gui.settings.cloud.chip_connected': 'Connected',
+    'gui.settings.cloud.chip_needs_key': 'Needs a key',
+    'gui.settings.cloud.chip_rate_limited': 'Rate limited',
+    'gui.settings.cloud.chip_probing': 'Checking'
   },
   zh: {
     'gui.act.ing.ask_user': '等待你回答',
@@ -5445,6 +5454,15 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.conn.line_ready': '凭据已填好，还没开启',
     'gui.conn.line_saved': '凭据已填好',
     'gui.conn.none_on': '还没有接入任何渠道',
-    'gui.conn.none_off': '所有渠道都已接入'
+    'gui.conn.none_off': '所有渠道都已接入',
+    'gui.settings.cloud.title': '长期记忆：EverOS Cloud',
+    'gui.settings.cloud.status': '状态',
+    'gui.settings.cloud.key': 'API 密钥',
+    'gui.settings.cloud.endpoint': '服务地址',
+    'gui.settings.cloud.restart_hint': '更换密钥后，运行中的网关下次启动才会使用新密钥。',
+    'gui.settings.cloud.chip_connected': '已连接',
+    'gui.settings.cloud.chip_needs_key': '需要密钥',
+    'gui.settings.cloud.chip_rate_limited': '被限流',
+    'gui.settings.cloud.chip_probing': '检查中'
   }
 } as Record<Locale, Record<string, string>>

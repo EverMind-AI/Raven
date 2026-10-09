@@ -97,6 +97,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
         ollama: ['embedding', 'llm', 'multimodal', 'rerank'],
       },
     },
+    everosCloud: null,
     providers: providers(),
     curProvider: 'anthropic',
     model: 'claude-opus-4-5',

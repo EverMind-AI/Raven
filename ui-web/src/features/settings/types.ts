@@ -134,6 +134,8 @@ export interface ToolRow {
 export type SkillRow = ExtSkillRow
 export type SkillDetail = NonNullable<ResultOf<'skills.manage'>['info']>
 export type ArchivedSession = ResultOf<'session.list'>['sessions'][number]
+/* The EverOS Cloud card's data: settings.everosCloud's own shape. */
+export type EverosCloudInfo = ResultOf<'settings.everosCloud'>
 export type OauthStart = ResultOf<'model.oauth_login'>
 
 /* Everything the dialog draws from, in one read. `raw` is the config
@@ -144,6 +146,7 @@ export interface SettingsSnapshot {
   raw: Record<string, unknown>
   configPath: string
   everos: EverosInfo | null
+  everosCloud: EverosCloudInfo | null
   providers: ProviderRow[]
   curProvider: string
   model: string

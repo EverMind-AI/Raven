@@ -3812,6 +3812,32 @@ class SettingsEverosResult(_Strict):
             "names. Null when the store was actually consulted."
         ),
     )
+    reason: str | None = Field(
+        default=None,
+        description=(
+            "Why available is false, when the page should draw none of the role slots: "
+            "'other_backend' means memory.backend names a backend that does not read "
+            "EverOS's roles. Absent when the plugin is merely not installed, which keeps "
+            "the slots drawn with their not-installed note."
+        ),
+    )
+
+
+class SettingsEverosCloudParams(_Strict):
+    pass
+
+
+class SettingsEverosCloudResult(_Strict):
+    available: bool = Field(description="Whether the everos-cloud-memory distribution is installed.")
+    selected: bool = Field(description="Whether memory.backend names everos-cloud; the card is drawn only then.")
+    api_key_set: bool = Field(description="Whether a key resolves, from the file or the environment.")
+    key_source: str | None = Field(default=None, description="'file' or 'env' when a key resolves; null otherwise.")
+    base_url: str = Field(default="", description="The cloud address in force: the slice's base_url or the default.")
+    status: str | None = Field(
+        default=None,
+        description="The health probe's verdict when selected: 'ok', 'degraded' or 'missing'; null when not probed.",
+    )
+    hint: str | None = Field(default=None, description="What a person should look at, in the backend's own words.")
 
 
 class SettingsEverosSetParams(_Strict):
@@ -5547,6 +5573,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "settings.everos": (SettingsEverosParams, SettingsEverosResult),
     "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
     "settings.everos_set": (SettingsEverosSetParams, SettingsEverosSetResult),
+    "settings.everosCloud": (SettingsEverosCloudParams, SettingsEverosCloudResult),
     "clipboard.paste": (ClipboardPasteParams, ClipboardPasteResult),
     "command.dispatch": (CommandDispatchParams, CommandDispatchResult),
     "delegation.status": (DelegationStatusParams, DelegationStatusResult),

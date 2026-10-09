@@ -210,9 +210,12 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
       },
       'settings.everos': () => ({
         sections: {}, config_path: '~/.raven/config.json', available: false, owned: true, supports: {},
-        required: ['llm', 'embedding'],
+        required: ['llm', 'embedding'], note: null, reason: null,
       }),
       'settings.everosSet': () => ({ applied: true, warning: null }),
+      'settings.everosCloud': () => ({
+        available: true, selected: false, api_key_set: false, key_source: null, base_url: '', status: null, hint: null,
+      }),
       'session.set_mode': (p) => {
         const mode = (p as { mode?: string }).mode
         if (mode) tier = mode
