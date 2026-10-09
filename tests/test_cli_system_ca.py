@@ -137,3 +137,24 @@ def test_the_entry_settles_trust_then_hands_the_process_to_the_cli(monkeypatch) 
     entry.run()
 
     assert calls == ["trust", "cli"]
+
+
+def test_no_cli_module_is_a_third_way_to_start_raven() -> None:
+    """The two launches above are the only ones: a CLI module run as a script skips the switch.
+
+    Pointing such a guard at ``cli.entry.run`` instead would not help either. By the
+    time a module's guard runs, its own imports have built aiohttp's context.
+    """
+    import ast
+
+    import raven.cli
+
+    package = Path(raven.cli.__file__).parent
+    guarded = sorted(
+        path.relative_to(package).as_posix()
+        for path in package.rglob("*.py")
+        for node in ast.parse(path.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.If) and ast.unparse(node.test).replace("'", '"') == '__name__ == "__main__"'
+    )
+
+    assert guarded == []

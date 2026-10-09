@@ -252,7 +252,3 @@ def run() -> None:
         from raven.cli._helpers import print_config_migration_notices
 
         print_config_migration_notices()
-
-
-if __name__ == "__main__":
-    run()
