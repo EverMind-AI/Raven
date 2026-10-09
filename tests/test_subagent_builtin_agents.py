@@ -11,9 +11,11 @@ opted out.
 
 from __future__ import annotations
 
-import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from raven.agent.subagent import builtin_agents
 from raven.agent.subagent.backends import agent_meta
@@ -24,6 +26,7 @@ from raven.agent.subagent.builtin_agents import (
     merge_builtin_seeds,
 )
 from raven.config.schema import BuiltinAgentConfig
+from raven.utils import commands
 
 OWNS = "owns decks. Do not build the deck yourself."
 
@@ -42,6 +45,47 @@ def _seeded(monkeypatch, **seed_fields: Any) -> None:
     """
     seed = BuiltinAgentConfig.model_validate({"name": "Scribe", "kind": "builtin", **seed_fields})
     monkeypatch.setattr(builtin_agents, "builtin_agent_seeds", lambda: [seed.model_copy()])
+
+
+@pytest.fixture(params=["nt", "posix"])
+def command_platform(request, monkeypatch) -> str:
+    """Select the producer and consumer platform without changing the host OS."""
+    for module in (builtin_agents, commands):
+        monkeypatch.setattr(module, "os", SimpleNamespace(name=request.param))
+    return request.param
+
+
+class TestHostRavenAcpCommand:
+    @pytest.mark.parametrize("directory", ["runtime", "my runtime"])
+    def test_interpreter_sibling_round_trips(self, monkeypatch, tmp_path, command_platform, directory) -> None:
+        interpreter = tmp_path / directory / "python"
+        interpreter.parent.mkdir()
+        launcher = interpreter.with_name("raven.exe" if command_platform == "nt" else "raven")
+        launcher.touch()
+        monkeypatch.setattr(builtin_agents, "sys", SimpleNamespace(executable=str(interpreter)))
+
+        def unexpected_lookup(exe):
+            pytest.fail("The interpreter's sibling must take precedence over PATH")
+
+        monkeypatch.setattr(builtin_agents.shutil, "which", unexpected_lookup)
+
+        assert commands.command_argv(builtin_agents.host_raven_acp_command()) == [str(launcher), "acp"]
+
+    @pytest.mark.parametrize("directory", ["runtime", "my runtime"])
+    def test_path_fallback_round_trips(self, monkeypatch, tmp_path, command_platform, directory) -> None:
+        if command_platform == "nt":
+            launcher = PureWindowsPath("C:/Users/me") / directory / "raven.exe"
+        else:
+            launcher = PurePosixPath("/opt") / directory / "raven"
+        monkeypatch.setattr(builtin_agents, "sys", SimpleNamespace(executable=str(tmp_path / "python")))
+
+        def find_launcher(exe):
+            assert exe == launcher.name
+            return str(launcher)
+
+        monkeypatch.setattr(builtin_agents.shutil, "which", find_launcher)
+
+        assert commands.command_argv(builtin_agents.host_raven_acp_command()) == [str(launcher), "acp"]
 
 
 class TestOwnershipIsDeclarableOnABuiltinRow:
@@ -227,12 +271,13 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         assert [(row.name, row.kind) for row in merged] == [(GENERIC_AGENT, "acp")]
 
-    def test_env_carries_the_host_raven_home(self, monkeypatch) -> None:
-        monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
+    def test_env_carries_the_host_raven_home(self, monkeypatch, tmp_path) -> None:
+        home = tmp_path / "host"
+        monkeypatch.setenv("RAVEN_HOME", str(home))
 
         merged = merge_builtin_seeds([self._acp()])
 
-        assert merged[0].env["RAVEN_HOME"] == "/srv/raven"
+        assert merged[0].env["RAVEN_HOME"] == str(home)
 
     def test_a_declared_command_description_and_env_are_kept(self) -> None:
         from raven.config.schema import ThirdPartyAcpSubagentConfig
@@ -261,14 +306,15 @@ class TestAnAcpRowCanReplaceTheSeed:
         using -- a different model and provider than this row promises.
         """
         cfg = tmp_path / "instance" / "config.json"
-        monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
+        home = tmp_path / "host"
+        monkeypatch.setenv("RAVEN_HOME", str(home))
         monkeypatch.setattr("raven.home._current_config_path", cfg)
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
 
         merged = merge_builtin_seeds([self._acp()])
 
-        assert merged[0].command == f"/usr/bin/raven acp --config {cfg}"
-        assert merged[0].env["RAVEN_HOME"] == "/srv/raven"
+        assert commands.command_argv(merged[0].command) == ["/usr/bin/raven", "acp", "--config", str(cfg)]
+        assert merged[0].env["RAVEN_HOME"] == str(home)
 
     def test_a_host_reading_its_own_homes_config_adds_no_flag(self, monkeypatch) -> None:
         monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
@@ -333,12 +379,13 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         assert merged[0].command == "/usr/bin/raven acp"
 
-    def test_a_config_path_with_a_space_stays_one_argv_token(self, monkeypatch, tmp_path) -> None:
-        cfg = tmp_path / "my configs" / "config.json"
+    def test_a_config_path_with_a_space_stays_one_argv_token(self, monkeypatch, command_platform) -> None:
+        root = PureWindowsPath("C:/Users/me") if command_platform == "nt" else PurePosixPath("/srv")
+        cfg = root / "my configs" / "config.json"
         monkeypatch.setenv("RAVEN_HOME", "/srv/raven")
         monkeypatch.setattr("raven.home._current_config_path", cfg)
         monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/usr/bin/raven acp")
 
         merged = merge_builtin_seeds([self._acp()])
 
-        assert shlex.split(merged[0].command) == ["/usr/bin/raven", "acp", "--config", str(cfg)]
+        assert commands.command_argv(merged[0].command) == ["/usr/bin/raven", "acp", "--config", str(cfg)]
