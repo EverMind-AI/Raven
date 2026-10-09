@@ -145,6 +145,7 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
   return {
     openConversation: runtime.openConversation,
     sendOnSession: runtime.sendOnSession,
+    send: runtime.send,
     isDraft: () => runtime.isDraft(),
     viewGen: () => generation(),
     enterDraft,
@@ -320,5 +321,43 @@ describe('getting a conversation to work in', () => {
     await h.openConversation()
     expect(h.viewGen()).toBe(began + 1)
     expect(h.reReads).toContainEqual(['made-1', began])
+  })
+})
+
+/* The first message of a draft records the model its turn runs on in the
+   picker's recent list (features/model/recent.ts). That is the staged pick when
+   the server applies it to the conversation just made, and the model the session
+   already had when it refuses -- which the chip shows only once its reload
+   lands, so that turn records nothing rather than the pick it did not run on. */
+describe('the model the first message of a draft goes out on', () => {
+  const used = (): unknown => JSON.parse(localStorage.getItem('raven.models.used') || 'null')
+  const settle = async (): Promise<void> => { for (let i = 0; i < 20; i += 1) await Promise.resolve() }
+
+  it('records the staged model when the server applies it', async () => {
+    localStorage.clear()
+    const h = await harness(true)
+    const model = await import('../../features/model/store')
+    h.stage({ model: { model: 'staged-m', provider: 'p' } })
+    model.setCurrent('staged-m', 'p')
+
+    h.send('hello')
+    await settle()
+
+    expect(h.log).toContain('rpc:turn.send')
+    expect(used()).toEqual([{ model: 'staged-m', provider: 'p' }])
+  })
+
+  it('records nothing when the server refuses the staged model', async () => {
+    localStorage.clear()
+    const h = await harness(true, { refuseModelWrite: true })
+    const model = await import('../../features/model/store')
+    h.stage({ model: { model: 'staged-m', provider: 'p' } })
+    model.setCurrent('staged-m', 'p')
+
+    h.send('hello')
+    await settle()
+
+    expect(h.log).toContain('rpc:turn.send')
+    expect(used()).toBeNull()
   })
 })

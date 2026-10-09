@@ -10,7 +10,7 @@ import * as tier from '../../state/tier'
 import { domSnapshot } from '../../test/domSnapshot'
 import { FOLD, ModelApp } from './ModelPicker'
 import { remember } from './recent'
-import { rememberSent } from './source'
+import { chipModel, rememberUsed } from './source'
 import * as store from './store';
 
 import type { ModelSource, Provider } from './types'
@@ -707,10 +707,12 @@ describe('the fold', () => {
 /* The models the last messages went out on head the list: the way back to the
    three or four a reader actually moves between (./recent.ts). */
 describe('the recently used models', () => {
-  /* What a send does to the list: the chip names the model, the message goes. */
+  /* What a taken send does to the list: the chip names the model, the turn
+     runs on it (state/session/runtime.ts records it once the server takes it). */
   const sendOn = (model: string, provider: string): void => {
     store.setCurrent(model, provider)
-    rememberSent()
+    const ran = chipModel()
+    if (ran) rememberUsed(ran)
   }
 
   it('heads the list with the models messages last went out on, latest first and each once, each naming its account', async () => {

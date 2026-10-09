@@ -7,9 +7,12 @@
  * its own memory, in localStorage -- the model and the provider, because the
  * same id can be served by two accounts and a turn runs on one.
  *
- * Written when a message goes out (`rememberSent`, called from the composer's
- * send in state/session/runtime.ts), under what the composer's chip names at
- * that moment, which is what the turn runs on. It used to be written on a pick
+ * Written when the server takes a message that starts a turn (the composer's
+ * send, state/session/runtime.ts), under what the composer's chip named as the
+ * message went out, which is what the turn runs on. A refused send records
+ * nothing, and neither does the first message of a draft whose staged model
+ * the server refused: that turn runs on the model the session already had,
+ * which the chip shows only once its reload lands. It used to be written on a pick
  * in the picker instead, and that listed what was reached for rather than what
  * was used: a model picked and never sent with stayed, and the default -- set
  * in settings, never picked, and the one every message went out on -- never

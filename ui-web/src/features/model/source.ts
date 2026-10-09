@@ -17,6 +17,7 @@ import { current, currentProvider, open as openPickerAt, setCurrent, statedTags 
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { TierReply, TierSource } from '../../state/tier'
+import type { Recent } from './recent'
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
 
 type ProviderWire = ResultOf<'model.options'>['providers'][number]
@@ -61,15 +62,19 @@ export function setChipPainter(fn: () => void): void {
   paintChip = fn
 }
 
-/* A message is going out: what the composer's chip names is what its turn
-   runs on, so it heads the picker's recent list (./recent.ts). A chip whose
-   account nothing has said yet names no row to list it under; the next send
-   that knows it does. */
-export function rememberSent(): void {
+/* What the composer's chip names -- the model, and the account it runs on --
+   or null while nothing has said which account: a recent row needs both, and
+   one with no account could never be listed. Read by the send as a message
+   goes out (state/session/runtime.ts), which records it once the server has
+   taken that message (`rememberUsed`). */
+export function chipModel(): Recent | null {
   const model = current()
   const provider = currentProvider()
-  if (model && provider) remember(model, provider)
+  return model && provider ? { model, provider } : null
 }
+
+/* A turn the server took ran on this: it heads the picker's recent list. */
+export const rememberUsed = (used: Recent): void => remember(used.model, used.provider)
 
 /* The chip the composer shows and the settings default both write. */
 export const showModel = (model: string, provider = ''): void => {
