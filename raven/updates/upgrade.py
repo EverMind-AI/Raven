@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -29,7 +30,6 @@ from urllib.request import url2pathname
 
 import httpx
 
-from raven.security.tls import opted_out
 from raven.updates import install_guard as _install_guard
 
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
@@ -1198,12 +1198,14 @@ def _hand_over_system_ca(env: dict[str, str]) -> Path | None:
     environment's truststore, so it gets a copy; it tells uv in turn. The copy
     is the helper's to discard once loaded, and the caller's when no helper
     starts. Since the helper deletes the directory it is handed, only one this
-    process just made is ever passed on.
+    process just made is ever passed on. A process that never switched -- opted
+    out, or started some way other than `cli.entry` -- has nothing to hand over,
+    and is not asked to import truststore to find that out.
     """
     env.pop("RAVEN_UPGRADE_TRUSTSTORE", None)
-    if opted_out():
+    truststore = sys.modules.get("truststore")
+    if truststore is None or ssl.SSLContext is not truststore.SSLContext:
         return None
-    import truststore
 
     copy: Path | None = None
     try:

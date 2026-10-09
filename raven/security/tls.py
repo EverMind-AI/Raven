@@ -27,14 +27,13 @@ OPT_OUT_ENV = "RAVEN_NO_SYSTEM_CA"
 _TRUTHY = {"1", "true", "yes", "on"}
 
 
-def opted_out() -> bool:
-    """Whether ``RAVEN_NO_SYSTEM_CA`` leaves every client verifying the way it does on its own."""
-    return os.environ.get(OPT_OUT_ENV, "").strip().lower() in _TRUTHY
-
-
 def use_system_ca() -> None:
-    """Verify TLS against the operating system's store from now on, unless opted out."""
-    if opted_out():
+    """Verify TLS against the operating system's store from now on, unless opted out.
+
+    ``RAVEN_NO_SYSTEM_CA=1`` leaves every client verifying the way it does on
+    its own.
+    """
+    if os.environ.get(OPT_OUT_ENV, "").strip().lower() in _TRUTHY:
         return
     import truststore
 

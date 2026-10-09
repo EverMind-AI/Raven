@@ -13,7 +13,7 @@ import tempfile
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import FrozenInstanceError
 from datetime import datetime
 from pathlib import Path
@@ -2407,13 +2407,20 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
             target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=tmp_path / "bin"),
         )
 
+    @pytest.fixture
+    def switched(self) -> Iterator[None]:
+        """This process verifying against the system store, as `cli.entry` leaves it."""
+        truststore.inject_into_ssl()
+        yield
+        truststore.extract_from_ssl()
+
     @staticmethod
     def _copy_in(env: dict[str, str]) -> tuple[Path, bytes]:
         copy = Path(env["RAVEN_UPGRADE_TRUSTSTORE"])
         return copy, (copy / "truststore" / "__init__.py").read_bytes()
 
     def test_the_cli_handoff_hands_the_helper_a_copy_of_truststore(
-        self, monkeypatch: pytest.MonkeyPatch, plan: object
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, switched: None
     ) -> None:
         monkeypatch.setattr(upgrade_commands.sys, "platform", "linux")
         handed: list[tuple[Path, bytes]] = []
@@ -2432,7 +2439,7 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         assert not copy.exists(), "a helper that never started left its copy behind"
 
     def test_the_page_spawn_hands_the_helper_a_copy_of_truststore(
-        self, monkeypatch: pytest.MonkeyPatch, plan: object
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, switched: None
     ) -> None:
         handed: list[tuple[Path, bytes]] = []
         monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: handed.append(self._copy_in(env)))
@@ -2443,7 +2450,7 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         assert package == Path(truststore.__file__).read_bytes()
 
     def test_a_page_spawn_that_never_started_leaves_no_copy(
-        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path, switched: None
     ) -> None:
         monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=OSError("spawn denied")))
 
@@ -2452,11 +2459,14 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
 
         assert list(scratch.iterdir()) == []
 
-    def test_opting_out_passes_on_no_copy_not_even_an_inherited_one(
+    def test_a_process_started_under_the_opt_out_hands_over_nothing_not_even_an_inherited_path(
         self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path, tmp_path: Path
     ) -> None:
         """The helper deletes the directory it is handed, so only one made for it may reach it."""
+        from raven.security.tls import use_system_ca
+
         monkeypatch.setenv("RAVEN_NO_SYSTEM_CA", "1")
+        use_system_ca()
         monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "not-for-this-helper"))
         envs: list[dict[str, str]] = []
         monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
@@ -2467,8 +2477,37 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
         assert list(scratch.iterdir()) == []
 
+    def test_a_process_that_never_switched_hands_over_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path
+    ) -> None:
+        """Started some way other than `cli.entry`, a process verifies the way each library does,
+        and its helper should do the same, whether or not truststore could be imported."""
+        envs: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        (env,) = envs
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+
+    def test_a_process_without_truststore_starts_its_helper_all_the_same(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path
+    ) -> None:
+        """The real-uv upgrade test's tool environment has no truststore, and calls the handoff
+        without `cli.entry`; importing truststore there ended the upgrade before it began."""
+        monkeypatch.setitem(sys.modules, "truststore", None)
+        envs: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        (env,) = envs
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+
     def test_a_copy_that_cannot_be_made_is_reported_and_nothing_is_handed_over(
-        self, monkeypatch: pytest.MonkeyPatch, scratch: Path, capsys: pytest.CaptureFixture[str]
+        self, monkeypatch: pytest.MonkeyPatch, scratch: Path, capsys: pytest.CaptureFixture[str], switched: None
     ) -> None:
         """The helper then verifies the way it always did; the upgrade itself goes ahead."""
 
@@ -2561,7 +2600,7 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         assert injected.exists()
         assert not copy.exists()
 
-    def test_the_base_interpreter_loads_the_copy_it_is_handed(self) -> None:
+    def test_the_base_interpreter_loads_the_copy_it_is_handed(self, switched: None) -> None:
         base = self._base_interpreter()
         copy = upgrade_commands._hand_over_system_ca({})
 
