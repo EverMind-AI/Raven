@@ -7,6 +7,9 @@ what the callers are handed once the read is in.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 
 from raven.utils import processes
@@ -64,6 +67,46 @@ def test_an_unreadable_command_line_is_never_ours(monkeypatch) -> None:
 def test_an_unreadable_command_line_has_an_unknown_identity(monkeypatch, line) -> None:
     monkeypatch.setattr(processes, "command_line", lambda _pid: line)
     assert processes.raven_identity(1234) is None
+
+
+@pytest.mark.parametrize("reader", [processes._command_line_posix, processes._command_line_windows])
+def test_undecodable_argv_does_not_crash_the_reader(monkeypatch, reader) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: "powershell.exe")
+    run = subprocess.run
+
+    def emit_bytes(_argv, **kwargs):
+        script = r"import sys; sys.stdout.buffer.write(b'python /tmp/profil\xe9/worker.py\n')"
+        return run([sys.executable, "-c", script], **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", emit_bytes)
+    assert reader(1234) == "python /tmp/profil\ufffd/worker.py"
+
+
+@pytest.mark.parametrize("reader", [processes._command_line_posix, processes._command_line_windows])
+@pytest.mark.parametrize("error", [OSError("unavailable"), subprocess.TimeoutExpired("probe", 1)])
+def test_a_failed_reader_keeps_the_identity_unknown(monkeypatch, reader, error) -> None:
+    monkeypatch.setattr("shutil.which", lambda _name: "powershell.exe")
+
+    def fail(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    assert reader(1234) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="CIM is the Windows reader")
+@pytest.mark.slow
+def test_windows_reads_unicode_arguments_from_a_live_process() -> None:
+    argument = "profile-\u00fc"
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", argument])
+    try:
+        line = processes.command_line(sleeper.pid)
+        assert line is not None
+        assert argument in line
+        assert "time.sleep" in line
+    finally:
+        sleeper.terminate()
+        sleeper.wait(timeout=10)
 
 
 class TestThePosixReader:
