@@ -65,15 +65,14 @@ own channel, and two different things under one label is worse than no label.
 """
 
 
-def looks_like_raven(pid: int) -> bool:
-    """Whether ``pid`` runs a ``python -m raven`` invocation, for callers that
-    cannot use the lock or the port.
+def looks_like_raven(pid: int) -> Optional[bool]:
+    """Whether ``pid`` runs a Raven resident, or None if its argv is unreadable.
 
     Kept as a name here for the same reason ``_pid_alive`` is: the identity
     probe is one name the tests pin, and the platform question itself belongs
     to ``utils.processes``.
     """
-    from raven.utils.processes import looks_like_raven as _check
+    from raven.utils.processes import raven_identity as _check
 
     return _check(pid)
 
@@ -755,7 +754,8 @@ def _read_web_state() -> Optional[int]:
     A recorded pid that is not ours is the same answer as no file at all: the
     file is removed on a clean exit only, so a killed supervisor leaves one
     behind -- and a pid the kernel has since recycled to somebody else is not
-    a supervisor, however alive.
+    a supervisor, however alive. An unreadable command line proves neither,
+    so a live supervisor with an unknown identity still counts.
     """
     import json
 
@@ -763,7 +763,7 @@ def _read_web_state() -> Optional[int]:
         pid = int(json.loads(_web_state_path().read_text(encoding="utf-8"))["pid"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return pid if pid > 0 and _pid_alive(pid) and looks_like_raven(pid) else None
+    return pid if pid > 0 and _pid_alive(pid) and looks_like_raven(pid) is not False else None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -807,7 +807,7 @@ def _drop_stale_serve_state(recorded: int) -> None:
     _state_path().unlink(missing_ok=True)
 
 
-def _recorded_is_ours(recorded: int) -> bool:
+def _recorded_is_ours(recorded: int) -> Optional[bool]:
     """Whether the pid a state file names is still the raven process it was.
 
     The instance lock answers for the page-hosting gateway it guards; the
@@ -1248,7 +1248,7 @@ def _stop_one(label: str, pid: int, unresponsive: list[str]) -> None:
 
 
 def _stop_resident() -> bool:
-    """Stop the supervisor and the gateway it keeps up. True if anything was up.
+    """Stop the supervisor and the gateway it keeps up. True if anything stopped.
 
     The supervisor goes first, and by SIGTERM rather than SIGKILL, so its
     ``finally`` removes ``web.json``. Killing the gateway first would only prove
@@ -1282,6 +1282,8 @@ def _stop_resident() -> bool:
     unresponsive: list[str] = []
 
     supervisor = _read_web_state()
+    if supervisor is not None and not _may_signal("supervisor", supervisor):
+        supervisor = None
     if supervisor is not None:
         try:
             _stop_one("supervisor", supervisor, unresponsive)
@@ -1297,7 +1299,7 @@ def _stop_resident() -> bool:
             _web_state_path().unlink(missing_ok=True)
 
     gateway = _read_serve_pid()
-    if gateway is not None and gateway != supervisor:
+    if gateway is not None and gateway != supervisor and _may_signal("gateway", gateway):
         try:
             _stop_one("gateway", gateway, unresponsive)
             stopped = True
@@ -1321,6 +1323,16 @@ def _stop_resident() -> bool:
     return stopped
 
 
+def _may_signal(label: str, pid: int) -> bool:
+    """State readers retain an uncertain identity; stopping requires proof."""
+    if _recorded_is_ours(pid) is True:
+        return True
+    typer.echo(
+        f"warning: not stopping the {label} (pid {pid}): its identity could not be confirmed; its record is kept"
+    )
+    return False
+
+
 def _recorded_serve_pid() -> Optional[int]:
     """The bare pid the state file names, with no claim made about it."""
     import json
@@ -1340,16 +1352,17 @@ def _read_serve_pid() -> Optional[int]:
     either as "our gateway" is what refused every ``raven web`` and signed the
     stop of an unrelated process. What makes the record ours is decidable:
     the instance lock for a page-hosting gateway, the command line for
-    anything that keeps the module shape. A record that cannot prove itself
-    ours is said once and removed, so the leftover stops deciding.
+    anything that keeps the module shape. A record proven to name a foreign
+    process is said once and removed. An unreadable identity keeps its record
+    and continues to prevent a second engine from starting beside it.
     """
     pid = _recorded_serve_pid()
     if pid is None or not _pid_alive(pid):
         return None
-    if _recorded_is_ours(pid):
-        return pid
-    _drop_stale_serve_state(pid)
-    return None
+    if _recorded_is_ours(pid) is False:
+        _drop_stale_serve_state(pid)
+        return None
+    return pid
 
 
 _ATTACH_PATIENCE_S = 150.0

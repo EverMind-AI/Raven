@@ -7,6 +7,8 @@ what the callers are handed once the read is in.
 
 from __future__ import annotations
 
+import pytest
+
 from raven.utils import processes
 
 
@@ -56,6 +58,12 @@ def test_a_process_named_raven_running_something_else_is_not(monkeypatch) -> Non
 def test_an_unreadable_command_line_is_never_ours(monkeypatch) -> None:
     monkeypatch.setattr(processes, "command_line", lambda _pid: None)
     assert not processes.looks_like_raven(1234)
+
+
+@pytest.mark.parametrize("line", [None, ""])
+def test_an_unreadable_command_line_has_an_unknown_identity(monkeypatch, line) -> None:
+    monkeypatch.setattr(processes, "command_line", lambda _pid: line)
+    assert processes.raven_identity(1234) is None
 
 
 class TestThePosixReader:
