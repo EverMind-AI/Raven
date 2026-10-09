@@ -1,9 +1,4 @@
-"""``raven.utils.processes`` -- reading "is this pid raven's" off its argv.
-
-The decision layer is exercised here, not the OS readers: ``ps`` and the CIM
-query both answer a real machine, and the only property the suite owns is
-what the callers are handed once the read is in.
-"""
+"""Process identity decisions and the POSIX and Windows command-line readers."""
 
 from __future__ import annotations
 
@@ -192,9 +187,7 @@ class TestThePosixReader:
         assert processes._command_line_posix(1) is None
 
     def test_a_ps_that_cannot_run_reads_as_none(self, monkeypatch) -> None:
-        """CI happens to ship ``ps``; the failure branch still has to be
-        exercised, because the honest answer to "cannot read" is "do not act",
-        never "assume alive"."""
+        """A missing probe establishes no identity; liveness is a separate read."""
         import subprocess
         import sys
 

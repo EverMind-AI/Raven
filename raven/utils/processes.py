@@ -33,7 +33,7 @@ def command_line(pid: int) -> Optional[str]:
 
 
 def _command_line_posix(pid: int) -> Optional[str]:
-    """The process's argv through ``ps``, which POSIX guarantees everywhere.
+    """The process's argv through GNU or BSD ``ps``, when it is available.
 
     ``/proc/<pid>/cmdline`` answers the same question on Linux but does not
     exist on macOS, which is a documented platform; ``ps -p -o command=`` is
@@ -113,8 +113,7 @@ def looks_like_raven(pid: int) -> bool:
     Two spellings the installs this code runs under:
 
     - ``python -m raven ...`` -- what the supervisor spawns for its gateway
-      (``_spawn_supervisor``, ``_gateway_argv``), and how ``uv run raven``
-      leaves the process looking too;
+      (``_spawn_supervisor``, ``_gateway_argv``);
     - ``raven <serve|web|gateway> ...`` -- the console-script entry point,
       with or without its ``.exe`` suffix on Windows.
 
