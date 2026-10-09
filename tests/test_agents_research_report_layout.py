@@ -226,6 +226,15 @@ def test_the_written_paths_come_from_the_tools_own_result_lines():
     assert written_markdown(messages) == ["/w/report draft.md", "/w/notes.md"]
 
 
+def test_the_notes_appended_after_the_fence_do_not_hide_the_path():
+    """The production bytes: the loop appends its budget lines after the fence closes."""
+    content = (
+        wrap_untrusted("Successfully wrote 8977 bytes to /w/r.md", source="write_file")
+        + "\n\n[budget: iteration 11/60 | context ~88%]\n[budget warning: most of the budget is spent]"
+    )
+    assert written_markdown([{"role": "tool", "name": "write_file", "content": content}]) == ["/w/r.md"]
+
+
 def test_an_unchanged_file_still_counts_as_written():
     text = "File unchanged: /w/r.md already holds exactly these 9 bytes, so nothing was written."
     assert written_markdown([_tool("write_file", text)]) == ["/w/r.md"]
