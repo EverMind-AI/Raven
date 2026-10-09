@@ -27,6 +27,9 @@ class TestPackageSurface:
         assert [c["name"] for c in data["plugin"]["contributes"]["onboard"]] == ["everos-cloud"]
         # Identity is the host's (C4): the slice declares a key and an address, nothing else.
         assert set(data["plugin"]["config_schema"]) == {"api_key", "base_url"}
+        # Only the key may be written from the settings page; the endpoint never (H7).
+        assert data["plugin"]["config_schema"]["api_key"].get("settable") is True
+        assert "settable" not in data["plugin"]["config_schema"]["base_url"]
 
 
 class TestEntryPointDiscovery:
