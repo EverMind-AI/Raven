@@ -342,10 +342,19 @@ export function dispatchSend(text: string, failed: (e: unknown) => void): void {
 }
 
 /* Conversations whose staged model the server refused while they were being
-   made. Their first turn runs on the model the session already had, which the
-   chip shows only once the reload that refusal fired lands -- so the send that
-   would read the chip in that window records nothing. */
+   made, until the reload that refusal fired lands. Their first turn runs on the
+   model the session already had, which the chip shows only once that reload
+   lands -- so a send that reads the chip in that window records nothing. Cleared
+   by that send or by the reload, whichever comes first: a conversation the
+   roster made has no send to clear it, and its first one, however much later,
+   would otherwise record nothing either. */
 const refusedModel = new Set<string>()
+
+/* The refusal's reload: it puts the chip back on what the session runs, and from
+   then on the chip can be read again. */
+function reconcileChip(sessionId: string, gen: number): void {
+  void Promise.resolve(loadProviders(sessionId, gen)).finally(() => { refusedModel.delete(sessionId) })
+}
 
 /* What a turn leaving now on `sessionId` runs on, for the picker's recent list
    (features/model/recent.ts): the chip's model and account, read as the message
@@ -532,14 +541,14 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
     if (r && r.applied === false) {
       refusedModel.add(sessionId)
       toast(t('gui.op.switch_failed', { detail: t('gui.model.refused') }))
-      void loadProviders(sessionId, gen)
+      reconcileChip(sessionId, gen)
     }
   } catch (e) {
     refusedModel.add(sessionId)
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.
     toast(t('gui.op.switch_failed', { detail: detailOf(e) }))
-    void loadProviders(sessionId, gen)
+    reconcileChip(sessionId, gen)
   }
 }
 
