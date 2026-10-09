@@ -1126,13 +1126,43 @@ and injects into the main agent's system prompt so evicted facts stay present.
 Raven's default memory-backend plugin (`everos-memory`; ships enabled, works out of
 the box). Its own distribution rather than part of the raven wheel, found through the
 `raven.plugins` entry-point group. (`plugins-dist/ppt-engine/` and
-`plugins-dist/design-engine/` ship the same way -- the group's other two
-distributed members, contributing a deck-building toolchain and a visual-design
+`plugins-dist/design-engine/` and `plugins-dist/everos-cloud-memory/` ship the same way -- the group's other
+distributed members, contributing a deck-building toolchain, a visual-design
 engine rather than memory.) Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
 SkillForge's three sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
+
+**EverOS Cloud** (`plugins-dist/everos-cloud-memory/raven_everos_cloud/`):
+The hosted EverOS at `https://api.evermind.ai`, reached with a Bearer key from
+`https://everos.evermind.ai`, and the second memory-backend plugin (distribution
+`everos-cloud-memory`, backend name `everos-cloud`). Speaks the same
+`/api/v2/memory/{add,flush,get,search}` as the local server; the plugin depends on
+`raven` and `httpx` only and never imports the `everos` package. Flushes only on an
+**explicit end** and at `stop()`; every add is `mode: "agent"`.
+
+**cloud slice**:
+`plugins.config["everos-cloud-memory"]`: `api_key` and an optional `base_url`. Holds no
+identity -- the **owner id** is the host's.
+
+**owner id**:
+`memory.userId` / `memory.agentId` from the host's `memory` block, handed to every
+backend through `ServiceLocator`. On the wire it is the `user_id` or `agent_id` of a
+search and the `sender_id` of a stored user message. The same two values on two
+machines sharing one cloud key name one memory.
+_Avoid_: owner identity (the older wording in `raven/contracts/plugin_surface.py`).
+
+**memory backend chooser** (`cli/onboard_commands.py:_choose_memory_backend`):
+The `raven onboard` question asked only when more than one memory plugin is
+installed: which backend's screen to run. Off writes `memory.backend = null`; a
+dismissed question exits the wizard and writes nothing.
+
+**explicit end**:
+A `store` call whose caller says the conversation is over: `metadata["flush"]` (the
+sub-agent **Memory record** handoff; a convention of the `MemoryBackend` contract) or
+`metadata["is_final"]` (the importer's last batch). The only two store-time reasons the
+cloud backend calls `/flush`.
 
 **EverOS role**:
 One of the four models EverOS talks to: `llm` (reads each conversation and extracts
@@ -1454,7 +1484,8 @@ pass-through. Failures name the owner and the key at the door, not deep inside a
 
 **Config-with-cargo** (`channels/contract.py:ChannelSpec.config_schema`, `raven-plugin.toml [plugin.config_schema]`):
 A cargo declares the config keys only it consumes -- types, defaults, secrecy,
-requiredness, choices, nested `fields` -- next to the code that consumes them. The
+requiredness, choices, nested `fields`, and `settable = true` on the few fields
+the settings page may write over RPC (a key, never an endpoint) -- next to the code that consumes them. The
 declaration is the only truth: the door
 dispenses from it, the writer (`config/update_channels.py`) validates through the same
 door, and the declaration guard (`tests/test_channels_config_declaration.py`) pins the

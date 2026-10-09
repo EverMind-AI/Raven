@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 206 methods, 119 component schemas.
+// 207 methods, 119 component schemas.
 
 /* eslint-disable */
 /**
@@ -3553,6 +3553,10 @@ export interface SettingsEverosResult {
    */
   note?: string | null;
   /**
+   * Why available is false, when the page should draw none of the role slots: 'other_backend' means memory.backend names a backend that does not read EverOS's roles. Absent when the plugin is merely not installed, which keeps the slots drawn with their not-installed note.
+   */
+  reason?: string | null;
+  /**
    * Whether raven manages this EverOS root. False makes the role slots read-only: raven neither writes that install's config nor starts or stops its server.
    */
   owned?: boolean;
@@ -3595,6 +3599,37 @@ export interface SettingsEverosSetResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   warning?: string | null;
+}
+export interface SettingsEverosCloudParams {}
+export interface SettingsEverosCloudResult {
+  /**
+   * Whether the everos-cloud-memory distribution is installed.
+   */
+  available: boolean;
+  /**
+   * Whether memory.backend names everos-cloud; the card is drawn only then.
+   */
+  selected: boolean;
+  /**
+   * Whether a key resolves, from the file or the environment.
+   */
+  api_key_set: boolean;
+  /**
+   * 'file' or 'env' when a key resolves; null otherwise.
+   */
+  key_source?: string | null;
+  /**
+   * The cloud address in force: the slice's base_url or the default.
+   */
+  base_url?: string;
+  /**
+   * The health probe's verdict when selected: 'ok', 'degraded' or 'missing'; null when not probed.
+   */
+  status?: string | null;
+  /**
+   * What a person should look at, in the backend's own words.
+   */
+  hint?: string | null;
 }
 export interface ChannelsStatusParams {}
 export interface ChannelsStatusResult {
@@ -5252,6 +5287,7 @@ export interface RpcMethods {
   'settings.everos': { params: SettingsEverosParams; result: SettingsEverosResult };
   'settings.everosSet': { params: SettingsEverosSetParams; result: SettingsEverosSetResult };
   'settings.everos_set': { params: SettingsEverosSetParams; result: SettingsEverosSetResult };
+  'settings.everosCloud': { params: SettingsEverosCloudParams; result: SettingsEverosCloudResult };
   'channels.status': { params: ChannelsStatusParams; result: ChannelsStatusResult };
   'channels.configure': { params: ChannelsConfigureParams; result: ChannelsConfigureResult };
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
@@ -5511,6 +5547,7 @@ export const RPC_METHODS = [
   "session.undo",
   "session.usage",
   "settings.everos",
+  "settings.everosCloud",
   "settings.everosSet",
   "settings.everos_set",
   "settings.get",

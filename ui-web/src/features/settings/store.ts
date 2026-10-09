@@ -144,7 +144,7 @@ export interface SettingsState {
 }
 
 const emptySnap = (): SettingsSnapshot => ({
-  raw: {}, configPath: '~/.raven/config.json', everos: null, providers: [],
+  raw: {}, configPath: '~/.raven/config.json', everos: null, everosCloud: null, providers: [],
   curProvider: '', model: '', tools: [], skills: [], mcp: [],
 })
 
@@ -249,6 +249,12 @@ export async function refresh(): Promise<void> {
   loading = (async () => {
     try {
       const snap = await source().load()
+      /* The cloud probe lands after the snapshot; patch it in so the card leaves
+         its checking state without a second open of the dialog. */
+      void source().everosCloud?.().then((everosCloud) => {
+        const now = get()
+        if (now.snap.everosCloud !== everosCloud) set({ snap: { ...now.snap, everosCloud } })
+      })
       const cur = get()
       if (cur.loaded && sameSnap(cur.snap, snap)) return
       set({ snap, loaded: true, epoch: cur.epoch + 1 })

@@ -1403,3 +1403,155 @@ async def test_usage_from_to_win_over_days(telemetry):
     r = await rpc_console.settings_usage({"days": 30})
     assert r["llm"]["total"]["calls"] == 1
     assert r["from"] == _iso(29)
+
+
+# ── a second memory backend behind the same page ─────────────────────────
+
+
+@pytest.fixture
+def memory_cfg(tmp_path):
+    """raven's config with a chosen ``memory.backend`` and plugin slices."""
+    import json
+
+    def build(backend, *, cloud=None, everos=None, providers=None):
+        cfg = tmp_path / "config.json"
+        raw: dict = {"memory": {"backend": backend}, "providers": providers or {}, "plugins": {"config": {}}}
+        if cloud is not None:
+            raw["plugins"]["config"]["everos-cloud-memory"] = dict(cloud)
+        if everos is not None:
+            raw["plugins"]["config"]["everos-memory"] = dict(everos)
+        cfg.write_text(json.dumps(raw), encoding="utf-8")
+        raven_home.set_config_path(cfg)
+        return cfg
+
+    yield build
+    raven_home.set_config_path(None)
+
+
+async def test_everos_roles_answer_other_backend_for_the_cloud_and_for_a_stale_name(memory_cfg):
+    for backend in ("everos-cloud", "mem0"):
+        memory_cfg(backend, cloud={"api_key": "k"})
+        out = await rpc_console.settings_everos({})
+        assert out["reason"] == "other_backend" and backend in out["note"]
+        assert set(out["sections"]) == {"embedding"} and set(out["required"]) <= {"embedding"}
+
+
+async def test_everos_roles_hide_every_everos_row_on_a_cloud_only_install(memory_cfg, monkeypatch):
+    """The local plugin absent: still reason other_backend, so the page draws no EverOS row and
+    not the 'plugin isn't installed' pill on each of them; sections is empty because nothing can
+    describe the embedding pin there."""
+    memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    monkeypatch.setattr("raven.core.plugin_stack.everos_plugin_installed", lambda: False)
+    out = await rpc_console.settings_everos({})
+    assert out["available"] is False and out["reason"] == "other_backend" and "everos-cloud" in out["note"]
+    assert out["sections"] == {} and out.get("required", []) == []
+
+
+async def test_everos_roles_unchanged_for_everos_and_none(memory_cfg):
+    for backend in ("everos", None):
+        memory_cfg(backend)
+        out = await rpc_console.settings_everos({})
+        assert out["available"] is True and out.get("reason") is None
+        assert set(out["sections"]) == {"llm", "embedding", "rerank", "multimodal"}
+
+
+@pytest.mark.everos_cloud
+async def test_settings_set_writes_a_declared_plugin_field(memory_cfg):
+    import json
+
+    cfg = memory_cfg("everos-cloud", cloud={"base_url": "http://fake"})
+    out = await rpc_console.settings_set({"key": "plugins.config.everos-cloud-memory.api_key", "value": "ecm-key-rot8"})
+    assert out == {"applied": True, "previous": None}
+    slice_ = json.loads(cfg.read_text())["plugins"]["config"]["everos-cloud-memory"]
+    assert slice_ == {"base_url": "http://fake", "api_key": "ecm-key-rot8"}
+
+
+@pytest.mark.everos_cloud
+async def test_settings_set_refuses_undeclared_wrong_type_and_unknown_plugin(memory_cfg):
+    cfg = memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    before = cfg.read_text()
+    for key, value in (
+        ("plugins.config.everos-cloud-memory.nope", "x"),
+        ("plugins.config.everos-cloud-memory.api_key", 42),
+        ("plugins.config.not-a-plugin.api_key", "x"),
+        ("plugins.config.everos-cloud-memory", {"api_key": "x"}),
+        # Declared, but not settable: the endpoint decides where the stored key goes.
+        ("plugins.config.everos-cloud-memory.base_url", "http://attacker.test"),
+        # A dotted field and an empty plugin id never reach the slice.
+        ("plugins.config.everos-cloud-memory.api_key.x", "x"),
+        ("plugins.config..api_key", "x"),
+    ):
+        with pytest.raises(ConfigValidationError) as exc:
+            await rpc_console.settings_set({"key": key, "value": value})
+        assert key in str(exc.value)
+    assert cfg.read_text() == before
+
+
+@pytest.mark.everos_cloud
+@pytest.mark.parametrize(
+    ("mode", "status", "fragment"),
+    [("ok", "ok", "http://cloud.test"), ("401", "missing", "rejected (401)")],
+)
+async def test_everos_cloud_status_reports_key_source_and_health(memory_cfg, monkeypatch, mode, status, fragment):
+    import httpx
+
+    from tests._everos_cloud_fake import FakeCloud
+
+    memory_cfg("everos-cloud", cloud={"api_key": "ecm-key-7f3a", "base_url": "http://cloud.test"})
+    fake = FakeCloud(mode=mode)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=fake.transport(), **kw))
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["available"] is True and out["selected"] is True
+    assert out["api_key_set"] is True and out["key_source"] == "file"
+    assert out["base_url"] == "http://cloud.test" and out["status"] == status and fragment in out["hint"]
+    assert fake.ledger[0]["headers"]["authorization"] == "Bearer ecm-key-7f3a"
+
+
+@pytest.mark.everos_cloud
+async def test_everos_cloud_status_without_a_key_or_selection(memory_cfg, monkeypatch):
+    monkeypatch.delenv("EVEROS_CLOUD_API_KEY", raising=False)
+    memory_cfg("everos", cloud={})
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["selected"] is False and out["api_key_set"] is False and out["status"] is None
+    memory_cfg("everos-cloud", cloud={})
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["selected"] is True and out["status"] == "missing" and "no API key" in out["hint"]
+
+
+async def test_provider_save_does_not_restart_everos_for_the_cloud_backend(memory_cfg, monkeypatch):
+    applied: list = []
+    monkeypatch.setattr(rpc_console, "_everos_applied", lambda factory, cost="": applied.append(factory))
+    providers = {"openrouter": {"apiKey": "sk-x", "models": ["anthropic/claude-sonnet-4.5"]}}
+    memory_cfg(
+        "everos-cloud",
+        everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}},
+        providers=providers,
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert applied == []
+    # Memory off: nothing runs on EverOS, so a provider save restarts nothing (spec C9's one exception, H15).
+    memory_cfg(
+        None, everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}}, providers=providers
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert applied == []
+    memory_cfg(
+        "everos",
+        everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}},
+        providers=providers,
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert len(applied) == 1
+
+
+async def test_role_write_is_refused_for_the_cloud_backend(memory_cfg):
+    memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    for section in ("llm", "rerank", "multimodal"):
+        with pytest.raises(ConfigValidationError) as exc:
+            await rpc_console.settings_everos_set({"section": section, "model": "m", "provider": "p"})
+        assert "everos-cloud" in str(exc.value)
+    # Embedding stays writable: knowledge bases size themselves to that pin.
+    with pytest.raises(ConfigValidationError) as exc:
+        await rpc_console.settings_everos_set({"section": "embedding", "model": "m", "provider": "p"})
+    assert "everos-cloud" not in str(exc.value)  # refused for its own reason (no such provider), not the backend's

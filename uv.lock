@@ -11,6 +11,7 @@ resolution-markers = [
 [manifest]
 members = [
     "design-engine",
+    "everos-cloud-memory",
     "everos-memory",
     "ppt-engine",
     "raven",
@@ -1127,6 +1128,21 @@ wheels = [
 [package.optional-dependencies]
 multimodal = [
     { name = "everalgo-parser", extra = ["svg"] },
+]
+
+[[package]]
+name = "everos-cloud-memory"
+version = "0.1.0"
+source = { editable = "plugins-dist/everos-cloud-memory" }
+dependencies = [
+    { name = "httpx" },
+    { name = "raven" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0,<1.0.0" },
+    { name = "raven", editable = "." },
 ]
 
 [[package]]
@@ -4142,6 +4158,7 @@ tools = [
 [package.dev-dependencies]
 dev = [
     { name = "deptry" },
+    { name = "everos-cloud-memory" },
     { name = "grimp" },
     { name = "hatchling" },
     { name = "import-linter" },
@@ -4247,6 +4264,7 @@ provides-extras = ["channel-telegram", "channel-slack", "channel-discord", "chan
 [package.metadata.requires-dev]
 dev = [
     { name = "deptry", specifier = ">=0.25.1" },
+    { name = "everos-cloud-memory", editable = "plugins-dist/everos-cloud-memory" },
     { name = "grimp", specifier = ">=3.16" },
     { name = "hatchling", specifier = ">=1.32.0" },
     { name = "import-linter", specifier = ">=2.14" },

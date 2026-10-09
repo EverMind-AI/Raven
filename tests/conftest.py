@@ -1083,3 +1083,31 @@ def with_channel_fields(view, **overrides):
         section = section.model_copy(update=socket_over)
     cargo.update({k: v for k, v in overrides.items() if k not in socket_keys})
     return DispensedSlice(section, cargo)
+
+
+@pytest.fixture(autouse=True)
+def _one_memory_plugin_in_discovery(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the second memory plugin out of entry-point discovery by default.
+
+    The dev environment installs every workspace member, so once the
+    ``everos-cloud-memory`` distribution joined the tree, every test that
+    walks ``raven onboard``'s memory step through the real registry met the
+    backend chooser -- a question those tests never scripted an answer to,
+    because they describe an install with one memory plugin. The fixture keeps
+    that world for them; a test marked ``everos_cloud`` (the cloud plugin's own
+    files carry the mark module-wide) sees both. Only discovery is touched:
+    ``import raven_everos_cloud`` and ``find_spec`` answer as installed everywhere.
+    """
+    if request.node.get_closest_marker("everos_cloud"):
+        return
+    from importlib import metadata
+
+    real_entry_points = metadata.entry_points
+
+    def _without_the_cloud_plugin(**kwargs):
+        eps = real_entry_points(**kwargs)
+        if kwargs.get("group") != "raven.plugins":
+            return eps
+        return metadata.EntryPoints(ep for ep in eps if ep.name != "everos-cloud-memory")
+
+    monkeypatch.setattr(metadata, "entry_points", _without_the_cloud_plugin)

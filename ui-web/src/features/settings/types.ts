@@ -89,6 +89,9 @@ export interface EverosInfo {
      in a model and a key and have nothing happen. */
   available?: boolean
   note?: string | null
+  /* "other_backend" when long-term memory runs on a backend that is not EverOS:
+     the three EverOS-only role rows are then hidden (Roles.tsx). */
+  reason?: string | null
   /* False for a root the user manages: raven neither starts it nor writes its
      config, so the slots are shown and not editable. */
   owned?: boolean
@@ -134,6 +137,8 @@ export interface ToolRow {
 export type SkillRow = ExtSkillRow
 export type SkillDetail = NonNullable<ResultOf<'skills.manage'>['info']>
 export type ArchivedSession = ResultOf<'session.list'>['sessions'][number]
+/* The EverOS Cloud card's data: settings.everosCloud's own shape. */
+export type EverosCloudInfo = ResultOf<'settings.everosCloud'>
 export type OauthStart = ResultOf<'model.oauth_login'>
 
 /* Everything the dialog draws from, in one read. `raw` is the config
@@ -144,6 +149,7 @@ export interface SettingsSnapshot {
   raw: Record<string, unknown>
   configPath: string
   everos: EverosInfo | null
+  everosCloud?: EverosCloudInfo | null
   providers: ProviderRow[]
   curProvider: string
   model: string
@@ -216,6 +222,10 @@ export interface McpDetail {
 
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
+  /* The cloud probe `load` started without waiting for it (a slow or absent
+     service must not hold the page): resolves when it lands, null when it failed,
+     so the store can patch the snapshot the moment the answer is in. */
+  everosCloud(): Promise<EverosCloudInfo | null>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
   /* A role is a pair: a model and the vendor serving it. No credential travels
      -- the address and key stay on the provider and are resolved at spawn, so

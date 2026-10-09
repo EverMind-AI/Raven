@@ -722,7 +722,51 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             refresh_env_file()
         return written
 
+    if key.startswith("plugins.config."):
+        return _set_plugin_config_field(key, value)
+
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
+
+
+def _plugin_config_declaration(plugin_id: str) -> dict[str, Any] | None:
+    """An activated plugin's ``config_schema``, or ``None`` for anything else."""
+    from raven.config.raven import load_raven_config
+    from raven.core.plugin_stack import build_plugin_registry
+
+    registry = build_plugin_registry(load_raven_config())
+    if plugin_id not in registry.activated_ids():
+        return None
+    manifest = registry.manifest_for(plugin_id)
+    return dict(manifest.config_schema) if manifest is not None and manifest.config_schema else None
+
+
+def _set_plugin_config_field(key: str, value: Any) -> dict[str, Any]:
+    """``plugins.config.<plugin_id>.<field>``, admitted against the plugin's own declaration.
+
+    Only a field the manifest marks ``settable = true`` is writable here. This
+    door is reachable from any RPC client with no confirmation step, so, like
+    ``tools.web.proxy`` above, it must not reach a field that decides where a
+    stored credential is sent: a plugin's ``base_url`` is declared but not
+    settable, its ``api_key`` is both. The type is checked as admission checks
+    it, and the write goes through ``set_plugin_config_fields``, which can only
+    touch that plugin's slice -- so no dotted path rides a credential write into
+    the rest of the config.
+    """
+    plugin_id, _, field = key[len("plugins.config.") :].partition(".")
+    declared = _plugin_config_declaration(plugin_id) if plugin_id and field and "." not in field else None
+    spec = declared.get(field) if declared else None
+    if not isinstance(spec, dict) or spec.get("settable") is not True:
+        raise ConfigValidationError(f"key not writable via settings.set: {key}")
+    from raven.config.admission import PluginConfigError, admit_slice
+
+    try:
+        admit_slice({field: declared[field]}, {field: value}, plugin_id=plugin_id)
+    except PluginConfigError as exc:
+        raise ConfigValidationError(f"{key}: {exc}") from exc
+    from raven.config.update import set_plugin_config_fields
+
+    set_plugin_config_fields(plugin_id, {field: value})
+    return {"applied": True, "previous": None}
 
 
 #: Keys whose value is an object covering only part of the block it names, so
@@ -1281,16 +1325,105 @@ async def settings_everos(params: dict, *, agent_loop_factory=None) -> dict:
     del params
     from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 
-    if not everos_plugin_installed():
-        return {
-            "available": False,
-            "note": everos_plugin_missing_note(),
-            "sections": {},
-            "config_path": "",
-        }
-    from raven_everos.config import describe_roles
+    installed = everos_plugin_installed()
+    roles: dict[str, Any] = {
+        "available": False,
+        "note": everos_plugin_missing_note(),
+        "sections": {},
+        "config_path": "",
+    }
+    if installed:
+        from raven_everos.config import describe_roles
 
-    return describe_roles()
+        roles = describe_roles()
+    other = _other_memory_backend()
+    if other is None:
+        return roles
+    # llm, rerank and multimodal are EverOS's own extraction models, which no
+    # other backend reads; ``reason`` tells the page to draw none of them --
+    # whether or not the local plugin is installed, since a cloud-only install
+    # is the common one and a bare ``available: false`` would put "plugin not
+    # installed" on every row. The page draws an EverOS row only when it is in
+    # ``sections``: embedding stays when the local plugin can describe it (its
+    # pin is raven's top-level block, and a knowledge base embeds with it
+    # whatever the memory backend is).
+    sections = roles.get("sections") or {}
+    return {
+        **roles,
+        "reason": "other_backend",
+        "note": f"Long-term memory runs on {other!r}; the EverOS model roles are not in use.",
+        "sections": {k: v for k, v in sections.items() if k == "embedding"},
+        "required": [r for r in roles.get("required", []) if r == "embedding"],
+    }
+
+
+def _other_memory_backend() -> str | None:
+    """The configured backend when it is neither EverOS nor off; ``None`` otherwise.
+
+    ``None`` (memory off) keeps the role slots live, because setting ``llm``
+    on that page is how memory is turned on; an unreadable config answers as
+    "not another backend" so the page falls back to what it did before.
+    """
+    try:
+        from raven.config.raven import load_raven_config
+
+        backend = load_raven_config().memory.backend
+    except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
+        return None
+    return backend if backend not in (None, "everos") else None
+
+
+async def settings_everos_cloud(params: dict, *, agent_loop_factory=None) -> dict:
+    """The EverOS Cloud card: whether it answers, which key it uses, where it points.
+
+    Built from the cloud slice alone, the way ``raven doctor`` builds a backend
+    to ask ``health()``: the running gateway's backend keeps the key it was
+    built with, so the probe here is about what is on disk now.
+    """
+    del params
+    from importlib.util import find_spec
+
+    from raven.config.raven import load_raven_config
+
+    cfg = load_raven_config()
+    installed = find_spec("raven_everos_cloud") is not None
+    answer: dict[str, Any] = {
+        "available": installed,
+        "selected": cfg.memory.backend == "everos-cloud",
+        "api_key_set": False,
+        "key_source": None,
+        "base_url": "",
+        "status": None,
+        "hint": None,
+    }
+    if not installed:
+        answer["hint"] = "the everos-cloud-memory distribution is not installed"
+        return answer
+    from raven_everos_cloud.backend import DEFAULT_BASE_URL, resolve_api_key
+
+    slice_ = dict((cfg.plugins.config or {}).get("everos-cloud-memory") or {})
+    key, source = resolve_api_key(slice_)
+    answer["api_key_set"] = bool(key)
+    answer["key_source"] = source
+    answer["base_url"] = str(slice_.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+    if not answer["selected"]:
+        return answer
+    from raven.config.loader import load_config
+    from raven.core.plugin_stack import maybe_build_memory_backend
+
+    backend = maybe_build_memory_backend(load_config().workspace_path, cfg)
+    if backend is None:
+        answer["status"] = "missing"
+        answer["hint"] = "the everos-cloud memory backend did not build; see the gateway log"
+        return answer
+    try:
+        health = await backend.health()
+    finally:
+        await backend.stop()
+    check = health.checks[0] if health.checks else None
+    answer["status"] = check.status if check else ("ok" if health.ready else "missing")
+    answer["hint"] = check.hint if check else None
+    return answer
 
 
 # One restart at a time, and one more run queued at most. Two saves in quick
@@ -1413,6 +1546,16 @@ def everos_follows_provider(slug: str, agent_loop_factory: Any) -> None:
     except ImportError:
         return
     try:
+        from raven.config.raven import load_raven_config
+
+        # Only while EverOS is the memory backend: a key saved by someone on
+        # the cloud backend, or with memory off, must not start a local server
+        # nobody uses.
+        if load_raven_config().memory.backend != "everos":
+            return
+    except Exception:  # noqa: BLE001 - a save must not fail over this question
+        return
+    try:
         for section in ROLES:
             pin = role_pin(section)
             if pin is None and section in FOLLOWS_MAIN_ROLES:
@@ -1486,6 +1629,11 @@ async def settings_everos_set(params: dict, *, agent_loop_factory=None) -> dict:
     section = str(params.get("section", ""))
     if section not in ROLES:
         raise ConfigValidationError(f"unknown everos role: {section}")
+    other = _other_memory_backend()
+    if other is not None and section != "embedding":
+        # Embedding is the one role another backend still lives with: its pin is
+        # raven's own block and knowledge bases size themselves to it.
+        raise ConfigValidationError(f"long-term memory runs on {other!r}; EverOS roles are not in use")
 
     if params.get("clear") is True:
         # The rule is `clear_role`'s now, so this door translates rather than
@@ -2466,6 +2614,7 @@ def register_console_methods(dispatcher, *, agent_loop_factory=None) -> None:
     dispatcher.register("settings.usage", bind(settings_usage))
     dispatcher.register("settings.everos", bind(settings_everos))
     dispatcher.register("settings.everosSet", bind(settings_everos_set))
+    dispatcher.register("settings.everosCloud", bind(settings_everos_cloud))
     # The camelCase spelling is what the shipped TUI calls; the snake_case name is
     # the method's, double-registered until the TUI reads it.
     dispatcher.register("settings.everos_set", bind(settings_everos_set))

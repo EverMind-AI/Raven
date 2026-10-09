@@ -383,6 +383,18 @@ MESSAGES: dict[str, str] = {
     "Configure it?": "要配置吗?",
     "Enter a different address": "重新填写地址",
     "Let Raven run EverOS for me": "让 Raven 替我运行 EverOS",
+    # raven.cli.onboard_commands step 4: the memory backend chooser (two memory plugins installed).
+    "Which memory backend?": "用哪个记忆后端?",
+    "Off": "关闭",
+    # raven_everos_cloud.onboard: the EverOS Cloud screen.
+    "Long-term memory: EverOS Cloud": "长期记忆:EverOS Cloud",
+    "  [dim]Using the API key from {var}.[/dim]": "  [dim]使用环境变量 {var} 里的 API 密钥。[/dim]",
+    "  [dim]Using the API key on file.[/dim]": "  [dim]使用已保存的 API 密钥。[/dim]",
+    "  [dim]Keys: {url}[/dim]": "  [dim]密钥:{url}[/dim]",
+    "  [dim]Memories are shared by every Raven that uses this key under user id {uid}; change memory.userId in config.json to keep devices apart.[/dim]": "  [dim]凡是用这把密钥、用户 id 为 {uid} 的 Raven 都共享这份记忆;要把设备分开,改 config.json 里的 memory.userId。[/dim]",
+    "  [yellow]✗ Couldn't verify EverOS Cloud: {detail}[/yellow]": "  [yellow]✗ 无法验证 EverOS Cloud:{detail}[/yellow]",
+    "Skip long-term memory": "跳过长期记忆",
+    "  [green]✓ EverOS Cloud connected.[/green]": "  [green]✓ EverOS Cloud 连接成功。[/green]",
     "I run my own EverOS -- connect to it": "我自己运行 EverOS —— 连过去",
     "Use it as it is": "直接用它",
     "Reconfigure it (port and models)": "重新配置（端口和模型）",

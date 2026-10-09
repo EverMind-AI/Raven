@@ -83,6 +83,7 @@ jobs:
           # The everos memory plugin ships as its own wheel from the same
           # release; gh release create uploads everything under dist/.
           uv build --wheel plugins-dist/everos-memory -o dist
+          uv build --wheel plugins-dist/everos-cloud-memory -o dist
           # The product engines ship the same way. install.sh resolves them
           # from the release assets by name, and the roster leaves
           # Raven-Design and Raven-PPT disabled when they are not installed.

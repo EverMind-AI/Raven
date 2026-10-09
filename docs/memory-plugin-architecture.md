@@ -579,3 +579,29 @@ independent of this refactor.
 | Discovery | manifest-only (TOML) | import-on-scan (Hermes-style) | missing deps can't break discovery; no startup cost for unselected backends |
 | EverOS pin | exact `==X.Y.Z` | range `>=,<` | adapter binds internal (non-public) APIs; upgrades must be deliberate |
 | Conflict priority | `bundled > user > project > entry_points` | user-overrides-bundled | builtin can't be silently shadowed |
+
+---
+
+## 10. EverOS Cloud as a second backend
+
+`plugins-dist/everos-cloud-memory/` (package `raven_everos_cloud`, backend name
+`everos-cloud`) keeps a Raven's memory on the hosted EverOS at
+`https://api.evermind.ai` instead of a local server. It speaks the same four
+routes as the local plugin (`/api/v2/memory/{search,add,flush,get}`) with a
+Bearer key, depends on `raven` and `httpx` only, and never imports the
+`everos` package. Design record: `docs/specs/2026-10-08-everos-cloud-memory-design.md`.
+
+| Topic | How it works |
+|---|---|
+| Key | `plugins.config["everos-cloud-memory"].api_key` first, `EVEROS_CLOUD_API_KEY` second; a key that came from the environment is never written to the file. The wizard's screen and the settings page's card both write the slice through `set_plugin_config_fields`. |
+| Identity | `memory.userId` / `memory.agentId`, through `ServiceLocator`, as for every backend. Two machines on one key with the default ids share one memory; the wizard says so. |
+| Extraction | every add carries `mode: "agent"` (the local server runs both pipelines on every add; the cloud defaults to `chat`). `/flush` is sent only when the caller says the conversation is over -- `metadata["flush"]` (the sub-agent handoff) and `metadata["is_final"]` (the importer's last batch) -- and once per touched session at `stop()`, within a 5 s budget. Ordinary turns rely on the cloud's own extraction. |
+| Limits | adds are split at 500 messages / 250 KB; a single message over the ceiling is not stored and is named in the log. |
+| Health | `POST /memory/get` with `page_size: 1`; 401, 403, 429, unreachable and "no key" each have their own sentence for `raven doctor`, the wizard and the card. |
+| Host surfaces | the wizard asks "Which memory backend?" when more than one memory plugin is installed; the memory page reads whichever backend `memory.backend` names (with the Bearer header, without the OSS `/health` probe); `settings.everos` answers `reason: "other_backend"` for any backend that is not EverOS, which hides the llm / rerank / multimodal slots (embedding stays: knowledge bases embed with that pin); `settings.everosCloud` feeds the card; `settings.set` admits `plugins.config.<id>.<field>` only for a field the plugin's manifest marks `settable = true` (the cloud key; never an endpoint, which decides where that key is sent); a provider save no longer restarts a local EverOS unless EverOS is the backend. |
+| Not shipped by default | the release builds the wheel but `raven-plugins.txt` keeps three distributions until the plugin has run against the live service (`tests/integration/test_everos_cloud_real_cloud.py`, key-gated). |
+| Not done | `delete` answers `False` (the cloud deletes by scope, not by id); no `understand_media` tool (cloud multimodal needs a presigned upload); `app_id` / `project_id` stay at the cloud's defaults. |
+
+Tests: `tests/test_everos_cloud_*.py` over `tests/_everos_cloud_fake.py`, a fake
+cloud that honours or refuses every field the backend sends and records every
+request; `tests/test_plugin_boundary.py` scans both plugin packages.
