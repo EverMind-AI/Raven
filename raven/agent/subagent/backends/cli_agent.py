@@ -34,7 +34,7 @@ from loguru import logger
 from raven.agent.subagent import activity
 from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
-from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
+from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
     record_outcome,
@@ -438,6 +438,7 @@ class CliAgentBackend:
             # is the way to hand one agent back its full registry. A third-party
             # CLI reads none of these; a ``raven`` one does.
             env = {**env_base, **host_identity_env(), **subagent_role_env(), **(runtime_env or {}), **self.env}
+            argv = resolve_program(argv, env)
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,

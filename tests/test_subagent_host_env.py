@@ -6,7 +6,7 @@ runs `$SHELL -lic` from a minimal base precisely so raven's own variables do not
 leak, so anything the host means the child to see has to be overlaid back.
 
 Windows has no login shell, so the same boundary is crossed there by a registry
-read; the section at the end covers that capture.
+read; the sections at the end cover that capture and the launch that consumes it.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import pytest
 
 import raven.agent.subagent.probe as probe_mod
 from raven.acp_client.client import AcpClient
+from raven.acp_client.protocol import AcpConnectionError
 from raven.agent.subagent.backends import env as backend_env
 from raven.agent.subagent.probe import probe_all
 from raven.agent.subagent.role import SUBAGENT_ENV_VAR, is_subagent_process
@@ -313,3 +314,73 @@ async def test_windows_probe_finds_agents_on_the_captured_path(
         ("on-boot-agent", "attention", str(boot_bin / "on-boot-agent")),
         ("fresh-agent", "attention", str(fresh_bin / "fresh-agent")),
     ]
+
+
+# --- Windows: the launch ---------------------------------------------------
+
+
+def _recording_refusal(started: list[tuple[str, ...]]) -> Any:
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    return refuse
+
+
+async def test_on_windows_a_bare_program_starts_from_the_childs_own_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CreateProcess finds a bare name on the gateway's own PATH, never on the env block it is handed.
+
+    So an agent installed after raven started, which the refreshed capture and the
+    probe both find, would still not start. The launch looks the name up on the
+    child's PATH itself, by CreateProcess's own rule that a name with no extension
+    means ``.exe``.
+    """
+    fresh_bin = tmp_path / "fresh-bin"
+    fresh_bin.mkdir()
+    (fresh_bin / "fresh-agent.exe").write_text("", encoding="utf-8")
+    (fresh_bin / "fresh-agent.exe").chmod(0o755)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(fresh_bin)})
+    started: list[tuple[str, ...]] = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_refusal(started))
+
+    with pytest.raises(AcpConnectionError):
+        await AcpClient.launch(name="fresh", command="fresh-agent acp")
+
+    assert started == [(str(fresh_bin / "fresh-agent.exe"), "acp")]
+
+
+async def test_off_windows_the_launch_leaves_the_lookup_to_exec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POSIX ``exec`` already resolves a bare name on the PATH of the env it is handed."""
+    fresh_bin = tmp_path / "fresh-bin"
+    fresh_bin.mkdir()
+    (fresh_bin / "fresh-agent.exe").write_text("", encoding="utf-8")
+    (fresh_bin / "fresh-agent.exe").chmod(0o755)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: False)
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(fresh_bin)})
+    started: list[tuple[str, ...]] = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_refusal(started))
+
+    with pytest.raises(AcpConnectionError):
+        await AcpClient.launch(name="fresh", command="fresh-agent acp")
+
+    assert started == [("fresh-agent", "acp")]
+
+
+def test_on_windows_a_shim_on_the_childs_path_is_not_made_the_program(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``.cmd`` shim runs through cmd.exe, whose parser would get the arguments -- a cli agent's prompt among them."""
+    npm_bin = tmp_path / "npm"
+    npm_bin.mkdir()
+    (npm_bin / "codex.cmd").write_text("", encoding="utf-8")
+    (npm_bin / "codex.cmd").chmod(0o755)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    child_env = {"PATH": str(npm_bin)}
+
+    assert backend_env.resolve_program(["codex", "exec", "a & b"], child_env) == ["codex", "exec", "a & b"]
+    assert backend_env.resolve_program(["codex.cmd", "exec"], child_env) == ["codex.cmd", "exec"]

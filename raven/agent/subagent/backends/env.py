@@ -42,15 +42,20 @@ Windows has no login shell to ask: explorer.exe holds the interactive
 environment, and installers refresh a terminal opened afterwards by
 broadcasting WM_SETTINGCHANGE. `_capture_windows` rebuilds PATH from the
 persisted User and Machine stores that broadcast refreshes and keeps every
-other value of raven's own environment.
+other value of raven's own environment. A launch finds a bare program name
+differently there too, so `resolve_program` lives beside the capture whose
+PATH it reads.
 """
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
+import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 
 from loguru import logger
 
@@ -72,8 +77,29 @@ _DRIVABLE_SHELLS = frozenset({"bash", "zsh"})
 
 
 def _on_windows() -> bool:
-    """Whether this is Windows, which decides how the environment below is captured."""
+    """Whether this is Windows, the one switch the capture and the launch lookup below read."""
     return sys.platform == "win32"
+
+
+def resolve_program(argv: list[str], env: Mapping[str, str]) -> list[str]:
+    r"""``argv`` with a bare program name looked up on the PATH of the env the child gets.
+
+    POSIX needs nothing here: its exec resolves the name on that PATH itself.
+    CreateProcess searches the gateway's own PATH instead and never the block it is
+    handed, so on Windows an agent installed after raven started -- found by the
+    refreshed capture and by the probe -- would still not start. The lookup follows
+    CreateProcess's own rule that a name with no extension means ``.exe``, and only
+    a program CreateProcess runs natively is put in its place: CreateProcess never
+    turns a bare name into a ``.cmd`` or ``.bat`` shim, and doing it here would put
+    the shim's arguments, a cli agent's prompt among them, through cmd.exe's parser.
+    """
+    if not _on_windows() or not argv or ntpath.dirname(argv[0]):
+        return argv
+    program = argv[0] if ntpath.splitext(argv[0])[1] else f"{argv[0]}.exe"
+    if ntpath.splitext(program)[1].lower() not in (".exe", ".com"):
+        return argv
+    found = shutil.which(program, path=env.get("PATH"))
+    return [found, *argv[1:]] if found else argv
 
 
 def _login_shell() -> str | None:
@@ -304,4 +330,4 @@ def host_identity_env() -> dict[str, str]:
     return {HOME_ENV_VAR: home} if home else {}
 
 
-__all__ = ["host_identity_env", "login_shell_env", "refresh_login_shell_env"]
+__all__ = ["host_identity_env", "login_shell_env", "refresh_login_shell_env", "resolve_program"]
