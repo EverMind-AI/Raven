@@ -228,7 +228,9 @@ class _TurnCollector:
     then reports back sends two, and joined chunk-to-chunk they read as one
     paragraph whose halves do not follow from each other. ``_BREAKING_UPDATES``
     is where the boundary is recovered, and the break is forwarded to
-    ``on_delta`` as well so a live view and the stored reply agree.
+    ``on_delta`` as well so a live view keeps the messages apart too. Only the
+    last of them is the run's result (``reply``): the live view shows the work
+    as it happens, and the earlier messages stay on the steps they preceded.
     """
 
     def __init__(
@@ -237,8 +239,15 @@ class _TurnCollector:
         dialect: AcpDialect | None = None,
         prompt: str | None = None,
         workspace: Path | None = None,
+        limit: int | None = None,
     ) -> None:
-        self._on_delta = on_delta
+        # The reply's cap, renewed for every message rather than spent across
+        # the turn: the reply is one message, and narration spending a shared
+        # budget would cut the report short on screen while the reply itself
+        # fits whole -- with no notice, since nothing was capped.
+        self._deliver = on_delta
+        self._limit = limit
+        self._on_delta = self._budgeted()
         # The prompt this turn was opened with. A ``user_message_chunk`` that
         # repeats it is an agent echoing the question back (the spec uses the
         # frame for replays), not a steer, and must not become a user row.
@@ -273,6 +282,9 @@ class _TurnCollector:
     @staticmethod
     def _now() -> str:
         return datetime.now().isoformat()
+
+    def _budgeted(self) -> Callable[[str], Awaitable[None]] | None:
+        return self._deliver if self._limit is None else bounded_delta(self._deliver, self._limit)
 
     async def __call__(self, method: str, params: dict[str, Any]) -> None:
         # Any frame from the agent is the run moving, whatever it carries. The
@@ -309,6 +321,7 @@ class _TurnCollector:
             said = "".join(texts)
             if texts and self._tool_ran and self.answer:
                 texts.insert(0, _MESSAGE_BREAK)
+                self._on_delta = self._budgeted()
             if texts:
                 self._tool_ran = False
             self.answer.extend(texts)
@@ -734,10 +747,10 @@ class _TurnCollector:
 
         Measured on codex-acp, a turn narrates as it goes: a plan, then a
         progress note before each of three calls, then the report. ``text``
-        joins all of it, which is right for the caller that receives the run's
-        answer, and wrong for a transcript -- the three progress notes belong on
-        the steps they preceded, and repeating them inside the final message is
-        what made a direct chat read as one blob of restated plan.
+        joins all of it, which is wrong for every reader: the three progress
+        notes belong on the steps they preceded, repeating them inside the final
+        message is what made a direct chat read as one blob of restated plan,
+        and a caller handed them as the result reads a plan as the answer.
 
         Empty when the turn ended on a tool call and said nothing after it, which
         is a real outcome and not the same as "not reported".
@@ -752,6 +765,25 @@ class _TurnCollector:
                 break
             if ev["t"] == "say":
                 said.append(ev["text"])
+        return "".join(reversed(said)).strip()
+
+    @property
+    def reply(self) -> str:
+        """What the run hands its caller: the last message, never the ones before it.
+
+        That is ``closing_text`` whenever the turn said anything after its last
+        step. A turn that ended on a step has no closing, and its last message is
+        the one before that step: still one message rather than every one joined,
+        and still an answer rather than nothing, which would hand back an empty
+        result for a run that finished its work. The walk only differs from
+        ``closing_text`` in stepping past the trailing steps to reach it.
+        """
+        said: list[str] = []
+        for ev in reversed(self.events):
+            if ev["t"] == "say":
+                said.append(ev["text"])
+            elif ev["t"] in ("call", "user") and "".join(said).strip():
+                break
         return "".join(reversed(said)).strip()
 
     @property
@@ -1511,14 +1543,17 @@ class AcpAgentBackend:
                 # Snapshotted before the prompt so the error below names what this
                 # turn ran into rather than what the connection has ever refused.
                 refused_before = client.refusal_count
-                sink = bounded_delta(on_delta, self.max_output_chars)
                 # From the live handshake, not the stored snapshot: this is the
                 # process actually answering, and a snapshot can be stale.
                 # `session_cwd` rather than `workspace`: it is the directory the
                 # agent's own tools resolve against, so it is where a file this
                 # turn writes actually lands.
                 collector = _TurnCollector(
-                    sink, dialect_for(connection.initialize), prompt=task, workspace=Path(session_cwd)
+                    on_delta,
+                    dialect_for(connection.initialize),
+                    prompt=task,
+                    workspace=Path(session_cwd),
+                    limit=self.max_output_chars,
                 )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
@@ -1665,7 +1700,7 @@ class AcpAgentBackend:
                     # the next turn has to continue.
                     await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
-                reply = await self._finished(text, stop_reason=stop_reason, span=span, sink=on_delta)
+                reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
                 if note := self._mcp_note(grant):
                     notice = f"\n\n[raven] {note}."
                     activity.append_closing(notice)
@@ -2023,7 +2058,7 @@ class AcpAgentBackend:
         thought_chars = sum(len(t) for t in collector.thoughts)
         record_outcome(
             span,
-            answer_chars=len(collector.text),
+            answer_chars=len(collector.reply),
             elapsed_ms=int((time.monotonic() - started) * 1000),
             stop_reason=stop_reason,
             update_counts=counts,

@@ -2080,10 +2080,12 @@ async def test_two_messages_in_one_turn_are_kept_apart(tmp_path: Path) -> None:
         seen.append(text)
 
     out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
-    assert out == "let me look.\n\nit is a repo."
-    # The live view and the stored reply must agree, or a direct chat renders
-    # the run-on version and the record keeps the readable one.
+    # The live view carries the break too, or a direct chat renders the two
+    # messages as one run-on paragraph.
     assert "".join(seen) == "let me look.\n\nit is a repo."
+    # The reply is the last message alone, and whole: the usage update inside it
+    # does not end it.
+    assert out == "it is a repo."
 
 
 async def test_the_partial_notice_reaches_a_caller_that_streamed(tmp_path: Path) -> None:
@@ -2123,6 +2125,25 @@ async def test_the_notice_survives_a_reply_that_used_the_whole_budget(tmp_path: 
 
     await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
     assert "stopReason=cancelled" in "".join(seen), "the reply's budget swallowed the notice"
+
+
+async def test_the_live_budget_is_spent_per_message_like_the_reply(tmp_path: Path) -> None:
+    """The cap guards the reply, and the reply is one message.
+
+    Spent across the whole turn, narration would use up the budget and cut a
+    direct chat's report short on screen -- with no notice, because the reply it
+    stands for fits and is never capped.
+    """
+    cfg = stub_config("a", mode="two_messages", max_output_chars=len("\n\nit is a repo."))
+    backend = build_third_party_backend(cfg)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+    assert out == "it is a repo."
+    assert "".join(seen) == "let me look.\n\nit is a repo."
 
 
 async def test_a_finished_turn_carries_no_notice(tmp_path: Path) -> None:
@@ -2607,6 +2628,19 @@ async def test_dispatch_records_its_own_span_under_the_calling_span(trace_dir, t
     # Every update kind seen becomes an event, so a timeline is readable without
     # opening the artifact.
     assert {e["name"] for e in span["events"]} >= {"acp.tool_call", "acp.usage_update"}
+
+
+async def test_the_span_measures_the_reply_it_handed_back(trace_dir, tmp_path: Path) -> None:
+    """`answer_chars` is the length of the answer on both transports.
+
+    The cli lane counts what it returns; counting the narration here as well
+    would make the same attribute mean two different things.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    span = next(s for s in _spans_written(trace_dir) if s.get("name") == "subagent.external")
+    assert span["attributes"]["subagent.external.answer_chars"] == len(out) == len("it is a repo.")
 
 
 async def test_the_call_names_its_own_stretch_of_the_wire_journal(trace_dir, tmp_path: Path) -> None:
@@ -4396,8 +4430,8 @@ async def test_narration_lands_on_the_step_it_preceded(tmp_path: Path) -> None:
     with activity.collecting() as did:
         out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
 
-    # Unchanged: the caller receiving the run's answer wants all of it.
-    assert out == "let me look.\n\nit is a repo."
+    # The caller is handed the report, not the notes on the way to it.
+    assert out == "it is a repo."
 
     call = next(m for m in did.transcript if m.get("tool_calls"))
     assert call["content"] == "let me look.", "the preamble belongs to the step it announced"
@@ -4409,7 +4443,7 @@ async def test_the_answer_row_is_what_was_said_last_not_every_burst(tmp_path: Pa
 
     End to end, because the split spans three places -- the collector decides
     it, the activity record carries it, and the log writer prefers it over the
-    run's full output.
+    run's output.
     """
     from raven.agent.subagent import activity
     from raven.agent.subagent.history import SpawnRecord
@@ -4429,6 +4463,27 @@ async def test_the_answer_row_is_what_was_said_last_not_every_burst(tmp_path: Pa
     rows = [json.loads(x) for x in transcript_path(session_dir, "a", "h1").read_text(encoding="utf-8").splitlines()]
     assert rows[-1] == {"role": "assistant", "content": "it is a repo.", "timestamp": rows[-1]["timestamp"]}
     assert sum(1 for r in rows if "let me look." in str(r.get("content"))) == 1
+    # What a later task reads through `{{ ref:@nodes/<id>.out.md }}` is the reply
+    # the caller was handed, so it carries no narration either.
+    assert record.file("out.md").read_text(encoding="utf-8") == "it is a repo."
+
+
+async def test_a_turn_that_ends_on_a_step_hands_back_its_last_message(tmp_path: Path) -> None:
+    """With nothing said after the last call, the message before it is the reply.
+
+    Not every message joined, which would hand the narration back, and not
+    nothing, which would turn a run that finished its work into an empty-turn
+    failure. The record still knows the turn ended on a step: the closing is
+    empty, so no answer row repeats the prose already on that step.
+    """
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="ends_on_a_step"))
+    with activity.collecting() as did:
+        out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert out == "saving it to notes.md."
+    assert did.closing == ""
 
 
 async def test_a_turn_that_ends_on_a_step_writes_no_answer_row(tmp_path: Path) -> None:
@@ -4452,6 +4507,25 @@ async def test_a_turn_that_ends_on_a_step_writes_no_answer_row(tmp_path: Path) -
     assert col.closing_text == ""
     call = next(m for m in col.messages() if m.get("tool_calls"))
     assert call["content"] == "on it."
+
+
+async def test_a_blank_burst_after_the_last_step_is_not_the_reply() -> None:
+    """Whitespace after the last call says nothing, so the reply is the message
+    before it -- handing back a blank answer would read as a run that answered."""
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "found it."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "kind": "edit", "title": "write"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\n"}})
+
+    assert col.closing_text == ""
+    assert col.reply == "found it."
 
 
 async def test_the_live_transcript_streams_only_the_closing_burst() -> None:
@@ -5103,7 +5177,7 @@ async def test_a_steer_reaches_the_running_turn_and_is_written_where_it_was_said
         assert await run.steer("the docs first") == "injected"
         reply = await asyncio.wait_for(turn, timeout=10)
 
-    assert reply.startswith("on it") and reply.endswith("steered: the docs first"), reply
+    assert reply == "steered: the docs first", "the reply is what answered the steer, not the words before it"
     roles = [(m["role"], m.get("content")) for m in run.transcript]
     assert ("user", "the docs first") in roles, roles
     said_before = next(i for i, m in enumerate(run.transcript) if m.get("content") == "on it")
