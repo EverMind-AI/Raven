@@ -1150,6 +1150,13 @@ class TestARecycledPid:
 
         assert serve_commands._stop_resident() is False
 
+    def test_a_foreign_pid_does_not_count_as_a_live_supervisor(self, home: Path, monkeypatch) -> None:
+        self._not_ours(monkeypatch)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "web.json").write_text(json.dumps({"pid": 111, "port": 18999}), encoding="utf-8")
+
+        assert serve_commands._read_web_state() is None
+
     def test_a_stop_clears_a_leftover_with_nothing_to_signal(self, home: Path, monkeypatch) -> None:
         """What makes the recovery instructions true: the `--stop` the refusal
         sends the reader to must end the state that refused them."""
@@ -2534,7 +2541,7 @@ class TestAStopThatLosesItsTarget:
         monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
         monkeypatch.setattr(serve_commands, "_stop_one", refuse)
         monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: True)
-        serve_commands._stop_resident()
+        assert serve_commands._stop_resident() is False
         assert "could not stop the supervisor (pid 4242)" in capsys.readouterr().out
 
     def test_a_supervisor_gone_before_its_signal_is_a_quiet_stop(self, home: Path, monkeypatch, capsys) -> None:
