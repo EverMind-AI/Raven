@@ -485,7 +485,7 @@ class LiteLLMProvider(LLMProvider):
 
     @staticmethod
     def _is_deepseek_family(model: str) -> bool:
-        """Whether a model id names a DeepSeek model, whichever provider serves it."""
+        """Whether a Wire Model names a DeepSeek model, whichever provider serves it."""
         return model.rsplit("/", 1)[-1].lower().startswith("deepseek")
 
     @staticmethod
