@@ -34,7 +34,6 @@ import math
 import os
 import time
 from collections.abc import Mapping
-from dataclasses import replace
 from datetime import datetime
 from typing import Any, Literal
 
@@ -257,18 +256,30 @@ def session_data_to_memories(data: Any, owner_type: _OwnerType) -> list[Memory]:
     the sub-agent memory record a sentence cut mid-word. Search hits keep the
     summary, as the local plugin's do.
     """
-    memories = search_data_to_memories(data, owner_type)
-    if owner_type != "user" or not isinstance(data, dict):
-        return memories
-    rows = [ep for ep in data.get("episodes") or [] if isinstance(ep, dict)]
-    episodes = iter(rows)
+    if owner_type != "user":
+        return search_data_to_memories(data, owner_type)
+    if not isinstance(data, dict):
+        return []
+    # Rendered row by row, in the service's order (a session's episodes come
+    # back chronologically), so each text stays with its own id: the search
+    # mapping sorts by score, and matching its output to the rows by position
+    # swapped texts as soon as two scores reordered them.
     out: list[Memory] = []
-    for memory in memories:
-        if memory.metadata.get("type") != "episode":
-            out.append(memory)
+    for ep in data.get("episodes") or []:
+        if not isinstance(ep, dict):
             continue
-        row = next(episodes)
-        out.append(replace(memory, text=_joined(row.get("subject"), row.get("episode") or row.get("summary"))))
+        out.append(
+            Memory(
+                text=_joined(ep.get("subject"), ep.get("episode") or ep.get("summary")),
+                score=_score(ep),
+                metadata={
+                    "id": ep.get("id"),
+                    "session_id": ep.get("session_id"),
+                    "type": "episode",
+                    "owner_type": "user",
+                },
+            )
+        )
     return out
 
 
