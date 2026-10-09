@@ -340,7 +340,7 @@ async def _run(cfg: Any, *args: str) -> tuple[int | None, str]:
     being cancelled when the page that asked goes away -- so an ask never
     outlives the question.
     """
-    from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
+    from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
     from raven.agent.subagent.role import subagent_role_env
 
     # The map `AcpClient.launch` builds, so the `kimi` asked is the one the
@@ -350,8 +350,7 @@ async def _run(cfg: Any, *args: str) -> tuple[int | None, str]:
     with tempfile.TemporaryDirectory(prefix="raven_subagent_ask_") as cwd:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "kimi",
-                *args,
+                *resolve_program(["kimi", *args], env),
                 cwd=cwd,
                 env=env,
                 stdin=asyncio.subprocess.DEVNULL,

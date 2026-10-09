@@ -26,6 +26,7 @@ from raven.rpc.methods.model import (
     model_options,
     model_remove_endpoint,
     model_remove_model,
+    model_reveal_key,
     model_save_key,
 )
 
@@ -324,6 +325,86 @@ async def test_disconnect_clears_creds(fake_home: Path) -> None:
 
     options = await model_options({})
     assert _entry(options, "anthropic")["authenticated"] is False
+
+
+# ----------------------------------------------------------------------------
+# model.reveal_key
+# ----------------------------------------------------------------------------
+
+
+async def test_reveal_key_reads_back_the_key_save_key_stored(fake_home: Path) -> None:
+    await model_save_key({"slug": "openrouter", "api_key": "sk-or-v1-abc"})
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": "sk-or-v1-abc"}
+
+
+async def test_reveal_key_is_null_for_a_provider_with_no_key_saved(fake_home: Path) -> None:
+    assert await model_reveal_key({"slug": "anthropic"}) == {"api_key": None}
+    await model_save_key({"slug": "anthropic", "api_key": "sk-ant-xxx"})
+    await model_disconnect({"slug": "anthropic"})
+    assert await model_reveal_key({"slug": "anthropic"}) == {"api_key": None}
+
+
+async def test_reveal_key_answers_with_the_key_alone(fake_home: Path) -> None:
+    """Not the section around it: not the address, not a header that can carry a secret of its own."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "openrouter": {
+                    "apiKey": "sk-or-flat",
+                    "apiBase": "https://relay.example/v1",
+                    "extraHeaders": {"X-Relay-Token": "hdr-secret"},
+                }
+            }
+        },
+    )
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": "sk-or-flat"}
+
+
+@pytest.mark.parametrize(
+    "slug, section",
+    [
+        # `endpoint add` leaves the flat key in place; requests carry the endpoint's.
+        ("openrouter", {"apiKey": "sk-or-left-behind", "endpoints": [{"label": "rotated", "apiKey": "sk-or-in-use"}]}),
+        ("gemini", {"apiKey": "g-left-behind", "apiKeyList": ["g-in-use-1", "g-in-use-2"]}),
+    ],
+)
+async def test_reveal_key_does_not_show_a_flat_key_requests_do_not_carry(
+    fake_home: Path, slug: str, section: dict
+) -> None:
+    """An endpoints list or a key list replaces the flat key outright (`provider_endpoints`).
+
+    Shown beside a provider marked connected, a flat key left behind would read
+    as the key in use, possibly the very one the endpoint was added to replace.
+    """
+    _write_config(fake_home, {"providers": {slug: section}})
+    assert await model_reveal_key({"slug": slug}) == {"api_key": None}
+
+
+async def test_reveal_key_shows_a_flat_key_an_endpoint_still_carries(fake_home: Path) -> None:
+    """Decided by what requests carry, not by the section's shape: a lone endpoint holding the same key uses it."""
+    _write_config(
+        fake_home,
+        {
+            "providers": {
+                "openrouter": {"apiKey": "sk-or-same", "endpoints": [{"label": "only", "apiKey": "sk-or-same"}]}
+            }
+        },
+    )
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": "sk-or-same"}
+
+
+async def test_reveal_key_reads_what_is_saved_not_the_environment(fake_home: Path, monkeypatch) -> None:
+    """The field the eye sits in edits the saved key, so a key the environment supplies is not the one to show."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-env")
+    assert await model_reveal_key({"slug": "openrouter"}) == {"api_key": None}
+
+
+async def test_reveal_key_refuses_a_provider_nobody_knows(fake_home: Path) -> None:
+    with pytest.raises(ConfigValidationError):
+        await model_reveal_key({"slug": "no_such_provider"})
+    with pytest.raises(ConfigValidationError):
+        await model_reveal_key({})
 
 
 # ----------------------------------------------------------------------------

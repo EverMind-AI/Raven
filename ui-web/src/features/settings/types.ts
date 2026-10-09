@@ -229,6 +229,10 @@ export interface SettingsSource {
   /* Ask the provider what it serves right now. A read: nothing is written
      until a row is added. */
   fetchModels(slug: string, verify?: boolean): Promise<ModelCatalogue>
+  /* The key a connected provider saved, for the eye beside its empty key
+     field; null when it keeps none in its own section. Asked for one provider
+     on a press, never part of the snapshot. */
+  revealKey(slug: string): Promise<string | null>
   /* The provider offer again, with no write before it: what a live read put in
      the server's served-models cache changes it. */
   reloadProviders(): Promise<SettingsSnapshot>

@@ -47,6 +47,31 @@ _ALLOWED_KEYS = {
 }
 
 
+def _tool_parents(messages: list[dict[str, Any]]) -> dict[int, int]:
+    """Each tool result's index mapped to the index of the call it answers.
+
+    A result answers the nearest earlier assistant that declared its id. That
+    is a position, not an id lookup, because nothing makes an id unique across
+    a session -- the streaming path keeps whatever id the upstream sent.
+    :meth:`HistoryTrimmer.canonical_ids` and :meth:`HistoryTrimmer.tool_group`
+    both pair through here: if closure could pair a result differently from the
+    group a budget drop removed, re-closing would put that group back and the
+    drop loop would never shrink the selection.
+    """
+    declared: dict[str, int] = {}
+    parents: dict[int, int] = {}
+    for idx, message in enumerate(messages):
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            for tc in message.get("tool_calls") or []:
+                if isinstance(tc, dict) and tc.get("id"):
+                    declared[str(tc["id"])] = idx
+        elif message.get("role") == "tool" and message.get("tool_call_id"):
+            parent = declared.get(str(message["tool_call_id"]))
+            if parent is not None:
+                parents[idx] = parent
+    return parents
+
+
 @dataclass
 class TrimOutcome:
     """Result of a :meth:`HistoryTrimmer.trim` call."""
@@ -109,29 +134,10 @@ class HistoryTrimmer:
         tool-exchange). Returns ``[]`` if no user message survives.
         """
         selected = {mid for mid in ids if isinstance(mid, int) and 0 <= mid < len(messages)}
-        tool_parent_by_call: dict[str, int] = {}
-        tool_result_by_call: dict[str, list[int]] = {}
-        for idx, message in enumerate(messages):
-            if message.get("role") == "assistant" and message.get("tool_calls"):
-                for tc in message.get("tool_calls") or []:
-                    if isinstance(tc, dict) and tc.get("id"):
-                        tool_parent_by_call[str(tc["id"])] = idx
-            if message.get("role") == "tool" and message.get("tool_call_id"):
-                tool_result_by_call.setdefault(str(message["tool_call_id"]), []).append(idx)
-
-        changed = True
-        while changed:
-            changed = False
-            for call_id, parent_idx in tool_parent_by_call.items():
-                result_ids = tool_result_by_call.get(call_id, [])
-                if parent_idx in selected:
-                    for rid in result_ids:
-                        if rid not in selected:
-                            selected.add(rid)
-                            changed = True
-                if any(rid in selected for rid in result_ids) and parent_idx not in selected:
-                    selected.add(parent_idx)
-                    changed = True
+        parents = _tool_parents(messages)
+        # Calls first: a result's sibling results come in only once its call is selected.
+        selected |= {parents[mid] for mid in selected if mid in parents}
+        selected |= {rid for rid, pid in parents.items() if pid in selected}
 
         ordered = sorted(selected)
         for pos, mid in enumerate(ordered):
@@ -164,27 +170,14 @@ class HistoryTrimmer:
         if not (0 <= mid < len(messages)):
             return {mid}
         msg = messages[mid]
-        parent: int | None = None
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            parent = mid
-        elif msg.get("role") == "tool" and msg.get("tool_call_id"):
-            call_id = str(msg["tool_call_id"])
-            for idx in range(mid - 1, -1, -1):
-                calls = messages[idx].get("tool_calls") or [] if messages[idx].get("role") == "assistant" else []
-                if any(isinstance(tc, dict) and str(tc.get("id")) == call_id for tc in calls):
-                    parent = idx
-                    break
+        is_call = msg.get("role") == "assistant" and msg.get("tool_calls")
+        if not is_call and msg.get("role") != "tool":
+            return {mid}
+        parents = _tool_parents(messages)
+        parent = mid if is_call else parents.get(mid)
         if parent is None:
             return {mid}
-        call_ids = {
-            str(tc["id"]) for tc in (messages[parent].get("tool_calls") or []) if isinstance(tc, dict) and tc.get("id")
-        }
-        group = {parent}
-        for idx in range(parent + 1, len(messages)):
-            m = messages[idx]
-            if m.get("role") == "tool" and str(m.get("tool_call_id", "")) in call_ids:
-                group.add(idx)
-        return group
+        return {parent} | {rid for rid, pid in parents.items() if pid == parent}
 
     @classmethod
     def _offenders(cls, messages: list[dict[str, Any]], ids: list[int]) -> set[int]:
@@ -193,8 +186,13 @@ class HistoryTrimmer:
         selected. Empty when the selection is provider-safe."""
         selected = set(ids)
         offenders: set[int] = set()
+        seen: set[int] = set()
         for mid in ids:
+            # Every member answers ``tool_group`` with the same group, so one look covers it.
+            if mid in seen:
+                continue
             group = cls.tool_group(messages, mid)
+            seen |= group
             if len(group) > 1 and not group <= selected:
                 offenders |= group & selected
             elif messages[mid].get("role") == "tool" and group == {mid}:

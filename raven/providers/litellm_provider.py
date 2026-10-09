@@ -484,6 +484,11 @@ class LiteLLMProvider(LLMProvider):
         return not self._is_anthropic_family(original, self._resolve_model(original))
 
     @staticmethod
+    def _is_deepseek_family(model: str) -> bool:
+        """Whether a Wire Model names a DeepSeek model, whichever provider serves it."""
+        return model.rsplit("/", 1)[-1].lower().startswith("deepseek")
+
+    @staticmethod
     def _normalize_tool_call_id(tool_call_id: Any) -> Any:
         """Normalize tool_call_id to a provider-safe 9-char alphanumeric form."""
         if not isinstance(tool_call_id, str):
@@ -494,9 +499,16 @@ class LiteLLMProvider(LLMProvider):
 
     @staticmethod
     def _sanitize_messages(
-        messages: list[dict[str, Any]], extra_keys: frozenset[str] = frozenset()
+        messages: list[dict[str, Any]],
+        extra_keys: frozenset[str] = frozenset(),
+        *,
+        require_reasoning_key: bool = False,
     ) -> list[dict[str, Any]]:
-        """Strip non-standard keys and ensure assistant messages have a content key."""
+        """Strip non-standard keys and ensure assistant messages have a content key.
+
+        With ``require_reasoning_key`` every tool-call message also carries
+        ``reasoning_content``, empty where the model did not think.
+        """
         allowed = _ALLOWED_MSG_KEYS | extra_keys
         sanitized = LLMProvider._sanitize_request_messages(messages, allowed)
         id_map: dict[str, str] = {}
@@ -519,6 +531,13 @@ class LiteLLMProvider(LLMProvider):
                     tc_clean["id"] = map_id(tc_clean.get("id"))
                     normalized_tool_calls.append(tc_clean)
                 clean["tool_calls"] = normalized_tool_calls
+
+            # DeepSeek's thinking mode refuses (400) a request that continues
+            # from a tool result unless each tool-call message carries this key.
+            # A step taken without thinking has none, and the ids rewritten above
+            # keep DeepSeek from recovering it on its own. Empty is accepted.
+            if require_reasoning_key and clean.get("tool_calls") and clean.get("reasoning_content") is None:
+                clean["reasoning_content"] = ""
 
             if "tool_call_id" in clean and clean["tool_call_id"]:
                 clean["tool_call_id"] = map_id(clean["tool_call_id"])
@@ -567,6 +586,7 @@ class LiteLLMProvider(LLMProvider):
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
+        require_reasoning_key = self._is_deepseek_family(model)
 
         if self._supports_cache_control(original_model):
             # Asked of this request, not of the process. A strategy that placed
@@ -587,7 +607,11 @@ class LiteLLMProvider(LLMProvider):
 
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
+            "messages": self._sanitize_messages(
+                self._sanitize_empty_content(messages),
+                extra_keys=extra_msg_keys,
+                require_reasoning_key=require_reasoning_key,
+            ),
             "temperature": temperature,
             # Per-phase httpx caps forwarded to the underlying client: connect,
             # write and pool get the first-byte budget, the read keeps the whole
@@ -688,6 +712,7 @@ class LiteLLMProvider(LLMProvider):
         original_model = model or self.default_model
         model = self._resolve_model(original_model)
         extra_msg_keys = self._extra_msg_keys(original_model, model)
+        require_reasoning_key = self._is_deepseek_family(model)
 
         if self._supports_cache_control(original_model):
             # Asked of this request, not of the process. A strategy that placed
@@ -701,7 +726,11 @@ class LiteLLMProvider(LLMProvider):
 
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": self._sanitize_messages(self._sanitize_empty_content(messages), extra_keys=extra_msg_keys),
+            "messages": self._sanitize_messages(
+                self._sanitize_empty_content(messages),
+                extra_keys=extra_msg_keys,
+                require_reasoning_key=require_reasoning_key,
+            ),
             "temperature": temperature,
             "stream": True,
             # OpenAI-compatible providers only emit the trailing usage chunk

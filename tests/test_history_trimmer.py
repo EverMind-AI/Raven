@@ -95,6 +95,12 @@ def test_tool_group_binds_an_assistant_to_all_of_its_results():
     assert HistoryTrimmer.tool_group(messages, 0) == {0}
 
 
+def test_closure_brings_a_selected_results_call_and_its_sibling_results():
+    messages = _parallel_call_session()
+
+    assert HistoryTrimmer.canonical_ids(messages, [0, 3]) == [0, 1, 2, 3, 4]
+
+
 def test_trim_drops_a_tool_call_and_its_results_as_one_group(monkeypatch):
     messages = _parallel_call_session()
     trimmer = _trimmer(monkeypatch, window=200)  # room for ~800 chars: not all three results
@@ -285,3 +291,124 @@ def test_a_split_group_goes_whole_and_last_when_it_must(monkeypatch):
     assert not ({8, 9} & kept)
     assert not ({5, 6, 7} & kept) or {5, 6, 7} <= kept  # never split
     assert HistoryTrimmer.structural_errors(built) == []
+
+
+# --- A call id that a later turn reuses ----------------------------------------
+#
+# Nothing makes a tool-call id unique across a session: the streaming path keeps
+# whatever id the upstream sent. A result belongs to the nearest earlier call
+# that declared its id, and closure and ``tool_group`` have to agree on that --
+# otherwise re-closing after a budget drop puts the dropped group back, the
+# selection stops shrinking, and ``trim`` never returns.
+
+
+def _reused_call_id_session() -> list[dict]:
+    return [
+        {"role": "user", "content": "one"},
+        {
+            "role": "assistant",
+            "content": "reading",
+            "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_0", "content": "r" * 200},
+        {"role": "assistant", "content": "a"},
+        {"role": "user", "content": "two"},
+        {"role": "assistant", "content": "b"},
+        {"role": "user", "content": "three"},
+        {
+            "role": "assistant",
+            "content": "reading again",
+            "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_0", "content": "s" * 200},
+        {"role": "assistant", "content": "t" * 200},
+        {"role": "user", "content": "u" * 200},
+    ]
+
+
+def test_a_reused_call_id_pairs_each_result_with_the_nearest_call():
+    messages = _reused_call_id_session()
+
+    assert HistoryTrimmer.tool_group(messages, 1) == {1, 2}
+    assert HistoryTrimmer.tool_group(messages, 8) == {7, 8}
+    assert HistoryTrimmer.canonical_ids(messages, [0, 1]) == [0, 1, 2]
+
+
+def test_trim_ends_when_a_later_turn_reuses_a_call_id(monkeypatch):
+    from raven.context_engine import history_trimmer as module
+
+    messages = _reused_call_id_session()
+    trimmer = _trimmer(monkeypatch, window=120)  # 0..5 and 10 fit (~104 tokens); 6..9 must go
+    estimate = module.estimate_prompt_tokens_chain
+    estimates: list[None] = []
+
+    def bounded(*args):
+        # A loop that stopped shrinking fails here instead of hanging pytest.
+        estimates.append(None)
+        assert len(estimates) <= 4 * len(messages), "trim stopped shrinking the selection"
+        return estimate(*args)
+
+    monkeypatch.setattr(module, "estimate_prompt_tokens_chain", bounded)
+
+    built, outcome = trimmer.trim(
+        session_messages=messages,
+        ids=list(range(len(messages))),
+        protected_ids=set(range(6)),  # protect_first_n=3 -> ids 0..5, holding the first call_0 exchange
+        reserved_output=0,
+        build_messages=lambda h: [{"role": "system", "content": "s"}, *h, {"role": "user", "content": "u"}],
+    )
+
+    assert outcome.ok
+    assert outcome.included_ids == [0, 1, 2, 3, 4, 5, 10]
+    assert HistoryTrimmer.structural_errors(built) == []
+
+
+# --- The closing sweep looks at each group once --------------------------------
+#
+# Every member of a group answers ``tool_group`` with that same group, and each
+# answer is a pass over the session, so the sweep that refuses a broken pairing
+# asks once per group rather than once per selected message.
+
+
+def _tool_heavy_session(turns: int) -> list[dict]:
+    messages: list[dict] = []
+    for b in range(turns):
+        messages += [
+            {"role": "user", "content": f"q{b}"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": f"a{b}", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+                    {"id": f"b{b}", "type": "function", "function": {"name": "read", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": f"a{b}", "content": "r"},
+            {"role": "tool", "tool_call_id": f"b{b}", "content": "r"},
+        ]
+    return messages
+
+
+def test_the_closing_sweep_looks_at_each_tool_group_once(monkeypatch):
+    messages = _tool_heavy_session(10)  # ten user messages, ten calls with two results each
+    trimmer = _trimmer(monkeypatch, window=10_000)  # everything fits: no drop, only the sweep
+    tool_group = HistoryTrimmer.tool_group
+    looks: list[int] = []
+
+    def counted(session_messages, mid):
+        looks.append(mid)
+        return tool_group(session_messages, mid)
+
+    monkeypatch.setattr(HistoryTrimmer, "tool_group", staticmethod(counted))
+
+    built, outcome = trimmer.trim(
+        session_messages=messages,
+        ids=list(range(40)),
+        protected_ids=set(),
+        reserved_output=0,
+        build_messages=lambda h: [{"role": "system", "content": "s"}, *h, {"role": "user", "content": "u"}],
+    )
+
+    assert outcome.included_ids == list(range(40))
+    assert HistoryTrimmer.structural_errors(built) == []
+    assert len(looks) == 20  # one look per group, not one per selected message

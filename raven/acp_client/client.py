@@ -229,7 +229,7 @@ class AcpClient:
         # Imported here rather than at module level: backends/__init__ pulls in
         # the acp backend, which pulls in this module, so a module-level import
         # back into that package would close the cycle at init time.
-        from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
+        from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
         from raven.agent.subagent.role import subagent_role_env
 
         try:
@@ -247,6 +247,7 @@ class AcpClient:
         # The role goes on before the caller's own map, so a config ``env`` entry
         # is the way to hand one agent back its full registry.
         child_env = {**base_env, **host_identity_env(), **subagent_role_env(), **(env or {})}
+        argv = resolve_program(argv, child_env)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
