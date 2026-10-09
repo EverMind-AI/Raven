@@ -10,7 +10,7 @@ COVERAGE_DIFF_THRESHOLD ?= 90
 # Allowed line or branch regression in percentage points to absorb rounding noise.
 COVERAGE_RATCHET_TOLERANCE ?= 0.05
 DOCKER_IMAGE ?= raven:local
-COVERAGE_REPORT_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
+COVERAGE_REPORT_ARGS = --cov=raven --cov=raven_everos --cov=raven_everos_cloud --cov-branch --cov-report=term-missing:skip-covered --cov-report=xml --cov-report=json --cov-report=html
 # One slice of the suite, K/N; the shard writes its .coverage data and no report.
 COVERAGE_SHARD ?= 1/1
 # Without an explicit encoding= Python opens text files in the locale encoding.
@@ -21,7 +21,7 @@ COVERAGE_SHARD ?= 1/1
 export PYTHONUTF8 := 1
 # Extra pytest flags for a shard; CI passes --idle-ceiling-strict, a local run stays warning-only.
 PYTEST_ARGS ?=
-COVERAGE_DATA_ARGS = --cov=raven --cov=raven_everos --cov-branch --cov-report=
+COVERAGE_DATA_ARGS = --cov=raven --cov=raven_everos --cov=raven_everos_cloud --cov-branch --cov-report=
 # Where the shards' .coverage.* files are gathered before they are combined.
 COVERAGE_DATA_DIR ?= coverage-data
 

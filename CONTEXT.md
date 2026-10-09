@@ -1134,6 +1134,35 @@ SkillForge's three sources at RRF weight 0.9). The name refers to the external p
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
 adapter. The same plugin also contributes the `understand_media` multimodal-parsing tool.
 
+**EverOS Cloud** (`plugins-dist/everos-cloud-memory/raven_everos_cloud/`):
+The hosted EverOS at `https://api.evermind.ai`, reached with a Bearer key from
+`https://everos.evermind.ai`, and the second memory-backend plugin (distribution
+`everos-cloud-memory`, backend name `everos-cloud`). Speaks the same
+`/api/v2/memory/{add,flush,get,search}` as the local server; the plugin depends on
+`raven` and `httpx` only and never imports the `everos` package. Flushes only on an
+**explicit end** and at `stop()`; every add is `mode: "agent"`.
+
+**cloud slice**:
+`plugins.config["everos-cloud-memory"]`: `api_key` and an optional `base_url`. Holds no
+identity -- the **owner id** is the host's.
+
+**owner id**:
+`memory.userId` / `memory.agentId` from the host's `memory` block, handed to every
+backend through `ServiceLocator`. On the wire it is the `user_id` or `agent_id` of a
+search and the `sender_id` of a stored user message. The same two values on two
+machines sharing one cloud key name one memory.
+
+**memory backend chooser** (`cli/onboard_commands.py:_choose_memory_screen`):
+The `raven onboard` question asked only when more than one memory plugin is
+installed: which backend's screen to run. Off writes `memory.backend = null`; a
+dismissed question exits the wizard and writes nothing.
+
+**explicit end**:
+A `store` call whose caller says the conversation is over: `metadata["flush"]` (the
+sub-agent **Memory record** handoff; a convention of the `MemoryBackend` contract) or
+`metadata["is_final"]` (the importer's last batch). The only two store-time reasons the
+cloud backend calls `/flush`.
+
 **EverOS role**:
 One of the four models EverOS talks to: `llm` (reads each conversation and extracts
 what matters), `embedding` (what recall matches meaning with), `rerank` (sharpens
