@@ -136,13 +136,25 @@ read environment variables instead. Export these in your shell profile, not
 only in the current terminal, so every process Raven starts receives them:
 
 ```bash
-export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export SSL_CERT_FILE=/path/to/ca-bundle.pem
 export NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem
 ```
 
 `SSL_CERT_FILE` replaces the whole list of trusted roots, so point it at a
-complete bundle such as the one above, not at the corporate certificate alone.
-To go back to each library's own certificate list, export
+complete bundle that also holds your corporate root, and never at a path that
+does not exist: httpx, which model calls and provider checks go through,
+refuses to start with one. On Debian, Ubuntu and WSL,
+`/etc/ssl/certs/ca-certificates.crt` is that bundle once
+`update-ca-certificates` has run. On macOS, build one first:
+
+```bash
+cat /etc/ssl/cert.pem corporate-ca.pem > ~/ca-bundle.pem
+```
+
+On macOS and Windows the operating system also applies its own certificate
+policy; macOS, for example, refuses a server certificate valid for more than
+825 days, or one not marked for server authentication, even when it trusts the
+root. To go back to each library's own certificate list, export
 `RAVEN_NO_SYSTEM_CA=1` in the same profile.
 
 ## Start Raven

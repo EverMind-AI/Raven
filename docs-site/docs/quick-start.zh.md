@@ -123,13 +123,22 @@ EverOS 记忆服务和基于 Node 的 Agent 作为独立程序运行，读取的
 配置文件里导出下面两项，而不是只在当前终端里设置，这样 Raven 启动的每个进程都能拿到：
 
 ```bash
-export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export SSL_CERT_FILE=/path/to/ca-bundle.pem
 export NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem
 ```
 
-`SSL_CERT_FILE` 会替换整份受信任根证书列表，所以要指向上面这样的完整证书包，而不是
-只指向公司根证书。如需改回各个库自带的证书列表，在同一个配置文件里导出
-`RAVEN_NO_SYSTEM_CA=1`。
+`SSL_CERT_FILE` 会替换整份受信任根证书列表，所以要指向一份同时包含公司根证书的完整
+证书包，而且这个路径必须存在：模型调用和服务商检测所用的 httpx 遇到不存在的路径会直接
+无法启动。在 Debian、Ubuntu 和 WSL 中，运行过 `update-ca-certificates` 之后，
+`/etc/ssl/certs/ca-certificates.crt` 就是这样的证书包。在 macOS 上需要先生成一份：
+
+```bash
+cat /etc/ssl/cert.pem corporate-ca.pem > ~/ca-bundle.pem
+```
+
+在 macOS 和 Windows 上，操作系统还会套用自己的证书策略；例如 macOS 会拒绝有效期超过
+825 天、或未标明用于服务器身份验证的服务器证书，即使它信任签发该证书的根证书。如需改回
+各个库自带的证书列表，在同一个配置文件里导出 `RAVEN_NO_SYSTEM_CA=1`。
 
 ## 启动 Raven { #start-raven }
 
