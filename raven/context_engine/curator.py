@@ -872,12 +872,12 @@ def _tool_call_name_args(tool_call: Any) -> tuple[str, dict[str, Any]]:
 def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | None) -> set[int]:
     """Ids of the messages that fetched a pinned skill's body.
 
-    Returns the assistant message carrying the fetch **and every result message
-    of that assistant turn** -- not only the skill result. Pinning half of a
-    tool exchange is what creates a dangling tool_call: the budget trimmer drops
-    ids one at a time without re-closing adjacency, so a sibling result left
-    unpinned can be dropped out from under a pinned parent and the provider
-    rejects the request.
+    Returns the assistant message carrying the fetch **and every result that
+    answers it** -- not only the skill result -- since the trimmer keeps or
+    drops a call and its results together. The pairing is the trimmer's own
+    (:meth:`HistoryTrimmer.tool_group`): a result answers the nearest earlier
+    call that declared its id, so a later call that reuses the fetch's id is a
+    different exchange and is not pinned with it.
 
     Only the latest fetch per skill id is pinned: a re-read supersedes the
     earlier copy, so the same 2k-token body can never occupy the window twice.
@@ -886,21 +886,12 @@ def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | No
     if not wanted:
         return set()
 
-    results_by_call: dict[str, list[int]] = {}
-    for idx, message in enumerate(messages):
-        if message.get("role") == "tool" and message.get("tool_call_id"):
-            results_by_call.setdefault(str(message["tool_call_id"]), []).append(idx)
-
     latest: dict[str, int] = {}
-    calls_by_parent: dict[int, list[str]] = {}
     for idx, message in enumerate(messages):
         if message.get("role") != "assistant" or not message.get("tool_calls"):
             continue
         for tool_call in message.get("tool_calls") or []:
             name, args = _tool_call_name_args(tool_call)
-            call_id = tool_call.get("id") if isinstance(tool_call, dict) else None
-            if call_id:
-                calls_by_parent.setdefault(idx, []).append(str(call_id))
             if name not in _SKILL_FETCH_TOOLS:
                 continue
             skill_id = args.get("skill_id")
@@ -909,9 +900,7 @@ def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | No
 
     pinned: set[int] = set()
     for parent_idx in set(latest.values()):
-        pinned.add(parent_idx)
-        for call_id in calls_by_parent.get(parent_idx, []):
-            pinned.update(results_by_call.get(call_id, []))
+        pinned |= HistoryTrimmer.tool_group(messages, parent_idx)
     return pinned
 
 

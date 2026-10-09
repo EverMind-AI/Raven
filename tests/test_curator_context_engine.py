@@ -358,9 +358,30 @@ def test_pinned_scan_covers_sibling_results_of_the_pinned_turn() -> None:
         {"role": "tool", "tool_call_id": "c2", "name": "grep", "content": "hits"},
     ]
 
-    # The sibling result comes along: the trimmer drops ids without re-closing
-    # adjacency, so an unpinned sibling could leave the pinned parent dangling.
+    # The sibling result comes along: a call and every result answering it are
+    # one group, which the trimmer keeps or drops whole.
     assert pinned_message_ids(messages, ["local/guide"]) == {1, 2, 3}
+
+
+def test_pinned_scan_leaves_out_a_later_call_that_reuses_the_fetch_id() -> None:
+    """A result answers the nearest earlier call that declared its id, so a later
+    call reusing the fetch's id is a different exchange and stays unpinned."""
+    from raven.context_engine.curator import pinned_message_ids
+
+    messages = [
+        {"role": "user", "content": "go"},
+        *_use_skill_exchange("call_0", "local/guide", "body"),
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": "find it"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "call_0", "type": "function", "function": {"name": "grep", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "call_0", "name": "grep", "content": "hits"},
+    ]
+
+    assert pinned_message_ids(messages, ["local/guide"]) == {1, 2}
 
 
 @pytest.mark.parametrize(
