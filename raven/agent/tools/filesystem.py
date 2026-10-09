@@ -404,7 +404,9 @@ class WriteFileTool(_FsTool):
             if mode == "append":
                 with fp.open("a", encoding="utf-8") as handle:
                     handle.write(content)
-                return f"Successfully appended {len(content)} bytes to {fp}"
+                # Bytes, as the line says: ``len(content)`` counted characters, and a
+                # model sizing a CJK report off it read a third of its real length.
+                return f"Successfully appended {len(_write_text_bytes(content))} bytes to {fp}"
             # The bytes decide, with no text gate in front of them. Text
             # equality is wrong in both directions here: ``read_text`` folds
             # CRLF to LF, so a CRLF file looks equal to the LF content that
@@ -434,7 +436,7 @@ class WriteFileTool(_FsTool):
                     )
             fp.write_text(content, encoding="utf-8")
             return ToolResult(
-                f"Successfully wrote {len(content)} bytes to {fp}",
+                f"Successfully wrote {len(would_write)} bytes to {fp}",
                 diff=_unified(before, content, str(fp)),
                 # Beside the rendered diff, not instead of it: the unified form is
                 # what a text surface shows, and this is what a surface with its

@@ -203,6 +203,10 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- `write_file` reports the bytes it wrote. Its success line said "N bytes"
+  and counted characters, so a model sizing a Chinese report off it read
+  about a third of the report's real length.
+
 - When an agent cannot inherit the host's model, its launcher now names
   what is missing -- for example the OpenAI Codex sign-in, with the
   command that adds it -- instead of reporting that the host has no
