@@ -81,7 +81,13 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
      already said so (the source's toast), and the eye opens on the field as it
      is. */
   const [revealed, setRevealed] = useState('')
+  /* Which read is the current one. Typing, or pressing the eye again, retires
+     the one in flight: its answer arriving after a reader started typing a
+     replacement would overwrite what they typed with the key they are
+     replacing. */
+  const asked = useRef(0)
   const peek = async (shown: boolean): Promise<void> => {
+    const ask = ++asked.current
     if (!shown) {
       if (revealed && key === revealed) setKey('')
       setRevealed('')
@@ -89,10 +95,9 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     }
     if (key) return
     const saved = await store.source().revealKey(p.id)
-    if (saved) {
-      setKey(saved)
-      setRevealed(saved)
-    }
+    if (ask !== asked.current || !saved) return
+    setKey(saved)
+    setRevealed(saved)
   }
   const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
   const kind = kindOf(p)
@@ -150,7 +155,8 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
             <KeyInput className="settings-tbox" value={key} aria-label={t('gui.settings.providers.api_key')}
               placeholder={p.on ? t('gui.settings.key_set_ph') : t('gui.settings.providers.paste_key')}
               onPeek={p.on ? peek : undefined}
-              onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !checking) save() }} />
+              onChange={(e) => { asked.current++; setKey(e.currentTarget.value) }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !checking) save() }} />
             {needsKey(p) && <button type="button" className="mini" disabled={checking} onClick={save}>{btn}</button>}
             {!needsKey(p) && <button type="button" className="mini ghost" disabled={checking} onClick={save}>{t('gui.settings.update')}</button>}
           </span>

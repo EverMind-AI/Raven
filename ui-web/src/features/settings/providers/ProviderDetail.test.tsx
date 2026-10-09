@@ -99,6 +99,26 @@ describe('the eye beside a connected provider\'s key', () => {
     expect(keyField().value).toBe('sk-or-saved-2')
   })
 
+  it('keeps a key typed while the saved one is still on its way', async () => {
+    /* The read is a round trip; a reader who presses the eye and starts typing
+       the replacement before it lands keeps what they typed. */
+    let answer = (_key: string): void => {}
+    install(snap(), {
+      revealKey: (slug) => {
+        asked.push(slug)
+        return new Promise<string | null>((done) => { answer = done })
+      },
+    })
+    await open('openrouter')
+    await act(async () => { fireEvent.click(keyEye()) })
+    expect(asked).toEqual(['openrouter'])
+    fireEvent.change(keyField(), { target: { value: 'sk-or-new' } })
+
+    await act(async () => { answer('sk-or-saved') })
+    await waitFor(() => expect(keyField().type).toBe('text'))
+    expect(keyField().value).toBe('sk-or-new')
+  })
+
   it('fetches nothing for a provider that is not connected', async () => {
     install(snap(), { revealKey: answering('sk-should-not-show') })
     await open('openai')
