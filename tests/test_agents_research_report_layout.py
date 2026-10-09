@@ -265,16 +265,45 @@ def test_an_unchanged_file_still_counts_as_written():
     assert written_markdown([_tool("write_file", text)]) == ["/w/r.md"]
 
 
-def test_the_last_file_written_is_the_one_replaced(tmp_path):
-    first, last = tmp_path / "a.md", tmp_path / "b.md"
-    first.write_text("old a", encoding="utf-8")
-    last.write_text("old b", encoding="utf-8")
+def test_the_only_file_written_is_the_one_replaced(tmp_path):
+    report = tmp_path / "a.md"
+    report.write_text("old a", encoding="utf-8")
 
-    record = sync_report_file([str(first), str(last)], "\n" + _EN + "\n\n")
+    record = sync_report_file([str(report)], "\n" + _EN + "\n\n")
 
-    assert record == {"path": str(last), "files_written": 2, "synced": True}
-    assert last.read_text(encoding="utf-8") == _EN
-    assert first.read_text(encoding="utf-8") == "old a"
+    assert record == {"path": str(report), "files_written": 1, "synced": True}
+    assert report.read_text(encoding="utf-8") == _EN
+
+
+def test_of_several_files_the_one_the_reply_names_is_replaced_not_the_last(tmp_path):
+    """Write order used to decide: a report followed by its notes file had the notes
+    replaced by the report reply, and the report draft left stale."""
+    report, notes = tmp_path / "report.md", tmp_path / "notes.md"
+    report.write_text("old report", encoding="utf-8")
+    notes.write_text("old notes", encoding="utf-8")
+    reply = _EN.replace("> yes, because.", f"> yes, because.\n> Saved to {report}.", 1)
+    assert reply != _EN
+
+    record = sync_report_file([str(report), str(notes)], reply)
+
+    assert record["path"] == str(report) and record["synced"] is True
+    # The delivery line naming the file stays on the reply.
+    assert report.read_text(encoding="utf-8") == _EN
+    assert notes.read_text(encoding="utf-8") == "old notes"
+
+
+@pytest.mark.parametrize("names", [(), ("report.md", "notes.md")])
+def test_several_files_and_no_single_one_named_leaves_every_file_alone(tmp_path, names):
+    report, notes = tmp_path / "report.md", tmp_path / "notes.md"
+    report.write_text("old report", encoding="utf-8")
+    notes.write_text("old notes", encoding="utf-8")
+    reply = _EN + "".join(f"\nSee {name}." for name in names)
+
+    record = sync_report_file([str(report), str(notes)], reply)
+
+    assert record == {"files_written": 2, "synced": False, "reason": "report_file_ambiguous"}
+    assert report.read_text(encoding="utf-8") == "old report"
+    assert notes.read_text(encoding="utf-8") == "old notes"
 
 
 def test_a_summary_reply_never_replaces_the_longer_report_it_describes(tmp_path):

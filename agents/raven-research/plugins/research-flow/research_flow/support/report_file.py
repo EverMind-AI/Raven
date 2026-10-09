@@ -4,9 +4,11 @@ A research turn may also save its report with ``write_file``. That call runs bef
 draft is reviewed and shaped, and the shape gate, the reviewer and the appendix act on
 the reply alone, so the saved file and the reply drift apart - a different structure,
 unreviewed text. Under the reader layout the reply already is the form a reader gets, so
-at turn end the flow writes it over the markdown file the turn last wrote, and the chat
-reply and the file are one text. The research trail, and the delivery line that
-names the file, stay on the reply only.
+at turn end the flow writes it over the report file the turn wrote, and the chat reply
+and the file are one text. The research trail, and the delivery line that names the
+file, stay on the reply only. A turn that wrote one markdown file wrote the report; a
+turn that wrote several (a report beside notes or a source index) has its report named
+by the reply, and when the reply names none or several of them every file is left alone.
 
 The path is read from ``write_file``'s own result line, which names the path the tool
 resolved; the model's argument may be relative to a workspace this plugin cannot see.
@@ -160,16 +162,31 @@ def file_text(reply: str, path: str) -> tuple[str, int]:
     return "\n".join(lines[:start] + quote + lines[end:]).strip(), dropped
 
 
+def _report_target(paths: list[str], reply: str) -> str | None:
+    """The one file the reply is the report for, or None when that is ambiguous.
+
+    Write order cannot decide it: a report followed by a notes file would put the
+    notes last, and the longer report reply would replace them while the report
+    draft stayed stale.
+    """
+    if len(paths) == 1:
+        return paths[0]
+    named = [p for p in paths if p in reply or Path(p).name in reply]
+    return named[0] if len(named) == 1 else None
+
+
 def _title_line(text: str) -> str | None:
     first = next((line for line in text.splitlines() if line.strip()), "")
     return first if first.startswith("# ") else None
 
 
 def sync_report_file(paths: list[str], reply: str) -> dict[str, Any]:
-    """Write ``reply`` over the last markdown file written; the observer payload, or ``{}``.
+    """Write ``reply`` over the turn's report file; the observer payload, or ``{}``.
 
     Never raises: the reply has already gone out, and a file that could not be
-    rewritten is recorded rather than turned into a failed turn. A reply well short
+    rewritten is recorded rather than turned into a failed turn. Which file is the
+    report is :func:`_report_target`'s call, and no file is touched when it cannot
+    tell. A reply well short
     of the file is left out of it, so a summary never replaces the report, and the
     delivery line naming the file stays in the reply (:func:`file_text`). A ``#``
     title the file opens with is kept when the reply has none: the reply omits it
@@ -177,7 +194,10 @@ def sync_report_file(paths: list[str], reply: str) -> dict[str, Any]:
     """
     if not paths:
         return {}
-    target = Path(paths[-1])
+    chosen = _report_target(paths, reply)
+    if chosen is None:
+        return {"files_written": len(paths), "synced": False, "reason": "report_file_ambiguous"}
+    target = Path(chosen)
     record: dict[str, Any] = {"path": str(target), "files_written": len(paths)}
     text, dropped = file_text(reply, str(target))
     if dropped:

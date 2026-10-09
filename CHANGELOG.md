@@ -79,8 +79,10 @@ All notable changes to Raven are documented here.
   fetch, before the limits), and the report is told to carry its
   argument in prose, define terms the question does not already use, ground
   abstract points in a concrete case and drop filler. When the turn also saved
-  the report with `write_file`, the delivered reply is written over the last
-  markdown file it wrote, so the chat reply and the file are the same report.
+  the report with `write_file`, the delivered reply is written over that
+  file, so the chat reply and the file are the same report. A turn that wrote
+  several markdown files (a report beside notes, say) syncs only the one the
+  reply names, and leaves them all alone when it names none or several.
   The file is left as the model wrote it when the reply is not a report, and
   when the reply is under 80% of the file's length - a brief that asks for a
   summary reply gets that summary, and it must not replace the report. The
