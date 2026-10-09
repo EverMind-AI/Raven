@@ -2136,6 +2136,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.paste_key': 'Paste an API key',
     'gui.settings.providers.pick_one': 'Choose a provider on the left',
     'gui.settings.providers.key_first': 'Enter the API key first',
+    'gui.settings.providers.key_unchanged':
+      'No new key to save. To replace the saved one, type a new key here, then press {button}.',
     'gui.settings.providers.key_not_ascii':
       "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",
     'gui.settings.providers.base': 'Service address',
@@ -4714,6 +4716,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.paste_key': '粘贴 API Key',
     'gui.settings.providers.pick_one': '在左边选一家服务商',
     'gui.settings.providers.key_first': '先填入 API Key',
+    'gui.settings.providers.key_unchanged': '没有新的密钥要保存。要换 key，先在框里填入新的，再点「{button}」。',
     'gui.settings.providers.key_not_ascii': '这不像是 API Key：里面有 Key 不会包含的字符，请检查粘贴的内容',
     'gui.settings.providers.base': '服务地址',
     'gui.settings.providers.api_base': 'API 地址',

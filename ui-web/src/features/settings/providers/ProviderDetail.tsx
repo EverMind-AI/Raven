@@ -119,6 +119,13 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     const b = base.trim()
     if (needsKey(p) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
+    /* Connected, with no new key and no address drawn here to send: the server
+       could only refuse the save, in English, so the page says what pressing
+       it would have needed instead. */
+    if (needsKey(p) && !k && !(b && basePlace)) {
+      store.refuse(t('gui.settings.providers.key_unchanged', { button: t('gui.settings.update') }))
+      return
+    }
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
     if (b && basePlace) params.api_base = b

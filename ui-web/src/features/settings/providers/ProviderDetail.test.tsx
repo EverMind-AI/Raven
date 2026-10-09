@@ -42,6 +42,9 @@ async function open(slug: string): Promise<void> {
   await act(async () => { store.set({ provider: slug }) })
 }
 
+/* What Update over a connected provider's key field says when it holds no new key. */
+const UNCHANGED = 'gui.settings.providers.key_unchanged {"button":"gui.settings.update"}'
+
 /* The connection card's key field and the eye beside it. */
 const keyField = (): HTMLInputElement =>
   document.querySelector('.settings-tp-main input[aria-label="gui.settings.providers.api_key"]') as HTMLInputElement
@@ -124,17 +127,29 @@ describe('the eye beside a connected provider\'s key', () => {
       fireEvent.click(keyField().closest('.settings-taglist')!.querySelector(':scope > button.mini')!)
     }],
     ['Enter', (): void => { fireEvent.keyDown(keyField(), { key: 'Enter' }) }],
-  ])('sends no key on %s while the revealed one is unedited: the stored key does not go back', async (_how, press) => {
-    /* What the empty field sends, so it is refused the way the empty field is,
-       rather than rewriting the config with the key it already holds. */
+  ])('sends nothing on %s while the revealed key is unedited, and says there is no new key', async (_how, press) => {
+    /* The stored key does not go back, and nothing else would: the server
+       could only refuse an empty save, in English. */
     const { calls } = install(snap(), { revealKey: answering('sk-or-saved') })
     await open('openrouter')
     await act(async () => { fireEvent.click(keyEye()) })
     await waitFor(() => expect(keyField().value).toBe('sk-or-saved'))
 
     await act(async () => { press() })
-    expect(calls.filter(([name]) => name === 'provider').map(([, args]) => args))
-      .toEqual([{ op: 'save_key', slug: 'openrouter' }])
+    expect(calls.filter(([name]) => name === 'provider')).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(UNCHANGED)
+    expect(keyField().value).toBe('sk-or-saved')
+  })
+
+  it('sends nothing on Update over the empty field of a connected provider, and says why', async () => {
+    const { calls } = install(snap())
+    await open('openrouter')
+    expect(keyField().value).toBe('')
+    await act(async () => {
+      fireEvent.click(keyField().closest('.settings-taglist')!.querySelector(':scope > button.mini')!)
+    })
+    expect(calls.filter(([name]) => name === 'provider')).toEqual([])
+    expect(screen.getByRole('alert').textContent).toBe(UNCHANGED)
   })
 
   it('saves an edited revealed key as the new key', async () => {
