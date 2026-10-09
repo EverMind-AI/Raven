@@ -4,6 +4,9 @@ Both variables here are captured from raven's own environment and re-applied ove
 a login shell's, which is the step that drops them if it is missed: the capture
 runs `$SHELL -lic` from a minimal base precisely so raven's own variables do not
 leak, so anything the host means the child to see has to be overlaid back.
+
+Windows has no login shell, so the same boundary is crossed there by a registry
+read; the section at the end covers that capture.
 """
 
 from __future__ import annotations
@@ -17,10 +20,12 @@ from typing import Any
 
 import pytest
 
-import raven.agent.subagent.backends.env as backend_env_mod
+import raven.agent.subagent.probe as probe_mod
 from raven.acp_client.client import AcpClient
 from raven.agent.subagent.backends import env as backend_env
+from raven.agent.subagent.probe import probe_all
 from raven.agent.subagent.role import SUBAGENT_ENV_VAR, is_subagent_process
+from raven.config.schema import ThirdPartyAcpSubagentConfig
 
 
 def _reporting_child(script: Path, variable: str) -> str:
@@ -96,21 +101,20 @@ async def test_acp_child_is_told_it_serves_as_a_subagent(tmp_path: Path, monkeyp
     assert is_subagent_process(), f"the child was handed {arrived!r}, which it does not read as a sub-agent role"
 
 
-# --- Windows login environment capture -----------------------------------
+# --- Windows: the capture --------------------------------------------------
 #
-# Windows has no login shell. The capture reads the two registry stores a
-# terminal is assembled from (machine, then user), merged over raven's own
-# inherited environment, with Path concatenated the way Windows builds it.
+# Windows has no login shell. The capture rebuilds PATH from the two registry
+# stores a new terminal's Path is assembled from, and keeps every other value
+# raven already has. The fixtures are shaped the way Windows hands them over:
+# the stores' REG_EXPAND_SZ values unexpanded, and raven's own environment with
+# every name upper-cased, which is how CPython's ``os.environ`` holds it there.
 
 
 class _FakeKey:
-    def __init__(self, values: dict[str, str], *, fail: bool = False) -> None:
+    def __init__(self, values: dict[str, str]) -> None:
         self.values = values
-        self.fail = fail
 
     def __enter__(self) -> "_FakeKey":
-        if self.fail:
-            raise OSError("access denied")
         return self
 
     def __exit__(self, *_: Any) -> None:
@@ -118,126 +122,171 @@ class _FakeKey:
 
 
 class _FakeWinreg:
-    """``import winreg`` is Windows-only, so the registry is faked here exactly.
-
-    Only the three calls the capture makes are honest: ``OpenKey`` hands a key
-    over a store a test seeded, and the enumeration returns that store. The
-    dict keeps insertion order, so user-after-machine remains visible.
-    """
+    """``winreg`` over two stores a test edits; a store set to ``None`` refuses the read."""
 
     HKEY_LOCAL_MACHINE = 0x80000002
     HKEY_CURRENT_USER = 0x80000001
     REG_EXPAND_SZ = 2
 
-    def __init__(self, machine: dict[str, str] | bool, user: dict[str, str] | bool) -> None:
-        self._stores = {self.HKEY_LOCAL_MACHINE: machine, self.HKEY_CURRENT_USER: user}
+    def __init__(self, machine: dict[str, str] | None, user: dict[str, str] | None) -> None:
+        self.machine = machine
+        self.user = user
 
     def OpenKey(self, hive: int, _subkey: str) -> _FakeKey:
-        store = self._stores[hive]
-        return _FakeKey({}, fail=True) if store is False else _FakeKey(dict(store))
+        store = self.machine if hive == self.HKEY_LOCAL_MACHINE else self.user
+        if store is None:
+            raise PermissionError(5, "Access is denied")
+        return _FakeKey(dict(store))
 
     def QueryInfoKey(self, key: _FakeKey) -> tuple[int, int, int]:
         return (0, len(key.values), 0)
 
     def EnumValue(self, key: _FakeKey, index: int) -> tuple[str, str, int]:
         name = list(key.values)[index]
-        return (name, key.values[name], 1)
+        return (name, key.values[name], self.REG_EXPAND_SZ)
 
 
-def _fake_winreg(
-    monkeypatch: pytest.MonkeyPatch,
-    machine: dict[str, str] | bool,
-    user: dict[str, str] | bool,
+# What `reg query` shows in each store on a default install.
+_STOCK_MACHINE = {
+    "ComSpec": r"%SystemRoot%\system32\cmd.exe",
+    "Path": r"%SystemRoot%\system32;%SystemRoot%",
+    "PSModulePath": r"%ProgramFiles%\WindowsPowerShell\Modules",
+    "TEMP": r"%SystemRoot%\TEMP",
+    "TMP": r"%SystemRoot%\TEMP",
+    "USERNAME": "SYSTEM",
+    "windir": r"%SystemRoot%",
+}
+_STOCK_USER = {
+    "Path": r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps",
+    "TEMP": r"%USERPROFILE%\AppData\Local\Temp",
+    "TMP": r"%USERPROFILE%\AppData\Local\Temp",
+}
+# Raven's own environment, as the logon built it from those stores.
+_LOGON = {
+    "COMSPEC": r"C:\Windows\system32\cmd.exe",
+    "PATH": r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps",
+    "SYSTEMROOT": r"C:\Windows",
+    "TEMP": r"C:\Users\me\AppData\Local\Temp",
+    "TMP": r"C:\Users\me\AppData\Local\Temp",
+    "USERNAME": "me",
+    "USERPROFILE": r"C:\Users\me",
+    "WINDIR": r"C:\Windows",
+}
+
+
+@pytest.fixture
+def windows_host(monkeypatch: pytest.MonkeyPatch) -> _FakeWinreg:
+    """Raven started on Windows over the stock stores, with no capture taken yet.
+
+    The ambient environment goes first: on Linux it can hold one variable under two
+    spellings (``HTTP_PROXY`` beside ``http_proxy``), which Windows never can, and a
+    test that read it would measure the machine it ran on.
+    """
+    for name in list(os.environ):
+        if not name.startswith("PYTEST_"):
+            monkeypatch.delenv(name)
+    for name, value in _LOGON.items():
+        monkeypatch.setenv(name, value)
+    registry = _FakeWinreg(dict(_STOCK_MACHINE), dict(_STOCK_USER))
+    monkeypatch.setitem(sys.modules, "winreg", registry)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV_FAILED", False)
+    return registry
+
+
+def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_raven(
+    windows_host: _FakeWinreg,
 ) -> None:
-    monkeypatch.setattr(sys, "winreg", _FakeWinreg(machine, user), raising=False)
-    monkeypatch.setitem(sys.modules, "winreg", _FakeWinreg(machine, user))
+    r"""The reported failure: an installer ran after the gateway started. Only PATH moves.
 
-
-def test_windows_capture_refreshes_a_frozen_process_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The reported failure: an installer ran after the gateway started.
-
-    A service keeps the PATH it started with. A terminal opened after
-    `uv tool install` reads the store the installer wrote, and so does this
-    capture: the merged answer carries every inherited variable and the
-    store's Path -- not the process's stale one.
+    A terminal opened after ``uv tool install`` builds its Path from the store the
+    installer wrote, and so does this capture. The stores' other values are what
+    Windows builds an environment *from* -- ``ComSpec`` and ``TEMP`` unexpanded, the
+    machine's own ``USERNAME`` -- so copied over raven's they would hand a child a
+    ``ComSpec`` that ``Popen(shell=True)`` cannot start, a ``TEMP`` that is no
+    directory, and a second spelling of names raven already has.
     """
-    monkeypatch.setenv("PATH", r"C:\stale\service-bin")
-    monkeypatch.setenv("HTTP_PROXY", "http://proxy:8888")
-    _fake_winreg(
-        monkeypatch,
-        machine={"Path": r"C:\Windows\system32", "ComSpec": r"C:\Windows\system32\cmd.exe"},
-        user={"Path": r"C:\Users\me\AppData\Roaming\uv\tools\raven\Scripts"},
-    )
-    captured = backend_env_mod._capture_windows(consequence="subagents inherit raven's environment")
+    windows_host.user["Path"] += r";C:\Users\me\.local\bin"
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
     assert captured is not None
-    assert captured["Path"] == (
-        r"C:\Windows\system32;C:\Users\me\AppData\Roaming\uv\tools\raven\Scripts;C:\stale\service-bin"
+    assert captured["PATH"] == (
+        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps;C:\Users\me\.local\bin;"
+        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps"
     )
-    assert captured["HTTP_PROXY"] == "http://proxy:8888", "a child keeps the process vars the store knows nothing of"
-    assert captured["ComSpec"] == r"C:\Windows\system32\cmd.exe"
-    assert sum(1 for k in captured if k.lower() == "path") == 1, "no duplicate Path spellings beside Path"
+    assert {name: value for name, value in captured.items() if name != "PATH"} == {
+        name: value for name, value in os.environ.items() if name != "PATH"
+    }
 
 
-def test_windows_capture_environments_names_fold_case_insensitively(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One name, one entry: `TEMP` from the process and `Temp` from the store are the same variable.
+def test_windows_capture_expands_stored_references_with_ravens_own_values_first(
+    windows_host: _FakeWinreg,
+) -> None:
+    r"""A reference in a stored Path resolves to what a terminal of this logon would get.
 
-    A child env block carrying both spellings resolves to an arbitrary one on
-    Windows -- and to the later-written one, which the store's refresh would
-    then silently contradict.
+    Raven's own values win because they are the logon's -- the machine store's
+    ``USERNAME`` is ``SYSTEM`` -- and the child carries them beside this PATH. A
+    variable an installer added after raven started is only in the stores, where the
+    user's shadows the machine's and may hold a reference of its own.
     """
-    monkeypatch.setenv("TEMP", r"C:\stale-tmp")
-    _fake_winreg(monkeypatch, machine=False, user={"Temp": r"C:\Users\me\AppData\Local\Temp"})
-    captured = backend_env_mod._capture_windows(consequence="...")
+    windows_host.machine.update({"Path": r"C:\Users\%USERNAME%\bin;%NVM_HOME%", "NVM_HOME": r"C:\nvm\machine"})
+    windows_host.user.update({"Path": "%NVM_SYMLINK%", "NVM_HOME": r"C:\nvm\user", "NVM_SYMLINK": r"%NVM_HOME%\nodejs"})
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
     assert captured is not None
-    assert captured.get("Temp") == r"C:\Users\me\AppData\Local\Temp"
-    assert "TEMP" not in captured
+    assert captured["PATH"].split(";")[:3] == [r"C:\Users\me\bin", r"C:\nvm\user", r"C:\nvm\user\nodejs"]
 
 
-def test_windows_capture_keeps_up_when_only_one_store_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    """HKLM can refuse a non-elevated read; the user's entries must not be lost with it."""
-    monkeypatch.setenv("PATH", r"C:\legacy")
-    _fake_winreg(monkeypatch, machine=False, user={"Path": r"C:\user-only"})
-    captured = backend_env_mod._capture_windows(consequence="...")
+def test_windows_capture_keeps_the_users_store_when_the_machines_refuses(windows_host: _FakeWinreg) -> None:
+    """HKLM can refuse a read; the user's entries must not be lost with it."""
+    windows_host.machine = None
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
     assert captured is not None
-    assert captured["Path"] == r"C:\user-only;C:\legacy"
+    assert captured["PATH"] == r"C:\Users\me\AppData\Local\Microsoft\WindowsApps;" + _LOGON["PATH"]
 
 
-def test_windows_capture_reports_failure_when_no_store_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both stores refusing is the one case the driver must fall back on ``os.environ``."""
-    _fake_winreg(monkeypatch, machine=False, user=False)
-    assert backend_env_mod._capture_windows(consequence="subagents inherit raven's environment") is None
+def test_windows_capture_reports_failure_when_no_store_reads(windows_host: _FakeWinreg) -> None:
+    """Both stores refusing is the one case the caller must fall back on ``os.environ``."""
+    windows_host.machine = None
+    windows_host.user = None
+
+    assert backend_env._capture_windows(consequence="subagents inherit raven's environment") is None
 
 
-def test_windows_capture_expands_percent_vars_in_the_stored_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    r"""`%USERPROFILE%\go\bin` in the registry is a path; left raw it is not one.
+async def test_windows_probe_finds_agents_on_the_captured_path(
+    tmp_path: Path, windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The capture is read by name -- ``probe_all`` asks it for ``PATH`` -- so it is checked through the probe.
 
-    The gateway's measured log shows a launcher script dying on exactly that:
-    the store writes the reference, the read-before mine passed it on, and a
-    terminal got the expanded form. Machine-level references resolve against
-    machine values first (USERPROFILE is the service account's there), then
-    against the process's inherited env -- SHELL-adjusted var precedence.
+    One agent sits on the PATH raven started with, one only in a directory the
+    user's store gained afterwards. Stored under the registry's ``Path`` spelling,
+    the capture left the probe an empty PATH and both read as missing, the first of
+    them found before the capture existed.
     """
-    monkeypatch.setenv("USERPROFILE", r"C:\Users\me")
-    monkeypatch.setenv("PATH", r"C:\legacy")
-    _fake_winreg(
-        monkeypatch,
-        machine={"Path": r"C:\tools;%ProgramFiles%\App", "ProgramFiles": r"C:\Program Files"},
-        user={"Path": r"%USERPROFILE%\AppData\Roaming\uv\tools\raven\Scripts"},
-    )
-    captured = backend_env_mod._capture_windows(consequence="...")
-    assert captured is not None
-    assert captured["Path"] == r"C:\tools;C:\Program Files\App;C:\Users\me\AppData\Roaming\uv\tools\raven\Scripts;C:\legacy"
+    boot_bin, fresh_bin = tmp_path / "boot-bin", tmp_path / "fresh-bin"
+    for directory, name in ((boot_bin, "on-boot-agent"), (fresh_bin, "fresh-agent")):
+        directory.mkdir()
+        (directory / name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (directory / name).chmod(0o755)
+    monkeypatch.setenv("PATH", str(boot_bin))
+    windows_host.user["Path"] = str(fresh_bin)
+    monkeypatch.setattr(os, "pathsep", ";")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    rows = [
+        ThirdPartyAcpSubagentConfig(name=name, command=f"{name} --acp") for name in ("on-boot-agent", "fresh-agent")
+    ]
 
+    results = await probe_all([(cfg, "config") for cfg in rows])
 
-def test_windows_capture_runs_in_place_of_the_posix_one_on_win32(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The platform decides the capture; on win32 the registry-built path beats raven's frozen one."""
-    monkeypatch.setenv("PATH", r"C:\service-legacy-bin")
-    _fake_winreg(monkeypatch, machine={"Path": r"C:\system32"}, user={"Path": r"C:\user"})
-    monkeypatch.setattr(backend_env_mod.sys, "platform", "win32")
-    monkeypatch.setattr(backend_env_mod, "_LOGIN_ENV", None)
-    monkeypatch.setattr(backend_env_mod, "_LOGIN_ENV_FAILED", False)
-    env = backend_env_mod.login_shell_env()
-    assert env["Path"] == r"C:\system32;C:\user;C:\service-legacy-bin"
+    assert [(r.name, r.status, r.target) for r in results] == [
+        ("on-boot-agent", "attention", str(boot_bin / "on-boot-agent")),
+        ("fresh-agent", "attention", str(fresh_bin / "fresh-agent")),
+    ]
 
 
 def test_login_shell_reads_a_windows_shaped_bash_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,4 +298,4 @@ def test_login_shell_reads_a_windows_shaped_bash_path(monkeypatch: pytest.Monkey
     """
     shell = r"C:\Program Files\Git\usr\bin\bash.exe"
     monkeypatch.setenv("SHELL", shell)
-    assert backend_env_mod._login_shell() == shell
+    assert backend_env._login_shell() == shell
