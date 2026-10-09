@@ -241,9 +241,20 @@ class FinalShapeConfig(_Base):
     report_structure: bool = True
     report_format_override: bool = True
     report_depth: bool = False
+    # "sections": the ``## Answer`` / ``## Findings`` / ``## Limitations`` template.
+    # "reader": the same three parts as a reader sees them - the answer as the opening
+    # blockquote, the body under its own ``##`` headings, the limits as the last
+    # section - and the reviewed reply is also written over the markdown report file
+    # the turn wrote, so the chat reply and the file are one text.
+    report_layout: Literal["sections", "reader"] = "sections"
     report_reminder: bool = True
     report_bounce: bool = False
     process_appendix: bool = True
+
+    @property
+    def effective_layout(self) -> str:
+        """The layout the prompt renders: the reader form exists only for the deep clause."""
+        return self.report_layout if self.report_depth else "sections"
 
 
 class ConversationConfig(_Base):

@@ -700,12 +700,12 @@ class ResearchTrail:
 
         if self.distinct_queries:
             shown = self.distinct_queries[:_MAX_LISTED]
-            lines.append("<details><summary>Queries run</summary>")
+            lines.append("**Queries run**")
             lines.append("")
             lines += [f"- `{q}`" for q in shown]
             if len(self.distinct_queries) > len(shown):
                 lines.append(f"- … and {len(self.distinct_queries) - len(shown)} more")
-            lines += ["", "</details>", ""]
+            lines.append("")
 
         if self.pages:
             # Split by whether the page actually yielded anything. Measured on the
@@ -716,7 +716,7 @@ class ResearchTrail:
             # line, because "23 pages read" over 9 real ones is the kind of number
             # that stops being audit and starts being decoration; they just do not
             # each get a URL.
-            lines.append("<details><summary>Pages read</summary>")
+            lines.append("**Pages read**")
             lines.append("")
             lines += [f"- {u} ({c:,} chars)" for u, c, _ in substantive[:_MAX_LISTED]]
             if len(substantive) > _MAX_LISTED:
@@ -725,13 +725,13 @@ class ResearchTrail:
                 lines.append(f"- ({thin} fetch(es) returned almost nothing)")
             if failed:
                 lines.append(f"- ({failed} page(s) could not be retrieved)")
-            lines += ["", "</details>", ""]
+            lines.append("")
 
         if self.unsupported:
-            lines.append("<details><summary>Reviewer's open points</summary>")
+            lines.append("**Reviewer's open points**")
             lines.append("")
             lines += [f"- {c}" for c in self.unsupported[:_MAX_LISTED]]
-            lines += ["", "</details>", ""]
+            lines.append("")
 
         return "\n".join(lines).rstrip() + "\n"
 

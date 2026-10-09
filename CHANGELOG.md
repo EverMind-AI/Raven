@@ -55,14 +55,25 @@ All notable changes to Raven are documented here.
 ### Changed
 
 - Research reports are written for a reader rather than for a grader. The
-  `## Answer` section states the answer and then why it holds and what it
-  means, in a few sentences instead of one or two; prose cites through
-  markdown links on the words a source supports instead of bare URLs
-  mid-sentence; and the report is told to carry its argument in prose, define
-  terms the question does not already use, ground abstract points in a
-  concrete case and drop filler. The identity no longer carries the
-  measured-guidance block, whose short-run and one-answer numbers came from a
-  short-answer benchmark (`measuredGuidance` off). The product label moves to
+  report opens with the answer as a blockquote, stated first and then why it
+  holds and what it means; the body follows under its own `##` headings, and
+  the last section names what could not be verified (`## Limitations` in
+  English). Prose cites through markdown links on the words a source supports
+  instead of bare URLs mid-sentence, with no fetch status or HTTP code beside
+  a link (a brief that asks for link checks gets one table of the URLs as
+  fetched, before the limits), and the report is told to carry its
+  argument in prose, define terms the question does not already use, ground
+  abstract points in a concrete case and drop filler. When the turn also saved
+  the report with `write_file`, the delivered reply is written over that file,
+  so the chat reply and the file are the same report; the research trail stays
+  on the reply only, and its query, page and open-point listings are plain
+  labelled lists instead of `<details>` folds, which a terminal shows as raw
+  tags. The shape gate, the clarify exemption and
+  `scripts/research_report_audit.py` read the new layout, and the old
+  three-heading layout stays the class default (`finalShape.reportLayout`).
+  The identity no longer carries the measured-guidance block, whose short-run
+  and one-answer numbers came from a short-answer benchmark
+  (`measuredGuidance` off). The product label moves to
   `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader`.
 
 - A running EverOS whose version no longer matches the installed one is

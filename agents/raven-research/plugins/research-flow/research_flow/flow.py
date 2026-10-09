@@ -23,6 +23,7 @@ import itertools
 import os
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -73,6 +74,7 @@ from research_flow.gates.plain_first import (
     set_plain_turn,
 )
 from research_flow.gates.report_shape import (
+    READER_LAYOUT,
     ReportShape,
     ReportShapeGate,
     interrupted_report_fallback,
@@ -84,11 +86,13 @@ from research_flow.gates.spin_breaker import SpinEntryBreaker
 from research_flow.gates.sufficiency import SufficiencyGate
 from research_flow.gates.verify import DraftReviewerGate
 from research_flow.state import SessionStore
+from research_flow.support.answer_text import visible_answer
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.fetch_gate_core import FetchGate
 from research_flow.support.harness_text import harness_ask_kind
 from research_flow.support.ledger import close_product_ledger, ledger_path, open_product_ledger
 from research_flow.support.process_appendix import build_appendix, read_ledger
+from research_flow.support.report_file import sync_report_file, written_markdown
 from research_flow.support.search_saturation import SearchSaturation
 from research_flow.support.turn_observers import turn_observers
 from research_flow.tools.web import set_current_session
@@ -112,10 +116,14 @@ def _turn_cargo(cfg: FlowConfig, text: str) -> dict[str, Any]:
         TURN_ASK_KIND_KEY: harness_ask_kind,
     }
     if cfg.final_shape.report_structure:
+        layout = cfg.final_shape.effective_layout
+        repair, fallback = interrupted_report_rewrite_prompt, interrupted_report_fallback
+        if layout == READER_LAYOUT:
+            repair, fallback = partial(repair, layout=layout), partial(fallback, layout=layout)
         cargo[TURN_SYNTHESIS_KEY] = TurnSynthesisPolicy(
-            guidance=interrupted_report_guidance(text),
-            repair_prompt=interrupted_report_rewrite_prompt if cfg.final_shape.report_bounce else None,
-            format_fallback=interrupted_report_fallback,
+            guidance=interrupted_report_guidance(text, layout),
+            repair_prompt=repair if cfg.final_shape.report_bounce else None,
+            format_fallback=fallback,
         )
     return cargo
 
@@ -141,6 +149,10 @@ _USER_TEXT_KEY = "dr_user_text"
 # The turn-mode decision, handed from the iteration phase that makes it to
 # the turn-end stamp that records it.
 _TURN_MODE_KEY = "dr_turn_mode"
+
+# The markdown files the turn's ``write_file`` calls wrote, read off the transcript
+# in the iteration phases - the only ones that carry it - for the turn end.
+_REPORT_FILES_KEY = "dr_report_files"
 
 
 @dataclass
@@ -230,6 +242,8 @@ class TurnFrame(Gate):
         self._report_reminder = cfg.final_shape.report_structure and cfg.final_shape.report_reminder
         self._process_appendix = cfg.final_shape.process_appendix
         self._ask_user_brief = cfg.ask_user_on and cfg.ask_user.brief
+        self._layout = cfg.final_shape.effective_layout
+        self._report_file = cfg.final_shape.report_structure and self._layout == READER_LAYOUT
 
     @property
     def name(self) -> str:
@@ -284,7 +298,7 @@ class TurnFrame(Gate):
         if self._report_reminder:
             # The turn's own text, not the assembled content: the checklist reads the
             # request, and the memo and brief prefixed above are ours, not the user's.
-            content = f"{content}\n\n{render_reminder(text)}"
+            content = f"{content}\n\n{render_reminder(text, self._layout)}"
         if content != text:
             return HookDecision(modified_content=content)
         return HookDecision()
@@ -371,6 +385,13 @@ class TurnFrame(Gate):
             logger.info("conversation-gate: answering from context ({}) - {}", mode.source, mode.why)
         return HookDecision()
 
+    async def after_iteration(self, ctx: GateCtx) -> HookDecision:
+        if self._report_file:
+            paths = written_markdown((ctx.messages or [])[ctx.turn_base or 0 :])
+            if paths:
+                ctx.metadata[_REPORT_FILES_KEY] = paths
+        return HookDecision()
+
     # -- turn exit --------------------------------------------------------
 
     async def after_send(self, ctx: GateCtx) -> HookDecision:
@@ -379,6 +400,7 @@ class TurnFrame(Gate):
         # they are phase-to-phase freight, not a gate's measurement.
         turn_mode = ctx.metadata.pop(_TURN_MODE_KEY, None)
         ctx.metadata.pop(_USER_TEXT_KEY, None)
+        report_paths = ctx.metadata.pop(_REPORT_FILES_KEY, None)
         # The gates' own counters first, the turn-level ones over them - the
         # order the fork stamped them in, and the one that lets a turn-level key
         # win a name collision.
@@ -399,8 +421,19 @@ class TurnFrame(Gate):
             if self._cfg.final_shape.report_structure or self._cfg.final_shape.record:
                 observers["report_shape"] = {
                     "expected": bool(self._cfg.final_shape.report_structure),
-                    **ReportShape(shaped.visible).counters(),
+                    **ReportShape(shaped.visible, self._layout).counters(),
                 }
+
+        if self._report_file and report_paths:
+            # Before the appendix is appended: the trail rides on the reply only. No
+            # closing-tag bar: whether reasoning came out of band is a per-response fact
+            # this phase never sees, and the reply has gone out whole either way.
+            visible = visible_answer(final_content)
+            if ReportShape(visible, self._layout).well_formed:
+                observers["report_file"] = sync_report_file(report_paths, visible)
+            else:
+                # A clarify or a reply that is not the report: the model's own file stands.
+                observers["report_file"] = {"synced": False, "reason": "reply_not_a_report"}
 
         mode = turn_mode
         if isinstance(mode, TurnMode):
@@ -507,6 +540,7 @@ def build_chain(
         evidence_round = evidence_round_for(cfg)
 
     ask_user_on = cfg.ask_user_on
+    layout = cfg.final_shape.effective_layout
     if ask_user_on and cfg.prompt_section_override:
         logger.warning(
             "drFlow.askUser is on but promptSectionOverride replaces the contract, "
@@ -577,7 +611,7 @@ def build_chain(
             closing_tag_required=cfg.think_closing_tag_required,
         )
         if ask_user_on:
-            plain = ClarifyExemptHook(plain)
+            plain = ClarifyExemptHook(plain, layout)
         observers.append(plain)
     if cfg.budget_note.enabled:
         observers.append(
@@ -656,7 +690,7 @@ def build_chain(
             # reach: a prose clarify is "answerless" to it, so it is exempted
             # whenever the clarify round exists.
             if ask_user_on:
-                finalizer = ClarifyExemptHook(finalizer)
+                finalizer = ClarifyExemptHook(finalizer, layout)
             observers.append(finalizer)
     if cfg.evidence_floor.enabled:
         floor: Gate = EvidenceFloorGate(
@@ -668,7 +702,7 @@ def build_chain(
         # A prose clarify reads as a draft here too, and more pages are not the
         # answer to "which sense of the term did you mean".
         if ask_user_on:
-            floor = ClarifyExemptHook(floor)
+            floor = ClarifyExemptHook(floor, layout)
         observers.append(floor)
     if cfg.verify.enabled:
         if provider is None:
@@ -699,7 +733,7 @@ def build_chain(
             # arrives here as an ordinary draft, and the reviewer rejects it
             # for being one.
             if ask_user_on:
-                reviewer = ClarifyExemptHook(reviewer)
+                reviewer = ClarifyExemptHook(reviewer, layout)
             observers.append(reviewer)
 
     # Wrapping happens here, after every observer is built, so the gate covers
@@ -714,12 +748,12 @@ def build_chain(
     # the non-research turn, and wrapping it would gate it out of the only
     # place it was built for.
     if cfg.final_shape.report_structure and cfg.final_shape.report_bounce:
-        bar: Gate = ReportShapeGate(closing_tag_required=cfg.think_closing_tag_required)
+        bar: Gate = ReportShapeGate(closing_tag_required=cfg.think_closing_tag_required, layout=layout)
         # Same exemption as the reviewer's: a clarify has no report sections to
         # be missing, and demanding them turns the one turn that must not
         # answer into a rewrite.
         if ask_user_on:
-            bar = ClarifyExemptHook(bar)
+            bar = ClarifyExemptHook(bar, layout)
         observers.append(bar)
 
     # The second observer outside the wrap, for the opposite reason: it has to

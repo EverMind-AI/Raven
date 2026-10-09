@@ -103,6 +103,13 @@ rows the report marks not fetched, shallow fetch depth (median page under 3k cha
 means abstracts and READMEs rather than papers and data cards), citations without a URL
 scheme, fence-tag citations, and an answer that shipped unreviewed.
 
+The audit reads both report layouts. The sections layout is the three `##` headings
+`Answer`, `Findings` and `Limitations`. The reader layout, which the product ships, opens
+with the answer as a blockquote, puts the body under its own `##` headings, and ends with
+the limits section (`## Limitations`, or its Chinese heading). A report whose first line,
+under at most a `#` title, is a blockquote is read in the reader layout: the quote is the
+answer rather than a preamble, and body headings are not extra sections.
+
 One more soft finding settles the readability dimension's measurable half.
 `too_many_compared_columns` fires above eight columns that a reader has to compare across,
 and names the last two so the finding says what to move rather than only that something is

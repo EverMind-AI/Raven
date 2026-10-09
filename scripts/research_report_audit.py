@@ -51,6 +51,15 @@ THIN_PAGE_CHARS = 400
 #: The three sections the deep report template requires, in order.
 REQUIRED_SECTIONS = ("Answer", "Findings", "Limitations")
 
+#: The reader layout's limits heading: the last ``##`` section, in English or in Chinese
+#: ("limitations", "restrictions", "shortcomings", and three forms of "could not be
+#: verified"). The flow's ``report_shape`` matcher, kept in sync by eye for the reason
+#: ``THIN_PAGE_CHARS`` is.
+_READER_LIMITS_RE = re.compile(
+    "limitation|\u5c40\u9650|\u9650\u5236|\u4e0d\u8db3|\u672a\u80fd\u6838\u5b9e|\u672a\u6838\u5b9e|\u65e0\u6cd5\u6838\u5b9e",
+    re.I,
+)
+
 #: Markers that say a number is not a measurement, each with whether it is a hard finding.
 #: The split is between a report declaring its own number an estimate - the defect that
 #: mis-ranked two candidates by an order of magnitude on 2026-09-04 - and approximate
@@ -152,7 +161,12 @@ _NOTHING_CITED_RE = re.compile(r">\s*No links were cited above, so there was not
 _PAGE_RE = re.compile(r"^-\s+(?P<url>https?://\S+)\s+\((?P<chars>[\d,]+)\s+chars\)\s*$")
 #: The producer caps each listing at 40 entries and writes this line for the rest.
 _MORE_RE = re.compile(r"^-\s+(?:…|\.\.\.)\s*and (?P<n>\d+) more\s*$")
-_DETAILS_RE = re.compile(r"<details><summary>(?P<name>[^<]+)</summary>")
+#: A listing opens under its bold label; reports written before the labels were
+#: plain carry the same names as ``<details>`` summaries.
+_LISTING_RE = re.compile(
+    r"^(?:<details><summary>(?P<name>[^<]+)</summary>"
+    r"|\*\*(?P<label>Queries run|Pages read|Reviewer's open points)\*\*)$"
+)
 _THIN_NOTE_RE = re.compile(r"^-\s+\((?P<n>\d+) fetch\(es\) returned almost nothing\)")
 _FAILED_NOTE_RE = re.compile(r"^-\s+\((?P<n>\d+) page\(s\) could not be retrieved\)")
 _APPENDIX_START_RE = re.compile(r"^(?:>[^*]*\*\*This answer shipped unreviewed|\*\*Research trail\*\*)")
@@ -190,6 +204,7 @@ class Audit:
 
     path: str
     chars: int
+    layout: str = "sections"
     preamble: str = ""
     sections: list[str] = field(default_factory=list)
     extra_sections: list[str] = field(default_factory=list)
@@ -203,6 +218,7 @@ class Audit:
         return {
             "path": self.path,
             "chars": self.chars,
+            "layout": self.layout,
             "preamble": self.preamble,
             "sections": self.sections,
             "extra_sections": self.extra_sections,
@@ -634,7 +650,7 @@ def parse_trail(lines: list[str]) -> tuple[dict[str, Any], dict[str, Any], dict[
     report that fetched nothing, and a head-to-head that conflated the two would credit a
     competitor for a check it never ran.
 
-    The two listings are read per ``<details>`` block rather than by pattern alone,
+    The two listings are read per labelled block rather than by pattern alone,
     because both are capped at forty entries and both end with the same "and N more"
     line. Read globally, the queries' cap would be attributed to the pages'.
     """
@@ -656,8 +672,8 @@ def parse_trail(lines: list[str]) -> tuple[dict[str, Any], dict[str, Any], dict[
     section: str | None = None
     for raw in lines:
         line = raw.strip()
-        if m := _DETAILS_RE.search(line):
-            section = m.group("name").strip().lower()
+        if m := _LISTING_RE.match(line):
+            section = (m.group("name") or m.group("label")).strip().lower()
             continue
         if line.startswith("</details>"):
             section = None
@@ -736,8 +752,17 @@ def audit(path: Path) -> Audit:
     # a revision note, a bounce acknowledgement, "here is the corrected report". It ships
     # as the first thing the reader sees, so it is a delivery defect rather than a style
     # one, and it is invisible to every other check.
+    #
+    # The reader layout opens with the answer as a blockquote, under at most a `#` title,
+    # so a quote in that position is the answer rather than a preamble.
     body_start = next((i for i, ln in enumerate(lines) if ln.startswith("#")), len(lines))
-    preamble = "\n".join(lines[:body_start]).strip()
+    lead = [ln for ln in lines if ln.strip()][:2]
+    if lead and (
+        lead[0].lstrip().startswith(">")
+        or (lead[0].startswith("# ") and lead[1:2] and lead[1].lstrip().startswith(">"))
+    ):
+        result.layout = "reader"
+    preamble = "" if result.layout == "reader" else "\n".join(lines[:body_start]).strip()
     if preamble:
         result.preamble = preamble
         first = preamble.splitlines()[0][:160]
@@ -751,10 +776,21 @@ def audit(path: Path) -> Audit:
     body = lines[:appendix_at]
     heads = [ln[3:].strip() for ln in body if ln.startswith("## ")]
     result.sections = heads
-    missing = [s for s in REQUIRED_SECTIONS if not any(h.lower().startswith(s.lower()) for h in heads)]
+    if result.layout == "reader":
+        # Answer is the opening quote; the limits are the last matching section; every
+        # other `##` is the body, which is where the reader layout puts its headings.
+        limits_at = next((i for i in range(len(heads) - 1, -1, -1) if _READER_LIMITS_RE.search(heads[i])), None)
+        present = {"Answer", *(["Limitations"] if limits_at is not None else [])}
+        if any(i != limits_at and (limits_at is None or i < limits_at) for i in range(len(heads))):
+            present.add("Findings")
+        missing = [s for s in REQUIRED_SECTIONS if s not in present]
+    else:
+        missing = [s for s in REQUIRED_SECTIONS if not any(h.lower().startswith(s.lower()) for h in heads)]
+        result.extra_sections = [
+            h for h in heads if not any(h.lower().startswith(s.lower()) for s in REQUIRED_SECTIONS)
+        ]
     if missing:
         result.findings.append(Finding(kind="missing_template_section", detail=", ".join(missing)))
-    result.extra_sections = [h for h in heads if not any(h.lower().startswith(s.lower()) for s in REQUIRED_SECTIONS)]
     if result.extra_sections:
         result.findings.append(Finding(kind="extra_h2_heading", detail=", ".join(result.extra_sections[:6])))
 
@@ -865,7 +901,7 @@ def _render(result: Audit) -> str:
     c = result.citations
     if c:
         out.append("   citations:  " + ", ".join(f"{k}={v}" for k, v in sorted(c.items()) if k != "urls"))
-    out.append(f"   sections:   {', '.join(result.sections) if result.sections else 'none'}")
+    out.append(f"   sections:   {', '.join(result.sections) if result.sections else 'none'} ({result.layout} layout)")
     if result.tables:
         widths = ", ".join(f"L{tb['line']}:{tb['width']}col×{tb['rows']}row" for tb in result.tables)
         out.append(f"   tables:     {widths}")

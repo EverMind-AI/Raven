@@ -221,6 +221,37 @@ def test_a_missing_template_section_is_named(tmp_path):
     assert finding.detail == "Limitations"
 
 
+def test_a_reader_layout_report_is_read_as_its_three_parts(tmp_path):
+    """The opening quote is the answer, not a preamble, and body headings are not extras."""
+    report = tmp_path / "reader.md"
+    report.write_text(
+        "> x\n\n## What the sources show\n\ny\n\n## How it compares\n\nw\n\n## Limitations\n\nz\n\n" + TRAIL,
+        encoding="utf-8",
+    )
+    result = audit(report)
+    kinds = {f.kind for f in result.findings}
+    assert result.layout == "reader"
+    assert not kinds & {"preamble_before_first_heading", "missing_template_section", "extra_h2_heading"}
+
+
+def test_a_chinese_reader_report_names_its_missing_limits(tmp_path):
+    report = tmp_path / "reader_zh.md"
+    # A titled report: the answer quote and one numbered body heading, no limits section.
+    report.write_text("# T\n\n> x\n\n## \u4e00\u3001a\n\ny\n", encoding="utf-8")
+    (finding,) = [f for f in audit(report).findings if f.kind == "missing_template_section"]
+    assert finding.detail == "Limitations"
+    report.write_text(report.read_text(encoding="utf-8") + "\n## \u672a\u80fd\u6838\u5b9e\n\nz\n", encoding="utf-8")
+    assert "missing_template_section" not in {f.kind for f in audit(report).findings}
+
+
+def test_prose_before_the_answer_quote_is_still_a_preamble(tmp_path):
+    report = tmp_path / "leak_reader.md"
+    report.write_text("Here is the corrected report.\n\n> **Conclusion:** x\n\n## A\n\ny\n", encoding="utf-8")
+    result = audit(report)
+    assert result.layout == "sections"
+    assert "preamble_before_first_heading" in {f.kind for f in result.findings}
+
+
 def test_an_appendix_heading_is_not_counted_as_a_body_section(tmp_path):
     report = tmp_path / "full.md"
     report.write_text("## Answer\n\nx\n\n## Findings\n\ny\n\n## Limitations\n\nz\n\n" + TRAIL, encoding="utf-8")

@@ -201,8 +201,10 @@ def test_the_rendered_trail_leads_with_the_summary_and_folds_the_detail():
     # still counts two - only the noun stops claiming two different things were
     # looked for.
     assert "3 searches (2 unique query strings), 1 pages read" in lines[1]
-    assert text.count("<details>") == 2  # queries + pages; no open points on a pass
-    assert text.index("<details>") > text.index("**Research trail**")
+    assert "**Queries run**" in lines and "**Pages read**" in lines  # no open points on a pass
+    assert "**Reviewer's open points**" not in text
+    assert "<details>" not in text
+    assert text.index("**Queries run**") > text.index("**Research trail**")
 
 
 def test_the_appendix_is_gated_on_the_assembly_so_the_anchor_cannot_reach_it():

@@ -294,7 +294,9 @@ TWIN_DRFLOW_DIVERGED = {
     "finalShape": (
         "the trunk product turns reportBounce on for every mode: a missing report section "
         "is a shape defect, not a depth setting, and it belongs to no tier. Measured at 0 "
-        "bounces over 15 turns, so it costs the baseline nothing. The fork ran it off"
+        "bounces over 15 turns, so it costs the baseline nothing. The fork ran it off. "
+        "It also ships reportLayout=reader, the report in the form a reader receives, "
+        "which the fork's schema does not have"
     ),
     "version": (
         "the trunk product's flow now carries the numeric-discipline rule in its deep "
@@ -433,11 +435,12 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
         report_structure=shape["reportStructure"],
         report_format_override=shape["reportFormatOverride"],
         report_depth=shape["reportDepth"],
+        report_layout=shape["reportLayout"],
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
     assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
-    assert digest == "6e5fde8bdf1085ae", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert digest == "363f8decdba74cbf", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():
