@@ -79,3 +79,44 @@ def test_a_refused_certificate_is_told_apart_from_the_other_ways_a_connection_fa
     assert is_untrusted_certificate(refused_certificate)
     assert not is_untrusted_certificate(refused_connection)
     assert not is_untrusted_certificate(not_tls)
+
+
+def _raised_through_httpx(cause: ssl.SSLError) -> httpx.ConnectError:
+    try:
+        try:
+            raise cause
+        except ssl.SSLError as exc:
+            raise httpx.ConnectError(str(exc)) from exc
+    except httpx.ConnectError as wrapped:
+        return wrapped
+
+
+@pytest.mark.parametrize(
+    ("verify_code", "message"),
+    [
+        (-67901, '"127.0.0.1" certificate is not standards compliant'),
+        (
+            0x800B0109,
+            "A certificate chain processed, but terminated in a root certificate "
+            "which is not trusted by the trust provider.",
+        ),
+    ],
+    ids=["macos", "windows"],
+)
+def test_a_refusal_in_the_system_verifiers_own_words_is_still_a_refused_certificate(
+    verify_code: int, message: str
+) -> None:
+    """Once truststore verifies, the refusal carries the operating system's wording.
+
+    These are the shapes truststore raises on macOS and Windows: an
+    ``SSLCertVerificationError`` that never says CERTIFICATE_VERIFY_FAILED. A
+    classifier reading the message would call every one of them a network error.
+    """
+    refusal = ssl.SSLCertVerificationError(message)
+    refusal.verify_message = message
+    refusal.verify_code = verify_code
+
+    failure = _raised_through_httpx(refusal)
+
+    assert "CERTIFICATE_VERIFY_FAILED" not in str(failure)
+    assert is_untrusted_certificate(failure)
