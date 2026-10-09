@@ -20,7 +20,7 @@ import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { reduce } from '../../features/composer/turn'
 import { claimDraft as claimDeskDraft } from '../../features/desk/store'
-import { loadProviders, stagedTier } from '../../features/model/source'
+import { loadProviders, rememberSent, stagedTier } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
@@ -266,6 +266,10 @@ export function send(text: string): void {
      queue then delivers anyway. It waits in the queue, as it always has. */
   if (turn.busy() && !registryIsDraft() && !promoting) { sendMidTurn(text); return }
   if (turn.busy()) { queuePush(text); return }
+  /* A turn of its own starts here, on the model the chip names: that is a use
+     (features/model/recent.ts). A message merged into a running turn rides on
+     the model that turn started with, already remembered then. */
+  rememberSent()
   const rt = viewRuntime()
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */

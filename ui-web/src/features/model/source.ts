@@ -12,7 +12,8 @@ import { gateway } from '../../rpc/gateway'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
 import { openModels, openProviderModels } from '../settings/store'
-import { open as openPickerAt, setCurrent, statedTags } from './store'
+import { remember } from './recent'
+import { current, currentProvider, open as openPickerAt, setCurrent, statedTags } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { TierReply, TierSource } from '../../state/tier'
@@ -58,6 +59,16 @@ export function setDefaultPair(model: string, provider: string): void {
 let paintChip: () => void = () => {}
 export function setChipPainter(fn: () => void): void {
   paintChip = fn
+}
+
+/* A message is going out: what the composer's chip names is what its turn
+   runs on, so it heads the picker's recent list (./recent.ts). A chip whose
+   account nothing has said yet names no row to list it under; the next send
+   that knows it does. */
+export function rememberSent(): void {
+  const model = current()
+  const provider = currentProvider()
+  if (model && provider) remember(model, provider)
 }
 
 /* The chip the composer shows and the settings default both write. */
