@@ -77,22 +77,10 @@ def _on_windows() -> bool:
 
 
 def _login_shell() -> str | None:
-    r"""The user's login shell if this module can drive it, else ``None``.
-
-    ``basename`` alone leaves a Windows-shaped bash unread: git-bash exports
-    ``SHELL=C:\Program Files\Git\usr\bin\bash.exe`` with backslashes, and
-    POSIX ``basename`` sees no separator. Both flavors of path are split so
-    that spelling drives the shell it names rather than falling back and
-    losing git-bash's profile-installed PATH entries on a POSIX host that is
-    not Windows.
-    """
+    """The user's login shell if this module can drive it, else ``None``."""
     shell = os.environ.get("SHELL", "").strip()
-    if not shell:
-        return None
-    name = shell.replace("\\", "/").rsplit("/", 1)[-1]
-    if name.lower().endswith(".exe"):
-        name = name[:-4]
-    return shell if name in _DRIVABLE_SHELLS else None
+
+    return shell if shell and os.path.basename(shell) in _DRIVABLE_SHELLS else None
 
 
 def login_shell_env() -> dict[str, str]:
@@ -111,11 +99,7 @@ def login_shell_env() -> dict[str, str]:
         return dict(_LOGIN_ENV)
     if _LOGIN_ENV_FAILED:
         return dict(os.environ)
-    captured = (
-        _capture_windows(consequence="subagents inherit raven's environment")
-        if _on_windows()
-        else _capture(consequence="subagents inherit raven's environment")
-    )
+    captured = _capture_now(consequence="subagents inherit raven's environment")
     if captured is None:
         _LOGIN_ENV_FAILED = True
         return dict(os.environ)
@@ -143,11 +127,22 @@ def refresh_login_shell_env() -> bool:
     returns. Returns whether a capture landed.
     """
     global _LOGIN_ENV
-    captured = _capture(consequence="keeping the environment captured earlier")
+    captured = _capture_now(consequence="keeping the environment captured earlier")
     if captured is None:
         return False
     _LOGIN_ENV = captured
     return True
+
+
+def _capture_now(*, consequence: str) -> dict[str, str] | None:
+    """This platform's capture: the registry's PATH on Windows, the login shell elsewhere.
+
+    The first capture and every refresh both come here, so a refresh cannot go
+    looking for a login shell on a host whose first capture never had one.
+    """
+    if _on_windows():
+        return _capture_windows(consequence=consequence)
+    return _capture(consequence=consequence)
 
 
 def _capture_windows(*, consequence: str) -> dict[str, str] | None:

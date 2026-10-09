@@ -16,7 +16,7 @@ import os
 import shlex
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
@@ -195,6 +195,10 @@ def windows_host(monkeypatch: pytest.MonkeyPatch) -> _FakeWinreg:
     return registry
 
 
+def _no_shell(argv: list[str], **_: Any) -> NoReturn:
+    raise AssertionError(f"no shell is started on Windows, got {argv}")
+
+
 def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_raven(
     windows_host: _FakeWinreg,
 ) -> None:
@@ -258,6 +262,28 @@ def test_windows_capture_reports_failure_when_no_store_reads(windows_host: _Fake
     assert backend_env._capture_windows(consequence="subagents inherit raven's environment") is None
 
 
+def test_a_refresh_on_windows_reads_the_stores_again(
+    windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check again, Connect and Test each refresh the capture; on Windows that is another registry read.
+
+    Routed to the login-shell capture instead, a refresh found no shell, kept the
+    first capture, and an agent installed after it stayed missing until a restart --
+    the case the Windows capture exists for. Git for Windows exports ``SHELL`` to
+    what it starts, and driving that bash would have been worse: an MSYS
+    environment, a ``:``-joined PATH of ``/c/...`` entries and no ``SystemRoot``,
+    swapped in for every probe and spawn after it.
+    """
+    monkeypatch.setenv("SHELL", r"C:\Program Files\Git\usr\bin\bash.exe")
+    monkeypatch.setattr(backend_env.subprocess, "run", _no_shell)
+    assert r"C:\Users\me\.local\bin" not in backend_env.login_shell_env()["PATH"]
+
+    windows_host.user["Path"] += r";C:\Users\me\.local\bin"
+
+    assert backend_env.refresh_login_shell_env() is True
+    assert r"C:\Users\me\.local\bin" in backend_env.login_shell_env()["PATH"]
+
+
 async def test_windows_probe_finds_agents_on_the_captured_path(
     tmp_path: Path, windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -287,15 +313,3 @@ async def test_windows_probe_finds_agents_on_the_captured_path(
         ("on-boot-agent", "attention", str(boot_bin / "on-boot-agent")),
         ("fresh-agent", "attention", str(fresh_bin / "fresh-agent")),
     ]
-
-
-def test_login_shell_reads_a_windows_shaped_bash_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """basename alone dropped it: git-bash's `SHELL` has backslashes, and POSIX split sees no separator.
-
-    The gateway's log had SHELL=`C:\\Program Files\\Git\\usr\\bin\\bash.exe` be "not one this
-    build can drive" and every probe ran on raven's own PATH -- invisible to the
-    README's own install-from-git-bash recipe, which then answered "agent missing".
-    """
-    shell = r"C:\Program Files\Git\usr\bin\bash.exe"
-    monkeypatch.setenv("SHELL", shell)
-    assert backend_env._login_shell() == shell
