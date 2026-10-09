@@ -148,7 +148,7 @@ _TRAIL_RE = re.compile(
     r"(?:\s*\((?P<thin>\d+)\s+returned almost nothing\))?"
     r"(?:,\s*(?P<refused>\d+)\s+refused by the site)?"
     r"(?:,\s*(?P<minutes>\d+)m of research)?"
-    r"(?:,\s*reviewer:\s*(?P<reviewer>[a-z_ ]+?)(?:\s*\(|,|$))?",
+    r"(?:,\s*reviewer:\s*(?P<reviewer>[a-z_ ]+?)(?:\s*\(|\s+via\s|,|$))?",
     re.MULTILINE,
 )
 _UNREVIEWED_RE = re.compile(r"^>[^*]*\*\*This answer shipped unreviewed\*\*\s*[-—]\s*(?P<why>.+?)\.?\s*$")

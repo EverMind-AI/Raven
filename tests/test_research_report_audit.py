@@ -601,6 +601,24 @@ def test_the_parser_reads_past_the_producers_refused_page_clause(tmp_path):
     assert result.pages["urls"] == ["https://a.example/real"]
 
 
+def test_the_reviewer_verdict_is_read_when_the_trail_names_the_reviewing_model(tmp_path):
+    """Every product trail names the model, and a model id carries ``/`` and ``-``,
+    which the verdict's character class refused, so the verdict read as missing."""
+    trail = ResearchTrail(
+        searches=3,
+        distinct_queries=["q0", "q1", "q2"],
+        pages=[("https://a.example/real", 5_000, True)],
+        cited=["https://a.example/real"],
+        span_seconds=240,
+        verify_outcome="pass",
+        verify_model="deepseek/deepseek-v4-flash",
+    )
+    assert "reviewer: pass via deepseek/deepseek-v4-flash" in trail.render()
+    result = audit(_rendered(trail, tmp_path))
+    assert result.trail["reviewer"] == "pass"
+    assert result.trail["research_minutes"] == 4
+
+
 def test_the_parser_reads_the_producers_own_untraceable_trail(tmp_path):
     """The outcome with no count in its sentence: pages read, nothing cited."""
     trail = ResearchTrail(
