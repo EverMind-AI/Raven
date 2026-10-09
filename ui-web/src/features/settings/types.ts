@@ -89,6 +89,9 @@ export interface EverosInfo {
      in a model and a key and have nothing happen. */
   available?: boolean
   note?: string | null
+  /* "other_backend" when long-term memory runs on a backend that is not EverOS:
+     the three EverOS-only role rows are then hidden (Roles.tsx). */
+  reason?: string | null
   /* False for a root the user manages: raven neither starts it nor writes its
      config, so the slots are shown and not editable. */
   owned?: boolean
@@ -146,7 +149,7 @@ export interface SettingsSnapshot {
   raw: Record<string, unknown>
   configPath: string
   everos: EverosInfo | null
-  everosCloud: EverosCloudInfo | null
+  everosCloud?: EverosCloudInfo | null
   providers: ProviderRow[]
   curProvider: string
   model: string
