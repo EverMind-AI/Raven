@@ -743,15 +743,19 @@ def _plugin_config_declaration(plugin_id: str) -> dict[str, Any] | None:
 def _set_plugin_config_field(key: str, value: Any) -> dict[str, Any]:
     """``plugins.config.<plugin_id>.<field>``, admitted against the plugin's own declaration.
 
-    The same rule ``channels.configure`` applies by a different door: a field
-    the manifest does not declare is refused by name, the type is checked as
-    admission checks it, and the write goes through ``set_plugin_config_fields``,
-    which can only touch that plugin's slice -- so no dotted path rides a
-    credential write into the rest of the config.
+    Only a field the manifest marks ``settable = true`` is writable here. This
+    door is reachable from any RPC client with no confirmation step, so, like
+    ``tools.web.proxy`` above, it must not reach a field that decides where a
+    stored credential is sent: a plugin's ``base_url`` is declared but not
+    settable, its ``api_key`` is both. The type is checked as admission checks
+    it, and the write goes through ``set_plugin_config_fields``, which can only
+    touch that plugin's slice -- so no dotted path rides a credential write into
+    the rest of the config.
     """
     plugin_id, _, field = key[len("plugins.config.") :].partition(".")
     declared = _plugin_config_declaration(plugin_id) if plugin_id and field and "." not in field else None
-    if declared is None or field not in declared:
+    spec = declared.get(field) if declared else None
+    if not isinstance(spec, dict) or spec.get("settable") is not True:
         raise ConfigValidationError(f"key not writable via settings.set: {key}")
     from raven.config.admission import PluginConfigError, admit_slice
 

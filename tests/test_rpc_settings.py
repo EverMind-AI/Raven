@@ -1464,6 +1464,8 @@ async def test_settings_set_refuses_undeclared_wrong_type_and_unknown_plugin(mem
         ("plugins.config.everos-cloud-memory.api_key", 42),
         ("plugins.config.not-a-plugin.api_key", "x"),
         ("plugins.config.everos-cloud-memory", {"api_key": "x"}),
+        # Declared, but not settable: the endpoint decides where the stored key goes.
+        ("plugins.config.everos-cloud-memory.base_url", "http://attacker.test"),
     ):
         with pytest.raises(ConfigValidationError) as exc:
             await rpc_console.settings_set({"key": key, "value": value})
