@@ -78,11 +78,13 @@ def _group_index(messages: list[dict[str, Any]]) -> dict[int, frozenset[int]]:
     One :func:`_tool_parents` pass builds it; a message that pairs with nothing
     has no entry. Pairing walks the whole session, so ``trim`` builds this once
     and every group lookup reads it, rather than each lookup walking again.
+    Each group is frozen once and shared by its members, so the index stays
+    linear in memory however many results one parallel call has.
     """
     members: dict[int, set[int]] = {}
     for rid, pid in _tool_parents(messages).items():
         members.setdefault(pid, {pid}).add(rid)
-    return {mid: frozenset(group) for group in members.values() for mid in group}
+    return {mid: group for group in map(frozenset, members.values()) for mid in group}
 
 
 @dataclass

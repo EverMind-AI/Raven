@@ -511,3 +511,26 @@ def test_a_drop_pairs_the_session_no_more_often_behind_a_larger_protected_head(m
         return len(passes)
 
     assert passes_for(6) == passes_for(2)
+
+
+# --- The group index keeps one copy of each group ------------------------------
+#
+# A parallel call with many results is one group, and every member maps to it:
+# the index stores that group once and shares it, so it stays linear in memory
+# however wide the call is.
+
+
+def test_the_group_index_keeps_one_copy_of_each_group():
+    from raven.context_engine import history_trimmer as module
+
+    calls = [{"id": f"c{i}", "type": "function", "function": {"name": "read", "arguments": "{}"}} for i in range(20)]
+    messages = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "", "tool_calls": calls},
+        *({"role": "tool", "tool_call_id": f"c{i}", "content": "r"} for i in range(20)),
+    ]
+
+    index = module._group_index(messages)
+
+    assert len(index) == 21
+    assert len({id(group) for group in index.values()}) == 1
