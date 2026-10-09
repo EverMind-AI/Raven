@@ -1044,3 +1044,15 @@ def test_a_cell_of_nothing_but_urls_is_still_exempt():
     assert link_columns(_tables(_grid(headers, one))[0]) == [8]
     assert link_columns(_tables(_grid(headers, two))[0]) == [8]
     assert check_table_width(_tables(_grid(headers, one))) == []
+
+
+def test_the_reader_limits_matcher_is_the_flows_own():
+    """One heading vocabulary on both sides of the report: a limits heading the gate
+    ships and the audit cannot find is a report that passes in the product and fails
+    its grading. Pinned here because nothing else held the two copies equal."""
+    from research_flow.gates.report_shape import _SECTION_RE
+
+    from scripts.research_report_audit import _READER_LIMITS_RE
+
+    flow = {term.removeprefix("(?<![a-z])") for term in _SECTION_RE["Limitations"].pattern.split("|")}
+    assert set(_READER_LIMITS_RE.pattern.split("|")) == flow
