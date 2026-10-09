@@ -47,9 +47,11 @@ def _command_line_posix(pid: int) -> Optional[str]:
             ["ps", "-ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
         return None
@@ -76,15 +78,18 @@ def _command_line_windows(pid: int) -> Optional[str]:  # pragma: no cover - no W
                 "$ProgressPreference='SilentlyContinue'; "
                 "$InformationPreference='SilentlyContinue'; "
                 "$WarningPreference='SilentlyContinue'; "
+                "try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}; "
                 "$p = Get-CimInstance Win32_Process -Filter 'ProcessId = %d'; "
                 "if ($null -ne $p) { [Console]::Out.Write($p.CommandLine) }" % pid,
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.SubprocessError):
         return None
     if out.returncode != 0:
         return None
