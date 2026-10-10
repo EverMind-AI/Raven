@@ -1246,6 +1246,20 @@ def test_web_is_registered_as_its_own_command() -> None:
     assert {c.name for c in app.registered_commands} == {"serve", "web"}
 
 
+def test_a_resident_below_a_raven_named_directory_keeps_its_record(home: Path, monkeypatch) -> None:
+    from raven.utils import processes
+
+    TestStopping._resident(home)
+    monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: None)
+    monkeypatch.setattr(processes, "command_line", lambda _pid: "/Users/x/Raven copy/.venv/bin/raven serve --port 8765")
+
+    assert serve_commands._read_serve_pid() == 222
+    assert serve_commands._read_web_state() == 111
+    assert (home / "serve.json").exists()
+    assert (home / "web.json").exists()
+
+
 class TestTheSessionSurvivesARestart:
     """A restart must not sign out the tabs that are open.
 
