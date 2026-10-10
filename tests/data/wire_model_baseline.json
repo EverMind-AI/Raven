@@ -346,6 +346,14 @@
       "vendorx/zz-probe-1": "openrouter/vendorx/zz-probe-1",
       "zz-probe-1": "openrouter/zz-probe-1"
     },
+    "opper": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "opper-probe": "openai/opper-probe",
+      "opper/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "opper/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "ovms": {
       "openai/zz-probe-1": "openai/zz-probe-1",
       "ovms-probe": "openai/ovms-probe",

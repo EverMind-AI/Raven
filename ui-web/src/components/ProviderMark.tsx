@@ -56,6 +56,7 @@ const ICONS: Record<string, string> = {
   openai: 'openai',
   openai_codex: 'codex',
   openrouter: 'openrouter',
+  opper: 'opper',
   paddleocr: 'paddleocr',
   perplexity: 'perplexity',
   poe: 'poe',
@@ -177,6 +178,7 @@ const TONES: Record<string, 'mono' | 'hybrid' | 'mono-white'> = {
   amd: 'mono-white',
   anthropic: 'hybrid',
   mineru: 'hybrid',
+  opper: 'mono',
   vllm: 'mono',
 }
 

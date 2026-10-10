@@ -142,6 +142,7 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {"name": "ph8", "label": "PH8"},
             {"name": "aionly", "label": "AIOnly"},
             {"name": "radeon_cloud", "label": "AMD GPU Cloud"},
+            {"name": "opper", "label": "Opper"},
             {"name": "azure_openai", "label": "Azure OpenAI"},
         ],
     },
