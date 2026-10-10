@@ -97,6 +97,30 @@ class PermissionTurn:
     # the gate swallows its errors and decides identically without it.
     on_review: Callable[[str, str], Awaitable[None]] | None = None
 
+    @property
+    def session_key(self) -> str:
+        """The conversation this turn belongs to: a direct chat's lane is not one.
+
+        A direct chat runs on ``<session>#<agent>/<handle>``
+        (``raven.spine.turn.direct_lane``), so ``conversation_id`` names the
+        instance's own lane, while everything a *conversation* settles -- its
+        permission mode, its session grants -- is settled per conversation and
+        written under the bare session key. Keyed by the lane instead, the two
+        id spaces meet nothing: the conversation's mode never reached its
+        direct chats, and a grant made in one of them never reached the
+        conversation. Splits on the first separator, which is what makes a
+        handle containing anything at all safe; on a key without one this is
+        the identity, so an ordinary turn is unaffected.
+        """
+        # Imported here rather than at module scope, the way
+        # ``raven.permissions.builtin`` reaches ``raven.agent.workdir``: the
+        # gate is assembled on every surface's startup path, and this shelf
+        # keeps what it drags in small. The same read as
+        # ``raven.acp.permissions``'s ``_session_for``.
+        from raven.spine import session_of
+
+        return session_of(self.conversation_id)
+
 
 _TURN: ContextVar[PermissionTurn | None] = ContextVar("permission_turn", default=None)
 

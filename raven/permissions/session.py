@@ -3,8 +3,10 @@ actions it has allowed for the rest of the session.
 
 Set from a settings surface (``/perm smart`` in the TUI, the composer chip on
 the web) through ``config.set`` with a ``session_id``; read by the gate on every
-tool call through the turn's conversation id, so a switch holds from the next
-call, and a sub-agent's task -- which inherits the turn -- reads the same one.
+tool call through the conversation the turn belongs to
+(``PermissionTurn.session_key``, which a direct chat's lane normalizes to), so a
+switch holds from the next call, and a sub-agent's task -- which inherits the
+turn -- reads the same one.
 
 Kept the way a conversation's model is kept: in memory here, and on the
 conversation's own record (``session.metadata["permissions_mode"]``, written

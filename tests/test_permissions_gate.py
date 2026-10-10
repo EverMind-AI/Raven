@@ -25,6 +25,7 @@ from raven.permissions.gate import PermissionGate
 from raven.permissions.rules import DEFAULT_ALLOW_TOOLS, exec_rule_tier
 from raven.permissions.session import set_session_mode
 from raven.permissions.turn import start_permission_turn
+from raven.spine.turn import direct_lane
 
 
 class Responder:
@@ -851,6 +852,56 @@ async def test_a_conversation_runs_in_its_own_mode_over_the_default():
         set_session_mode("conv-1", None)
     bind(None)
     assert isinstance(await gate.check("write_file", {"path": "x", "content": "y"}), NeedsApproval)
+
+
+@pytest.mark.asyncio
+async def test_a_direct_chat_runs_in_its_conversations_mode_over_the_default():
+    """A direct chat's turn runs on the instance's lane, and a lane is not a
+    conversation: the mode the conversation settled is still the one its tool
+    calls answer to."""
+    gate = gate_for(PermissionsConfig(mode="ask"))
+    set_session_mode("conv-1", "full")
+    try:
+        start_permission_turn(None, conversation_id=direct_lane("conv-1", "Raven", "h1"), turn_id="turn-1")
+        decision = await gate.check("write_file", {"path": "x", "content": "y"})
+        assert isinstance(decision, Allow)
+        assert decision.source is DecisionSource.MODE
+    finally:
+        set_session_mode("conv-1", None)
+    bind(None)
+    assert isinstance(await gate.check("write_file", {"path": "x", "content": "y"}), NeedsApproval)
+
+
+@pytest.mark.asyncio
+async def test_a_session_grant_covers_the_conversations_direct_chat(no_grants):
+    gate = gate_for(PermissionsConfig())
+    responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_SESSION))
+    bind(responder)
+
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 1
+
+    # The same conversation's direct chat: the instance's lane, not a new scope.
+    start_permission_turn(responder, conversation_id=direct_lane("conv-1", "Raven", "h1"), turn_id="turn-2")
+    decision = await gate.check("exec", {"command": "git push origin HEAD"})
+    assert isinstance(decision, Allow)
+    assert decision.source is DecisionSource.SESSION
+    assert len(responder.calls) == 1
+
+    # Another conversation's direct chat is another conversation.
+    start_permission_turn(responder, conversation_id=direct_lane("conv-2", "Raven", "h1"), turn_id="turn-3")
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 2
+
+    # And a grant the direct chat itself made belongs to the conversation.
+    start_permission_turn(responder, conversation_id=direct_lane("conv-3", "Raven", "h1"), turn_id="turn-4")
+    assert await gate.enforce("exec", {"command": "git push origin HEAD"}) is None
+    assert len(responder.calls) == 3
+    start_permission_turn(responder, conversation_id="conv-3", turn_id="turn-5")
+    decision = await gate.check("exec", {"command": "git push origin HEAD"})
+    assert isinstance(decision, Allow)
+    assert decision.source is DecisionSource.SESSION
+    assert len(responder.calls) == 3
 
 
 def test_a_command_bound_for_another_machine_says_so_on_the_prompt():
