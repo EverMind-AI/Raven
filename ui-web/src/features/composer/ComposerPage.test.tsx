@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Lightbox } from '../../chrome/Lightbox'
 import { setTranslator } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
+import { IMG_EXT } from '../../lib/pictureExt'
 import * as confirmStore from '../../state/confirm'
 import { close as closeLightbox } from '../../state/lightbox'
 import * as pageStore from '../../state/page'
@@ -745,14 +746,14 @@ describe('the attachment tray', () => {
       `\n\n${word('gui.att.note')}\n- uploads/shot.png\n- /work/notes.pdf\n- C:\\work\\plot.png`)
   })
 
-  /* The chip and the sent bubble each tell a picture by its extension, from two
-     tables: this island's and features/workspace's fileKind. A name the two
-     disagree on is a picture in the tray and a file chip once sent. */
+  /* The chip and the sent bubble tell a picture by its extension, and both read
+     the one table (lib/pictureExt) fileKind does, so a name the two disagree on
+     cannot exist. The table is spread here rather than restated: an extension
+     added to it is exercised by this case the moment it lands. */
   it('draws a picture chip for exactly the names the sent bubble draws as pictures', () => {
     wire({ upload: vi.fn() })
     mountTray()
-    const exts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif', 'svg', 'PNG',
-      'tif', 'tiff', 'heic', 'jxl', 'pdf', 'txt', 'pptx']
+    const exts = [...IMG_EXT, 'svg', 'PNG', 'tif', 'tiff', 'heic', 'jxl', 'pdf', 'txt', 'pptx']
     act(() => {
       store.addPaths(exts.map((ext) => ({ path: `uploads/x.${ext}`, url: `http://localhost/file?path=x.${ext}` })))
     })

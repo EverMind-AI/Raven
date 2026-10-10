@@ -597,6 +597,17 @@ describe('the anchored popovers', () => {
    is taken at its word only when it began in this document: any site the
    reader drags from can put one of these addresses in the list just as well. */
 describe('a drop onto the field', () => {
+  /* The page registers the two drag listeners with its other document
+     listeners (state/globalListeners), which this harness does not install; a
+     case here registers just those two. */
+  beforeEach(() => {
+    document.addEventListener('dragstart', composer.onPageDragStart)
+    document.addEventListener('dragend', composer.onPageDragEnd)
+  })
+  afterEach(() => {
+    document.removeEventListener('dragstart', composer.onPageDragStart)
+    document.removeEventListener('dragend', composer.onPageDragEnd)
+  })
   const fileAt = (path: string): string => `${location.origin}/file?path=${encodeURIComponent(path)}&session=s1`
   const carrying = (uris: string[], files: File[] = []): DataTransfer => {
     const dt = new DataTransfer()

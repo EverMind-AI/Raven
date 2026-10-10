@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 
 import { t } from '../../i18n/t'
 import { copy } from '../../lib/clipboard'
+import { IMG_EXT } from '../../lib/pictureExt'
 import { md } from '../../lib/prose'
 import { current as currentSession } from '../../lib/session'
 import { ds } from '../../state/sources'
@@ -195,7 +196,6 @@ export const runURL = (p: string): string => fileURL(p) + '&run=1'
 const TEXT_EXT = new Set(['c', 'cfg', 'conf', 'cpp', 'css', 'diff', 'env', 'go', 'h', 'ini', 'java',
   'js', 'json', 'jsonl', 'jsx', 'kt', 'log', 'lua', 'patch', 'php', 'pl', 'py', 'pyi', 'rb', 'rs',
   'sh', 'sql', 'swift', 'toml', 'ts', 'tsx', 'txt', 'vue', 'yaml', 'yml', 'zsh'])
-const IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif'])
 /* What the gateway can turn into a PDF with LibreOffice, and so what the
    viewer draws as pictures of pages: raven/rpc/pdf_preview.py's
    RENDERABLE_SUFFIXES, which is the list to change first. */
