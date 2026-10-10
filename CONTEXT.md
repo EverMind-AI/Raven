@@ -396,6 +396,23 @@ GPU hosts, and the term covers any registered compute destination);
 here the rows name compute destinations with that binding as an
 implementation detail).
 
+**Raven node** (`raven/node/`):
+A Raven process the host starts on a registered **Machine** over ssh, as
+`python -m raven.node --stdio`, to answer file calls there: it runs Raven's own
+file tools (`read_file`, `list_dir`, `find`, `grep`) fenced to the directories
+each call names, and sends back only the answer, so a read of 50 lines of a large
+file moves those 50 lines. It holds no conversation, calls no model, opens no
+port and ends with its ssh. It runs exactly the host's code, checked by digest at
+every start (`raven/node/bundle.py`); `raven ops connection install-node` puts it
+on a machine, under the row's `node_dir` (`~/.raven-node` when it names none), in a
+directory named by the code's version and digest -- its install name,
+`bundle.install_name()`. The host keeps at most one live node per machine
+(`raven/node/client.py`).
+_Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
+entry already rules the bare word out for a computer); "node id" for the install
+name (a **Node id** is a delegated task's address); "agent" or "server" (it
+answers only the Raven that started it, only file calls, only over that ssh).
+
 **Roster** (`format_agent_listing`):
 The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
 descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
@@ -1643,9 +1660,9 @@ turns through its schedulers and sentinel but is an engine the loop and the asse
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
 and takes no seat. Surfaces: `cli`, `rpc`, `acp` (an entrance: Raven serving as an
 agent for another host) and `a2a` (the same entrance for a peer agent, over
-Agent2Agent rather than ACP). `browser` and `importer` are seated inner (feature
-libraries consumed by surfaces, importing none themselves -- the edge is watched
-by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
+Agent2Agent rather than ACP). `browser`, `importer` and `node` (the **Raven node**)
+are seated inner (feature libraries consumed by surfaces, importing none themselves --
+the edge is watched by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
 and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
 same kind of non-seat: repo-level agent definitions (the A/B pilots whose A side is the

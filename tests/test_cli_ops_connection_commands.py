@@ -293,3 +293,220 @@ def test_a_local_machine_gets_no_alias(store, reached, home):
 
     assert out.exit_code == 0, out.output
     assert not (home / ".ssh" / "config").exists()
+
+
+# --- install-node -------------------------------------------------------------------
+#
+# The install itself is raven.node.install's (tests/test_node_install.py); what the
+# command adds is the order of things: look, refuse or ask, install, record where,
+# and only then say the node answers.
+
+
+class _Node:
+    """raven.node.install and the node's answer, stood in for, with what was asked of them."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, registered: str = "") -> None:
+        from raven.acp_client.remote import Machine
+        from raven.node import install as node_install
+        from raven.node.client import NodeError, NodePool
+
+        self.present = False
+        self.refusal: str | None = None
+        self.plan_error: str | None = None
+        self.install_error: str | None = None
+        self.prune_error: str | None = None
+        self.hello_error: str | None = None
+        self.rg = True
+        self.pruned: tuple[str, ...] = ()
+        self.asked: list[tuple[str, object]] = []
+
+        def plan(conn_id: str, *, node_dir: str | None = None) -> node_install.Plan:
+            self.asked.append(("plan", node_dir))
+            if self.plan_error:
+                raise node_install.InstallError(self.plan_error)
+            row = {"id": conn_id, "node_dir": registered} if registered else {"id": conn_id}
+            return node_install.Plan(
+                target=Machine(id=conn_id, display_name="Lab box", _row=row),
+                node_dir=node_dir or registered or "~/.raven-node",
+                install_name="0.2.4-abcdef012345",
+                present=self.present,
+                python="/usr/bin/python3.12",
+                uv="",
+                free_kb=None,
+            )
+
+        def install(p: node_install.Plan) -> node_install.Installed:
+            self.asked.append(("install", p.node_dir))
+            if self.install_error:
+                raise node_install.InstallError(self.install_error)
+            return node_install.Installed(p.node_dir, p.install_name, 52 * 1024, rg=self.rg)
+
+        def prune(p: node_install.Plan) -> tuple[str, ...]:
+            self.asked.append(("prune", p.node_dir))
+            if self.prune_error:
+                raise node_install.InstallError(self.prune_error)
+            return self.pruned
+
+        async def hello(pool: NodePool, machine_id: str) -> dict:
+            self.asked.append(("hello", machine_id))
+            if self.hello_error:
+                raise NodeError(self.hello_error)
+            return {"python": "3.12.3", "digest": "abcdef012345"}
+
+        monkeypatch.setattr(node_install, "plan", plan)
+        monkeypatch.setattr(node_install, "refusal", lambda p: self.refusal)
+        monkeypatch.setattr(node_install, "install", install)
+        monkeypatch.setattr(node_install, "prune", prune)
+        monkeypatch.setattr(NodePool, "hello", hello)
+
+    def steps(self) -> list[str]:
+        return [step for step, _ in self.asked]
+
+
+@pytest.fixture
+def node(monkeypatch):
+    return _Node(monkeypatch)
+
+
+def install_node(*args, answer: str | None = None):
+    return CliRunner().invoke(connection_app, ["install-node", *args], input=answer)
+
+
+def said(result) -> str:
+    """The command's output with rich's line wrapping undone."""
+    return " ".join(result.output.split())
+
+
+def test_install_node_asks_before_installing_and_then_checks_the_node_answers(node):
+    out = install_node("box", answer="y\n")
+
+    assert out.exit_code == 0, out.output
+    assert "Install it?" in out.output
+    assert node.steps() == ["plan", "install", "hello"]
+    assert "Installed the Raven node 0.2.4-abcdef012345 in ~/.raven-node (52 MB)." in said(out)
+    assert "The node answers: Python 3.12.3, code abcdef012345." in said(out)
+
+
+def test_install_node_does_nothing_the_owner_declined(node):
+    out = install_node("box", answer="n\n")
+
+    assert out.exit_code == 1
+    assert node.steps() == ["plan"]
+
+
+def test_install_node_yes_installs_without_asking(node):
+    out = install_node("box", "--yes")
+
+    assert out.exit_code == 0, out.output
+    assert "Install it?" not in out.output
+    assert node.steps() == ["plan", "install", "hello"]
+
+
+def test_a_machine_that_already_has_the_node_is_left_as_it_is(node):
+    node.present = True
+
+    out = install_node("box")
+
+    assert out.exit_code == 0, out.output
+    assert node.steps() == ["plan", "hello"]
+    assert "Machine 'Lab box' (box) already has the Raven node 0.2.4-abcdef012345 in ~/.raven-node." in said(out)
+
+
+@pytest.mark.parametrize(
+    ("knob", "value"),
+    [
+        ("plan_error", "machine 'box' is not registered; add it with `raven ops connection add`"),
+        ("refusal", "machine 'Lab box' (box) has neither a Python 3.12 (with venv) nor uv"),
+        ("install_error", "installing the Raven node on machine 'Lab box' (box) failed at the packages step: no"),
+        ("hello_error", "the Raven node on machine 'Lab box' (box) stopped"),
+    ],
+)
+def test_install_node_stops_at_the_first_thing_that_fails_and_says_it(node, knob, value):
+    setattr(node, knob, value)
+
+    out = install_node("box", "--yes")
+
+    assert out.exit_code == 1
+    assert value in said(out)
+    assert "The node answers" not in out.output
+
+
+def test_a_node_without_rg_says_how_search_runs_there(node):
+    node.rg = False
+
+    out = install_node("box", "--yes")
+
+    assert out.exit_code == 0, out.output
+    assert "grep there runs Raven's own Python search" in said(out)
+
+
+def test_install_node_prunes_only_when_asked(node):
+    node.pruned = ("0.2.3-aaaaaaaaaaaa",)
+
+    plain = install_node("box", "--yes")
+    pruned = install_node("box", "--yes", "--prune")
+
+    assert "prune" not in [step for step, _ in node.asked[:3]]
+    assert "Removed 1 other node(s) from ~/.raven-node: 0.2.3-aaaaaaaaaaaa." in said(pruned)
+    assert plain.exit_code == pruned.exit_code == 0
+
+
+def test_a_prune_with_nothing_to_remove_says_none(node):
+    node.present = True
+
+    out = install_node("box", "--prune")
+
+    assert "Removed 0 other node(s) from ~/.raven-node: none." in said(out)
+    assert node.steps() == ["plan", "prune", "hello"]
+
+
+def test_a_prune_that_fails_stops_the_command(node):
+    node.prune_error = "installing the Raven node on machine 'Lab box' (box) failed at the prune step: busy"
+
+    out = install_node("box", "--yes", "--prune")
+
+    assert out.exit_code == 1
+    assert "failed at the prune step: busy" in said(out)
+
+
+def _box_row(store, **extra):
+    store.write_text(
+        json.dumps({"connections": [{"id": "box", "host": "203.0.113.7", "port": 22, "key": "/k", **extra}]}),
+        encoding="utf-8",
+    )
+
+
+def test_a_directory_chosen_with_dir_is_kept_in_the_registry(node, store):
+    _box_row(store, note="kept")
+
+    out = install_node("box", "--yes", "--dir", "/data/raven-node/")
+
+    assert out.exit_code == 0, out.output
+    assert node.asked[0] == ("plan", "/data/raven-node")
+    (row,) = json.loads(store.read_text(encoding="utf-8"))["connections"]
+    assert row["node_dir"] == "/data/raven-node" and row["note"] == "kept"
+    assert "Recorded /data/raven-node as where machine 'Lab box' (box) keeps its Raven nodes." in said(out)
+
+
+def test_the_directory_already_on_record_is_not_written_again(monkeypatch, store):
+    node = _Node(monkeypatch, registered="/data/raven-node")
+    _box_row(store, node_dir="/data/raven-node")
+    before = store.read_text(encoding="utf-8")
+
+    out = install_node("box", "--yes", "--dir", "/data/raven-node")
+
+    assert out.exit_code == 0, out.output
+    assert node.steps() == ["plan", "install", "hello"]
+    assert "Recorded" not in out.output
+    assert store.read_text(encoding="utf-8") == before
+
+
+def test_a_directory_that_cannot_be_recorded_is_said_after_the_install(node, store):
+    store.write_text(json.dumps({"connections": [{"id": "box", "host": "h"}, {"id": "box", "host": "h2"}]}))
+
+    out = install_node("box", "--yes", "--dir", "/data/raven-node")
+
+    assert out.exit_code == 1
+    assert "The node is installed, but /data/raven-node could not be recorded" in said(out)
+    assert "listed 2 times" in said(out)
+    assert node.steps() == ["plan", "install"]

@@ -619,6 +619,9 @@ source_modules = [
     # `raven.playbook`, by the CLI and RPC surfaces that read a stint's record,
     # and by the dispatch path that carries its ref; it imports no surface itself.
     "raven.stint",
+    # The Raven node: this Raven's own file tools run on a registered machine;
+    # consumed by the CLI, it imports no surface itself.
+    "raven.node",
 ]
 forbidden_modules = ["raven.cli", "raven.rpc", "raven.acp", "raven.a2a"]
 # Debt allowlist: none. The last allowlisted edge (market reaching the skill

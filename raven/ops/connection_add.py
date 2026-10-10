@@ -196,6 +196,32 @@ def write(row: dict[str, Any]) -> Path:
     return path
 
 
+def set_fields(conn_id: str, fields: dict[str, Any]) -> Path:
+    """Change ``fields`` on the one machine listed as ``conn_id``, keeping every other row as it was.
+
+    For what is learned about a machine after it was added -- where its Raven
+    node is kept (``node_dir``), set by ``raven ops connection install-node
+    --dir``. Refuses on the same grounds as :func:`write`, and when the id is
+    not listed exactly once.
+    """
+    path = connections.store_path()
+    found = connections.read()
+    if found.state == UNREADABLE:
+        raise ValueError(f"{found.detail}\nFix or move that file before changing it.")
+    if found.detail:
+        raise ValueError(
+            f"{found.detail}\nChanging a machine here would rewrite the file without them. "
+            "Give those entries an id (or remove them) first."
+        )
+    rows = list(found.rows)
+    hits = [r for r in rows if str(r.get("id") or "").strip() == conn_id]
+    if len(hits) != 1:
+        raise ValueError(f"machine {conn_id!r} is listed {len(hits)} times in {path}; it has to be listed once")
+    hits[0].update(fields)
+    path.write_text(json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
 ALIAS_MARK = "# raven connection {conn_id} (managed; rewritten on every add)"
 
 

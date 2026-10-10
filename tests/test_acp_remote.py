@@ -222,10 +222,10 @@ def test_a_variable_name_the_shell_cannot_assign_is_refused():
 
 
 def test_an_absolute_root_is_quoted_and_a_bare_tilde_is_left_to_the_shell():
-    assert remote._shell_path("/srv/raven work") == "'/srv/raven work'"
-    assert remote._shell_path("~") == "~"
-    assert remote._shell_path("~/") == "~"
-    assert remote._shell_path("") == "~/raven-work"
+    assert remote.shell_path("/srv/raven work") == "'/srv/raven work'"
+    assert remote.shell_path("~") == "~"
+    assert remote.shell_path("~/") == "~"
+    assert remote.shell_path("") == "~/raven-work"
 
 
 # --- the machine ------------------------------------------------------------
@@ -608,3 +608,104 @@ def test_what_is_sent_is_one_quoted_sh_line_with_csh_s_history_character_escaped
     assert remote.remote_command("qwen --acp", root="~").startswith(
         "exec /bin/sh -c 'echo; mkdir -p ~ && cd ~ || exit; "
     )
+
+
+def test_a_machine_answers_for_itself_but_never_for_the_way_onto_it():
+    box = Machine(id="box", display_name="Lab box", _row={**ROW, "node_dir": "/srv/raven-node", "paths": ["/data"]})
+
+    assert box.field("node_dir") == "/srv/raven-node"
+    assert box.field("paths") == ["/data"]
+    assert box.field("missing") is None
+    for way_in in ("host", "port", "user", "key"):
+        with pytest.raises(KeyError, match="how raven reaches the machine"):
+            box.field(way_in)
+
+
+# --- one command, and a file sent ----------------------------------------------------
+
+
+def test_run_is_the_registry_s_own_runner_capped_at_the_timeout(monkeypatch):
+    seen: dict = {}
+
+    def runner_from(row, *, cap_seconds):
+        seen.update(row=row, cap=cap_seconds)
+        return lambda command: (0, f"ran {command}")
+
+    monkeypatch.setattr(remote, "runner_from", runner_from)
+
+    assert remote.run(_box(), "echo hi", timeout=12.0) == (0, f"ran {remote.posix('echo hi')}")
+    assert seen == {"row": ROW, "cap": 12.0}
+
+
+def test_run_on_a_row_the_runner_cannot_use_is_one_sentence(monkeypatch):
+    from raven.ops.transport import TransportError
+
+    def runner_from(row, *, cap_seconds):
+        raise TransportError("no key to log in with")
+
+    monkeypatch.setattr(remote, "runner_from", runner_from)
+
+    with pytest.raises(RemoteMachineError, match=r"^machine 'Lab box' \(box\): no key to log in with$"):
+        remote.run(_box(), "true")
+
+
+def _ssh_here(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> Path:
+    """An ``ssh`` on PATH that runs ``body`` with the remote command as ``$cmd``."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh = bin_dir / "ssh"
+    ssh.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$@" > "{tmp_path}/argv"\nfor cmd; do :; done\n' + body,
+        encoding="utf-8",
+    )
+    ssh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}")
+    return tmp_path / "argv"
+
+
+def test_push_hands_the_data_to_the_command_on_the_machine(tmp_path, monkeypatch):
+    argv = _ssh_here(tmp_path, monkeypatch, 'sh -c "$cmd"\n')
+
+    rc, out = remote.push(_box(), "wc -c && echo done", b"0123456789", timeout=30.0)
+
+    assert (rc, out.split()) == (0, ["10", "done"])
+    sent = argv.read_text(encoding="utf-8").splitlines()
+    from raven.ops.transport import ssh_argv
+
+    assert sent == ssh_argv(HOST, PORT, KEY, user="worker")[1:] + [remote.posix("wc -c && echo done")]
+
+
+def test_a_push_that_failed_keeps_what_the_machine_said(tmp_path, monkeypatch):
+    _ssh_here(tmp_path, monkeypatch, 'echo partial; echo "tar: Unexpected EOF in archive" >&2; exit 2\n')
+
+    assert remote.push(_box(), "tar -xzf -", b"x") == (2, "partial\n\ntar: Unexpected EOF in archive\n")
+
+
+def test_a_push_that_succeeded_drops_ssh_s_chatter(tmp_path, monkeypatch):
+    _ssh_here(tmp_path, monkeypatch, f"echo \"Warning: Permanently added '[{HOST}]:{PORT}'\" >&2; echo ok\n")
+
+    assert remote.push(_box(), "true", b"") == (0, "ok\n")
+
+
+def test_a_push_that_runs_out_of_time_reads_as_timed_out(tmp_path, monkeypatch):
+    from raven.ops.transport import TIMED_OUT_RC
+
+    _ssh_here(tmp_path, monkeypatch, "sleep 5\n")
+
+    assert remote.push(_box(), "true", b"", timeout=0.3) == (TIMED_OUT_RC, "")
+
+
+def test_a_push_to_a_row_without_an_address_is_one_sentence():
+    box = Machine(id="box", display_name="Lab box", _row={"id": "box"})
+
+    with pytest.raises(RemoteMachineError, match=r"^machine 'Lab box' \(box\): "):
+        remote.push(box, "true", b"")
+
+
+def test_run_and_push_refuse_a_command_of_two_lines_before_any_ssh(monkeypatch):
+    monkeypatch.setattr(remote, "runner_from", lambda row, *, cap_seconds=None: pytest.fail("no ssh for this"))
+    monkeypatch.setattr(remote.subprocess, "run", lambda *a, **k: pytest.fail("no ssh for this"))
+
+    for call in (lambda: remote.run(_box(), "echo a\necho b"), lambda: remote.push(_box(), "cat\ncat", b"")):
+        with pytest.raises(RemoteMachineError, match=r"^machine 'Lab box' \(box\): .*must be one line$"):
+            call()

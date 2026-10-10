@@ -25,6 +25,7 @@ import hashlib
 import os
 import re
 import shlex
+import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +57,8 @@ SSH_FAILED_RC = 255
 NOT_FOUND_RC = 127
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# The fields of a registry row that are the way onto the machine, never shown.
+_WAY_IN = frozenset({"host", "port", "user", "key"})
 # The shell variable the launch line reads each stdin variable line into.
 _ENV_LINE = "__raven_env"
 # Login shells the launch starts with ``-lic``: the POSIX family, which reads
@@ -93,6 +96,18 @@ class Machine:
         if self.display_name and self.display_name != self.id:
             return f"{self.display_name!r} ({self.id})"
         return repr(self.id)
+
+    def field(self, name: str) -> Any:
+        """One field of the machine's row, other than the way onto it.
+
+        For what a caller needs to know about the machine itself -- where a
+        Raven node is kept on it (``node_dir``), the directories its owner
+        listed (``paths``). The address, port, account and key stay behind
+        :func:`launch_command` and :func:`session_dir`.
+        """
+        if name in _WAY_IN:
+            raise KeyError(f"{name!r} is how raven reaches the machine, not a fact about it")
+        return self._row.get(name)
 
 
 def machine(conn_id: str) -> Machine:
@@ -176,7 +191,7 @@ def remote_command(agent_command: str, *, root: str) -> str:
         f'while IFS= read -r {_ENV_LINE} && [ -n "${_ENV_LINE}" ]; do eval "export ${_ENV_LINE}"; done; '
         f"echo; exec {agent_command}"
     )
-    where = _shell_path(root)
+    where = shell_path(root)
     script = (
         f"mkdir -p {where} && cd {where} || exit; "
         f'case "${{SHELL##*/}}" in {"|".join(_LOGIN_SHELLS)}) exec "$SHELL" -lic {shlex.quote(inner)};; esac; '
@@ -241,7 +256,7 @@ def session_dir(target: Machine, *, root: str = DEFAULT_ROOT, handle: str, timeo
     requires it, and resolved on the machine because ``~`` and symlinks mean
     something only there.
     """
-    where = f"{_shell_path(root)}/{shlex.quote(leaf(handle))}"
+    where = f"{shell_path(root)}/{shlex.quote(leaf(handle))}"
     try:
         command = posix(f"mkdir -p {where} && cd {where} && pwd -P")
         run = runner_from(target._row, cap_seconds=timeout)
@@ -345,6 +360,46 @@ def read_ssh_log(path: str | os.PathLike[str], limit: int = 4000) -> str:
         return ""
 
 
+def run(target: Machine, command: str, *, timeout: float = 60.0) -> tuple[int, str]:
+    """``command``, a POSIX shell line, run once on ``target``: ``(exit code, output)``.
+
+    The registry's own one-shot runner (:func:`raven.ops.transport.runner_from`),
+    so a command here and a look through the machine channel reach the machine
+    the same way; sent through :func:`posix`, so the user's login shell may be
+    any shell. Blocking: call it off the event loop.
+    """
+    try:
+        wrapped = posix(command)
+        runner = runner_from(target._row, cap_seconds=timeout)
+    except (TransportError, ValueError) as exc:
+        raise RemoteMachineError(f"machine {target.label}: {exc}") from None
+    return runner(wrapped)
+
+
+def push(target: Machine, command: str, data: bytes, *, timeout: float = 300.0) -> tuple[int, str]:
+    """``command`` on ``target`` with ``data`` on its stdin: how a file is sent there.
+
+    The same ssh options as :func:`run`, and the same :func:`posix` wrapping.
+    Output is ``(exit code, stdout, then stderr when it failed)``, the shape
+    :func:`run` answers in, so a failure is read by :func:`explain` either way.
+    Blocking: call it off the event loop.
+    """
+    host, port, key, user = _target(target)
+    try:
+        wrapped = posix(command)
+    except ValueError as exc:
+        raise RemoteMachineError(f"machine {target.label}: {exc}") from None
+    argv = ssh_argv(host, port, key, user=user) + [wrapped]
+    try:
+        done = subprocess.run(argv, input=data, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return TIMED_OUT_RC, ""
+    out = done.stdout.decode("utf-8", "replace")
+    if done.returncode != 0 and done.stderr:
+        out += "\n" + done.stderr.decode("utf-8", "replace")
+    return done.returncode, out
+
+
 def explain(target: Machine, rc: int, output: str) -> str | None:
     """One sentence for a failure ssh itself caused, or None when ssh got through.
 
@@ -430,7 +485,7 @@ _SSH_OWN_LINE = re.compile(
 )
 
 
-def _shell_path(path: str) -> str:
+def shell_path(path: str) -> str:
     """``path`` quoted for the machine's shell, leaving a leading ``~`` to it."""
     path = str(path or "").strip() or DEFAULT_ROOT
     if path == "~":
@@ -463,8 +518,11 @@ __all__ = [
     "machine",
     "posix",
     "prepare_launch",
+    "push",
     "read_ssh_log",
     "remote_command",
+    "run",
     "session_dir",
+    "shell_path",
     "ssh_log_path",
 ]
