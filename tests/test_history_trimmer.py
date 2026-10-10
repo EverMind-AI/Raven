@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import random
+
 from raven.context_engine.history_trimmer import HistoryTrimmer
 
 
@@ -387,6 +390,87 @@ def _tool_heavy_session(turns: int) -> list[dict]:
             {"role": "tool", "tool_call_id": f"b{b}", "content": "r"},
         ]
     return messages
+
+
+def test_trimming_reuses_tokenization_of_retained_history(monkeypatch):
+    from raven.utils import tokens
+
+    messages = _tool_heavy_session(80)
+    tools = [{"type": "function", "function": {"name": "read"}}]
+
+    def build(history):
+        return [{"role": "system", "content": "system"}, *history, {"role": "user", "content": "next"}]
+
+    initial = tokens.estimate_prompt_tokens(build(messages), tools)
+    real = tokens.tiktoken.get_encoding("cl100k_base")
+    encoded: list[int] = []
+
+    class MeasuredEncoding:
+        def encode(self, payload):
+            encoded.append(len(payload))
+            return real.encode(payload)
+
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: MeasuredEncoding())
+    trimmer = HistoryTrimmer(_CharProvider(), "fake", lambda: tools, initial // 2)
+    _built, outcome = trimmer.trim(
+        session_messages=messages,
+        ids=list(range(len(messages))),
+        protected_ids={0},
+        reserved_output=0,
+        build_messages=build,
+    )
+
+    assert outcome.ok and len(outcome.included_ids) < len(messages) - 10
+    assert encoded and sum(encoded) < 2 * len(json.dumps(messages))
+
+
+def test_cached_trimming_matches_uncached_choices_and_estimates():
+    rng = random.Random(886)
+    trimmer = HistoryTrimmer(_CharProvider(), "fake", lambda: [], 350)
+    for _ in range(24):
+        messages = _tool_heavy_session(rng.randrange(8, 18))
+        for message in messages:
+            message["content"] = rng.choice(["text", " ?!\n ", "\n\n", "item 12345", "A\u0301"]) * rng.randrange(1, 8)
+        arguments = {
+            "session_messages": messages,
+            "ids": list(range(len(messages))),
+            "protected_ids": {0, rng.randrange(len(messages))},
+            "reserved_output": rng.randrange(0, 100),
+            "build_messages": lambda history: [
+                {"role": "system", "content": "system\n"},
+                *history,
+                {"role": "user", "content": " current"},
+            ],
+        }
+        expected = HistoryTrimmer.trim.__wrapped__(trimmer, **arguments)
+        assert trimmer.trim(**arguments) == expected
+
+
+def test_trimming_keeps_the_providers_own_counter(monkeypatch):
+    from raven.utils import tokens
+
+    calls: list[int] = []
+
+    class Provider:
+        def estimate_prompt_tokens(self, messages, tools, model):
+            assert tools == [{"name": "read"}] and model == "custom"
+            calls.append(len(messages))
+            return len(messages) * 100, "native"
+
+    monkeypatch.setattr(
+        tokens.tiktoken, "get_encoding", lambda _name: (_ for _ in ()).throw(AssertionError("fallback used"))
+    )
+    messages = [{"role": "user", "content": "message"} for _ in range(6)]
+    trimmer = HistoryTrimmer(Provider(), "custom", lambda: [{"name": "read"}], 200)
+    _built, outcome = trimmer.trim(
+        session_messages=messages,
+        ids=list(range(6)),
+        protected_ids=set(),
+        reserved_output=0,
+        build_messages=lambda history: history,
+    )
+    assert calls == [6, 5, 4, 3, 2]
+    assert outcome.source == "native" and outcome.estimated_tokens == 200
 
 
 def test_the_closing_sweep_looks_at_each_tool_group_once(monkeypatch):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,6 +11,102 @@ import pytest
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
 from raven.session.manager import Session
 from raven.utils import images, tokens
+
+
+def test_reused_prompt_tokenization_matches_whole_payload_counts() -> None:
+    rng = random.Random(886)
+    atoms = ["alpha", "123456", "?!", "\n", "\r", "\t", " ", "  ", "A\u0301", "\u2603", "{}", "'s"]
+    histories = [
+        [{"role": "user", "content": "".join(rng.choices(atoms, k=rng.randrange(1, 60)))} for _ in range(5)]
+        for _ in range(100)
+    ]
+    histories += [[{"role": "user", "content": "repeat"}] * count for count in (5, 2, 7, 1, 0)]
+    expected = [tokens.estimate_prompt_tokens(history) for history in histories]
+
+    with tokens.reuse_prompt_tokenization():
+        assert [tokens.estimate_prompt_tokens(history) for history in histories] == expected
+
+
+def test_reused_prompt_tokens_keep_reasoning_tools_images_and_error_fallback() -> None:
+    image = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
+    history = [
+        {"role": "user", "content": [{"type": "text", "text": "Look.\n"}, image]},
+        {
+            "role": "assistant",
+            "content": "  Now.\n\n",
+            "reasoning_content": "thinking",
+            "thinking_blocks": [{"thinking": "more"}],
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "c", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "c", "name": "read", "content": {"answer": "found"}},
+    ]
+    tool_definitions = [{"type": "function", "function": {"name": "read"}}]
+    cases = [
+        (history, tool_definitions),
+        (history[1:], []),
+        ([{"role": "user", "content": "<|endoftext|>"}], []),
+        (history, tool_definitions),
+    ]
+    expected = [tokens.estimate_prompt_tokens(messages, tools) for messages, tools in cases]
+
+    with tokens.reuse_prompt_tokenization():
+        assert [tokens.estimate_prompt_tokens(messages, tools) for messages, tools in cases] == expected
+
+
+def test_prompt_token_cache_is_nested_scoped_and_drops_removed_text(monkeypatch) -> None:
+    real = tokens.tiktoken.get_encoding("cl100k_base")
+    encoded: list[str] = []
+
+    class MeasuredEncoding:
+        def encode(self, payload):
+            encoded.append(payload)
+            return real.encode(payload)
+
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: MeasuredEncoding())
+    first = [{"role": "user", "content": "first"}]
+    second = [{"role": "user", "content": "second"}]
+    with tokens.reuse_prompt_tokenization():
+        tokens.estimate_prompt_tokens(first)
+        with tokens.reuse_prompt_tokenization():
+            tokens.estimate_prompt_tokens(second)
+        before = len(encoded)
+        tokens.estimate_prompt_tokens(first)
+        assert len(encoded) == before
+        tokens.estimate_prompt_tokens(second)
+        before = len(encoded)
+        tokens.estimate_prompt_tokens(first)
+        assert encoded[before:] == ["first"]
+        for unavailable in ([], [{"role": "user", "content": "<|endoftext|>"}]):
+            tokens.estimate_prompt_tokens(unavailable)
+            before = len(encoded)
+            tokens.estimate_prompt_tokens(first)
+            assert encoded[before:] == ["first"]
+    before = len(encoded)
+    tokens.estimate_prompt_tokens(first)
+    assert encoded[before:] == ["first"]
+
+
+def test_prompt_token_cache_is_released_when_the_trim_raises(monkeypatch) -> None:
+    encoding = _FakeEncoding()
+    calls: list[str] = []
+
+    def encode(payload):
+        calls.append(payload)
+        return list(payload)
+
+    monkeypatch.setattr(encoding, "encode", encode)
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: encoding)
+    history = [{"role": "user", "content": "unchanged"}]
+    with pytest.raises(RuntimeError, match="builder failed"):
+        with tokens.reuse_prompt_tokenization():
+            tokens.estimate_prompt_tokens(history)
+            raise RuntimeError("builder failed")
+    tokens.estimate_prompt_tokens(history)
+    assert calls == ["unchanged", "unchanged"]
 
 
 class _FakeEncoding:
