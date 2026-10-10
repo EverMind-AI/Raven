@@ -67,7 +67,7 @@ def _resolve_media(paths: list[str] | None, root: Path | None = None) -> tuple[M
     ``root`` is the conversation's own working directory, which ``/file``
     serves the front end's pictures from, and a picture dragged out of the
     transcript is attached by the path the viewer drew it from. So a relative
-    path is found by the viewer's own rule (``console.viewer_root``), and with
+    path is found by the viewer's own rule (``files.viewer_root``), and with
     ``tools.restrict_to_workspace`` on that root is admitted beside agent home:
     a fence on agent home alone dropped such a picture while the tray showed it
     attached, and this conversation's file tools may read that root already.
@@ -77,7 +77,7 @@ def _resolve_media(paths: list[str] | None, root: Path | None = None) -> tuple[M
         return ()
     from raven.agent.tools.filesystem import resolve_path
     from raven.config import load_config
-    from raven.rpc.methods.console import viewer_root
+    from raven.rpc.files import viewer_root
 
     try:
         cfg = load_config()
@@ -119,19 +119,19 @@ def _resolve_media(paths: list[str] | None, root: Path | None = None) -> tuple[M
 def _media_root(agent_loop_factory: AgentLoopFactory | None, session_key: str) -> Path | None:
     """The conversation's own working directory, as ``/file`` finds it, or None.
 
-    The viewer asks ``console._workspace_root`` and so does this, so the two
+    The viewer asks ``files.workspace_root`` and so does this, so the two
     cannot disagree about which root a picture came from. With no loop there is
     nothing to ask; a loop that cannot answer leaves agent home to stand in,
     rather than costing the turn its attachments.
     """
-    from raven.rpc.methods.console import _workspace_root
+    from raven.rpc.files import workspace_root
     from raven.rpc.methods.session import _safe_invoke_factory
 
     loop = _safe_invoke_factory(agent_loop_factory)
     if loop is None:
         return None
     try:
-        return _workspace_root(loop, session_key)
+        return workspace_root(loop, session_key)
     except Exception as exc:
         logger.warning("turn.send: cannot read the session's working directory ({}); using agent home", exc)
         return None

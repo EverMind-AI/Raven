@@ -28,6 +28,9 @@ from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
 from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
+from raven.rpc.files import UPLOAD_DIR as _UPLOAD_DIR
+from raven.rpc.files import viewer_root as _viewer_root_from
+from raven.rpc.files import workspace_root as _workspace_root
 from raven.utils.atomic_io import atomic_update
 
 if TYPE_CHECKING:
@@ -1793,31 +1796,6 @@ _FS_MAX_ENTRIES = 500
 _FS_DEFAULT_MAX_BYTES = 200_000
 
 
-def _workspace_root(loop, session_key: str = "") -> Path:
-    """The directory the page's file panel is rooted at.
-
-    The working directory the session's turns run in, not agent home: home is
-    ``~/.raven/workspace`` by default, which holds the agent's own memory and
-    is not where a launch-directory turn reads or writes anything. Resolved
-    per session because a session can be pinned to its own directory (the
-    persisted ``workdir`` override); an empty key falls through to the
-    resolver's policy default, which for the gateway is the launch directory.
-    """
-    if loop is not None:
-        peek = getattr(loop, "peek_session_workdir", None)
-        if peek is not None:
-            try:
-                return Path(peek(session_key)).resolve()
-            except ValueError:
-                pass
-    ws = getattr(loop, "workspace", None) if loop is not None else None
-    if ws:
-        return Path(ws).resolve()
-    from raven.config.loader import load_config
-
-    return Path(load_config().workspace_path).resolve()
-
-
 def _resolve_inside(root: Path, rel: str) -> Path:
     """Resolve ``rel`` under ``root``, refusing anything outside it -- or inside
     raven's own state directory.
@@ -2047,9 +2025,6 @@ async def fs_pick_dir(params: dict, *, agent_loop_factory=None) -> dict:
     return {"path": str(target), "ok": ok}
 
 
-_UPLOAD_DIR = "uploads"
-
-
 def _safe_name(name: str) -> str:
     """Strip directory parts and anything that could escape or confuse a shell."""
     base = Path(str(name or "file")).name
@@ -2057,33 +2032,13 @@ def _safe_name(name: str) -> str:
     return (cleaned or "file")[:120]
 
 
-def viewer_root(workspace: Path, rel: Path, home: Path | None = None) -> Path:
+def viewer_root(workspace: Path, rel: Path) -> Path:
     """Which root a relative path handed to the viewer is relative to.
 
-    Two roots, each deliberate, and one kind of path belongs to the other one.
-    ``fs.upload`` deposits into agent home whichever session asked -- it is the
-    root always writable -- and answers with a path relative to it. Everything
-    else the viewer is handed is
-    relative to the session's own working directory, which is what the file
-    panel browses. The two are the same directory for a session that runs where
-    the agent lives, and part company for one pinned elsewhere: there a picture
-    the reader attached came back 404 from ``/file`` and its bubble fell back to
-    a file name.
-
-    The session's own root is tried first, so a session that keeps an
-    ``uploads`` directory of its own still serves its own file; agent home
-    answers only for a path that is an upload and is actually there.
-
-    ``turn.send`` resolves an attachment by this same rule, so a picture the
-    viewer drew is the file the turn receives. It passes ``home`` from the
-    config it already read; other callers leave it to be read here.
+    :func:`raven.rpc.files.viewer_root`'s rule, with agent home read where
+    ``fs.upload`` reads it.
     """
-    if (workspace / rel).exists():
-        return workspace
-    upload_root = home if home is not None else _upload_root()
-    if rel.parts[:1] == (_UPLOAD_DIR,) and (upload_root / rel).exists():
-        return upload_root
-    return workspace
+    return _viewer_root_from(workspace, rel, _upload_root())
 
 
 def _upload_root() -> Path:
