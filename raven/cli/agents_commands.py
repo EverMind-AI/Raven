@@ -278,11 +278,8 @@ def _write_tree(
 def _resolved_python() -> str:
     """The interpreter the roster command resolves to: ``SUBAGENT_PYTHON``
     then this process's own -- discovery's own order
-    (``vendored_agents._resolved_python``). One resolver for the whitespace
-    guard AND the register writer, so the value the guard checked is the
-    value that lands in the roster; two spellings here would let a clean
-    ``SUBAGENT_PYTHON`` pass the gate while ``--register`` pinned a spacey
-    ``sys.executable``.
+    (``vendored_agents._resolved_python``), so the row ``--register`` pins
+    names the interpreter discovery would.
     """
     return os.environ.get("SUBAGENT_PYTHON", "").strip() or sys.executable
 
