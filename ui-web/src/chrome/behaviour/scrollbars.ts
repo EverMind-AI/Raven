@@ -170,7 +170,10 @@ function place(el: HTMLElement, b: Bars, axis: Axis): HTMLElement | undefined {
   const vert = axis === 'v'
   const size = vert ? el.clientHeight : el.clientWidth
   const full = vert ? el.scrollHeight : el.scrollWidth
-  if (!el.isConnected || full <= size + 1 || size < 40) {
+  /* A hidden scroller keeps its box -- the chat column parks its transcript
+     that way, under the trajectory view -- but a thumb over it would float
+     over whatever is shown there, and drag what nobody can see. */
+  if (!el.isConnected || full <= size + 1 || size < 40 || getComputedStyle(el).visibility === 'hidden') {
     drop(el, b, axis)
     return
   }
