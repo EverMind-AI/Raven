@@ -175,8 +175,15 @@ export function EntryList(): JSX.Element {
      details -- brings its row into view too; a click here already has it. The
      follow flag is the reader's and is left alone. */
   const selectedBy = state.selectedBy
+  /* Such a selection can show a hidden row, which changes the rows in the
+     same commit; the tail-following below must not take the view back down
+     in that commit. Moving the view off the tail then stops the following,
+     through the scroll handler, the way a reader's own scroll does. */
+  const revealing = useRef(false)
   useLayoutEffect(() => {
-    if (selectedBy === 'bar' || selectedBy === 'link') reveal()
+    if (selectedBy !== 'bar' && selectedBy !== 'link') return
+    reveal()
+    revealing.current = true
   }, [selectedBy, reveal])
 
   /* The viewport's size, measured the moment the scroller exists and again
@@ -192,6 +199,10 @@ export function EntryList(): JSX.Element {
     if (!el) return
     const measure = (): void => { setSize({ width: el.clientWidth, height: el.clientHeight }) }
     measure()
+    /* A scroller that comes back starts where the browser put it, which no
+       scroll event reports: a short list swapped in under a deep scroll
+       position would otherwise draw an empty window. */
+    setScrollTop(el.scrollTop)
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(measure)
     ro.observe(el)
@@ -204,7 +215,9 @@ export function EntryList(): JSX.Element {
     const el = box.current
     if (!el) return
     if (follow) {
+      if (revealing.current) return
       el.scrollTop = el.scrollHeight
+      setScrollTop(el.scrollTop)
       return
     }
     if (anchor) {
@@ -217,9 +230,15 @@ export function EntryList(): JSX.Element {
           at = next ? index[next.entry_id] : undefined
         }
       }
-      if (at !== undefined) el.scrollTop = at * ROW_HEIGHT + anchor.offset
+      if (at !== undefined) {
+        el.scrollTop = at * ROW_HEIGHT + anchor.offset
+        setScrollTop(el.scrollTop)
+      }
     }
   }, [entries, follow, anchor, index, state.index, state.entries])
+
+  /* Last in every commit: a selection's reveal holds the tail only in its own. */
+  useLayoutEffect(() => { revealing.current = false })
 
   const onScroll = (e: UIEvent<HTMLDivElement>): void => {
     const el = e.currentTarget

@@ -257,6 +257,36 @@ describe('the entry list', () => {
     expect(el.scrollTop).toBe(0)
   })
 
+  it('keeps a hidden row a link revealed in view, even while the list was following its tail', async () => {
+    rows = Array.from({ length: 200 }, (_, k) => (k === 50
+      ? entry('reply50', k, { kind: 'turn.end', slot: 'turn.output', meta: { hidden: 'empty_reply' } })
+      : entry(`r${k}`, k)))
+    await draw()
+    const el = list()
+    size(el, 320, 199 * ROW_HEIGHT)
+    el.scrollTop = 199 * ROW_HEIGHT - 320
+    act(() => { fireEvent.scroll(el) })
+    expect(store.get().follow).toBe(true)
+    size(el, 320, 200 * ROW_HEIGHT)
+    act(() => { store.select('reply50', { source: 'link' }) })
+    expect(store.get().visibleIndex.reply50).toBe(50)
+    expect(el.scrollTop).toBe(50 * ROW_HEIGHT)
+  })
+
+  it('draws the rows of a short list swapped in under a deep scroll position', () => {
+    render(<EntryList />)
+    act(() => { feed(Array.from({ length: 600 }, (_, k) => entry(`r${k}`, k))) })
+    const el = list()
+    size(el, 320, 600 * ROW_HEIGHT)
+    el.scrollTop = 500 * ROW_HEIGHT
+    act(() => { fireEvent.scroll(el) })
+    act(() => { feed([]) })
+    /* The browser puts a scroller whose content shrank back at the top, and says nothing. */
+    el.scrollTop = 0
+    act(() => { feed(Array.from({ length: 15 }, (_, k) => entry(`s${k}`, k))) })
+    expect(document.querySelectorAll('.trajectory-row')).toHaveLength(15)
+  })
+
   it('says why the list is empty: scanning, or nothing recorded', async () => {
     indexState = { ...READY, phase: 'scanning', scanned_bytes: 1024 * 1024, total_bytes: 4 * 1024 * 1024 }
     await draw()

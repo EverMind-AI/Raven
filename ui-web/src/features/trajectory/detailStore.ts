@@ -269,6 +269,16 @@ let gen = 0
 let clock = 0
 let tokens = 0
 let revisionHops = 0
+
+/* The entry moved on under a read (-32023): counted, so a revision that keeps
+   moving ends in the unstable state rather than a loop. Only such answers
+   count -- an entry still running moves on through the feed all the time --
+   and any page read at the revision it asked for starts the count again. */
+const refused = (): boolean => {
+  revisionHops += 1
+  return revisionHops > REVISION_RETRIES
+}
+const steady = (): void => { revisionHops = 0 }
 let unfollow: (() => void) | null = null
 /** Reads in the air, by key, each owned by one request's token. */
 const inflight = new Map<string, number>()
@@ -424,51 +434,46 @@ function trim(s: DetailsState, keepFile: string | null = null): DetailsState {
   const active = activeBlockKey(next)
   const rawUp = onRawTab(next)
   const byAge = (keys: string[], at: (k: string) => number): string[] => [...keys].sort((a, b) => at(a) - at(b))
-  const drop = (key: string): void => {
-    next = {
-      ...next,
-      descriptors: without(next.descriptors, key),
-      blocks: without(next.blocks, key),
-      outlines: without(next.outlines, key),
-      fileDirs: without(next.fileDirs, key),
-      fileBodies: without(next.fileBodies, key),
-      loading: without(next.loading, key),
-    }
+  /* One table at a time: a directory shares its key with the entry's
+     descriptor and outline, which must not go with it. */
+  const drop = (table: 'descriptors' | 'blocks' | 'outlines' | 'fileDirs' | 'fileBodies', key: string): void => {
+    next = { ...next, [table]: without<unknown>(next[table], key) }
+    if (table === 'fileDirs') next = { ...next, released: without(next.released, key) }
   }
   const foreign = (id: Identity): boolean => !sameIdentity(id, next.current)
   for (const key of byAge(Object.keys(next.fileBodies).filter((k) => foreign(next.fileBodies[k]!.identity)), (k) => next.fileBodies[k]!.at)) {
     if (!over()) return next
-    drop(key)
+    drop('fileBodies', key)
   }
   for (const key of byAge(Object.keys(next.fileDirs).filter((k) => foreign(next.fileDirs[k]!.identity)), (k) => next.fileDirs[k]!.at)) {
     if (!over()) return next
-    drop(key)
+    drop('fileDirs', key)
   }
   for (const key of byAge(Object.keys(next.outlines).filter((k) => foreign(next.outlines[k]!.identity)), (k) => next.outlines[k]!.at)) {
     if (!over()) return next
-    drop(key)
+    drop('outlines', key)
   }
   for (const key of byAge(Object.keys(next.blocks).filter((k) => foreign(next.blocks[k]!.identity)), (k) => next.blocks[k]!.at)) {
     if (!over()) return next
-    drop(key)
+    drop('blocks', key)
   }
   for (const key of byAge(Object.keys(next.descriptors).filter((k) => foreign(next.descriptors[k]!.identity)), (k) => next.descriptors[k]!.at)) {
     if (!over()) return next
-    drop(key)
+    drop('descriptors', key)
   }
   for (const key of byAge(Object.keys(next.blocks).filter((k) => k !== active), (k) => next.blocks[k]!.at)) {
     if (!over()) return next
-    drop(key)
+    drop('blocks', key)
   }
   /* Off the raw tab the files are another tab's records, and go like them. */
   if (!rawUp) {
     for (const key of byAge(Object.keys(next.fileBodies), (k) => next.fileBodies[k]!.at)) {
       if (!over()) return next
-      drop(key)
+      drop('fileBodies', key)
     }
     for (const key of Object.keys(next.fileDirs)) {
       if (!over()) return next
-      drop(key)
+      drop('fileDirs', key)
     }
   }
   /* On it, the stalest file content goes, never the one just read; the
@@ -478,7 +483,7 @@ function trim(s: DetailsState, keepFile: string | null = null): DetailsState {
     for (const key of byAge(Object.keys(next.fileBodies).filter((k) => k !== keepFile), (k) => next.fileBodies[k]!.at)) {
       if (!over()) return next
       const index = next.fileBodies[key]!.index
-      drop(key)
+      drop('fileBodies', key)
       const was = next.released[dirKey] ?? []
       next = { ...next, released: { ...next.released, [dirKey]: was.includes(index) ? was : [...was, index] } }
     }
@@ -602,8 +607,6 @@ function accept(result: TrajectoryDetailResult, t: number, g: number, mark: stri
         if (fileBodies[k]!.identity.entryId === id.entryId && !sameIdentity(fileBodies[k]!.identity, id)) delete fileBodies[k]
       }
       next = { ...next, blocks, outlines, fileDirs, fileBodies }
-      revisionHops += 1
-      if (revisionHops > REVISION_RETRIES) next = { ...next, unstable: true }
     }
     const tab = next.tabByEntry[id.entryId] ?? 'overview'
     if (tab !== 'overview' && !result.blocks.some((b) => b.id === tab)) {
@@ -693,6 +696,7 @@ function filePage(
     if (s !== store.get()) store.set(s)
     return
   }
+  steady()
   const key = blockKey(id, blockId)
   const page = pageOf(result, offsetOf(result.data))
   const have = s.blocks[key]
@@ -747,7 +751,7 @@ async function read(blockId: string, cursor: string | null, continuing: boolean,
          but the descriptor, which brings the revision and the tabs with it.
          An epoch the list has not reached yet is the list's to bring. */
       if (moved.epoch !== id.epoch) { store.set({ ...s, waitingEpoch: moved.epoch }); return }
-      if (revisionHops >= REVISION_RETRIES) { store.set({ ...s, unstable: true }); return }
+      if (refused()) { store.set({ ...s, unstable: true }); return }
       /* One write: stale, and the revision the pane now knows about. A
          subscriber that asks for the descriptor on this very notification
          cannot be answered from the cache at the list's older revision, so
@@ -854,6 +858,7 @@ export async function loadOutline(): Promise<void> {
     for (;;) {
       const result: TrajectoryBlockResult = await src.block(id.sessionKey, id.entryId, id.revision, id.epoch, 'outline', cursor)
       if (!currentEpoch(id.sessionKey, id.epoch) || result.epoch !== id.epoch || result.entry_revision !== id.revision || result.entry_id !== id.entryId) break
+      steady()
       cursor = result.next_cursor ?? null
       const fresh = outlineItems(result.data)
       const total = typeof result.total_items === 'number' ? result.total_items : null
@@ -888,6 +893,7 @@ export async function loadOutline(): Promise<void> {
     const moved = revisionChange(e)
     if (moved) {
       if (moved.epoch !== id.epoch) { store.set({ ...calm(s), waitingEpoch: moved.epoch }); return }
+      if (refused()) { store.set({ ...calm(s), unstable: true }); return }
       store.set({ ...calm(s), stale: true, pending: { epoch: moved.epoch, revision: moved.revision } })
       void loadDescriptor({ fresh: true })
       return
@@ -972,6 +978,7 @@ export async function loadFileDir(): Promise<void> {
     for (;;) {
       const result: TrajectoryBlockResult = await src.block(id.sessionKey, id.entryId, id.revision, id.epoch, 'files', cursor)
       if (!currentEpoch(id.sessionKey, id.epoch) || result.epoch !== id.epoch || result.entry_revision !== id.revision || result.entry_id !== id.entryId) break
+      steady()
       cursor = result.next_cursor ?? null
       const fresh = fileEntries(result.data)
       const total = typeof result.total_items === 'number' ? result.total_items : null
@@ -1006,6 +1013,7 @@ export async function loadFileDir(): Promise<void> {
     const moved = revisionChange(e)
     if (moved) {
       if (moved.epoch !== id.epoch) { store.set({ ...calm(s), waitingEpoch: moved.epoch }); return }
+      if (refused()) { store.set({ ...calm(s), unstable: true }); return }
       store.set({ ...calm(s), stale: true, pending: { epoch: moved.epoch, revision: moved.revision } })
       void loadDescriptor({ fresh: true })
       return
@@ -1058,6 +1066,7 @@ export async function loadFile(file: FileEntry): Promise<void> {
       : undefined
     const item = (Array.isArray(items) ? items[0] : undefined) as JsonValue | undefined
     if (item === undefined) { if (s !== store.get()) store.set(s); return }
+    steady()
     const dirKey = descriptorKey(id)
     const released = (s.released[dirKey] ?? []).filter((n) => n !== file.index)
     commit({
@@ -1079,6 +1088,7 @@ export async function loadFile(file: FileEntry): Promise<void> {
     const moved = revisionChange(e)
     if (moved) {
       if (moved.epoch !== id.epoch) { store.set({ ...s, waitingEpoch: moved.epoch }); return }
+      if (refused()) { store.set({ ...s, unstable: true }); return }
       store.set({ ...s, stale: true, pending: { epoch: moved.epoch, revision: moved.revision } })
       void loadDescriptor({ fresh: true })
       return

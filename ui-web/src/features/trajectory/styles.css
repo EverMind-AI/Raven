@@ -307,6 +307,8 @@ html[data-theme="dark"] {
 .trajectory-json-fold:hover { background: var(--hover); }
 .trajectory-json-caret { color: var(--faint); width: 10px; display: inline-block; }
 .trajectory-json-shape { color: var(--faint); }
+/* The rest of a long node, a page at a time, on the line its next child would take. */
+.trajectory-json-more { display: block; margin: 2px 0; font-size: 11.5px; }
 
 /* Key-values: no borders, label left, value beside it. */
 .trajectory-kv { margin: 0; display: grid; grid-template-columns: minmax(96px, 160px) minmax(0, 1fr); gap: 5px 12px; }

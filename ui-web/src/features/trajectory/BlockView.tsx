@@ -59,19 +59,28 @@ const isPlaceholder = (v: unknown): v is Obj => isObj(v) && (v.$oversize === tru
 
 /** How deep a tree opens on its own before a node needs a click. */
 export const JSON_OPEN_DEPTH = 2
+/** How many children a node draws at a time: a flat array near the read cap
+    holds hundreds of thousands, and drawing them all would stall the page. */
+export const JSON_CHILDREN = 200
 
 function JsonNode({ name, value, depth }: { name: string | null; value: unknown; depth: number }): JSX.Element {
   const [open, setOpen] = useState(depth < JSON_OPEN_DEPTH)
+  const [shown, setShown] = useState(JSON_CHILDREN)
   const label = name === null ? null : <span className="trajectory-json-k">{name}</span>
   if (isPlaceholder(value)) {
     return <div className="trajectory-json-row">{label}<Placeholder value={value} /></div>
   }
   if (Array.isArray(value) || isObj(value)) {
-    const entries: Array<[string, unknown]> = Array.isArray(value)
-      ? value.map((v, i) => [String(i), v])
+    const all: Array<[string, unknown]> | null = Array.isArray(value)
+      ? null
       : Object.entries(value).filter(([k]) => k !== '$more_keys')
+    const count = all ? all.length : (value as unknown[]).length
+    const entries: Array<[string, unknown]> = all
+      ? all.slice(0, shown)
+      : (value as unknown[]).slice(0, shown).map((v, i) => [String(i), v])
+    const rest = count - entries.length
     const more = isObj(value) && typeof value.$more_keys === 'number' ? value.$more_keys : 0
-    const shape = Array.isArray(value) ? `[${entries.length}]` : `{${entries.length}}`
+    const shape = Array.isArray(value) ? `[${count}]` : `{${count}}`
     return (
       <div className="trajectory-json-row">
         <button className="trajectory-json-fold" aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -82,6 +91,11 @@ function JsonNode({ name, value, depth }: { name: string | null; value: unknown;
         {open ? (
           <div className="trajectory-json-kids">
             {entries.map(([k, v]) => <JsonNode key={k} name={k} value={v} depth={depth + 1} />)}
+            {rest > 0 ? (
+              <button className="trajectory-link trajectory-json-more" onClick={() => setShown((n) => n + JSON_CHILDREN)}>
+                {t('gui.trajectory.details.more_children', { n: Math.min(JSON_CHILDREN, rest), rest })}
+              </button>
+            ) : null}
             {more > 0 ? <div className="trajectory-ph">{t('gui.trajectory.details.more_keys', { n: more })}</div> : null}
           </div>
         ) : null}

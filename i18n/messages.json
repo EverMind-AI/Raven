@@ -10887,18 +10887,6 @@
       "en": "(no preview)",
       "zh": "（无预览）"
     },
-    "gui.trajectory.col_turn": {
-      "en": "Turn",
-      "zh": "轮次"
-    },
-    "gui.trajectory.col_type": {
-      "en": "Type",
-      "zh": "类型"
-    },
-    "gui.trajectory.col_content": {
-      "en": "Content",
-      "zh": "内容"
-    },
     "gui.trajectory.failed": {
       "en": "failed",
       "zh": "失败"
@@ -11035,6 +11023,10 @@
       "en": "{n} more keys",
       "zh": "还有 {n} 个键"
     },
+    "gui.trajectory.details.more_children": {
+      "en": "Show {n} more of {rest}",
+      "zh": "再显示 {n} 项（还剩 {rest} 项）"
+    },
     "gui.trajectory.details.resize": {
       "en": "Resize details",
       "zh": "调整详情宽度"
@@ -11042,10 +11034,6 @@
     "gui.trajectory.details.region": {
       "en": "Entry details",
       "zh": "条目详情"
-    },
-    "gui.trajectory.details.gone": {
-      "en": "This entry is no longer in the index",
-      "zh": "该条目已不在索引中"
     },
     "gui.trajectory.details.tabs": {
       "en": "Detail tabs",
@@ -11411,10 +11399,6 @@
       "en": "Charged to",
       "zh": "计入条目"
     },
-    "gui.trajectory.timing.overlap": {
-      "en": "Nested calls overlap; the bar does not add them twice",
-      "zh": "父子调用时间重叠，条中不重复相加"
-    },
     "gui.trajectory.details.unstable": {
       "en": "The entry keeps changing; try again in a moment",
       "zh": "条目仍在变化，请稍后重试"
@@ -11430,10 +11414,6 @@
     "gui.trajectory.details.waiting_list": {
       "en": "Waiting for the list to catch up",
       "zh": "等待列表同步"
-    },
-    "gui.trajectory.details.pick_one": {
-      "en": "Pick an entry to see its details",
-      "zh": "选择一个条目查看详情"
     },
     "gui.trajectory.bar.zoom_in": {
       "en": "Zoom in",
@@ -11490,10 +11470,6 @@
     "gui.trajectory.bar.pick_one": {
       "en": "Pick an entry",
       "zh": "选择条目"
-    },
-    "gui.trajectory.bar.close": {
-      "en": "Close",
-      "zh": "关闭"
     },
     "gui.trajectory.bar.canvas_label": {
       "en": "Duration bar: {n} entries, {known} charged",

@@ -401,6 +401,10 @@ describe('the data chain on a whole snapshot', () => {
     await flush()
     expect(store.get().revision).toBe(100)
     expect(store.entry('stale')).toBeNull()
+    /* The old answer does not free the newer request's place: still one in the air. */
+    poll.sync()
+    await tick(poll.FAST_MS * 2)
+    expect(changesCalls).toHaveLength(2)
     await answerChanges(quietBatch(100, { to_revision: 101, upserts: [entry('r2', 2)] }))
     expect(store.get().revision).toBe(101)
   })

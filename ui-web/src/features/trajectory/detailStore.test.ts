@@ -618,6 +618,70 @@ describe('a changed revision', () => {
     expect(details.descriptor()).not.toBeNull()
   })
 
+  it('follows an entry that keeps moving on through the feed for as long as its pages read', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['result']))
+    details.setTab('r1', 'result')
+    for (let revision = 2; revision <= details.REVISION_RETRIES + 4; revision += 1) {
+      list.applyChanges(batch({ upserts: [entry('r1', 1, revision)] }))
+      void details.loadDescriptor()
+      await answerDetail(descriptor('r1', revision, ['result'], { revision_changed: true }))
+      void details.loadBlock('result')
+      await answerBlock(body('r1', revision, 'result', { value: { at: revision } }, { renderer: 'json' }))
+      expect(details.get().unstable).toBe(false)
+    }
+    expect(details.mayRead()).toBe(true)
+    /* A refusal after all those moves is the first of a row, not the last straw. */
+    const last = details.REVISION_RETRIES + 5
+    list.applyChanges(batch({ upserts: [entry('r1', 1, last)] }))
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', last, ['result'], { revision_changed: true }))
+    void details.loadBlock('result')
+    await failBlock(new RpcError(-32023, 'moved', { current_revision: last + 1, current_epoch: 'e1' }))
+    expect(details.get().unstable).toBe(false)
+    expect(detailQueue).toHaveLength(1)
+  })
+
+  it('says nothing of a read that failed on the connection before a handshake', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['result']))
+    details.setTab('r1', 'result')
+    void details.loadBlock('result')
+    const ticket = details.ticket()
+    list.handshake()
+    expect(details.ticket()).toBe(ticket)
+    await failBlock(new Error('the old socket closed'))
+    expect(details.fault({ blockId: 'result' })).toBeNull()
+  })
+
+  it('keeps a newer read of the same block in the air when an older one lands after a switch away and back', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['result']))
+    details.setTab('r1', 'result')
+    void details.loadBlock('result')
+    list.sessionChanged('gui:b')
+    list.sessionChanged('gui:a')
+    list.setView('trajectory')
+    await list.load()
+    /* The conversation's memory brings r1 back selected; the reader picks it again. */
+    list.select(null, { source: 'click' })
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['result']))
+    details.setTab('r1', 'result')
+    void details.loadBlock('result')
+    expect(blockCalls).toHaveLength(2)
+    await failBlock(new Error('the read from before the switch'))
+    void details.loadBlock('result')
+    expect(blockCalls).toHaveLength(2)
+  })
+
   it('gives up following revisions after three hops inside one reader action', async () => {
     await ready()
     list.select('r1', { source: 'click' })
@@ -768,6 +832,27 @@ describe('the files a span names', () => {
     await answerBlock(fileBody(100, big))
     expect(details.isReleased(100)).toBe(false)
     expect(details.fileBody(100)).not.toBeNull()
+  })
+
+  it('lets the directory go off the raw tab without taking the entry\'s descriptor with it', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await answerDetail(descriptor('r1', 1, ['content', 'raw', 'files', 'file']))
+    details.setTab('r1', 'raw')
+    void details.loadFileDir()
+    await answerBlock(dirPage(0, 3, 3, null))
+    void details.loadFile(dirItem(0))
+    await answerBlock(fileBody(0, 'b'.repeat(480 * 1024)))
+    expect(details.fileDir()).not.toBeNull()
+    /* Another tab reads one block larger than the whole budget. */
+    details.setTab('r1', 'content')
+    void details.loadBlock('content')
+    await answerBlock(body('r1', 1, 'content', { text: 'x'.repeat(details.BUDGET + 1024) }, { renderer: 'text' }))
+    expect(details.fileDir()).toBeNull()
+    expect(details.fileBody(0)).toBeNull()
+    expect(details.descriptor()).not.toBeNull()
+    expect(details.block('content')).not.toBeNull()
   })
 
   it('files a late answer under the entry that asked, and keeps one file\'s failure to that file', async () => {

@@ -7,7 +7,7 @@ import { absorb, resetCapabilities } from '../../rpc/capabilities'
 import { _resetFreshForTests, unpitch } from '../../state/session/conversation'
 import { resetSources, setSources } from '../../state/sources'
 import { get as toasts } from '../../state/toast'
-import { BlockView, JsonView, KeyValuesView, copyText, usageRows } from './BlockView'
+import { BlockView, JSON_CHILDREN, JsonView, KeyValuesView, copyText, usageRows } from './BlockView'
 import * as details from './detailStore'
 import { OPEN_EST, ROW_GAP } from './Messages'
 import * as list from './store'
@@ -141,6 +141,24 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
+describe('a JSON tree', () => {
+  it('draws a node\'s children a page at a time, however many there are', () => {
+    const value = { items: Array.from({ length: 1000 }, (_, k) => k) }
+    render(<JsonView value={value} />)
+    const kids = (): number => document.querySelectorAll('.trajectory-json-kids .trajectory-json-kids > .trajectory-json-row').length
+    expect(kids()).toBe(JSON_CHILDREN)
+    expect(q('.trajectory-json-shape')?.textContent).toBe('{1}')
+    expect([...document.querySelectorAll('.trajectory-json-shape')].map((s) => s.textContent)).toContain('[1000]')
+    const more = (): HTMLElement | null => q('.trajectory-json-more') as HTMLElement | null
+    expect(more()?.textContent).toBe(`gui.trajectory.details.more_children {"n":${JSON_CHILDREN},"rest":${1000 - JSON_CHILDREN}}`)
+    for (let drawn = JSON_CHILDREN; drawn < 1000; drawn += JSON_CHILDREN) {
+      act(() => { fireEvent.click(more() as HTMLElement) })
+    }
+    expect(kids()).toBe(1000)
+    expect(more()).toBeNull()
+  })
+})
+
 describe('the renderers', () => {
   it('draws JSON as a tree that folds past two levels and names the gateway\'s placeholders', () => {
     render(<JsonView value={{ a: { b: { c: 1 } }, big: { $oversize: true, bytes: 9000 }, deep: { $depth_truncated: true }, $more_keys: 3 }} />)
@@ -246,6 +264,21 @@ describe('a block tab', () => {
     } else {
       expect(blockCalls).toEqual(['outline|'])
     }
+  })
+
+  it.each([
+    [3, 0, true],
+    [2, 1, false],
+  ] as const)('says a continued call that starts its news at %i of three added nothing, folding the rest', async (newFrom, open, same) => {
+    await ready()
+    const meta: Record<string, JsonValue> = { delta: 'continued', new_from: newFrom, message_count: 3 }
+    act(() => { list.set({ ...list.get(), ...list.rowsOf([{ ...row, meta }]) }) })
+    render(<BlockView block={descriptor.blocks[0]!} />)
+    await flush()
+    await answer(body('outline', { items: outlineItems(0, 3), offset: 0 }, { renderer: 'items', total_items: 3 }))
+    expect(document.querySelectorAll('.trajectory-msg-open')).toHaveLength(open)
+    if (same) expect(q('.trajectory-msg-note')?.textContent).toBe('gui.trajectory.details.delta_same')
+    else expect(q('.trajectory-msg-note')).toBeNull()
   })
 
   it('lets the stalest pages go past the window and folds their rows again until asked, saying the copy is partial', async () => {
