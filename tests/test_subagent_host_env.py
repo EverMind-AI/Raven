@@ -437,3 +437,4 @@ def test_on_windows_only_a_bare_startable_name_is_looked_up(monkeypatch: pytest.
     for argv in ([r"C:\Tools\npx", "-y"], ["tools/npx", "-y"], ["server.js", "--stdio"]):
         assert backend_env.resolve_program(argv, child_env, batch_files=True) == argv
     assert backend_env.resolve_program(["npx", "-y"], child_env, batch_files=True) == ["/elsewhere/npx.exe", "-y"]
+    assert backend_env.resolve_program(["npx.cmd", "-y"], child_env, batch_files=True) == ["/elsewhere/npx.cmd", "-y"]
