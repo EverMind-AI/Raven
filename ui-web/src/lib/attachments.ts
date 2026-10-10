@@ -53,9 +53,10 @@ const FILE_NOTE = /^\[(?:Image|Attachment): .*\(path: .+?\).*\]$/
 const IMAGE_PART = /^(?:\[image\]\s*)+/
 
 /* The absolute path each of those lines names, which is the one thing in them
-   worth keeping. The note lists what the composer uploaded -- a path relative
-   to the workspace it uploaded into -- and the file route resolves a relative
-   path against the SESSION's own root, which is not always that workspace: a
+   worth keeping. The note lists what the composer handed over -- an upload's
+   path, relative to the agent home it was uploaded into, or the own path of a
+   file attached where it already was -- and the file route resolves a relative
+   path against the SESSION's own root, which is not always agent home: a
    conversation whose root is elsewhere asked for `uploads/x.png` under its own
    root and got a 404, so the file fell back to its name on every reload. The
    engine's line carries the absolute path of the same file, and that one
@@ -147,7 +148,7 @@ export function splitAttachments(text: string, notes: readonly string[]): Attach
      sentence with the word in brackets meant to write it, and this helper
      promises such a message back unchanged. */
   if (!absolute.length && !carried) return { body: raw, atts: [] }
-  /* The same file, named twice: the note's path as the composer uploaded it,
+  /* The same file, named twice: the note's path as the composer handed it over,
      and the engine's as it stands on disk. The second is preferred wherever
      both exist, because it resolves whatever the session is rooted at.
      Compared with one separator, because the two spellings differ on Windows:
