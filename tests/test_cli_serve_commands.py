@@ -707,6 +707,25 @@ class TestTheSupervisor:
         assert launched and launched[0][:4] == [sys.executable, "-P", "-m", "raven"]
         assert "--supervise" in launched[0]
 
+    def test_a_dev_page_is_supervised_and_brought_back_with_its_view(self, home: Path, instant, monkeypatch) -> None:
+        import subprocess
+
+        argv = self._run(monkeypatch, [1, 0])
+        serve_commands._supervise(18999, dev=True)
+        assert len(argv) == 2 and all(run[-1] == "--dev" for run in argv)
+
+        launched: list[list[str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda argv, **_k: launched.append(list(argv)))
+        serve_commands._spawn_supervisor(18999, dev=True)
+        serve_commands._spawn_supervisor(18999)
+        assert launched[0][-1] == "--dev" and "--dev" not in launched[1]
+
+    @pytest.mark.parametrize("held", [True, False])
+    def test_the_gateway_command_carries_dev_whichever_engine_it_runs(self, monkeypatch, held: bool) -> None:
+        monkeypatch.setattr(serve_commands, "_gateway_holds_the_lock", lambda: held)
+        assert serve_commands._gateway_argv(18999, dev=True)[-1] == "--dev"
+        assert "--dev" not in serve_commands._gateway_argv(18999)
+
     def test_it_supervises_the_engine_that_has_the_channel_adapters(self) -> None:
         """`serve` builds no ChannelManager, so a page behind it can never start an
         adapter: no sign-in code is ever minted and every enabled entrance reads
@@ -2449,7 +2468,7 @@ class TestTheDevFlag:
         [
             (True, {"trajectory_view": False}, True, False),
             (True, {}, True, False),
-            (True, None, True, False),
+            (True, None, False, False),
             (True, {"trajectory_view": True}, False, False),
             (False, {"trajectory_view": True}, False, True),
             (False, {"trajectory_view": False}, False, False),
@@ -2482,7 +2501,10 @@ class TestTheDevFlag:
         else:
             serve_commands._web(port=18999, dev=dev)
             assert opened == ["http://127.0.0.1:31337/auth#abc"] and stopped == []
-            assert ("trajectory view enabled" in capsys.readouterr().out) is noted
+            out = capsys.readouterr().out
+            assert ("trajectory view enabled" in out) is noted
+            # An unreadable health answer is not a "no": the page opens, with a warning when --dev asked.
+            assert ("could not read http://127.0.0.1:31337/health" in out) is (dev and facts is None)
 
     def test_a_recovering_supervisor_without_the_view_is_refused_too(
         self, home: Path, a_built_page, opened: list[str], supervised: list[int], monkeypatch, capsys
@@ -2554,8 +2576,35 @@ class TestTheDevFlag:
         policy._reset_for_tests()
         monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", lambda *_a, **_k: None)
         monkeypatch.setattr(serve_commands.bounded_asyncio, "run", lambda coro: coro.close())
-        serve_commands._run(18999, False, dev=True)
-        assert policy.current().enabled() is True
-        serve_commands._run(18999, False)
-        assert policy.current().enabled() is False
-        policy._reset_for_tests()
+        try:
+            serve_commands._run(18999, False, dev=True)
+            assert policy.current().enabled() is True
+            serve_commands._run(18999, False)
+            assert policy.current().enabled() is False
+        finally:
+            policy._reset_for_tests()
+
+
+@pytest.mark.parametrize(("argv", "dev"), [(["web", "--dev"], True), (["web"], False)])
+def test_the_web_command_hands_dev_on(monkeypatch, argv: list[str], dev: bool) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli.commands import app
+
+    seen: list[bool] = []
+    monkeypatch.setattr(serve_commands, "_web", lambda port, **kw: seen.append(kw.get("dev")))
+    assert CliRunner().invoke(app, argv).exit_code == 0
+    assert seen == [dev]
+
+
+@pytest.mark.parametrize(("argv", "dev"), [(["serve", "--dev"], True), (["serve"], False)])
+def test_the_serve_command_hands_dev_on(monkeypatch, argv: list[str], dev: bool) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli.commands import app
+
+    seen: list[bool] = []
+    monkeypatch.setattr(serve_commands, "_gateway_hosted_page", lambda: None)
+    monkeypatch.setattr(serve_commands, "_run", lambda port, open_browser, dev=False: seen.append(dev))
+    assert CliRunner().invoke(app, argv).exit_code == 0
+    assert seen == [dev]

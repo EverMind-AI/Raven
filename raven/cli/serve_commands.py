@@ -678,11 +678,20 @@ def _check_attached(url: str, dev: bool) -> None:
     on, the one a foreground child bound -- because a page opened against a
     service without the trajectory view would present a working UI with the
     feature the user asked for silently missing. The service is left running:
-    stopping it is the user's call (``raven web --stop``).
+    stopping it is the user's call (``raven web --stop``). A health answer
+    that could not be read says nothing either way, so the page is opened
+    with a warning rather than refused.
     """
     facts = _health_facts(url)
-    view = facts.get("trajectory_view") if facts else None
     base = url.split("/auth#")[0]
+    if facts is None:
+        if dev:
+            typer.echo(
+                f"warning: could not read {base}/health, so whether this service has the trajectory view is "
+                "unknown; if the page shows no trajectory toggle, run `raven web --stop`, then `raven --dev`"
+            )
+        return
+    view = facts.get("trajectory_view")
     if dev and view is not True:
         typer.echo(
             f"error: the web service at {base} has no trajectory view; run `raven web --stop`, then `raven --dev`"

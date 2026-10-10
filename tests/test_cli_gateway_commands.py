@@ -1755,8 +1755,10 @@ def test_gateway_dev_flag_arms_the_trajectory_policy(monkeypatch, tmp_config) ->
         raise RuntimeError("halt here")
 
     monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", halt)
-    r = runner.invoke(app, ["gateway", "--dev"])
-    assert r.exit_code != 0 and policy.current().enabled() is True
-    r = runner.invoke(app, ["gateway"])
-    assert r.exit_code != 0 and policy.current().enabled() is False
-    policy._reset_for_tests()
+    try:
+        r = runner.invoke(app, ["gateway", "--dev"])
+        assert r.exit_code != 0 and policy.current().enabled() is True
+        r = runner.invoke(app, ["gateway"])
+        assert r.exit_code != 0 and policy.current().enabled() is False
+    finally:
+        policy._reset_for_tests()
