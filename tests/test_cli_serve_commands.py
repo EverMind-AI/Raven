@@ -366,6 +366,7 @@ class TestTheCommand:
 
         home.mkdir(parents=True, exist_ok=True)
         (home / "web.json").write_text(json.dumps({"pid": os.getpid(), "port": 18999}), encoding="utf-8")
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: "http://127.0.0.1:18999/auth#z")
 
@@ -410,6 +411,7 @@ class TestTheCommand:
         started one, whose gateway could only come up on `serve` -- no channels."""
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: 4321)
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: 4321)
         # So a regression that does spawn fails here, not after the attach ceiling.
         monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: None)
 
@@ -848,12 +850,15 @@ class TestTheSupervisor:
         assert serve_commands._gateway_holds_the_lock() is True
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX")
 class TestStopping:
     @pytest.fixture(autouse=True)
     def _no_real_groups(self, monkeypatch) -> None:
         """The pids here are made up, and a real process may hold one. Left to
         the real calls, the escalation would read that process's group and
-        SIGKILL it, or fail on it and skip the wait being measured."""
+        SIGKILL it, or fail on it and skip the wait being measured. The
+        identity probe is nulled for the same reason: these tests are about
+        signal choreography, and argv reads are this file's other class."""
         import os
 
         def _no_such_process(pid: int) -> int:
@@ -861,6 +866,7 @@ class TestStopping:
 
         monkeypatch.setattr(os, "getpgid", _no_such_process)
         monkeypatch.setattr(os, "killpg", lambda *_a: pytest.fail("signalled a real process group"))
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
 
     @staticmethod
     def _resident(home: Path) -> None:
@@ -1097,12 +1103,201 @@ class TestStopping:
         assert serve_commands._stop_resident() is False
 
 
+class TestARecycledPid:
+    """The pid a killed gateway left in serve.json is the kernel's to give away.
+
+    A state file's pid can name a live process without naming raven at all.
+    """
+
+    @staticmethod
+    def _not_ours(monkeypatch) -> None:
+        """Every identity probe says the recorded pid belongs to somebody else."""
+        from raven.gateway import lock as _gateway_lock
+
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(_gateway_lock, "read_status", lambda _now: None)
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: False)
+
+    def test_a_leftover_names_a_pid_but_blocks_nothing(self, home: Path, monkeypatch, capsys) -> None:
+        """The stale-file case the locking refusal used to trip on: remove the
+        record and say so, rather than refusing to start beside it."""
+        self._not_ours(monkeypatch)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+
+        assert serve_commands._read_serve_pid() is None
+
+        assert not (home / "serve.json").exists()
+        assert "pid 222" in capsys.readouterr().out
+
+    def test_the_lock_holder_s_pid_is_read_as_its_own_page(self, home: Path, monkeypatch) -> None:
+        from raven.gateway import lock as _gateway_lock
+
+        info = _gateway_lock.LockInfo(pid=222, started_at=0.0, config_path="")
+        monkeypatch.setattr(_gateway_lock, "read_status", lambda _now: info)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+
+        assert serve_commands._read_serve_pid() == 222
+
+    def test_a_stop_never_signals_a_pid_that_is_not_ours(self, home: Path, monkeypatch) -> None:
+        import os
+
+        self._not_ours(monkeypatch)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+        monkeypatch.setattr(os, "kill", lambda *_a: pytest.fail("signalled a pid that was never proven ours"))
+
+        assert serve_commands._stop_resident() is False
+
+    def test_a_foreign_pid_does_not_count_as_a_live_supervisor(self, home: Path, monkeypatch) -> None:
+        self._not_ours(monkeypatch)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "web.json").write_text(json.dumps({"pid": 111, "port": 18999}), encoding="utf-8")
+
+        assert serve_commands._read_web_state() is None
+
+    def test_a_stop_clears_a_leftover_with_nothing_to_signal(self, home: Path, monkeypatch) -> None:
+        """What makes the recovery instructions true: the `--stop` the refusal
+        sends the reader to must end the state that refused them."""
+        from raven.gateway import lock as _gateway_lock
+
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: False)
+        monkeypatch.setattr(_gateway_lock, "read_status", lambda _now: None)
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": 222}), encoding="utf-8")
+
+        assert serve_commands._stop_resident() is False
+
+        assert not (home / "serve.json").exists()
+
+
+class TestAnUnreadableIdentity:
+    @pytest.fixture(autouse=True)
+    def _resident_without_argv(self, home: Path, monkeypatch) -> None:
+        from raven.utils import processes
+
+        TestStopping._resident(home)
+        monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: None)
+        monkeypatch.setattr(processes, "command_line", lambda _pid: None)
+
+    def test_the_live_serve_record_is_kept(self, home: Path) -> None:
+        assert serve_commands._read_serve_pid() == 222
+        assert json.loads((home / "serve.json").read_text(encoding="utf-8"))["pid"] == 222
+
+    def test_the_live_supervisor_still_counts(self, home: Path) -> None:
+        assert serve_commands._read_web_state() == 111
+        assert (home / "web.json").exists()
+
+    def test_a_stop_signals_neither_process_and_keeps_both_records(self, home: Path, monkeypatch, capsys) -> None:
+        monkeypatch.setattr("os.kill", lambda *_args: pytest.fail("signalled an unverified process"))
+
+        with pytest.raises(typer.Exit) as stopped:
+            serve_commands._stop_resident()
+
+        assert stopped.value.exit_code == 1
+        assert (home / "serve.json").exists()
+        assert (home / "web.json").exists()
+        said = capsys.readouterr().out
+        assert "not stopping the supervisor (pid 111)" in said
+        assert "not stopping the gateway (pid 222)" in said
+
+    def test_a_start_waits_instead_of_spawning_another_supervisor(
+        self, home: Path, a_built_page, opened, supervised, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda: "http://127.0.0.1:18999/auth#t")
+
+        serve_commands._web(port=18999)
+
+        assert supervised == []
+        assert opened == ["http://127.0.0.1:18999/auth#t"]
+        assert (home / "web.json").exists()
+
+    def test_a_start_preserves_a_standalone_serve_and_refuses_a_second_engine(
+        self, home: Path, a_built_page, opened, supervised, monkeypatch, capsys
+    ) -> None:
+        (home / "web.json").unlink()
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda: None)
+
+        with pytest.raises(typer.Exit) as stopped:
+            serve_commands._web(port=18999)
+
+        assert stopped.value.exit_code == 1
+        assert supervised == []
+        assert opened == []
+        assert (home / "serve.json").exists()
+        said = capsys.readouterr().out
+        assert "check process permissions or stop it manually" in said
+        assert "web --stop" not in said
+
+    def test_the_lock_holder_can_still_be_stopped(self, home: Path, monkeypatch) -> None:
+        stopped: list[int] = []
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: 222)
+        monkeypatch.setattr(serve_commands, "_stop_one", lambda _label, pid, _unresponsive: stopped.append(pid))
+
+        with pytest.raises(typer.Exit) as result:
+            serve_commands._stop_resident()
+        assert result.value.exit_code == 1
+        assert stopped == [222]
+        assert (home / "web.json").exists()
+
+
 def test_web_is_registered_as_its_own_command() -> None:
     """A verb nobody can type is not a verb."""
     app = typer.Typer()
     serve_commands.register(app)
 
     assert {c.name for c in app.registered_commands} == {"serve", "web"}
+
+
+@pytest.mark.parametrize("unreadable", [{111, 222}, {111}, {222}])
+def test_web_stop_reports_a_refused_or_partial_stop(home: Path, monkeypatch, unreadable: set[int]) -> None:
+    from typer.testing import CliRunner
+
+    from raven.utils import processes
+
+    TestStopping._resident(home)
+    alive = {111, 222}
+    stopped: list[int] = []
+    monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: None)
+    monkeypatch.setattr(processes, "command_line", lambda pid: None if pid in unreadable else "python -m raven serve")
+
+    def stop(_label, pid, _unresponsive):
+        stopped.append(pid)
+        alive.remove(pid)
+
+    monkeypatch.setattr(serve_commands, "_stop_one", stop)
+    app = typer.Typer()
+    serve_commands.register(app)
+
+    result = CliRunner().invoke(app, ["web", "--stop"])
+
+    assert result.exit_code == 1
+    assert "not fully stopped" in result.output
+    assert "nothing to stop" not in result.output
+    assert set(stopped) == {111, 222} - unreadable
+    for pid, name in [(111, "web.json"), (222, "serve.json")]:
+        if pid in unreadable:
+            assert (home / name).exists()
+
+
+def test_a_resident_below_a_raven_named_directory_keeps_its_record(home: Path, monkeypatch) -> None:
+    from raven.utils import processes
+
+    TestStopping._resident(home)
+    monkeypatch.setattr(serve_commands, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: None)
+    monkeypatch.setattr(processes, "command_line", lambda _pid: "/Users/x/Raven copy/.venv/bin/raven serve --port 8765")
+
+    assert serve_commands._read_serve_pid() == 222
+    assert serve_commands._read_web_state() == 111
+    assert (home / "serve.json").exists()
+    assert (home / "web.json").exists()
 
 
 class TestTheSessionSurvivesARestart:
@@ -2009,7 +2204,29 @@ def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
 class TestStoppingARealTree:
-    """The fakes above say what is signalled; these say it actually ends."""
+    """The fakes above say what is signalled; these say it actually ends.
+
+    The supervisor and gateway these tests start are real processes - they run
+    as ``python -c`` sleepers rather than ``python -m raven ...``, and the
+    gateway's pid only reaches us inside the state files its supervisor wrote.
+    Identifying them by argv is what the production check does, so it is what
+    the fake processes are made to satisfy: each sleeper's argv ends with the
+    home directory it was told to record, and ``looks_like_raven`` is patched
+    to accept a pid whose command line names that home.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _sleepers_carry_their_home(self, home: Path, monkeypatch) -> None:
+        from raven.cli import serve_commands
+        from raven.utils import processes
+
+        real = processes.command_line
+
+        def _looks(pid: int) -> bool:
+            line = real(pid)
+            return line is not None and str(home) in line
+
+        monkeypatch.setattr(serve_commands, "looks_like_raven", _looks)
 
     def test_stop_ends_a_supervisor_and_gateway_that_both_ignore_sigterm(self, home: Path, monkeypatch) -> None:
         """Detached the way `_spawn_supervisor` detaches it -- its own session,
@@ -2369,16 +2586,20 @@ class TestAStopThatLosesItsTarget:
         serve_commands._stop_one("gateway", 4242, unresponsive)
         assert unresponsive == []
 
-    def test_a_supervisor_that_cannot_be_signalled_is_warned_about(self, home: Path, monkeypatch, capsys) -> None:
+    @pytest.mark.parametrize("label", ["supervisor", "gateway"])
+    def test_a_resident_that_cannot_be_signalled_is_warned_about(self, home: Path, monkeypatch, capsys, label) -> None:
         def refuse(label, pid, unresponsive):
             raise PermissionError(1, "not permitted")
 
-        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242)
-        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242 if label == "supervisor" else None)
+        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: 4242 if label == "gateway" else None)
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
         monkeypatch.setattr(serve_commands, "_stop_one", refuse)
         monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: True)
-        serve_commands._stop_resident()
-        assert "could not stop the supervisor (pid 4242)" in capsys.readouterr().out
+        with pytest.raises(typer.Exit) as result:
+            serve_commands._stop_resident()
+        assert result.value.exit_code == 1
+        assert f"could not stop the {label} (pid 4242)" in capsys.readouterr().out
 
     def test_a_supervisor_gone_before_its_signal_is_a_quiet_stop(self, home: Path, monkeypatch, capsys) -> None:
         def gone(label, pid, unresponsive):
@@ -2386,6 +2607,7 @@ class TestAStopThatLosesItsTarget:
 
         monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242)
         monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
+        monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
         monkeypatch.setattr(serve_commands, "_stop_one", gone)
         monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: False)
         assert serve_commands._stop_resident() is True

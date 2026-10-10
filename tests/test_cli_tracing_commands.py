@@ -21,6 +21,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from raven.cli import tracing_commands as tc
@@ -205,68 +206,71 @@ def test_pid_is_viewer_rejects_foreign_process():
     assert tc._pid_is_viewer(os.getpid()) is False
 
 
-class _FakeCompleted:
-    def __init__(self, stdout: str):
-        self.stdout = stdout
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("node /opt/raven/cli/tracing_viewer/server.js", True),
+        ("nodejs /opt/raven/cli/tracing_viewer/server.js", True),
+        ("node22 /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/usr/bin/node-22 /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/usr/bin/node-v22.16.0 /opt/raven/cli/tracing_viewer/server.js", True),
+        (r'"C:\Node\nodejs.exe" "C:\Raven\tracing_viewer\server.js"', True),
+        ('"C:\\Program Files\\nodejs\\node.exe" "C:\\Raven\\tracing_viewer\\server.js"', True),
+        ('"/opt/node runtime/node" /opt/raven/cli/tracing_viewer/server.js', True),
+        (None, None),
+        ("", None),
+        ("node.exe unrelated.js", False),
+        ("python server.js", False),
+        ("notnode server.js", False),
+    ],
+)
+def test_pid_is_viewer_uses_the_shared_command_line_reader(monkeypatch, line, expected):
+    from raven.utils import processes
+
+    seen: list[int] = []
+
+    def read(pid):
+        seen.append(pid)
+        return line
+
+    monkeypatch.setattr(processes, "command_line", read)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: True)
+    assert tc._pid_is_viewer(4242) is expected
+    assert seen == [4242]
 
 
-def _windows_run(calls: list, tasklist_stdout: str):
-    """subprocess.run stand-in for a native Windows host: ps.exe does not
-    exist (FileNotFoundError), tasklist answers with the given output."""
+@pytest.mark.parametrize("action", [[], ["stop"]])
+def test_tracing_keeps_an_unreadable_live_viewer_record(tmp_path, monkeypatch, action):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    entry = {"pid": 4242, "port": 4318}
+    pidfile.write_text(json.dumps(entry), encoding="utf-8")
+    monkeypatch.setattr("raven.utils.processes.command_line", lambda _pid: None)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: True)
+    monkeypatch.setattr(tc.os, "kill", lambda *_args: pytest.fail("signalled an unverified viewer"))
+    monkeypatch.setattr(tc, "_resolve_node", lambda: pytest.fail("started beside an unverified viewer"))
+    monkeypatch.setattr(tc, "_port_live", lambda _port: False)
 
-    def run(argv, **kwargs):
-        calls.append(list(argv))
-        if argv[0] == "ps":
-            raise FileNotFoundError("ps")
-        assert argv[0] == "tasklist"
-        return _FakeCompleted(tasklist_stdout)
+    result = runner.invoke(app, ["tracing", *action])
 
-    return run
-
-
-def test_pid_is_viewer_windows_detects_node_via_tasklist(monkeypatch):
-    """On win32 the check must not shell out to the missing ps.exe (whose
-    FileNotFoundError used to be swallowed into a blanket False): tasklist
-    filters the pid and a node image means the viewer is alive."""
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr(tc.subprocess, "run", _windows_run(calls, "node.exe                     4242 Console"))
-    assert tc._pid_is_viewer(4242) is True
-    assert calls == [["tasklist", "/FI", "PID eq 4242"]]
+    assert result.exit_code == 1
+    assert "cannot verify" in result.output.lower()
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
 
 
-def test_pid_is_viewer_windows_no_node_match_is_false(monkeypatch):
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr(
-        tc.subprocess,
-        "run",
-        _windows_run(calls, "INFO: No tasks are running which match the specified criteria."),
-    )
-    assert tc._pid_is_viewer(4242) is False
+def test_an_unreadable_dead_viewer_record_can_be_cleared(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+    monkeypatch.setattr("raven.utils.processes.command_line", lambda _pid: None)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: False)
+    monkeypatch.setattr(tc.os, "kill", lambda *_args: pytest.fail("signalled a dead viewer"))
 
+    result = runner.invoke(app, ["tracing", "stop"])
 
-def test_pid_is_viewer_windows_tasklist_missing_is_false(monkeypatch):
-    monkeypatch.setattr("sys.platform", "win32")
-
-    def raise_missing(argv, **kwargs):
-        raise FileNotFoundError(argv[0])
-
-    monkeypatch.setattr(tc.subprocess, "run", raise_missing)
-    assert tc._pid_is_viewer(4242) is False
-
-
-def test_pid_is_viewer_posix_keeps_ps_command_check(monkeypatch):
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "linux")
-
-    def run(argv, **kwargs):
-        calls.append(list(argv))
-        return _FakeCompleted("node /opt/raven/cli/tracing_viewer/server.js\n")
-
-    monkeypatch.setattr(tc.subprocess, "run", run)
-    assert tc._pid_is_viewer(4242) is True
-    assert calls and calls[0][0] == "ps"
+    assert result.exit_code == 0
+    assert "stale pid file" in result.output
+    assert not pidfile.exists()
 
 
 def _aged_artifact(state_dir: Path, name: str, text: str) -> Path:

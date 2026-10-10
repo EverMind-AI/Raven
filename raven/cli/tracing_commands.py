@@ -29,7 +29,6 @@ import os
 import signal
 import socket
 import subprocess
-import sys
 import time
 import urllib.request
 import webbrowser
@@ -133,43 +132,37 @@ def _clear_pid_file() -> None:
     _pid_file().unlink(missing_ok=True)
 
 
-def _pid_is_viewer(pid: int) -> bool:
-    """True only when ``pid`` is alive and looks like our node viewer.
+def _pid_is_viewer(pid: int) -> bool | None:
+    """Identify the Node viewer, keeping an unreadable live process unknown.
 
     A pid from the pid file may have been recycled by the OS for an unrelated
-    process, so liveness alone is never enough to signal it. POSIX checks the
-    command line via ps (``node .../server.js``); native Windows has no
-    ps.exe (the FileNotFoundError would read as "not our viewer" and disable
-    stop / start-reuse entirely), so tasklist filters the pid and the image
-    name must be node — command lines are not visible there.
+    process, so liveness alone is never enough to signal it. The shared process
+    reader must identify both Node and the viewer script on every platform.
     """
-    if sys.platform == "win32":
-        try:
-            out = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"],  # noqa: S607 -- system tool; PATH lookup intended
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout
-        except OSError:
-            return False
-        return "node" in out.lower()
-    try:
-        out = subprocess.run(
-            # -ww: `server.js` sits at the end of the argv, and ps truncates to
-            # $COLUMNS (80 when unset), so without it a deep install reads as not
-            # ours and the viewer is never stopped.
-            ["ps", "-ww", "-p", str(pid), "-o", "command="],  # noqa: S607 -- ps location varies across POSIX; PATH lookup intended
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-    except OSError:
-        return False
+    import re
+
+    from raven.utils.pid import pid_alive
+    from raven.utils.processes import command_line
+
+    out = command_line(pid)
     if not out:
+        return None if pid_alive(pid) else False
+    match = re.match(r'"([^"]+)"|(\S+)', out)
+    if match is None:
         return False
-    argv0 = out.split()[0]
-    return "node" in Path(argv0).name and "server.js" in out
+    name = re.split(r"[/\\]", match.group(1) or match.group(2))[-1].lower()
+    return re.fullmatch(r"node(?:js)?(?:-?v?\d+(?:\.\d+)*)?(?:\.exe)?", name) is not None and "server.js" in out
+
+
+def _checked_viewer(pid: int) -> bool:
+    identity = _pid_is_viewer(pid)
+    if identity is None:
+        console.print(
+            f"[yellow]Cannot verify the tracing viewer (pid {pid}); its record is kept. "
+            "Check process permissions or stop it manually before retrying.[/yellow]"
+        )
+        raise typer.Exit(1)
+    return identity
 
 
 def _stop_viewer() -> None:
@@ -178,7 +171,7 @@ def _stop_viewer() -> None:
         console.print("Tracing viewer is not running.")
         return
     pid = entry["pid"]
-    if not _pid_is_viewer(pid):
+    if not _checked_viewer(pid):
         _clear_pid_file()
         console.print("Tracing viewer is not running (cleared a stale pid file).")
         return
@@ -217,7 +210,7 @@ def _server_js() -> Path:
 def _open_dashboard(port: int) -> None:
     entry = _read_pid_file()
     if entry is not None:
-        if _pid_is_viewer(entry["pid"]) and _viewer_health(entry["port"]):
+        if _checked_viewer(entry["pid"]) and _viewer_health(entry["port"]):
             url = f"http://127.0.0.1:{entry['port']}/"
             console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
             webbrowser.open(url)
