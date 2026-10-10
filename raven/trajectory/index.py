@@ -190,7 +190,7 @@ def _parse_line(line: bytes) -> dict[str, Any] | None:
         return None
     try:
         span = json.loads(text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         return None
     return span if isinstance(span, dict) else None
 
@@ -596,6 +596,10 @@ class SessionIndex:
         self.limits = limits or Limits()
         self._now = now
         self._lock = threading.Lock()
+        # The scan and apply phases mutate the cursor and the span tables
+        # outside `_lock`. A refresh whose awaiting task was cancelled leaves
+        # its worker thread running, so the next refresh must wait for it here.
+        self._refresh_lock = threading.Lock()
         self._reset()
 
     # -- lifecycle ---------------------------------------------------------
@@ -647,6 +651,10 @@ class SessionIndex:
     # -- refresh (worker thread) ------------------------------------------
 
     def refresh_sync(self, deadline: float | None = None) -> None:
+        with self._refresh_lock:
+            self._refresh_locked(deadline)
+
+    def _refresh_locked(self, deadline: float | None) -> None:
         budget = ScanBudget(self.limits.budget_bytes, deadline, self._now)
         batch = self.scanner.scan(budget)
         if batch.generation_changed:
@@ -815,7 +823,11 @@ class SessionIndex:
             if cache is not None and cache.complete:
                 continue
             before = cache.version if cache is not None else -1
-            updated = _entries.preview_records(span, state=self.state_dir, budget=budget, cache=cache)
+            try:
+                updated = _entries.preview_records(span, state=self.state_dir, budget=budget, cache=cache)
+            except Exception as exc:  # noqa: BLE001 -- one span's artifacts must not stop the session's index
+                reason = f"artifact unreadable ({type(exc).__name__})"
+                updated = _entries.preview_failed(span, state=self.state_dir, cache=cache, reason=reason)
             self.preview_cache[key] = updated
             if before != updated.version:
                 self._dirty = True

@@ -150,6 +150,9 @@ def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tupl
             data = handle.read(limit + 1)
     except OSError:
         return None, "artifact missing"
+    except ValueError:
+        # A pointer with an embedded NUL cannot name a file.
+        return None, "artifact unreadable: the path is not valid"
     if len(data) > limit:
         return data[:limit].decode("utf-8", errors="replace"), f"content over {limit // 1024} KiB — truncated"
     return data.decode("utf-8", errors="replace"), None
@@ -187,7 +190,7 @@ def _slot(
 def _parse_json(text: str) -> tuple[Any, bool]:
     try:
         return json.loads(text), True
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None, False
 
 

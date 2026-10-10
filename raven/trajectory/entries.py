@@ -115,6 +115,7 @@ _INTEGRITY_RULES = (
     ("content over 512 KiB", "artifact_truncated"),
     ("not valid JSON", "artifact_unreadable"),
     ("content unavailable", "artifact_unreadable"),
+    ("artifact unreadable", "artifact_unreadable"),
     ("blob(s) missing", "blob_missing"),
     ("over the 512 KiB cap", "blob_missing"),
 )
@@ -353,7 +354,7 @@ def _result_error(result: Any) -> str | None:
         if stripped.startswith(("{", "[")) and len(stripped) <= PREVIEW_READ_LIMIT:
             try:
                 parsed = json.loads(stripped)
-            except ValueError:
+            except (ValueError, RecursionError):
                 parsed = None
             if isinstance(parsed, dict):
                 return _result_error(parsed)
@@ -1097,6 +1098,17 @@ def _failed_record(record: dict[str, Any], reason: str) -> dict[str, Any]:
     return out
 
 
+def preview_failed(span: dict[str, Any], *, state: Path, cache: SpanCache | None, reason: str) -> SpanCache:
+    """A span whose preview pass raised: what was read stays, every slot
+    still unread carries the reason, and the span is not read again."""
+    if cache is None:
+        info = _conv._build_infos([span])[0]
+        skeleton = _conv.span_records(info, state, None, {}, read=False, dedup=False)
+        cache = SpanCache(records=[_compact(r) for r in skeleton])
+    records = [_failed_record(r, reason) if r.get("degraded") == _conv.NOT_LOADED else r for r in cache.records]
+    return SpanCache(records=records, complete=True, cursor=cache.cursor, pending=None, version=cache.version + 1)
+
+
 def _finish_llm_input(record: dict[str, Any], message: Any, note: str | None, *, capped: bool) -> dict[str, Any]:
     source = _conv._display(message.get("content")) if isinstance(message, dict) else _conv._display(message)
     out = _loaded_record(record, preview_text(source), capped=capped, payload=None)
@@ -1269,6 +1281,7 @@ __all__ = [
     "TrajectoryEntry",
     "TurnInfo",
     "merge_snapshots",
+    "preview_failed",
     "preview_records",
     "preview_text",
     "project_entries",

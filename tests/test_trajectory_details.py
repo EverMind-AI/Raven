@@ -634,6 +634,30 @@ def test_messages_page_with_missing_and_oversize_blobs(state):
     assert messages.total_items == 45 and len(messages.preview) == 2
 
 
+def test_a_page_of_wide_text_is_measured_as_sent_and_comes_back_whole(state):
+    """Twenty messages of 15000 CJK characters are about 880 KiB in UTF-8, the
+    form the transport sends; counted as ASCII escapes they would be twice that."""
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _llm(state, "t", "llm", "turn", start=1, end=2, v2_count=20, output={"content": "a"}),
+        ],
+    )
+    index = _ready(state)
+    entry = _entry(index, "llm", "llm.input")
+    shell = json.loads(Path(tidx.tstore._span_attrs(index.span("t", "llm"))["llm.input.artifact_path"]).read_text())
+    wide = "\u4e2d" * 15000
+    for ref in shell["messages"]:
+        artifact_v2.message_path(state / "logs" / "audit-artifacts", ref["$msg"]).write_text(
+            json.dumps({"role": "user", "content": wide}, ensure_ascii=False), encoding="utf-8"
+        )
+    body = _block(index, state, entry, "messages")
+    assert len(body.data["items"]) == 20
+    assert body.next_cursor is None and not body.truncated
+    assert all(item["content"] == wide for item in body.data["items"])
+
+
 # ── schema association ────────────────────────────────────────────────
 
 
@@ -811,7 +835,7 @@ def test_response_budget_degrades_every_renderer(state, monkeypatch):
 
 
 def test_oversize_single_item_is_replaced_and_offset_advances(state, monkeypatch):
-    messages = [{"role": "user", "content": "é" * (150 * 1024)}, {"role": "user", "content": "ok"}]
+    messages = [{"role": "user", "content": "é" * (200 * 1024)}, {"role": "user", "content": "ok"}]
     shell = {"messages": messages, "tools": []}
     _append(
         state,

@@ -561,7 +561,8 @@ def _field(loaded: _Loaded, field: str | None) -> tuple[bool, Any]:
 
 
 def _size(value: Any) -> int:
-    return len(json.dumps(value, ensure_ascii=True, default=str))
+    """Bytes on the wire: the transports send UTF-8 without ASCII escapes."""
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
 
 
 def _limit_depth(value: Any, depth: int) -> tuple[Any, bool]:

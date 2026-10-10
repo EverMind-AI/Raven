@@ -741,6 +741,130 @@ def test_refresh_is_throttled_single_flight_and_failure_safe(state, clock):
     asyncio.run(run())
 
 
+def test_a_cancelled_refresh_finishes_before_the_next_one_scans(state):
+    """The awaiting task can be cancelled, its worker thread cannot: the next
+    refresh must not scan the same index while that thread is still in it."""
+    import threading
+
+    turns = 40
+    _append(state, [_turn("t", f"s{i}", start=i, end=i + 1) for i in range(turns)])
+    indexer = tidx.TrajectoryIndexer(state, limits=tidx.Limits(throttle_seconds=0, budget_bytes=512))
+    index = indexer.session(SESSION)
+    scan = index.scanner.scan
+    entered, release = threading.Event(), threading.Event()
+    seen = {"active": 0, "most": 0, "calls": 0}
+    guard = threading.Lock()
+
+    def gated_scan(budget):
+        with guard:
+            seen["active"] += 1
+            seen["most"] = max(seen["most"], seen["active"])
+            seen["calls"] += 1
+            first = seen["calls"] == 1
+        try:
+            if first:
+                entered.set()
+                assert release.wait(5)
+            return scan(budget)
+        finally:
+            with guard:
+                seen["active"] -= 1
+
+    index.scanner.scan = gated_scan  # type: ignore[method-assign]
+
+    async def run():
+        first = asyncio.create_task(indexer.refresh(SESSION))
+        assert await asyncio.to_thread(entered.wait, 5)
+        first.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        second = asyncio.create_task(indexer.refresh(SESSION))
+        await asyncio.sleep(0.1)
+        assert seen["most"] == 1
+        release.set()
+        await second
+        for _ in range(500):
+            if index.index_state().phase == tidx.PHASE_READY:
+                break
+            await indexer.refresh(SESSION)
+        assert index.index_state().phase == tidx.PHASE_READY
+
+    asyncio.run(run())
+    assert seen["most"] == 1
+    assert len([e for e in index.entries() if e.kind == "user.input"]) == turns
+
+
+def _tool_with_output(state, trace, span_id, parent, *, start, end, pointer):
+    attrs = {"tool.name": span_id, "tool.args_preview": "{}", "tool.output.artifact_path": pointer}
+    return _span(trace, span_id, "tool.call", parent=parent, start=start, end=end, attrs=attrs)
+
+
+@pytest.mark.parametrize("bad", ["deep", "nul"])
+def test_one_unreadable_tool_result_leaves_the_rest_of_the_session_indexed(state, clock, bad):
+    """A result nested deeper than the parser can go, or a pointer that cannot
+    name a file, marks its own entry; every other entry still projects."""
+    if bad == "deep":
+        pointer = _artifact(state, {"result": "[" * 20000 + "]" * 20000}, "deep")
+    else:
+        pointer = str(state / "logs" / "audit-artifacts" / "bad\x00name.json")
+    _append(
+        state,
+        [
+            _turn("t", "a", start=0, end=10),
+            _tool_with_output(state, "t", "bad", "a", start=1, end=2, pointer=pointer),
+            _tool("t", "fine", "a", start=3, end=4),
+        ],
+    )
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    _append(state, [_turn("t2", "b", start=20, end=30)])
+    _refresh_until_ready(index, clock)
+    assert index.index_state().phase == tidx.PHASE_READY and index.index_state().failure is None
+    spans = {e.span_id for e in index.entries()}
+    assert {"a", "bad", "fine", "b"} <= spans
+    bad_entry = next(e for e in index.entries() if e.span_id == "bad" and e.kind == "tool.output")
+    if bad == "nul":
+        assert "artifact_unreadable" in bad_entry.integrity
+    else:
+        assert bad_entry.operation_status == "ok"
+
+
+def test_a_preview_pass_that_raises_marks_its_span_and_the_index_goes_on(state, clock, monkeypatch):
+    real = tent.preview_records
+
+    def flaky(span, **kwargs):
+        if span.get("spanId") == "bad":
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(span, **kwargs)
+
+    monkeypatch.setattr(tent, "preview_records", flaky)
+    pointer = _artifact(state, {"result": "fine"}, "bad-out")
+    _append(
+        state,
+        [
+            _turn("t", "a", start=0, end=10),
+            _tool_with_output(state, "t", "bad", "a", start=1, end=2, pointer=pointer),
+            _tool("t", "fine", "a", start=3, end=4),
+        ],
+    )
+    index = _index(state, clock)
+    _refresh_until_ready(index, clock)
+    assert index.index_state().phase == tidx.PHASE_READY and index.index_state().failure is None
+    assert {"a", "bad", "fine"} <= {e.span_id for e in index.entries()}
+    bad_entry = next(e for e in index.entries() if e.span_id == "bad" and e.kind == "tool.output")
+    assert "artifact_unreadable" in bad_entry.integrity
+    calls = {"n": 0}
+
+    def counting(span, **kwargs):
+        calls["n"] += span.get("spanId") == "bad"
+        return real(span, **kwargs)
+
+    monkeypatch.setattr(tent, "preview_records", counting)
+    _append(state, [_turn("t2", "b", start=20, end=30)])
+    _refresh_until_ready(index, clock)
+    assert calls["n"] == 0
+
+
 # ── lazy previews ─────────────────────────────────────────────────────
 
 
