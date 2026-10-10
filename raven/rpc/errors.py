@@ -169,10 +169,6 @@ class SubagentNotReadyError(RpcError):
     MESSAGE = "subagent_not_ready"
 
 
-# JSON-RPC pre-defined ``invalid_params`` (-32602). Class added for the same
-# reason as the one below: a handler that validates its own params answers the
-# caller with the code for a bad request, instead of letting the pydantic
-# failure escape as an internal error with a traceback in it.
 class TrajectoryDisabledError(RpcError):
     CODE = -32020
     MESSAGE = "trajectory_disabled"
@@ -193,6 +189,10 @@ class RevisionChangedRpcError(RpcError):
     MESSAGE = "revision_changed"
 
 
+# JSON-RPC pre-defined ``invalid_params`` (-32602). Class added for the same
+# reason as the one below: a handler that validates its own params answers the
+# caller with the code for a bad request, instead of letting the pydantic
+# failure escape as an internal error with a traceback in it.
 class InvalidParamsError(RpcError):
     CODE = -32602
     MESSAGE = "invalid_params"
@@ -236,7 +236,12 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         NotDispatchCompatibleError,
         SubscriptionCapacityExceededError,
         SubagentNotFoundError,
+        SessionTitleTooLongError,
         SubagentNotReadyError,
+        TrajectoryDisabledError,
+        EntryNotFoundError,
+        CursorExpiredRpcError,
+        RevisionChangedRpcError,
         InvalidParamsError,
         InternalError,
     )
@@ -261,7 +266,12 @@ __all__ = [
     "NotDispatchCompatibleError",
     "SubscriptionCapacityExceededError",
     "SubagentNotFoundError",
+    "SessionTitleTooLongError",
     "SubagentNotReadyError",
+    "TrajectoryDisabledError",
+    "EntryNotFoundError",
+    "CursorExpiredRpcError",
+    "RevisionChangedRpcError",
     "InvalidParamsError",
     "InternalError",
     "JSONRPC_ERROR_REGISTRY",

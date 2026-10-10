@@ -577,6 +577,16 @@ EXPECTED_ERROR_CODES = {
 }
 
 
+def test_every_spec_error_code_maps_back_to_its_class() -> None:
+    from raven.rpc import errors
+
+    for code, message in EXPECTED_ERROR_CODES.items():
+        cls = errors.JSONRPC_ERROR_REGISTRY.get(code)
+        assert cls is not None, f"{code} has no class in JSONRPC_ERROR_REGISTRY"
+        assert cls.MESSAGE == message
+        assert cls.__name__ in errors.__all__
+
+
 def test_error_codes_match_spec(schema: dict[str, Any]) -> None:
     errors_component = schema["components"]["errors"]
     declared: dict[int, str] = {body["code"]: body["message"] for body in errors_component.values()}
