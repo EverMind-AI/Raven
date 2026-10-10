@@ -1123,3 +1123,31 @@ def test_the_generated_installer_honors_subagent_python_and_quotes_whitespace(
     assert install.main() == 0
     (spacey_row,) = get_agents(config_path=raven_home / "config.json")
     assert command_argv(spacey_row["command"])[0] == str(spacey)
+
+
+def test_the_generated_installer_under_a_raven_without_the_quoting_rule_writes_the_unquoted_row(
+    raven_home: Path, clean_alt_python: Path, monkeypatch
+) -> None:
+    """A generated folder is never refreshed, so its installer can run under a raven
+    older than ``raven.utils.commands``; there it writes the unquoted row rather than
+    failing on the import."""
+    import importlib.util
+
+    r = runner.invoke(app, ["agents", "new", "demo-agent", "--no-smoke"])
+    assert r.exit_code == 0, r.output
+    target = raven_home / "agents" / "demo-agent"
+
+    spec = importlib.util.spec_from_file_location("c12_generated_install_older_raven", target / "install.py")
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+    written: list[dict] = []
+    monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+    monkeypatch.setenv("SUBAGENT_PYTHON", str(clean_alt_python))
+    monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
+
+    assert install.main() == 0
+
+    (row,) = written
+    here = target.resolve()
+    assert row["command"] == f"{clean_alt_python} {here}/run.py --acp"
+    assert row["cwd"] == str(here)
