@@ -150,7 +150,7 @@ Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
 hidden, its size and scroll position kept) rather than unmounting it, so the
 transcript goes on streaming underneath and comes back exactly where it was.
 The header's toggle (`#trajBtn`) appears only when the gateway announced
-`trajectory-v1`, `trajectory.state` says the view is on, a conversation is open
+`trajectory-v1` (only a gateway launched with `--dev` does), `trajectory.state` says the view is on, a conversation is open
 and that conversation is not in its empty state (`state/session/conversation.ts`'s
 flag); the store's `available` is that one condition. Picking a row opens the
 details pane beside the list (`features/trajectory/detailStore.ts`): a descriptor

@@ -71,8 +71,9 @@ const field = (holder: unknown, name: string): unknown =>
   holder !== null && typeof holder === 'object' ? (holder as Record<string, unknown>)[name] : undefined
 
 /**
- * The gateway implements the `trajectory.*` methods. Whether the view is
- * enabled for this process is a separate, live question (`trajectory.state`).
+ * The gateway serves the `trajectory.*` methods: it announces them only when
+ * it was launched with the view enabled. `trajectory.state` still says whether
+ * the view is on, and a refusal still stops the asking.
  */
 export const servesTrajectory = (): boolean => serves('trajectory-v1')
 

@@ -165,6 +165,23 @@ describe('the state chain', () => {
     expect(stateCalls).toBe(before + 1)
   })
 
+  it('never asks for the state when the handshake did not announce the surface, as on a normal launch', async () => {
+    absorb(['jsonrpc-2.0', 'subscriptions', 'cli-dispatch'])
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    poll.install()
+    poll.sync()
+    await tick(poll.STATE_EVERY_MS * 4)
+    expect(stateCalls).toBe(0)
+    expect(poll.isStateRunning()).toBe(false)
+    expect(store.available()).toBe(false)
+    setVisible(true)
+    poll.sync()
+    await tick(poll.STATE_EVERY_MS)
+    expect(stateCalls).toBe(0)
+  })
+
   it('brings the toggle back when the switch turns on again, without a reconnect', async () => {
     await ready(false)
     expect(store.available()).toBe(false)

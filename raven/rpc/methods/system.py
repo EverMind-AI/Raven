@@ -19,6 +19,7 @@ from loguru import logger
 
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
+from raven.trajectory import policy as trajectory_policy
 
 if TYPE_CHECKING:
     from raven.rpc.dispatcher import Dispatcher
@@ -33,7 +34,11 @@ if TYPE_CHECKING:
 # raven_version: the raven package version (from installed metadata).
 SERVER_VERSION = "0.1.0"
 SCHEMA_VERSION = "0.1.0"
-SERVER_CAPABILITIES = ["jsonrpc-2.0", "subscriptions", "cli-dispatch", "trajectory-v1"]
+SERVER_CAPABILITIES = ["jsonrpc-2.0", "subscriptions", "cli-dispatch"]
+# Announced only by a process launched with --dev. The policy is armed once at
+# launch, so a page that does not see it at the handshake has nothing to ask
+# the trajectory surface, and a normal launch never polls it.
+TRAJECTORY_CAPABILITY = "trajectory-v1"
 
 # Lenient semver: <major>.<minor>.<patch> with optional `-prerelease` / `+build`.
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
@@ -105,7 +110,7 @@ async def system_hello(params: dict, *, channel: str = LOCAL_CHANNEL) -> dict:
     )
     return {
         "server_version": SERVER_VERSION,
-        "server_capabilities": list(SERVER_CAPABILITIES),
+        "server_capabilities": server_capabilities(),
         "session": {
             "default_channel": channel,
             "default_session_key": f"{channel}:default",
@@ -114,6 +119,13 @@ async def system_hello(params: dict, *, channel: str = LOCAL_CHANNEL) -> dict:
         # where the gateway runs, so the wording has to match that machine.
         "platform": "mac" if sys.platform == "darwin" else "windows" if sys.platform.startswith("win") else "linux",
     }
+
+
+def server_capabilities() -> list[str]:
+    capabilities = list(SERVER_CAPABILITIES)
+    if trajectory_policy.current().enabled():
+        capabilities.append(TRAJECTORY_CAPABILITY)
+    return capabilities
 
 
 async def system_ping(params: dict) -> dict:
@@ -279,6 +291,9 @@ async def system_upgrade(params: dict) -> dict:
             parent_pid = SERVE.supervisor_pid or parent_pid
         else:
             relaunch = [str(raven_bin), "serve", "--port", str(SERVE.port)]
+        if trajectory_policy.current().enabled():
+            # The flag lives in this process only; the relaunched one must be told again.
+            relaunch.append("--dev")
         # Same port, same credentials: the browser reconnects to the origin it
         # already has and presents the cookie it already holds, so it stays
         # signed in across the restart instead of hitting an auth wall. Both
@@ -357,4 +372,6 @@ __all__ = [
     "SERVER_VERSION",
     "SCHEMA_VERSION",
     "SERVER_CAPABILITIES",
+    "TRAJECTORY_CAPABILITY",
+    "server_capabilities",
 ]

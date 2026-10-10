@@ -1,11 +1,12 @@
 """Whether the trajectory view may be served by this process.
 
-The policy separates *implementing* the trajectory RPC surface (a static
-capability the server always announces) from *enabling* it for the current
-process. Today the only source of truth is a launch flag; a settings entry or
-a developer mode can later replace the getter without touching the readers,
-and every replacement bumps ``revision`` so a client that cached the answer
-knows to ask again.
+The trajectory RPC surface is announced at the handshake (``trajectory-v1``)
+only while this policy is enabled, and every handler consults it again before
+it answers. Today the only source of truth is a launch flag, armed once before
+the first client connects; a settings entry or a developer mode can later
+replace the getter without touching the readers, and every replacement bumps
+``revision``. A source that can change while clients are connected must also
+make them handshake again, since the announcement is read only then.
 """
 
 from __future__ import annotations
