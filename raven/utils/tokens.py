@@ -5,11 +5,60 @@ wants a safe filename does not pay for an encoding table.
 """
 
 import json
+import re
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import tiktoken
 
 from raven.utils.images import estimate_content_part_tokens
+
+# A cl100k regex piece cannot cross a newline followed by non-whitespace.
+# These boundaries preserve full-prompt tokenization, unlike message boundaries.
+_TOKEN_BOUNDARY = re.compile(r"(?<=[\r\n])(?=\S)")
+
+
+class _PromptTokenCache:
+    def __init__(self) -> None:
+        self.counts: Counter[str] = Counter()
+        self.costs: dict[str, int] = {}
+        self.total = 0
+
+    def clear(self) -> None:
+        self.counts.clear()
+        self.costs.clear()
+        self.total = 0
+
+    def count(self, payload: str, encoding: tiktoken.Encoding) -> int:
+        counts = Counter(_TOKEN_BOUNDARY.split(payload))
+        costs: dict[str, int] = {}
+        total = self.total
+        for part, count in self.counts.items():
+            total -= max(0, count - counts[part]) * self.costs[part]
+        for part, count in counts.items():
+            cost = self.costs.get(part)
+            if cost is None:
+                cost = len(encoding.encode(part))
+            total += max(0, count - self.counts[part]) * cost
+            costs[part] = cost
+        self.counts, self.costs, self.total = counts, costs, total
+        return total
+
+
+_prompt_cache: ContextVar[_PromptTokenCache | None] = ContextVar("prompt_token_cache", default=None)
+
+
+@contextmanager
+def reuse_prompt_tokenization() -> Iterator[None]:
+    """Reuse retained text within one synchronous trim, keeping only current pieces."""
+    token = _prompt_cache.set(_PromptTokenCache())
+    try:
+        yield
+    finally:
+        _prompt_cache.reset(token)
 
 
 def estimate_prompt_tokens(
@@ -52,12 +101,17 @@ def estimate_prompt_tokens(
         parts.append(json.dumps(tools, ensure_ascii=False))
 
     payload = "\n".join(parts)
+    cache = _prompt_cache.get()
     if not payload:
+        if cache is not None:
+            cache.clear()
         return extra_tokens
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        text_tokens = len(enc.encode(payload))
+        text_tokens = len(enc.encode(payload)) if cache is None else cache.count(payload, enc)
     except Exception:
+        if cache is not None:
+            cache.clear()
         text_tokens = len(payload) // 4
     return max(1, text_tokens + extra_tokens)
 
@@ -127,4 +181,9 @@ def estimate_prompt_tokens_chain(
     return 0, "none"
 
 
-__all__ = ["estimate_message_tokens", "estimate_prompt_tokens", "estimate_prompt_tokens_chain"]
+__all__ = [
+    "estimate_message_tokens",
+    "estimate_prompt_tokens",
+    "estimate_prompt_tokens_chain",
+    "reuse_prompt_tokenization",
+]

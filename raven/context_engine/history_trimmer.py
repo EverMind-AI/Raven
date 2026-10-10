@@ -29,7 +29,7 @@ from typing import Any, Callable
 
 from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
-from raven.utils.tokens import estimate_prompt_tokens_chain
+from raven.utils.tokens import estimate_prompt_tokens_chain, reuse_prompt_tokenization
 
 # Provider-safe message keys. Anything else on a session message
 # (timestamps, internal ids, manifest annotations) is dropped before
@@ -317,6 +317,7 @@ class HistoryTrimmer:
     def context_window_tokens(self, tokens: int) -> None:
         self._fallback_window = int(tokens)
 
+    @reuse_prompt_tokenization()
     def trim(
         self,
         *,
