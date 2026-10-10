@@ -256,3 +256,100 @@ class TestTextlessRegions:
         out, _layout = recogniser(answer)(pages(), [[]], scale_factor=1)
 
         assert sorted(b["layoutno"] for b in out) == ["equation-0", "figure-0"]
+
+
+#: A second detection, scored under the 0.08 this branch forces, so it is
+#: filtered out and changes no assertion. Present because `np.squeeze` flattens
+#: a one-detection block into a single row, which the branch cannot index -- a
+#: shape the graph never answers, since it emits one per anchor.
+_IGNORED_DETECTION = [900.0, 900.0, 910.0, 910.0, 0.0, 0.0]
+
+
+class TestYolov10Variant:
+    """The letterboxing variant.
+
+    It fits the page inside the graph's square input rather than stretching it
+    to fill it, so the aspect ratio survives, and records the padding it added
+    so the boxes can be put back on the page afterwards. Getting the padding
+    subtraction wrong moves every region by the width of the grey border.
+    """
+
+    @staticmethod
+    def _variant(input_shape: tuple[int, int] = (64, 64)):
+        from raven.knowledge.parser.deepdoc._layout_recognizer import LayoutRecognizer4YOLOv10
+
+        instance = object.__new__(LayoutRecognizer4YOLOv10)
+        instance.input_names = ["images"]
+        instance.input_shape = input_shape
+        instance.label_list = LayoutRecognizer4YOLOv10.labels
+        instance.center = True
+        return instance
+
+    def test_a_page_is_fitted_inside_the_graphs_input(self) -> None:
+        import numpy as np
+
+        out = self._variant().preprocess([np.zeros((100, 200, 3), dtype=np.uint8)])
+
+        assert out[0]["images"].shape == (1, 3, 64, 64)
+
+    def test_the_padding_it_added_is_recorded(self) -> None:
+        """A 2:1 page in a square input is padded top and bottom, and that
+        offset has to come back off the boxes."""
+        import numpy as np
+
+        out = self._variant().preprocess([np.zeros((100, 200, 3), dtype=np.uint8)])
+
+        _wx, _wy, dw, dh = out[0]["scale_factor"]
+        assert dw == pytest.approx(0.0)
+        assert dh > 0, "padded on the short axis"
+
+    def test_a_square_page_needs_no_padding(self) -> None:
+        import numpy as np
+
+        out = self._variant().preprocess([np.zeros((100, 100, 3), dtype=np.uint8)])
+
+        _wx, _wy, dw, dh = out[0]["scale_factor"]
+        assert (dw, dh) == (pytest.approx(0.0), pytest.approx(0.0))
+
+    def test_pixels_arrive_scaled_to_the_unit_range(self) -> None:
+        import numpy as np
+
+        out = self._variant().preprocess([np.full((64, 64, 3), 255, dtype=np.uint8)])
+
+        assert out[0]["images"].max() == pytest.approx(1.0)
+
+    def test_a_detection_comes_back_with_the_padding_taken_off(self) -> None:
+        import numpy as np
+
+        answer = np.array([[[10.0, 20.0, 30.0, 40.0, 0.9, 0.0], _IGNORED_DETECTION]], dtype=np.float32)
+
+        found = self._variant().postprocess(answer, {"scale_factor": [2.0, 2.0, 5.0, 10.0]}, thr=0.5)
+
+        assert len(found) == 1
+        assert found[0]["bbox"] == [10.0, 20.0, 50.0, 60.0], "padding off, then scaled"
+
+    def test_a_faint_detection_is_dropped(self) -> None:
+        import numpy as np
+
+        answer = np.array([[[10.0, 20.0, 30.0, 40.0, 0.01, 0.0], _IGNORED_DETECTION]], dtype=np.float32)
+
+        assert self._variant().postprocess(answer, {"scale_factor": [1.0, 1.0, 0.0, 0.0]}, thr=0.5) == []
+
+    def test_two_readings_of_one_region_are_thinned(self) -> None:
+        import numpy as np
+
+        answer = np.array([[[10.0, 20.0, 30.0, 40.0, 0.9, 0.0], [11.0, 21.0, 31.0, 41.0, 0.6, 0.0]]], dtype=np.float32)
+
+        found = self._variant().postprocess(answer, {"scale_factor": [1.0, 1.0, 0.0, 0.0]}, thr=0.5)
+
+        assert len(found) == 1
+        assert found[0]["score"] == pytest.approx(0.9)
+
+    def test_two_kinds_that_overlap_both_survive(self) -> None:
+        import numpy as np
+
+        answer = np.array([[[10.0, 20.0, 30.0, 40.0, 0.9, 0.0], [10.0, 20.0, 30.0, 40.0, 0.9, 3.0]]], dtype=np.float32)
+
+        found = self._variant().postprocess(answer, {"scale_factor": [1.0, 1.0, 0.0, 0.0]}, thr=0.5)
+
+        assert {b["type"] for b in found} == {"title", "figure"}
