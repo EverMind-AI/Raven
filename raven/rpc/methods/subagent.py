@@ -138,9 +138,8 @@ def _outcome(files: _NodeFiles) -> tuple[str | None, bool]:
 
     ``error.md`` and ``out.md`` are written by the same ``finish``, never both,
     so whichever exists is the outcome. ``closing.md``, when the lane left one
-    beside ``out.md``, is what the run said after its last step and stands in
-    for the whole reply as the answer row: the whole reply repeats the
-    narration already drawn on the steps (CONTEXT.md, Closing Message).
+    beside ``out.md``, is what the run said after its last step, and it is the
+    answer row whenever it is there (CONTEXT.md, Closing Message).
     """
     for name in ("closing.md", "out.md", "error.md"):
         path = files.path(name)

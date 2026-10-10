@@ -545,6 +545,63 @@ def test_test_command_failure_renders_hint(
     assert "provider set openrouter --api-key" in r.output
 
 
+def test_test_command_points_an_untrusted_certificate_at_the_certificate_store(
+    tmp_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The handshake refused the certificate, so the network advice would mislead."""
+    from raven.config import update_providers
+
+    def fake_probe(name: str, *, timeout_s: int = 10) -> dict:
+        return {
+            "ok": False,
+            "status": "certificate_untrusted",
+            "elapsed_ms": 12,
+            "http_status": None,
+            "models_count": None,
+            "error": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate",
+        }
+
+    monkeypatch.setattr(update_providers, "test_provider", fake_probe)
+
+    r = runner.invoke(app, ["provider", "test", "openrouter"])
+    out = " ".join(r.output.split())
+    assert r.exit_code == 1
+    assert "certificate store" in out
+    assert "VPN" not in out
+
+
+def test_test_command_names_the_refusals_a_ca_does_not_fix(
+    tmp_config: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Adding a CA is one remedy of three.
+
+    macOS and Windows refuse a certificate by their own rules even when the CA is
+    trusted through ``SSL_CERT_FILE``, and an expired certificate, or one for
+    another host, is the server's to fix.
+    """
+    from raven.config import update_providers
+
+    def fake_probe(name: str, *, timeout_s: int = 10) -> dict:
+        return {
+            "ok": False,
+            "status": "certificate_untrusted",
+            "elapsed_ms": 12,
+            "http_status": None,
+            "models_count": None,
+            "error": '"api.example.com" certificate is not standards compliant',
+        }
+
+    monkeypatch.setattr(update_providers, "test_provider", fake_probe)
+
+    r = runner.invoke(app, ["provider", "test", "openrouter"])
+    out = " ".join(r.output.split())
+    assert r.exit_code == 1
+    assert "RAVEN_NO_SYSTEM_CA=1" in out
+    assert "expired" in out
+
+
 def test_test_command_unknown_provider_exits_1(tmp_config: Path) -> None:
     r = runner.invoke(app, ["provider", "test", "no-such-provider"])
     assert r.exit_code == 1

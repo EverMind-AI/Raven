@@ -224,3 +224,64 @@ describe('a message typed while a brand-new conversation is being made', () => {
     expect(h.queue).toEqual(['only the last quarter'])
   })
 })
+
+/* The composer's recent list (features/model/recent.ts) is written by the send:
+   a message the server takes as a turn of its own is a use of the model the chip
+   named as it left, and one merged into the running turn rides on the model that
+   turn started with, recorded when it did. */
+describe('the model a message goes out on', () => {
+  const used = (): unknown => JSON.parse(localStorage.getItem('raven.models.used') || 'null')
+
+  it('records nothing when the server refuses the send', async () => {
+    localStorage.clear()
+    const h = await harness({ reject: { code: -32003, message: 'refused' } })
+    const model = await import('../../features/model/store')
+    model.setCurrent('z-ai/glm-5.3-flash', 'openrouter')
+
+    h.runtime.send('hello')
+    await h.tick()
+
+    expect(h.did('noteRow')).toHaveLength(1)
+    expect(used()).toBeNull()
+  })
+
+  it('records the model the chip named as the message left, not one picked while it was on its way', async () => {
+    localStorage.clear()
+    const h = await harness()
+    const model = await import('../../features/model/store')
+    model.setCurrent('z-ai/glm-5.3-flash', 'openrouter')
+
+    h.runtime.send('hello')
+    model.setCurrent('anthropic/claude-sonnet-5', 'openrouter')
+    await h.tick()
+
+    expect(used()).toEqual([{ model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }])
+  })
+
+  it('heads the recent list when the message starts a turn', async () => {
+    localStorage.clear()
+    const h = await harness()
+    const model = await import('../../features/model/store')
+    model.setCurrent('z-ai/glm-5.3-flash', 'openrouter')
+
+    h.runtime.send('hello')
+    await h.tick()
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'hello' }])
+    expect(used()).toEqual([{ model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }])
+  })
+
+  it('leaves the list alone for a message merged into the running turn', async () => {
+    localStorage.clear()
+    const h = await harness()
+    const model = await import('../../features/model/store')
+    model.setCurrent('z-ai/glm-5.3-flash', 'openrouter')
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('only the last quarter')
+    await h.tick()
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'only the last quarter', busy: 'inject' }])
+    expect(used()).toBeNull()
+  })
+})

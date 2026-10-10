@@ -99,7 +99,8 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
     setKey(saved)
     setRevealed(saved)
   }
-  const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
+  const shownBase = p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || ''
+  const [base, setBase] = useState(shownBase)
   const kind = kindOf(p)
   const checking = store.isBusy(busy(p.id))
   /* Where this block draws the address field, if anywhere: above the key for a
@@ -117,8 +118,26 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
        here) for no change, so it goes as an empty field does. */
     const k = key === revealed ? '' : key.trim()
     const b = base.trim()
-    if (needsKey(p) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
+    /* A key-shaped provider, or an endpoint (custom, Azure), connects by its
+       key: `model.save_key` refuses such a save without one -- all but
+       Bedrock's, which takes an ambient credential, accepts it and changes
+       nothing. */
+    const endpointKey = p.kind === 'endpoint' && takesKey(p)
+    if ((needsKey(p) || endpointKey) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
+    if (!k && (endpointKey || (needsKey(p) && !(b && basePlace)))) {
+      /* An endpoint's edited address with no new key goes on its own, the way
+         any other field does (`model.set_fields`, as AddressRow sends it):
+         `model.save_key` would demand the key again. */
+      if (endpointKey && b !== shownBase.trim()) {
+        void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
+        return
+      }
+      /* Nothing new to send: the save could only be refused, in English, or
+         change nothing, so the page says what pressing it would have needed. */
+      store.refuse(t('gui.settings.providers.key_unchanged', { button: t('gui.settings.update') }))
+      return
+    }
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
     if (b && basePlace) params.api_base = b

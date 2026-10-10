@@ -34,8 +34,13 @@ interface Staged { model: { model: string; provider: string } | null; tier: stri
 const traffic = (method: string, params: { key?: string }): string =>
   `rpc:${method}${method === 'config.set' ? `:${params.key ?? ''}` : ''}`
 
-async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {}) {
+async function harness(startAsDraft: boolean, { refuseModelWrite = false, holdTurnSend = false } = {}) {
   const log: string[] = []
+  /* The reload a refused model write fires, held until a case lands it: on a
+     real page it is a round trip, and what happens before it lands is the
+     window under test. */
+  const reloads: Array<() => void> = []
+  let releaseSend: () => void = () => {}
   const rows: Row[] = []
   /* Every write to the staged model the promotion refuses and re-reads, with
      the generation it was checked against -- the one observable that says which
@@ -91,7 +96,10 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
       'src/features/model/source': {
         /* The re-read a refused model write ends with, which is the only place
            the generation the promotion began on becomes visible. */
-        loadProviders: (id: string | null, gen: number) => { reReads.push([id, gen]) },
+        loadProviders: (id: string | null, gen: number) => {
+          reReads.push([id, gen])
+          return new Promise<void>((done) => { reloads.push(done) })
+        },
         openModelsForMissingProvider: () => false,
         stagedTier: () => staging().tier,
       },
@@ -128,6 +136,9 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
     if (method === 'config.set' && params.key === 'model' && refuseModelWrite) {
       throw new Error('refused')
     }
+    if (method === 'turn.send' && holdTurnSend) {
+      return new Promise<Record<string, unknown>>((done) => { releaseSend = () => done({}) })
+    }
     return {}
   })
 
@@ -145,6 +156,10 @@ async function harness(startAsDraft: boolean, { refuseModelWrite = false } = {})
   return {
     openConversation: runtime.openConversation,
     sendOnSession: runtime.sendOnSession,
+    send: runtime.send,
+    /* Land the refusal's reload, and answer a held `turn.send`. */
+    landReloads: () => { reloads.splice(0).forEach((done) => done()) },
+    releaseSend: () => releaseSend(),
     isDraft: () => runtime.isDraft(),
     viewGen: () => generation(),
     enterDraft,
@@ -320,5 +335,80 @@ describe('getting a conversation to work in', () => {
     await h.openConversation()
     expect(h.viewGen()).toBe(began + 1)
     expect(h.reReads).toContainEqual(['made-1', began])
+  })
+})
+
+/* The first message of a draft records the model its turn runs on in the
+   picker's recent list (features/model/recent.ts). That is the staged pick when
+   the server applies it to the conversation just made, and the model the session
+   already had when it refuses -- which the chip shows only once its reload
+   lands, so that turn records nothing rather than the pick it did not run on. */
+describe('the model the first message of a draft goes out on', () => {
+  const used = (): unknown => JSON.parse(localStorage.getItem('raven.models.used') || 'null')
+  const settle = async (): Promise<void> => { for (let i = 0; i < 20; i += 1) await Promise.resolve() }
+
+  it('records the staged model when the server applies it', async () => {
+    localStorage.clear()
+    const h = await harness(true)
+    const model = await import('../../features/model/store')
+    h.stage({ model: { model: 'staged-m', provider: 'p' } })
+    model.setCurrent('staged-m', 'p')
+
+    h.send('hello')
+    await settle()
+
+    expect(h.log).toContain('rpc:turn.send')
+    expect(used()).toEqual([{ model: 'staged-m', provider: 'p' }])
+  })
+
+  it('records the model the chip named as the message left, not one picked while it was on its way', async () => {
+    localStorage.clear()
+    const h = await harness(true, { holdTurnSend: true })
+    const model = await import('../../features/model/store')
+    h.stage({ model: { model: 'staged-m', provider: 'p' } })
+    model.setCurrent('staged-m', 'p')
+
+    h.send('hello')
+    await settle()
+    expect(h.log).toContain('rpc:turn.send')
+    model.setCurrent('other-m', 'p')
+    h.releaseSend()
+    await settle()
+
+    expect(used()).toEqual([{ model: 'staged-m', provider: 'p' }])
+  })
+
+  it('counts again once a refused stage\'s reload has landed, on a conversation the roster made', async () => {
+    /* The roster's new-instance button promotes a draft with no send to read the
+       refusal. Once the reload lands the chip shows what the session runs, and
+       the first send, whenever it comes, records it. */
+    localStorage.clear()
+    const h = await harness(true, { refuseModelWrite: true })
+    const model = await import('../../features/model/store')
+    h.stage({ model: { model: 'staged-m', provider: 'p' } })
+    await h.openConversation()
+    h.landReloads()
+    await settle()
+    /* What the landed reload puts on the chip; the fake does not paint it. */
+    model.setCurrent('real-m', 'p')
+
+    h.sendOnSession('hello', () => {})
+    await settle()
+
+    expect(used()).toEqual([{ model: 'real-m', provider: 'p' }])
+  })
+
+  it('records nothing when the server refuses the staged model', async () => {
+    localStorage.clear()
+    const h = await harness(true, { refuseModelWrite: true })
+    const model = await import('../../features/model/store')
+    h.stage({ model: { model: 'staged-m', provider: 'p' } })
+    model.setCurrent('staged-m', 'p')
+
+    h.send('hello')
+    await settle()
+
+    expect(h.log).toContain('rpc:turn.send')
+    expect(used()).toBeNull()
   })
 })

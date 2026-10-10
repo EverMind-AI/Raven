@@ -105,6 +105,41 @@ raven onboard
 按照向导提示配置模型服务商，并选择要启用的内置 Agent。之后可以在 WebUI 的
 **设置 > 模型服务商（Settings > Model providers）**中添加或修改配置。
 
+### 公司代理或私有 CA { #behind-a-corporate-proxy-or-private-ca }
+
+Raven 用操作系统的证书库校验 HTTPS 证书，IT 部门装进系统的根证书无需额外设置即可
+被信任。如果服务商检测报告 `certificate_untrusted`，请把签发网关或代理证书的根证书
+加入该证书库。
+
+WSL2 中的 Linux 发行版有自己的证书库，看不到 Windows 里安装的证书。在 WSL 内导入
+一次根证书：
+
+```bash
+sudo cp corporate-ca.pem /usr/local/share/ca-certificates/corporate-ca.crt
+sudo update-ca-certificates
+```
+
+EverOS 记忆服务和基于 Node 的 Agent 作为独立程序运行，读取的是环境变量。请在 shell
+配置文件里导出下面两项，而不是只在当前终端里设置，这样 Raven 启动的每个进程都能拿到：
+
+```bash
+export SSL_CERT_FILE=/path/to/ca-bundle.pem
+export NODE_EXTRA_CA_CERTS=/path/to/corporate-ca.pem
+```
+
+`SSL_CERT_FILE` 会替换整份受信任根证书列表，所以要指向一份同时包含公司根证书的完整
+证书包，而且这个路径必须存在：模型调用和服务商检测所用的 httpx 遇到不存在的路径会直接
+无法启动。在 Debian、Ubuntu 和 WSL 中，运行过 `update-ca-certificates` 之后，
+`/etc/ssl/certs/ca-certificates.crt` 就是这样的证书包。在 macOS 上需要先生成一份：
+
+```bash
+cat /etc/ssl/cert.pem corporate-ca.pem > ~/ca-bundle.pem
+```
+
+在 macOS 和 Windows 上，操作系统还会套用自己的证书策略；例如 macOS 会拒绝有效期超过
+825 天、或未标明用于服务器身份验证的服务器证书，即使它信任签发该证书的根证书。如需改回
+各个库自带的证书列表，在同一个配置文件里导出 `RAVEN_NO_SYSTEM_CA=1`。
+
 ## 启动 Raven { #start-raven }
 
 启动 WebUI，同时在后台运行 Raven 引擎：

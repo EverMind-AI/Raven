@@ -21,7 +21,6 @@ from typing import Any, AsyncGenerator
 
 import httpx
 import json_repair
-from loguru import logger
 
 from raven.providers.base import (
     LLMProvider,
@@ -124,31 +123,15 @@ class OpenAICodexProvider(LLMProvider):
         caps = httpx_timeout(self.generation) or timeout
         raw_usage: dict[str, Any] = {}
         try:
-            try:
-                content, tool_calls, finish_reason = await _request_codex(
-                    url,
-                    headers,
-                    body,
-                    verify=True,
-                    timeout=caps,
-                    idle_timeout=idle_timeout,
-                    first_byte=first_byte,
-                    usage_sink=raw_usage,
-                )
-            except Exception as e:
-                if "CERTIFICATE_VERIFY_FAILED" not in str(e):
-                    raise
-                logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
-                content, tool_calls, finish_reason = await _request_codex(
-                    url,
-                    headers,
-                    body,
-                    verify=False,
-                    timeout=caps,
-                    idle_timeout=idle_timeout,
-                    first_byte=first_byte,
-                    usage_sink=raw_usage,
-                )
+            content, tool_calls, finish_reason = await _request_codex(
+                url,
+                headers,
+                body,
+                timeout=caps,
+                idle_timeout=idle_timeout,
+                first_byte=first_byte,
+                usage_sink=raw_usage,
+            )
             return LLMResponse(
                 content=content,
                 tool_calls=tool_calls,
@@ -196,7 +179,6 @@ async def _request_codex(
     url: str,
     headers: dict[str, str],
     body: dict[str, Any],
-    verify: bool,
     timeout: Any,
     idle_timeout: float | None = None,
     first_byte: float = 0.0,
@@ -208,7 +190,7 @@ async def _request_codex(
     ``first_byte`` bounds the wait for that stream's first event. ``timeout``
     may be an ``httpx.Timeout`` so the pre-generation phases can be narrower
     than the read."""
-    async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
                 text = await response.aread()

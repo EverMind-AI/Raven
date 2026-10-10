@@ -47,6 +47,46 @@ _ALLOWED_KEYS = {
 }
 
 
+def _tool_parents(messages: list[dict[str, Any]]) -> dict[int, int]:
+    """Each tool result's index mapped to the index of the call it answers.
+
+    A result answers the nearest earlier assistant that declared its id. That
+    is a position, not an id lookup, because nothing makes an id unique across
+    a session -- the streaming path keeps whatever id the upstream sent.
+    :meth:`HistoryTrimmer.canonical_ids` and :meth:`HistoryTrimmer.tool_group`
+    both pair through here: if closure could pair a result differently from the
+    group a budget drop removed, re-closing would put that group back and the
+    drop loop would never shrink the selection.
+    """
+    declared: dict[str, int] = {}
+    parents: dict[int, int] = {}
+    for idx, message in enumerate(messages):
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            for tc in message.get("tool_calls") or []:
+                if isinstance(tc, dict) and tc.get("id"):
+                    declared[str(tc["id"])] = idx
+        elif message.get("role") == "tool" and message.get("tool_call_id"):
+            parent = declared.get(str(message["tool_call_id"]))
+            if parent is not None:
+                parents[idx] = parent
+    return parents
+
+
+def _group_index(messages: list[dict[str, Any]]) -> dict[int, frozenset[int]]:
+    """Every paired call and result mapped to the whole group it belongs to.
+
+    One :func:`_tool_parents` pass builds it; a message that pairs with nothing
+    has no entry. Pairing walks the whole session, so ``trim`` builds this once
+    and every group lookup reads it, rather than each lookup walking again.
+    Each group is frozen once and shared by its members, so the index stays
+    linear in memory however many results one parallel call has.
+    """
+    members: dict[int, set[int]] = {}
+    for rid, pid in _tool_parents(messages).items():
+        members.setdefault(pid, {pid}).add(rid)
+    return {mid: group for group in map(frozenset, members.values()) for mid in group}
+
+
 @dataclass
 class TrimOutcome:
     """Result of a :meth:`HistoryTrimmer.trim` call."""
@@ -109,29 +149,10 @@ class HistoryTrimmer:
         tool-exchange). Returns ``[]`` if no user message survives.
         """
         selected = {mid for mid in ids if isinstance(mid, int) and 0 <= mid < len(messages)}
-        tool_parent_by_call: dict[str, int] = {}
-        tool_result_by_call: dict[str, list[int]] = {}
-        for idx, message in enumerate(messages):
-            if message.get("role") == "assistant" and message.get("tool_calls"):
-                for tc in message.get("tool_calls") or []:
-                    if isinstance(tc, dict) and tc.get("id"):
-                        tool_parent_by_call[str(tc["id"])] = idx
-            if message.get("role") == "tool" and message.get("tool_call_id"):
-                tool_result_by_call.setdefault(str(message["tool_call_id"]), []).append(idx)
-
-        changed = True
-        while changed:
-            changed = False
-            for call_id, parent_idx in tool_parent_by_call.items():
-                result_ids = tool_result_by_call.get(call_id, [])
-                if parent_idx in selected:
-                    for rid in result_ids:
-                        if rid not in selected:
-                            selected.add(rid)
-                            changed = True
-                if any(rid in selected for rid in result_ids) and parent_idx not in selected:
-                    selected.add(parent_idx)
-                    changed = True
+        parents = _tool_parents(messages)
+        # Calls first: a result's sibling results come in only once its call is selected.
+        selected |= {parents[mid] for mid in selected if mid in parents}
+        selected |= {rid for rid, pid in parents.items() if pid in selected}
 
         ordered = sorted(selected)
         for pos, mid in enumerate(ordered):
@@ -150,7 +171,9 @@ class HistoryTrimmer:
         return history
 
     @staticmethod
-    def tool_group(messages: list[dict[str, Any]], mid: int) -> set[int]:
+    def tool_group(
+        messages: list[dict[str, Any]], mid: int, index: dict[int, frozenset[int]] | None = None
+    ) -> set[int]:
         """The ids that stand or fall with ``mid``.
 
         An assistant carrying ``tool_calls`` goes with every result answering
@@ -160,41 +183,28 @@ class HistoryTrimmer:
         backend refuses outright -- measured 2026-09-11 on DeepSeek's API,
         where one such request failed every turn until the history was
         re-selected.
+
+        ``index`` is :func:`_group_index` of ``messages``; a caller asking
+        about many ids passes it, since building it is a pass over the session.
         """
-        if not (0 <= mid < len(messages)):
-            return {mid}
-        msg = messages[mid]
-        parent: int | None = None
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            parent = mid
-        elif msg.get("role") == "tool" and msg.get("tool_call_id"):
-            call_id = str(msg["tool_call_id"])
-            for idx in range(mid - 1, -1, -1):
-                calls = messages[idx].get("tool_calls") or [] if messages[idx].get("role") == "assistant" else []
-                if any(isinstance(tc, dict) and str(tc.get("id")) == call_id for tc in calls):
-                    parent = idx
-                    break
-        if parent is None:
-            return {mid}
-        call_ids = {
-            str(tc["id"]) for tc in (messages[parent].get("tool_calls") or []) if isinstance(tc, dict) and tc.get("id")
-        }
-        group = {parent}
-        for idx in range(parent + 1, len(messages)):
-            m = messages[idx]
-            if m.get("role") == "tool" and str(m.get("tool_call_id", "")) in call_ids:
-                group.add(idx)
-        return group
+        if index is None:
+            index = _group_index(messages)
+        return set(index.get(mid, (mid,)))
 
     @classmethod
-    def _offenders(cls, messages: list[dict[str, Any]], ids: list[int]) -> set[int]:
+    def _offenders(cls, messages: list[dict[str, Any]], ids: list[int], index: dict[int, frozenset[int]]) -> set[int]:
         """Selected ids whose tool pairing is broken *within the selection*:
         a parent missing any of its results, or a result whose parent is not
         selected. Empty when the selection is provider-safe."""
         selected = set(ids)
         offenders: set[int] = set()
+        seen: set[int] = set()
         for mid in ids:
-            group = cls.tool_group(messages, mid)
+            # Every member answers ``tool_group`` with the same group, so one look covers it.
+            if mid in seen:
+                continue
+            group = cls.tool_group(messages, mid, index)
+            seen |= group
             if len(group) > 1 and not group <= selected:
                 offenders |= group & selected
             elif messages[mid].get("role") == "tool" and group == {mid}:
@@ -227,6 +237,7 @@ class HistoryTrimmer:
         messages: list[dict[str, Any]],
         ids: list[int],
         protected_ids: set[int],
+        index: dict[int, frozenset[int]],
     ) -> tuple[set[int], list[int], list[int]] | None:
         """The next drop: ``(group, remaining, reclosed)`` or None when ``ids`` is empty.
 
@@ -250,26 +261,43 @@ class HistoryTrimmer:
         """
         if not ids:
             return None
-        seen: set[int] = set()
-        unprotected: list[tuple[set[int], list[int], list[int]]] = []
-        protected: list[tuple[set[int], list[int], list[int]]] = []
-        for candidate in ids:
-            if candidate in seen:
-                continue
-            group = cls.tool_group(messages, candidate)
-            seen |= group
+
+        def option(group: set[int]) -> tuple[set[int], list[int], list[int]]:
             remaining = [mid for mid in ids if mid not in group]
-            choice = (group, remaining, cls.canonical_ids(messages, remaining))
-            (protected if group & protected_ids else unprotected).append(choice)
+            return group, remaining, cls.canonical_ids(messages, remaining)
+
+        def anchored(choice: tuple[set[int], list[int], list[int]]) -> bool:
+            _group, remaining, reclosed = choice
+            return not (protected_ids & set(remaining)) - set(reclosed)
+
         # Unprotected groups first, then protected ones, each only if it leaves
         # every other protected id anchored; when nothing goes cleanly the first
         # candidate goes anyway, so a prompt that cannot fit still shrinks.
-        for tier in (unprotected, protected):
-            for group, remaining, reclosed in tier:
-                lost = (protected_ids & set(remaining)) - set(reclosed)
-                if not lost:
-                    return group, remaining, reclosed
-        return (unprotected + protected)[0]
+        # Re-closing walks the whole session, so a group is re-closed only when
+        # it is the next that could go, and the search stops at the first clean one.
+        seen: set[int] = set()
+        protected: list[set[int]] = []
+        first: tuple[set[int], list[int], list[int]] | None = None
+        for candidate in ids:
+            if candidate in seen:
+                continue
+            group = cls.tool_group(messages, candidate, index)
+            seen |= group
+            if group & protected_ids:
+                protected.append(group)
+                continue
+            choice = option(group)
+            if anchored(choice):
+                return choice
+            if first is None:
+                first = choice
+        for group in protected:
+            choice = option(group)
+            if anchored(choice):
+                return choice
+            if first is None:
+                first = choice
+        return first
 
     # ------------------------------------------------------------------
     # Budget-driven trimming
@@ -319,8 +347,9 @@ class HistoryTrimmer:
         max_prompt = max(1, self.context_window_tokens - reserved_output)
         warnings: list[str] = []
         trimmed_ids = list(canon)
+        index = _group_index(session_messages)
         while estimated > max_prompt and trimmed_ids:
-            choice = self._choose_drop(session_messages, trimmed_ids, protected_ids)
+            choice = self._choose_drop(session_messages, trimmed_ids, protected_ids, index)
             if choice is None:
                 break
             group, remaining, reclosed = choice
@@ -342,7 +371,7 @@ class HistoryTrimmer:
         # A selection that arrived broken -- a plan naming a result whose parent
         # the session no longer holds -- is not shipped either; each pass drops
         # at least one id, so this ends.
-        offenders = self._offenders(session_messages, trimmed_ids)
+        offenders = self._offenders(session_messages, trimmed_ids, index)
         while offenders:
             trimmed_ids = [mid for mid in trimmed_ids if mid not in offenders]
             for mid in sorted(offenders):
@@ -355,7 +384,7 @@ class HistoryTrimmer:
                 messages,
                 self.get_tool_definitions(),
             )
-            offenders = self._offenders(session_messages, trimmed_ids)
+            offenders = self._offenders(session_messages, trimmed_ids, index)
 
         return messages, TrimOutcome(
             history=history,

@@ -2319,8 +2319,10 @@ if its configured command asks its CLI for partial output - `claude` under
 `--include-partial-messages` (on the resume template too), while `codex exec --json` has no
 partial event to ask for. Asked for by a Direct Chat alone; a spawn takes the whole reply and keeps
 `chat_with_retry`'s retry ladder, which streaming trades away (a stream that already
-rendered cannot be retried without duplicating itself). What streams is the same text the
-record stores, so a caller that rendered the deltas must not deliver the return value again.
+rendered cannot be retried without duplicating itself). What streams ends with the reply the
+record stores - a lane that narrates between its steps streams that narration first and
+returns only its last message, and acp caps each message at `maxOutputChars` the way the
+reply is capped - so a caller that rendered the deltas must not deliver the return value again.
 _Avoid_: conflating it with the roster's `live-progress` tag, which says a transport reports
 its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
 invisible to the model and is about the answer itself.
@@ -2601,18 +2603,19 @@ vocabulary keyed the same way throughout.
 _Avoid_: applying it at write time - that is what this replaced.
 
 **Closing Message** (`raven/acp_client/acp_agent.py`, `activity.py`):
-What a delegated run said *after its last tool call*, as distinct from its whole reply. An
+What a delegated run said *after its last tool call*, as distinct from everything it said. An
 ACP turn may narrate as it works - measured on codex-acp: a plan, then a progress note
-before each of three calls, then the report - and the run's returned answer joins all of it,
-which is right for the caller receiving it and wrong for a transcript, where each note
-belongs on the step it preceded. So the Instance Log carries narration on the calling rows
-and closes with this. `""` (the turn ended on a step and said nothing after) is deliberately
-different from `None` (this lane cannot tell the two apart), which falls back to the whole
-output. The record keeps it as `<node_id>.closing.md` beside `out.md` (a spawn's
-`SpawnRecord.finish`, a dag node's runner), and the two context reads (`subagent.context`,
-`dag.node`) draw it as the answer row when it is there, the whole output when it is not.
-_Avoid_: calling it the answer - the answer is what the run returns, and for a narrating
-agent the two differ.
+before each of three calls, then the report - and each note belongs on the step it
+preceded, so the Instance Log carries narration on the calling rows and closes with this.
+The run's returned answer is one message too, never the narration joined to it: this, or -
+for a turn that ended on a step - the message said before that step. `""` (the turn ended
+on a step and said nothing after) is deliberately different from `None` (this lane cannot
+tell the two apart), which falls back to the whole output. The record keeps it as
+`<node_id>.closing.md` beside `out.md` (a spawn's `SpawnRecord.finish`, a dag node's
+runner), and the two context reads (`subagent.context`, `dag.node`) draw it as the answer
+row when it is there, the whole output when it is not.
+_Avoid_: calling it the answer - the answer is what the run returns, and a turn that ended
+on a step returns the message before that step while its closing is empty.
 
 **Response Meta** (`raven/acp/methods.py`, `raven/acp_client/acp_agent.py`,
 `raven/agent/subagent/activity.py`):

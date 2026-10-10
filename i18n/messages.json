@@ -7471,6 +7471,10 @@
       "en": "The proxy this machine is set to use isn't reachable, saved anyway",
       "zh": "本机设置的代理连不上，已先保存"
     },
+    "gui.settings.providers.probe_certificate": {
+      "en": "This machine doesn't trust the service's certificate, saved anyway",
+      "zh": "本机不信任该服务的证书，已先保存"
+    },
     "gui.settings.providers.probe_unchecked": {
       "en": "This provider's model list doesn't check keys, so the key can't be confirmed; saved",
       "zh": "这家的模型列表不校验 Key，无法确认是否填对，已保存"
@@ -7558,6 +7562,10 @@
     "gui.settings.providers.key_first": {
       "en": "Enter the API key first",
       "zh": "先填入 API Key"
+    },
+    "gui.settings.providers.key_unchanged": {
+      "en": "No new API key to save. To replace the saved one, type a new key in the API key field, then press {button}.",
+      "zh": "没有新的 API Key 要保存。要更换，先在「API 密钥」框里填入新的，再点「{button}」。"
     },
     "gui.settings.providers.key_not_ascii": {
       "en": "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",

@@ -2113,6 +2113,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.probe_rate_limited': 'The key works, but is rate limited right now',
     'gui.settings.providers.probe_unreachable': "Couldn't reach the service, saved anyway",
     'gui.settings.providers.probe_proxy': "The proxy this machine is set to use isn't reachable, saved anyway",
+    'gui.settings.providers.probe_certificate': "This machine doesn't trust the service's certificate, saved anyway",
     'gui.settings.providers.probe_unchecked':
       "This provider's model list doesn't check keys, so the key can't be confirmed; saved",
     'gui.settings.providers.probe_no_endpoint': 'This provider offers no way to check a key online, saved',
@@ -2136,6 +2137,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.paste_key': 'Paste an API key',
     'gui.settings.providers.pick_one': 'Choose a provider on the left',
     'gui.settings.providers.key_first': 'Enter the API key first',
+    'gui.settings.providers.key_unchanged':
+      'No new API key to save. To replace the saved one, type a new key in the API key field, then press {button}.',
     'gui.settings.providers.key_not_ascii':
       "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",
     'gui.settings.providers.base': 'Service address',
@@ -4692,6 +4695,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.probe_rate_limited': 'Key 有效，当前被限流',
     'gui.settings.providers.probe_unreachable': '连不上服务，已先保存',
     'gui.settings.providers.probe_proxy': '本机设置的代理连不上，已先保存',
+    'gui.settings.providers.probe_certificate': '本机不信任该服务的证书，已先保存',
     'gui.settings.providers.probe_unchecked': '这家的模型列表不校验 Key，无法确认是否填对，已保存',
     'gui.settings.providers.probe_no_endpoint': '这家不支持在线验证 Key，已保存',
     'gui.settings.providers.probe_unknown': '未能验证（{status}），已先保存',
@@ -4714,6 +4718,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.providers.paste_key': '粘贴 API Key',
     'gui.settings.providers.pick_one': '在左边选一家服务商',
     'gui.settings.providers.key_first': '先填入 API Key',
+    'gui.settings.providers.key_unchanged':
+      '没有新的 API Key 要保存。要更换，先在「API 密钥」框里填入新的，再点「{button}」。',
     'gui.settings.providers.key_not_ascii': '这不像是 API Key：里面有 Key 不会包含的字符，请检查粘贴的内容',
     'gui.settings.providers.base': '服务地址',
     'gui.settings.providers.api_base': 'API 地址',

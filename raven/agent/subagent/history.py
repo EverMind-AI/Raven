@@ -258,9 +258,10 @@ def add_turn_to_instance_log(
     if session_dir is None or not agent or not handle:
         return []
     # A transport that narrated as it went already has that prose on the steps it
-    # was said before, so the closing row is what it said last -- not `output`,
-    # which is every burst joined for the caller receiving the answer. A lane
-    # that cannot tell them apart reports None and `output` stands in whole.
+    # was said before, so the closing row is what it said after the last one --
+    # not `output`, which for a turn that ended on a step is the message before
+    # that step, already on its row. A lane that cannot tell them apart reports
+    # None and `output` stands in whole.
     closing = getattr(activity, "closing", None)
     answer = output if closing is None else (closing or None)
     try:
@@ -408,10 +409,10 @@ class SpawnRecord:
                         encoding="utf-8",
                     )
                 # What it said after its last step, when the lane can tell that
-                # apart from the whole reply. The context read draws this as
+                # apart from everything it said. The context read draws this as
                 # the answer row, so a narrating agent's progress notes stay
-                # on the steps they preceded instead of opening the answer a
-                # second time; `out.md` keeps the whole reply for the caller.
+                # on the steps they preceded; `out.md` keeps the reply the
+                # caller was handed.
                 closing = getattr(activity, "closing", None)
                 if output is not None and isinstance(closing, str) and closing.strip():
                     self.file("closing.md").write_text(closing, encoding="utf-8")

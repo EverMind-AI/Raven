@@ -160,6 +160,7 @@ function probeText(p: ConnectProbe): string {
     case 'rate_limited': return t('gui.settings.providers.probe_rate_limited')
     case 'network_error': return t('gui.settings.providers.probe_unreachable')
     case 'proxy_unreachable': return t('gui.settings.providers.probe_proxy')
+    case 'certificate_untrusted': return t('gui.settings.providers.probe_certificate')
     case 'no_probe_endpoint': return t('gui.settings.providers.probe_no_endpoint')
     case 'key_unchecked': return t('gui.settings.providers.probe_unchecked')
     default: return t('gui.settings.providers.probe_unknown', { status: p.status })

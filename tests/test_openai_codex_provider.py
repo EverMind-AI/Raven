@@ -8,6 +8,7 @@ trips a test.
 from __future__ import annotations
 
 import asyncio
+import http.server
 import json
 
 import pytest
@@ -24,6 +25,7 @@ from raven.providers.openai_codex_provider import (
     _friendly_error,
     _iter_sse,
 )
+from tests._tls import https_endpoint, private_ca
 
 
 def test_default_url_targets_codex_responses_endpoint():
@@ -561,7 +563,7 @@ async def test_the_codex_sse_watchdog_runs_on_the_stream_idle_budget_not_the_cal
 
     seen: list[dict] = []
 
-    async def fake_request(url, headers, body, *, verify, timeout, idle_timeout=None, first_byte=None, **kwargs):
+    async def fake_request(url, headers, body, *, timeout, idle_timeout=None, first_byte=None, **kwargs):
         seen.append({"timeout": timeout, "idle_timeout": idle_timeout, "first_byte": first_byte})
         return "ok", [], "stop"
 
@@ -639,3 +641,55 @@ def test_every_replayed_assistant_message_carries_them_not_only_the_first() -> N
     parts = [c for i in items if i.get("role") == "assistant" for c in i.get("content", [])]
     assert [p["text"] for p in parts] == ["first", "second"]
     assert all(p["annotations"] == [] for p in parts)
+
+
+@pytest.fixture
+def impostor(tmp_path, monkeypatch):
+    """An HTTPS endpoint whose certificate no trust store vouches for.
+
+    It answers like Codex, so a client that carried on without verifying would
+    get an ordinary reply. What it keeps is every Authorization header that
+    reached it.
+    """
+    received: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(self.headers.get("Authorization", ""))
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            reply = (
+                b'data: {"type": "response.output_text.delta", "delta": "hello"}\n\n'
+                b'data: {"type": "response.completed", "response": {"status": "completed"}}\n\n'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+        def log_message(self, *args):
+            pass
+
+    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    with https_endpoint(private_ca(tmp_path / "pki").server, Handler) as origin:
+        yield f"{origin}/backend-api/codex/responses", received
+
+
+async def test_a_certificate_that_fails_verification_ends_the_call_before_the_token_leaves(
+    impostor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed verification is the answer, not a reason to try again without it.
+
+    Reconnecting with verification off hands the bearer token, and the whole
+    conversation with it, to whoever presented the certificate.
+    """
+    url, received = impostor
+    monkeypatch.setattr("raven.providers.openai_codex_provider.DEFAULT_CODEX_URL", url)
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("tok-secret", "acct"))
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5")
+
+    response = await provider.chat([{"role": "user", "content": "hi"}])
+
+    assert received == []
+    assert response.finish_reason == "error"
