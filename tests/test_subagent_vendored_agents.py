@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -34,6 +36,9 @@ whatever the function does."""
 
 _MISSING_ENGINE = "raven_probe_engine_that_is_not_installed"
 """An import name no environment carries, for the engine-absent branch."""
+
+_SHIPPED = Path(__file__).resolve().parent.parent / "agents"
+"""The checkout's own agent tree, the one the wheel ships."""
 
 _MANIFEST = {
     "name": "Raven-Probe",
@@ -1187,6 +1192,70 @@ class TestTheShippedManifests:
                 if "{SUBAGENT_DIR}" not in str(entry.get(field, "")) and "{PYTHON}" not in str(entry.get(field, "")):
                     continue
                 assert f'"{field}"' in source, f"{folder}: manifest uses {field!r} but install.py does not resolve it"
+
+    @staticmethod
+    def _installer_in(folder: str, landing: Path) -> tuple[Path, ModuleType]:
+        """``folder``'s shipped ``install.py``, copied with its manifest under ``landing`` and loaded."""
+        import importlib.util
+        import shutil
+
+        target = landing / folder
+        target.mkdir(parents=True)
+        for name in ("install.py", "subagent.json"):
+            shutil.copy2(_SHIPPED / folder / name, target / name)
+        spec = importlib.util.spec_from_file_location(
+            f"shipped_{folder.replace('-', '_')}_install", target / "install.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return target.resolve(), module
+
+    @pytest.mark.parametrize("folder", sorted(p.parent.name for p in _SHIPPED.glob("*/install.py")))
+    def test_each_installer_pins_a_spaced_folder_as_discovery_resolves_it(
+        self, folder: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The row ``install.py`` pins goes through the same quoting rule as the discovered one.
+
+        So a folder whose path has a space splits back with its launcher as one
+        argument, and a pinned row and a discovered row cannot disagree about it.
+        """
+        from raven.utils.commands import command_argv, resolve_subagent_command
+
+        target, installer = self._installer_in(folder, tmp_path / "my agents")
+        written: list[dict] = []
+        monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+
+        assert installer.main() == 0
+
+        (row,) = written
+        manifest = json.loads((target / "subagent.json").read_text(encoding="utf-8"))
+        assert command_argv(row["command"])[:2] == [sys.executable, str(target / "run.py")]
+        assert row["cwd"] == str(target)
+        for field in va._PLACEHOLDER_FIELDS:
+            if field in manifest:
+                expected = resolve_subagent_command(
+                    manifest[field], python=sys.executable, subagent_dir=str(target), quote=field != "cwd"
+                )
+                assert row[field] == expected, field
+
+    def test_an_installer_under_a_raven_without_the_quoting_rule_writes_its_old_row(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The folder can outlive the raven that shipped it; an older raven has no ``raven.utils.commands``.
+
+        There the installer writes the row it always wrote, unquoted, rather
+        than failing on the import.
+        """
+        target, installer = self._installer_in("raven-code", tmp_path / "agents")
+        written: list[dict] = []
+        monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+        monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
+
+        assert installer.main() == 0
+
+        (row,) = written
+        assert row["command"] == f"{sys.executable} {target}/run.py --acp"
+        assert row["cwd"] == str(target)
 
 
 def test_a_stored_row_of_the_old_kind_loses_to_the_folders_new_one(tree: Path) -> None:
