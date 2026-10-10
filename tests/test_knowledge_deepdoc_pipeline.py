@@ -510,3 +510,60 @@ class TestFromTextLayer:
 
     def test_a_page_with_no_blocks_is_empty(self) -> None:
         assert _pipeline._from_text_layer(self._page([]), 1) == []
+
+
+class TestModelSingletons:
+    """One session per process, built on first use.
+
+    A parser that rebuilt the graph per page would pay the load for every page
+    of every document, and the three models together are about 100 MB.
+    """
+
+    @staticmethod
+    def _reset() -> None:
+        _pipeline._layout = None
+        _pipeline._tables = None
+        _pipeline._ocr = None
+
+    def test_the_layout_model_is_built_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        built: list[int] = []
+        monkeypatch.setattr(_pipeline, "LayoutRecognizer", lambda *a, **k: built.append(1) or object())
+        self._reset()
+
+        try:
+            first, second = _pipeline._layout_model(), _pipeline._layout_model()
+        finally:
+            self._reset()
+
+        assert first is second
+        assert built == [1]
+
+    def test_the_table_model_is_built_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        built: list[int] = []
+        monkeypatch.setattr(_pipeline, "TableStructureRecognizer", lambda *a, **k: built.append(1) or object())
+        self._reset()
+
+        try:
+            first, second = _pipeline._table_model(), _pipeline._table_model()
+        finally:
+            self._reset()
+
+        assert first is second
+        assert built == [1]
+
+    def test_the_recogniser_is_built_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Imported inside the call rather than at the top: a build with no
+        recognition weights must still be able to read a born-digital page."""
+        from raven.knowledge.parser.deepdoc import _ocr
+
+        built: list[int] = []
+        monkeypatch.setattr(_ocr, "OCR", lambda *a, **k: built.append(1) or object())
+        self._reset()
+
+        try:
+            first, second = _pipeline._ocr_model(), _pipeline._ocr_model()
+        finally:
+            self._reset()
+
+        assert first is second
+        assert built == [1]

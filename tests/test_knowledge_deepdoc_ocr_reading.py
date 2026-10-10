@@ -406,3 +406,69 @@ class TestFilteringDetections:
         boxes = [np.array([[0, 0], [2, 0], [2, 20], [0, 20]], dtype=np.float32)]
 
         assert len(_detector().filter_tag_det_res_only_clip(boxes, (200, 300))) == 1
+
+
+class _DetectorTensor:
+    """A graph declaring a dynamic input, which is what the published detector
+    does: the resize cap decides the size rather than the graph."""
+
+    name = "x"
+    shape = [-1, 3, "h", "w"]
+
+
+def _detector_with_graph(points: list, *, scores=None):
+    """A TextDetector with its graph and both ends of its pipeline supplied."""
+    from raven.knowledge.parser.deepdoc._ocr import (
+        DetResizeForTest,
+        KeepKeys,
+        NormalizeImage,
+        TextDetector,
+        ToCHWImage,
+    )
+
+    instance = object.__new__(TextDetector)
+    instance.input_tensor = _DetectorTensor()
+    instance.preprocess_op = [
+        DetResizeForTest(limit_side_len=64, limit_type="max"),
+        NormalizeImage(std=[0.229, 0.224, 0.225], mean=[0.485, 0.456, 0.406], scale="1./255.", order="hwc"),
+        ToCHWImage(),
+        KeepKeys(keep_keys=["image", "shape"]),
+    ]
+    instance.predictor = type(
+        "P", (), {"run": staticmethod(lambda _n, feed, _o=None: [np.zeros((1, 1, 8, 8), dtype=np.float32)])}
+    )()
+    instance.postprocess_op = lambda _maps, _shape: [{"points": points}]
+    return instance
+
+
+class TestDetectingOnAPage:
+    def test_a_detection_comes_back_clipped_to_the_page(self) -> None:
+        """The post-processor answers in the resized frame and can run past the
+        edge; a box outside the page cannot be cropped from it."""
+        points = [np.array([[-10, -10], [500, 0], [500, 400], [-10, 400]], dtype=np.float32)]
+
+        boxes, _elapsed = _detector_with_graph(points)(page(200, 300))
+
+        assert len(boxes) == 1
+        assert boxes[0][:, 0].min() >= 0
+        assert boxes[0][:, 0].max() <= 299
+
+    def test_a_sliver_is_filtered_out(self) -> None:
+        points = [np.array([[0, 0], [2, 0], [2, 20], [0, 20]], dtype=np.float32)]
+
+        boxes, _elapsed = _detector_with_graph(points)(page())
+
+        assert len(boxes) == 0
+
+    def test_a_page_with_nothing_on_it_answers_no_boxes(self) -> None:
+        boxes, _elapsed = _detector_with_graph([])(page())
+
+        assert len(boxes) == 0
+
+    def test_the_page_handed_in_is_not_modified(self) -> None:
+        original = page()
+        before = original.copy()
+
+        _detector_with_graph([np.array([[0, 0], [80, 0], [80, 20], [0, 20]], dtype=np.float32)])(original)
+
+        assert np.array_equal(original, before)
