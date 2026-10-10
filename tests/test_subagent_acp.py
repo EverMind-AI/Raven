@@ -4531,6 +4531,67 @@ async def test_a_blank_burst_after_the_last_step_is_not_the_reply() -> None:
     assert col.reply == "found it."
 
 
+async def test_a_steer_inside_the_final_message_does_not_cut_the_reply() -> None:
+    """Raven puts a steer on the wire as it arrives and reads it only before its
+    next model call, so the words after it can finish the message it landed in.
+
+    The steer is set apart in that message and does not end it: the caller gets
+    the message whole, and the live view spends one budget on it -- the break is
+    raven's own, so it spends none, and the steer does not renew it.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task", limit=len("REPORT PART ONE. ") + 3)
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Looking."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "r1", "kind": "read", "title": "Read"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "r1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPORT PART ONE. "}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "also cover the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPORT PART TWO."}})
+
+    assert col.reply == "REPORT PART ONE. \n\nREPORT PART TWO."
+    assert "".join(seen) == "Looking.\n\nREPORT PART ONE. \n\nREP"
+    assert col.closing_text == "REPORT PART TWO.", "the transcript still draws the steer as a row of its own"
+
+
+async def test_the_reply_ends_a_message_where_the_live_view_does() -> None:
+    """One rule decides where a message ends, for the stream and the caller alike.
+
+    Text that arrives while a call is still open streams as a message of its
+    own, so the caller is handed the message after it rather than the two run
+    together with nothing between them.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Alpha."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "w1", "kind": "edit", "title": "Write"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "while it runs."}})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "w1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Saved."}})
+
+    assert "".join(seen) == "Alpha.\n\nwhile it runs.\n\nSaved."
+    assert col.reply == "Saved."
+
+
 async def test_the_live_transcript_streams_only_the_closing_burst() -> None:
     """The live view and the settled record must agree on where prose sits.
 
@@ -5180,7 +5241,7 @@ async def test_a_steer_reaches_the_running_turn_and_is_written_where_it_was_said
         assert await run.steer("the docs first") == "injected"
         reply = await asyncio.wait_for(turn, timeout=10)
 
-    assert reply == "steered: the docs first", "the reply is what answered the steer, not the words before it"
+    assert reply == "on it\n\nsteered: the docs first", "a steer does not end the message it lands in"
     roles = [(m["role"], m.get("content")) for m in run.transcript]
     assert ("user", "the docs first") in roles, roles
     said_before = next(i for i, m in enumerate(run.transcript) if m.get("content") == "on it")
