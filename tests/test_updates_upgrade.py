@@ -7,6 +7,7 @@ import ctypes
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2524,6 +2525,16 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         assert list(scratch.iterdir()) == []
         assert "No space left on device" in capsys.readouterr().err
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps no POSIX permission bits")
+    def test_each_copy_is_a_new_directory_only_this_user_can_open(self, switched: None) -> None:
+        """The helper imports what it finds there. A name another user could guess, or a
+        directory they could write to, would let them put their code in its place."""
+        copies = [upgrade_commands._hand_over_system_ca({}) for _ in range(2)]
+
+        assert None not in copies
+        assert copies[0] != copies[1]
+        assert [stat.S_IMODE(copy.stat().st_mode) for copy in copies] == [0o700, 0o700]
+
     def _uv_and_relaunch_environments(
         self, monkeypatch: pytest.MonkeyPatch, version: str | Exception = "uv 0.13.0 (x86_64-unknown-linux-gnu)\n"
     ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
@@ -2661,6 +2672,30 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         assert (done.returncode, done.stderr) == (2, self.INVALID)
         assert injected.exists()
         assert not copy.exists()
+
+    def test_the_helper_takes_the_copy_off_its_import_path(self, tmp_path: Path) -> None:
+        """The copy is deleted next. Left first on sys.path, its name would point every later
+        import, ahead of the standard library, at a directory anyone who can write the temp
+        dir may make again. A stand-in package records the path as the helper exits."""
+        copy = tmp_path / "handed"
+        (copy / "truststore").mkdir(parents=True)
+        (copy / "truststore" / "__init__.py").write_text(
+            "import atexit\nimport json\nimport os\nimport sys\n\n\n"
+            "def record():\n"
+            "    with open(os.environ['RAVEN_TEST_PATH'], 'w') as handle:\n"
+            "        json.dump(sys.path, handle)\n\n\n"
+            "def inject_into_ssl():\n"
+            "    atexit.register(record)\n",
+            encoding="utf-8",
+        )
+        recorded = tmp_path / "path.json"
+
+        done = self._run_helper(sys.executable, copy, RAVEN_TEST_PATH=str(recorded))
+
+        assert (done.returncode, done.stderr) == (2, self.INVALID)
+        path = json.loads(recorded.read_text(encoding="utf-8"))
+        assert os.path.dirname(os.__file__) in path, path
+        assert str(copy) not in path
 
     def test_the_base_interpreter_loads_the_copy_it_is_handed(self, switched: None) -> None:
         base = self._base_interpreter()
