@@ -111,9 +111,12 @@ class AcpConnectionError(AcpError):
     failed with first and then prints a stack trace and a log path under it.
     """
 
-    def __init__(self, message: str, *, stderr: str | None = None) -> None:
+    def __init__(self, message: str, *, stderr: str | None = None, returncode: int | None = None) -> None:
         super().__init__(message)
         self.stderr = stderr
+        # The process's exit status when it had ended, which for an agent on a
+        # registered machine says whether ssh (255) or the far side ended it.
+        self.returncode = returncode
 
 
 class AcpTimeoutError(AcpError):

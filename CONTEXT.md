@@ -381,8 +381,14 @@ keeping the registry and handing it over: a launcher points the agent's
 `RAVEN_CONNECTIONS` at the owner's store rather than copying rows into the
 agent's own home, and a sub-agent inherits `RAVEN_HOME` so it resolves the
 same file. Which machine a job lands on, and whether it can run at all, is
-settled inside the agent that runs it. Nothing on the dispatch path reads the
-registry, so no graph and no spawn is ever refused over the state of it.
+settled inside the agent that runs it, with one exception: an `acp` agent entry
+that names a `machine` is launched there by the host, over ssh with the row's
+address, port, key and user (`raven/acp_client/remote.py`). Its dispatch reads the
+registry once (`remote.machine`), and the run fails before anything starts when
+the id is not registered, is listed twice, cannot be used, or is this computer;
+the `spawn` itself has already answered that it started. No other dispatch reads
+the registry, so no graph and no spawn is ever refused over the state of it. The
+address stays in the launch line, in memory; the entry names only the machine's id.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);
@@ -456,7 +462,11 @@ one the dispatching turn's own tools get. Every dispatch supplies it — `spawn`
 read), a DAG node takes the same, and a Direct Chat resolves `session_workdir` because its
 branch returns before `workdir.bind` wraps the turn body. Distinct from **Agent home**
 (`SubagentManager.workspace`, `~/.raven/workspace`), which holds raven's memory and skills
-and is only the fallback for a dispatch that supplied nothing.
+and is only the fallback for a dispatch that supplied nothing. An `acp` entry that names a
+**Machine** is the exception: its session works on that machine, in
+`<remoteCwd>/<instance or task id>` (`remoteCwd` defaults to `~/raven-work`), made and
+resolved there for each dispatch before the session opens (`remote.session_dir`); this
+computer's working directory never reaches the machine.
 _Avoid_: treating the fallback as the default — a sub-agent working in Agent home inspects
 raven's own memory instead of the user's checkout, and says nothing about having done so.
 

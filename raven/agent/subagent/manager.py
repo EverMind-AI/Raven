@@ -2085,6 +2085,11 @@ class SubagentManager:
         # Where the run was dispatched to work, so the parent can find what it
         # left there without searching the disk for it.
         workdir_line = f"Working directory: {origin['workspace']}\n" if origin.get("workspace") else ""
+        row = self.registry.get(origin.get("agent") or "")
+        if machine := (row.caps.machine if row is not None else ""):
+            # Not this computer's directory: the agent worked on its machine, and
+            # its result closes with where (``AcpAgentBackend.run``).
+            workdir_line = f"Working directory: on machine {machine!r}, named at the end of the result\n"
         record_line = f"\n\nRecord: {record_path}" if record_path else ""
         # How the run's calls went, which nothing on this path carried. Measured
         # on a real dispatch: two of three calls timed out, the run produced no
