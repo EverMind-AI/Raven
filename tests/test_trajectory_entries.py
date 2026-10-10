@@ -1289,8 +1289,64 @@ def test_delta_is_unknown_until_the_predecessor_is_read(state):
     read = tent.project_entries(
         [a, b], state=state, cached_records={("A", "a1"): a_cache.records, ("B", "b1"): b_cache.records}
     ).entries
-    assert _delta(read, "b1") == ("continued", 2, 4)
+    # The message after the proven prefix is a1's own answer, written back: what b1 adds starts after it.
+    assert _delta(read, "b1") == ("continued", 3, 4)
+    assert _one(read, "b1", "llm.input").meta["echo_at"] == 2
     assert _delta(read, "a1") == ("first", 0, 2)
+
+
+def test_a_side_question_is_never_the_predecessor_of_a_main_call_even_when_its_messages_fit(state):
+    """A call under another label whose messages happen to be a prefix of the
+    next main call's is not what that call continues: the main call before it is."""
+    s, u1, a1, u2 = _m("system", "rules"), _m("user", "q1"), _m("assistant", "a1"), _m("user", "q2")
+    spans = [
+        _span("X", "tX", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "tX")),
+        _call(state, "X", "m1", "tX", start=1, messages=[s, u1], purpose="main"),
+        _call(state, "X", "side", "tX", start=2, messages=[s, u1, a1], purpose="title"),
+        _call(state, "X", "m2", "tX", start=3, messages=[s, u1, a1, u2], purpose="main"),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    assert _delta(entries, "side") == ("independent", 0, 3)
+    assert _delta(entries, "m2") == ("continued", 3, 4)
+    assert _one(entries, "m2", "llm.input").meta["echo_at"] == 2
+
+
+def test_a_side_question_answered_after_the_main_line_does_not_stand_in_for_its_last_word(state):
+    spans = [
+        _span("t", "turn", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "turn", content_out="Done.")),
+        _call(state, "t", "l1", "turn", start=1, messages=[_m("user", "go")], content="Done.", purpose="main"),
+        _call(state, "t", "l2", "turn", start=2, messages=[_m("user", "name it")], content="A title", purpose="title"),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    assert _one(entries, "turn", "turn.output").meta.get("hidden") == "redundant_reply"
+
+
+def test_only_an_outer_only_summary_that_recorded_nothing_is_hidden_as_empty_internal(state):
+    spans = [
+        _span("t", "turn", "session.turn", start=0, end=10, attrs=_turn_attrs(state, "turn")),
+        _span("t", "odd", "custom.step", parent="turn", start=1, end=2),
+    ]
+    entries = tent.project_entries(spans, state=state, read=True).entries
+    odd = _one(entries, "odd", "summary")
+    assert "outer_only" not in odd.status_evidence
+    assert odd.meta.get("hidden") is None
+
+
+def test_a_failed_probe_ends_the_search_for_a_preview_and_an_unread_one_is_the_next_read():
+    failed = {"probes": {"2": {"role": None, "text": None, "failed": "blob missing"}}}
+    assert tent.preview_target(failed, 2, 6) is None
+    system_then_unread = {"probes": {"2": {"role": "system", "text": "rules", "failed": None}}}
+    assert tent.preview_target(system_then_unread, 2, 6) == 3
+    found = {"probes": {"2": {"role": "user", "text": "a question", "failed": None}}}
+    assert tent.preview_target(found, 2, 6) is None
+
+
+def test_a_tool_result_is_read_for_errors_at_its_top_level_only_and_a_list_has_none():
+    assert tent._result_error({"error": "boom"}) is not None
+    assert tent._result_error('{"ok": false}') is not None
+    assert tent._result_error([{"error": "boom"}]) is None
+    assert tent._result_error('[{"error": "boom"}, {"ok": false}]') is None
+    assert tent._result_error({"items": [{"error": "inside"}]}) is None
 
 
 # ── rows the list need not show ───────────────────────────────────────

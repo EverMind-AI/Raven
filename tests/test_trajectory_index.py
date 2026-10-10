@@ -424,6 +424,33 @@ def test_spilled_member_trace_is_recovered_by_rescan(state, clock):
     assert index.index_state().recovering_traces == 0 and index.spilled == {}
 
 
+def test_a_spilled_trace_whose_first_file_was_removed_keeps_what_later_files_hold(state, clock):
+    """Removing an archived span log out of band loses what it held of a
+    spilled trace, but not what the files after it hold; the gap is counted."""
+    _append(state, [_tool("S", f"early-{i}", "s-root", start=1, end=2, session="sub") for i in range(6)])
+    index = _index(state, clock, pending_spans=5)
+    index.refresh_sync(None)
+    assert "S" in index.spilled
+    archived = _rotate(state)
+    _append(state, [_tool("S", f"late-{i}", "s-root", start=1, end=2, session="sub") for i in range(6)])
+    index.refresh_sync(None)
+    archived.unlink()
+    attrs = {"trace.dispatched_in_trace_id": "t"}
+    _append(
+        state,
+        [
+            _turn("t", "a", start=0, end=9),
+            _span("S", "s-root", "session.turn", start=0, end=3, session="sub", attrs=attrs),
+        ],
+    )
+    _refresh_until_ready(index, clock)
+    recovered = {e.span_id for e in index.entries() if e.trace_id == "S"}
+    assert recovered >= {f"late-{i}" for i in range(6)} | {"s-root"}
+    assert not recovered & {f"early-{i}" for i in range(6)}
+    assert index.index_state().unresolved_dropped == 1
+    assert index.index_state().recovering_traces == 0 and index.spilled == {}
+
+
 def test_spilled_foreign_trace_is_forgotten(state, clock):
     children = [_tool("F", f"f-{i}", "f-root", start=1, end=2, session="other") for i in range(12)]
     _append(state, children)
@@ -594,14 +621,23 @@ def test_cursor_rejects_other_session_epoch_and_expiry(state, clock):
         index.list_page(page.next_cursor, 2)
 
 
-def test_new_first_page_replaces_the_old_snapshot(state, clock):
+def test_walks_started_side_by_side_keep_their_own_snapshots_up_to_the_limit(state, clock):
+    """Two tabs walking one session at once must not expire each other's
+    cursors; only the walk least recently read past the limit, or an idle one, goes."""
     _append(state, [_turn("t", f"s{i}", start=i, end=i) for i in range(5)])
-    index = _index(state, clock)
+    index = _index(state, clock, snapshots=2, snapshot_ttl=10)
     _refresh_until_ready(index, clock)
-    old = index.list_page(None, 2)
-    index.list_page(None, 2)
+    first = index.list_page(None, 2)
+    second = index.list_page(None, 2)
+    assert index.list_page(first.next_cursor, 2).entries == index.list_page(second.next_cursor, 2).entries
+    third = index.list_page(None, 2)
     with pytest.raises(tidx.CursorExpiredError):
-        index.list_page(old.next_cursor, 2)
+        index.list_page(first.next_cursor, 2)
+    assert index.list_page(second.next_cursor, 2).entries
+    assert index.list_page(third.next_cursor, 2).entries
+    clock.advance(11)
+    with pytest.raises(tidx.CursorExpiredError):
+        index.list_page(third.next_cursor, 2)
 
 
 # ── resource limits ───────────────────────────────────────────────────
@@ -739,6 +775,17 @@ def test_refresh_is_throttled_single_flight_and_failure_safe(state, clock):
         assert index.index_state().failure == "RuntimeError"
 
     asyncio.run(run())
+
+
+def test_idle_indexes_go_on_any_visit_to_the_indexer_not_only_a_refresh(state, clock):
+    indexer = tidx.TrajectoryIndexer(state, limits=tidx.Limits(idle_seconds=60), now=clock)
+    indexer.session("tui:a")
+    clock.advance(61)
+    indexer.session("tui:b")
+    assert list(indexer._slots) == ["tui:b"]
+    clock.advance(61)
+    indexer.evict_idle()
+    assert list(indexer._slots) == []
 
 
 def test_a_cancelled_refresh_finishes_before_the_next_one_scans(state):
@@ -1211,7 +1258,7 @@ def test_capture_returns_one_consistent_view(state, clock):
 # ── the repair read behind a continued model input ────────────────────
 
 
-def _v2_shell(state: Path, name: str, messages: list[dict]) -> str:
+def _v2_shell(state: Path, name: str, messages: list[dict], tools: list | None = None) -> str:
     from raven.tracing import artifact_v2
 
     refs = []
@@ -1221,7 +1268,7 @@ def _v2_shell(state: Path, name: str, messages: list[dict]) -> str:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(artifact_v2.message_text(message), encoding="utf-8")
         refs.append({"$msg": sha1})
-    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs, "prompt": refs[-1], "tools": []}
+    shell = {"artifactFormat": artifact_v2.ARTIFACT_FORMAT, "messages": refs, "prompt": refs[-1], "tools": tools or []}
     return _artifact(state, shell, name)
 
 
@@ -1271,6 +1318,83 @@ def _refresh_until(index: tidx.SessionIndex, clock: Clock, condition, *, rounds:
         if condition():
             return used
     raise AssertionError("condition never met")
+
+
+def _calls(state: Path, shells: list[str | None]) -> list[dict]:
+    spans = [_turn("a", "turnA", start=0, end=100)]
+    for n, shell in enumerate(shells):
+        attrs = {
+            "llm.purpose": "main",
+            "llm.input.artifact_path": shell or str(state / "logs" / "audit-artifacts" / f"gone-{n}.json"),
+            "llm.output.artifact_path": _artifact(state, {"content": f"answer {n}"}, f"c{n}-out"),
+        }
+        spans.append(_span("a", f"c{n}", "llm.call", parent="turnA", start=1 + 2 * n, end=2 + 2 * n, attrs=attrs))
+    return spans
+
+
+def _talk(turns: int) -> list[list[dict]]:
+    history = [{"role": "system", "content": "rules"}]
+    out = []
+    for n in range(turns):
+        history = history + [{"role": "user", "content": f"question {n}"}]
+        out.append(list(history))
+        history = history + [{"role": "assistant", "content": f"answer {n}"}]
+    return out
+
+
+def test_a_shell_capped_by_its_tool_list_still_gives_its_messages_and_preview(state, clock):
+    """The shell writes its message references ahead of the tools, so a tool
+    list that pushes it past the preview read limit leaves them readable."""
+    tools = [{"type": "function", "function": {"name": f"tool_{i}", "description": "x" * 600}} for i in range(120)]
+    shells = [_v2_shell(state, f"c{n}-in", messages, tools) for n, messages in enumerate(_talk(3))]
+    assert all(Path(s).stat().st_size > tent.PREVIEW_READ_LIMIT for s in shells)
+    _append(state, _calls(state, shells))
+    index = _index(state, clock)
+    _refresh_until(
+        index, clock, lambda: index.index_state().preview_pending == 0 and index.index_state().phase == tidx.PHASE_READY
+    )
+    rows = [index.entry(f"a:c{n}:llm.input") for n in range(3)]
+    assert [r.meta["delta"] for r in rows] == ["first", "continued", "continued"]
+    assert [r.meta["message_count"] for r in rows] == [2, 4, 6]
+    assert [r.preview for r in rows] == ["question 0", "question 1", "question 2"]
+
+
+def test_an_input_whose_messages_cannot_be_read_leaves_unknown_only_the_one_after_it(state, clock):
+    talk = _talk(4)
+    shells: list[str | None] = [_v2_shell(state, f"c{n}-in", messages) for n, messages in enumerate(talk)]
+    shells[1] = None
+    _append(state, _calls(state, shells))
+    index = _index(state, clock)
+    _refresh_until(
+        index, clock, lambda: index.index_state().preview_pending == 0 and index.index_state().phase == tidx.PHASE_READY
+    )
+    rows = [index.entry(f"a:c{n}:llm.input") for n in range(4)]
+    assert [r.meta["delta"] for r in rows] == ["first", "unknown", "unknown", "continued"]
+    assert rows[3].meta["new_from"] == 7 and rows[3].meta["echo_at"] == 6
+
+
+def test_a_legacy_input_with_its_messages_inline_tells_the_echo_apart_and_reads_nothing_more(state, clock):
+    s, u1, a1, u2 = (
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "the answer"},
+        {"role": "user", "content": "next question"},
+    )
+    shells = [
+        _artifact(state, {"messages": messages, "tools": [], "model": "m"}, f"c{n}-in")
+        for n, messages in enumerate([[s, u1], [s, u1, a1, u2]])
+    ]
+    _append(state, _calls(state, shells))
+    index = _index(state, clock)
+    _refresh_until(
+        index, clock, lambda: index.index_state().preview_pending == 0 and index.index_state().phase == tidx.PHASE_READY
+    )
+    second = index.entry("a:c1:llm.input")
+    assert second.meta["delta"] == "continued"
+    assert second.meta["new_from"] == 3 and second.meta["echo_at"] == 2
+    assert index.preview_cache[("a", "c1")].pending is None
+    record = next(r for r in index.preview_cache[("a", "c1")].records if r["slot"] == "llm.input")
+    assert record["roles"] == ["system", "user", "assistant", "user"] and not record.get("probes")
 
 
 def test_a_late_predecessor_repairs_the_successor_row_and_bumps_its_revision(state, clock):

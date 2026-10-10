@@ -2126,7 +2126,10 @@ list need not show — `redundant_reply`, a turn's end that repeats the turn's
 last model output word for word; `empty_reply`, a turn's end of a turn that
 finished `ok` whose recorded content was read and is null or blank;
 `empty_internal`, an outer-only summary that recorded nothing. A hidden row
-stays in the index and keeps its clock.
+stays in the index and keeps its clock. While the recorder writes the turn's
+end as `{"content": null}` (`semconv.turn` reads `.content` off the tuple the
+turn returns), every ok turn end it records is `empty_reply` and
+`redundant_reply` cannot fire; the latter takes effect once that is fixed.
 _Avoid_: calling a Conversation Record an entry — that is the CLI's text
 projection, without identity, structured status or timing.
 

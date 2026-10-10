@@ -62,6 +62,9 @@ DEPENDENCY_LIMIT = 200_000
 ENTRY_LIMIT = 50_000
 REMOVED_WINDOW = 1_000
 SNAPSHOT_TTL_SECONDS = 120.0
+# Walks of one session's list kept at once: two tabs, or a tab and its retry,
+# walking at the same time must not expire each other's cursors.
+SNAPSHOTS_PER_SESSION = 4
 MAX_SESSIONS = 8
 IDLE_SECONDS = 60.0
 THROTTLE_SECONDS = 0.3
@@ -104,6 +107,7 @@ class Limits:
     entries: int = ENTRY_LIMIT
     removed_window: int = REMOVED_WINDOW
     snapshot_ttl: float = SNAPSHOT_TTL_SECONDS
+    snapshots: int = SNAPSHOTS_PER_SESSION
     max_sessions: int = MAX_SESSIONS
     idle_seconds: float = IDLE_SECONDS
     throttle_seconds: float = THROTTLE_SECONDS
@@ -170,6 +174,8 @@ class RecoveryTask:
     offset: int
     partial: bytearray = field(default_factory=bytearray)
     discarding: bool = False
+    # The file the task started in was gone when it ran: what it held is lost.
+    lost: bool = False
 
 
 def _file_key(stat_result: Any) -> FileKey:
@@ -401,8 +407,14 @@ class SpanLogScanner:
         """Records of ``task.trace_id`` from the task's position to the chain end."""
         catalog = self._catalog()
         keys = [key for _, key, _, _ in catalog]
-        if task.key not in keys:
+        if not keys:
             return [], True
+        if task.key not in keys:
+            # Removed out of band: what that file held of the trace is lost,
+            # and the rest is read again from the oldest file still there.
+            task.key, task.offset, task.lost = keys[0], 0, True
+            task.partial.clear()
+            task.discarding = False
         records: list[RawRecord] = []
         start_index = keys.index(task.key)
         for path, key, size, _ in catalog[start_index:]:
@@ -613,7 +625,7 @@ class SessionIndex:
         self._entries: dict[str, _entries.TrajectoryEntry] = {}
         self._order: tuple[str, ...] = ()
         self._removed: deque[Removed] = deque(maxlen=self.limits.removed_window)
-        self._snapshot: Snapshot | None = None
+        self._snapshots: OrderedDict[str, Snapshot] = OrderedDict()
         self._snapshot_seq = 0
         self.spans: dict[SpanKey, dict[str, Any]] = {}
         self.skeletons: dict[SpanKey, dict[str, Any]] = {}
@@ -673,6 +685,8 @@ class SessionIndex:
                 self._add_span(record.span)
             if not finished:
                 break
+            if task.lost:
+                self.unresolved_dropped += 1
             self.recovery_queue.popleft()
         self._fill_previews(deadline)
         projection = self._reproject() if self._dirty else None
@@ -864,7 +878,7 @@ class SessionIndex:
             if at is None:
                 continue
             record = cache.records[at]
-            if _entries.inline_messages(record) is not None:
+            if _entries.inline_messages(record) is not None or isinstance(record.get("roles"), list):
                 continue
             refs = record.get("refs")
             if not isinstance(refs, list):
@@ -1055,32 +1069,36 @@ class SessionIndex:
     def list_page(self, cursor: str | None, limit: int) -> ListPage:
         with self._lock:
             now = self._now()
+            for stale in [k for k, s in self._snapshots.items() if now - s.last_access > self.limits.snapshot_ttl]:
+                del self._snapshots[stale]
             if cursor is None:
                 self._snapshot_seq += 1
                 items = tuple(self._entries[entry_id] for entry_id in self._order)
                 snapshot = Snapshot(f"snap-{self._snapshot_seq}", self._counter, items, now, now)
-                self._snapshot = snapshot
+                self._snapshots[snapshot.snapshot_id] = snapshot
+                while len(self._snapshots) > max(1, self.limits.snapshots):
+                    self._snapshots.popitem(last=False)
                 offset = 0
             else:
                 data = _decode_cursor(cursor)
-                snapshot = self._snapshot
+                found = self._snapshots.get(data.get("n")) if isinstance(data.get("n"), str) else None
                 if (
-                    snapshot is None
+                    found is None
                     or data.get("s") != self.session_key
                     or data.get("e") != self.epoch
-                    or data.get("n") != snapshot.snapshot_id
                     or not isinstance(data.get("o"), int)
-                    or now - snapshot.last_access > self.limits.snapshot_ttl
                 ):
                     raise CursorExpiredError("the list snapshot is no longer available")
+                snapshot = found
                 offset = data["o"]
                 snapshot.last_access = now
+                self._snapshots.move_to_end(snapshot.snapshot_id)
             page = snapshot.items[offset : offset + limit]
             end = offset + len(page)
             complete = end >= len(snapshot.items)
             next_cursor = None if complete else _encode_cursor(self.session_key, self.epoch, snapshot.snapshot_id, end)
             if complete:
-                self._snapshot = None
+                self._snapshots.pop(snapshot.snapshot_id, None)
             return ListPage(self.epoch, snapshot.revision, page, next_cursor, self._published_state, complete)
 
     def changes(self, epoch: str, after_revision: int, limit: int) -> ChangeBatch:
@@ -1148,6 +1166,7 @@ class TrajectoryIndexer:
             del self._slots[key]
 
     def session(self, session_key: str) -> SessionIndex:
+        self.evict_idle()
         return self._slot(session_key).index
 
     async def refresh(self, session_key: str) -> SessionIndex:

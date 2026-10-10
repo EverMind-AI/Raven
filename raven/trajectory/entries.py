@@ -97,6 +97,8 @@ _COMPACT_KEYS = (
     "text",
     "payload",
     "refs",
+    "refs_unreadable",
+    "roles",
     "probes",
     "content_sha1",
     "content_empty",
@@ -777,12 +779,20 @@ def _probe(record: Mapping[str, Any] | None, index: int) -> Mapping[str, Any] | 
     return found if isinstance(found, dict) else None
 
 
+def _role_of(message: Any) -> str:
+    role = message.get("role") if isinstance(message, dict) else None
+    return role if isinstance(role, str) else ""
+
+
 def _role_at(record: Mapping[str, Any] | None, index: int) -> str | None:
-    """The role of message ``index``: from an inline payload, or from a repair read; None while unknown."""
+    """The role of message ``index``: from an inline payload or the roles the
+    preview pass kept of one, or from a repair read; None while unknown."""
     messages = inline_messages(record)
     if messages is not None:
-        message = messages[index] if 0 <= index < len(messages) else None
-        role = message.get("role") if isinstance(message, dict) else None
+        return _role_of(messages[index]) if 0 <= index < len(messages) else ""
+    roles = record.get("roles") if record is not None else None
+    if isinstance(roles, list):
+        role = roles[index] if 0 <= index < len(roles) else None
         return role if isinstance(role, str) else ""
     found = _probe(record, index)
     if found is None or found.get("failed"):
@@ -857,9 +867,11 @@ def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[st
     (``echo_at``). The first input of a chain is all new; an input no
     candidate precedes is independent and all new too; an input whose own
     messages or whose candidates' messages are not read yet is unknown, and
-    is decided again once they are.
+    is decided again once they are. A candidate whose messages were read and
+    could not be told is settled: it leaves unknown only an input it may have
+    preceded directly, one whose newest proven prefix is older than it.
     """
-    history: dict[tuple[str, ...], list[tuple[list[str] | None, str | None]]] = {}
+    history: dict[tuple[str, ...], list[tuple[list[str] | None, str | None, bool]]] = {}
     for index, entry in enumerate(entries):
         if entry.slot != "llm.input":
             continue
@@ -869,8 +881,8 @@ def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[st
         purpose = purpose if isinstance(purpose, str) else None
         chain = history.setdefault(_chain_of(entry), [])
         window = [
-            (candidate, label)
-            for candidate, label in chain[-DELTA_CANDIDATES:]
+            (candidate, label, settled)
+            for candidate, label, settled in chain[-DELTA_CANDIDATES:]
             if purpose is None or label is None or label == purpose
         ]
         meta: dict[str, Any] = {**entry.meta, "message_count": len(refs) if refs is not None else None}
@@ -881,11 +893,21 @@ def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[st
         elif not window:
             # Earlier inputs exist in this chain, none of them of a compatible purpose: a conversation of its own.
             meta.update(delta=DELTA_INDEPENDENT, new_from=0)
-        elif any(candidate is None for candidate, _ in window):
+        elif any(candidate is None and not settled for candidate, _, settled in window):
             meta.update(delta=DELTA_UNKNOWN, new_from=None)
         else:
-            previous = next((c for c, _ in reversed(window) if c is not None and _is_prefix(c, refs)), None)
-            if previous is None:
+            previous: list[str] | None = None
+            blocked = False
+            for candidate, _, _ in reversed(window):
+                if candidate is None:
+                    blocked = True
+                    break
+                if _is_prefix(candidate, refs):
+                    previous = candidate
+                    break
+            if blocked:
+                meta.update(delta=DELTA_UNKNOWN, new_from=None)
+            elif previous is None:
                 meta.update(delta=DELTA_INDEPENDENT, new_from=0)
             else:
                 # The loop writes the predecessor's own output back into the history right
@@ -894,7 +916,7 @@ def _apply_delta(entries: list[TrajectoryEntry], record_of: Mapping[str, dict[st
                 base = len(previous)
                 echo = base < len(refs) and _role_at(record, base) == "assistant"
                 meta.update(delta=DELTA_CONTINUED, new_from=base + 1 if echo else base, echo_at=base if echo else None)
-        chain.append((refs, purpose))
+        chain.append((refs, purpose, refs is None and record is not None and bool(record.get("refs_unreadable"))))
         preview = entry.preview
         start = preview_start(meta)
         picked = _target_text(record, start) if start is not None else None
@@ -1059,6 +1081,40 @@ def _preview_source(slot: str, obj: Any, text: str, attrs: Mapping[str, Any] | N
     return text if obj is None else _conv._compact(obj)
 
 
+_SPACE = re.compile(r"\s*")
+
+
+def _object_head(text: str) -> dict[str, Any] | None:
+    """The complete top-level fields of a JSON object whose text was cut
+    short, in order, up to the first field the cut reached."""
+    decoder = json.JSONDecoder()
+    pos = _SPACE.match(text, 0).end()  # type: ignore[union-attr]
+    if not text.startswith("{", pos):
+        return None
+    pos += 1
+    out: dict[str, Any] = {}
+    while True:
+        pos = _SPACE.match(text, pos).end()  # type: ignore[union-attr]
+        try:
+            key, pos = decoder.raw_decode(text, pos)
+        except (ValueError, RecursionError):
+            break
+        pos = _SPACE.match(text, pos).end()  # type: ignore[union-attr]
+        if not isinstance(key, str) or not text.startswith(":", pos):
+            break
+        pos = _SPACE.match(text, pos + 1).end()  # type: ignore[union-attr]
+        try:
+            value, pos = decoder.raw_decode(text, pos)
+        except (ValueError, RecursionError):
+            break
+        out[key] = value
+        pos = _SPACE.match(text, pos).end()  # type: ignore[union-attr]
+        if not text.startswith(",", pos):
+            break
+        pos += 1
+    return out or None
+
+
 def _last_message_ref(obj: dict[str, Any]) -> str | None:
     sha1 = artifact_v2.ref_sha1(obj.get("prompt"))
     if sha1 is None:
@@ -1105,7 +1161,12 @@ def preview_failed(span: dict[str, Any], *, state: Path, cache: SpanCache | None
         info = _conv._build_infos([span])[0]
         skeleton = _conv.span_records(info, state, None, {}, read=False, dedup=False)
         cache = SpanCache(records=[_compact(r) for r in skeleton])
-    records = [_failed_record(r, reason) if r.get("degraded") == _conv.NOT_LOADED else r for r in cache.records]
+    records = [
+        {**_failed_record(r, reason), **({"refs_unreadable": True} if r["slot"] == "llm.input" else {})}
+        if r.get("degraded") == _conv.NOT_LOADED and not isinstance(r.get("refs"), list)
+        else r
+        for r in cache.records
+    ]
     return SpanCache(records=records, complete=True, cursor=cache.cursor, pending=None, version=cache.version + 1)
 
 
@@ -1200,16 +1261,27 @@ def preview_records(
             break
         text, reason = _conv._read_artifact(state, pointer, PREVIEW_READ_LIMIT)
         if text is None:
-            put(index, _failed_record(record, reason or "artifact missing"))
+            failed = _failed_record(record, reason or "artifact missing")
+            if record["slot"] == "llm.input":
+                failed["refs_unreadable"] = True
+            put(index, failed)
             position += 1
             continue
         capped = reason is not None
         obj, ok = _conv._parse_json(text) if not capped else (None, False)
-        if record["slot"] == "llm.input" and isinstance(obj, dict):
+        if record["slot"] == "llm.input":
+            if capped:
+                # A long tool list caps the shell, but the shell writes its
+                # message references ahead of the tools, so its head holds them.
+                obj = _object_head(text)
             refs = _refs_of_payload(obj)
-            if refs is not None:
-                record = {**record, "refs": refs}
-                put(index, record)
+            record = {**record, "refs": refs} if refs is not None else {**record, "refs_unreadable": True}
+            inline = obj.get("messages") if isinstance(obj, dict) and not artifact_v2.is_v2(obj) else None
+            if isinstance(inline, list):
+                # A legacy input carries its messages whole and has no blobs to
+                # read later: its roles are kept now, for telling echoes apart.
+                record["roles"] = [_role_of(message) for message in inline]
+            put(index, record)
         if record["slot"] == "llm.input" and isinstance(obj, dict) and artifact_v2.is_v2(obj):
             sha1 = _last_message_ref(obj)
             if sha1 is None:

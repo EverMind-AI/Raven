@@ -658,6 +658,87 @@ def test_a_page_of_wide_text_is_measured_as_sent_and_comes_back_whole(state):
     assert all(item["content"] == wide for item in body.data["items"])
 
 
+@pytest.mark.parametrize("damage", ["missing", "unreadable"])
+def test_an_output_whose_artifact_cannot_be_read_keeps_its_content_block_and_says_why(state, damage):
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _llm(state, "t", "llm", "turn", start=1, end=2, output={"content": "an answer"}),
+        ],
+    )
+    index = _ready(state)
+    entry = _entry(index, "llm", "llm.output")
+    out = Path(tidx.tstore._span_attrs(index.span("t", "llm"))["llm.output.artifact_path"])
+    if damage == "missing":
+        out.unlink()
+    else:
+        out.unlink()
+        out.mkdir()
+    blocks = {b.id: b for b in _describe(index, state, entry).blocks}
+    assert "content" in blocks
+    assert blocks["content"].availability == damage
+    body = _block(index, state, entry, "content")
+    assert body.availability == damage
+
+
+def test_the_reader_stops_at_each_of_its_budgets_and_says_it_ran_out(state):
+    files = [_artifact(state, {"n": i, "pad": "x" * 1000}, f"f{i}") for i in range(3)]
+    blobs = [_blob(state, {"role": "user", "content": f"m{i}"})["$msg"] for i in range(3)]
+    reader = tdet._Reader(state, max_artifacts=2, max_blobs=1, max_bytes=None)
+    assert reader.read(files[0]) is not None and reader.read(files[1]) is not None
+    assert reader.read(files[0]) is not None, "a path read once is answered from the cache, free"
+    assert reader.read(files[2]) is None and reader.exhausted
+    reader = tdet._Reader(state, max_artifacts=None, max_blobs=1, max_bytes=None)
+    assert reader.blob(blobs[0]) is not None
+    assert reader.blob(blobs[1]) is None and reader.exhausted
+    assert reader.read(files[0]) is not None, "blobs and artifacts are counted apart"
+    reader = tdet._Reader(state, max_artifacts=None, max_blobs=None, max_bytes=1000)
+    assert reader.read(files[0]) is not None
+    assert reader.read(files[1]) is None and reader.exhausted
+
+
+def test_a_block_cursor_is_honoured_only_for_the_entry_revision_and_epoch_it_was_made_for():
+    good = tdet._encode_cursor("t:a:llm.input", 3, "e1", 20)
+    assert tdet._decode_cursor(good, "t:a:llm.input", 3, "e1") == 20
+    for entry, revision, epoch in [("t:b:llm.input", 3, "e1"), ("t:a:llm.input", 4, "e1"), ("t:a:llm.input", 3, "e2")]:
+        with pytest.raises(tidx.CursorExpiredError):
+            tdet._decode_cursor(good, entry, revision, epoch)
+    for offset in (-1, "20", None):
+        bad = tdet._encode_cursor("t:a:llm.input", 3, "e1", offset)  # type: ignore[arg-type]
+        with pytest.raises(tidx.CursorExpiredError):
+            tdet._decode_cursor(bad, "t:a:llm.input", 3, "e1")
+    with pytest.raises(tidx.CursorExpiredError):
+        tdet._decode_cursor("not a cursor!", "t:a:llm.input", 3, "e1")
+
+
+def test_a_page_leaves_the_response_reserve_free(state, monkeypatch):
+    messages = [{"role": "user", "content": "z" * (50 * 1024)} for _ in range(4)]
+    shell = {"messages": messages, "tools": []}
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=100),
+            _span(
+                "t",
+                "llm",
+                "llm.call",
+                parent="turn",
+                start=1,
+                end=2,
+                attrs={"llm.input.artifact_path": _artifact(state, shell, "llm-in")},
+            ),
+        ],
+    )
+    index = _ready(state)
+    entry = _entry(index, "llm", "llm.input")
+    monkeypatch.setattr(tdet, "RESPONSE_LIMIT", 200 * 1024)
+    monkeypatch.setattr(tdet, "RESPONSE_RESERVE", 64 * 1024)
+    page = _block(index, state, entry, "messages")
+    assert len(page.data["items"]) == 2
+    assert tdet._size(page.data) <= tdet.RESPONSE_LIMIT - tdet.RESPONSE_RESERVE
+
+
 # ── schema association ────────────────────────────────────────────────
 
 

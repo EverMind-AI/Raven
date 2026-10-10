@@ -373,7 +373,11 @@ def _all_specs(entry: _entries.TrajectoryEntry) -> tuple[BlockSpec, ...]:
 
 
 def _empty_block(evaluated: "_Evaluated") -> bool:
+    """Nothing to show. A block whose source could not be read whole is never
+    empty: that it is missing, cut or unreadable is what the reader needs."""
     data = evaluated.data
+    if evaluated.availability in (MISSING, TRUNCATED, UNREADABLE):
+        return False
     if evaluated.availability in (EMPTY, NOT_RECORDED):
         return True
     if not isinstance(data, dict):
@@ -1738,6 +1742,11 @@ def read_block(
     """One block's full data for ``entry_id`` at ``entry_revision``/``epoch``, paged where the renderer pages."""
     view = index.capture(entry_id)
     if view is None:
+        if epoch != index.epoch:
+            # Asked in an epoch this index has left, for an entry it has not
+            # reached yet: the caller's list must catch up before anything is
+            # gone. No revision exists for it here, so none is claimed.
+            raise RevisionChangedError(0, index.epoch)
         raise EntryGoneError(entry_id)
     if view.epoch != epoch or view.entry.revision != entry_revision:
         raise RevisionChangedError(view.entry.revision, view.epoch)
