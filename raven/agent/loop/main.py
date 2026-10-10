@@ -31,6 +31,7 @@ from raven.agent.loop._shared import (
     build_executor,
     datetime,
     logger,
+    session_of,
     use_binding,
     workdir,
 )
@@ -877,7 +878,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # which is exactly what the Model Binding contract in CONTEXT.md
             # forbids: a turn resolves its pair once and holds it for the whole
             # turn tree.
-            binding = self._with_live_window(self.binding_for_session(session_key))
+            # A direct chat's conversation is the instance's lane, which nothing
+            # ever stores a binding under -- the session's switch lives on the
+            # bare session key. Strip the lane back to its session, as the
+            # direct-chat record path does (see raven.spine.turn.session_of).
+            binding = self._with_live_window(self.binding_for_session(session_of(session_key)))
             resolution = await self._resolve_playbook_turn(req, session_key, binding)
             delegate_table = resolution.table
             if resolution.active:
