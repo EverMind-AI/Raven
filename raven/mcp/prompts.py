@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.contracts.tool import Tool
+from raven.mcp.paging import walk_prompts
 
 if TYPE_CHECKING:
     from raven.mcp.manager import MCPConnectionManager
@@ -112,12 +113,12 @@ class ListMcpPromptsTool(_PromptTool):
                 errors.append(refusal)
                 continue
             try:
-                result = await _with_timeout(session.list_prompts())
+                prompts = await _with_timeout(walk_prompts(session))
             except Exception as exc:  # noqa: BLE001 -- one bad server must not hide the others
                 logger.warning("MCP prompts: list on '{}' failed: {}", target, exc)
                 errors.append(f"Error: listing prompts on '{target}' failed: {type(exc).__name__}.")
                 continue
-            for prompt in result.prompts:
+            for prompt in prompts:
                 rows.append(
                     {
                         # On every row, because get_mcp_prompt needs it: a row the

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.contracts.tool import Tool, ToolResult
+from raven.mcp.paging import walk_resource_templates, walk_resources
 from raven.utils.images import image_block, text_block
 
 if TYPE_CHECKING:
@@ -127,12 +128,12 @@ class ListMcpResourcesTool(_ResourceTool):
                 errors.append(refusal)
                 continue
             try:
-                result = await _with_timeout(session.list_resources())
+                resources = await _with_timeout(walk_resources(session))
             except Exception as exc:  # noqa: BLE001 -- one bad server must not hide the others
                 logger.warning("MCP resources: list on '{}' failed: {}", target, exc)
                 errors.append(f"Error: listing '{target}' failed: {type(exc).__name__}.")
                 continue
-            for res in result.resources:
+            for res in resources:
                 rows.append(
                     {
                         # Carried on every row, not just when several servers were
@@ -186,12 +187,12 @@ class ListMcpResourceTemplatesTool(_ResourceTool):
                 errors.append(refusal)
                 continue
             try:
-                result = await _with_timeout(session.list_resource_templates())
+                templates = await _with_timeout(walk_resource_templates(session))
             except Exception as exc:  # noqa: BLE001 -- see ListMcpResourcesTool
                 logger.warning("MCP resources: template list on '{}' failed: {}", target, exc)
                 errors.append(f"Error: listing templates on '{target}' failed: {type(exc).__name__}.")
                 continue
-            for tpl in result.resourceTemplates:
+            for tpl in templates:
                 rows.append(
                     {
                         "server": target,
