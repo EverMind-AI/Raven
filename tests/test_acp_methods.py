@@ -1959,6 +1959,59 @@ class TestHeldTurn:
         await asyncio.sleep(0.05)
         assert len(rig.updates()) == before, "the heartbeat stops with the wait"
 
+    async def test_a_beat_inside_the_wake_report_leaves_raven_s_own_client_the_whole_report(self, rig, monkeypatch):
+        """Raven's own acp client reads this stream: a dag node or spawn running
+        raven-oncall hands its caller the last message its collector saw. A beat
+        lands on the wait call while that call is open, so it can fall
+        mid-sentence in the wake turn's report, and the collector has to read it
+        as a call still running rather than as a step that ends the message.
+        Replayed through the real collector, so either half of that agreement
+        changing alone turns this red."""
+        from raven.acp import methods as methods_mod
+        from raven.acp_client.acp_agent import _TurnCollector
+
+        monkeypatch.setattr(methods_mod, "HOLD_HEARTBEAT_S", 0.01)
+        await rig.handshake()
+        sid = await rig.new_session()
+        sub = rig.translator.get(sid).subscription_id
+        record = rig.engine.sessions.get_or_create(sid)
+
+        async def say(text: str) -> None:
+            event = {"type": "token.delta", "payload": {"text": text}}
+            await rig.translator.send_frame(
+                {"jsonrpc": "2.0", "method": "event", "params": {"subscription_id": sub, "event": event}}
+            )
+
+        def beats() -> int:
+            # Told apart by the beat's own mark rather than by its status, which
+            # is the field the collector reads.
+            return sum(1 for u in rig.updates() if "raven.heldS" in (u.get("_meta") or {}))
+
+        async def next_beat() -> None:
+            seen = beats()
+            for _ in range(400):
+                await asyncio.sleep(0.005)
+                if beats() > seen:
+                    return
+            raise AssertionError("no beat landed")
+
+        task = await self._start(rig, sid)
+        await say("Filed job 7.")
+        self._held(record)
+        rig.translator.settle_turn(sid, "end_turn")
+        await next_beat()
+        await say("Round 2: loss converged, ")
+        await next_beat()
+        await say("killed job 7.")
+        record.messages.append(self._assistant("Round 2: loss converged, killed job 7."))
+        rig.translator.settle_turn(sid, "end_turn")
+        await asyncio.wait_for(task, 2)
+
+        collector = _TurnCollector(prompt="watch it")
+        for update in rig.updates():
+            await collector("session/update", {"update": update})
+        assert collector.reply == "Round 2: loss converged, killed job 7."
+
     async def test_a_cancel_while_held_answers_cancelled(self, rig):
         await rig.handshake()
         sid = await rig.new_session()
