@@ -384,3 +384,56 @@ def test_on_windows_a_shim_on_the_childs_path_is_not_made_the_program(
 
     assert backend_env.resolve_program(["codex", "exec", "a & b"], child_env) == ["codex", "exec", "a & b"]
     assert backend_env.resolve_program(["codex.cmd", "exec"], child_env) == ["codex.cmd", "exec"]
+
+
+def _executable(directory: Path, name: str) -> Path:
+    directory.mkdir(exist_ok=True)
+    program = directory / name
+    program.write_text("", encoding="utf-8")
+    program.chmod(0o755)
+    return program
+
+
+async def test_on_windows_an_acp_server_that_is_a_batch_file_starts_from_the_childs_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An npm-installed acp server has no ``.exe`` to find, only ``npx.cmd``.
+
+    Its argv is configuration -- the turns travel over stdio -- so the acp launch
+    lets the batch file stand in, found on the child's PATH like any program.
+    """
+    npx = _executable(tmp_path / "npm", "npx.cmd")
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(npx.parent)})
+    started: list[tuple[str, ...]] = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_refusal(started))
+
+    with pytest.raises(AcpConnectionError):
+        await AcpClient.launch(name="npm", command="npx -y @scope/server")
+
+    assert started == [(str(npx), "-y", "@scope/server")]
+
+
+def test_on_windows_the_lookup_takes_path_order_then_exe_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The order a terminal finds a name in, so the program that starts is the one the user runs there."""
+    early_batch = _executable(tmp_path / "early", "agent.cmd")
+    late_exe = _executable(tmp_path / "late", "agent.exe")
+    both_exe = _executable(tmp_path / "both", "tool.exe")
+    _executable(tmp_path / "both", "tool.cmd")
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    child_env = {"PATH": os.pathsep.join(str(tmp_path / d) for d in ("early", "late", "both"))}
+
+    assert backend_env.resolve_program(["agent", "acp"], child_env, batch_files=True) == [str(early_batch), "acp"]
+    assert backend_env.resolve_program(["agent", "acp"], child_env) == [str(late_exe), "acp"]
+    assert backend_env.resolve_program(["tool", "acp"], child_env, batch_files=True) == [str(both_exe), "acp"]
+
+
+def test_on_windows_only_a_bare_startable_name_is_looked_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A path already names its program, and CreateProcess starts no ``.js``, whatever the PATH holds."""
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    monkeypatch.setattr(backend_env.shutil, "which", lambda program, path=None: f"/elsewhere/{program}")
+    child_env = {"PATH": "/elsewhere"}
+
+    for argv in ([r"C:\Tools\npx", "-y"], ["tools/npx", "-y"], ["server.js", "--stdio"]):
+        assert backend_env.resolve_program(argv, child_env, batch_files=True) == argv
+    assert backend_env.resolve_program(["npx", "-y"], child_env, batch_files=True) == ["/elsewhere/npx.exe", "-y"]

@@ -131,21 +131,3 @@ class TestCommandQuote:
         quoted = cmd.command_quote(value)
         assert cmd.command_argv(f"{quoted} next") == [value, "next"]
         assert cmd.command_argv(f"first {quoted}") == ["first", value]
-
-
-class TestLaunchArgvResolution:
-    def test_posix_leaves_argv_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _as("posix", monkeypatch)
-        assert cmd.launch_argv("npx -y pkg") == ["npx", "-y", "pkg"]
-
-    def test_windows_resolves_a_bare_extensionless_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """CreateProcess needs the full path of ``npx.cmd``; ``shutil.which`` finds it."""
-        _as("nt", monkeypatch)
-        monkeypatch.setattr(cmd.shutil, "which", lambda exe: rf"C:\Tools\{exe}.cmd")
-        assert cmd.launch_argv("npx -y pkg")[0] == r"C:\Tools\npx.cmd"
-
-    def test_windows_leaves_a_path_or_extension_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _as("nt", monkeypatch)
-        monkeypatch.setattr(cmd.shutil, "which", lambda exe: None)
-        assert cmd.launch_argv(r"C:\Tools\node.exe run.js")[0] == r"C:\Tools\node.exe"
-        assert cmd.launch_argv("npx.cmd -y pkg")[0] == "npx.cmd"

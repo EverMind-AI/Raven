@@ -21,7 +21,6 @@ see a quoted Windows path as one token.
 import os
 import re
 import shlex
-import shutil
 
 
 def _split_windows(command: str) -> list[str]:
@@ -177,32 +176,3 @@ def command_quote(value: str) -> str:
         escaped = re.sub(r'(\\*)"', r'\1\1\\"', value)
         return '"' + re.sub(r"(\\+)\Z", r"\1\1", escaped) + '"'
     return shlex.quote(value)
-
-
-def _resolve_executable_windows(exe: str) -> str:
-    """The full path of a bare executable name on Windows, with extension.
-
-    The process-launch API finds ``npx.cmd`` only when it is handed a full
-    path (no suffix search); ``shutil.which`` is the one place that applies
-    the PATHEXT lookup the shell would have done. A bare name with no
-    extension becomes the resolved path; anything already carrying a path or
-    extension is returned unchanged so the spawn does not differ from the
-    string the operator wrote.
-    """
-    root, ext = os.path.splitext(exe)
-    if ext or not root or os.sep in exe or (os.altsep and os.altsep in exe):
-        return exe
-    return shutil.which(exe) or exe
-
-
-def launch_argv(command: str) -> list[str]:
-    """The argv to spawn for a stored launch-command string.
-
-    ``command_argv`` plus, on Windows, the same executable resolution a
-    bare-name lookup needs. POSIX callers get ``command_argv`` unchanged,
-    because the shell the spawn falls back to does its own PATH lookup there.
-    """
-    argv = command_argv(command)
-    if argv and os.name == "nt":
-        argv[0] = _resolve_executable_windows(argv[0])
-    return argv
