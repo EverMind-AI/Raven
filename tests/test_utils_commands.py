@@ -82,21 +82,55 @@ class TestCommandTokens:
         assert cmd.command_tokens(r"C:\gone\python.exe --run") == [r"C:\gone\python.exe", "--run"]
 
 
+#: Tokens the Windows quoter has to get right: CommandLineToArgvW halves a
+#: backslash run only where a quote follows it, the closing quote included.
+WINDOWS_TOKENS = [
+    r"C:\Program Files\node\npx.cmd",
+    "C:\\Users\\me\\agents\\",
+    "C:\\Users\\me\\agents\\\\",
+    'C:\\dir\\a"b',
+    'C:\\dir\\a\\"b',
+    'C:\\dir\\a\\\\"b',
+    '"C:\\dir\\"',
+    "\\\\server\\share\\dir",
+    "a b\\c d\\",
+    "tab\there",
+    "",
+]
+
+POSIX_TOKENS = ["/opt/my dir/py", "/opt/it's/py", '/opt/a"b/py', "/opt/$HOME/py", "/opt/back\\slash", "tab\there", ""]
+
+
 class TestCommandQuote:
     def test_windows_wraps_a_spaced_path_and_escapes_inner_quotes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _as("nt", monkeypatch)
         assert cmd.command_quote(r"C:\Program Files\py.exe") == r'"C:\Program Files\py.exe"'
+        assert cmd.command_quote('C:\\dir\\a"b') == '"C:\\dir\\a\\"b"'
 
-    def test_a_quoted_windows_token_round_trips(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """What a producer quotes must come back through ``command_argv`` as one token."""
+    def test_windows_doubles_the_backslashes_in_front_of_a_quote(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Left single, a trailing ``\\`` would escape the closing quote."""
         _as("nt", monkeypatch)
-        quoted = cmd.command_quote(r"C:\Program Files\Python312\python.exe")
-        (first,) = cmd.command_argv(f"{quoted} run.py")[:1]
-        assert first == r"C:\Program Files\Python312\python.exe"
+        assert cmd.command_quote("C:\\dir\\") == '"C:\\dir\\\\"'
+        assert cmd.command_quote('C:\\dir\\a\\"b') == '"C:\\dir\\a\\\\\\"b"'
+
+    @pytest.mark.parametrize("value", WINDOWS_TOKENS)
+    def test_a_quoted_windows_token_round_trips(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+        """What a producer quotes comes back through ``command_argv`` as itself, wherever it sits in the line."""
+        _as("nt", monkeypatch)
+        quoted = cmd.command_quote(value)
+        assert cmd.command_argv(f"{quoted} next") == [value, "next"]
+        assert cmd.command_argv(f"first {quoted}") == ["first", value]
 
     def test_posix_uses_shlex_quoting(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _as("posix", monkeypatch)
         assert cmd.command_quote("/opt/my dir/py") == "'/opt/my dir/py'"
+
+    @pytest.mark.parametrize("value", POSIX_TOKENS)
+    def test_a_quoted_posix_token_round_trips(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+        _as("posix", monkeypatch)
+        quoted = cmd.command_quote(value)
+        assert cmd.command_argv(f"{quoted} next") == [value, "next"]
+        assert cmd.command_argv(f"first {quoted}") == ["first", value]
 
 
 class TestLaunchArgvResolution:
