@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.acp_client import remote
 from raven.acp_client.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
@@ -50,6 +51,7 @@ from raven.acp_client.protocol import (
     SESSION_MCP_CAPABILITY,
     STEER_METHOD,
     AcpBusyError,
+    AcpConnectionError,
     AcpError,
     AcpRemoteError,
     AcpTimeoutError,
@@ -240,6 +242,7 @@ class _TurnCollector:
         prompt: str | None = None,
         workspace: Path | None = None,
         limit: int | None = None,
+        track_files: bool = True,
     ) -> None:
         # The reply's cap, renewed for every message rather than spent across
         # the turn: the reply is one message, and narration spending a shared
@@ -267,6 +270,10 @@ class _TurnCollector:
         # of its commands produced is only ever visible as a directory that
         # changed around the call, which is what the per-call listings are for.
         self._workspace = workspace
+        # Off for an agent on another machine: its paths name that machine's
+        # disk, so a listing here would see none of its files, and a path it
+        # wrote that is absent here would be recorded as a delete.
+        self._track_files = track_files
         self._blocks: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._listings: dict[str, Any] = {}
         self._settled_calls: set[str] = set()
@@ -398,7 +405,8 @@ class _TurnCollector:
                         }
                     )
                     self._backfill_subject(str(update.get("toolCallId") or ""), update)
-            await self._note_files(update)
+            if self._track_files:
+                await self._note_files(update)
         elif kind == "plan":
             self._plan(update)
         elif kind == "usage_update":
@@ -962,10 +970,16 @@ class AcpAgentBackend:
         allow_mcp_secrets: bool = False,
         session_mcp: bool = True,
         pool: Any = None,
+        machine: str | None = None,
+        remote_cwd: str | None = None,
     ) -> None:
         self.name = name
         self.command = command
         self.cwd = cwd
+        # The registered machine this agent runs on, or None for this computer;
+        # see ``raven.acp_client.remote`` for what changes when it is set.
+        self.machine = (machine or "").strip() or None
+        self.remote_cwd = remote_cwd
         self.env = env or {}
         self.ready_timeout_ms = ready_timeout_ms
         self.timeout = timeout
@@ -1285,6 +1299,11 @@ class AcpAgentBackend:
         taken the code yet, not as a standing policy about forks. The first is not
         transitional -- it is the peer's own property.
         """
+        if self.machine:
+            # A third reason, and not the peer's: the host's servers are reached
+            # through a socket on this computer, which an agent on another
+            # machine cannot open.
+            return True
         from raven.agent.subagent.backends import session_mcp_delivered
 
         return not session_mcp_delivered(session_mcp=self.session_mcp, snapshot=self._snapshot)
@@ -1301,7 +1320,12 @@ class AcpAgentBackend:
         notes = []
         if self._session_mcp_refused and grant.granted:
             names = ", ".join(repr(server.name) for server in grant.granted)
-            if not self.session_mcp:
+            if self.machine:
+                notes.append(
+                    f"MCP servers {names} were not lent to acp agent {self.name!r}: it runs on machine "
+                    f"{self.machine!r}, and the host's servers are reached through a socket on this computer"
+                )
+            elif not self.session_mcp:
                 notes.append(
                     f"MCP servers {names} were withheld because acp agent {self.name!r} is configured as not "
                     f"keeping one session's servers to that session (sessionMcp: false); raven pools one "
@@ -1381,7 +1405,9 @@ class AcpAgentBackend:
                         "acp agent {!r}: withholding {} MCP server(s); {}",
                         self.name,
                         len(grant.granted),
-                        "configured as not keeping a session's servers to that session (sessionMcp: false)"
+                        f"it runs on machine {self.machine!r}"
+                        if self.machine
+                        else "configured as not keeping a session's servers to that session (sessionMcp: false)"
                         if not self.session_mcp
                         else f"a raven build with no {SESSION_MCP_CAPABILITY} declaration",
                     )
@@ -1459,8 +1485,17 @@ class AcpAgentBackend:
         # it, so it must be the caller's workspace whatever the entry pinned.
         # Conflating them sent a pinned entry's own folder to `session/new`, and
         # the agent then edited that tree instead of the caller's.
-        launch_cwd = self.cwd or str(workspace)
-        session_cwd = str(workspace)
+        # An agent on another machine has neither: the ssh starts in a fixed
+        # directory here and the session works in a directory made on the
+        # machine (`raven.acp_client.remote`), never in this computer's
+        # workspace, which does not exist there.
+        launched = await self._remote_launch() if self.machine else None
+        if launched is not None:
+            launch_cwd = launched.cwd
+            session_cwd = await self._remote_session_dir(launched, handle)
+        else:
+            launch_cwd = self.cwd or str(workspace)
+            session_cwd = str(workspace)
         started = time.monotonic()
         grant = mcp_grant if mcp_grant is not None else await self.resolve_mcp_grant_async(mcps)
         async with self._mcp_endpoints(task_id, grant) as mcp_servers:
@@ -1482,13 +1517,16 @@ class AcpAgentBackend:
                 # binding gets a connection of its own and the two coexist.
 
                 binding: dict[str, str] = {}
-                if model:
+                if model and launched is None:
                     binding["RAVEN_PARENT_MODEL"] = model
                 parent_provider = str(getattr(provider, "provider_name", "") or "")
-                if parent_provider:
+                # Not for an agent on another machine: the binding is the local
+                # process's environment, which there is ssh, and a binding of its
+                # own would open a second ssh per parent model for nothing.
+                if parent_provider and launched is None:
                     binding["RAVEN_PARENT_PROVIDER"] = parent_provider
                 parent_protocol = str(getattr(provider, "api_protocol", "") or "")
-                if parent_protocol:
+                if parent_protocol and launched is None:
                     binding["RAVEN_PARENT_PROTOCOL"] = parent_protocol
                 # One of raven's own with no pin of its own follows the parent.
                 # The binding above puts a fresh worker on the parent's model at
@@ -1504,14 +1542,21 @@ class AcpAgentBackend:
                 # parent's model is not one of its choices.
                 if not session_model and model and parent_provider and self._follows_parent:
                     session_model = model if model.startswith(f"{parent_provider}/") else f"{parent_provider}/{model}"
-                connection = await self.pool.acquire(
-                    name=self.name,
-                    command=self.command,
-                    cwd=launch_cwd,
-                    env=dict(self.env),
-                    binding=binding or None,
-                    ready_timeout_s=budget,
-                )
+                try:
+                    connection = await self.pool.acquire(
+                        name=self.name,
+                        # A remote agent's own command and env are inside the
+                        # launch line; the local process is ssh.
+                        command=launched.command if launched is not None else self.command,
+                        cwd=launch_cwd,
+                        env={} if launched is not None else dict(self.env),
+                        binding=binding or None,
+                        ready_timeout_s=budget,
+                    )
+                except AcpConnectionError as exc:
+                    if launched is None:
+                        raise
+                    raise self._said_remotely(launched, exc) from exc
                 client = connection.client
                 # Marked after acquire, so a call's range covers its own traffic and
                 # not the handshake of a connection it merely inherited. The pool
@@ -1558,8 +1603,9 @@ class AcpAgentBackend:
                     on_delta,
                     dialect_for(connection.initialize),
                     prompt=task,
-                    workspace=Path(session_cwd),
+                    workspace=Path(session_cwd) if launched is None else None,
                     limit=self.max_output_chars,
+                    track_files=launched is None,
                 )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
@@ -1597,7 +1643,10 @@ class AcpAgentBackend:
                                 # file; see raven.agent.subagent.attachments.
                                 "prompt": [
                                     {"type": "text", "text": task},
-                                    *attachment_blocks(media, root=_uploads_root()),
+                                    # Links to this computer's files, which an agent
+                                    # on another machine cannot open; the manager has
+                                    # already told the caller they were not sent.
+                                    *(attachment_blocks(media, root=_uploads_root()) if launched is None else ()),
                                 ],
                             },
                             timeout=_prompt_deadline(self.timeout),
@@ -1634,6 +1683,10 @@ class AcpAgentBackend:
                         activity.note_frames(cancelled)
                         record_frames(span, cancelled)
                         raise
+                    except AcpConnectionError as exc:
+                        if launched is None:
+                            raise
+                        raise self._said_remotely(launched, exc) from exc
                     finally:
                         activity.offer_steer(collector._run, None)
                         connection.router.detach(session_id, collector)
@@ -1707,13 +1760,54 @@ class AcpAgentBackend:
                     await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
 
                 reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
-                if note := self._mcp_note(grant):
+                notes = [self._mcp_note(grant)]
+                if launched is not None:
+                    # Where to find what it made: the caller's workspace line names
+                    # this computer, and nothing it wrote is here.
+                    notes.append(
+                        f"Ran on machine {launched.target.label}, in {session_cwd}; "
+                        "the files it wrote are there, not on this computer"
+                    )
+                for note in filter(None, notes):
                     notice = f"\n\n[raven] {note}."
                     activity.append_closing(notice)
                     if on_delta is not None:
                         await on_delta(notice)
                     reply += notice
                 return reply
+
+    async def _remote_launch(self) -> remote.RemoteLaunch:
+        """This agent's launch on its machine, or a connection error that says why not."""
+        try:
+            return await asyncio.to_thread(
+                remote.prepare_launch,
+                self.name,
+                self.machine or "",
+                self.command,
+                remote_cwd=self.remote_cwd,
+                env=self.env,
+            )
+        except remote.RemoteMachineError as exc:
+            raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
+
+    async def _remote_session_dir(self, launched: remote.RemoteLaunch, handle: str) -> str:
+        """The session's directory on the machine, made fresh for every dispatch.
+
+        Not cached: a directory removed on the machine between two dispatches
+        would otherwise be named to ``session/new`` and refused there, and the
+        round trip costs a fraction of a second against a turn.
+        """
+        try:
+            return await asyncio.to_thread(remote.session_dir, launched.target, root=launched.root, handle=handle)
+        except remote.RemoteMachineError as exc:
+            raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
+
+    def _said_remotely(self, launched: remote.RemoteLaunch, exc: AcpConnectionError) -> AcpConnectionError:
+        """``exc`` in one sentence when ssh, or the machine's shell, ended the connection."""
+        said = remote.failure(launched, exc)
+        if said is None:
+            return exc
+        return AcpConnectionError(f"acp agent {self.name!r}: {said}", stderr=exc.stderr, returncode=exc.returncode)
 
     @property
     def can_steer(self) -> bool:

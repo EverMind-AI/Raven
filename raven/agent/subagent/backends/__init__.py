@@ -94,6 +94,14 @@ class AgentMeta(NamedTuple):
     fields up: this is a NamedTuple several callers build positionally, so a
     field inserted anywhere but the end moves one of theirs."""
 
+    machine: str = ""
+    """The registered machine this agent runs on, by id, or ``""`` for this computer.
+
+    Rendered as a tag so the model can send work to a named machine and knows
+    the files it gets back are there, not here. The id only: the registry keeps
+    the address out of anything a model reads. Appended last, for the reason
+    ``model_choices`` gives."""
+
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one agent config, any kind.
@@ -171,11 +179,14 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         stateful = bool(getattr(cfg, "stateful", True))
     else:
         stateful = bool(getattr(cfg, "resume_command", None))
+    machine = str(getattr(cfg, "machine", None) or "") if kind == "acp" else ""
     return AgentMeta(
         getattr(cfg, "name", "") or "",
         getattr(cfg, "description", "") or "",
         stateful,
-        bool(getattr(cfg, "reads_local_files", True)),
+        # An agent on another machine reads that machine's disk, so a path here
+        # means nothing to it however its kind would otherwise answer.
+        bool(getattr(cfg, "reads_local_files", True)) and not machine,
         # Only the acp transport carries a live event stream. This is a fact about
         # the transport, not about the agent, so it is read from `kind` rather
         # than from anything the agent or the operator says.
@@ -184,6 +195,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         modes,
         bool(getattr(cfg, "owns_watched_work", False)),
         model_choices,
+        machine,
     )
 
 
@@ -220,6 +232,10 @@ def session_mcp_effective(cfg: Any, *, snapshot: Any = None) -> bool:
     ``snapshot`` is passed by a caller that already loaded one, so a roster build
     does not read the store twice per row.
     """
+    if getattr(cfg, "machine", None):
+        # Withheld at dispatch for the reason ``AcpAgentBackend._session_mcp_refused``
+        # gives, so advertised as withheld too.
+        return False
     if snapshot is None:
         snapshot = acp_snapshot_for(cfg)
     return session_mcp_delivered(session_mcp=session_mcp_for(cfg), snapshot=snapshot)
@@ -281,6 +297,7 @@ def format_agent_listing(meta: Sequence[AgentMeta]) -> str:
                 "stateful" if entry.stateful else "stateless",
                 "local-files" if entry.reads_local_files else "no-local-files",
                 "live-progress" if entry.live_progress else "no-progress",
+                *((f"on machine {entry.machine}",) if entry.machine else ()),
             )
         )
         head = f"{entry.name} [{tags}]"
@@ -396,7 +413,9 @@ def build_third_party_backend(
             name=cfg.name,
             command=cfg.command,
             cwd=cfg.cwd,
-            env={**lent_key_env(cfg), **cfg.env},
+            # Nothing lent to an agent on another machine: the schema drops such
+            # a key on load, and this keeps the two from disagreeing.
+            env={**({} if getattr(cfg, "machine", None) else lent_key_env(cfg)), **cfg.env},
             ready_timeout_ms=cfg.ready_timeout_ms if ready_timeout_ms is None else ready_timeout_ms,
             timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
@@ -406,6 +425,8 @@ def build_third_party_backend(
             allow_mcp_secrets=cfg.allow_mcp_secrets,
             session_mcp=session_mcp_for(cfg),
             pool=pool,
+            machine=getattr(cfg, "machine", None),
+            remote_cwd=getattr(cfg, "remote_cwd", None),
         )
     if kind == "openai":
         return OpenAIApiBackend(

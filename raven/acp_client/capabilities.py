@@ -22,6 +22,7 @@ as absent rather than shown as current, which also covers a hand-edited
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -36,7 +37,7 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from raven.acp_client import protocol
+from raven.acp_client import protocol, remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
 from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError, reason_of
@@ -56,6 +57,11 @@ _CLOSE_TIMEOUT_S = 10.0
 SnapshotStatus = Literal["ready", "attention", "missing", "unknown"]
 
 _LAUNCH_FIELDS = ("command", "cwd", "env", "ready_timeout_ms")
+
+#: Where an acp agent runs, when that is a registered machine rather than here.
+#: Folded into launch digests only when set, so a digest recorded before these
+#: fields existed still matches the row it was taken from.
+REMOTE_LAUNCH_FIELDS = ("machine", "remote_cwd")
 
 # Substrings that mark a remote error as "the operator has to authenticate",
 # which is a different action from "this thing is not reachable". Matched on the
@@ -319,6 +325,10 @@ def snapshot_fingerprint(cfg: Any) -> str:
     # Only when set, so every snapshot measured before the field existed holds.
     if getattr(cfg, "lend_keys", None):
         payload["lend_keys"] = list(cfg.lend_keys)
+    # Same rule: a row moved to another machine is another agent install.
+    for name in REMOTE_LAUNCH_FIELDS:
+        if getattr(cfg, name, None):
+            payload[name] = getattr(cfg, name)
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -843,13 +853,31 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
 
+    agent_env = dict(env if env is not None else (getattr(cfg, "env", None) or {}))
+    launched: remote.RemoteLaunch | None = None
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        # An agent on a registered machine is verified where it runs, over the
+        # same launch line a dispatch uses. Every failure there is "attention",
+        # never "missing": the roster answers "missing" with an installer, and
+        # that installer would run on this computer.
+        try:
+            launched = await asyncio.to_thread(
+                remote.prepare_launch,
+                name,
+                machine_id,
+                getattr(cfg, "command", "") or "",
+                remote_cwd=getattr(cfg, "remote_cwd", None),
+                env=agent_env,
+            )
+        except remote.RemoteMachineError as exc:
+            return done("attention", str(exc))
     client: AcpClient | None = None
     try:
         client = await AcpClient.launch(
             name=name,
-            command=getattr(cfg, "command", "") or "",
-            cwd=getattr(cfg, "cwd", None),
-            env=dict(env if env is not None else (getattr(cfg, "env", None) or {})),
+            command=launched.command if launched is not None else getattr(cfg, "command", "") or "",
+            cwd=launched.cwd if launched is not None else getattr(cfg, "cwd", None),
+            env={} if launched is not None else agent_env,
             # Nothing here is prompted, so no permission request is expected.
             # One that arrives anyway still has to be answered, or the agent
             # waits for a reply that never comes and the handshake stalls behind
@@ -866,6 +894,11 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
         except AcpError as exc:
             tail = client.stderr_tail(400)
             suffix = f"; stderr: {tail}" if tail else ""
+            if launched is not None:
+                # ssh's own failure in one sentence; anything else in the far
+                # side's own words (a full disk, a crash), never "missing".
+                said = remote.failure(launched, exc)
+                return done("attention", said or f"handshake failed: {exc}{suffix}")
             unfetched = npx_fetch_failure(getattr(cfg, "command", "") or "", exc, client.stderr_tail() or None)
             if unfetched is not None:
                 # Not `missing`: nothing is absent that an install would bring, and
@@ -881,7 +914,18 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
                 f"agent speaks ACP v{handshake.protocol_version}, raven speaks v{protocol.PROTOCOL_VERSION}"
             )
 
-        with tempfile.TemporaryDirectory(prefix="raven_acp_verify_") as tmp:
+        with contextlib.ExitStack() as scratch:
+            if launched is None:
+                tmp = scratch.enter_context(tempfile.TemporaryDirectory(prefix="raven_acp_verify_"))
+            else:
+                # On the machine, the one directory every check reuses: a local
+                # temp dir does not exist where the agent runs, and it refuses one.
+                try:
+                    tmp = await asyncio.to_thread(
+                        remote.session_dir, launched.target, root=launched.root, handle=remote.CHECK_HANDLE
+                    )
+                except remote.RemoteMachineError as exc:
+                    return done("attention", str(exc), handshake)
             try:
                 session = await client.request("session/new", {"cwd": tmp, "mcpServers": []}, timeout=budget)
             except AcpRemoteError as exc:
@@ -931,6 +975,8 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
         )
         return done("ready", detail, handshake)
     except AcpError as exc:
+        if launched is not None:
+            return done("attention", remote.failure(launched, exc) or str(exc))
         return done("missing", str(exc))
     except Exception as exc:  # noqa: BLE001 - a raising verify would blank the page
         logger.opt(exception=True).warning("acp verify for {!r} failed unexpectedly: {}", name, exc)

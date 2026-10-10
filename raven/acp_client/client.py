@@ -673,6 +673,7 @@ class AcpClient:
             f"acp agent {self.name!r}: connection ended (exit {self._proc.returncode}); "
             f"stderr tail: {self.stderr_tail(400) or '<empty>'}",
             stderr=self.stderr_tail() or None,
+            returncode=self._proc.returncode,
         )
 
     async def _read_stderr(self) -> None:

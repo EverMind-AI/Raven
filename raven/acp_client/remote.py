@@ -44,6 +44,11 @@ DEFAULT_ROOT = "~/raven-work"
 #: machine that drops off the network is noticed only by TCP, minutes later.
 KEEPALIVE = ("-T", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3")
 
+#: The session directory every check of an agent reuses (Test, Connect, the
+#: capability record), so pressing Test leaves one directory on the machine
+#: rather than one per press.
+CHECK_HANDLE = "raven-check"
+
 #: What ssh's own exit code is when ssh, rather than the remote command, failed.
 SSH_FAILED_RC = 255
 
@@ -188,6 +193,58 @@ def session_dir(target: Machine, *, root: str = DEFAULT_ROOT, handle: str, timeo
     raise RemoteMachineError(said)
 
 
+@dataclass(frozen=True)
+class RemoteLaunch:
+    """One launch of an agent on a registered machine, resolved from its entry."""
+
+    target: Machine
+    root: str
+    log: Path
+    command: str = field(repr=False)
+    """The launch line. It carries the address, so it is never printed."""
+
+    @property
+    def cwd(self) -> str:
+        """Where the local ssh starts.
+
+        Fixed rather than the caller's workspace: the pool keys a connection on
+        its launch arguments, so a cwd that followed the workspace would start
+        a second ssh, and drop the first one's sessions, for every new one.
+        """
+        return str(Path.home())
+
+
+def prepare_launch(
+    agent: str, machine_id: str, agent_command: str, *, remote_cwd: str | None, env: Mapping[str, str]
+) -> RemoteLaunch:
+    """Resolve the machine and build the launch line, with an emptied ssh log.
+
+    Blocking (it reads the registry): call it off the event loop. ``env`` is the
+    entry's own; the role variable every sub-agent is started with goes first,
+    as the local launch puts it. Raises :class:`RemoteMachineError`.
+    """
+    from raven.home import subagent_role_env
+
+    target = machine(machine_id)
+    log = ssh_log_path(agent)
+    try:
+        # Emptied per launch, so a failure is read from this launch's lines.
+        log.write_text("", encoding="utf-8")
+    except OSError:
+        pass
+    root = (remote_cwd or "").strip() or DEFAULT_ROOT
+    line = launch_command(target, agent_command, root=root, env={**subagent_role_env(), **env}, ssh_log=log)
+    return RemoteLaunch(target=target, root=root, log=log, command=line)
+
+
+def failure(launch: RemoteLaunch, exc: BaseException) -> str | None:
+    """The sentence for a connection that ended, when ssh or the far shell ended it."""
+    rc = getattr(exc, "returncode", None)
+    if rc is None:
+        return None
+    return explain(launch.target, rc, read_ssh_log(launch.log))
+
+
 def ssh_log_path(agent: str) -> Path:
     """The owner-only file a remote agent's ssh writes its own messages to.
 
@@ -307,14 +364,18 @@ def _target(target: Machine) -> tuple[str, int, str, str]:
 
 
 __all__ = [
+    "CHECK_HANDLE",
     "DEFAULT_ROOT",
     "KEEPALIVE",
     "Machine",
+    "RemoteLaunch",
     "RemoteMachineError",
     "explain",
+    "failure",
     "launch_command",
     "leaf",
     "machine",
+    "prepare_launch",
     "read_ssh_log",
     "remote_command",
     "session_dir",
