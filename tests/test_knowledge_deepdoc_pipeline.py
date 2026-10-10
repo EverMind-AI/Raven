@@ -302,3 +302,211 @@ class TestAvailability:
 
         assert _pipeline.readable() is True
         assert _pipeline.usable() is False
+
+
+MARGIN, ZOOM = _pipeline.MARGIN, _pipeline.ZOOM
+
+
+def part(label: str, x0: float, top: float, x1: float, bottom: float, score: float = 0.9) -> dict:
+    """One component of a table, as the structure model answers it: in the
+    crop's own pixels, not the page's points."""
+    return {"label": label, "score": score, "x0": x0, "top": top, "x1": x1, "bottom": bottom}
+
+
+class TestInPoints:
+    """The structure model reads a crop taken at ZOOM from MARGIN points
+    outside the region, and answers in that crop's pixels. Everything it is
+    compared against is in points."""
+
+    def test_a_box_comes_back_in_page_points(self) -> None:
+        out = _pipeline._in_points([part("table row", 0, 0, ZOOM, ZOOM)], region("table", 100, 200, 300, 400))
+
+        assert out[0]["x0"] == pytest.approx(100 - MARGIN)
+        assert out[0]["x1"] == pytest.approx(100 - MARGIN + 1)
+
+    def test_the_label_and_score_ride_through(self) -> None:
+        out = _pipeline._in_points([part("table column", 0, 0, 10, 10, score=0.42)], region("table", 0, 0, 10, 10))
+
+        assert out[0]["label"] == "table column"
+        assert out[0]["score"] == pytest.approx(0.42)
+
+
+class TestIsEnglish:
+    """Only the caption's spacing turns on this: an English caption takes a
+    space between its runs and a Chinese one does not."""
+
+    def test_latin_cells_read_as_english(self) -> None:
+        assert _pipeline._is_english([{"text": "revenue"}, {"text": "cost"}])
+
+    def test_cjk_cells_do_not(self) -> None:
+        assert not _pipeline._is_english([{"text": "\u6536\u5165"}, {"text": "\u6210\u672c"}])
+
+    def test_a_table_of_numbers_reads_as_english(self) -> None:
+        """No letters at all, so there is nothing to count; the spacing that
+        follows is the one that does no harm."""
+        assert _pipeline._is_english([{"text": "1234"}, {"text": "56.7"}])
+
+    def test_a_mostly_latin_table_reads_as_english(self) -> None:
+        assert _pipeline._is_english([{"text": "revenue"}, {"text": "\u6536"}])
+
+
+class TestGathered:
+    def test_it_keeps_only_the_components_asked_for(self) -> None:
+        parts = [part("table row", 0, 0, 100, 20), part("table column", 0, 0, 20, 100)]
+        cells = [text("a", 5, 5, 15, 15)]
+
+        out = _pipeline._gathered(cells, parts, r".* (row|header)$")
+
+        assert [p["label"] for p in out] == ["table row"]
+
+    def test_the_rows_come_back_down_the_page(self) -> None:
+        parts = [part("table row", 0, 50, 100, 70), part("table row", 0, 0, 100, 20)]
+        cells = [text("a", 5, 5, 15, 15), text("b", 5, 55, 15, 65)]
+
+        out = _pipeline._gathered(cells, parts, r".* (row|header)$")
+
+        assert [p["top"] for p in out] == [0, 50]
+
+    def test_a_component_the_model_drew_over_no_text_is_dropped(self) -> None:
+        """The cleanup pass is what the text boxes are for: a row where nothing
+        was written is a row the model invented."""
+        parts = [part("table row", 0, 0, 100, 20, score=0.9), part("table row", 0, 5, 100, 25, score=0.1)]
+        cells = [text("a", 5, 5, 15, 15)]
+
+        out = _pipeline._gathered(cells, parts, r".* (row|header)$")
+
+        assert len(out) == 1
+
+
+class TestTableText:
+    """The whole table path: crops out of the page, structure in, HTML out."""
+
+    @staticmethod
+    def _structure(rows: int = 2, columns: int = 2) -> list[dict]:
+        """A grid the structure model might answer, in crop pixels."""
+        found = [part("table", 0, 0, columns * 100 * ZOOM, rows * 50 * ZOOM)]
+        found += [part("table row", 0, r * 50 * ZOOM, columns * 100 * ZOOM, (r * 50 + 40) * ZOOM) for r in range(rows)]
+        found += [
+            part("table column", c * 100 * ZOOM, 0, (c * 100 + 90) * ZOOM, rows * 50 * ZOOM) for c in range(columns)
+        ]
+        return found
+
+    @staticmethod
+    def _cells(rows: int = 2, columns: int = 2) -> list[dict]:
+        """The text boxes inside the region. `page_number` rides along because
+        the composition reads it: a table split across a page break is grouped
+        by geometry rather than by the model's columns."""
+        return [
+            text(f"r{r}c{c}", MARGIN + c * 100 + 5, MARGIN + r * 50 + 5, MARGIN + c * 100 + 80, MARGIN + r * 50 + 35)
+            | {"page_number": 1}
+            for r in range(rows)
+            for c in range(columns)
+        ]
+
+    def test_a_table_region_comes_back_as_html(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_pipeline, "available", lambda *_names: True)
+        monkeypatch.setattr(_pipeline, "_table_model", lambda: lambda crops: [self._structure()])
+        found = [region("table", MARGIN, MARGIN, MARGIN + 200, MARGIN + 100)]
+
+        out = _pipeline._table_text(image(2000, 2000), found, self._cells())
+
+        assert 0 in out
+        assert out[0].startswith("<table>")
+        assert "r1c1" in out[0]
+
+    def test_a_page_with_no_table_region_asks_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_pipeline, "available", lambda *_names: True)
+        called: list[int] = []
+        monkeypatch.setattr(_pipeline, "_table_model", lambda: lambda crops: called.append(1) or [])
+
+        assert _pipeline._table_text(image(), [region("text", 0, 0, 100, 100)], []) == {}
+        assert called == []
+
+    def test_without_the_structure_model_the_tables_are_left_as_prose(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_pipeline, "available", lambda *_names: False)
+
+        assert _pipeline._table_text(image(), [region("table", 0, 0, 100, 100)], []) == {}
+
+    def test_a_structure_model_that_fails_leaves_the_tables_as_prose(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One table failing is not the page failing: prose is worse than a
+        grid and much better than losing the region."""
+        monkeypatch.setattr(_pipeline, "available", lambda *_names: True)
+        monkeypatch.setattr(
+            _pipeline,
+            "_table_model",
+            lambda: lambda crops: (_ for _ in ()).throw(RuntimeError("the model failed")),
+        )
+        found = [region("table", MARGIN, MARGIN, MARGIN + 200, MARGIN + 100)]
+
+        assert _pipeline._table_text(image(2000, 2000), found, self._cells()) == {}
+
+    def test_a_region_with_no_text_in_it_is_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_pipeline, "available", lambda *_names: True)
+        monkeypatch.setattr(_pipeline, "_table_model", lambda: lambda crops: [self._structure()])
+        found = [region("table", MARGIN, MARGIN, MARGIN + 200, MARGIN + 100)]
+
+        assert _pipeline._table_text(image(2000, 2000), found, []) == {}
+
+    def test_a_region_that_crops_to_nothing_is_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A region past the edge of the render has no pixels to hand over."""
+        monkeypatch.setattr(_pipeline, "available", lambda *_names: True)
+        monkeypatch.setattr(_pipeline, "_table_model", lambda: lambda crops: [self._structure()])
+        found = [region("table", 10_000, 10_000, 10_100, 10_100)]
+
+        assert _pipeline._table_text(image(200, 200), found, self._cells()) == {}
+
+
+class TestAsHtml:
+    def test_a_structure_with_no_rows_answers_with_nothing(self) -> None:
+        """Nothing to compose against: the caller falls back to the region's
+        own text."""
+        out = _pipeline._as_html(
+            [part("table column", 0, 0, 10, 10)], [text("a", 0, 0, 10, 10)], region("table", 0, 0, 100, 100)
+        )
+
+        assert out == ""
+
+    def test_a_structure_with_no_columns_answers_with_nothing(self) -> None:
+        out = _pipeline._as_html(
+            [part("table row", 0, 0, 10, 10)], [text("a", 0, 0, 10, 10)], region("table", 0, 0, 100, 100)
+        )
+
+        assert out == ""
+
+
+class TestFromTextLayer:
+    """The lines the file itself states, which is what makes a born-digital
+    page cost nothing to read."""
+
+    @staticmethod
+    def _page(blocks: list[dict]):
+        return SimpleNamespace(get_text=lambda _kind: {"blocks": blocks})
+
+    def test_a_line_comes_back_with_its_box(self) -> None:
+        page = self._page([{"type": 0, "lines": [{"bbox": [1.0, 2.0, 3.0, 4.0], "spans": [{"text": "hello"}]}]}])
+
+        out = _pipeline._from_text_layer(page, 7)
+
+        assert out == [{"x0": 1.0, "x1": 3.0, "top": 2.0, "bottom": 4.0, "text": "hello", "page_number": 7}]
+
+    def test_the_spans_of_one_line_are_joined(self) -> None:
+        """A line is split into spans wherever the font changes, which is not
+        a word boundary."""
+        page = self._page(
+            [{"type": 0, "lines": [{"bbox": [0, 0, 10, 10], "spans": [{"text": "hel"}, {"text": "lo"}]}]}]
+        )
+
+        assert _pipeline._from_text_layer(page, 1)[0]["text"] == "hello"
+
+    def test_an_image_block_carries_no_lines(self) -> None:
+        page = self._page([{"type": 1, "lines": []}])
+
+        assert _pipeline._from_text_layer(page, 1) == []
+
+    def test_a_blank_line_is_left_out(self) -> None:
+        page = self._page([{"type": 0, "lines": [{"bbox": [0, 0, 10, 10], "spans": [{"text": "   "}]}]}])
+
+        assert _pipeline._from_text_layer(page, 1) == []
+
+    def test_a_page_with_no_blocks_is_empty(self) -> None:
+        assert _pipeline._from_text_layer(self._page([]), 1) == []
