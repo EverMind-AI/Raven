@@ -2607,15 +2607,20 @@ What a delegated run said *after its last tool call*, as distinct from everythin
 ACP turn may narrate as it works - measured on codex-acp: a plan, then a progress note
 before each of three calls, then the report - and each note belongs on the step it
 preceded, so the Instance Log carries narration on the calling rows and closes with this.
-The run's returned answer is one message too, never the narration joined to it: this, or -
-for a turn that ended on a step - the message said before that step. `""` (the turn ended
+The run's returned answer is one message too, never the narration joined to it: the last
+message the live view showed between two steps - a steer inside it stays inside it, where
+the closing stops at the steer - or, for a turn that ended on a step, the message said before
+that step. So a turn that reports, then saves, then signs off returns the sign-off, and a dag
+node's downstream `{{ ref:@nodes/<id>.out.md }}` reads that; the report a later node needs
+has to be the node's last message. `""` (the turn ended
 on a step and said nothing after) is deliberately different from `None` (this lane cannot
 tell the two apart), which falls back to the whole output. The record keeps it as
 `<node_id>.closing.md` beside `out.md` (a spawn's `SpawnRecord.finish`, a dag node's
 runner), and the two context reads (`subagent.context`, `dag.node`) draw it as the answer
 row when it is there, the whole output when it is not.
-_Avoid_: calling it the answer - the answer is what the run returns, and a turn that ended
-on a step returns the message before that step while its closing is empty.
+_Avoid_: calling it the answer - the answer is what the run returns, and the two differ: a
+turn that ended on a step returns the message before that step while its closing is empty,
+and a steer inside the last message stays in the answer while the closing starts after it.
 
 **Response Meta** (`raven/acp/methods.py`, `raven/acp_client/acp_agent.py`,
 `raven/agent/subagent/activity.py`):
