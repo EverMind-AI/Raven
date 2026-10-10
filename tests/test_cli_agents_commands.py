@@ -460,9 +460,7 @@ def test_a_failed_smoke_exits_nonzero_and_keeps_the_folder(raven_home: Path, mon
 def test_smoke_judges_the_three_bad_reply_shapes(tmp_path: Path, script: str, expected: str) -> None:
     """The smoke's own verdicts, against tiny stand-in launchers: garbage, bad shape, silence.
 
-    The stand-in is a file, not a ``-c`` payload: the smoke tokenizes the
-    command with ``str.split`` exactly the way discovery does, so the command
-    line must stay space-free.
+    The stand-in is a file, like the launcher a scaffolded row names.
     """
     from types import SimpleNamespace
 
@@ -1021,7 +1019,7 @@ def test_an_explicit_schema_default_workspace_renders_like_an_omitted_one(raven_
 
 
 # ---------------------------------------------------------------------------
-# the c12 wave: one {PYTHON} resolution for guard, register and installer
+# the c12 wave: one {PYTHON} resolution for discovery, register and installer
 # ---------------------------------------------------------------------------
 
 
@@ -1033,12 +1031,12 @@ def clean_alt_python(tmp_path: Path) -> Path:
     return alt
 
 
-def test_a_clean_subagent_python_passes_the_gate_and_is_what_register_writes(
+def test_register_writes_subagent_python_over_sys_executable(
     raven_home: Path, clean_alt_python: Path, monkeypatch
 ) -> None:
-    """The guard and the writer share one resolver: a clean SUBAGENT_PYTHON
-    over a spacey sys.executable passes, and the pinned row carries the clean
-    interpreter -- never the spacey one the guard did not check."""
+    """``--register`` resolves ``{PYTHON}`` the way discovery does: a
+    ``SUBAGENT_PYTHON`` set over a spacey ``sys.executable`` is the
+    interpreter the pinned row carries."""
     monkeypatch.setenv("SUBAGENT_PYTHON", str(clean_alt_python))
     monkeypatch.setattr(sys, "executable", "/spa cey/python")
 
