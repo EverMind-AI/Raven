@@ -37,6 +37,8 @@ import threading
 from collections.abc import Collection
 from pathlib import Path
 
+import yaml
+
 log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
@@ -350,7 +352,7 @@ class SkillRegistry:
         name: str,
         source: str | None = None,
     ) -> dict | None:
-        """Top-level frontmatter dict (YAML-lite parsed)."""
+        """Top-level frontmatter dict, as :func:`_parse_frontmatter` reads it."""
         body = self.get_body(name, source=source)
         if not body:
             return None
@@ -461,7 +463,7 @@ class SkillRegistry:
         # label. Falls back to dir name for hand-authored skills lacking
         # that field.
         display_name = (frontmatter.get("name") or "").strip() or skill_dir.name
-        description = frontmatter.get("description", "") or display_name
+        description = " ".join(frontmatter.get("description", "").split()) or display_name
 
         return SkillMeta(
             id=f"{source}/{stable_key}",
@@ -482,27 +484,63 @@ class SkillRegistry:
 # ----------------------------------------------------------------------
 
 
+class _NoAliasSafeLoader(yaml.SafeLoader):
+    """``SafeLoader`` that refuses aliases: frontmatter is untrusted text, and a
+    few aliased bytes can expand into a value whose string form never ends."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise yaml.YAMLError("aliases are not accepted in frontmatter")
+        return super().compose_node(parent, index)
+
+
+def _load_yaml(block: str) -> object:
+    loader = _NoAliasSafeLoader(block)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 def _parse_frontmatter(content: str) -> dict | None:
-    """Minimal YAML-lite parser for SKILL.md frontmatter.
+    """Parse SKILL.md frontmatter as YAML.
 
     Expected format::
 
         ---
         name: foo
         description: "bar"
-        metadata: '{"raven": {...}}'
+        metadata: {"raven": {...}}
         ---
 
-    Values are stripped of surrounding quotes; nested keys are not supported.
-    Returns ``None`` when no frontmatter is present.
+    A block YAML cannot read (bad syntax, a non-mapping, an alias, a date
+    that does not exist) gets :func:`_parse_frontmatter_lines`, the reading
+    every skill had before, so a skill that loaded keeps loading the same
+    way. So does a ``name`` or ``description`` that YAML reads as a
+    non-string. Returns ``None`` when no frontmatter is present.
     """
     if not content.startswith("---"):
         return None
     m = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
     if not m:
         return None
+    lines = _parse_frontmatter_lines(m.group(1))
+    try:
+        parsed = _load_yaml(m.group(1))
+    except Exception:  # noqa: BLE001 - ValueError and RecursionError are not YAMLError
+        return lines
+    if not isinstance(parsed, dict):
+        return lines
+    for key in ("name", "description"):
+        if key in parsed and not isinstance(parsed[key], str):
+            parsed[key] = lines.get(key, "")
+    return parsed
+
+
+def _parse_frontmatter_lines(block: str) -> dict:
+    """One ``key: value`` per line, surrounding quotes stripped, no nesting."""
     metadata: dict = {}
-    for line in m.group(1).split("\n"):
+    for line in block.split("\n"):
         if ":" in line:
             key, value = line.split(":", 1)
             metadata[key.strip()] = value.strip().strip("\"'")
@@ -519,18 +557,22 @@ def _strip_frontmatter(content: str) -> str:
     return content[m.end() :]
 
 
-def _parse_nested_metadata(raw: str) -> dict:
-    """Extract Raven-namespaced metadata from the ``metadata`` JSON blob.
+def _parse_nested_metadata(raw: str | dict) -> dict:
+    """Extract Raven-namespaced metadata from ``metadata``: a JSON string, or
+    the mapping YAML reads the same one-line JSON as.
 
     Lookup order (first match wins): ``raven`` > ``nanobot`` > ``openclaw``.
     Returns ``{}`` on any failure.
     """
-    if not raw:
+    if isinstance(raw, dict):
+        data = raw
+    elif not raw:
         return {}
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return {}
+    else:
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
     if not isinstance(data, dict):
         return {}
     for key in ("raven", "nanobot", "openclaw"):
