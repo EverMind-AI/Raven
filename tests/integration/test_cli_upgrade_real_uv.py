@@ -212,6 +212,8 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path, s
     assert completed.returncode == 0, completed.stderr
     assert ("handed over: yes" if system_store else "handed over: no") in completed.stderr, completed.stderr
     assert "system certificate store" not in completed.stderr, completed.stderr
+    # From uv 0.11.9 to 0.12.15 the older name draws a deprecation warning even beside the new one.
+    assert "UV_NATIVE_TLS" not in completed.stderr, completed.stderr
     assert "Raven upgraded: 1.0.0 -> 2.0.0" in completed.stdout
     version = subprocess.run(
         [str(executable), "--version"],

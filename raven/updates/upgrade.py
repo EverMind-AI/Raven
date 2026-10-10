@@ -229,16 +229,29 @@ def use_system_ca():
         shutil.rmtree(TRUSTSTORE_COPY, ignore_errors=True)
 
 
-def uv_environment():
+def uv_environment(uv_path):
     # uv keeps its own bundled roots unless told otherwise. It is told when the
     # system store was handed over, and only uv is: the Raven relaunched after
     # the install inherits this helper's own environment.
     env = dict(os.environ)
     if TRUSTSTORE_COPY:
         env.setdefault("UV_SYSTEM_CERTS", "1")
-        # What uv read before it had UV_SYSTEM_CERTS; current releases accept both.
-        env.setdefault("UV_NATIVE_TLS", "1")
+        # The name uv read before 0.11. Later releases still honour it but call
+        # it deprecated, from 0.11.9 to 0.12.15 even beside UV_SYSTEM_CERTS, so
+        # it goes only to a uv older than that, or one that does not say.
+        if uv_version(uv_path) < (0, 11):
+            env.setdefault("UV_NATIVE_TLS", "1")
     return env
+
+
+def uv_version(uv_path):
+    # `uv 0.12.3 (...)` reads as (0, 12); one that cannot be read as (0,),
+    # older than every release.
+    try:
+        out = subprocess.run([uv_path, "--version"], capture_output=True, text=True, timeout=30, check=False)
+        return tuple(int(part) for part in out.stdout.split()[1].split(".")[:2])
+    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
+        return (0,)
 
 
 def stamp_marker():
@@ -451,7 +464,7 @@ def run(argv=None):
         if plugin_list:
             command += ["--with-requirements", plugin_list]
         command.append(requirement)
-        return subprocess.run(command, check=False, env=uv_environment()).returncode
+        return subprocess.run(command, check=False, env=uv_environment(uv_path)).returncode
 
     def install(requirement, plugin_list):
         # Cheap shape first. `--force` tears the whole environment down and
