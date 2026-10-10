@@ -263,14 +263,26 @@ def test_a_session_directory_that_cannot_be_made_says_where_and_not_how(tmp_path
     assert HOST not in said and str(PORT) not in said
 
 
-def test_a_directory_the_machine_will_not_make_is_named_without_ssh_s_words(tmp_path, monkeypatch):
+def test_a_directory_the_machine_will_not_make_gives_its_reason_without_ssh_s_words(tmp_path, monkeypatch):
+    # Measured 2026-10-10: a registered machine whose disk had filled. On a
+    # first connect the runner's output also carries ssh's own warning, which
+    # names the address.
     def runner_from(row, *, cap_seconds=None):
-        return lambda cmd: (1, "\nmkdir: cannot create directory '/srv/x': Permission denied")
+        return lambda cmd: (
+            1,
+            f"\nWarning: Permanently added '[{HOST}]:{PORT}' (ED25519) to the list of known hosts.\n"
+            "mkdir: cannot create directory '/srv/x': No space left on device",
+        )
 
     monkeypatch.setattr(remote, "runner_from", runner_from)
 
-    with pytest.raises(RemoteMachineError, match=r"could not make a working directory under '/srv/x'"):
+    with pytest.raises(RemoteMachineError) as caught:
         remote.session_dir(_box(), root="/srv/x", handle="t1")
+
+    said = str(caught.value)
+    assert said.startswith("could not make a working directory under '/srv/x' on machine 'Lab box' (box): ")
+    assert said.endswith("No space left on device")
+    assert HOST not in said and str(PORT) not in said
 
 
 # --- failures ----------------------------------------------------------------
@@ -333,3 +345,15 @@ def test_an_entry_that_lost_its_address_is_refused_by_name_not_as_a_network_faul
         remote.launch_command(bare, "agent")
     with pytest.raises(RemoteMachineError, match=r"'Lab box' \(box\): .*has no address"):
         remote.session_dir(bare, handle="t1")
+
+
+def test_a_failure_whose_only_words_are_ssh_s_gives_no_reason_rather_than_the_address(tmp_path, monkeypatch):
+    def runner_from(row, *, cap_seconds=None):
+        return lambda cmd: (1, f"\nWarning: Permanently added '[{HOST}]:{PORT}' (ED25519) to the list of known hosts.")
+
+    monkeypatch.setattr(remote, "runner_from", runner_from)
+
+    with pytest.raises(RemoteMachineError) as caught:
+        remote.session_dir(_box(), root="/srv/x", handle="t1")
+
+    assert str(caught.value) == "could not make a working directory under '/srv/x' on machine 'Lab box' (box)"
