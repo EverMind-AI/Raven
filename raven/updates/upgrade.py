@@ -13,8 +13,10 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
+import tempfile
 import tomllib
 import zlib
 from collections.abc import Callable
@@ -203,6 +205,41 @@ def serve_status(port, progress):
 # cannot import raven to ask; the path is handed over instead.
 MARKER_PATH = os.environ.get("RAVEN_UPGRADE_MARKER") or None
 
+# The spawning side verifies TLS against the operating system's store, and this
+# helper's downloads should succeed wherever its release lookup did. truststore
+# is handed over as a copy for the same reason as the marker path: the original
+# sits in the environment being rewritten, beside packages it would pull in.
+# Taken out of the environment, so the Raven relaunched below does not inherit
+# a path this helper deletes.
+TRUSTSTORE_COPY = os.environ.pop("RAVEN_UPGRADE_TRUSTSTORE", None) or None
+
+
+def use_system_ca():
+    if not TRUSTSTORE_COPY:
+        return
+    sys.path.insert(0, TRUSTSTORE_COPY)
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception as exc:
+        print(f"Warning: could not verify downloads against the system certificate store ({exc}).", file=sys.stderr)
+    finally:
+        sys.path.remove(TRUSTSTORE_COPY)
+        shutil.rmtree(TRUSTSTORE_COPY, ignore_errors=True)
+
+
+def uv_environment():
+    # uv keeps its own bundled roots unless told otherwise. It is told when the
+    # system store was handed over, and only uv is: the Raven relaunched after
+    # the install inherits this helper's own environment.
+    env = dict(os.environ)
+    if TRUSTSTORE_COPY:
+        env.setdefault("UV_SYSTEM_CERTS", "1")
+        # What uv read before it had UV_SYSTEM_CERTS; current releases accept both.
+        env.setdefault("UV_NATIVE_TLS", "1")
+    return env
+
 
 def stamp_marker():
     # Claim the marker for this helper. The pid is the only thing that tells an
@@ -311,6 +348,8 @@ def wait_for_parent_windows(parent_pid):
 
 
 def main(argv=None):
+    # Before anything builds a TLS context, as the CLI's own entry settles it.
+    use_system_ca()
     # Claimed before the argument check, and released however this ends: a
     # helper that exits without clearing the marker leaves every later start
     # waiting on an install that is not running.
@@ -412,7 +451,7 @@ def run(argv=None):
         if plugin_list:
             command += ["--with-requirements", plugin_list]
         command.append(requirement)
-        return subprocess.run(command, check=False).returncode
+        return subprocess.run(command, check=False, env=uv_environment()).returncode
 
     def install(requirement, plugin_list):
         # Cheap shape first. `--force` tears the whole environment down and
@@ -1152,6 +1191,37 @@ def _external_executable(value: object, *, label: str) -> Path:
     return executable
 
 
+def _hand_over_system_ca(env: dict[str, str]) -> Path | None:
+    """Hand the helper the certificate store this process verifies against.
+
+    The helper runs on the base interpreter, which cannot import this
+    environment's truststore, so it gets a copy; it tells uv in turn. The copy
+    is the helper's to discard once loaded, and the caller's when no helper
+    starts. Since the helper deletes the directory it is handed, only one this
+    process just made is ever passed on. A process that never switched -- opted
+    out, or started some way other than `cli.entry` -- has nothing to hand over,
+    and is not asked to import truststore to find that out.
+    """
+    env.pop("RAVEN_UPGRADE_TRUSTSTORE", None)
+    truststore = sys.modules.get("truststore")
+    if truststore is None or ssl.SSLContext is not truststore.SSLContext:
+        return None
+
+    copy: Path | None = None
+    try:
+        copy = Path(tempfile.mkdtemp(prefix="raven-upgrade-truststore-"))
+        shutil.copytree(
+            Path(truststore.__file__).parent, copy / "truststore", ignore=shutil.ignore_patterns("__pycache__")
+        )
+    except OSError as exc:
+        if copy is not None:
+            shutil.rmtree(copy, ignore_errors=True)
+        print(f"Warning: the upgrade will not verify against the system certificate store ({exc}).", file=sys.stderr)
+        return None
+    env["RAVEN_UPGRADE_TRUSTSTORE"] = str(copy)
+    return copy
+
+
 def _handoff_upgrade(
     release: ReleaseInfo,
     current_version: str,
@@ -1167,6 +1237,7 @@ def _handoff_upgrade(
     env["UV_TOOL_DIR"] = str(target.tool_dir)
     env["UV_TOOL_BIN_DIR"] = str(target.bin_dir)
     env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=release.version))
+    trust_copy = _hand_over_system_ca(env)
     argv = [
         str(base_python),
         "-I",
@@ -1188,6 +1259,8 @@ def _handoff_upgrade(
         os.execve(str(base_python), argv, env)
     except OSError as exc:
         _install_guard.clear_marker()
+        if trust_copy is not None:
+            shutil.rmtree(trust_copy, ignore_errors=True)
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
     raise UpgradeError("The Raven upgrade helper returned unexpectedly")
 
@@ -1260,6 +1333,7 @@ def spawn_detached_upgrade(
     # opens the moment the caller lets go of the port, which is before the
     # helper has run its first instruction.
     env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=plan.release.version, port=status_port))
+    trust_copy = _hand_over_system_ca(env)
     if extra_env:
         env.update(extra_env)
 
@@ -1282,4 +1356,6 @@ def spawn_detached_upgrade(
         subprocess.Popen(argv, env=env, **kwargs)  # noqa: S603 - argv is built from resolved executables
     except OSError as exc:
         _install_guard.clear_marker()
+        if trust_copy is not None:
+            shutil.rmtree(trust_copy, ignore_errors=True)
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc

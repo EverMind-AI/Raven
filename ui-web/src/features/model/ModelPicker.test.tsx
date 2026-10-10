@@ -9,6 +9,8 @@ import { resetSources, setSources } from '../../state/sources'
 import * as tier from '../../state/tier'
 import { domSnapshot } from '../../test/domSnapshot'
 import { FOLD, ModelApp } from './ModelPicker'
+import { remember } from './recent'
+import { chipModel, rememberUsed } from './source'
 import * as store from './store';
 
 import type { ModelSource, Provider } from './types'
@@ -702,20 +704,26 @@ describe('the fold', () => {
   })
 })
 
-/* The last picks made from the composer head the list: the way back to the
+/* The models the last messages went out on head the list: the way back to the
    three or four a reader actually moves between (./recent.ts). */
-describe('the recent picks', () => {
-  it('heads the list with the last picks, latest first and each once, each naming its account', async () => {
+describe('the recently used models', () => {
+  /* What a taken send does to the list: the chip names the model, the turn
+     runs on it (state/session/runtime.ts records it once the server takes it). */
+  const sendOn = (model: string, provider: string): void => {
+    store.setCurrent(model, provider)
+    const ran = chipModel()
+    if (ran) rememberUsed(ran)
+  }
+
+  it('heads the list with the models messages last went out on, latest first and each once, each naming its account', async () => {
     const h = install()
     mount()
     openIt()
     expect(recents()).toHaveLength(0)
-    await act(async () => { rows('models')[1]!.click() })
-    openIt()
-    await act(async () => { rows('models')[3]!.click() })
-    openIt()
-    await act(async () => { rows('models')[1]!.click() })
-    expect(h.persisted).toEqual(['minimax-m2', 'claude-sonnet-5', 'minimax-m2'])
+    act(() => store.close())
+    sendOn('minimax-m2', 'minimax')
+    sendOn('claude-sonnet-5', 'anthropic')
+    sendOn('minimax-m2', 'minimax')
     openIt()
     expect(recents().map((b) => b.querySelector('.nm')!.textContent)).toEqual(['minimax-m2', 'claude-sonnet-5'])
     /* The account's name on the row, not its mark: the marks live on the group
@@ -730,11 +738,50 @@ describe('the recent picks', () => {
     expect(h.persistedProviders.at(-1)).toBe('anthropic')
   })
 
-  it('shows a recent pick only while its account still lists it, and not while searching', async () => {
+  it('lists the default a message went out on, though nobody ever picked it', async () => {
+    /* The case that read wrong (2026-10-09): every message went out on the
+       default set in settings, and the list showed only models picked once and
+       never sent with. */
+    install()
+    mount()
+    sendOn('minimax-m3', 'minimax')
+    openIt()
+    expect(recents().map((b) => b.querySelector('.nm')!.textContent)).toEqual(['minimax-m3'])
+  })
+
+  it('does not count a pick that no message went out on', async () => {
     install()
     mount()
     openIt()
     await act(async () => { rows('models')[1]!.click() })
+    openIt()
+    expect(recents()).toHaveLength(0)
+  })
+
+  it('does not carry over the picks the list used to hold', () => {
+    localStorage.setItem('raven.models.recent', JSON.stringify([{ model: 'claude-sonnet-5', provider: 'anthropic' }]))
+    install()
+    mount()
+    openIt()
+    expect(recents()).toHaveLength(0)
+    act(() => store.close())
+    sendOn('minimax-m2', 'minimax')
+    expect(localStorage.getItem('raven.models.recent')).toBeNull()
+  })
+
+  it('keeps nothing for a chip whose account is not known yet', () => {
+    /* A row with no account could never be shown, and kept it would push a
+       real one out of the three. */
+    install()
+    mount()
+    sendOn('minimax-m2', '')
+    expect(localStorage.getItem('raven.models.used')).toBeNull()
+  })
+
+  it('shows a recent model only while its account still lists it, and not while searching', async () => {
+    install()
+    mount()
+    sendOn('minimax-m2', 'minimax')
     openIt()
     expect(recents()).toHaveLength(1)
     type('m')
@@ -745,14 +792,6 @@ describe('the recent picks', () => {
     expect(recents()).toHaveLength(0)
   })
 
-  it('remembers picks from the composer only, not from a settings slot', async () => {
-    install()
-    mount()
-    openIt(document.getElementById('modelChip')!)
-    await act(async () => { rows('models')[1]!.click() })
-    openIt()
-    expect(recents()).toHaveLength(0)
-  })
 })
 
 describe('what the picker offers', () => {
@@ -1043,6 +1082,7 @@ describe('the model picker, to a screen reader', () => {
     mount()
     openIt()
     await act(async () => { rows('models')[3]!.click() })
+    remember('claude-sonnet-5', 'anthropic')
     openIt()
     const recent = document.querySelector<HTMLElement>('.mpick .model-recent')!
     expect(recent.getAttribute('role')).toBe('radiogroup')

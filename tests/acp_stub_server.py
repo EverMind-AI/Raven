@@ -559,6 +559,19 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "a repo."}})
         ok(request_id, {"stopReason": "end_turn"})
         return
+    if MODE == "ends_on_a_step":
+        # Two messages, each followed by the call it announced, and nothing said
+        # after the second call: the turn's last frame is a step.
+        first = {"type": "text", "text": "first, the files."}
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": first})
+        update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "ls", "status": "pending"})
+        update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+        second = {"type": "text", "text": "saving it to notes.md."}
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": second})
+        update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "t2", "title": "write", "status": "pending"})
+        update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "completed"})
+        ok(request_id, {"stopReason": "end_turn"})
+        return
     if MODE in ("cancel_aware", "cancel_deaf"):
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "working"}})
         _AWAITING_CANCEL.append((request_id, session_id))

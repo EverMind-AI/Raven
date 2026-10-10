@@ -432,9 +432,9 @@ async def test_the_transcript_carries_the_runs_own_turns_when_recorded(workspace
 
 
 async def test_the_answer_row_is_the_closing_message_when_the_lane_reports_one(workspace: Path) -> None:
-    """A narrating agent's whole reply repeats the notes already drawn on the
-    steps; the answer row is what it said after its last call, and the whole
-    reply stays in out.md for the caller that received it."""
+    """The answer row is what a narrating agent said after its last call when
+    the lane reports one, and out.md keeps what the caller received, whatever
+    the lane put in it."""
 
     class _Narrating:
         async def run(self, task: str, **_kw: Any) -> str:

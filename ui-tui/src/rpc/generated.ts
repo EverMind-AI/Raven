@@ -3441,7 +3441,7 @@ export interface ModelFetchModelsParams {
 export interface ModelFetchModelsResult {
   models: ModelCandidate[];
   /**
-   * `ok` when the vendor answered, otherwise why it did not (`not_configured`, `unauthorized`, `network_error`, `no_probe_endpoint`, `http_NNN`). The models are the bundled catalogue unioned with whatever the vendor named, so a failure to reach it costs currency, not the list.
+   * `ok` when the vendor answered, otherwise why it did not (`not_configured`, `invalid_key`, `network_error`, `certificate_untrusted`, `proxy_unreachable`, `no_probe_endpoint`, `http_NNN`). The models are the bundled catalogue unioned with whatever the vendor named, so a failure to reach it costs currency, not the list.
    */
   status: string;
   error?: string;

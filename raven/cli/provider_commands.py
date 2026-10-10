@@ -517,6 +517,12 @@ def _register_config_commands(app: typer.Typer) -> None:
             "rate_limited": "Wait a few minutes and retry, or switch provider",
             "oauth_token_missing": (f"Run: raven provider login {name.replace('_', '-')}"),
             "network_error": "Check network / firewall / VPN settings",
+            "certificate_untrusted": (
+                "If a corporate proxy or private CA signs it, add that CA to the system certificate store. "
+                "If SSL_CERT_FILE already trusts that CA, macOS and Windows may still refuse the certificate "
+                "by their own rules; RAVEN_NO_SYSTEM_CA=1 turns those off. An expired certificate, or one "
+                "for another host, is the server's to fix"
+            ),
         }
         if result["status"] == "no_probe_endpoint":
             # Not a failure: this probe pings `/models`, and these vendors do not
