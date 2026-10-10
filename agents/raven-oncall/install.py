@@ -25,8 +25,13 @@ def _resolve(value: str, *, quote: bool) -> str:
     try:
         from raven.utils.commands import resolve_subagent_command
     except ImportError:
-        # This folder can outlive the raven that shipped it, and one older than the
-        # quoting rule gets the row its own installer wrote, unquoted.
+        # Older launchers cannot keep a whitespace path together after substitution.
+        for placeholder, path in (("{SUBAGENT_DIR}", str(HERE)), ("{PYTHON}", sys.executable)):
+            if quote and placeholder in value and any(char.isspace() for char in path):
+                raise SystemExit(
+                    f"Cannot register a command path containing whitespace with this Raven version: {path!r}. "
+                    "Upgrade Raven or use paths without whitespace."
+                )
         return value.replace("{SUBAGENT_DIR}", str(HERE)).replace("{PYTHON}", sys.executable)
     return resolve_subagent_command(value, python=sys.executable, subagent_dir=str(HERE), quote=quote)
 
