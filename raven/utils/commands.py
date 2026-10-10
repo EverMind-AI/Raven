@@ -19,12 +19,19 @@ see a quoted Windows path as one token.
 """
 
 import os
+import re
 import shlex
 import shutil
 
 
 def _split_windows(command: str) -> list[str]:
-    """Tokenise one Windows command line by the CommandLineToArgvW rules."""
+    """Tokenise one Windows command line by the CommandLineToArgvW rules.
+
+    Narrower than the real parser in two places, neither of them a spelling
+    ``command_quote`` produces: a ``""`` pair inside quotes, which Windows reads
+    as a literal ``"``, yields nothing here, and an unclosed quote raises where
+    Windows reads the rest of the line as one token.
+    """
     argv: list[str] = []
     token: list[str] = []
     token_started = False
@@ -158,13 +165,17 @@ def command_quote(value: str) -> str:
 
     The string a command template is built from is split again before
     spawning, so a token carrying a space must reach that split already quoted
-    the way that host's parser reads -- ``shlex.quote`` on POSIX, the
-    surrounding-double-quote (with internal ``"`` escaped as ``\\"``) on
-    Windows. Producing this platform's quoting is what makes a template
+    the way that host's parser reads -- ``shlex.quote`` on POSIX, surrounding
+    double quotes on Windows. There a ``"`` inside the token is escaped as
+    ``\\"``, and any run of backslashes in front of a quote, the closing one
+    included, is doubled: CommandLineToArgvW halves a backslash run only where
+    a quote follows it, so a trailing ``\\`` left single would escape the
+    closing quote. Producing this platform's quoting is what makes a template
     round-trip back into the same argv it was built from.
     """
     if os.name == "nt":
-        return '"' + value.replace('"', '\\"') + '"'
+        escaped = re.sub(r'(\\*)"', r'\1\1\\"', value)
+        return '"' + re.sub(r"(\\+)\Z", r"\1\1", escaped) + '"'
     return shlex.quote(value)
 
 
