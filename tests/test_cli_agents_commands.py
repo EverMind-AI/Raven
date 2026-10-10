@@ -767,7 +767,8 @@ def test_the_engine_declaration_round_trips_through_the_row_schema(raven_home: P
 
 
 @pytest.mark.skipif(
-    os.geteuid() == 0, reason="root ignores permission bits, so the directory cannot be made unwritable"
+    os.name == "nt" or os.geteuid() == 0,
+    reason="Windows and root cannot make a directory unwritable with POSIX permission bits",
 )
 def test_an_unwritable_target_refuses_cleanly(raven_home: Path, tmp_path: Path, monkeypatch) -> None:
     """L4: a traceback is not a refusal."""
@@ -1149,3 +1150,42 @@ def test_the_generated_installer_under_a_raven_without_the_quoting_rule_writes_t
     here = target.resolve()
     assert row["command"] == f"{clean_alt_python} {here}/run.py --acp"
     assert row["cwd"] == str(here)
+
+
+@pytest.mark.parametrize("spaced", ["none", "folder", "python", "cwd"])
+def test_the_generated_installer_on_older_raven_checks_paths_before_registering(
+    raven_home: Path, tmp_path: Path, monkeypatch, spaced: str
+) -> None:
+    import importlib.util
+
+    from raven.config.update_subagents import get_agents
+
+    if spaced in {"folder", "cwd"}:
+        raven_home = tmp_path / "my home"
+        monkeypatch.setenv("RAVEN_HOME", str(raven_home))
+    result = runner.invoke(app, ["agents", "new", "demo-agent", "--no-smoke"])
+    assert result.exit_code == 0, result.output
+    target = raven_home / "agents" / "demo-agent"
+    spec = importlib.util.spec_from_file_location("generated_install_older_raven_whitespace", target / "install.py")
+    install = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(install)
+    python = tmp_path / ("my python" if spaced == "python" else "python")
+    if spaced == "cwd":
+        manifest_path = target / "subagent.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["command"] = "python run.py --acp"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setenv("SUBAGENT_PYTHON", str(python))
+    monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
+
+    if spaced in {"folder", "python"}:
+        with pytest.raises(SystemExit, match="Upgrade Raven"):
+            install.main()
+
+        assert get_agents(config_path=raven_home / "config.json") == []
+    else:
+        assert install.main() == 0
+        (row,) = get_agents(config_path=raven_home / "config.json")
+        expected = "python run.py --acp" if spaced == "cwd" else f"{python} {target}/run.py --acp"
+        assert row["command"] == expected
+        assert row["cwd"] == str(target)

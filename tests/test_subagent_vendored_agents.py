@@ -1229,7 +1229,9 @@ class TestTheShippedManifests:
 
         (row,) = written
         manifest = json.loads((target / "subagent.json").read_text(encoding="utf-8"))
-        assert command_argv(row["command"])[:2] == [sys.executable, str(target / "run.py")]
+        argv = command_argv(row["command"])
+        assert argv[0] == sys.executable
+        assert Path(argv[1]) == target / "run.py"
         assert row["cwd"] == str(target)
         for field in va._PLACEHOLDER_FIELDS:
             if field in manifest:
@@ -1238,15 +1240,16 @@ class TestTheShippedManifests:
                 )
                 assert row[field] == expected, field
 
+    @pytest.mark.parametrize("folder", sorted(p.parent.name for p in _SHIPPED.glob("*/install.py")))
     def test_an_installer_under_a_raven_without_the_quoting_rule_writes_its_old_row(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, folder: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The folder can outlive the raven that shipped it; an older raven has no ``raven.utils.commands``.
 
         There the installer writes the row it always wrote, unquoted, rather
         than failing on the import.
         """
-        target, installer = self._installer_in("raven-code", tmp_path / "agents")
+        target, installer = self._installer_in(folder, tmp_path / "agents")
         written: list[dict] = []
         monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
         monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
@@ -1254,7 +1257,46 @@ class TestTheShippedManifests:
         assert installer.main() == 0
 
         (row,) = written
-        assert row["command"] == f"{sys.executable} {target}/run.py --acp"
+        expected_flags = [] if folder == "raven-research" else ["--acp"]
+        assert row["command"].split() == [sys.executable, f"{target}/run.py", *expected_flags]
+        assert row["cwd"] == str(target)
+
+    @pytest.mark.parametrize("folder", sorted(p.parent.name for p in _SHIPPED.glob("*/install.py")))
+    @pytest.mark.parametrize("spaced", ["folder", "python"])
+    def test_an_older_raven_refuses_spaced_paths_before_registering(
+        self, folder, tmp_path, monkeypatch, spaced
+    ) -> None:
+        landing = tmp_path / ("my agents" if spaced == "folder" else "agents")
+        target, installer = self._installer_in(folder, landing)
+        python = str(tmp_path / ("my python" if spaced == "python" else "python"))
+        monkeypatch.setattr(installer, "sys", SimpleNamespace(executable=python))
+        written: list[dict] = []
+        monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+        monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
+
+        with pytest.raises(SystemExit, match="Upgrade Raven"):
+            installer.main()
+
+        assert written == []
+
+    @pytest.mark.parametrize("folder", sorted(p.parent.name for p in _SHIPPED.glob("*/install.py")))
+    def test_an_older_raven_keeps_a_spaced_cwd_when_the_command_uses_no_paths(
+        self, folder, tmp_path, monkeypatch
+    ) -> None:
+        target, installer = self._installer_in(folder, tmp_path / "my agents")
+        manifest_path = target / "subagent.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["command"] = "python run.py"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setattr(installer, "sys", SimpleNamespace(executable=str(tmp_path / "my python")))
+        written: list[dict] = []
+        monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+        monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
+
+        assert installer.main() == 0
+
+        (row,) = written
+        assert row["command"] == "python run.py"
         assert row["cwd"] == str(target)
 
 
