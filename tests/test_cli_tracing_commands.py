@@ -210,10 +210,15 @@ def test_pid_is_viewer_rejects_foreign_process():
     ("line", "expected"),
     [
         ("node /opt/raven/cli/tracing_viewer/server.js", True),
+        ("nodejs /opt/raven/cli/tracing_viewer/server.js", True),
+        ("node22 /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/usr/bin/node-22 /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/usr/bin/node-v22.16.0 /opt/raven/cli/tracing_viewer/server.js", True),
+        (r'"C:\Node\nodejs.exe" "C:\Raven\tracing_viewer\server.js"', True),
         ('"C:\\Program Files\\nodejs\\node.exe" "C:\\Raven\\tracing_viewer\\server.js"', True),
         ('"/opt/node runtime/node" /opt/raven/cli/tracing_viewer/server.js', True),
-        (None, False),
-        ("", False),
+        (None, None),
+        ("", None),
         ("node.exe unrelated.js", False),
         ("python server.js", False),
         ("notnode server.js", False),
@@ -229,8 +234,43 @@ def test_pid_is_viewer_uses_the_shared_command_line_reader(monkeypatch, line, ex
         return line
 
     monkeypatch.setattr(processes, "command_line", read)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: True)
     assert tc._pid_is_viewer(4242) is expected
     assert seen == [4242]
+
+
+@pytest.mark.parametrize("action", [[], ["stop"]])
+def test_tracing_keeps_an_unreadable_live_viewer_record(tmp_path, monkeypatch, action):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    entry = {"pid": 4242, "port": 4318}
+    pidfile.write_text(json.dumps(entry), encoding="utf-8")
+    monkeypatch.setattr("raven.utils.processes.command_line", lambda _pid: None)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: True)
+    monkeypatch.setattr(tc.os, "kill", lambda *_args: pytest.fail("signalled an unverified viewer"))
+    monkeypatch.setattr(tc, "_resolve_node", lambda: pytest.fail("started beside an unverified viewer"))
+    monkeypatch.setattr(tc, "_port_live", lambda _port: False)
+
+    result = runner.invoke(app, ["tracing", *action])
+
+    assert result.exit_code == 1
+    assert "cannot verify" in result.output.lower()
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
+
+
+def test_an_unreadable_dead_viewer_record_can_be_cleared(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+    monkeypatch.setattr("raven.utils.processes.command_line", lambda _pid: None)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: False)
+    monkeypatch.setattr(tc.os, "kill", lambda *_args: pytest.fail("signalled a dead viewer"))
+
+    result = runner.invoke(app, ["tracing", "stop"])
+
+    assert result.exit_code == 0
+    assert "stale pid file" in result.output
+    assert not pidfile.exists()
 
 
 def _aged_artifact(state_dir: Path, name: str, text: str) -> Path:
