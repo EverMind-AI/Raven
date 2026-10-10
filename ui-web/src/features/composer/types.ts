@@ -4,11 +4,14 @@
  * row that rides the tail of the transcript.
  */
 
-/* A staged file. `path` and `size` are the server's answer once the upload
-   lands; `url` is the data URL kept for display only, and only for an image. */
+/* A staged file. For an upload, `path` and `size` are the server's answer once
+   it lands and `url` is the data URL kept for display; for a file attached
+   where it already is, `path` is its own and `url` the address it is served
+   at. `url` is set only for an image. */
 export interface Attachment {
   name: string
-  size: number
+  /* Null for a file attached where it already is: its bytes were never read here. */
+  size: number | null
   uploading: boolean
   path: string | null
   url: string | null
@@ -28,7 +31,12 @@ export interface UploadReq {
 }
 
 export interface UploadRes {
+  /* The short spelling the note carries and the bubble renders from. */
   path: string
+  /* The file that spelling names, where the host answers one (`fs.upload`
+     does; a test double need not). It is what the turn is handed -- see
+     lib/uploadPaths. */
+  abs_path?: string
   size: number
 }
 

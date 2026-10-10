@@ -4,7 +4,9 @@ import { SEND, SEND_PX, SEND_STROKE } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { formatDuration } from '../../lib/duration'
+import { IMG_EXT } from '../../lib/pictureExt'
 import { current as currentSession } from '../../lib/session'
+import { remember as rememberUpload } from '../../lib/uploadPaths'
 import { draw as plusDraw } from '../../state/plus'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -418,7 +420,8 @@ export function drawTurnLive(): void {
 
 /* ── the attachment tray ──────────────────────────────────────────────── */
 
-export const fmtSize = (n: number): string => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB`
+export const fmtSize = (n: number | null): string => (n === null ? ''
+  : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB`
   : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`)
 
 /* The tray's own container is the root React draws into, so its hidden flag is
@@ -522,6 +525,7 @@ export function addTemplate(row: TemplateRow): void {
       entry.path = r.path
       entry.size = r.size
       entry.uploading = false
+      if (r.abs_path) rememberUpload(r.path, r.abs_path)
       if (entry.url) attachmentCache.set(r.path, entry.url)
       traySet(owner, trayOf(owner).slice())
       goPaint()
@@ -531,6 +535,48 @@ export function addTemplate(row: TemplateRow): void {
       goPaint()
       sayFailed(owner, t('gui.tpl.fail', { name: row.label }), e)
     })
+}
+
+/* The picture types, each with the extension a file of that type goes up under
+   when its own name spells no picture. Once the file is uploaded, its name is
+   all that is left of its type, so the extension must be one the sent bubble
+   draws as a picture -- a member of the shared table (lib/pictureExt). */
+const PICTURE_EXT: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+  'image/bmp': 'bmp', 'image/avif': 'avif', 'image/svg+xml': 'svg',
+  'image/x-icon': 'ico', 'image/vnd.microsoft.icon': 'ico',
+}
+/* By what name draws as a picture here: the shared image table, plus svg,
+   which the viewer's fileKind gives its own kind. */
+const PICTURE_NAMES = new Set([...IMG_EXT, 'svg'])
+
+const namesPicture = (name: string): boolean => {
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 && PICTURE_NAMES.has(name.slice(dot + 1).toLowerCase())
+}
+
+/* Chrome on macOS hands an image dragged in from another site as a File named
+   `download`, the name its drop code falls back to, with the format in `type`
+   alone. Everything past the upload -- the sent bubble, the file route, the
+   reloaded history -- tells a picture by its extension, so the name is given
+   the one its type says. */
+function uploadName(file: File): string {
+  const ext = PICTURE_EXT[file.type]
+  return !ext || namesPicture(file.name) ? file.name : `${file.name}.${ext}`
+}
+
+/* A file already on show, attached where it is: a picture dragged out of the
+   transcript names the file it was drawn from, and that path is handed over
+   instead of the same bytes going up again as a second copy. `url` is the
+   address the file is served at, which is what the chip draws a picture from. */
+export function addPaths(refs: ReadonlyArray<{ path: string; url: string }>): void {
+  const owner = ownerKey()
+  const staged = refs.map(({ path, url }): Attachment => {
+    const name = path.split(/[\\/]/).pop() || path
+    return { name, size: null, uploading: false, path, url: namesPicture(name) ? url : null }
+  })
+  traySet(owner, trayOf(owner).concat(staged))
+  goPaint()
 }
 
 /* Files are uploaded into <workspace>/uploads and handed to the agent as
@@ -545,7 +591,8 @@ export function addFiles(files: ArrayLike<File>): void {
      ghost that refuses that conversation every later send. */
   const owner = ownerKey()
   Array.from(files).forEach((file) => {
-    const entry: Attachment = { name: file.name, size: file.size, uploading: true, path: null, url: null }
+    const name = uploadName(file)
+    const entry: Attachment = { name, size: file.size, uploading: true, path: null, url: null }
     traySet(owner, trayOf(owner).concat([entry]))
     goPaint()
     const drop = (): void => {
@@ -559,18 +606,19 @@ export function addFiles(files: ArrayLike<File>): void {
       /* Keep the bytes for display only: an image renders as itself in the
          composer, and once uploaded, keyed by path, in the sent bubble. */
       if (/^image\//.test(file.type || '')) entry.url = dataUrl
-      up({ name: file.name, content_b64: b64 })
+      up({ name, content_b64: b64 })
         .then((r) => {
           entry.path = r.path
           entry.size = r.size
           entry.uploading = false
+          if (r.abs_path) rememberUpload(r.path, r.abs_path)
           if (entry.url) attachmentCache.set(r.path, entry.url)
           traySet(owner, trayOf(owner).slice())
           goPaint()
         })
         .catch((e: unknown) => {
           drop()
-          sayFailed(owner, t('gui.att.fail', { name: file.name }), e)
+          sayFailed(owner, t('gui.att.fail', { name }), e)
         })
     }
     reader.onerror = drop

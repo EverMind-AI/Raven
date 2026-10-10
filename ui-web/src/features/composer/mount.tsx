@@ -162,7 +162,51 @@ function openPicker(): void {
   picker.click()
 }
 
+/* The `text/uri-list` the drag in flight carried when it began in this
+   document, or '' while no drag that began here is under way. */
+let pageDrag = ''
+
+/* The files a `text/uri-list` names by this origin's own /file route. */
+function filesIn(list: string): Array<{ path: string; url: string }> {
+  const out: Array<{ path: string; url: string }> = []
+  for (const line of list.split(/\r?\n/)) {
+    const uri = line.trim()
+    if (!uri || uri.startsWith('#')) continue
+    let url: URL
+    try {
+      url = new URL(uri, location.href)
+    } catch {
+      continue
+    }
+    const path = url.searchParams.get('path')
+    if (url.origin === location.origin && url.pathname === '/file' && path) out.push({ path, url: url.href })
+  }
+  return out
+}
+
+/* A picture dragged out of the transcript carries its file's address, but
+   anything dragged in from elsewhere can name one of these addresses just as
+   well -- so a dropped file is taken at its word only when the drag that began
+   in this document carried it from its start. Matched by path rather than by
+   the address as written, which the platform's own drag plumbing may respell
+   on the way through. */
+function pageFiles(list: string, carried: string): Array<{ path: string; url: string }> {
+  const own = new Set(filesIn(carried).map((f) => f.path))
+  return filesIn(list).filter((f) => own.has(f.path))
+}
+
 let wired = false
+
+/* The page's dragstart and dragend, registered with the page's other document
+ * listeners (state/globalListeners): what a drag carries is read from the drag
+ * that began in this document, wherever in it that was. */
+export function onPageDragStart(e: DragEvent): void {
+  pageDrag = e.dataTransfer?.getData('text/uri-list') || ''
+}
+
+export function onPageDragEnd(): void {
+  pageDrag = ''
+}
 
 export function install(): void {
   if (wired) return
@@ -218,8 +262,19 @@ export function install(): void {
       e.preventDefault()
       depth = 0
       fieldBox.classList.remove('drop')
+      const carried = pageDrag
+      pageDrag = ''
       const dt = (e as DragEvent).dataTransfer
-      if (!dt || !dt.files.length) return
+      if (!dt) return
+      /* Before the files: Chrome on macOS hands the same picture over as a File
+         too, and the address is what keeps it from going up a second time. */
+      const refs = pageFiles(dt.getData('text/uri-list'), carried)
+      if (refs.length) {
+        ensure()
+        store.addPaths(refs)
+        return
+      }
+      if (!dt.files.length) return
       ensure()
       store.addFiles(dt.files)
     })
@@ -256,4 +311,5 @@ export function _resetForTests(): void {
   liveHost = null
   wired = false
   picker = null
+  pageDrag = ''
 }

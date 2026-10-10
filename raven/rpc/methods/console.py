@@ -28,6 +28,9 @@ from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
 from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
+from raven.rpc.files import UPLOAD_DIR as _UPLOAD_DIR
+from raven.rpc.files import viewer_root as _viewer_root_from
+from raven.rpc.files import workspace_root as _workspace_root
 from raven.utils.atomic_io import atomic_update
 
 if TYPE_CHECKING:
@@ -1793,31 +1796,6 @@ _FS_MAX_ENTRIES = 500
 _FS_DEFAULT_MAX_BYTES = 200_000
 
 
-def _workspace_root(loop, session_key: str = "") -> Path:
-    """The directory the page's file panel is rooted at.
-
-    The working directory the session's turns run in, not agent home: home is
-    ``~/.raven/workspace`` by default, which holds the agent's own memory and
-    is not where a launch-directory turn reads or writes anything. Resolved
-    per session because a session can be pinned to its own directory (the
-    persisted ``workdir`` override); an empty key falls through to the
-    resolver's policy default, which for the gateway is the launch directory.
-    """
-    if loop is not None:
-        peek = getattr(loop, "peek_session_workdir", None)
-        if peek is not None:
-            try:
-                return Path(peek(session_key)).resolve()
-            except ValueError:
-                pass
-    ws = getattr(loop, "workspace", None) if loop is not None else None
-    if ws:
-        return Path(ws).resolve()
-    from raven.config.loader import load_config
-
-    return Path(load_config().workspace_path).resolve()
-
-
 def _resolve_inside(root: Path, rel: str) -> Path:
     """Resolve ``rel`` under ``root``, refusing anything outside it -- or inside
     raven's own state directory.
@@ -2047,9 +2025,6 @@ async def fs_pick_dir(params: dict, *, agent_loop_factory=None) -> dict:
     return {"path": str(target), "ok": ok}
 
 
-_UPLOAD_DIR = "uploads"
-
-
 def _safe_name(name: str) -> str:
     """Strip directory parts and anything that could escape or confuse a shell."""
     base = Path(str(name or "file")).name
@@ -2060,34 +2035,21 @@ def _safe_name(name: str) -> str:
 def viewer_root(workspace: Path, rel: Path) -> Path:
     """Which root a relative path handed to the viewer is relative to.
 
-    Two roots, each deliberate, and one kind of path belongs to the other one.
-    ``fs.upload`` deposits into agent home whichever session asked -- it is the
-    root always writable, and ``turn.send`` fences an attachment there -- and
-    answers with a path relative to it. Everything else the viewer is handed is
-    relative to the session's own working directory, which is what the file
-    panel browses. The two are the same directory for a session that runs where
-    the agent lives, and part company for one pinned elsewhere: there a picture
-    the reader attached came back 404 from ``/file`` and its bubble fell back to
-    a file name.
-
-    The session's own root is tried first, so a session that keeps an
-    ``uploads`` directory of its own still serves its own file; agent home
-    answers only for a path that is an upload and is actually there.
+    :func:`raven.rpc.files.viewer_root`'s rule, with agent home read where
+    ``fs.upload`` reads it.
     """
-    if (workspace / rel).exists():
-        return workspace
-    if rel.parts[:1] == (_UPLOAD_DIR,) and (_upload_root() / rel).exists():
-        return _upload_root()
-    return workspace
+    return _viewer_root_from(workspace, rel, _upload_root())
 
 
 def _upload_root() -> Path:
     """Where an uploaded file is deposited: agent home, not the session workdir.
 
     The relative path this handler returns rides back to ``turn.send``, which
-    resolves an attachment against agent home and fences it there, so a file
-    parked anywhere else is dropped from the turn without an error. Agent home
-    is also the one root always writable: a session's working directory is
+    finds it here by :func:`viewer_root`'s rule and, with
+    ``tools.restrict_to_workspace`` on, admits agent home and the session's own
+    working directory alone, so a file parked anywhere else is dropped from the
+    turn without an error.
+    Agent home is also the one root always writable: a session's working directory is
     wherever the engine was launched from, and an engine started by the desktop
     shell inherits ``/``, where creating the directory cannot succeed.
 
@@ -2105,10 +2067,13 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
 
     The caller hands the agent a path, not bytes: every tool that reads files is
     already workspace-scoped, so an upload is just a file appearing in the
-    workspace. Collisions get a numeric suffix rather than overwriting.
+    workspace. Collisions get a numeric suffix rather than overwriting -- and
+    the name is kept free under the session's own ``uploads/`` too, because
+    :func:`raven.rpc.files.viewer_root` reads a relative path there before agent
+    home, so ``uploads/<name>`` must never mean two files.
 
-    ``session`` is still accepted (the page sends it) but does not select the
-    root -- see :func:`_upload_root`.
+    ``session`` does not select the root -- see :func:`_upload_root` -- but it
+    is what names the root the collision check above has to look past.
     """
     import base64
 
@@ -2133,10 +2098,22 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
         # the page as a bare -32603 ``internal_error`` with no reason in it.
         raise ConfigValidationError(f"cannot create {target_dir}: {e}") from None
     name = _safe_name(params.get("name", ""))
+    # The session's own root is read first by ``viewer_root``, and both
+    # ``turn.send`` and ``/file`` follow it, so a name the session root already
+    # holds would hand the turn -- and the reloaded bubble -- that file instead
+    # of the bytes just uploaded. A session that cannot be resolved leaves the
+    # old rule alone; ``turn.send``'s own resolve fails the same way there.
+    try:
+        shadow_dir = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / _UPLOAD_DIR
+    except Exception as exc:
+        logger.warning(
+            "fs.upload: cannot read the session's working directory ({}); agent home alone decides the name", exc
+        )
+        shadow_dir = None
     target = target_dir / name
     stem, suffix = target.stem, target.suffix
     n = 1
-    while target.exists():
+    while target.exists() or (shadow_dir is not None and (shadow_dir / target.name).exists()):
         target = target_dir / f"{stem}-{n}{suffix}"
         n += 1
     try:

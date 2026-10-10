@@ -930,7 +930,8 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
  *
  * The bytes are in `attachmentCache` for as long as the page that uploaded
  * them is open, and after that the file is where it was put: the composer
- * uploads into the workspace and the message keeps the path. So the cache is
+ * uploads into agent home, or attaches a file where it already is, and the
+ * message keeps the path. So the cache is
  * the fast path and `/file` is the standing one -- without it, every picture
  * in the scrollback turned into a file name the moment the page was reloaded,
  * which is not what the reader sent.
@@ -938,6 +939,10 @@ const StepView = memo(function StepView({ lane, seg }: { lane: Lane; seg: StepDa
  * A file that cannot be fetched falls back to its name rather than to a broken
  * image, the same way a generated shot does: an attachment can outlive the
  * file, and the name is still true when the bytes are gone.
+ *
+ * A drag carries an <img> by its src, and the cached copy's src is the upload's
+ * own data URL, so a dragged picture hands over its file's address instead: the
+ * composer attaches the file it names rather than a second copy of its bytes.
  */
 function AskShot({ path, live }: { path: string; live: boolean }): ReactElement {
   const [gone, setGone] = useState(false)
@@ -954,6 +959,7 @@ function AskShot({ path, live }: { path: string; live: boolean }): ReactElement 
     <img
       className="shot" src={src} alt={name}
       onError={() => setGone(true)}
+      onDragStart={(e) => e.dataTransfer.setData('text/uri-list', new URL(fileURL(String(path)), location.href).href)}
       {...(live ? { title: t('gui.img.open', { name }), onClick: () => lightbox.open(src, name) } : {})}
     />
   )

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 import * as turn from '../../features/composer/turn'
+import { readMessage } from '../../lib/attachments'
 
 import type { Sources } from '../sources'
 
@@ -37,7 +38,9 @@ async function harness({ reject = null as { code?: number; message?: string } | 
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
         pitch: () => {},
-        splitAtts: (t: string) => ({ text: t, atts: [] }),
+        /* The real reader, which is what the production stub delegates to: a
+           message's note is where the send recovers its files from. */
+        splitAtts: (t: string) => readMessage(t),
         unpitch: () => {},
       },
       'src/features/rail/store': { markNew: () => {}, draw: () => {}, endRename: () => {} },
@@ -118,6 +121,35 @@ async function harness({ reject = null as { code?: number; message?: string } | 
 }
 
 afterEach(() => { turn._resetForTests() })
+
+describe('the files a message hands to the turn', () => {
+  it('answers an upload path as the file the upload wrote', async () => {
+    /* The note keeps `uploads/shot.png` -- the bubble renders it and `/file`
+       re-roots it -- while the turn is handed the absolute file, because
+       `viewer_root` reads the session's own root before agent home: a
+       same-named file appearing there after the upload would otherwise answer
+       for it (lib/uploadPaths). */
+    const h = await harness()
+    /* The registry the loaded graph reads: `loadPart` resets the module
+       registry, so the case's own import has to be the one the graph took. */
+    const uploads = await import('../../lib/uploadPaths')
+    uploads.remember('uploads/shot.png', '/home/me/.raven/workspace/uploads/shot.png')
+
+    h.runtime.send('look\n\n[attachments, saved in the workspace]\n- uploads/shot.png')
+    await h.tick()
+
+    expect(h.sends()[0]?.media).toEqual(['/home/me/.raven/workspace/uploads/shot.png'])
+  })
+
+  it('leaves a path no upload minted to the resolver', async () => {
+    const h = await harness()
+
+    h.runtime.send('look\n\n[attachments, saved in the workspace]\n- uploads/dragged.png')
+    await h.tick()
+
+    expect(h.sends()[0]?.media).toEqual(['uploads/dragged.png'])
+  })
+})
 
 describe('a message typed while the turn is running', () => {
   it('goes to that turn instead of the queue', async () => {

@@ -104,6 +104,7 @@ function kindMark(name: string): ReactElement {
 function AttChip({ a, i }: { a: Attachment; i: number }): ReactElement {
   const isImg = !!a.url
   const size = a.uploading ? t('gui.att.uploading') : store.fmtSize(a.size)
+  const tip = size ? `${a.name} · ${size}` : a.name
   const rm = (
     <button className="rm" aria-label={t('gui.att.remove', { name: a.name })}
       onClick={(e) => { e.stopPropagation(); store.removeAtt(i) }}>
@@ -114,18 +115,18 @@ function AttChip({ a, i }: { a: Attachment; i: number }): ReactElement {
     return (
       <div className={'att img' + (a.uploading ? ' up' : '')}>
         {/* the square crops the image, so a click has to be able to show all of it */}
-        <img src={a.url as string} alt={a.name} title={`${a.name} · ${size}`}
+        <img src={a.url as string} alt={a.name} title={tip}
           onClick={() => lightbox.open(a.url as string, a.name)} />
         {rm}
       </div>
     )
   }
-  /* The name and the badge are the chip; a finished file's size goes to the
-     tooltip, and only an upload in flight says so in words. The
+  /* The name and the badge are the chip; a finished file's size, where one is
+     known, goes to the tooltip, and only an upload in flight says so in words. The
      remove button takes the badge's slot on hover, the way the design draws it,
      so the chip keeps its width. */
   return (
-    <div className={'att' + (a.uploading ? ' up' : '')} title={`${a.name} · ${size}`}>
+    <div className={'att' + (a.uploading ? ' up' : '')} title={tip}>
       <span className="cp-ik">{kindMark(a.name)}{rm}</span>
       <span className="nm">{a.name}</span>
       {a.uploading ? <span className="sz">{size}</span> : null}

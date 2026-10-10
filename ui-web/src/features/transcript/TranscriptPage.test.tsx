@@ -139,6 +139,24 @@ describe('transcript island, history', () => {
     expect($('.turn.me .achip')).toBeNull()
   })
 
+  /* A drag carries an <img> by its src, and the cached copy's src is the upload's
+     own data URL: dropped on the composer, it named no file. */
+  it('carries the file, not the cached bytes, when a sent picture is dragged', () => {
+    attachmentCache.set('uploads/shot.png', 'data:image/png;base64,eA==')
+    act(() => {
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
+    })
+    const dt = new DataTransfer()
+    /* happy-dom builds a drag event as a plain Event, so the transfer goes on by hand. */
+    const ev = new Event('dragstart', { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'dataTransfer', { value: dt })
+    act(() => { $('.turn.me .shot')!.dispatchEvent(ev) })
+    const url = new URL(dt.getData('text/uri-list') || 'about:blank')
+    expect(url.origin).toBe(location.origin)
+    expect(url.pathname).toBe('/file')
+    expect(url.searchParams.get('path')).toBe('uploads/shot.png')
+  })
+
   it('renders an attached picture from the workspace once the cache is gone', () => {
     /* The cache holds the bytes only for the page that uploaded them, so after
        a reload every picture in the scrollback turned into a file name -- which

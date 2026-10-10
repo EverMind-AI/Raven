@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -46,26 +47,37 @@ if TYPE_CHECKING:
 _TURN_FAILED_CODE = -32099
 
 
-def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
+def _resolve_media(paths: list[str] | None, root: Path | None = None) -> tuple[Media, ...]:
     """Turn the front end's attachment paths into ``Media`` for the spine.
 
     Resolved with the filesystem tools' own policy rather than against the
-    process cwd. A caller sends what it holds, and what it holds is a workspace
-    path (``uploads/shot.png``) -- the same spelling every file tool takes, and
-    one that resolves to nothing from wherever ``raven serve`` happens to have
-    been started. The downstream check is a bare ``is_file()`` that drops a miss
-    in silence, so a cwd-relative resolve loses the attachment with no error
-    anywhere.
+    process cwd. A caller sends what it holds: an upload's path relative to
+    agent home (``uploads/shot.png``), or the absolute path of a file the front
+    end attached where it already was -- the spellings every file tool takes,
+    and the first one resolves to nothing from wherever ``raven serve`` happens
+    to have been started. The downstream check is a bare ``is_file()`` that
+    drops a miss in silence, so a cwd-relative resolve loses the attachment with
+    no error anywhere.
 
     The mime is left generic on purpose: ``render.build_user_content`` sniffs
     the magic bytes, and the channels' own intake does the same thing here.
     A path that does not resolve, or resolves outside the allowed directory,
     is dropped with a log line -- one bad attachment must not fail the turn.
+
+    ``root`` is the conversation's own working directory, which ``/file``
+    serves the front end's pictures from, and a picture dragged out of the
+    transcript is attached by the path the viewer drew it from. So a relative
+    path is found by the viewer's own rule (``files.viewer_root``), and with
+    ``tools.restrict_to_workspace`` on that root is admitted beside agent home:
+    a fence on agent home alone dropped such a picture while the tray showed it
+    attached, and this conversation's file tools may read that root already.
+    Without a root, agent home stands for both.
     """
     if not paths:
         return ()
     from raven.agent.tools.filesystem import resolve_path
     from raven.config import load_config
+    from raven.rpc.files import viewer_root
 
     try:
         cfg = load_config()
@@ -74,8 +86,9 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
         # ``fs.upload`` deposits through that same property. Reading the field
         # directly put a second home's attachments under the first home's
         # workspace, where nothing resolved.
-        workspace = cfg.workspace_path
-        allowed = (workspace,) if cfg.tools.restrict_to_workspace else ()
+        home = cfg.workspace_path
+        base = root if root is not None else home
+        allowed = (base, home) if cfg.tools.restrict_to_workspace else ()
     except Exception as exc:
         logger.warning("turn.send: cannot resolve the workspace ({}); attachments dropped", exc)
         return ()
@@ -85,7 +98,9 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
         if not isinstance(raw, str) or not raw.strip():
             continue
         try:
-            resolved = resolve_path(raw.strip(), workspace, allowed)
+            text = raw.strip()
+            anchor = base if Path(text).expanduser().is_absolute() else viewer_root(base, Path(text), home)
+            resolved = resolve_path(text, anchor, allowed)
             if not resolved.is_file():
                 logger.warning("turn.send: attachment {} does not resolve to a file", raw)
                 continue
@@ -99,6 +114,27 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
             continue
         out.append(Media(path=str(resolved), mime="application/octet-stream", kind="file"))
     return tuple(out)
+
+
+def _media_root(agent_loop_factory: AgentLoopFactory | None, session_key: str) -> Path | None:
+    """The conversation's own working directory, as ``/file`` finds it, or None.
+
+    The viewer asks ``files.workspace_root`` and so does this, so the two
+    cannot disagree about which root a picture came from. With no loop there is
+    nothing to ask; a loop that cannot answer leaves agent home to stand in,
+    rather than costing the turn its attachments.
+    """
+    from raven.rpc.files import workspace_root
+    from raven.rpc.methods.session import _safe_invoke_factory
+
+    loop = _safe_invoke_factory(agent_loop_factory)
+    if loop is None:
+        return None
+    try:
+        return workspace_root(loop, session_key)
+    except Exception as exc:
+        logger.warning("turn.send: cannot read the session's working directory ({}); using agent home", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -461,13 +497,17 @@ async def turn_send(
         else parsed.session_key
     )
 
+    # Both paths below resolve the same attachments; the root is only looked
+    # up when there is something to resolve.
+    media_root = _media_root(agent_loop_factory, parsed.session_key) if parsed.media else None
+
     if parsed.busy == "inject" and (is_turn_active(lane) or _lane_in_flight(scheduler, lane)):
         # Two records of "a turn is running here", and both count: this map
         # knows the turns ``turn.send`` started, the scheduler knows every turn
         # on the lane -- an armed wake is submitted to it directly
         # (``make_on_session_wake``) and never passes through here (reviewed
         # 2026-09-09: a steer during a running wake queued a second turn).
-        return await _inject_into_running(parsed, lane, scheduler=scheduler, emitter=emitter)
+        return await _inject_into_running(parsed, lane, scheduler=scheduler, emitter=emitter, media_root=media_root)
     if is_turn_active(lane):
         raise TurnInProgressError(
             f"session {parsed.session_key!r} already has an active turn",
@@ -487,7 +527,7 @@ async def turn_send(
         ),
         text=parsed.content,
         playbook_mode=parsed.playbook_mode,
-        media=_resolve_media(parsed.media),
+        media=_resolve_media(parsed.media, media_root),
         # conversation == the lane. For the main agent that is the session key,
         # which is also the front-end subscription key; for a direct chat it is
         # that instance's lane, and ``RpcOutlet`` maps it back to the session so
@@ -573,6 +613,7 @@ async def _inject_into_running(
     *,
     scheduler: Scheduler,
     emitter: SubscriptionEmitter | None,
+    media_root: Path | None = None,
 ) -> dict[str, Any]:
     """Hand ``parsed.content`` to the turn already running on ``lane``.
 
@@ -603,7 +644,7 @@ async def _inject_into_running(
             surface=declared_surface(),
         ),
         text=parsed.content,
-        media=_resolve_media(parsed.media),
+        media=_resolve_media(parsed.media, media_root),
         conversation=lane,
         direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
         busy=BusyPolicy.INJECT,

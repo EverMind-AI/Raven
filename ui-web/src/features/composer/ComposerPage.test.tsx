@@ -5,12 +5,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Lightbox } from '../../chrome/Lightbox'
 import { setTranslator } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
+import { IMG_EXT } from '../../lib/pictureExt'
+import * as uploadPaths from '../../lib/uploadPaths'
 import * as confirmStore from '../../state/confirm'
 import { close as closeLightbox } from '../../state/lightbox'
 import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import * as tail from '../transcript/tail'
+import { fileKind } from '../workspace/store'
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
 import * as turn from './turn';
@@ -152,6 +155,7 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   attachmentCache._resetForTests()
+  uploadPaths._resetForTests()
   tail._resetForTests()
   localStorage.clear()
   turn._resetForTests()
@@ -382,6 +386,25 @@ describe('composer drafts', () => {
     let taken: string[] = []
     act(() => { taken = store.takeAtts() })
     expect(taken).toEqual(['uploads/slow.bin'])
+  })
+
+  /* The note keeps the short path its reader renders, while the turn is handed
+     the file the upload wrote: `viewer_root` reads the session's own root
+     first, so a same-named file appearing there after the upload could answer
+     for it (lib/uploadPaths). Recording the answer here is what feeds that. */
+  it('remembers the file an upload wrote, for the send to name absolutely', async () => {
+    wire({
+      upload: (req) => Promise.resolve({
+        path: `uploads/${req.name}`,
+        abs_path: `/home/me/.raven/workspace/uploads/${req.name}`,
+        size: 4,
+      }),
+    })
+    mountTray()
+    await stage('shot.png')
+
+    expect(paths()).toEqual(['uploads/shot.png'])
+    expect(uploadPaths.mediaPath('uploads/shot.png')).toBe('/home/me/.raven/workspace/uploads/shot.png')
   })
 
   /* The other session stages one too: it is what tells a tray that forgot the
@@ -668,6 +691,97 @@ describe('the attachment tray', () => {
     expect((box.querySelector('.att') as HTMLElement).classList.contains('up')).toBe(false)
     expect(box.querySelector('.att img')!.getAttribute('title')).toBe('shot.png · 2 KB')
     expect(attachmentCache.get('uploads/shot.png')).toMatch(/^data:image\/png/)
+  })
+
+  /* Chrome on macOS hands an <img> dragged out of the transcript back as a File
+     named `download`, the name its drop code falls back to, with the format in
+     `type` alone. Uploaded under that name it became uploads/download, and
+     everything past the upload tells a picture by its extension: the sent
+     bubble drew a file chip where the picture should have been. */
+  it('uploads a picture whose name says no picture under the extension its type gives', async () => {
+    const names: string[] = []
+    const { calls } = wire({
+      upload: async (req) => {
+        names.push(req.name)
+        return { path: `uploads/${req.name}`, size: 4 }
+      },
+    })
+    mountTray()
+    await act(async () => {
+      store.addFiles([
+        new File(['x'], 'download', { type: 'image/png' }),
+        new File(['x'], 'download', { type: 'image/jpeg' }),
+        new File(['x'], 'chart.v2', { type: 'image/webp' }),
+      ])
+      await flush()
+    })
+    expect(names).toEqual(['download.png', 'download.jpg', 'chart.v2.webp'])
+    act(() => { store.fireSend() })
+    expect(calls.sent[0]).toBe(
+      `\n\n${word('gui.att.note')}\n- uploads/download.png\n- uploads/download.jpg\n- uploads/chart.v2.webp`)
+  })
+
+  it('keeps a name that already says what the file is', async () => {
+    const names: string[] = []
+    wire({
+      upload: async (req) => {
+        names.push(req.name)
+        return { path: `uploads/${req.name}`, size: 4 }
+      },
+    })
+    mountTray()
+    await act(async () => {
+      store.addFiles([
+        new File(['x'], 'Shot.PNG', { type: 'image/png' }),
+        new File(['x'], 'photo.jpeg', { type: 'image/jpeg' }),
+        new File(['x'], 'notes', { type: '' }),
+      ])
+      await flush()
+    })
+    expect(names).toEqual(['Shot.PNG', 'photo.jpeg', 'notes'])
+  })
+
+  it('attaches a file already on show by its path, sending nothing up', () => {
+    const up = vi.fn()
+    const { calls } = wire({ upload: up })
+    const box = mountTray()
+    act(() => {
+      store.addPaths([
+        { path: 'uploads/shot.png', url: 'http://localhost/file?path=uploads%2Fshot.png' },
+        { path: '/work/notes.pdf', url: 'http://localhost/file?path=%2Fwork%2Fnotes.pdf' },
+        { path: 'C:\\work\\plot.png', url: 'http://localhost/file?path=C%3A%5Cwork%5Cplot.png' },
+      ])
+    })
+    expect(up).not.toHaveBeenCalled()
+    expect(store.attsPending()).toBe(0)
+    const imgs = [...box.querySelectorAll('.att.img img')] as HTMLImageElement[]
+    expect(imgs.map((i) => i.getAttribute('src'))).toEqual([
+      'http://localhost/file?path=uploads%2Fshot.png',
+      'http://localhost/file?path=C%3A%5Cwork%5Cplot.png',
+    ])
+    /* Nothing here read the bytes, so the tooltip has no size to give. */
+    expect(imgs.map((i) => i.getAttribute('title'))).toEqual(['shot.png', 'plot.png'])
+    expect(box.querySelector('.att:not(.img) .nm')!.textContent).toBe('notes.pdf')
+    act(() => { store.fireSend() })
+    expect(calls.sent[0]).toBe(
+      `\n\n${word('gui.att.note')}\n- uploads/shot.png\n- /work/notes.pdf\n- C:\\work\\plot.png`)
+  })
+
+  /* The chip and the sent bubble tell a picture by its extension, and both read
+     the one table (lib/pictureExt) fileKind does, so a name the two disagree on
+     cannot exist. The table is spread here rather than restated: an extension
+     added to it is exercised by this case the moment it lands. */
+  it('draws a picture chip for exactly the names the sent bubble draws as pictures', () => {
+    wire({ upload: vi.fn() })
+    mountTray()
+    const exts = [...IMG_EXT, 'svg', 'PNG', 'tif', 'tiff', 'heic', 'jxl', 'pdf', 'txt', 'pptx']
+    act(() => {
+      store.addPaths(exts.map((ext) => ({ path: `uploads/x.${ext}`, url: `http://localhost/file?path=x.${ext}` })))
+    })
+    const drawn = store.get().atts.map((a) => !!a.url)
+    expect(drawn).toEqual(exts.map((ext) => ['img', 'svg'].includes(fileKind(`uploads/x.${ext}`))))
+    expect(drawn).toContain(true)
+    expect(drawn).toContain(false)
   })
 
   it('shows a non-image as a name, with its size in the tooltip', async () => {
