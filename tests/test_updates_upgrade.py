@@ -26,6 +26,7 @@ import truststore
 from typer.testing import CliRunner
 
 from raven.cli.commands import app
+from raven.security.tls import use_system_ca
 from raven.updates import upgrade as upgrade_commands
 
 WHEEL_NAME = "raven-0.1.4-py3-none-any.whl"
@@ -2410,8 +2411,8 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
 
     @pytest.fixture
     def switched(self) -> Iterator[None]:
-        """This process verifying against the system store, as `cli.entry` leaves it."""
-        truststore.inject_into_ssl()
+        """This process verifying against the system store, switched the way `cli.entry` does it."""
+        use_system_ca()
         yield
         truststore.extract_from_ssl()
 
@@ -2464,8 +2465,6 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path, tmp_path: Path
     ) -> None:
         """The helper deletes the directory it is handed, so only one made for it may reach it."""
-        from raven.security.tls import use_system_ca
-
         monkeypatch.setenv("RAVEN_NO_SYSTEM_CA", "1")
         use_system_ca()
         monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "not-for-this-helper"))

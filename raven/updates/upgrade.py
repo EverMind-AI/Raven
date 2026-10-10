@@ -13,7 +13,6 @@ import json
 import os
 import re
 import shutil
-import ssl
 import subprocess
 import sys
 import tempfile
@@ -30,6 +29,7 @@ from urllib.request import url2pathname
 
 import httpx
 
+from raven.security.tls import system_ca_in_use
 from raven.updates import install_guard as _install_guard
 
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
@@ -1216,15 +1216,16 @@ def _hand_over_system_ca(env: dict[str, str]) -> Path | None:
     and is not asked to import truststore to find that out.
     """
     env.pop("RAVEN_UPGRADE_TRUSTSTORE", None)
-    truststore = sys.modules.get("truststore")
-    if truststore is None or ssl.SSLContext is not truststore.SSLContext:
+    if not system_ca_in_use():
         return None
 
     copy: Path | None = None
     try:
         copy = Path(tempfile.mkdtemp(prefix="raven-upgrade-truststore-"))
         shutil.copytree(
-            Path(truststore.__file__).parent, copy / "truststore", ignore=shutil.ignore_patterns("__pycache__")
+            Path(sys.modules["truststore"].__file__).parent,
+            copy / "truststore",
+            ignore=shutil.ignore_patterns("__pycache__"),
         )
     except OSError as exc:
         if copy is not None:
