@@ -219,6 +219,16 @@ class TestFrontmatterParsing:
         content = "---\n- first\n- tools: shell\n---\nbody\n"
         assert _parse_frontmatter(content) == {"- tools": "shell"}
 
+    def test_an_oversized_block_keeps_the_line_reading(self):
+        filler = "\n".join(f"k{i}: v{i}" for i in range(2000))
+        content = f"---\nname: big\ndescription: >-\n  Folded\n  text\n{filler}\n---\nbody\n"
+        assert _parse_frontmatter(content)["description"] == ">-"
+
+    def test_a_block_several_kilobytes_long_still_reads_as_yaml(self):
+        description = " ".join(["word"] * 900)
+        content = f"---\nname: long\ndescription: >-\n  {description}\n---\nbody\n"
+        assert _parse_frontmatter(content)["description"] == description
+
     def test_a_control_character_keeps_the_line_reading(self):
         content = "---\nname: bell\ndescription: Rings \x07 twice\n---\nbody\n"
         assert _parse_frontmatter(content) == {"name": "bell", "description": "Rings \x07 twice"}
