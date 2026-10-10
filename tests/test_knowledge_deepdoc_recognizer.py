@@ -518,3 +518,106 @@ class TestPostprocessTransposedYolo:
         found = _stub(input_names=["images"]).postprocess(boxes, {"scale_factor": [2.0, 3.0]}, thr=0.5)
 
         assert found[0]["bbox"] == [16.0, 51.0, 24.0, 69.0]
+
+
+class TestCreateInputs:
+    """The PaddleDetection shape, where a batch is one padded tensor."""
+
+    @staticmethod
+    def _info(height: float, width: float) -> dict:
+        import numpy as np
+
+        return {
+            "im_shape": np.array([height, width], dtype="float32"),
+            "scale_factor": np.array([1.0, 1.0], dtype="float32"),
+        }
+
+    def test_a_single_page_is_wrapped_without_padding(self) -> None:
+        import numpy as np
+
+        page = np.zeros((3, 10, 20), dtype=np.float32)
+
+        inputs = _stub(input_names=["image", "scale_factor"]).create_inputs([page], [self._info(10, 20)])
+
+        assert inputs["image"].shape == (1, 3, 10, 20)
+        assert set(inputs) == {"image", "im_shape", "scale_factor"}
+
+    def test_a_batch_is_padded_up_to_its_largest_page(self) -> None:
+        """One tensor per batch, so the shorter pages are padded rather than
+        sent separately."""
+        import numpy as np
+
+        pages = [np.zeros((3, 10, 20), dtype=np.float32), np.zeros((3, 30, 40), dtype=np.float32)]
+        info = [self._info(10, 20), self._info(30, 40)]
+
+        inputs = _stub(input_names=["image", "scale_factor"]).create_inputs(pages, info)
+
+        assert inputs["image"].shape == (2, 3, 30, 40)
+
+    def test_the_padding_goes_after_the_page(self) -> None:
+        """So the boxes keep the coordinates they were detected at."""
+        import numpy as np
+
+        small = np.ones((3, 10, 20), dtype=np.float32)
+        pages = [small, np.zeros((3, 30, 40), dtype=np.float32)]
+        info = [self._info(10, 20), self._info(30, 40)]
+
+        inputs = _stub(input_names=["image", "scale_factor"]).create_inputs(pages, info)
+
+        assert inputs["image"][0, :, :10, :20].min() == pytest.approx(1.0)
+        assert inputs["image"][0, :, 10:, :].max() == pytest.approx(0.0)
+
+
+class TestRunningABatch:
+    """``__call__``: pages in, one list of regions per page out."""
+
+    @staticmethod
+    def _running(answer, *, input_shape=(64, 64)):
+        recogniser = _stub(input_names=["images"], input_shape=input_shape)
+        recogniser.batches = []  # type: ignore[attr-defined]
+
+        def run(_names, feed, _options=None):
+            recogniser.batches.append(feed)  # type: ignore[attr-defined]
+            return [answer]
+
+        recogniser.ort_sess = type("S", (), {"run": staticmethod(run)})()  # type: ignore[attr-defined]
+        return recogniser
+
+    @staticmethod
+    def _answer():
+        import numpy as np
+
+        return np.array([[[0.0, 0.0, 10.0, 20.0, 0.9, 0.0]]], dtype=np.float32)
+
+    def test_each_page_answers_its_own_regions(self) -> None:
+        import numpy as np
+
+        recogniser = self._running(self._answer())
+
+        out = recogniser([np.zeros((50, 50, 3), dtype=np.uint8) for _ in range(2)])
+
+        assert len(out) == 2
+        assert out[0][0]["type"] == "table"
+
+    def test_a_long_document_is_run_in_batches(self) -> None:
+        import numpy as np
+
+        recogniser = self._running(self._answer())
+
+        recogniser([np.zeros((50, 50, 3), dtype=np.uint8) for _ in range(5)], batch_size=2)
+
+        assert len(recogniser.batches) == 5, "one run per page, three batches of pages"
+
+    def test_a_page_given_as_an_image_object_is_converted(self) -> None:
+        """The caller hands pages straight from the renderer, which are not
+        always arrays."""
+        from PIL import Image
+
+        recogniser = self._running(self._answer())
+
+        out = recogniser([Image.new("RGB", (50, 50))])
+
+        assert len(out) == 1
+
+    def test_no_pages_answer_nothing(self) -> None:
+        assert self._running(self._answer())([]) == []

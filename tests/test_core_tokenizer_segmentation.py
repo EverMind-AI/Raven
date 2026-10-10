@@ -339,3 +339,177 @@ class TestMixedScripts:
 
         assert "\u5317\u4eac" in out
         assert "hello" in out
+
+
+class TestTheSearch:
+    """`dfs_` enumerates the ways a run of characters can be cut.
+
+    It is the expensive half of segmentation, which is why it carries a memo, a
+    depth ceiling and a shortcut for repeated characters -- a page of one
+    character repeated is otherwise exponential, and the three guards are the
+    kind that go wrong quietly: the search still answers, with fewer splits.
+    """
+
+    def test_it_finds_the_split_the_dictionary_knows(self, segmenter: tok.Tokenizer) -> None:
+        found: list = []
+
+        segmenter.dfs_("\u6570\u636e\u5e93", 0, [], found)
+
+        assert found, "at least one way to cut it"
+        assert any(["\u6570\u636e\u5e93"] == [tk for tk, _ in way] for way in found)
+
+    def test_it_finds_more_than_one_way_where_there_is_more_than_one(self, segmenter: tok.Tokenizer) -> None:
+        """`database` is also `data` plus a character, and the scoring below is
+        what chooses between them."""
+        found: list = []
+
+        segmenter.dfs_("\u6570\u636e\u5e93", 0, [], found)
+
+        assert len(found) > 1
+
+    def test_a_long_run_of_one_character_does_not_explode(self, segmenter: tok.Tokenizer) -> None:
+        """Five of the same character turns on the repetition shortcut. Without
+        it the search walks every partition of the run."""
+        found: list = []
+
+        segmenter.dfs_("\u55b5" * 40, 0, [], found)
+
+        assert found
+        assert len(found) < 100, "the shortcut kept the search bounded"
+
+    def test_a_long_mixed_run_stops_at_the_depth_ceiling(self, segmenter: tok.Tokenizer) -> None:
+        """Past the ceiling the rest of the run is taken whole rather than
+        split, which is a worse segmentation and a finite one."""
+        found: list = []
+
+        segmenter.dfs_("\u5317\u4eac\u5927\u5b66" * 12, 0, [], found)
+
+        assert found
+        assert all(way for way in found)
+
+    def test_an_exhausted_run_answers_with_what_it_has(self, segmenter: tok.Tokenizer) -> None:
+        found: list = []
+
+        segmenter.dfs_("", 0, [], found)
+
+        assert found == [[]]
+
+
+class TestScoring:
+    """What makes one cut better than another: total frequency, a bonus for
+    words longer than a character, and a penalty for using many tokens."""
+
+    def test_a_known_word_scores_above_the_same_characters_apart(self, segmenter: tok.Tokenizer) -> None:
+        whole = [("\u6570\u636e\u5e93", (9, "n"))]
+        apart = [("\u6570", (0, "")), ("\u636e", (0, "")), ("\u5e93", (0, ""))]
+
+        _tks, whole_score = segmenter.score_(whole)
+        _tks, apart_score = segmenter.score_(apart)
+
+        assert whole_score > apart_score
+
+    def test_fewer_tokens_score_better_at_equal_frequency(self, segmenter: tok.Tokenizer) -> None:
+        one = [("ab", (0, ""))]
+        two = [("a", (0, "")), ("b", (0, ""))]
+
+        assert segmenter.score_(one)[1] > segmenter.score_(two)[1]
+
+    def test_the_tokens_come_back_with_the_score(self, segmenter: tok.Tokenizer) -> None:
+        tks, _score = segmenter.score_([("a", (0, "")), ("b", (0, ""))])
+
+        assert tks == ["a", "b"]
+
+    def test_the_best_cut_sorts_first(self, segmenter: tok.Tokenizer) -> None:
+        ways = [
+            [("\u6570", (0, "")), ("\u636e", (0, "")), ("\u5e93", (0, ""))],
+            [("\u6570\u636e\u5e93", (9, "n"))],
+        ]
+
+        ranked = segmenter._sort_tokens(ways)
+
+        assert ranked[0][0] == ["\u6570\u636e\u5e93"]
+
+
+class TestMaximumMatching:
+    """The two single-pass fallbacks, left to right and right to left.
+
+    They disagree on exactly the text the search is for, which is why both run
+    and the better-scoring answer wins.
+    """
+
+    def test_the_forward_pass_takes_the_longest_word_it_can(self, segmenter: tok.Tokenizer) -> None:
+        tks, _score = segmenter._max_forward("\u6570\u636e\u5e93")
+
+        assert tks == ["\u6570\u636e\u5e93"]
+
+    def test_the_backward_pass_agrees_where_there_is_one_answer(self, segmenter: tok.Tokenizer) -> None:
+        tks, _score = segmenter._max_backward("\u6570\u636e\u5e93")
+
+        assert tks == ["\u6570\u636e\u5e93"]
+
+    def test_the_forward_pass_falls_through_unknown_characters(self, segmenter: tok.Tokenizer) -> None:
+        tks, _score = segmenter._max_forward("\u55b5\u55b5")
+
+        assert tks == ["\u55b5", "\u55b5"]
+
+    def test_the_backward_pass_falls_through_them_too(self, segmenter: tok.Tokenizer) -> None:
+        tks, _score = segmenter._max_backward("\u55b5\u55b5")
+
+        assert tks == ["\u55b5", "\u55b5"]
+
+    def test_both_passes_keep_a_known_word_beside_an_unknown_one(self, segmenter: tok.Tokenizer) -> None:
+        for pass_ in (segmenter._max_forward, segmenter._max_backward):
+            tks, _score = pass_("\u55b5\u5317\u4eac")
+
+            assert "\u5317\u4eac" in tks
+
+    def test_an_empty_line_matches_nothing(self, segmenter: tok.Tokenizer) -> None:
+        """`score_` divides by the token count, so an empty line is the one
+        input that could raise rather than answer."""
+        for pass_ in (segmenter._max_forward, segmenter._max_backward):
+            with pytest.raises(ZeroDivisionError):
+                pass_("")
+
+
+class TestMerge:
+    """Putting back a split the punctuation pattern made inside a word."""
+
+    def test_a_word_the_dictionary_knows_is_rejoined(self, segmenter: tok.Tokenizer, tmp_path) -> None:
+        extra = tmp_path / "dotted.txt"
+        extra.write_text("a.b 900 n\n", encoding="utf-8")
+        segmenter.add_user_dict(str(extra))
+
+        assert segmenter.merge_("a . b") == "a.b"
+
+    def test_runs_the_dictionary_does_not_know_are_left_apart(self, segmenter: tok.Tokenizer) -> None:
+        assert segmenter.merge_("\u5317\u4eac \u5927\u5b66") == "\u5317\u4eac \u5927\u5b66"
+
+    def test_repeated_spaces_are_collapsed(self, segmenter: tok.Tokenizer) -> None:
+        assert segmenter.merge_("\u5317\u4eac    \u5927\u5b66") == "\u5317\u4eac \u5927\u5b66"
+
+    def test_an_empty_line_merges_to_nothing(self, segmenter: tok.Tokenizer) -> None:
+        assert segmenter.merge_("") == ""
+
+
+class TestFineGrainedPaths:
+    def test_a_latin_line_is_split_on_slashes_rather_than_searched(self, segmenter: tok.Tokenizer) -> None:
+        """Under a fifth Chinese, the second pass is not segmentation at all --
+        it is the one split the first pass leaves joined."""
+        assert segmenter.fine_grained_tokenize("and/or").split() == ["and", "or"]
+
+    def test_a_short_token_is_left_whole(self, segmenter: tok.Tokenizer) -> None:
+        assert segmenter.fine_grained_tokenize("\u5317\u4eac").strip() == "\u5317\u4eac"
+
+    def test_a_number_is_left_whole(self, segmenter: tok.Tokenizer) -> None:
+        """`1,234.56` is one thing; cutting it is how a figure stops being
+        findable."""
+        out = segmenter.fine_grained_tokenize("1,234.56 \u6570\u636e\u5e93 \u5317\u4eac")
+
+        assert "1,234.56" in out.split()
+
+    def test_a_very_long_token_is_not_searched(self, segmenter: tok.Tokenizer) -> None:
+        """Past ten characters the search is skipped: it is the expensive half,
+        and a run that long is rarely one word."""
+        long = "\u6570\u636e\u5e93" * 5
+
+        assert long in segmenter.fine_grained_tokenize(long).split()

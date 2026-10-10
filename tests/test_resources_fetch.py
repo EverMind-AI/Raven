@@ -332,3 +332,156 @@ class TestMain:
         resources.main(["--all-layouts"])
 
         assert len(asked[0]) > default
+
+
+class TestFetchNltk:
+    """The corpora the latin half of the tokenizer reads, into the package
+    rather than a user's home -- so an install is self-contained and two
+    checkouts do not fight over one cache."""
+
+    @staticmethod
+    def _install(monkeypatch: pytest.MonkeyPatch, *, answer: bool = True) -> list[str]:
+        asked: list[str] = []
+
+        def download(corpus: str, download_dir: str = "", quiet: bool = False, halt_on_error: bool = True) -> bool:
+            asked.append(corpus)
+            return answer
+
+        import nltk
+
+        monkeypatch.setattr(nltk, "download", download)
+        return asked
+
+    def test_every_corpus_is_fetched(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked = self._install(monkeypatch)
+
+        written = resources.fetch_nltk(force=False)
+
+        assert written == len(resources.NLTK_CORPORA)
+        assert asked == list(resources.NLTK_CORPORA)
+
+    def test_the_order_puts_the_dependency_first(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """nltk gates wordnet behind omw-1.4, so a run that fetched wordnet
+        alone still raises the first time the lemmatizer is asked."""
+        asked = self._install(monkeypatch)
+
+        resources.fetch_nltk(force=False)
+
+        assert asked.index("omw-1.4") < asked.index("wordnet")
+
+    def test_a_corpus_unpacked_into_a_directory_counts_as_present(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asked = self._install(monkeypatch)
+        (resources.NLTK_DATA / "corpora" / "wordnet").mkdir(parents=True)
+
+        resources.fetch_nltk(force=False)
+
+        assert "wordnet" not in asked
+
+    def test_a_corpus_left_as_its_zip_counts_as_present_too(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """nltk unpacks some and leaves others zipped; checking only for the
+        directory re-downloaded wordnet on every run."""
+        asked = self._install(monkeypatch)
+        (resources.NLTK_DATA / "corpora").mkdir(parents=True)
+        (resources.NLTK_DATA / "corpora" / "wordnet.zip").write_bytes(b"x")
+
+        resources.fetch_nltk(force=False)
+
+        assert "wordnet" not in asked
+
+    def test_the_sentence_splitter_is_looked_for_under_tokenizers(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        asked = self._install(monkeypatch)
+        (resources.NLTK_DATA / "tokenizers" / "punkt_tab").mkdir(parents=True)
+
+        resources.fetch_nltk(force=False)
+
+        assert "punkt_tab" not in asked
+
+    def test_force_fetches_what_is_already_here(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        asked = self._install(monkeypatch)
+        (resources.NLTK_DATA / "corpora" / "wordnet").mkdir(parents=True)
+
+        resources.fetch_nltk(force=True)
+
+        assert "wordnet" in asked
+
+    def test_a_refused_download_is_raised(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`halt_on_error=False` keeps nltk from aborting the batch itself, so
+        the return value is what this has to report on."""
+        self._install(monkeypatch, answer=False)
+
+        with pytest.raises(RuntimeError):
+            resources.fetch_nltk(force=False)
+
+    def test_the_proxy_guard_is_opted_out_of(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """nltk's SSRF guard cannot tell an intentional corporate proxy from a
+        redirect it was tricked into following, and this is an explicit fetch
+        of named corpora run by an operator installing raven."""
+        import os
+
+        monkeypatch.delenv("NLTK_ALLOW_PROXIED_URLOPEN", raising=False)
+        self._install(monkeypatch)
+
+        resources.fetch_nltk(force=False)
+
+        assert os.environ["NLTK_ALLOW_PROXIED_URLOPEN"] == "1"
+
+    def test_a_host_that_already_decided_keeps_its_answer(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import os
+
+        monkeypatch.setenv("NLTK_ALLOW_PROXIED_URLOPEN", "0")
+        self._install(monkeypatch)
+
+        resources.fetch_nltk(force=False)
+
+        assert os.environ["NLTK_ALLOW_PROXIED_URLOPEN"] == "0"
+
+
+class TestWarmDictionary:
+    """Building the trie cache at install time rather than inside a reader's
+    first query, which is six seconds."""
+
+    def test_a_cache_already_built_is_left_alone(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from raven.core import tokenizer as tok
+
+        dictionary = tmp_path / "huqie.txt"
+        dictionary.write_text("", encoding="utf-8")
+        dictionary.with_suffix(".txt.trie").write_bytes(b"cached")
+        monkeypatch.setattr(tok, "dictionary_path", lambda **_kw: dictionary)
+        built: list[int] = []
+        monkeypatch.setattr(tok, "Tokenizer", lambda *a, **k: built.append(1))
+
+        resources.warm_dictionary()
+
+        assert built == []
+
+    def test_a_missing_cache_is_built(self, res: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        from raven.core import tokenizer as tok
+
+        dictionary = tmp_path / "huqie.txt"
+        dictionary.write_text("", encoding="utf-8")
+        monkeypatch.setattr(tok, "dictionary_path", lambda **_kw: dictionary)
+        built: list[int] = []
+        monkeypatch.setattr(tok, "Tokenizer", lambda *a, **k: built.append(1))
+
+        resources.warm_dictionary()
+
+        assert built == [1]
+
+    def test_a_failure_to_build_does_not_stop_the_install(
+        self, res: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """It costs six seconds later, not correctness."""
+        from raven.core import tokenizer as tok
+
+        dictionary = tmp_path / "huqie.txt"
+        dictionary.write_text("", encoding="utf-8")
+        monkeypatch.setattr(tok, "dictionary_path", lambda **_kw: dictionary)
+        monkeypatch.setattr(tok, "Tokenizer", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no datrie here")))
+
+        resources.warm_dictionary()

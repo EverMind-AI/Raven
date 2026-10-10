@@ -474,3 +474,99 @@ class TestStraySingleCells:
         assert "lonely" in html
         for c in range(4):
             assert f"r3c{c}" in html
+
+
+class TestProseFormInDepth:
+    """`html=False`, which is the form that gets embedded.
+
+    A grid is not something a search can match against, so each body cell is
+    written out as a sentence naming the column it sat under. Stacked headers
+    are joined into one name, so a value under `2025 > Q1` is findable by
+    either.
+    """
+
+    @staticmethod
+    def _described(rows: list[list[str]], headers: list[int], is_english: bool = True) -> list[str]:
+        boxes = [
+            box(cell, row=r, col=c, **({"H": r} if r in headers else {}))
+            for r, line in enumerate(rows)
+            for c, cell in enumerate(line)
+        ]
+        out = TSR.construct_table(boxes, is_english=is_english, html=False)
+        assert isinstance(out, list)
+        return out
+
+    def test_a_body_value_is_named_by_its_column(self) -> None:
+        lines = self._described([["name", "count"], ["widget", "3"]], headers=[0])
+
+        assert any("count" in line and "3" in line for line in lines)
+
+    def test_two_header_rows_are_joined_into_one_name(self) -> None:
+        """A value under `2025` over `Q1` has to be findable by either, which
+        it is not if only the nearest header reaches it."""
+        lines = self._described([["year", "2025"], ["metric", "Q1"], ["revenue", "10"]], headers=[0, 1])
+
+        assert lines
+        assert any("10" in line for line in lines)
+
+    def test_the_english_joiner_is_a_word_and_the_chinese_one_is_a_particle(self) -> None:
+        """`de` reads as two words run together in English and the English
+        phrasing reads as nothing at all in Chinese."""
+        english = self._described([["year", "2025"], ["metric", "Q1"], ["a", "10"]], headers=[0, 1])
+        chinese = self._described([["year", "2025"], ["metric", "Q1"], ["a", "10"]], headers=[0, 1], is_english=False)
+
+        assert english != chinese or all("\u7684" not in line for line in english)
+
+    def test_a_header_row_that_is_entirely_empty_is_not_one(self) -> None:
+        """The model can mark a blank band as a header; naming every value
+        after nothing is worse than naming it after the row above."""
+        boxes = [
+            box("", row=0, col=0, H=0),
+            box("", row=0, col=1, H=0),
+            box("name", row=1, col=0, H=1),
+            box("count", row=1, col=1, H=1),
+            box("widget", row=2, col=0),
+            box("3", row=2, col=1),
+        ]
+
+        out = TSR.construct_table(boxes, is_english=True, html=False)
+
+        assert isinstance(out, list)
+        assert any("widget" in line or "3" in line for line in out)
+
+    def test_a_two_column_table_with_no_header_reads_as_pairs(self) -> None:
+        """Nothing to name the values after, and two columns is a list of
+        key and value -- so they are joined rather than described."""
+        boxes = [box(f"key{r}", row=r, col=0) for r in range(3)] + [box(f"value{r}", row=r, col=1) for r in range(3)]
+
+        out = TSR.construct_table(boxes, is_english=True, html=False)
+
+        assert isinstance(out, list)
+        assert any("value" in line for line in out)
+
+    def test_a_described_row_is_one_line_carrying_every_cell(self) -> None:
+        """Under a header, each body row is written out whole -- the column
+        name against each value, joined. One row, one line."""
+        rows = [["name", "n"]] + [[f"r{r}", str(r)] for r in range(6)]
+
+        lines = self._described(rows, headers=[0])
+
+        assert len(lines) == 6
+        assert all("name" in line and "n" in line for line in lines)
+
+    def test_every_body_value_reaches_the_description(self) -> None:
+        rows = [["name", "n"]] + [[f"r{r}", str(r)] for r in range(6)]
+
+        joined = "\n".join(self._described(rows, headers=[0]))
+
+        for r in range(6):
+            assert f"r{r}" in joined
+
+    def test_a_table_with_no_body_rows_describes_nothing(self) -> None:
+        out = TSR.construct_table(
+            [box("name", row=0, col=0, H=0), box("count", row=0, col=1, H=0)],
+            is_english=True,
+            html=False,
+        )
+
+        assert out == []
