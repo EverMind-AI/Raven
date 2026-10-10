@@ -374,6 +374,8 @@ def identity_text(
     model: str | None = None,
     specialists: Sequence[tuple[str, str]] = (),
     dispatch_tools: Sequence[str] = DISPATCH_TOOLS,
+    *,
+    has_memory_backend: bool = False,
 ) -> str:
     """Segment 1 - the core identity / runtime block.
 
@@ -385,6 +387,11 @@ def identity_text(
     form) told to the model so it never guesses its own identity from
     pretraining. ``None`` (the default) resolves it from the running turn's
     binding, else lazily from config (see ``_resolved_model_id``).
+
+    ``has_memory_backend`` reflects whether a ``MemoryBackend`` plugin is
+    wired. A backend keeps memory in its own store and surfaces it through
+    per-turn recall into ``# Memory``, so naming a profile file there would
+    hand the agent a write target that is not where its memory lives.
     """
     home_path = str(agent_home.expanduser().resolve())
     bound = work_dir or workdir.current()
@@ -394,6 +401,29 @@ def identity_text(
     resolved_model = model if model is not None else _resolved_model_id()
     delegation, delegation_rule = _delegation_block(specialists, dispatch_tools)
     model_line = f"\nYou are running on model: {resolved_model}." if resolved_model else ""
+
+    # A wired backend keeps memory in the plugin's own store and hands the
+    # turn what is relevant as ``# Memory``, so the two files under agent home
+    # are not where that memory lives. Naming them there left the agent a write
+    # target it does not own. The last clause is the other half of the same
+    # bug: the store is dispatched after the turn ends, so a claim either way
+    # is one the agent cannot have checked -- and whatever it claims is itself
+    # extracted into memory next turn. Without a backend the text is unchanged:
+    # whatever those files are worth is the host's business, not this segment's.
+    if has_memory_backend:
+        home_memory = (
+            " — your own skills, not a place for user artifacts.\n"
+            "  - Memory is not yours to write: what is relevant is recalled into the `# Memory`\n"
+            "    section each turn, and the host persists the conversation after it ends. You\n"
+            "    cannot observe that write, so never report it to the user as done or as failed."
+        )
+    else:
+        home_memory = (
+            " — your own memory and skills, not a place for user artifacts.\n"
+            f"  - User profile: {home_path}/user_memory/profile/user.md (preferences, identity, project context)\n"
+            f"  - Episodic log: {home_path}/user_memory/episodic/episodes.md (grep-searchable). "
+            "Each entry starts with [YYYY-MM-DD HH:MM]."
+        )
 
     # One sentence for both policies. A package installed into the interpreter
     # Raven itself runs on, or into a user-wide prefix, changes every later run.
@@ -424,9 +454,7 @@ You are Raven, a helpful AI assistant.
 
 ## Directories
 - Working directory: {work_path} — files you produce go here; relative paths resolve here.
-- Agent home: {home_path} — your own memory and skills, not a place for user artifacts.
-  - User profile: {home_path}/user_memory/profile/user.md (preferences, identity, project context)
-  - Episodic log: {home_path}/user_memory/episodic/episodes.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+- Agent home: {home_path}{home_memory}
   - Custom skills: {home_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}{delegation}{_subagent_note()}## Raven Guidelines

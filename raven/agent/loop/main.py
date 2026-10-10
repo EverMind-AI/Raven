@@ -330,6 +330,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             skill_forge_config=skill_forge_config,
             now_fn=now_fn,
             blocklist_reader=lambda: skill_blocklist(self._live_config),
+            has_memory_backend=backend is not None,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Off switches with no config file behind them: an eval harness that
