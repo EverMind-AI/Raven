@@ -411,8 +411,8 @@ class SpawnRecord:
                 # What it said after its last step, when the lane can tell that
                 # apart from everything it said. The context read draws this as
                 # the answer row, so a narrating agent's progress notes stay
-                # on the steps they preceded; `out.md` keeps the reply the
-                # caller was handed.
+                # on the steps they preceded; `out.md` keeps the whole reply,
+                # before the cap the caller's copy went through.
                 closing = getattr(activity, "closing", None)
                 if output is not None and isinstance(closing, str) and closing.strip():
                     self.file("closing.md").write_text(closing, encoding="utf-8")
