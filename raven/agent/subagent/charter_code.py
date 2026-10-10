@@ -51,6 +51,8 @@ ALLOWED_NODES: frozenset[type[ast.AST]] = frozenset(
         ast.Compare,
         ast.BoolOp,
         ast.UnaryOp,
+        ast.UAdd,
+        ast.USub,
         ast.BinOp,
         ast.Add,
         ast.Sub,
@@ -95,7 +97,24 @@ shape "does any earlier call match" actually takes.
 """
 
 ALLOWED_CALLS: frozenset[str] = frozenset(
-    {"len", "str", "int", "bool", "any", "all", "sorted", "set", "list", "dict", "tuple", "min", "max", "abs"}
+    {
+        "len",
+        "str",
+        "int",
+        "float",
+        "bool",
+        "isinstance",
+        "any",
+        "all",
+        "sorted",
+        "set",
+        "list",
+        "dict",
+        "tuple",
+        "min",
+        "max",
+        "abs",
+    }
 )
 
 ALLOWED_METHODS: frozenset[str] = frozenset(

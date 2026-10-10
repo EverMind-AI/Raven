@@ -451,10 +451,10 @@ async def test_dag_node_draws_what_the_node_did_between_the_two_messages() -> No
 
 
 async def test_a_dag_nodes_answer_row_is_its_closing_message_when_the_lane_left_one() -> None:
-    """Same rule as subagent.context: the whole output repeats the narration
-    already on the steps, so the answer row is what the node said after its
-    last call. The field itself stays off the wire -- `output` is what the
-    contract declares, and it stays whole."""
+    """Same rule as subagent.context: when the lane left a closing message, the
+    answer row is what the node said after its last call. The field itself
+    stays off the wire -- `output` is what the contract declares, and it is
+    left as stored."""
 
     class _Closing(_TranscribedDagTool):
         async def read_node(
@@ -470,7 +470,7 @@ async def test_a_dag_nodes_answer_row_is_its_closing_message_when_the_lane_left_
     answer = await dag_node({"run_id": RUN_ID, "node": "node-a"}, agent_loop_factory=_factory(tool))
 
     assert answer["node"]["messages"][-1]["text"] == "the report"
-    assert answer["node"]["output"] and answer["node"]["output"] != "the report", "output stays the whole reply"
+    assert answer["node"]["output"] and answer["node"]["output"] != "the report", "output is left as stored"
     assert "closing" not in answer["node"]
     _, model = METHOD_MODELS["dag.node"]
     model.model_validate(answer)

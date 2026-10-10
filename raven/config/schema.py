@@ -2247,10 +2247,10 @@ class PlaybookConfig(Base):
     """Whether each turn writes itself a worker table before it starts.
 
     ``default`` is the flow this repo has always run: nothing is generated and
-    no new code is on the request path. ``generate`` spends one model call per
-    turn deciding which sub-agents the question needs and what each one's brief
-    is, then offers those workers -- rather than the bare roster -- to the
-    dispatching model.
+    no new code is on the request path. ``generate`` enables the pre-turn mode
+    chosen by ``defaultGenerationMode`` or the request override: Task selects
+    existing workers with minimal prompts, while Persona may build the full
+    enabled Harness surface.
 
     What it does not do is configure the main agent: it keeps every tool it had
     and decides for itself who to hand work to. The brief travels as a preamble
@@ -2258,6 +2258,23 @@ class PlaybookConfig(Base):
     it is permitted -- narrowing what a model is shown was never a permission
     in Raven, and the enforcement point is ``ToolRegistry.execute``.
     """
+
+    default_generation_mode: Literal["off", "task", "persona"] = "task"
+    """Default pre-turn Playbook generation mode for a request that names none.
+
+    ``off`` preserves the ordinary turn path and ``task`` selects and configures
+    existing workers for the turn in hand. Both are deployment-wide answers,
+    which is what a default is for.
+
+    ``persona`` is not, and setting it here does not make every turn mint one:
+    a Persona is an identity a conversation then runs as, so it is minted only
+    for a request that asked for one by sending ``playbook_mode: "persona"``
+    (the maker page does). Read as a default it meant a reader typing "hi" spent
+    a model call on a Harness, was bound to it, and heard the assistant offer a
+    draft nobody asked about. The value is accepted rather than refused because
+    it still reads as "this deployment is in the Persona business", and a turn
+    that does ask is served -- but a deployment wanting Personas from clients
+    that send no mode needs those clients to send one."""
 
 
 class SubagentsConfig(Base):

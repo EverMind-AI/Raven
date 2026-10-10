@@ -9,10 +9,11 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import FrozenInstanceError
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+import truststore
 from typer.testing import CliRunner
 
 from raven.cli.commands import app
@@ -720,7 +722,7 @@ def _uv_calls(run: Mock) -> list[dict[str, object]]:
     for call in run.call_args_list:
         argv = list(call.args[0])
         assert argv[:3] == ["/usr/bin/uv", "tool", "install"], argv
-        assert call.kwargs == {"check": False}
+        assert call.kwargs.keys() == {"check", "env"} and call.kwargs["check"] is False
         options, requirement = argv[3:-1], argv[-1]
         mode = options[:2] if options[0] == "--reinstall-package" else options[:1]
         options = options[len(mode) :]
@@ -887,7 +889,7 @@ def test_upgrade_helper_manifest_reaches_a_log_file_before_uv_does(
     monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="utf-8", write_through=False))
     seen: dict[str, str] = {}
 
-    def run(argv, check):
+    def run(argv, check, env):
         seen.setdefault("before_uv", raw.getvalue().decode("utf-8"))
         return Mock(returncode=0)
 
@@ -1057,7 +1059,7 @@ class TestTheHelperAnswersOnThePagePort:
         and asks the reader to sign in again on 401 or 403."""
         seen: dict[str, tuple[int, bytes]] = {}
 
-        def run(_argv, check):
+        def run(_argv, check, env):
             seen["status"] = _get(port, "/upgrade/status")
             seen["root"] = _get(port, "/")
             return Mock(returncode=0)
@@ -1084,7 +1086,7 @@ class TestTheHelperAnswersOnThePagePort:
         own to this port and read the answer."""
         seen: list[int] = []
 
-        def run(_argv, check):
+        def run(_argv, check, env):
             seen.append(_get(port, "/upgrade/status", host=f"attacker.example:{port}")[0])
             return Mock(returncode=0)
 
@@ -1136,7 +1138,7 @@ class TestTheHelperAnswersOnThePagePort:
         """The terminal has no page to answer and sees the progress itself."""
         free_during_install: list[bool] = []
 
-        def run(_argv, check):
+        def run(_argv, check, env):
             free_during_install.append(_port_is_free(port))
             return Mock(returncode=0)
 
@@ -1405,7 +1407,7 @@ def test_upgrade_helper_waits_for_parent_before_running_uv(
         events.append(("wait", parent_pid))
         return 0
 
-    def run(argv: list[str], *, check: bool) -> Mock:
+    def run(argv: list[str], *, check: bool, env: dict[str, str]) -> Mock:
         events.append(("run", argv))
         return Mock(returncode=0)
 
@@ -2370,3 +2372,252 @@ def test_upgrade_helper_does_not_sweep_on_posix(monkeypatch: pytest.MonkeyPatch)
 
     assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 0
     assert "sweep" not in order
+
+
+class TestTheHelperVerifiesAgainstTheSystemStore:
+    """The helper fetches the release's lists itself and uv fetches the rest, both
+    outside the environment that holds truststore. The spawning side hands the
+    helper a copy, and the helper tells uv, so an upgrade succeeds wherever the
+    release lookup did."""
+
+    INVALID = "Unable to upgrade Raven: invalid upgrade helper arguments.\n"
+    HANDED = ("RAVEN_UPGRADE_TRUSTSTORE", "UV_SYSTEM_CERTS", "UV_NATIVE_TLS")
+
+    @pytest.fixture(autouse=True)
+    def scratch(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """Where the copy is made, so one no helper consumed stays out of the real temp dir."""
+        directory = tmp_path / "scratch"
+        directory.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(directory))
+        monkeypatch.delenv("RAVEN_NO_SYSTEM_CA", raising=False)
+        for name in self.HANDED:
+            monkeypatch.delenv(name, raising=False)
+        return directory
+
+    @pytest.fixture
+    def plan(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> object:
+        uv = tmp_path / "uv"
+        uv.write_text("", encoding="utf-8")
+        uv.chmod(0o755)
+        monkeypatch.setattr(upgrade_commands.shutil, "which", lambda _name: str(uv))
+        monkeypatch.setattr(upgrade_commands, "_external_executable", lambda value, *, label: Path(str(value)))
+        return upgrade_commands.UpgradePlan(
+            current_version="0.1.3",
+            release=upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL),
+            target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=tmp_path / "bin"),
+        )
+
+    @pytest.fixture
+    def switched(self) -> Iterator[None]:
+        """This process verifying against the system store, as `cli.entry` leaves it."""
+        truststore.inject_into_ssl()
+        yield
+        truststore.extract_from_ssl()
+
+    @staticmethod
+    def _copy_in(env: dict[str, str]) -> tuple[Path, bytes]:
+        copy = Path(env["RAVEN_UPGRADE_TRUSTSTORE"])
+        return copy, (copy / "truststore" / "__init__.py").read_bytes()
+
+    def test_the_cli_handoff_hands_the_helper_a_copy_of_truststore(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, switched: None
+    ) -> None:
+        monkeypatch.setattr(upgrade_commands.sys, "platform", "linux")
+        handed: list[tuple[Path, bytes]] = []
+
+        def execve(_executable, _argv, env):
+            handed.append(self._copy_in(env))
+            raise OSError("stop here")
+
+        monkeypatch.setattr(upgrade_commands.os, "execve", execve)
+
+        with pytest.raises(upgrade_commands.UpgradeError, match="stop here"):
+            upgrade_commands._handoff_upgrade(plan.release, plan.current_version, plan.target)
+
+        ((copy, package),) = handed
+        assert package == Path(truststore.__file__).read_bytes()
+        assert not copy.exists(), "a helper that never started left its copy behind"
+
+    def test_the_page_spawn_hands_the_helper_a_copy_of_truststore(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, switched: None
+    ) -> None:
+        handed: list[tuple[Path, bytes]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: handed.append(self._copy_in(env)))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        ((_copy, package),) = handed
+        assert package == Path(truststore.__file__).read_bytes()
+
+    def test_a_page_spawn_that_never_started_leaves_no_copy(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path, switched: None
+    ) -> None:
+        monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=OSError("spawn denied")))
+
+        with pytest.raises(upgrade_commands.UpgradeError):
+            upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        assert list(scratch.iterdir()) == []
+
+    def test_a_process_started_under_the_opt_out_hands_over_nothing_not_even_an_inherited_path(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path, tmp_path: Path
+    ) -> None:
+        """The helper deletes the directory it is handed, so only one made for it may reach it."""
+        from raven.security.tls import use_system_ca
+
+        monkeypatch.setenv("RAVEN_NO_SYSTEM_CA", "1")
+        use_system_ca()
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "not-for-this-helper"))
+        envs: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        (env,) = envs
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+
+    def test_a_process_that_never_switched_hands_over_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path
+    ) -> None:
+        """Started some way other than `cli.entry`, a process verifies the way each library does,
+        and its helper should do the same, whether or not truststore could be imported."""
+        envs: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        (env,) = envs
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+
+    def test_a_process_without_truststore_starts_its_helper_all_the_same(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path
+    ) -> None:
+        """The real-uv upgrade test's tool environment has no truststore, and calls the handoff
+        without `cli.entry`; importing truststore there ended the upgrade before it began."""
+        monkeypatch.setitem(sys.modules, "truststore", None)
+        envs: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        (env,) = envs
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+
+    def test_a_copy_that_cannot_be_made_is_reported_and_nothing_is_handed_over(
+        self, monkeypatch: pytest.MonkeyPatch, scratch: Path, capsys: pytest.CaptureFixture[str], switched: None
+    ) -> None:
+        """The helper then verifies the way it always did; the upgrade itself goes ahead."""
+
+        def full(_source, destination, **_kwargs):
+            Path(destination).mkdir()
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(upgrade_commands.shutil, "copytree", full)
+        env: dict[str, str] = {}
+
+        assert upgrade_commands._hand_over_system_ca(env) is None
+
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+        assert "No space left on device" in capsys.readouterr().err
+
+    def _uv_and_relaunch_environments(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        uv: list[dict[str, str]] = []
+        relaunched: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "run", lambda _argv, check, env: uv.append(env) or Mock(returncode=0))
+        helper_main, popen = _helper_with_relaunch(monkeypatch)
+        # This process's ssl module is not the helper's to change.
+        helper_main.__globals__["use_system_ca"] = lambda: None
+        popen.side_effect = lambda *_a, **_kw: relaunched.append(dict(os.environ))
+
+        assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH]) == 0
+        return uv, relaunched
+
+    def test_a_handed_over_store_reaches_uv_and_not_the_relaunched_raven(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The relaunched Raven inherits the helper's own environment, and everything it starts after."""
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
+
+        uv, relaunched = self._uv_and_relaunch_environments(monkeypatch)
+
+        assert {(env["UV_SYSTEM_CERTS"], env["UV_NATIVE_TLS"]) for env in uv} == {("1", "1")}
+        (relaunch,) = relaunched
+        assert not set(self.HANDED) & relaunch.keys()
+
+    def test_without_a_copy_uv_is_told_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch)
+
+        assert uv
+        assert not any({"UV_SYSTEM_CERTS", "UV_NATIVE_TLS"} & env.keys() for env in uv)
+
+    def test_a_uv_setting_already_made_is_left_alone(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("UV_SYSTEM_CERTS", "0")
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
+
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch)
+
+        assert {env["UV_SYSTEM_CERTS"] for env in uv} == {"0"}
+
+    def _run_helper(self, interpreter: str, copy: Path, **extra: str) -> subprocess.CompletedProcess[str]:
+        env = {**os.environ, "RAVEN_UPGRADE_TRUSTSTORE": str(copy), **extra}
+        env.pop("RAVEN_UPGRADE_MARKER", None)
+        return subprocess.run(
+            [interpreter, "-I", "-c", upgrade_commands._upgrade_helper_bootstrap()],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    @staticmethod
+    def _base_interpreter() -> str:
+        """The interpreter the helper runs on, which holds no truststore of its own."""
+        base = getattr(sys, "_base_executable", None) or sys.executable
+        if subprocess.run([base, "-I", "-c", "import truststore"], capture_output=True, check=False).returncode == 0:
+            pytest.skip("this base interpreter has its own truststore, which would hide a copy that cannot load")
+        return base
+
+    def test_the_helper_switches_to_the_store_it_is_handed_before_anything_else(self, tmp_path: Path) -> None:
+        """A stand-in package records the call; the helper exits on its empty argv right after."""
+        copy = tmp_path / "handed"
+        (copy / "truststore").mkdir(parents=True)
+        (copy / "truststore" / "__init__.py").write_text(
+            "import os\n\n\ndef inject_into_ssl():\n    open(os.environ['RAVEN_TEST_INJECTED'], 'w').close()\n",
+            encoding="utf-8",
+        )
+        injected = tmp_path / "injected"
+
+        done = self._run_helper(sys.executable, copy, RAVEN_TEST_INJECTED=str(injected))
+
+        assert (done.returncode, done.stderr) == (2, self.INVALID)
+        assert injected.exists()
+        assert not copy.exists()
+
+    def test_the_base_interpreter_loads_the_copy_it_is_handed(self, switched: None) -> None:
+        base = self._base_interpreter()
+        copy = upgrade_commands._hand_over_system_ca({})
+
+        done = self._run_helper(base, copy)
+
+        assert (done.returncode, done.stderr) == (2, self.INVALID)
+        assert not copy.exists()
+
+    def test_a_copy_that_does_not_load_is_reported_and_the_helper_carries_on(self, tmp_path: Path) -> None:
+        base = self._base_interpreter()
+        copy = tmp_path / "empty"
+        copy.mkdir()
+
+        done = self._run_helper(base, copy)
+
+        warning, refusal = done.stderr.splitlines(keepends=True)
+        assert done.returncode == 2
+        assert "system certificate store" in warning
+        assert refusal == self.INVALID
+        assert not copy.exists()

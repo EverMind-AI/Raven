@@ -20,7 +20,7 @@ import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { reduce } from '../../features/composer/turn'
 import { claimDraft as claimDeskDraft } from '../../features/desk/store'
-import { loadProviders, stagedTier } from '../../features/model/source'
+import { chipModel, loadProviders, rememberUsed, stagedTier } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
@@ -49,6 +49,7 @@ import { get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, view
 import { rows as sessionRows, sess } from './rows'
 
 import type { TurnEvent, TurnSnapshot } from '../../features/composer/turn'
+import type { Recent } from '../../features/model/recent'
 import type { SessRow } from '../../features/rail/types'
 import type { Staging } from './staging'
 
@@ -290,11 +291,13 @@ export function send(text: string): void {
   ;(async () => {
     const id = await openConversation(rowPreview(text))
     beginNaming(text)
+    const ran = runsOn(id)
     /* `sessionCurrent()` rather than `id`, which is what this has always sent:
        the two differ only when the reader opened another conversation inside
        the promotion above, and making them agree is a fix about where a raced
        first message lands, not about this one. Left alone deliberately. */
     const sent = await gateway().call('turn.send', { session_key: sessionCurrent() as string, content: text, ...mediaOf(text) })
+    if (ran && sent.accepted !== false) rememberUsed(ran)
     if (hasNamingFlag(sent) && sent.naming === false) namingDeclined(id as string)
   })().catch(failed)
 }
@@ -325,13 +328,42 @@ export function dispatchSend(text: string, failed: (e: unknown) => void): void {
   const current = sessionCurrent()
   touchSession(current, text)
   beginNaming(text)
+  const ran = runsOn(current)
   /* `=== false`, not falsy: a server too old to carry the field says nothing
      at all, and reading that as "declined" would tear down a placeholder
      while a title really is on its way. Which servers carry it is
      rpc/capabilities.ts's question; what the verdict means stays here. */
   gateway().call('turn.send', { session_key: current as string, content: text, ...mediaOf(text) })
-    .then((r) => { if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string) })
+    .then((r) => {
+      if (ran && r.accepted !== false) rememberUsed(ran)
+      if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string)
+    })
     .catch(failed)
+}
+
+/* Conversations whose staged model the server refused while they were being
+   made, until the reload that refusal fired lands. Their first turn runs on the
+   model the session already had, which the chip shows only once that reload
+   lands -- so a send that reads the chip in that window records nothing. Cleared
+   by that send or by the reload, whichever comes first: a conversation the
+   roster made has no send to clear it, and its first one, however much later,
+   would otherwise record nothing either. */
+const refusedModel = new Set<string>()
+
+/* The refusal's reload: it puts the chip back on what the session runs, and from
+   then on the chip can be read again. */
+function reconcileChip(sessionId: string, gen: number): void {
+  void Promise.resolve(loadProviders(sessionId, gen)).finally(() => { refusedModel.delete(sessionId) })
+}
+
+/* What a turn leaving now on `sessionId` runs on, for the picker's recent list
+   (features/model/recent.ts): the chip's model and account, read as the message
+   goes and recorded once the server has taken it, so a pick made while it is on
+   its way does not stand in for it. A message merged into a running turn rides
+   on the model that turn started with and records nothing (`sendMidTurn`). */
+function runsOn(sessionId: string | null | undefined): Recent | null {
+  if (sessionId && refusedModel.delete(sessionId)) return null
+  return chipModel()
 }
 
 /* The stop button: cancel the turn the reader started. */
@@ -507,14 +539,16 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
        quiet here: with no loop to bind to, the server answers applied:false,
        and the chip kept a model the session does not have. */
     if (r && r.applied === false) {
+      refusedModel.add(sessionId)
       toast(t('gui.op.switch_failed', { detail: t('gui.model.refused') }))
-      void loadProviders(sessionId, gen)
+      reconcileChip(sessionId, gen)
     }
   } catch (e) {
+    refusedModel.add(sessionId)
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.
     toast(t('gui.op.switch_failed', { detail: detailOf(e) }))
-    void loadProviders(sessionId, gen)
+    reconcileChip(sessionId, gen)
   }
 }
 

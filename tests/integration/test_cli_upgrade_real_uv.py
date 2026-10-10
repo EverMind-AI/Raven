@@ -21,7 +21,14 @@ import pytest
 UV_PATH = shutil.which("uv")
 
 
-def _build_fixture(source_root: Path, output_root: Path, version: str, uv_path: Path) -> Path:
+def _build_fixture(
+    source_root: Path, output_root: Path, version: str, uv_path: Path, *, system_store: bool = False
+) -> Path:
+    """``system_store`` installs truststore and switches to it before the handoff, as
+    ``cli.entry`` does, so the helper is handed a copy of the store to verify against."""
+    dependencies = ", ".join(
+        f'"{name}"' for name in ["httpx", "rich", "typer", *(["truststore"] if system_store else [])]
+    )
     package_root = source_root / "upgrade_fixture"
     package_root.mkdir(parents=True)
     (source_root / "pyproject.toml").write_text(
@@ -31,7 +38,7 @@ def _build_fixture(source_root: Path, output_root: Path, version: str, uv_path: 
             name = "raven"
             version = "{version}"
             requires-python = ">=3.12"
-            dependencies = ["httpx", "rich", "typer"]
+            dependencies = [{dependencies}]
 
             [project.optional-dependencies]
             channels = []
@@ -57,6 +64,7 @@ def _build_fixture(source_root: Path, output_root: Path, version: str, uv_path: 
 
 
             VERSION = "{version}"
+            SYSTEM_STORE = {system_store!r}
 
 
             def main():
@@ -71,8 +79,21 @@ def _build_fixture(source_root: Path, output_root: Path, version: str, uv_path: 
                 if sys.argv[1:] != ["upgrade"]:
                     return 2
 
+                if SYSTEM_STORE:
+                    import truststore
+
+                    truststore.inject_into_ssl()
                 sys.path.insert(0, os.environ["RAVEN_UPGRADE_SOURCE"])
                 from raven.updates import upgrade as upgrade_commands
+
+                hand_over = upgrade_commands._hand_over_system_ca
+
+                def reported(env):
+                    copy = hand_over(env)
+                    print("handed over: " + ("yes" if copy else "no"), file=sys.stderr, flush=True)
+                    return copy
+
+                upgrade_commands._hand_over_system_ca = reported
 
                 target = upgrade_commands._uv_tool_target()
                 if target is None:
@@ -133,14 +154,15 @@ def _build_companion(source_root: Path, output_root: Path, uv_path: Path) -> Pat
 
 
 @pytest.mark.skipif(UV_PATH is None, reason="uv is required for the real self-upgrade test")
-def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -> None:
+@pytest.mark.parametrize("system_store", [False, True], ids=["library roots", "system store"])
+def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path, system_store: bool) -> None:
     external_tools = tmp_path / "external tools"
     external_tools.mkdir()
     external_uv = external_tools / Path(UV_PATH).name
     shutil.copy2(UV_PATH, external_uv)
     wheels = tmp_path / "wheels"
-    old_wheel = _build_fixture(tmp_path / "old", wheels, "1.0.0", external_uv)
-    new_wheel = _build_fixture(tmp_path / "new", wheels, "2.0.0", external_uv)
+    old_wheel = _build_fixture(tmp_path / "old", wheels, "1.0.0", external_uv, system_store=system_store)
+    new_wheel = _build_fixture(tmp_path / "new", wheels, "2.0.0", external_uv, system_store=system_store)
     companion = _build_companion(tmp_path / "companion", wheels, external_uv)
     # The release directory the helper reads: the plugin list sits beside the
     # wheel, exactly as release.yml lays it out. No constraints file, so the
@@ -188,6 +210,8 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path) -
     )
 
     assert completed.returncode == 0, completed.stderr
+    assert ("handed over: yes" if system_store else "handed over: no") in completed.stderr, completed.stderr
+    assert "system certificate store" not in completed.stderr, completed.stderr
     assert "Raven upgraded: 1.0.0 -> 2.0.0" in completed.stdout
     version = subprocess.run(
         [str(executable), "--version"],

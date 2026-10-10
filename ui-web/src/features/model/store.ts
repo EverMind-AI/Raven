@@ -11,7 +11,6 @@ import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
-import { remember } from './recent'
 import { KIND_ORDER, offered, sameModel, statedTags, withCurrent } from './types'
 
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
@@ -254,10 +253,6 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
   if (scope === 'session') {
     setCurrent(m, provider)
     after?.()
-    /* Remembered on the pick rather than on the acknowledgement: a model the
-       reader reached for belongs at the head of the list whether or not this
-       one write lands. */
-    remember(m, provider)
   }
   try {
     const settled = await src.persist(m, provider, scope)

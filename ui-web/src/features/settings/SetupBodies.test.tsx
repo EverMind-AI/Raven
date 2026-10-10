@@ -356,6 +356,24 @@ describe('ModelStepBody', () => {
     expect(document.querySelector('.settings-pnote')!.getAttribute('data-tone')).toBe('ok')
   })
 
+  it('a certificate this machine does not trust is named, not called unreachable', async () => {
+    const data = snap()
+    install(data, {
+      provider: async (_op, params) => {
+        data.providers = data.providers.map((p) => (p.id === params.slug ? { ...p, on: true } : p))
+        return { ...data }
+      },
+      fetchModels: async () => ({ status: 'certificate_untrusted', models: [] }),
+    })
+    await openBody(ModelStepBody)
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.add')) })
+    await act(async () => { fireEvent.change(screen.getByLabelText('gui.settings.providers.api_key'), { target: { value: 'sk-1' } }) })
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.connect')) })
+    const note = document.querySelector('.settings-pnote')!
+    expect(note.textContent).toContain('gui.settings.providers.probe_certificate')
+    expect(note.getAttribute('data-tone')).toBe('warn')
+  })
+
   it('a save that fails leaves the form open and tests nothing', async () => {
     const data = snap()
     const { calls } = install(data, {

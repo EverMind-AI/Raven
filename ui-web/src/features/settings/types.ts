@@ -179,7 +179,7 @@ export interface ModelCatalogue {
 /* What a provider's credential check answered, after a connect or on a
    "check again". `status` is the probe's word -- valid, invalid_key,
    key_unchecked, no_credits, rate_limited, network_error, proxy_unreachable,
-   no_probe_endpoint, http_<code>. */
+   certificate_untrusted, no_probe_endpoint, http_<code>. */
 export interface ConnectProbe {
   ok: boolean
   status: string

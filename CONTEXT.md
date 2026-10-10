@@ -1256,6 +1256,13 @@ read; whether a playbook is offered on this machine is config (the
 the model is shown, and `raven playbook run` still resolves it), because the file
 is the distribution unit and local state must not travel with it.
 
+Schema v2 separates three concepts. A reusable artifact contains a **Harness**, a
+**Workflow**, or both: the Harness is the durable worker table bound into a turn;
+the Workflow is the validated DAG compiled from one accepted successful run.
+A **Run Record** is the per-execution evidence and metadata kept separately from
+the reusable artifact; it is neither discoverable nor loaded as a Playbook.
+Schema v1 remains supported through the `dag` and `prompt` modes below.
+
 The two modes differ in where the graph comes from, and therefore in who acts on
 a load: `dag` ships it as `nodes`, which the engine fills and dispatches through
 `SubAgentDagTool.execute` — the same entry a model-composed graph takes, so one
@@ -1266,16 +1273,24 @@ model in the room, composes with one call of its own. `mode` is the author's
 statement of how completely they specified the procedure, and is deliberately not
 in the tool signature.
 
-**Discovery is the model's, not a matcher's.** A playbook is reached through
-`load_playbook`, one of the tools a turn can use, alongside `spawn` and
-`run_subagent_dag` — there is no pre-turn interception and no LLM gate.
-`triggers.keywords` decides which playbooks get *described* in that tool when the
-library is larger than `playbooks.router.topK`; the `name` enum stays the whole
-library, so a retrieval miss leaves a playbook undescribed rather than
-unreachable. What the caller may supply is bounded to `params` and `fills`, and a
-`fills` entry aimed at a field the playbook already wrote is refused — so a
-playbook can be completed but never edited, and the file in git stays an accurate
-account of what ran.
+**Discovery has one path today.** The main model chooses `load_playbook`
+alongside `spawn` and `run_subagent_dag`. When
+`playbooks.agentHarness=generate`, one pre-turn setup-model call receives the
+ranked saved candidates, but its tool takes no `selectedPlaybook`: it mints a
+Harness or declines, and `HarnessResolution.selected_playbook` is a record
+field no producer fills. A second path -- that call selecting a direct match,
+binding the saved durable Harness before the main turn and annotating
+`load_playbook` -- was described here before anything implemented it; the
+annotation machinery it named has been removed rather than left reading as
+shipped. If it returns, the constraint it was written under still holds: a
+selection annotates, it never executes the stored Workflow, and the main model
+must call `load_playbook` to run one. Either way the resolver is an LLM
+decision, not a passive keyword matcher and not an auto-run path.
+`match.keywords` on v2 and `triggers.keywords` on v1 rank what is described
+when the library exceeds `playbooks.router.topK`; the `name` enum still covers
+the whole library. What the caller may supply is bounded to declared parameters
+and fills, and a fill aimed at a field the Playbook already wrote is refused, so
+a Playbook can be completed but never edited.
 _Avoid_: calling `triggers.keywords` a trigger — a keyword makes a playbook
 visible, never run. And avoid describing `confirm` as a playbook-level gate: it is
 `SubAgentDagSpec.confirm`, a graph-level parameter the playbook's value is
@@ -2304,8 +2319,10 @@ if its configured command asks its CLI for partial output - `claude` under
 `--include-partial-messages` (on the resume template too), while `codex exec --json` has no
 partial event to ask for. Asked for by a Direct Chat alone; a spawn takes the whole reply and keeps
 `chat_with_retry`'s retry ladder, which streaming trades away (a stream that already
-rendered cannot be retried without duplicating itself). What streams is the same text the
-record stores, so a caller that rendered the deltas must not deliver the return value again.
+rendered cannot be retried without duplicating itself). What streams ends with the reply the
+record stores - a lane that narrates between its steps streams that narration first and
+returns only its last message, and acp caps each message at `maxOutputChars` the way the
+reply is capped - so a caller that rendered the deltas must not deliver the return value again.
 _Avoid_: conflating it with the roster's `live-progress` tag, which says a transport reports
 its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
 invisible to the model and is about the answer itself.
@@ -2586,18 +2603,19 @@ vocabulary keyed the same way throughout.
 _Avoid_: applying it at write time - that is what this replaced.
 
 **Closing Message** (`raven/acp_client/acp_agent.py`, `activity.py`):
-What a delegated run said *after its last tool call*, as distinct from its whole reply. An
+What a delegated run said *after its last tool call*, as distinct from everything it said. An
 ACP turn may narrate as it works - measured on codex-acp: a plan, then a progress note
-before each of three calls, then the report - and the run's returned answer joins all of it,
-which is right for the caller receiving it and wrong for a transcript, where each note
-belongs on the step it preceded. So the Instance Log carries narration on the calling rows
-and closes with this. `""` (the turn ended on a step and said nothing after) is deliberately
-different from `None` (this lane cannot tell the two apart), which falls back to the whole
-output. The record keeps it as `<node_id>.closing.md` beside `out.md` (a spawn's
-`SpawnRecord.finish`, a dag node's runner), and the two context reads (`subagent.context`,
-`dag.node`) draw it as the answer row when it is there, the whole output when it is not.
-_Avoid_: calling it the answer - the answer is what the run returns, and for a narrating
-agent the two differ.
+before each of three calls, then the report - and each note belongs on the step it
+preceded, so the Instance Log carries narration on the calling rows and closes with this.
+The run's returned answer is one message too, never the narration joined to it: this, or -
+for a turn that ended on a step - the message said before that step. `""` (the turn ended
+on a step and said nothing after) is deliberately different from `None` (this lane cannot
+tell the two apart), which falls back to the whole output. The record keeps it as
+`<node_id>.closing.md` beside `out.md` (a spawn's `SpawnRecord.finish`, a dag node's
+runner), and the two context reads (`subagent.context`, `dag.node`) draw it as the answer
+row when it is there, the whole output when it is not.
+_Avoid_: calling it the answer - the answer is what the run returns, and a turn that ended
+on a step returns the message before that step while its closing is empty.
 
 **Response Meta** (`raven/acp/methods.py`, `raven/acp_client/acp_agent.py`,
 `raven/agent/subagent/activity.py`):

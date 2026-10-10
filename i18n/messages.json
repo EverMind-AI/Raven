@@ -6171,6 +6171,362 @@
       "en": "Nothing reads this setting yet",
       "zh": "目前没有代码读取这个设置"
     },
+    "gui.confirm.cfg.why.agents.defaults.workspace": {
+      "en": "moves where sessions, memory and files live",
+      "zh": "改变会话、记忆和文件的存放位置"
+    },
+    "gui.confirm.cfg.why.channels.*.allowFrom": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.*.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.dingtalk.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.dingtalk.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.dingtalk.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.discord.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.discord.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.discord.gateway_url": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.discord.group_policy": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.discord.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.email.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.email.auto_reply_enabled": {
+      "en": "lets Raven send mail on its own",
+      "zh": "允许 Raven 自行发送邮件"
+    },
+    "gui.confirm.cfg.why.channels.email.consent_granted": {
+      "en": "lets Raven read and act on this mailbox",
+      "zh": "允许 Raven 读取并操作这个邮箱"
+    },
+    "gui.confirm.cfg.why.channels.email.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.email.imap_host": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.email.imap_use_ssl": {
+      "en": "turning it off sends this channel's credentials or messages unencrypted",
+      "zh": "关闭它会让此通道的凭据或消息以未加密方式发送"
+    },
+    "gui.confirm.cfg.why.channels.email.smtp_host": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.email.smtp_use_ssl": {
+      "en": "turning it off sends this channel's credentials or messages unencrypted",
+      "zh": "关闭它会让此通道的凭据或消息以未加密方式发送"
+    },
+    "gui.confirm.cfg.why.channels.email.smtp_use_tls": {
+      "en": "turning it off sends this channel's credentials or messages unencrypted",
+      "zh": "关闭它会让此通道的凭据或消息以未加密方式发送"
+    },
+    "gui.confirm.cfg.why.channels.email.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.feishu.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.feishu.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.feishu.group_policy": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.feishu.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.matrix.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.matrix.allow_room_mentions": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.matrix.e2ee_enabled": {
+      "en": "turning it off sends this channel's credentials or messages unencrypted",
+      "zh": "关闭它会让此通道的凭据或消息以未加密方式发送"
+    },
+    "gui.confirm.cfg.why.channels.matrix.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.matrix.group_allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.matrix.group_policy": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.matrix.homeserver": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.matrix.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.mochat.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.mochat.base_url": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.mochat.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.mochat.groups": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.mochat.mention.require_in_groups": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.mochat.panels": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.mochat.sessions": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.mochat.socket_url": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.mochat.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.qq.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.qq.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.qq.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.slack.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.slack.dm.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.slack.dm.enabled": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.slack.dm.policy": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.slack.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.slack.group_allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.slack.group_policy": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.slack.user_token_read_only": {
+      "en": "turning it off lets Raven act as you on Slack",
+      "zh": "关闭它会让 Raven 以你的身份在 Slack 上行事"
+    },
+    "gui.confirm.cfg.why.channels.slack.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.telegram.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.telegram.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.telegram.group_policy": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.telegram.proxy": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.telegram.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.wecom.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.wecom.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.wecom.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.weixin.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.weixin.base_url": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.weixin.cdn_base_url": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.weixin.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.weixin.state_dir": {
+      "en": "moves where this channel keeps its login, which decides whose account it runs as",
+      "zh": "改变此通道登录信息的存放位置，这决定它以哪个账号的身份运行"
+    },
+    "gui.confirm.cfg.why.channels.weixin.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.channels.whatsapp.allow_from": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.whatsapp.bridge_url": {
+      "en": "sends this channel's credentials and messages to the address given",
+      "zh": "会把此通道的凭据和消息发往所给地址"
+    },
+    "gui.confirm.cfg.why.channels.whatsapp.enabled": {
+      "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
+      "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.whatsapp.group_policy": {
+      "en": "widening it lets more people instruct Raven",
+      "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.whatsapp.workspace": {
+      "en": "moves where this channel's conversations read and write files",
+      "zh": "改变此通道的对话读写文件的位置"
+    },
+    "gui.confirm.cfg.why.embedding": {
+      "en": "a different embedding model invalidates every vector already stored",
+      "zh": "换用别的嵌入模型会让已存储的全部向量失效"
+    },
+    "gui.confirm.cfg.why.permissions.judgeModel": {
+      "en": "picks the model that decides which calls run without asking you",
+      "zh": "决定由哪个模型来判定哪些调用无需询问你即可执行"
+    },
+    "gui.confirm.cfg.why.permissions.mode": {
+      "en": "'full' runs every tool call without asking",
+      "zh": "'full' 模式下每个工具调用都不经询问直接执行"
+    },
+    "gui.confirm.cfg.why.providers.*.apiBase": {
+      "en": "sends this provider's API key, and every conversation on it, to the address given",
+      "zh": "会把该提供商的 API 密钥及其上的全部对话发往所给地址"
+    },
+    "gui.confirm.cfg.why.skillForge.autoInstall": {
+      "en": "'auto' downloads and installs skills without asking",
+      "zh": "'auto' 会在不询问你的情况下下载并安装技能"
+    },
+    "gui.confirm.cfg.why.skillForge.blocklist": {
+      "en": "taking a skill off the list lets it be offered and installed again",
+      "zh": "把技能移出清单后，它可以再次被推荐和安装"
+    },
+    "gui.confirm.cfg.why.subagents.*.description": {
+      "en": "the dispatching model reads it every turn, so it can steer what is sent where",
+      "zh": "调度模型每一轮都会读到它，因此能左右内容发往何处"
+    },
+    "gui.confirm.cfg.why.subagents.*.lendKeys": {
+      "en": "gives the agent Raven's key for these providers; what it spends is billed to that key",
+      "zh": "把这些提供商的 Raven 密钥交给智能体使用；它的消耗都计在这把密钥上"
+    },
+    "gui.confirm.cfg.why.tools.connectionAdd": {
+      "en": "lets the agent write the owner's ssh config",
+      "zh": "允许智能体改写所有者的 ssh 配置"
+    },
+    "gui.confirm.cfg.why.tools.disabledTools": {
+      "en": "taking a tool off the list gives back one the user withheld",
+      "zh": "把工具移出清单，等于交还了一个用户曾禁用的工具"
+    },
+    "gui.confirm.cfg.why.tools.exec.extraDenyPatterns": {
+      "en": "removing a pattern loosens what shell commands may run",
+      "zh": "移除一个模式会放宽 shell 命令的运行范围"
+    },
+    "gui.confirm.cfg.why.tools.mcpServers.*.enabled": {
+      "en": "turning a server on runs its command, or reaches its address, with its credentials",
+      "zh": "开启服务器会执行其命令，或携带其凭据访问其地址"
+    },
+    "gui.confirm.cfg.why.tools.media.proxy": {
+      "en": "routes every media API call, its API key included, through that host",
+      "zh": "所有媒体 API 调用（连同其 API 密钥）都会经由该主机转发"
+    },
+    "gui.confirm.cfg.why.tools.restrictToWorkspace": {
+      "en": "turning it off lets tools reach files outside the workspace",
+      "zh": "关闭它会让工具触达工作区之外的文件"
+    },
+    "gui.confirm.cfg.why.tools.sandbox.backend": {
+      "en": "changes whether shell commands run isolated",
+      "zh": "改变 shell 命令是否在隔离环境中运行"
+    },
+    "gui.confirm.cfg.why.tools.web.proxy": {
+      "en": "routes every web search and fetch, search API keys included, through that host",
+      "zh": "所有网页搜索与抓取（连同搜索 API 密钥）都会经由该主机转发"
+    },
     "gui.confirm.ev.created": {
       "en": "new file",
       "zh": "新建文件"
@@ -7470,6 +7826,10 @@
     "gui.settings.providers.probe_proxy": {
       "en": "The proxy this machine is set to use isn't reachable, saved anyway",
       "zh": "本机设置的代理连不上，已先保存"
+    },
+    "gui.settings.providers.probe_certificate": {
+      "en": "This machine doesn't trust the service's certificate, saved anyway",
+      "zh": "本机不信任该服务的证书，已先保存"
     },
     "gui.settings.providers.probe_unchecked": {
       "en": "This provider's model list doesn't check keys, so the key can't be confirmed; saved",

@@ -129,7 +129,7 @@ export function open(
        mounted one may be answered from the keyboard, or a chord pressed here
        would allow something another conversation asked. */
     if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
-    if (e.key === 'Escape') { e.preventDefault(); close(onDeny); return }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(onDeny); return }
     if (typing(e)) return
     if (sendChord(e) === 'plain') { e.preventDefault(); close(onAllow) }
   }
@@ -276,7 +276,13 @@ function wordsFor(req: ApprovalReq): GateWords {
       keyNoField: t('gui.confirm.cfg.key_no_field'),
       rows: configRows(ev).map((row) => ({
         effect: str(row.effect) ? t('gui.confirm.cfg.effect.' + str(row.effect), {}, '') : '',
-        sensitive: str(row.sensitive) ? t('gui.confirm.cfg.sensitive', { note: str(row.sensitive) }) : '',
+        sensitive: str(row.sensitive)
+          ? t('gui.confirm.cfg.sensitive', {
+            note: str(row.sensitive_key)
+              ? t('gui.confirm.cfg.why.' + str(row.sensitive_key), null, str(row.sensitive))
+              : str(row.sensitive),
+          })
+          : '',
         unsetTo: str(row.unset_to) ? t('gui.confirm.cfg.unset_to.' + str(row.unset_to), {}, '') : '',
         test: str(row.action) === 'test'
           ? t('gui.confirm.cfg.test', { name: str(row.setting).replace(/^subagents\./, '') })
@@ -374,7 +380,7 @@ export function openApproval(req: ApprovalReq, handlers: ApprovalHandlers, owner
 
   function onKey(e: KeyboardEvent): void {
     if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
-    if (e.key === 'Escape') { e.preventDefault(); answer('deny'); return }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); answer('deny'); return }
     if (typing(e)) return
     const chord = sendChord(e)
     if (!chord) return
