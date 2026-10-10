@@ -21,16 +21,25 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
-def main() -> int:
-    from raven.utils.commands import resolve_subagent_command
+def _resolve(value: str, *, python: str, quote: bool) -> str:
+    """``value`` with ``{PYTHON}`` and ``{SUBAGENT_DIR}`` substituted for this folder."""
+    try:
+        from raven.utils.commands import resolve_subagent_command
+    except ImportError:
+        # This folder is not refreshed when raven changes version, so it can run
+        # under one older than the quoting rule; that one gets the unquoted row.
+        return value.replace("{SUBAGENT_DIR}", str(HERE)).replace("{PYTHON}", python)
+    return resolve_subagent_command(value, python=python, subagent_dir=str(HERE), quote=quote)
 
+
+def main() -> int:
     python = os.environ.get("SUBAGENT_PYTHON", "").strip() or sys.executable
 
     row = json.loads((HERE / "subagent.json").read_text(encoding="utf-8"))
     for field in ("command", "cwd"):
         value = row.get(field)
         if isinstance(value, str):
-            row[field] = resolve_subagent_command(value, python=python, subagent_dir=str(HERE), quote=field != "cwd")
+            row[field] = _resolve(value, python=python, quote=field != "cwd")
 
     from raven.config.update_subagents import add_third_party_subagent
 
