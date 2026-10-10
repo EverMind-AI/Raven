@@ -118,7 +118,7 @@ ACP 成为**主通道**：它是拿到会话分叉和审批回调的唯一路径
 
 - raven 作为 ACP **server**（别的 agent 调 raven）。本稿的事件模型和审批路径刻意做成可复用，但那需要独立设计稿。
 - 把过程数据喂给派发模型（D4）。
-- 远程 agent。只做 stdio 上的本地进程。
+- 远程 agent。只做 stdio 上的本地进程。（2026-10-10 修订：已登记机器上的 ACP agent 不再是非目标，见 `2026-10-10-acp-agents-on-registered-machines-design.md`。ACP 仍只走 stdio：本地起的是 ssh，远端 agent 是这条 stdio 的另一端。）
 - 改动 `run_subagent_dag` 节点间的文件传递契约。
 
 ## 4. 架构
