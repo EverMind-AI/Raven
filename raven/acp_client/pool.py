@@ -78,11 +78,16 @@ SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 # hold the two in step: a parameter added to `acquire` and not to the key would
 # be silently discarded for the life of the process, which is the exact bug this
 # key exists to prevent.
-LAUNCH_PARAMS = ("command", "cwd", "env", "binding")
+LAUNCH_PARAMS = ("command", "cwd", "env", "binding", "preamble")
 
 
 def launch_key(
-    *, command: str, cwd: str | None, env: dict[str, str] | None, binding: dict[str, str] | None = None
+    *,
+    command: str,
+    cwd: str | None,
+    env: dict[str, str] | None,
+    binding: dict[str, str] | None = None,
+    preamble: bytes | None = None,
 ) -> str:
     """A digest of what a connection was launched from.
 
@@ -95,10 +100,14 @@ def launch_key(
 
     `binding` is launch environment too, so it is in the key; the pool keeps it
     apart from `env` because the two are answered differently (see `acquire`).
+    `preamble` is a remote agent's environment, sent on stdin: an edited value
+    has to relaunch as an edited `env` does. Folded in as a digest, and only
+    when set, so no key of a local agent changes.
     """
-    raw = json.dumps(
-        {"command": command, "cwd": cwd, "env": env or {}, "binding": binding or {}}, sort_keys=True, default=str
-    )
+    params: dict[str, Any] = {"command": command, "cwd": cwd, "env": env or {}, "binding": binding or {}}
+    if preamble:
+        params["preamble"] = hashlib.sha256(preamble).hexdigest()
+    raw = json.dumps(params, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -387,6 +396,7 @@ class AcpConnectionPool:
         binding: dict[str, str] | None = None,
         on_request: Any = None,
         ready_timeout_s: float | None = None,
+        preamble: bytes | None = None,
     ) -> _Connection:
         """The live connection for ``name`` under ``binding``, starting or restarting it if needed.
 
@@ -410,8 +420,8 @@ class AcpConnectionPool:
         running. A change to the config half (`command`, `cwd`, `env`) still
         retires every connection of the name, as it always did.
         """
-        config = launch_key(command=command, cwd=cwd, env=env)
-        key = launch_key(command=command, cwd=cwd, env=env, binding=binding)
+        config = launch_key(command=command, cwd=cwd, env=env, preamble=preamble)
+        key = launch_key(command=command, cwd=cwd, env=env, binding=binding, preamble=preamble)
         bkey = _binding_key(binding)
         launch_env = {**(env or {}), **binding} if binding else env
         async with self._lock_for(name):
@@ -459,6 +469,7 @@ class AcpConnectionPool:
                 # `ask_user.notification_dispatcher` -- everything still routes.
                 on_notification=notification_dispatcher(name, router.dispatch, responders=responders),
                 journal=journal,
+                preamble=preamble,
             )
             # The handshake belongs to establishing the connection, not to the
             # first caller: ACP has no usable state before `initialize`, and an

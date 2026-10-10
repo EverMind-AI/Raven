@@ -160,22 +160,35 @@ async def test_a_dispatch_runs_on_the_machine_in_a_directory_made_there_and_says
         assert str(local) not in " ".join(argv), "this computer's workspace path never reaches the machine"
 
 
-async def test_the_launch_line_carries_the_entry_s_env_and_keeps_ssh_s_words_off_stderr(box, tmp_path):
-    backend = build_third_party_backend(remote_config())
+async def test_the_entry_s_env_reaches_the_agent_on_stdin_and_never_an_ssh_argument(box, tmp_path):
+    # Review of #897: env is where credentials live, and an argument is in the
+    # process list at both ends. The stub answers in the mode its env names, so
+    # an echo proves the variables arrived; no ssh argv may carry any of them.
+    cfg = remote_config(mode="echo_blocks")
+    cfg = cfg.model_copy(update={"env": {**cfg.env, "OPENAI_API_KEY": "sk-raven-test-not-real"}})
+    backend = build_third_party_backend(cfg)
 
-    await backend.run(
-        "hi",
-        task_id="t1",
-        workspace=tmp_path,
-        executor=None,
-        model="parent-model",
-    )
+    reply = await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, model="parent-model")
 
+    assert json.loads(reply.split("\n\n[raven]")[0]) == [{"type": "text", "text": "hi"}]
     (launch,) = [argv for argv in box.calls() if "-T" in argv]
+    for argv in box.calls():
+        joined = " ".join(argv)
+        assert "sk-raven-test-not-real" not in joined and "ACP_STUB_MODE" not in joined
     remote = launch[launch.index("--") + 1]
-    assert "ACP_STUB_MODE=ok" in remote and "RAVEN_SUBAGENT=1" in remote
     assert "RAVEN_PARENT_MODEL" not in remote, "the parent binding is this computer's process env"
     assert "-E" in launch, "ssh's own messages go to their log"
+
+
+async def test_an_edited_env_value_relaunches_the_agent(box, tmp_path):
+    # The values are not in the launch line any more, so the pool keys on them
+    # another way: an edit must not be answered by the connection started before it.
+    first = build_third_party_backend(remote_config())
+    await first.run("one", task_id="t1", workspace=tmp_path, executor=None)
+    edited = remote_config().model_copy(update={"env": {"ACP_STUB_MODE": "ok", "EXTRA": "2"}})
+    await build_third_party_backend(edited).run("two", task_id="t2", workspace=tmp_path, executor=None)
+
+    assert len([argv for argv in box.calls() if "-T" in argv]) == 2
 
 
 async def test_two_handles_on_one_machine_work_in_two_directories(box, tmp_path):
@@ -389,6 +402,15 @@ async def test_verify_handshakes_on_the_machine_in_the_one_check_directory(box):
 
     assert snapshot.status == "ready", snapshot.detail
     assert (box.home / "raven-work" / "raven-check").is_dir()
+
+
+async def test_verify_starts_the_agent_with_the_entry_s_env(box):
+    # The stub refuses session/new when its env names that mode; started without
+    # the variables it would default to answering, and the check would read ready.
+    snapshot = await verify_agent(remote_config(mode="no_session"))
+
+    assert snapshot.status == "attention"
+    assert "no session could be opened" in snapshot.detail
 
 
 async def test_verify_of_an_unreachable_machine_is_attention_never_missing(box):

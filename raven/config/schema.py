@@ -2111,8 +2111,10 @@ class ThirdPartyAcpSubagentConfig(Base):
     def _remote_rows_borrow_no_keys(self) -> "ThirdPartyAcpSubagentConfig":
         """A row on another machine is started without Raven's keys; drop and warn.
 
-        A lent key would travel on the ssh command line, visible in the process
-        list at both ends. Warn-and-drop on load for the startup reason
+        Lending lets an agent here use a provider key Raven holds without
+        holding it itself; on another machine it would mean copying Raven's key
+        to that machine, which is that machine's own sign-in to provide.
+        Warn-and-drop on load for the startup reason
         ``_warn_on_declared_cli_fields`` gives; the write path refuses it
         (``update_subagents.reject_unsupported_acp_fields``).
         """

@@ -137,8 +137,8 @@ def reject_unsupported_acp_fields(entries: list[dict]) -> None:
         if isinstance(machine, str) and machine.strip() and lent:
             raise ValueError(
                 f"acp sub-agent {name!r} runs on machine {machine.strip()!r}, so it cannot be started with "
-                f"Raven's keys {sorted(lent)}: they would travel on the ssh command line, visible in the process "
-                "list at both ends; sign it in on that machine and remove lendKeys"
+                f"Raven's keys {sorted(lent)}: they would have to be copied to that machine; sign it in there "
+                "and remove lendKeys"
             )
 
 

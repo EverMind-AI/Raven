@@ -219,8 +219,14 @@ class AcpClient:
         on_request: RequestHandler | None = None,
         on_notification: NotificationHandler | None = None,
         journal: FrameJournal | None = None,
+        preamble: bytes | None = None,
     ) -> "AcpClient":
         """Start the agent's ACP server and begin reading it.
+
+        ``preamble`` is written to the process's stdin before any frame, and
+        never journaled: an agent on another machine takes its variables this
+        way rather than on the ssh command line, where the process list at
+        both ends would show them (``raven.acp_client.remote.env_preamble``).
 
         Raises :class:`AcpConnectionError` if the process cannot be started; a
         server that starts but never speaks is a per-request timeout, not a
@@ -262,6 +268,13 @@ class AcpClient:
         except (OSError, ValueError) as exc:
             raise AcpConnectionError(f"acp agent {name!r}: cannot start {argv[0]!r}: {exc}") from exc
 
+        if preamble and proc.stdin is not None:
+            try:
+                proc.stdin.write(preamble)
+                await proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError):
+                # Gone before it read a byte; the first request reports how it ended.
+                pass
         client = cls(
             name=name,
             proc=proc,

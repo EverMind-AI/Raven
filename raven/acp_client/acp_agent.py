@@ -1545,13 +1545,14 @@ class AcpAgentBackend:
                 try:
                     connection = await self.pool.acquire(
                         name=self.name,
-                        # A remote agent's own command and env are inside the
-                        # launch line; the local process is ssh.
+                        # A remote agent's own command is inside the launch line
+                        # and its env goes on stdin; the local process is ssh.
                         command=launched.command if launched is not None else self.command,
                         cwd=launch_cwd,
                         env={} if launched is not None else dict(self.env),
                         binding=binding or None,
                         ready_timeout_s=budget,
+                        preamble=launched.preamble if launched is not None else None,
                     )
                 except AcpConnectionError as exc:
                     if launched is None:

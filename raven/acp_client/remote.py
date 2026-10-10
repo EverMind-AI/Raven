@@ -56,6 +56,8 @@ SSH_FAILED_RC = 255
 NOT_FOUND_RC = 127
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# The shell variable the launch line reads each stdin variable line into.
+_ENV_LINE = "__raven_env"
 _LEAF_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 _LEAF_MAX = 64
 
@@ -115,7 +117,7 @@ def machine(conn_id: str) -> Machine:
     return Machine(id=wanted, display_name=str(row.get("display_name") or wanted), _row=dict(row))
 
 
-def remote_command(agent_command: str, *, root: str, env: Mapping[str, str]) -> str:
+def remote_command(agent_command: str, *, root: str) -> str:
     """The one argv element sshd hands to the machine user's shell.
 
     Two shells read it, each once: sshd's ``$SHELL -c`` reads this string, and
@@ -126,16 +128,16 @@ def remote_command(agent_command: str, *, root: str, env: Mapping[str, str]) -> 
     early for a non-interactive shell); it costs two "no job control" lines on
     stderr and nothing on stdout, which carries the protocol.
 
-    ``env`` travels as ``env K=V`` on the command line because ssh forwards no
-    environment without ``AcceptEnv`` on every machine; the values are
-    therefore visible in the process list at both ends, and the caller passes
-    nothing secret.
+    No variable is on this line. An entry's ``env`` is where credentials live
+    (``OPENAI_API_KEY`` and the like), and an argument is visible in the
+    process list at both ends, so the variables arrive on stdin instead, ahead
+    of the protocol (:func:`env_preamble`): the login shell reads them up to an
+    empty line, one line at a time, and execs the agent on the rest.
     """
-    bad = sorted(k for k in env if not _ENV_NAME.fullmatch(k))
-    if bad:
-        raise ValueError(f"not an environment variable name: {bad}")
-    assigns = " ".join(shlex.quote(f"{k}={v}") for k, v in env.items())
-    inner = f"exec env {assigns} {agent_command}" if assigns else f"exec {agent_command}"
+    inner = (
+        f'while IFS= read -r {_ENV_LINE} && [ -n "${_ENV_LINE}" ]; do eval "export ${_ENV_LINE}"; done; '
+        f"exec {agent_command}"
+    )
     where = _shell_path(root)
     return f'mkdir -p {where} && cd {where} && exec "${{SHELL:-/bin/sh}}" -lic {shlex.quote(inner)}'
 
@@ -145,7 +147,6 @@ def launch_command(
     agent_command: str,
     *,
     root: str = DEFAULT_ROOT,
-    env: Mapping[str, str] | None = None,
     connect_timeout: int = 15,
     ssh_log: str | os.PathLike[str] | None = None,
 ) -> str:
@@ -153,7 +154,8 @@ def launch_command(
 
     A string because that is what the pool and the client take (they
     ``shlex.split`` it); ``shlex.join`` makes the split give back exactly this
-    argv. Built at launch and held in memory only: it carries the address.
+    argv. Built at launch and held in memory only: it carries the address. It
+    carries no variable: those go on stdin (:func:`env_preamble`).
 
     ``ssh_log`` (see :func:`ssh_log_path`) is where ssh writes its own
     messages instead of stderr, so stderr carries only what the far side
@@ -165,8 +167,28 @@ def launch_command(
     argv = ssh_argv(host, port, key, user=user, connect_timeout=connect_timeout, extra=extra)
     # ``--`` so nothing in the remote command is read as an option to ssh,
     # which also parses options that follow the destination.
-    argv += ["--", remote_command(agent_command, root=root, env=env or {})]
+    argv += ["--", remote_command(agent_command, root=root)]
     return shlex.join(argv)
+
+
+def env_preamble(env: Mapping[str, str]) -> bytes:
+    """``env`` as the lines the launch line's shell reads from stdin, then an empty line.
+
+    Written to the agent's stdin before the first protocol frame, so the values
+    never appear in an argument list, a log or the frame journal. Each line is
+    ``NAME=<value quoted for the shell>``, exported by the login shell; the
+    empty line ends them and is always sent, so an entry with no variables
+    still lets the agent start. A value holding a newline would end its line
+    early, so it is refused, by name and never by value.
+    """
+    bad = sorted(k for k in env if not _ENV_NAME.fullmatch(k))
+    if bad:
+        raise ValueError(f"not an environment variable name: {bad}")
+    broken = sorted(k for k, v in env.items() if "\n" in v or "\r" in v or "\0" in v)
+    if broken:
+        raise ValueError(f"environment variable {broken} holds a line break, which cannot be sent to another machine")
+    lines = "".join(f"{k}={shlex.quote(v)}\n" for k, v in env.items())
+    return (lines + "\n").encode("utf-8")
 
 
 def session_dir(target: Machine, *, root: str = DEFAULT_ROOT, handle: str, timeout: float = 30.0) -> str:
@@ -202,6 +224,8 @@ class RemoteLaunch:
     log: Path
     command: str = field(repr=False)
     """The launch line. It carries the address, so it is never printed."""
+    preamble: bytes = field(default=b"\n", repr=False)
+    """The variables for the agent's stdin (:func:`env_preamble`); they may be secrets."""
 
     @property
     def cwd(self) -> str:
@@ -233,8 +257,12 @@ def prepare_launch(
     except OSError:
         pass
     root = (remote_cwd or "").strip() or DEFAULT_ROOT
-    line = launch_command(target, agent_command, root=root, env={**subagent_role_env(), **env}, ssh_log=log)
-    return RemoteLaunch(target=target, root=root, log=log, command=line)
+    line = launch_command(target, agent_command, root=root, ssh_log=log)
+    try:
+        preamble = env_preamble({**subagent_role_env(), **env})
+    except ValueError as exc:
+        raise RemoteMachineError(f"agent {agent!r} on machine {target.label}: {exc}") from None
+    return RemoteLaunch(target=target, root=root, log=log, command=line, preamble=preamble)
 
 
 def failure(launch: RemoteLaunch, exc: BaseException) -> str | None:
@@ -383,6 +411,7 @@ __all__ = [
     "Machine",
     "RemoteLaunch",
     "RemoteMachineError",
+    "env_preamble",
     "explain",
     "failure",
     "launch_command",

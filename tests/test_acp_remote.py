@@ -51,10 +51,22 @@ _PROBE = (
 )
 
 
-def _run_as_sshd(command: str, home: Path) -> subprocess.CompletedProcess[str]:
-    """What sshd does with the one argv element it is sent: ``$SHELL -c`` it."""
+def _run_as_sshd(command: str, home: Path, stdin: bytes = b"\n") -> subprocess.CompletedProcess[str]:
+    """What sshd does with the one argv element it is sent: ``$SHELL -c`` it.
+
+    ``stdin`` is what the client writes first; the launch line's shell reads
+    the variables from it up to an empty line, which by default is all it is.
+    """
     env = {"HOME": str(home), "SHELL": "/bin/sh", "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
-    return subprocess.run(["/bin/sh", "-c", command], capture_output=True, text=True, env=env, cwd=home, timeout=60)
+    return subprocess.run(
+        ["/bin/sh", "-c", command],
+        capture_output=True,
+        text=True,
+        input=stdin.decode("utf-8"),
+        env=env,
+        cwd=home,
+        timeout=60,
+    )
 
 
 # --- the launch line -------------------------------------------------------
@@ -106,7 +118,7 @@ def test_the_remote_command_runs_the_agent_with_its_arguments_intact(tmp_path: P
     # The trap measured 2026-10-10: `ssh host -- bash -lic 'qwen --acp'` loses
     # `--acp` to the far shell's re-parse and starts qwen interactive.
     agent = f"{shlex.quote(sys.executable)} -c {shlex.quote(_PROBE)} --acp 'two words'"
-    done = _run_as_sshd(remote.remote_command(agent, root="~/raven-work", env={}), tmp_path)
+    done = _run_as_sshd(remote.remote_command(agent, root="~/raven-work"), tmp_path)
 
     assert done.returncode == 0, done.stderr
     seen = json.loads(done.stdout.strip().splitlines()[-1])
@@ -115,24 +127,77 @@ def test_the_remote_command_runs_the_agent_with_its_arguments_intact(tmp_path: P
 
 def test_the_agent_starts_in_the_root_which_the_machine_s_shell_expands_and_makes(tmp_path: Path):
     agent = f"{shlex.quote(sys.executable)} -c {shlex.quote(_PROBE)}"
-    done = _run_as_sshd(remote.remote_command(agent, root="~/raven work/agents", env={}), tmp_path)
+    done = _run_as_sshd(remote.remote_command(agent, root="~/raven work/agents"), tmp_path)
 
     assert done.returncode == 0, done.stderr
     seen = json.loads(done.stdout.strip().splitlines()[-1])
     assert Path(seen["cwd"]).resolve() == (tmp_path / "raven work" / "agents").resolve()
 
 
-def test_variables_reach_the_agent_with_their_values_unchanged(tmp_path: Path):
+# Reads like an ACP agent: the variables it was started with, then all of stdin.
+_READER = (
+    "import json, os, sys; rest = sys.stdin.read(); "
+    "print(json.dumps({'env': {k: os.environ.get(k) for k in ('RAVEN_SUBAGENT', 'ODD', 'OPENAI_API_KEY')}, "
+    "'rest': rest}))"
+)
+_FRAMES = '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"session/new"}\n'
+
+
+def test_variables_arrive_on_stdin_unchanged_and_the_protocol_after_them_untouched(tmp_path: Path):
+    # Review of #897: an entry's env holds credentials, and an argument is in
+    # the process list at both ends, so the values come on stdin ahead of the
+    # first frame -- and the shell must not read a byte past its empty line.
     odd = "a b 'c' \"d\" $HOME `id` \\e"
-    agent = f"{shlex.quote(sys.executable)} -c {shlex.quote(_PROBE)}"
-    done = _run_as_sshd(
-        remote.remote_command(agent, root=str(tmp_path / "work"), env={"RAVEN_SUBAGENT": "1", "ODD": odd}),
-        tmp_path,
-    )
+    env = {"RAVEN_SUBAGENT": "1", "ODD": odd, "OPENAI_API_KEY": "sk-raven-test-not-real"}
+    agent = f"{shlex.quote(sys.executable)} -c {shlex.quote(_READER)}"
+    command = remote.remote_command(agent, root=str(tmp_path / "work"))
+
+    done = _run_as_sshd(command, tmp_path, stdin=remote.env_preamble(env) + _FRAMES.encode())
 
     assert done.returncode == 0, done.stderr
     seen = json.loads(done.stdout.strip().splitlines()[-1])
-    assert seen["env"] == {"RAVEN_SUBAGENT": "1", "ODD": odd}
+    assert seen == {"env": env, "rest": _FRAMES}
+    assert "sk-raven-test-not-real" not in command and odd not in command
+
+
+def test_with_no_variables_the_agent_still_starts_and_reads_the_protocol(tmp_path: Path):
+    agent = f"{shlex.quote(sys.executable)} -c {shlex.quote(_READER)}"
+
+    done = _run_as_sshd(
+        remote.remote_command(agent, root="~/raven-work"), tmp_path, stdin=remote.env_preamble({}) + _FRAMES.encode()
+    )
+
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout.strip().splitlines()[-1])["rest"] == _FRAMES
+    assert remote.env_preamble({}) == b"\n"
+
+
+def test_a_value_with_a_line_break_is_refused_by_name_not_by_value():
+    with pytest.raises(ValueError, match=r"\['TOKEN'\] holds a line break") as caught:
+        remote.env_preamble({"TOKEN": "first\nsecond-secret"})
+    assert "second-secret" not in str(caught.value)
+
+
+def test_a_launch_keeps_the_entry_s_secret_off_its_command_line(tmp_path, monkeypatch):
+    _registry(tmp_path, monkeypatch, [ROW])
+    monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: tmp_path / "logs")
+
+    launched = remote.prepare_launch(
+        "a", "box", "agent --acp", remote_cwd=None, env={"OPENAI_API_KEY": "sk-raven-test-not-real"}
+    )
+
+    assert "sk-raven-test-not-real" not in launched.command
+    assert b"OPENAI_API_KEY=sk-raven-test-not-real\n" in launched.preamble
+    assert launched.preamble.startswith(b"RAVEN_SUBAGENT=1\n") and launched.preamble.endswith(b"\n\n")
+    assert "sk-raven-test-not-real" not in repr(launched)
+
+
+def test_a_launch_with_an_unsendable_value_is_refused_naming_the_agent(tmp_path, monkeypatch):
+    _registry(tmp_path, monkeypatch, [ROW])
+    monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: tmp_path / "logs")
+
+    with pytest.raises(RemoteMachineError, match=r"agent 'a' on machine 'Lab box' \(box\): .*line break"):
+        remote.prepare_launch("a", "box", "agent", remote_cwd=None, env={"TOKEN": "x\ny"})
 
 
 def test_the_agent_is_found_on_the_login_shell_s_path(tmp_path: Path):
@@ -145,7 +210,7 @@ def test_the_agent_is_found_on_the_login_shell_s_path(tmp_path: Path):
     agent.chmod(0o755)
     (tmp_path / ".profile").write_text('PATH="$HOME/agentbin:$PATH"; export PATH\n', encoding="utf-8")
 
-    done = _run_as_sshd(remote.remote_command("fake-agent", root="~/raven-work", env={}), tmp_path)
+    done = _run_as_sshd(remote.remote_command("fake-agent", root="~/raven-work"), tmp_path)
 
     assert done.returncode == 0, done.stderr
     assert "found-by-login-path" in done.stdout
@@ -153,7 +218,7 @@ def test_the_agent_is_found_on_the_login_shell_s_path(tmp_path: Path):
 
 def test_a_variable_name_the_shell_cannot_assign_is_refused():
     with pytest.raises(ValueError, match="not an environment variable name"):
-        remote.remote_command("agent", root="~/raven-work", env={"A-B": "1"})
+        remote.env_preamble({"A-B": "1"})
 
 
 def test_an_absolute_root_is_quoted_and_a_bare_tilde_is_left_to_the_shell():

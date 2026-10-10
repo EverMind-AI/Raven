@@ -2523,11 +2523,17 @@ def test_the_launch_key_covers_every_launch_parameter() -> None:
     assert params == set(LAUNCH_PARAMS)
 
     base = {"command": "agent acp", "cwd": "/w", "env": {"A": "1"}}
-    for field, other in (("command", "agent acp --url x"), ("cwd", "/other"), ("env", {"A": "2"})):
+    for field, other in (
+        ("command", "agent acp --url x"),
+        ("cwd", "/other"),
+        ("env", {"A": "2"}),
+        ("preamble", b"A=2\n\n"),
+    ):
         assert launch_key(**base) != launch_key(**{**base, field: other}), field
     assert launch_key(**base) == launch_key(**base)
-    # An absent env and an empty one are the same launch.
+    # An absent env and an empty one are the same launch, and so is an absent preamble.
     assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env={})
+    assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env=None, preamble=None)
 
 
 async def test_two_bindings_of_one_agent_hold_their_own_connections(tmp_path: Path) -> None:

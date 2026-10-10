@@ -878,6 +878,7 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             command=launched.command if launched is not None else getattr(cfg, "command", "") or "",
             cwd=launched.cwd if launched is not None else getattr(cfg, "cwd", None),
             env={} if launched is not None else agent_env,
+            preamble=launched.preamble if launched is not None else None,
             # Nothing here is prompted, so no permission request is expected.
             # One that arrives anyway still has to be answered, or the agent
             # waits for a reply that never comes and the handshake stalls behind
