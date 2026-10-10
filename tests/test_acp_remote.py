@@ -459,3 +459,152 @@ def test_a_failure_whose_only_words_are_ssh_s_gives_no_reason_rather_than_the_ad
         remote.session_dir(_box(), root="/srv/x", handle="t1")
 
     assert str(caught.value) == "could not make a working directory under '/srv/x' on machine 'Lab box' (box)"
+
+
+# --- any login shell ---------------------------------------------------------
+#
+# Review of #893: a machine user's login shell may be tcsh or csh (HPC
+# clusters still hand them out), which cannot read ``${SHELL:-/bin/sh}``; and a
+# profile that prints had its words glued to the agent's first frame. Each test
+# runs what is sent the way sshd does for a user whose login shell that is. A
+# shell this computer does not have is skipped: the Linux CI has no tcsh.
+
+_SHELLS = ["/bin/sh", "/bin/dash", "/bin/bash", "/bin/zsh", "/bin/tcsh", "/bin/csh"]
+_ARGS_PROBE = (
+    "import json, os, sys; print(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), 'odd': os.environ.get('ODD')}))"
+)
+
+
+def _shell(path: str) -> str:
+    if not os.access(path, os.X_OK):
+        pytest.skip(f"{path} is not on this computer")
+    return path
+
+
+def _as_user_of(shell: str, command: str, home: Path, stdin: bytes = b"\n") -> subprocess.CompletedProcess[bytes]:
+    """What sshd does for a user whose login shell is ``shell``: ``shell -c`` the command, in their home."""
+    return subprocess.run(
+        [shell, "-c", command],
+        capture_output=True,
+        input=stdin,
+        env={"HOME": str(home), "SHELL": shell, "PATH": "/usr/bin:/bin"},
+        cwd=home,
+        timeout=60,
+    )
+
+
+def _first_frame(stdout: bytes) -> object:
+    """The first line that parses, read the way the client reads stdout: it skips any other line."""
+    for line in stdout.decode("utf-8", "replace").splitlines():
+        try:
+            return json.loads(line)
+        except ValueError:
+            continue
+    return None
+
+
+@pytest.mark.parametrize("shell", _SHELLS)
+def test_the_agent_starts_with_its_arguments_and_variables_whatever_the_login_shell(tmp_path, shell):
+    shell = _shell(shell)
+    agent = f"{shlex.quote(sys.executable)} -c {shlex.quote(_ARGS_PROBE)} 'bang!x' '$HOME' \"it's\""
+    stdin = remote.env_preamble({"ODD": "a b'$c!d"}) + _FRAMES.encode()
+
+    done = _as_user_of(shell, remote.remote_command(agent, root="~/raven work"), tmp_path, stdin)
+
+    assert done.returncode == 0, done.stderr
+    seen = _first_frame(done.stdout)
+    assert isinstance(seen, dict), done.stdout
+    assert seen["argv"] == ["bang!x", "$HOME", "it's"]
+    assert seen["odd"] == "a b'$c!d"
+    assert Path(seen["cwd"]).resolve() == (tmp_path / "raven work").resolve()
+
+
+@pytest.mark.parametrize("shell", ["/bin/sh", "/bin/bash", "/bin/zsh", "/bin/tcsh", "/bin/csh"])
+def test_what_a_profile_prints_never_joins_the_first_frame(tmp_path, shell):
+    shell = _shell(shell)
+    for rc in (".profile", ".bash_profile", ".bashrc", ".zprofile", ".zshrc"):
+        (tmp_path / rc).write_text("printf 'Welcome to the cluster'\n", encoding="utf-8")
+    (tmp_path / ".cshrc").write_text("echo -n 'Welcome to the cluster'\n", encoding="utf-8")
+    frame = '{"jsonrpc":"2.0","id":1,"result":{}}'
+
+    done = _as_user_of(shell, remote.remote_command(f"printf '%s\\n' {shlex.quote(frame)}", root="~"), tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.decode().splitlines()
+    assert frame in lines, lines
+    assert any("Welcome to the cluster" in line for line in lines), "the greeting is a line of its own, skipped"
+
+
+def test_a_csh_user_s_agent_is_found_on_the_path_their_cshrc_sets(tmp_path):
+    shell = _shell("/bin/tcsh")
+    bin_dir = tmp_path / "agentbin"
+    bin_dir.mkdir()
+    agent = bin_dir / "fake-agent"
+    agent.write_text("#!/bin/sh\necho found-by-cshrc-path\n", encoding="utf-8")
+    agent.chmod(0o755)
+    (tmp_path / ".cshrc").write_text("setenv PATH ${HOME}/agentbin:${PATH}\n", encoding="utf-8")
+
+    done = _as_user_of(shell, remote.remote_command("fake-agent", root="~"), tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    assert "found-by-cshrc-path" in done.stdout.decode()
+
+
+def test_every_login_shell_the_local_launch_drives_is_driven_on_a_machine_too():
+    from raven.agent.subagent.backends.env import _DRIVABLE_SHELLS
+
+    assert set(_DRIVABLE_SHELLS) <= set(remote._LOGIN_SHELLS)
+    assert not {"csh", "tcsh", "fish"} & set(remote._LOGIN_SHELLS), "they cannot read the launch's line"
+
+
+@pytest.mark.parametrize("shell", _SHELLS)
+def test_a_one_shot_command_reads_the_same_under_every_login_shell(tmp_path, shell):
+    shell = _shell(shell)
+    command = "printf '%s\\n' 'a!b' \"it's\" '$HOME' && [ ! -d /nonexistent ] && echo done"
+
+    done = _as_user_of(shell, remote.posix(command), tmp_path)
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.decode().splitlines() == ["", "a!b", "it's", "$HOME", "done"]
+
+
+def test_the_session_directory_is_read_past_a_greeting_from_the_user_s_shell(tmp_path, monkeypatch):
+    # bash reads .bashrc for a command sshd hands it and csh reads .cshrc for
+    # every -c, before anything raven sent runs; a greeting with no line break
+    # would turn the path into "greeting/root/raven-work/t1".
+    def runner_from(row, *, cap_seconds=None):
+        def run(cmd: str) -> tuple[int, str]:
+            done = _run_as_sshd(f"printf 'greeting with no line break'; {cmd}", tmp_path)
+            return done.returncode, done.stdout
+
+        return run
+
+    monkeypatch.setattr(remote, "runner_from", runner_from)
+
+    got = remote.session_dir(_box(), root="~/raven-work", handle="t1")
+
+    assert Path(got).resolve() == (tmp_path / "raven-work" / "t1").resolve()
+
+
+def test_a_line_break_in_what_would_be_sent_is_refused_before_any_ssh(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="must be one line"):
+        remote.posix("echo a\necho b")
+    _registry(tmp_path, monkeypatch, [ROW])
+    monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: tmp_path / "logs")
+    monkeypatch.setattr(remote, "runner_from", lambda row, *, cap_seconds=None: pytest.fail("no ssh for this"))
+
+    with pytest.raises(
+        RemoteMachineError,
+        match=r"^agent 'a' on machine 'Lab box' \(box\): a command for a registered machine must be one line$",
+    ):
+        remote.prepare_launch("a", "box", "agent\n--flag", remote_cwd=None, env={})
+    with pytest.raises(RemoteMachineError, match=r"^machine 'Lab box' \(box\): .*must be one line$"):
+        remote.session_dir(_box(), root="~/a\nb", handle="t1")
+
+
+def test_what_is_sent_is_one_quoted_sh_line_with_csh_s_history_character_escaped():
+    # The shape, pinned where no csh is installed to run it (the Linux CI).
+    assert remote.posix("echo a!b") == "exec /bin/sh -c 'echo; echo a'\\!'b'"
+    assert remote.remote_command("qwen --acp", root="~").startswith(
+        "exec /bin/sh -c 'echo; mkdir -p ~ && cd ~ || exit; "
+    )

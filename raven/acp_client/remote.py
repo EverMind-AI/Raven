@@ -58,6 +58,14 @@ NOT_FOUND_RC = 127
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # The shell variable the launch line reads each stdin variable line into.
 _ENV_LINE = "__raven_env"
+# Login shells the launch starts with ``-lic``: the POSIX family, which reads
+# the launch's script the way ``/bin/sh`` does. Wider than the local launch's
+# rule (``backends.env._DRIVABLE_SHELLS``, bash and zsh), because that one
+# parses the shell's own output to capture an environment, and this one only
+# hands the shell a line to run. A csh or fish login shell reads neither, and
+# the agent starts from ``/bin/sh`` with the environment that shell's own
+# startup made (csh reads ``.cshrc`` for every ``-c``).
+_LOGIN_SHELLS = ("ash", "bash", "dash", "ksh", "mksh", "sh", "yash", "zsh")
 _LEAF_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 _LEAF_MAX = 64
 
@@ -117,16 +125,46 @@ def machine(conn_id: str) -> Machine:
     return Machine(id=wanted, display_name=str(row.get("display_name") or wanted), _row=dict(row))
 
 
+def posix(command: str) -> str:
+    """``command`` as sshd should hand it to the machine user's shell, whatever shell that is.
+
+    sshd runs a remote command with the user's login shell, and a tcsh, csh or
+    fish one cannot read a POSIX line -- ``${SHELL:-/bin/sh}`` alone stops csh
+    with "Bad : modifier" (review of #893). ``exec /bin/sh -c '...'`` reads
+    the same in all of them, with two adjustments for csh: a ``!`` is written
+    ``'\\!'``, because csh substitutes history inside single quotes even for
+    ``-c`` (measured 2026-10-10: ``a!b`` gave "Event not found"), and a line
+    break is refused, because csh cannot quote one.
+
+    The command's output starts on a line of its own. The user's shell may
+    print while it starts -- bash reads ``.bashrc`` for a command sshd hands
+    it, csh reads ``.cshrc`` for every ``-c`` -- and a greeting with no line
+    break would otherwise glue itself to the first line the caller reads.
+    """
+    if "\n" in command or "\r" in command:
+        raise ValueError("a command for a registered machine must be one line")
+    return "exec /bin/sh -c " + shlex.quote(f"echo; {command}").replace("!", "'\\!'")
+
+
 def remote_command(agent_command: str, *, root: str) -> str:
     """The one argv element sshd hands to the machine user's shell.
 
-    Two shells read it, each once: sshd's ``$SHELL -c`` reads this string, and
-    the login shell it execs reads ``inner``. The login shell is what finds the
-    agent: measured 2026-10-10, claude, codex and qwen installed through nvm or
-    into ``~/.local/bin`` were on the PATH of ``bash -lic`` and of nothing
-    less. ``-i`` because that is where nvm's lines live (``.bashrc`` returns
-    early for a non-interactive shell); it costs two "no job control" lines on
-    stderr and nothing on stdout, which carries the protocol.
+    Three shells read it, each once: the user's shell reads only
+    :func:`posix`'s wrapper, ``/bin/sh`` reads the script that makes the
+    root and starts the login shell, and the login shell reads ``inner``. The
+    login shell is what finds the agent: measured 2026-10-10, claude, codex
+    and qwen installed through nvm or into ``~/.local/bin`` were on the PATH
+    of ``bash -lic`` and of nothing less. ``-i`` because that is where nvm's
+    lines live (``.bashrc`` returns early for a non-interactive shell). Which
+    login shells are started that way, and why, is :data:`_LOGIN_SHELLS`.
+
+    stdout carries the protocol, and a profile or rc file may print on its way
+    in: a banner with no line break ended up glued to the first frame (review
+    of #893). The client skips a line that is not a frame, so the launch ends
+    whatever was printed with a line break the moment before the agent starts,
+    and the agent's first frame arrives on a line of its own. Keeping the
+    startup off stdout instead does not hold: measured 2026-10-10, macOS's
+    bash login startup closed the descriptor the real stdout was kept on.
 
     No variable is on this line. An entry's ``env`` is where credentials live
     (``OPENAI_API_KEY`` and the like), and an argument is visible in the
@@ -136,10 +174,15 @@ def remote_command(agent_command: str, *, root: str) -> str:
     """
     inner = (
         f'while IFS= read -r {_ENV_LINE} && [ -n "${_ENV_LINE}" ]; do eval "export ${_ENV_LINE}"; done; '
-        f"exec {agent_command}"
+        f"echo; exec {agent_command}"
     )
     where = _shell_path(root)
-    return f'mkdir -p {where} && cd {where} && exec "${{SHELL:-/bin/sh}}" -lic {shlex.quote(inner)}'
+    script = (
+        f"mkdir -p {where} && cd {where} || exit; "
+        f'case "${{SHELL##*/}}" in {"|".join(_LOGIN_SHELLS)}) exec "$SHELL" -lic {shlex.quote(inner)};; esac; '
+        f"exec /bin/sh -c {shlex.quote(inner)}"
+    )
+    return posix(script)
 
 
 def launch_command(
@@ -200,10 +243,11 @@ def session_dir(target: Machine, *, root: str = DEFAULT_ROOT, handle: str, timeo
     """
     where = f"{_shell_path(root)}/{shlex.quote(leaf(handle))}"
     try:
+        command = posix(f"mkdir -p {where} && cd {where} && pwd -P")
         run = runner_from(target._row, cap_seconds=timeout)
-    except TransportError as exc:
+    except (TransportError, ValueError) as exc:
         raise RemoteMachineError(f"machine {target.label}: {exc}") from None
-    rc, out = run(f"mkdir -p {where} && cd {where} && pwd -P")
+    rc, out = run(command)
     lines = [line.strip() for line in out.splitlines() if line.strip()]
     if rc == 0 and lines and lines[-1].startswith("/"):
         return lines[-1]
@@ -257,8 +301,8 @@ def prepare_launch(
     except OSError:
         pass
     root = (remote_cwd or "").strip() or DEFAULT_ROOT
-    line = launch_command(target, agent_command, root=root, ssh_log=log)
     try:
+        line = launch_command(target, agent_command, root=root, ssh_log=log)
         preamble = env_preamble({**subagent_role_env(), **env})
     except ValueError as exc:
         raise RemoteMachineError(f"agent {agent!r} on machine {target.label}: {exc}") from None
@@ -417,6 +461,7 @@ __all__ = [
     "launch_command",
     "leaf",
     "machine",
+    "posix",
     "prepare_launch",
     "read_ssh_log",
     "remote_command",
