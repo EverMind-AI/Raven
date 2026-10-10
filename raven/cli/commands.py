@@ -114,6 +114,16 @@ def main(
     """
     i18n.set_language(_saved_language())
     if ctx.invoked_subcommand is not None:
+        if dev:
+            # The root flag shapes the bare launch only; ahead of a subcommand
+            # it would be dropped without a word, so it is refused instead.
+            sub = ctx.invoked_subcommand
+            hint = (
+                f"put --dev after the subcommand: raven {sub} --dev"
+                if sub in ("web", "serve", "gateway")
+                else "--dev ahead of a subcommand applies to bare `raven` only"
+            )
+            raise typer.BadParameter(hint, param_hint="'--dev'")
         return
     if _can_open_a_browser():
         from raven.cli.serve_commands import _web
