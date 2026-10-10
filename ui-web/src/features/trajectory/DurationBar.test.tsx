@@ -44,7 +44,7 @@ const entry = (id: string, at: number, over: Partial<TrajectoryEntry> = {}): Tra
    mark, and a one-second output that takes the rest. */
 const THREE: TrajectoryEntry[] = [
   entry('in', 0, { kind: 'llm.input', charged_ms: 0, timing_basis: 'zero', operation_start: null, operation_end: null }),
-  entry('think', 1, { kind: 'llm.thinking', charged_ms: null, timing_basis: 'not_recorded', operation_start: null, operation_end: null }),
+  entry('think', 1, { kind: 'llm.thinking', charged_ms: 0, timing_basis: 'not_recorded', operation_start: null, operation_end: null }),
   entry('out', 2, { kind: 'llm.output', charged_ms: 1000, timing_basis: 'span_full', failure_entry: true }),
 ]
 
@@ -306,6 +306,22 @@ describe('the duration bar', () => {
     expect(store.get().selectedId).toBeNull()
   })
 
+  it('forgets a press released off the canvas before it moved, so a later hover does not pan', async () => {
+    await ready()
+    render(<DurationBar />)
+    await flush()
+    act(() => { fireEvent.click(q('.trajectory-bar-tool[aria-label="gui.trajectory.bar.zoom_in"]') as HTMLElement) })
+    const before = store.get().timeline.offset
+    pointer('pointerdown', 300)
+    pointer('pointermove', 302)
+    act(() => { fireEvent.pointerLeave(canvas(), { pointerId: 1 }) })
+    /* Back over the canvas with no button held. */
+    pointer('pointermove', 250)
+    pointer('pointermove', 200)
+    expect(store.get().timeline.offset).toBe(before)
+    expect(q('.trajectory-bar')?.hasAttribute('data-drag')).toBe(false)
+  })
+
   it('does not click after a cancelled or lost pointer', async () => {
     await ready()
     render(<DurationBar />)
@@ -516,7 +532,7 @@ describe('a dense block', () => {
   })
 
   it('says how many of a block\'s entries have no recorded duration', async () => {
-    rows = many.map((e, k) => (k % 3 === 1 ? { ...e, charged_ms: null, timing_basis: 'not_recorded' as const } : e))
+    rows = many.map((e, k) => (k % 3 === 1 ? { ...e, charged_ms: 0, timing_basis: 'not_recorded' as const } : e))
     await ready()
     render(<DurationBar />)
     await flush()
@@ -600,7 +616,7 @@ describe('the switches, the bands and the dots', () => {
     rows = [
       entry('u', 0, { kind: 'user.input', charged_ms: 0, timing_basis: 'zero' }),
       entry('fast', 1, { kind: 'tool.output', charged_ms: 12 }),
-      entry('unknown', 2, { kind: 'llm.thinking', charged_ms: null, timing_basis: 'not_recorded' }),
+      entry('unknown', 2, { kind: 'llm.thinking', charged_ms: 0, timing_basis: 'not_recorded' }),
       entry('mid', 3, { kind: 'llm.output', charged_ms: 400 }),
       entry('slow', 4, { kind: 'tool.output', charged_ms: 1500 }),
     ]

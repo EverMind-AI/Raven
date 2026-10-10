@@ -172,6 +172,18 @@ describe('available', () => {
     expect(store.get().view).toBe('chat')
   })
 
+  it('goes when the gateway stops serving the surface, though the switch it last reported was on', async () => {
+    serve()
+    store.install()
+    unpitch()
+    store.sessionChanged('gui:a')
+    await store.refreshState()
+    expect(store.available()).toBe(true)
+    store.absent()
+    expect(store.get().enabled).toBe(true)
+    expect(store.available()).toBe(false)
+  })
+
   it('goes with the switch and comes back with it, in the conversation view', async () => {
     serve(false)
     store.install()
@@ -566,7 +578,7 @@ describe('sessionChanged', () => {
     await flush()
     await answerAll(3, 3)
     await walk
-    store.setTimeline({ scale: 4, offset: 120, fit: false, frozenUnit: 0.5, anchor: { id: 'r1', frac: 0.25 } })
+    store.setTimeline({ scale: 4, offset: 120, fit: false, frozenUnit: 0.5, frozenMark: 30, anchor: { id: 'r1', frac: 0.25 } })
     store.openBucket(['r0', 'r1'], 10)
     store.setThresholdOpen(true)
     expect(store.get().timeline.bucket).toEqual({ ids: ['r0', 'r1'], x: 10 })
@@ -574,7 +586,7 @@ describe('sessionChanged', () => {
     expect(store.get().timeline).toEqual(store.initialTimeline)
     store.sessionChanged('gui:a')
     expect(store.get().timeline).toEqual({
-      scale: 4, offset: 120, fit: false, frozenUnit: 0.5, anchor: { id: 'r1', frac: 0.25 }, bucket: null, threshold: false,
+      scale: 4, offset: 120, fit: false, frozenUnit: 0.5, frozenMark: 30, anchor: { id: 'r1', frac: 0.25 }, bucket: null, threshold: false,
     })
     /* Leaving the view, or losing it, closes the list and the threshold's popover too. */
     store.setView('trajectory')

@@ -58,6 +58,8 @@ export interface Timeline {
   offset: number
   fit: boolean
   frozenUnit: number | null
+  /** The fit's equal share frozen with it when the rows had no duration (geometry.ts). */
+  frozenMark: number | null
   anchor: { id: string; frac: number } | null
   bucket: { ids: string[]; x: number } | null
   /** The duration filter's popover is up. */
@@ -65,7 +67,7 @@ export interface Timeline {
 }
 
 export const initialTimeline: Timeline = {
-  scale: 1, offset: 0, fit: true, frozenUnit: null, anchor: null, bucket: null, threshold: false,
+  scale: 1, offset: 0, fit: true, frozenUnit: null, frozenMark: null, anchor: null, bucket: null, threshold: false,
 }
 
 export interface TrajectoryState {

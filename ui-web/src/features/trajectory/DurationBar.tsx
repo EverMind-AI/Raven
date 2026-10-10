@@ -369,7 +369,7 @@ export function DurationBar(): JSX.Element {
       }
       const x = e.clientX - el.getBoundingClientRect().left
       const next = zoomAt(viewRef.current, x, wheelFactor(intent.zoom), segmentsRef.current)
-      store.setTimeline({ scale: next.scale, offset: next.offset, fit: next.fit, frozenUnit: next.frozenUnit, anchor: next.anchor })
+      store.setTimeline({ scale: next.scale, offset: next.offset, fit: next.fit, frozenUnit: next.frozenUnit, frozenMark: next.frozenMark, anchor: next.anchor })
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -511,13 +511,13 @@ export function DurationBar(): JSX.Element {
   const zoomBy = (factor: number): void => {
     if (width < MIN_W || !segments.length) return
     const next = zoomAt(view, width / 2, factor, segments)
-    store.setTimeline({ scale: next.scale, offset: next.offset, fit: next.fit, frozenUnit: next.frozenUnit, anchor: next.anchor })
+    store.setTimeline({ scale: next.scale, offset: next.offset, fit: next.fit, frozenUnit: next.frozenUnit, frozenMark: next.frozenMark, anchor: next.anchor })
   }
 
   const bucket = timeline.bucket
   /* Below the bar when the window has room for the list there, above it
-     otherwise -- the bar sits at the bottom of the column, so above is the
-     usual case -- and never wider than the window. */
+     otherwise -- the bar sits above the list, so below is the usual case --
+     and never wider than the window. */
   const bucketPlace = (): { left: number; top: number; maxHeight: number } => {
     const rect = canvas.current?.getBoundingClientRect()
     const vw = document.documentElement.clientWidth || 1000
@@ -546,7 +546,7 @@ export function DurationBar(): JSX.Element {
     store.closeBucket()
     if (!block) return
     const next = expand(view, block, segments)
-    store.setTimeline({ scale: next.scale, offset: next.offset, fit: next.fit, frozenUnit: next.frozenUnit, anchor: next.anchor })
+    store.setTimeline({ scale: next.scale, offset: next.offset, fit: next.fit, frozenUnit: next.frozenUnit, frozenMark: next.frozenMark, anchor: next.anchor })
     root.current?.focus()
   }
 
@@ -573,7 +573,14 @@ export function DurationBar(): JSX.Element {
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         onLostPointerCapture={onPointerCancel}
-        onPointerLeave={() => { setHover(null); setOver(null) }}
+        onPointerLeave={() => {
+          setHover(null)
+          setOver(null)
+          /* A press released off the canvas before it became a drag sends no
+             pointerup here (capture is taken only once it moves), so it is
+             dropped on the way out rather than left to pan on a later hover. */
+          if (drag.current && !drag.current.moved) endDrag()
+        }}
         onDoubleClick={onDoubleClick}
       />
       <div className="trajectory-bar-tools" role="group" title={summaryText(sum)}>

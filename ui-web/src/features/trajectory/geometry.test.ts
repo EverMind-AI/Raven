@@ -86,6 +86,17 @@ describe('the fit', () => {
     expect(near(layout.dividers[1]!, layout.blocks[3]!.x - GAP)).toBe(true)
   })
 
+  it('holds exactly k minimum slots, gaps between them, in a bar 4k - 1 wide, and goes dense one row past that', () => {
+    for (const k of [1, 2, 7, 100]) {
+      const width = k * (MIN_W + GAP) - GAP
+      expect(capacity(width)).toBe(k)
+      expect(capacity(width - 1)).toBe(Math.max(1, k - 1))
+      const fits = Array.from({ length: k }, (_, i) => seg(`s${i}`, 0))
+      expect(layoutFor(fits, initialViewport(width)).dense).toBe(false)
+      if (k > 1) expect(layoutFor([...fits, seg('more', 0)], initialViewport(width)).dense).toBe(true)
+    }
+  })
+
   it('is empty for no rows or a bar narrower than one slot, and one dense block as wide as the bar when it cannot hold two', () => {
     expect(layoutFor([], initialViewport(400)).blocks).toEqual([])
     expect(layoutFor([seg('a', 5)], initialViewport(0)).blocks).toEqual([])
@@ -156,7 +167,7 @@ describe('the timing fixtures', () => {
   it('marks an input at zero width, a thinking entry as not recorded, and lets the output carry the call', () => {
     const segments = toSegments(rows([
       { entry_id: 'in', kind: 'llm.input', charged_ms: 0, timing_basis: 'zero' },
-      { entry_id: 'think', kind: 'llm.thinking', charged_ms: null, timing_basis: 'not_recorded' },
+      { entry_id: 'think', kind: 'llm.thinking', charged_ms: 0, timing_basis: 'not_recorded' },
       { entry_id: 'out', kind: 'llm.output', charged_ms: 3200, timing_basis: 'span_full' },
       { entry_id: 'lost', kind: 'tool.output', charged_ms: null, timing_basis: 'unknown' },
     ]))
@@ -333,6 +344,36 @@ describe('zoom', () => {
     }
     expect(after.contentWidth).toBeGreaterThan(before.contentWidth)
     expect(near(layoutFor(more, initialViewport(width)).contentWidth, width)).toBe(true)
+  })
+
+  it('forgets the frozen unit at scale one, so the next zoom fits the rows and the width as they are then', () => {
+    const width = 600
+    const first = Array.from({ length: 10 }, (_, i) => seg(`a${i}`, 1000))
+    let view = zoomAt(initialViewport(width), 300, 2, first)
+    expect(view.frozenUnit).not.toBeNull()
+    view = zoomAt(view, 300, 0.5, first)
+    expect(view.fit).toBe(true)
+    expect(view.frozenUnit).toBeNull()
+    const grown = [...first, ...Array.from({ length: 10 }, (_, i) => seg(`b${i}`, 10_000))]
+    view = zoomAt(view, 300, 1.25, grown)
+    const content = layoutFor(grown, view).contentWidth
+    expect(content).toBeGreaterThan(width)
+    expect(content).toBeLessThanOrEqual(width * 1.25 + 1e-6)
+  })
+
+  it('grows the equal shares of rows with no recorded duration, and the minimum again once one arrives', () => {
+    const width = 800
+    const segments = Array.from({ length: 10 }, (_, i) => seg(`z${i}`, i % 2 ? 0 : null))
+    const share = fitLayout(segments, width).blocks[0]!.w
+    expect(share).toBeGreaterThan(MIN_W * 2)
+    const zoomed = zoomAt(initialViewport(width), 400, 2, segments)
+    const layout = layoutFor(segments, zoomed)
+    expect(layout.blocks.every((b) => near(b.w, share * 2))).toBe(true)
+    expect(layout.contentWidth).toBeGreaterThan(width)
+    const later = [...segments, seg('late', 4000)]
+    const withDuration = layoutFor(later, zoomed)
+    expect(withDuration.blocks.slice(0, 10).every((b) => near(b.w, MIN_W * 2))).toBe(true)
+    expect(zoomAt(zoomed, 400, 0.5, segments).frozenMark).toBeNull()
   })
 
   it('pulls zero-length marks apart when every entry is zero or unknown, with no unit to fit', () => {
@@ -539,16 +580,30 @@ describe('spreading a dense block out', () => {
 })
 
 describe('the duration threshold', () => {
+  /* As the index sends them: thinking is zero with the basis not_recorded, an unfinished span null. */
   const row = (id: string, kind: string, charged: number | null): TrajectoryEntry =>
-    ({ entry_id: id, kind, charged_ms: charged, timing_basis: charged === null ? 'not_recorded' : 'span_full' }) as TrajectoryEntry
+    ({
+      entry_id: id, kind, charged_ms: charged === null && kind === 'llm.thinking' ? 0 : charged,
+      timing_basis: charged === null ? (kind === 'llm.thinking' ? 'not_recorded' : 'unknown') : 'span_full',
+    }) as TrajectoryEntry
 
   it('keeps the user\'s input and unknown durations at any threshold, and filters nothing at zero', () => {
-    const rows = [row('u', 'user.input', 0), row('n', 'llm.thinking', null), row('a', 'tool.output', 12), row('b', 'llm.output', 400), row('c', 'tool.output', 1500)]
+    const rows = [
+      row('u', 'user.input', 0), row('n', 'llm.thinking', null), row('a', 'tool.output', 12), row('b', 'llm.output', 400),
+      row('c', 'tool.output', 1500), row('q', 'tool.output', null),
+    ]
     const ids = (ms: number): string[] => barEntries(rows, ms).map((e) => e.entry_id)
-    expect(ids(0)).toEqual(['u', 'n', 'a', 'b', 'c'])
-    expect(ids(20)).toEqual(['u', 'n', 'b', 'c'])
-    expect(ids(1000)).toEqual(['u', 'n', 'c'])
-    expect(ids(Number.NaN)).toEqual(['u', 'n', 'a', 'b', 'c'])
+    expect(ids(0)).toEqual(['u', 'n', 'a', 'b', 'c', 'q'])
+    expect(ids(20)).toEqual(['u', 'n', 'b', 'c', 'q'])
+    expect(ids(1000)).toEqual(['u', 'n', 'c', 'q'])
+    expect(ids(Number.NaN)).toEqual(['u', 'n', 'a', 'b', 'c', 'q'])
+    expect(toSegments(rows).find((s) => s.id === 'n')?.charged).toBeNull()
+  })
+
+  it('keeps a duration exactly at the threshold, and drops the one a millisecond under it', () => {
+    const at = row('at', 'tool.output', 20)
+    const under = row('under', 'tool.output', 19)
+    expect(barEntries([at, under], 20).map((e) => e.entry_id)).toEqual(['at'])
   })
 
   it('snaps a value to the nearest detent, from zero to a second', () => {

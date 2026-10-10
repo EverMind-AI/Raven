@@ -101,6 +101,10 @@ export interface Viewport {
   fit: boolean
   /** The fit's unit when the reader first zoomed; what later scales multiply. */
   frozenUnit: number | null
+  /** The fit's equal share when the reader first zoomed rows with no recorded
+      duration and room for each: zero and unknown slots grow from it rather
+      than from the minimum, until a duration arrives. */
+  frozenMark: number | null
   anchor: Anchor | null
 }
 
@@ -112,16 +116,21 @@ export interface Summary {
 }
 
 export const initialViewport = (width: number): Viewport =>
-  ({ scale: 1, offset: 0, width, fit: true, frozenUnit: null, anchor: null })
+  ({ scale: 1, offset: 0, width, fit: true, frozenUnit: null, frozenMark: null, anchor: null })
 
 const EMPTY: Layout = { blocks: [], dividers: [], contentWidth: 0, unit: 0, dense: false }
 
 /* ── from rows to segments ────────────────────────────────────────────── */
 
+/* The index sends a duration the record does not hold (a model's thinking)
+   as zero with the basis `not_recorded`; the bar reads it as unknown, never
+   as a recorded zero. */
+const recorded = (e: TrajectoryEntry): boolean => e.timing_basis !== 'not_recorded'
+
 export function toSegments(entries: readonly TrajectoryEntry[]): Segment[] {
   return entries.map((e) => ({
     id: e.entry_id,
-    charged: typeof e.charged_ms === 'number' && e.charged_ms >= 0 ? e.charged_ms : null,
+    charged: recorded(e) && typeof e.charged_ms === 'number' && e.charged_ms >= 0 ? e.charged_ms : null,
     turn: typeof e.turn_number === 'number' ? e.turn_number : null,
     failure: e.failure_entry,
     kind: e.kind,
@@ -194,13 +203,19 @@ export function fitLayout(segments: readonly Segment[], width: number): Layout {
 }
 
 /* Past the fit: every entry its own slot, positive ones the frozen unit
-   times the scale (floored), zero and unknown ones the minimum times the
-   scale, and the bar as wide as that makes it. Rows arriving later extend it. */
-export function spreadLayout(segments: readonly Segment[], unit: number, scale: number): Layout {
+   times the scale (floored), zero and unknown ones the mark (the minimum,
+   unless the view froze a wider one) times the scale, and the bar as wide as
+   that makes it. Rows arriving later extend it. */
+export function spreadLayout(segments: readonly Segment[], unit: number, scale: number, mark: number = MIN_W): Layout {
   if (!segments.length) return EMPTY
-  const widths = segments.map((s) => (positive(s) ? Math.max(MIN_W, unit * scale * (s.charged as number)) : MIN_W * scale))
+  const widths = segments.map((s) => (positive(s) ? Math.max(MIN_W, unit * scale * (s.charged as number)) : mark * scale))
   return place(segments, widths, unit * scale, false)
 }
+
+/* The width a zero or unknown slot grows from: the frozen mark while no row
+   has a duration, the minimum once one has. */
+const markFor = (segments: readonly Segment[], view: Viewport): number =>
+  segments.some(positive) ? MIN_W : Math.max(MIN_W, view.frozenMark ?? MIN_W)
 
 /* ── density (the fit only) ───────────────────────────────────────────── */
 
@@ -271,7 +286,7 @@ export function layoutFor(segments: readonly Segment[], view: Viewport): Layout 
   if (view.fit) {
     return segments.length > capacity(view.width) ? denseLayout(segments, view.width) : fitLayout(segments, view.width)
   }
-  return spreadLayout(segments, unitFor(segments, view), view.scale)
+  return spreadLayout(segments, unitFor(segments, view), view.scale, markFor(segments, view))
 }
 
 /* ── places ───────────────────────────────────────────────────────────── */
@@ -282,7 +297,7 @@ export function layoutFor(segments: readonly Segment[], view: Viewport): Layout 
 export function barEntries(visible: readonly TrajectoryEntry[], minChargedMs: number): TrajectoryEntry[] {
   if (!(minChargedMs > 0)) return [...visible]
   return visible.filter(
-    (e) => e.kind === 'user.input' || typeof e.charged_ms !== 'number' || e.charged_ms >= minChargedMs,
+    (e) => e.kind === 'user.input' || !recorded(e) || typeof e.charged_ms !== 'number' || e.charged_ms >= minChargedMs,
   )
 }
 
@@ -386,13 +401,22 @@ export function zoomAt(view: Viewport, pointerX: number, factor: number, segment
   if (!segments.length || view.width < MIN_W) return view
   const before = layoutFor(segments, view)
   const scale = Math.max(1, Math.min(MAX_SCALE, view.scale * factor))
-  if (scale === 1) return { ...view, scale: 1, offset: 0, fit: true, anchor: null }
+  /* Back at one the view is the fit again, and forgets what it froze: the
+     next zoom freezes the fit of the rows and the width as they are then. */
+  if (scale === 1) return { ...view, scale: 1, offset: 0, fit: true, anchor: null, frozenUnit: null, frozenMark: null }
   const unit = unitFor(segments, view)
   const anchor = locate(before, pointerX + view.offset) ?? lastPlace(before)
-  const after = spreadLayout(segments, unit, scale)
+  /* Leaving a fit of equal shares (no duration, no dense block), the shares
+     are what grows, so the first step widens the bar instead of shrinking it. */
+  const share = view.fit && !before.dense && !segments.some(positive) ? (before.blocks[0]?.w ?? MIN_W) : null
+  const mark = share ?? markFor(segments, view)
+  const after = spreadLayout(segments, unit, scale, mark)
   const at = anchor ? position(after, anchor) : null
   const offset = clampOffset((at ?? 0) - pointerX, after.contentWidth, view.width)
-  const next: Viewport = { ...view, scale, offset, fit: false, frozenUnit: view.frozenUnit ?? freeze(unit) }
+  const next: Viewport = {
+    ...view, scale, offset, fit: false, frozenUnit: view.frozenUnit ?? freeze(unit),
+    frozenMark: view.frozenMark ?? (share !== null && share > MIN_W ? share : null),
+  }
   return { ...next, anchor: anchorOf(after, next) }
 }
 
@@ -438,13 +462,14 @@ export function expand(view: Viewport, block: Block, segments: readonly Segment[
   const ids = block.ids ?? [block.id]
   if (!segments.length || view.width < MIN_W) return view
   const frozen = unitFor(segments, view)
-  const one = spreadLayout(segments, frozen, 1)
+  const mark = markFor(segments, view)
+  const one = spreadLayout(segments, frozen, 1, mark)
   const first = position(one, { id: ids[0]!, frac: 0 })
   const last = position(one, { id: ids[ids.length - 1]!, frac: 1 })
   if (first === null || last === null) return view
   const span = Math.max(1e-6, last - first)
   const scale = Math.max(1, Math.min(MAX_SCALE, Math.floor((view.width / span) * 100) / 100))
-  const after = spreadLayout(segments, frozen, scale)
+  const after = spreadLayout(segments, frozen, scale, mark)
   const start = position(after, { id: ids[0]!, frac: 0 }) ?? 0
   const next: Viewport = {
     ...view, scale, fit: false, frozenUnit: view.frozenUnit ?? freeze(frozen), offset: clampOffset(start, after.contentWidth, view.width),
