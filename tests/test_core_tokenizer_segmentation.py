@@ -40,22 +40,30 @@ _WORDS = [
 ]
 
 
-def _wordnet_available() -> bool:
-    """Whether the lemmatizer has its corpus.
+def _corpora_available() -> bool:
+    """Whether the latin half of the tokenizer has what it reads.
+
+    Two corpora, both from the same fetch step: the sentence splitter
+    `word_tokenize` loads, and the WordNet data the lemmatizer reads. Any line
+    carrying latin text goes through both, so a case with so much as an English
+    word in it needs them; a line of Chinese alone is segmented from the
+    dictionary and needs neither.
 
     Asked after this module's import of `raven.core.tokenizer`, which is what
     puts the package's own `res/nltk_data` on nltk's search path.
     """
     try:
+        import nltk
         from nltk.corpus import wordnet
 
         wordnet.ensure_loaded()
+        nltk.data.find("tokenizers/punkt_tab")
     except Exception:
         return False
     return True
 
 
-needs_wordnet = pytest.mark.skipif(not _wordnet_available(), reason="the nltk corpora have not been fetched")
+needs_corpora = pytest.mark.skipif(not _corpora_available(), reason="the nltk corpora have not been fetched")
 
 
 @pytest.fixture
@@ -86,6 +94,7 @@ class TestBuildingFromADictionary:
 
         assert again.tokenize("\u6570\u636e\u5e93").split() == ["\u6570\u636e\u5e93"]
 
+    @needs_corpora
     def test_a_missing_user_dictionary_falls_back_to_the_shipped_one(self, tmp_path: Path) -> None:
         """A path that is not there is a misconfiguration, not a reason to
         refuse to segment -- but with no shipped dictionary either, the error
@@ -256,6 +265,7 @@ class TestLanguages:
         assert segmenter._fold_diacritics is True
         assert segmenter._normalize_token("running") == "running", "left unstemmed"
 
+    @needs_corpora
     def test_a_folding_language_strips_the_accents_from_its_words(self, segmenter: tok.Tokenizer) -> None:
         segmenter.set_language("Czech")
 
@@ -303,11 +313,11 @@ class TestIsChinese:
 
 
 class TestEnglishNormalisation:
-    @needs_wordnet
+    @needs_corpora
     def test_an_english_word_is_lemmatised_then_stemmed(self, segmenter: tok.Tokenizer) -> None:
         assert segmenter.tokenize("running").strip() == "run"
 
-    @needs_wordnet
+    @needs_corpora
     def test_case_is_folded(self, segmenter: tok.Tokenizer) -> None:
         assert segmenter.tokenize("Hello World").split() == ["hello", "world"]
 
@@ -323,6 +333,7 @@ class TestEnglishNormalisation:
 
 
 class TestMixedScripts:
+    @needs_corpora
     def test_a_line_of_both_scripts_splits_at_the_script_boundary(self, segmenter: tok.Tokenizer) -> None:
         out = segmenter.tokenize("\u5317\u4eac hello").split()
 
