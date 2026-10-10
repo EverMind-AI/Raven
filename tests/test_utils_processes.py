@@ -82,6 +82,20 @@ def test_a_resident_command_has_a_positive_identity(monkeypatch, line: str) -> N
 @pytest.mark.parametrize(
     "line",
     [
+        "/Users/x/Raven copy/.venv/bin/python3 /Users/x/Raven copy/.venv/bin/raven serve --port 8765",
+        r"C:\Users\Raven Smith\.venv\Scripts\raven.exe serve",
+        r'"C:\Users\Raven Smith\python.exe" "C:\Users\Raven Smith\raven.exe" web --supervise',
+        "/Users/x/Raven 2/.venv/bin/raven web --supervise --port 9",
+    ],
+)
+def test_a_raven_named_directory_does_not_hide_the_resident(monkeypatch, line: str) -> None:
+    monkeypatch.setattr(processes, "command_line", lambda _pid: line)
+    assert processes.raven_identity(1234) is True
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
         "python -m raven acp",
         "python -m raven tui",
         "python -m raven --version serve",

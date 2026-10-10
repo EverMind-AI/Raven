@@ -144,15 +144,17 @@ def raven_identity(pid: int) -> Optional[bool]:
 def _is_console_serve(line: str) -> bool:
     """Whether the argv spells ``raven <a resident subcommand>``.
 
-    The console script is a tiny shim that forwards to ``raven.cli.commands:run``;
+    The console script is a tiny shim that forwards to ``raven.cli.entry:run``;
     its argv[0] is the script name and argv[1] is the subcommand. Anything else
     (``raven --version``, ``raven tui``) is fine to reject: it is not a process
     this module's state files can point at.
     """
     import re
 
-    match = re.match(r'.*?(?:^|[/\\])raven(?:\.exe)?"?(?=\s)', line, re.IGNORECASE)
-    return match is not None and _has_resident_subcommand(line[match.end() :])
+    return any(
+        _has_resident_subcommand(line[match.end() :])
+        for match in re.finditer(r'(?:^|[/\\])raven(?:\.exe)?"?(?=\s)', line, re.IGNORECASE)
+    )
 
 
 def _has_resident_subcommand(arguments: str) -> bool:
