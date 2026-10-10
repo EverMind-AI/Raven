@@ -77,39 +77,71 @@ def _split_windows(command: str) -> list[str]:
 
 
 def _split_shape(command: str) -> list[str]:
-    """Split on whitespace and double quotes, keeping every other byte.
+    """Read host quoting while preserving absolute paths from the other host.
 
-    Backslashes and single quotes are literal here, so a Windows drive-letter
-    token keeps its ``\\`` separators and ``_is_absolute_path`` can judge its
-    shape on any host. An unclosed double quote reads the rest as one token
-    rather than raising: this arm is a probe, and a malformed command answers
-    "the path is not there" through whatever token it produced.
-
-    Both quote characters group: the Windows producer emits double quotes and
-    the POSIX one single quotes (``shlex.quote``), and a token either of them
-    quoted must stay whole here or the path it carries is judged split. A
-    backslash stays literal under both, so a POSIX escape is read a character
-    longer -- a malformed spelling that simply names a path that is not there,
-    which is fail-closed.
+    Windows drive and UNC paths retain Windows backslash rules on POSIX, and
+    a single-quoted POSIX absolute path stays grouped on Windows. Other tokens
+    follow the host's escape rules, so a literal quote in an argument cannot
+    swallow the launcher that follows it. Unclosed groups consume the rest
+    of the command; syntax validation belongs to the launch parser.
     """
     argv: list[str] = []
     token: list[str] = []
     token_started = False
     quote: str | None = None
-    for char in command:
-        if quote is None and char in "\"'":
-            quote = char
+    windows = os.name == "nt"
+    windows_token = windows
+    i = 0
+    while i < len(command):
+        char = command[i]
+        if not token and quote != "'" and re.match(r"(?:[A-Za-z]:[\\/]|\\\\)", command[i:]):
+            windows_token = True
+        if char == "\\" and quote != "'":
             token_started = True
+            if windows_token:
+                start = i
+                while i < len(command) and command[i] == "\\":
+                    i += 1
+                run = i - start
+                if i < len(command) and command[i] == '"':
+                    token.append("\\" * (run // 2))
+                    if run % 2:
+                        token.append('"')
+                    else:
+                        quote = None if quote else '"'
+                    i += 1
+                else:
+                    token.append("\\" * run)
+                continue
+            if i + 1 < len(command) and (quote is None or command[i + 1] in '\\"'):
+                i += 1
+                token.append(command[i])
+            else:
+                token.append(char)
         elif char == quote:
             quote = None
+        elif quote is None and (
+            char == '"'
+            or (
+                char == "'"
+                and (
+                    not windows_token
+                    or (not token_started and command[i + 1 :].startswith("/") and "'" in command[i + 1 :])
+                )
+            )
+        ):
+            quote = char
+            token_started = True
         elif char in " \t" and quote is None:
             if token_started:
                 argv.append("".join(token))
                 token = []
                 token_started = False
+                windows_token = windows
         else:
             token.append(char)
             token_started = True
+        i += 1
     if token_started:
         argv.append("".join(token))
     return argv
