@@ -1723,3 +1723,32 @@ class TestAQuotedSpacedRootStaysFailClosed:
         (row,) = va.discover_product_rows()
 
         assert row.enabled is True
+
+    @pytest.mark.parametrize(
+        ("platform", "argument"),
+        [
+            ("posix", r"--name=O\'Brien"),
+            ("posix", r"--name=O\"Brien"),
+            ("nt", "--name=O'Brien"),
+            ("nt", "'/label"),
+            ("nt", r"--name=O\"Brien"),
+        ],
+    )
+    @pytest.mark.parametrize("launcher", [False, True])
+    def test_a_literal_quote_before_the_launcher_preserves_readiness(
+        self, tmp_path, monkeypatch, platform, argument, launcher
+    ) -> None:
+        from raven.utils import commands
+
+        monkeypatch.setattr(commands, "os", SimpleNamespace(name=platform))
+        root = self._spaced_root(tmp_path, monkeypatch)
+        manifest = {**_ACP_MANIFEST, "command": "{PYTHON} " + argument + " {SUBAGENT_DIR}/run.py --acp"}
+        folder = _product(root, "raven-probe", manifest=manifest, launcher=launcher)
+
+        (row,) = va.discover_product_rows()
+
+        assert commands.command_argv(row.command)[-2] == f"{folder}/run.py"
+        assert row.enabled is launcher
+        assert va._launcher_is_gone(row) is not launcher
+        if not launcher:
+            assert va._launcher_missing({"command": row.command}) == f"{folder}/run.py"

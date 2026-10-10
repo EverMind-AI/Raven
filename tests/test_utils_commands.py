@@ -64,22 +64,44 @@ class TestCommandArgv:
 class TestCommandTokens:
     """The shape-preserving split the launcher existence probes judge with."""
 
-    def test_groups_a_double_quoted_windows_path(self) -> None:
+    @pytest.mark.parametrize("platform", ["nt", "posix"])
+    def test_groups_a_double_quoted_windows_path(self, monkeypatch, platform) -> None:
+        _as(platform, monkeypatch)
         assert cmd.command_tokens(r'"C:\Program Files\app\run.exe" --go') == [
             r"C:\Program Files\app\run.exe",
             "--go",
         ]
 
-    def test_groups_a_single_quoted_posix_path(self) -> None:
+    @pytest.mark.parametrize("platform", ["nt", "posix"])
+    def test_groups_a_single_quoted_posix_path(self, monkeypatch, platform) -> None:
         """``shlex.quote`` output must stay one token to the shape probe."""
+        _as(platform, monkeypatch)
         assert cmd.command_tokens("python '/tmp/raven agents(1)/raven-code/run.py' --acp") == [
             "python",
             "/tmp/raven agents(1)/raven-code/run.py",
             "--acp",
         ]
 
-    def test_keeps_a_backslash_path_whole_on_any_host(self) -> None:
-        assert cmd.command_tokens(r"C:\gone\python.exe --run") == [r"C:\gone\python.exe", "--run"]
+    @pytest.mark.parametrize("platform", ["nt", "posix"])
+    @pytest.mark.parametrize("path", [r"C:\gone\python.exe", r"\\server\share\python.exe"])
+    def test_keeps_a_backslash_path_whole_on_any_host(self, monkeypatch, platform, path) -> None:
+        _as(platform, monkeypatch)
+        assert cmd.command_tokens(f"{path} --run") == [path, "--run"]
+
+    @pytest.mark.parametrize(
+        ("platform", "argument", "expected"),
+        [
+            ("posix", r"--name=O\'Brien", "--name=O'Brien"),
+            ("posix", r"--name=O\"Brien", '--name=O"Brien'),
+            ("posix", r"--name=two\ words", "--name=two words"),
+            ("nt", "--name=O'Brien", "--name=O'Brien"),
+            ("nt", "'/label", "'/label"),
+            ("nt", r"--name=O\"Brien", '--name=O"Brien'),
+        ],
+    )
+    def test_literal_quotes_do_not_hide_the_launcher(self, monkeypatch, platform, argument, expected) -> None:
+        _as(platform, monkeypatch)
+        assert cmd.command_tokens(f"python {argument} /missing/run.py") == ["python", expected, "/missing/run.py"]
 
 
 #: Tokens the Windows quoter has to get right: CommandLineToArgvW halves a
@@ -120,6 +142,8 @@ class TestCommandQuote:
         quoted = cmd.command_quote(value)
         assert cmd.command_argv(f"{quoted} next") == [value, "next"]
         assert cmd.command_argv(f"first {quoted}") == ["first", value]
+        assert cmd.command_tokens(f"{quoted} next") == [value, "next"]
+        assert cmd.command_tokens(f"first {quoted}") == ["first", value]
 
     def test_posix_uses_shlex_quoting(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _as("posix", monkeypatch)
@@ -131,3 +155,5 @@ class TestCommandQuote:
         quoted = cmd.command_quote(value)
         assert cmd.command_argv(f"{quoted} next") == [value, "next"]
         assert cmd.command_argv(f"first {quoted}") == ["first", value]
+        assert cmd.command_tokens(f"{quoted} next") == [value, "next"]
+        assert cmd.command_tokens(f"first {quoted}") == ["first", value]
