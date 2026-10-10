@@ -36,6 +36,7 @@ import { manifest as desk } from './desk/manifest'
 import { manifest as extAgents } from './extAgents/manifest'
 import { manifest as importSync } from './importSync/manifest'
 import { manifest as installed } from './installed/manifest'
+import { manifest as knowledge } from './knowledge/manifest'
 import { manifest as memory } from './memory/manifest'
 import { manifest as model } from './model/manifest'
 import { manifest as onboard } from './onboard/manifest'
@@ -73,7 +74,7 @@ export interface DomainManifest {
   readonly cssPrefix?: string
 }
 
-/** The nineteen, alphabetically: nothing reads them in an order. */
+/** The twenty, alphabetically: nothing reads them in an order. */
 export const MANIFESTS: readonly DomainManifest[] = [
   browser,
   composer,
@@ -84,6 +85,7 @@ export const MANIFESTS: readonly DomainManifest[] = [
   extAgents,
   importSync,
   installed,
+  knowledge,
   memory,
   model,
   onboard,

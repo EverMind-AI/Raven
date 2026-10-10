@@ -153,3 +153,11 @@ docker compose run --rm raven status
   fonts it needs to render anything but Latin text. Build with
   `--build-arg RAVEN_OFFICE=0`, or `RAVEN_OFFICE=0` in the environment Compose
   reads, for a deployment that will never preview one.
+- **The tokenizer dictionary and the deepdoc models are in the image**, about
+  160 MB. They are fetched at build time rather than at first use so the
+  container needs no egress to read a PDF or to segment Chinese -- a deployment
+  without it would otherwise fail the first time somebody uploaded one, long
+  after the build that could have said so. Build with
+  `--build-arg RAVEN_RESOURCES=0`, or `RAVEN_RESOURCES=0` in the environment
+  Compose reads, for a smaller image that does neither; both features report
+  their own absence rather than failing obscurely.

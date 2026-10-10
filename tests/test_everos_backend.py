@@ -35,6 +35,27 @@ def _fresh_notices():
     NOTICES.clear()
 
 
+@pytest.fixture(autouse=True)
+def _confine_everos_env():
+    """Put the process environment back after a test that bound the roles.
+
+    `start()` exports the EVEROS_* role variables, which is the behaviour these
+    tests assert rather than a side effect to suppress. It writes them through
+    `os.environ` directly, though, so `monkeypatch` has nothing recorded to
+    undo, and thirteen of them outlived this file: a later test reading a saved
+    everos config was told the environment outranks it and refused the write.
+
+    Which tests collided depended on how the suite was dealt into shards, so it
+    surfaced and hid again with changes that had nothing to do with either one.
+    """
+    before = {key: value for key, value in os.environ.items() if key.startswith("EVEROS_")}
+    yield
+    for key in [key for key in os.environ if key.startswith("EVEROS_")]:
+        if key not in before:
+            del os.environ[key]
+    os.environ.update(before)
+
+
 from raven_everos.backend import (
     _PROFILE_MAX_CHARS,
     EverosBackend,

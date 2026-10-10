@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from raven.a2a_client.tool import A2aTool
 from raven.acp_client.asker import held_question
+from raven.agent import knowledge_scope
 from raven.agent.loop._shared import (
     SEARCH_PROVIDERS,
     Any,
@@ -174,6 +175,12 @@ class WiringMixin:
         for entry in configured:
             withheld.update(self.tools.resolve_configured(entry))
         withheld.update(self._unconfigured_tool_names())
+        # Nothing to search is not a tool to offer. Read from the turn's own
+        # binding rather than from config, so attaching a base takes effect on
+        # the next model call and detaching every base takes the tool away
+        # again -- both directions, mid-conversation.
+        if not knowledge_scope.selected():
+            withheld.add("knowledge_search")
         return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES | META_TOOL_NAMES))
 
     def _unconfigured_tool_names(self) -> set[str]:
@@ -1218,6 +1225,13 @@ class WiringMixin:
         # type: a plugin that shadows one of these names -- even with a
         # subclass -- replaces the entry, and the built-in's config section
         # says nothing about the replacement's credential story.
+        # The material this conversation was pointed at. Registered always and
+        # withheld where nothing was picked, which is the reversible direction:
+        # a reader who attaches a base mid-conversation gets the tool on the
+        # next model call rather than on the next process.
+        from raven.agent.tools.knowledge import KnowledgeSearchTool
+
+        self.tools.register(KnowledgeSearchTool())
         self._config_gated_tools: dict[str, Any] = {}
         web_search = WebSearchTool(
             api_key=self._live_web_search_key,

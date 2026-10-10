@@ -15,19 +15,29 @@ const TYPES = [
 ];
 
 // The canonical scope set mirrors the documentation site's repo-layout
-// table (docs-site/docs/repo-layout.md): every
-// top-level package under raven/ (plus the home.py module), computed from
-// the tree at config-load time so the enum cannot rot behind a refactor.
+// table (docs-site/docs/repo-layout.md): every top-level package under
+// raven/ and every module beside them, computed from the tree at
+// config-load time so the enum cannot rot behind a refactor.
+//
+// The modules are read rather than listed. They were a single hardcoded
+// "home", which is the same thing as not reading them: the second module to
+// arrive was a scope the table accepted and this enum rejected, and the two
+// are meant to be the same set (tests/test_scope_canon.py derives it this
+// way, from packages and modules both).
 function ravenPackages() {
   const root = path.join(__dirname, "raven");
+  const SKIP = ["__init__.py", "__main__.py"];
   return fs
     .readdirSync(root, { withFileTypes: true })
     .filter(
       (entry) =>
-        entry.isDirectory() &&
-        fs.existsSync(path.join(root, entry.name, "__init__.py")),
+        (entry.isDirectory() &&
+          fs.existsSync(path.join(root, entry.name, "__init__.py"))) ||
+        (entry.isFile() &&
+          entry.name.endsWith(".py") &&
+          !SKIP.includes(entry.name)),
     )
-    .map((entry) => entry.name);
+    .map((entry) => entry.name.replace(/\.py$/, ""));
 }
 
 // A change living wholly in a top-level tree outside raven/ uses that tree
@@ -74,7 +84,6 @@ const LEGACY_SCOPES = [
 const SCOPES = [
   ...new Set([
     ...ravenPackages(),
-    "home",
     ...TOP_LEVEL_TREES,
     ...ROOT_SURFACES,
     ...PRODUCTS,

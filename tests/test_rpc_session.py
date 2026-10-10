@@ -3600,6 +3600,109 @@ async def test_session_usage_is_no_longer_a_stub(tmp_path: Path, monkeypatch: py
     assert response["result"]["input"] == 42
 
 
+# ---------------------------------------------------------------------------
+# session.set_knowledge -- which bases a conversation's turns may search
+# ---------------------------------------------------------------------------
+
+
+def _shared_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionManager:
+    """One session manager behind every call in a case.
+
+    `manager_for` prefers the loop's own and builds a fresh one otherwise, so
+    two calls with no loop write to two different managers -- and a test would
+    read back nothing whatever the handler did. Pinning it is what makes the
+    record the picker writes the record the turn reads.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr("raven.rpc.methods.session.load_config", lambda: cfg)
+    sessions = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.rpc.methods.session.manager_for", lambda loop, config: sessions)
+    return sessions
+
+
+async def test_a_session_is_created_with_the_bases_it_was_pointed_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent import knowledge_scope
+
+    sessions = _shared_sessions(tmp_path, monkeypatch)
+
+    made = await session_create({"knowledge_bases": ["kb-a", "kb-b"]})
+
+    assert knowledge_scope.read(sessions, made["session_id"]) == ("kb-a", "kb-b")
+
+
+async def test_a_session_created_without_them_searches_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ordinary case: a conversation nobody pointed at a base."""
+    from raven.agent import knowledge_scope
+
+    sessions = _shared_sessions(tmp_path, monkeypatch)
+
+    made = await session_create({})
+
+    assert knowledge_scope.read(sessions, made["session_id"]) == ()
+
+
+async def test_what_was_set_is_what_the_turn_will_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole point of the selection: the record the picker writes is the
+    record the turn binds from."""
+    from raven.agent import knowledge_scope
+    from raven.rpc.methods.session import session_set_knowledge
+
+    sessions = _shared_sessions(tmp_path, monkeypatch)
+    made = await session_create({})
+
+    await session_set_knowledge({"session_id": made["session_id"], "knowledge_bases": ["kb-b", "kb-a"]})
+
+    assert knowledge_scope.read(sessions, made["session_id"]) == ("kb-b", "kb-a")
+
+
+async def test_setting_the_bases_replaces_what_was_there(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The picker sends what is ticked, and a call that added would have no way
+    to say that something was unticked."""
+    from raven.rpc.methods.session import session_set_knowledge
+
+    _shared_sessions(tmp_path, monkeypatch)
+    made = await session_create({"knowledge_bases": ["kb-a", "kb-b"]})
+
+    out = await session_set_knowledge({"session_id": made["session_id"], "knowledge_bases": ["kb-c"]})
+
+    assert out == {"knowledge_bases": ["kb-c"]}
+
+
+async def test_the_bases_can_be_cleared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Detaching every base has to be sayable, or the tool could never be taken
+    away once it was offered."""
+    from raven.rpc.methods.session import session_set_knowledge
+
+    _shared_sessions(tmp_path, monkeypatch)
+    made = await session_create({"knowledge_bases": ["kb-a"]})
+
+    assert await session_set_knowledge({"session_id": made["session_id"], "knowledge_bases": []}) == {
+        "knowledge_bases": []
+    }
+
+
+async def test_setting_the_bases_without_a_session_is_refused() -> None:
+    from raven.rpc.errors import ConfigValidationError
+    from raven.rpc.methods.session import session_set_knowledge
+
+    with pytest.raises(ConfigValidationError):
+        await session_set_knowledge({"knowledge_bases": ["kb-a"]})
+
+
+async def test_a_selection_that_is_not_a_list_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.rpc.errors import ConfigValidationError
+    from raven.rpc.methods.session import session_set_knowledge
+
+    _shared_sessions(tmp_path, monkeypatch)
+    made = await session_create({})
+
+    with pytest.raises(ConfigValidationError):
+        await session_set_knowledge({"session_id": made["session_id"], "knowledge_bases": "kb-a"})
+
+
 class _HarnessLoop:
     """The two verbs `session.set_harness` reaches for, and a library of one."""
 

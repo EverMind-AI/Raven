@@ -66,6 +66,21 @@ def _patch_client(monkeypatch, transport):
         return real(transport=transport, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", factory)
+    _shorten_the_retry_ladder(monkeypatch)
+
+
+def _shorten_the_retry_ladder(monkeypatch):
+    """Collapse the fetch backoff to a millisecond a slot.
+
+    The suite shortens the ladders it knows about in `tests/conftest.py`, which
+    reaches `raven.*` and not this plugin -- so a case whose fallback walk
+    retries waited the real one, five seconds of a test session spent asleep.
+    The length stays, because that is how the walk counts its attempts; only
+    the seconds collapse.
+    """
+    from research_flow.tools import web
+
+    monkeypatch.setattr(web, "_RETRY_BACKOFF_S", tuple(0.001 for _ in web._RETRY_BACKOFF_S))
 
 
 class _PageTransport(httpx.AsyncBaseTransport):

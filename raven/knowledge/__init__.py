@@ -26,7 +26,6 @@ from raven.knowledge._manager import (
     StaleBaseError,
     supported_extensions,
 )
-from raven.knowledge._parser import ParserBase, TextParser
 from raven.knowledge._records import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
@@ -47,6 +46,11 @@ from raven.knowledge._types import (
     VectorSearchResult,
 )
 from raven.knowledge._vector_store import VectorStoreBase
+from raven.knowledge.parser import BBox, ElementSpan, LayoutType, ParserBase
+from raven.knowledge.parser.doc_parser import LegacyDocParser
+from raven.knowledge.parser.docx_parser import DocxParser
+from raven.knowledge.parser.excel_parser import ExcelParser
+from raven.knowledge.parser.text_parser import TextParser
 
 __all__ = [
     "DEFAULT_CHUNK_OVERLAP",
@@ -54,11 +58,15 @@ __all__ = [
     "DEFAULT_SEPARATOR",
     "DEFAULT_TOP_K",
     "ApproxTokenChunker",
+    "BBox",
     "Chunk",
     "ChunkerBase",
     "DataBlock",
     "DocumentSummary",
+    "DocxParser",
+    "ElementSpan",
     "EmbeddingClient",
+    "ExcelParser",
     "EmbeddingConfig",
     "EmbeddingError",
     "HeadingAwareChunker",
@@ -67,6 +75,8 @@ __all__ = [
     "KnowledgeError",
     "KnowledgeManager",
     "LanceDBVectorStore",
+    "LegacyDocParser",
+    "LayoutType",
     "ParserBase",
     "RecordStore",
     "SearchOutcome",

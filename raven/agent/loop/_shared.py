@@ -22,7 +22,7 @@ from loguru import logger
 
 from raven.acp_client import resolver as autofill_resolver
 from raven.acp_client.asker import current_autofill
-from raven.agent import workdir
+from raven.agent import knowledge_scope, workdir
 from raven.agent.context import ContextBuilder
 from raven.agent.loop.failure_streak import (
     failure_class,

@@ -38,6 +38,7 @@ import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
 import { set as setCtx } from '../ctxChip'
+import { adopt as adoptBases, staged as stagedBases } from '../mentions'
 import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
@@ -479,7 +480,13 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
      before the list is read back. Spent once the session exists, and left
      staged when the create fails, since the draft is still on screen. */
   const workdir = stagedWorkdir()
-  const r = await gateway().call('session.create', workdir ? { workdir } : {})
+  /* And what it may search, for the same reason and at the same moment: the
+     draft held the pick because there was no session to write it to. */
+  const bases = stagedBases()
+  const r = await gateway().call('session.create', {
+    ...(workdir ? { workdir } : {}),
+    ...(bases.length ? { knowledge_bases: bases } : {}),
+  })
   setWsRoot(draftRt, r.info && r.info.cwd)
   const s: SessRow = {
     id: r.session_id, title: t('gui.new_task'), last: preview || t('gui.sess.not_started'),
@@ -488,6 +495,10 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   }
   sessionRows().unshift(s); sessionSet(s.id)
   clearStagedWorkdir()
+  /* Not cleared: the pick belongs to the conversation that was just minted,
+     and the panel goes on showing what it is pointed at. What is dropped is
+     the staging, which `mentions.adopt` below re-states against the session. */
+  adoptBases(bases)
   /* The draft IS the conversation now: everything it was holding -- the staged
      model, tier and permission mode, the lane it drew into -- belongs to the
      session that was just minted. */

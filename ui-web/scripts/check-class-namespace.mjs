@@ -213,6 +213,11 @@ const LEGACY_LOCAL = {
      Up to 26 the same way: `.h` was shared with the workspace's binary-file
      note, which is prefixed in features/workspace/styles.css now. */
   browser: 26,
+  /* Zero, and new: the knowledge domain was written after this rule, so every
+     class it introduces already carries its prefix. The entry exists because
+     the check pins every domain rather than only the ones with debt -- a
+     domain absent from this table is one nobody has measured. */
+  knowledge: 0,
   /* Up from 9, and none of the three is new code: an earlier branch deleted
      the old settings page, which also named `.icb`, `.other`, `.srow` and
      `.what`, so what the check read as two domains' it now reads as
@@ -319,6 +324,9 @@ const LEGACY_LOCAL = {
 // debt. A name in both places is counted once, by LEGACY_LOCAL.
 const LEGACY_EXPR = {
   browser: 2,
+  /* Zero, for the same reason the table above has it at zero: the domain
+     was written after the rule, expressions included. */
+  knowledge: 0,
   composer: 3,
   connections: 2,
   cron: 0,

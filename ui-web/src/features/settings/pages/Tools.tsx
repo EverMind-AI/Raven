@@ -24,7 +24,8 @@ export const TOOL_GROUPS = GROUPS as Record<string, string[]>
 export const isBuiltin = (row: ToolRow | undefined): boolean => !!(row && row.builtin)
 
 const GROUP_LABEL: Record<string, string> = {
-  file: 'gui.settings.tools.grp_file', run: 'gui.settings.tools.grp_run', net: 'gui.settings.tools.grp_net',
+  file: 'gui.settings.tools.grp_file', knowledge: 'gui.settings.tools.grp_knowledge',
+  run: 'gui.settings.tools.grp_run', net: 'gui.settings.tools.grp_net',
   generate: 'gui.settings.tools.grp_generate', collab: 'gui.settings.tools.grp_collab', skills: 'gui.settings.tools.grp_skills',
   memory: 'gui.settings.tools.grp_memory', search: 'gui.settings.tools.grp_search',
 }
