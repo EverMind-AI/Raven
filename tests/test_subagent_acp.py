@@ -4654,6 +4654,30 @@ async def test_a_status_less_update_still_ends_the_message() -> None:
     assert col.reply == "It is messages.json."
 
 
+async def test_a_steer_sets_apart_only_the_words_right_after_it() -> None:
+    """One break per steer: what the agent keeps saying after it is one run of
+    text, not a break before every chunk."""
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Half the report, "}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "and the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "the docs "}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "too."}})
+
+    assert col.reply == "Half the report, \n\nthe docs too."
+    assert "".join(seen) == col.reply
+
+
 @pytest.mark.parametrize("over", [-2, -1, 0])
 async def test_a_steered_message_streams_whole_only_when_its_reply_comes_back_whole(over: int) -> None:
     """The live view's budget counts what the reply's cap counts.
@@ -4936,9 +4960,14 @@ async def test_a_plan_is_one_row_that_moves() -> None:
 
 @pytest.mark.asyncio
 async def test_only_the_first_plan_frame_breaks_the_message() -> None:
-    """A moving plan must not fragment the narration around it."""
+    """A moving plan must not fragment the narration around it, while its
+    opening frame ends the message said before it, as a call's does."""
     collector = _TurnCollector(dialect=CodexDialect())
 
+    await collector(
+        "session/update",
+        {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Reading the task."}}},
+    )
     await collector("session/update", {"update": acp_frames.CODEX_PLAN_FIRST})
     await collector(
         "session/update",
@@ -4950,7 +4979,8 @@ async def test_only_the_first_plan_frame_breaks_the_message() -> None:
         {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " Nearly done."}}},
     )
 
-    assert collector.text == "Working on it. Nearly done."
+    assert collector.text == "Reading the task.\n\nWorking on it. Nearly done."
+    assert collector.reply == "Working on it. Nearly done."
 
 
 @pytest.mark.asyncio
