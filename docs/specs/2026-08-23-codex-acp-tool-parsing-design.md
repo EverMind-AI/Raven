@@ -255,7 +255,8 @@ near-identical rows in a transcript.
 
 The opening frame sets the message break the way a `tool_call` does; a
 revision does not. `plan` is therefore handled in its own branch rather than
-added to `_BREAKING_UPDATES`, whose members break unconditionally.
+added to `_BREAKING_UPDATES`, whose members break on every frame but a
+`tool_call_update` that says its call is still running.
 
 ### 6. CRLF
 

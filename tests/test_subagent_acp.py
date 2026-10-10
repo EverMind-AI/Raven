@@ -4531,6 +4531,187 @@ async def test_a_blank_burst_after_the_last_step_is_not_the_reply() -> None:
     assert col.reply == "found it."
 
 
+async def test_a_steer_inside_the_final_message_does_not_cut_the_reply() -> None:
+    """Raven puts a steer on the wire as it arrives and reads it only before its
+    next model call, so the words after it can finish the message it landed in.
+
+    The steer is set apart in that message and does not end it: the caller gets
+    the message whole, and the live view spends one budget on it -- the steer
+    does not renew it, and its break spends it like the agent's words, since the
+    break is in the reply the cap counts.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task", limit=len("REPORT PART ONE. ") + 3)
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Looking."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "r1", "kind": "read", "title": "Read"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "r1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPORT PART ONE. "}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "also cover the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPORT PART TWO."}})
+
+    assert col.reply == "REPORT PART ONE. \n\nREPORT PART TWO."
+    assert "".join(seen) == "Looking.\n\nREPORT PART ONE. \n\nR"
+    assert col.closing_text == "REPORT PART TWO.", "the transcript still draws the steer as a row of its own"
+
+
+async def test_the_reply_ends_a_message_where_the_live_view_does() -> None:
+    """One rule decides where a message ends, for the stream and the caller alike.
+
+    Text that arrives while a call is still open streams as a message of its
+    own, so the caller is handed the message after it rather than the two run
+    together with nothing between them.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Alpha."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "w1", "kind": "edit", "title": "Write"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "while it runs."}})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "w1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Saved."}})
+
+    assert "".join(seen) == "Alpha.\n\nwhile it runs.\n\nSaved."
+    assert col.reply == "Saved."
+
+
+@pytest.mark.parametrize("status", ["in_progress", "pending"])
+async def test_a_progress_frame_on_an_open_call_does_not_end_the_message(status: str) -> None:
+    """A call still running ends nothing.
+
+    Raven's own held prompt beats an ``in_progress`` update on its open wait call
+    every minute while the wake turn's report streams, and ending the message
+    there handed the caller only the words after the beat while ``closing.md``
+    kept the whole report. The opening frame says ``in_progress`` too, and still
+    ends the message said before the call.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Filed job 7."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "hold-1", "kind": "other", "status": "in_progress"})
+    await feed(
+        {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Round 2: loss converged, "}}
+    )
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "hold-1", "status": status})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "killed job 7."}})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "hold-1", "status": "completed"})
+
+    assert col.reply == "Round 2: loss converged, killed job 7."
+    assert col.closing_text == col.reply, "out.md and closing.md hold the same report"
+    assert "".join(seen) == "Filed job 7.\n\nRound 2: loss converged, killed job 7."
+
+
+async def test_a_status_less_update_still_ends_the_message() -> None:
+    """Only an update that says its call is still running is passed over.
+
+    claude-agent-acp reports a finished call's result on an update with no
+    status at all, sent from its PostToolUse hook -- the captured frame below --
+    so a status-less update is a step, like a completed one. The frames are
+    captured; the words around them are not.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+    from tests import acp_frames
+
+    col = _TurnCollector(prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Looking."}})
+    await feed(acp_frames.CLAUDE_BASH_WITH_DESCRIPTION)
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Listing it."}})
+    await feed(acp_frames.CLAUDE_UPDATE_WITHOUT_KIND)
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "It is messages.json."}})
+
+    assert col.reply == "It is messages.json."
+
+
+async def test_a_steer_sets_apart_only_the_words_right_after_it() -> None:
+    """One break per steer: what the agent keeps saying after it is one run of
+    text, not a break before every chunk."""
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Half the report, "}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "and the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "the docs "}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "too."}})
+
+    assert col.reply == "Half the report, \n\nthe docs too."
+    assert "".join(seen) == col.reply
+
+
+@pytest.mark.parametrize("over", [-2, -1, 0])
+async def test_a_steered_message_streams_whole_only_when_its_reply_comes_back_whole(over: int) -> None:
+    """The live view's budget counts what the reply's cap counts.
+
+    A steer's break is raven's, but it is inside the message the reply returns,
+    and the cap counts it. Left out of the budget, a steered message within a
+    break of the cap streamed whole and came back cut, with the truncation
+    notice under a message the screen had shown complete.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent.backends.base import clamp_output
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = "x" * 30 + "\n\n" + "y" * 30
+    limit = len(reply) + over
+    col = _TurnCollector(on_delta, prompt="the task", limit=limit)
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "x" * 30}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "and the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "y" * 30}})
+
+    assert col.reply == reply
+    assert "".join(seen) == reply[:limit]
+    returned = await clamp_output(col.reply, limit, agent="probe")
+    assert ("".join(seen) == reply) == (returned == reply)
+
+
 async def test_the_live_transcript_streams_only_the_closing_burst() -> None:
     """The live view and the settled record must agree on where prose sits.
 
@@ -4779,9 +4960,14 @@ async def test_a_plan_is_one_row_that_moves() -> None:
 
 @pytest.mark.asyncio
 async def test_only_the_first_plan_frame_breaks_the_message() -> None:
-    """A moving plan must not fragment the narration around it."""
+    """A moving plan must not fragment the narration around it, while its
+    opening frame ends the message said before it, as a call's does."""
     collector = _TurnCollector(dialect=CodexDialect())
 
+    await collector(
+        "session/update",
+        {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Reading the task."}}},
+    )
     await collector("session/update", {"update": acp_frames.CODEX_PLAN_FIRST})
     await collector(
         "session/update",
@@ -4793,7 +4979,8 @@ async def test_only_the_first_plan_frame_breaks_the_message() -> None:
         {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " Nearly done."}}},
     )
 
-    assert collector.text == "Working on it. Nearly done."
+    assert collector.text == "Reading the task.\n\nWorking on it. Nearly done."
+    assert collector.reply == "Working on it. Nearly done."
 
 
 @pytest.mark.asyncio
@@ -5180,7 +5367,7 @@ async def test_a_steer_reaches_the_running_turn_and_is_written_where_it_was_said
         assert await run.steer("the docs first") == "injected"
         reply = await asyncio.wait_for(turn, timeout=10)
 
-    assert reply == "steered: the docs first", "the reply is what answered the steer, not the words before it"
+    assert reply == "on it\n\nsteered: the docs first", "a steer does not end the message it lands in"
     roles = [(m["role"], m.get("content")) for m in run.transcript]
     assert ("user", "the docs first") in roles, roles
     said_before = next(i for i, m in enumerate(run.transcript) if m.get("content") == "on it")

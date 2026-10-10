@@ -93,7 +93,8 @@ _USER_UPDATES = ("user_message_chunk",)
 # it is about to do, runs a command and then reports back has sent two messages,
 # and the protocol marks the boundary only by what came between them. Thoughts
 # and usage updates are deliberately not here -- neither ends a message, and
-# breaking on one would split a single reply mid-sentence.
+# breaking on one would split a single reply mid-sentence. An update that says
+# its call is still running is passed over for the same reason.
 _BREAKING_UPDATES = ("tool_call", "tool_call_update")
 _MESSAGE_BREAK = "\n\n"
 
@@ -256,6 +257,11 @@ class _TurnCollector:
         # only cares about answer text) still reads tool calls correctly.
         self._dialect = dialect or AcpDialect()
         self._tool_ran = False
+        self._steered = False
+        # Where each message starts in `answer`. Only a step opens one: the
+        # stream's per-message budget and `reply` both read this, so the two
+        # cannot disagree about where a message ends.
+        self._message_starts = [0]
         # The run this collector belongs to, captured here rather than read at
         # publish time. `__call__` is awaited from the connection's read loop,
         # a task created when the *connection* was opened, so the ContextVar it
@@ -319,12 +325,16 @@ class _TurnCollector:
                 self.answer_at = self._now()
             texts = content_texts(update.get("content"))
             said = "".join(texts)
-            broke = bool(texts) and self._tool_ran and bool(self.answer)
+            step = bool(texts) and self._tool_ran and bool(self.answer)
+            broke = step or (bool(texts) and self._steered and bool(self.answer))
             if broke:
                 self.answer.append(_MESSAGE_BREAK)
+            if step:
+                self._message_starts.append(len(self.answer))
                 self._on_delta = self._budgeted()
             if texts:
                 self._tool_ran = False
+                self._steered = False
             self.answer.extend(texts)
             if said:
                 # Merged with the previous burst only when nothing came between:
@@ -335,20 +345,27 @@ class _TurnCollector:
                     self.events[-1]["text"] += said
                 else:
                     self.events.append({"t": "say", "text": said, "at": self._now()})
-            if broke and self._deliver is not None:
-                # Raven's separator, not the agent's words, so it rides past the
-                # message's budget the way the partial-turn notice does: counted,
-                # it would cut the last characters of a reply that fits its cap.
-                await self._deliver(_MESSAGE_BREAK)
+            if broke:
+                # Raven's separator, not the agent's words. A step's break comes
+                # before the message it opens and is in no reply, so it rides past
+                # the budget the way the partial-turn notice does: counted, it
+                # would cut the last characters of a reply that fits its cap. A
+                # steer's break is inside the message the reply returns, and the
+                # reply's cap counts it, so that message's budget does too.
+                sink = self._deliver if step else self._on_delta
+                if sink is not None:
+                    await sink(_MESSAGE_BREAK)
             if self._on_delta is not None:
                 for text in texts:
                     await self._on_delta(text)
         elif kind in _USER_UPDATES:
             said = "".join(content_texts(update.get("content")))
             if said and said.strip() != self._prompt:
-                # A steer ends the message being written the way a tool call
-                # does: what the agent says next answers the new words.
-                self._tool_ran = bool(self.answer)
+                # Set apart by a break, but not the end of the message: raven
+                # puts a steer on the wire as it arrives and reads it only before
+                # its next model call, so the words after it can finish the
+                # message it landed in.
+                self._steered = bool(self.answer)
                 self.events.append({"t": "user", "text": said, "at": self._now()})
         elif kind in _THOUGHT_UPDATES:
             chunks = content_texts(update.get("content"))
@@ -363,7 +380,14 @@ class _TurnCollector:
             # own row to the transcript: the call names what was run, the update
             # carries how it ended. One branch, because the boundary is the same
             # fact for both -- an answer chunk after either starts a new message.
-            self._tool_ran = True
+            # Not after an update that says the call is still running: raven's
+            # own held prompt beats one on its open wait call every minute, and
+            # the wake turn's report may be mid-sentence when it lands. The
+            # opening frame says `in_progress` too and still ends the message
+            # before the call; a status-less update still ends it, since
+            # claude-agent-acp reports a finished call's result on one.
+            if kind == "tool_call" or update.get("status") not in ("pending", "in_progress"):
+                self._tool_ran = True
             if kind == "tool_call":
                 call = self._dialect.call(update)
                 if call.id and any(e.get("t") == "call" and e.get("id") == call.id for e in self.events):
@@ -749,7 +773,7 @@ class _TurnCollector:
 
     @property
     def closing_text(self) -> str:
-        """What the agent said after its last tool call -- the reply proper.
+        """What the agent said after its last tool call -- the transcript's closing row.
 
         Measured on codex-acp, a turn narrates as it goes: a plan, then a
         progress note before each of three calls, then the report. ``text``
@@ -763,7 +787,12 @@ class _TurnCollector:
 
         A steer is a boundary too: what was said before the person's words is
         already on its own row above them, and repeating it here printed the
-        first half of the reply twice.
+        first half of the message twice.
+
+        So it is not ``reply``, which is a message as the live view shows it:
+        the rows put a steer between the words around it, and they attach text
+        to a call only when a call follows it, which is why this walks the
+        events rather than the messages.
         """
         said: list[str] = []
         for ev in reversed(self.events):
@@ -777,20 +806,22 @@ class _TurnCollector:
     def reply(self) -> str:
         """What the run hands its caller: the last message, never the ones before it.
 
-        That is ``closing_text`` whenever the turn said anything after its last
-        step. A turn that ended on a step has no closing, and its last message is
-        the one before that step: still one message rather than every one joined,
-        and still an answer rather than nothing, which would hand back an empty
-        result for a run that finished its work. The walk only differs from
-        ``closing_text`` in stepping past the trailing steps to reach it.
+        A message is what the live view shows between two steps -- a tool call,
+        an update that does not say the call is still running, or a plan
+        opening -- so the caller gets the last one exactly as it streamed. A
+        steer inside it stays inside it, set apart by a break that the
+        message's stream budget counts the way the reply's cap does. A turn that
+        ended on a step said nothing after it, and so did one whose last message
+        is blank; either way the message before is the answer: still one
+        message rather than every one joined, and still an answer rather than
+        an empty result for a run that finished its work.
         """
-        said: list[str] = []
-        for ev in reversed(self.events):
-            if ev["t"] == "say":
-                said.append(ev["text"])
-            elif ev["t"] in ("call", "user") and "".join(said).strip():
-                break
-        return "".join(reversed(said)).strip()
+        ends = [*self._message_starts[1:], len(self.answer)]
+        for start, end in zip(reversed(self._message_starts), reversed(ends), strict=True):
+            said = "".join(self.answer[start:end]).strip()
+            if said:
+                return said
+        return ""
 
     @property
     def failed_call_without_answer(self) -> tuple[str, str] | None:
