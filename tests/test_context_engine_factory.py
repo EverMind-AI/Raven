@@ -542,6 +542,31 @@ def test_push_config_restores_the_legacy_pipeline(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+class TestTheEngineTellsItsIdentityWhoOwnsMemory:
+    """The turn's half of the flag, held where the engine decides it.
+
+    Handing ``IdentitySegmentBuilder`` the flag directly pins how it renders,
+    not who told it. This builds the engine the way the loop does and reads
+    the builder it chose, so deleting the argument at the factory's call site
+    reddens here -- the suite was otherwise green with the request path naming
+    both memory files again.
+    """
+
+    @staticmethod
+    async def _identity_text(engine) -> str:
+        builder = next(b for b in engine._builders if isinstance(b, IdentitySegmentBuilder))
+        return (await builder.build(_assembly_ctx())).text
+
+    async def test_without_a_backend_the_turn_still_names_the_memory_files(self, tmp_path: Path) -> None:
+        text = await self._identity_text(_build_engine(tmp_path))
+        assert f"{tmp_path}/user_memory/profile/user.md" in text
+
+    async def test_with_a_backend_the_turn_names_no_memory_file(self, tmp_path: Path) -> None:
+        text = await self._identity_text(_build_engine(tmp_path, backend=_FakeBackend()))
+        assert "user_memory" not in text
+        assert "# Memory" in text
+
+
 def _assembly_ctx() -> AssemblyContext:
     return AssemblyContext(
         session_key="s",

@@ -108,8 +108,12 @@ class TestIdentityBootstrap:
         assert str(project / "user_memory") not in seg.text
 
     async def test_identity_without_a_backend_still_names_both_memory_files(self, tmp_path: Path) -> None:
-        """No backend, no change: whether those files earn their line is #122's
-        question, and answering it here would couple the two."""
+        """No backend, no change.
+
+        Whether an episodic log nothing writes earns a line in the prompt is a
+        separate question from where memory lives once a backend owns it, and
+        deciding it here would tie the two together.
+        """
         seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
         assert f"{tmp_path}/user_memory/profile/user.md" in seg.text
         assert f"{tmp_path}/user_memory/episodic/episodes.md" in seg.text
@@ -121,7 +125,7 @@ class TestIdentityBootstrap:
         "remember this" goes. On a non-interactive turn that ``edit_file``
         is refused at the ask tier, and the agent reports the refusal as the
         memory system having failed -- while the backend has already stored
-        the turn and recalls it in the next session (issue #440).
+        the turn and recalls it in the next session.
 
         The same block forbids the claim in either direction. ``backend.store``
         is dispatched after the turn ends, so neither "saved" nor "not saved"
