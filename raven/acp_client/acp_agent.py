@@ -346,10 +346,13 @@ class _TurnCollector:
                 else:
                     self.events.append({"t": "say", "text": said, "at": self._now()})
             if broke and self._deliver is not None:
-                # Raven's separator, not the agent's words, so it rides past the
-                # message's budget the way the partial-turn notice does: counted,
-                # it would cut the last characters of a reply that fits its cap.
-                await self._deliver(_MESSAGE_BREAK)
+                # Raven's separator, not the agent's words. A step's break comes
+                # before the message it opens and is in no reply, so it rides past
+                # the budget the way the partial-turn notice does: counted, it
+                # would cut the last characters of a reply that fits its cap. A
+                # steer's break is inside the message the reply returns, and the
+                # reply's cap counts it, so that message's budget does too.
+                await (self._deliver if step else self._on_delta)(_MESSAGE_BREAK)
             if self._on_delta is not None:
                 for text in texts:
                     await self._on_delta(text)
@@ -804,7 +807,8 @@ class _TurnCollector:
         A message is what the live view shows between two steps -- a tool call,
         an update that does not say the call is still running, or a plan
         opening -- so the caller gets the last one exactly as it streamed. A
-        steer inside it stays inside it, set apart by its break. A turn that
+        steer inside it stays inside it, set apart by a break that the
+        message's stream budget counts the way the reply's cap does. A turn that
         ended on a step said nothing after it, and so did one whose last message
         is blank; either way the message before is the answer: still one
         message rather than every one joined, and still an answer rather than
