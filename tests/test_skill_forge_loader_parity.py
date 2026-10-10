@@ -561,6 +561,24 @@ class TestThirdPartyFrontmatter:
         store = SkillRegistry(tmp_path / "workspace", builtin_skills_dir=tmp_path / "no-builtin")
         assert store.get("release-notes").description == "Drafts release notes. Use after tagging."
 
+    def test_a_description_everos_writes_is_read_whole(self, tmp_path):
+        """EverOS dumps an evolved skill with ``yaml.safe_dump``, which wraps a
+        long description onto a second line; the registry must read it back."""
+        everos_frontmatter = pytest.importorskip("everos.core.persistence.markdown.frontmatter")
+        description = (
+            "Use when a deploy to staging fails health checks after a schema migration; "
+            "collects the failing probes, the migration id and the rollback command before asking."
+        )
+        skill_dir = tmp_path / "workspace" / "skills" / "everos" / "42"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            everos_frontmatter.dump_frontmatter({"name": "staging-deploy-triage", "description": description})
+            + "\nbody\n",
+            encoding="utf-8",
+        )
+        store = SkillRegistry(tmp_path / "workspace", builtin_skills_dir=tmp_path / "no-builtin")
+        assert store.get("staging-deploy-triage").description == description
+
     def test_the_dag_guide_shape_loads_as_before(self, tmp_path):
         """A colon inside the description makes this invalid YAML, next to
         one-line JSON metadata: the shape of the shipped orchestration guide."""
