@@ -5,13 +5,14 @@ from __future__ import annotations
 import http.server
 import socket
 import ssl
+import sys
 import threading
 
 import httpx
 import pytest
 import truststore
 
-from raven.security.tls import is_untrusted_certificate, use_system_ca
+from raven.security.tls import is_untrusted_certificate, system_ca_in_use, use_system_ca
 from tests._tls import OpenAIModels, https_endpoint, private_ca
 
 
@@ -46,6 +47,33 @@ def test_a_value_that_does_not_say_yes_is_not_an_opt_out(monkeypatch, process_ss
     use_system_ca()
 
     assert isinstance(ssl.create_default_context(), truststore.SSLContext)
+
+
+def test_a_process_says_whether_it_switched(monkeypatch, process_ssl) -> None:
+    monkeypatch.delenv("RAVEN_NO_SYSTEM_CA", raising=False)
+    truststore.extract_from_ssl()
+    assert not system_ca_in_use()
+
+    use_system_ca()
+
+    assert system_ca_in_use()
+
+
+def test_a_process_that_opted_out_has_not_switched(monkeypatch, process_ssl) -> None:
+    monkeypatch.setenv("RAVEN_NO_SYSTEM_CA", "1")
+    truststore.extract_from_ssl()
+
+    use_system_ca()
+
+    assert not system_ca_in_use()
+
+
+def test_a_process_without_truststore_is_answered_without_an_import(monkeypatch) -> None:
+    """The upgrade asks from processes started without `cli.entry`, some of which have no
+    truststore to import: the real-uv upgrade test's tool environment is one."""
+    monkeypatch.setitem(sys.modules, "truststore", None)
+
+    assert not system_ca_in_use()
 
 
 def _failure(url: str) -> httpx.HTTPError:

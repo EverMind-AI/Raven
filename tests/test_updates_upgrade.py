@@ -7,6 +7,7 @@ import ctypes
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,7 @@ import truststore
 from typer.testing import CliRunner
 
 from raven.cli.commands import app
+from raven.security.tls import use_system_ca
 from raven.updates import upgrade as upgrade_commands
 
 WHEEL_NAME = "raven-0.1.4-py3-none-any.whl"
@@ -2409,8 +2411,8 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
 
     @pytest.fixture
     def switched(self) -> Iterator[None]:
-        """This process verifying against the system store, as `cli.entry` leaves it."""
-        truststore.inject_into_ssl()
+        """This process verifying against the system store, switched the way `cli.entry` does it."""
+        use_system_ca()
         yield
         truststore.extract_from_ssl()
 
@@ -2463,8 +2465,6 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path, tmp_path: Path
     ) -> None:
         """The helper deletes the directory it is handed, so only one made for it may reach it."""
-        from raven.security.tls import use_system_ca
-
         monkeypatch.setenv("RAVEN_NO_SYSTEM_CA", "1")
         use_system_ca()
         monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "not-for-this-helper"))
@@ -2524,18 +2524,45 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         assert list(scratch.iterdir()) == []
         assert "No space left on device" in capsys.readouterr().err
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps no POSIX permission bits")
+    def test_each_copy_is_a_new_directory_only_this_user_can_open(self, switched: None) -> None:
+        """The helper imports what it finds there. A name another user could guess, or a
+        directory they could write to, would let them put their code in its place."""
+        copies = [upgrade_commands._hand_over_system_ca({}) for _ in range(2)]
+
+        assert None not in copies
+        assert copies[0] != copies[1]
+        assert [stat.S_IMODE(copy.stat().st_mode) for copy in copies] == [0o700, 0o700]
+
     def _uv_and_relaunch_environments(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, version: str | Exception = "uv 0.13.0 (x86_64-unknown-linux-gnu)\n"
     ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        """``version`` is what the helper's uv prints for `--version`, or what asking it raises;
+        any other uv says nothing."""
+        uv_path = "/usr/bin/uv"
         uv: list[dict[str, str]] = []
         relaunched: list[dict[str, str]] = []
-        monkeypatch.setattr(subprocess, "run", lambda _argv, check, env: uv.append(env) or Mock(returncode=0))
+
+        def install(_argv, check, env):
+            uv.append(env)
+            return Mock(returncode=0)
+
+        def run(argv, **kwargs):
+            if argv[1:] != ["--version"]:
+                return install(argv, **kwargs)
+            if argv[0] != uv_path:
+                return Mock(returncode=0, stdout="")
+            if isinstance(version, Exception):
+                raise version
+            return Mock(returncode=0, stdout=version)
+
+        monkeypatch.setattr(subprocess, "run", run)
         helper_main, popen = _helper_with_relaunch(monkeypatch)
         # This process's ssl module is not the helper's to change.
         helper_main.__globals__["use_system_ca"] = lambda: None
         popen.side_effect = lambda *_a, **_kw: relaunched.append(dict(os.environ))
 
-        assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH]) == 0
+        assert helper_main([uv_path, WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH]) == 0
         return uv, relaunched
 
     def test_a_handed_over_store_reaches_uv_and_not_the_relaunched_raven(
@@ -2546,23 +2573,69 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
 
         uv, relaunched = self._uv_and_relaunch_environments(monkeypatch)
 
-        assert {(env["UV_SYSTEM_CERTS"], env["UV_NATIVE_TLS"]) for env in uv} == {("1", "1")}
+        assert uv
+        assert {env["UV_SYSTEM_CERTS"] for env in uv} == {"1"}
         (relaunch,) = relaunched
         assert not set(self.HANDED) & relaunch.keys()
 
+    @pytest.mark.parametrize(
+        "version",
+        ["uv 0.11.0 (x86_64-unknown-linux-gnu)\n", "uv 0.12.3 (aarch64-apple-darwin)\n", "uv 1.0.0\n"],
+    )
+    def test_a_uv_that_reads_system_certs_is_not_given_the_name_it_calls_deprecated(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str
+    ) -> None:
+        """uv 0.11.9 to 0.12.15 print the deprecation warning even beside UV_SYSTEM_CERTS,
+        on every upgrade, about a variable the user never set."""
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
+
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch, version)
+
+        assert uv
+        assert {env["UV_SYSTEM_CERTS"] for env in uv} == {"1"}
+        assert not any("UV_NATIVE_TLS" in env for env in uv)
+
+    @pytest.mark.parametrize(
+        "version",
+        [
+            "uv 0.10.12 (x86_64-pc-windows-msvc)\n",
+            "uv 0.5.0\n",
+            "",
+            "error: unexpected argument\n",
+            OSError("uv is gone"),
+            subprocess.TimeoutExpired(["uv", "--version"], 30),
+        ],
+        ids=["0.10.12", "0.5.0", "says nothing", "says something else", "cannot be asked", "times out"],
+    )
+    def test_a_uv_older_than_system_certs_or_that_does_not_say_is_given_the_name_it_reads(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str | Exception
+    ) -> None:
+        """Before 0.11 uv reads UV_NATIVE_TLS alone. A warning is the lesser cost when the
+        version cannot be read: without either name, a download through a TLS-inspecting
+        proxy fails."""
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
+
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch, version)
+
+        assert uv
+        assert {(env["UV_SYSTEM_CERTS"], env["UV_NATIVE_TLS"]) for env in uv} == {("1", "1")}
+
     def test_without_a_copy_uv_is_told_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch)
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch, "uv 0.10.12\n")
 
         assert uv
         assert not any({"UV_SYSTEM_CERTS", "UV_NATIVE_TLS"} & env.keys() for env in uv)
 
-    def test_a_uv_setting_already_made_is_left_alone(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        monkeypatch.setenv("UV_SYSTEM_CERTS", "0")
+    @pytest.mark.parametrize("name", ["UV_SYSTEM_CERTS", "UV_NATIVE_TLS"])
+    def test_a_uv_setting_already_made_is_left_alone(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+    ) -> None:
+        monkeypatch.setenv(name, "0")
         monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
 
-        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch)
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch, "uv 0.10.12\n")
 
-        assert {env["UV_SYSTEM_CERTS"] for env in uv} == {"0"}
+        assert {env[name] for env in uv} == {"0"}
 
     def _run_helper(self, interpreter: str, copy: Path, **extra: str) -> subprocess.CompletedProcess[str]:
         env = {**os.environ, "RAVEN_UPGRADE_TRUSTSTORE": str(copy), **extra}
@@ -2599,6 +2672,30 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
         assert (done.returncode, done.stderr) == (2, self.INVALID)
         assert injected.exists()
         assert not copy.exists()
+
+    def test_the_helper_takes_the_copy_off_its_import_path(self, tmp_path: Path) -> None:
+        """The copy is deleted next. Left first on sys.path, its name would point every later
+        import, ahead of the standard library, at a directory anyone who can write the temp
+        dir may make again. A stand-in package records the path as the helper exits."""
+        copy = tmp_path / "handed"
+        (copy / "truststore").mkdir(parents=True)
+        (copy / "truststore" / "__init__.py").write_text(
+            "import atexit\nimport json\nimport os\nimport sys\n\n\n"
+            "def record():\n"
+            "    with open(os.environ['RAVEN_TEST_PATH'], 'w') as handle:\n"
+            "        json.dump(sys.path, handle)\n\n\n"
+            "def inject_into_ssl():\n"
+            "    atexit.register(record)\n",
+            encoding="utf-8",
+        )
+        recorded = tmp_path / "path.json"
+
+        done = self._run_helper(sys.executable, copy, RAVEN_TEST_PATH=str(recorded))
+
+        assert (done.returncode, done.stderr) == (2, self.INVALID)
+        path = json.loads(recorded.read_text(encoding="utf-8"))
+        assert os.path.dirname(os.__file__) in path, path
+        assert str(copy) not in path
 
     def test_the_base_interpreter_loads_the_copy_it_is_handed(self, switched: None) -> None:
         base = self._base_interpreter()

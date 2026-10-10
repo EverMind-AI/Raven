@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -591,6 +592,20 @@ def test_the_key_probe_names_a_refused_certificate_for_what_it_is(tmp_path: Path
         result = probe_models("sk-mine", f"{origin}/v1", transport=httpx.HTTPTransport())
 
     assert result["status"] == "certificate_untrusted", result
+
+
+def test_the_key_probe_leaves_a_connection_nobody_answers_a_network_error() -> None:
+    """The key prompt prints this status. A base nothing listens on is the network's to fix,
+    and reading it as a refused certificate would send the reader to install a CA."""
+    from raven.cli._key_probe import probe_models
+
+    with socket.socket() as vacated:
+        vacated.bind(("127.0.0.1", 0))
+        port = vacated.getsockname()[1]
+
+    result = probe_models("sk-mine", f"http://127.0.0.1:{port}/v1", transport=httpx.HTTPTransport())
+
+    assert (result["ok"], result["status"]) == (False, "network_error"), result
 
 
 def test_configure_skip_writes_no_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

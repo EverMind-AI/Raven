@@ -24,8 +24,8 @@ UV_PATH = shutil.which("uv")
 def _build_fixture(
     source_root: Path, output_root: Path, version: str, uv_path: Path, *, system_store: bool = False
 ) -> Path:
-    """``system_store`` installs truststore and switches to it before the handoff, as
-    ``cli.entry`` does, so the helper is handed a copy of the store to verify against."""
+    """``system_store`` installs truststore and switches to it before the handoff, through
+    the call ``cli.entry`` makes, so the helper is handed a copy of the store to verify against."""
     dependencies = ", ".join(
         f'"{name}"' for name in ["httpx", "rich", "typer", *(["truststore"] if system_store else [])]
     )
@@ -79,11 +79,11 @@ def _build_fixture(
                 if sys.argv[1:] != ["upgrade"]:
                     return 2
 
-                if SYSTEM_STORE:
-                    import truststore
-
-                    truststore.inject_into_ssl()
                 sys.path.insert(0, os.environ["RAVEN_UPGRADE_SOURCE"])
+                if SYSTEM_STORE:
+                    from raven.security.tls import use_system_ca
+
+                    use_system_ca()
                 from raven.updates import upgrade as upgrade_commands
 
                 hand_over = upgrade_commands._hand_over_system_ca
@@ -180,6 +180,7 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path, s
             "RAVEN_UPGRADE_WHEEL": new_wheel.resolve().as_uri(),
         }
     )
+    env.pop("RAVEN_NO_SYSTEM_CA", None)
     subprocess.run(
         [str(external_uv), "tool", "install", "--force", "--with", str(companion), str(old_wheel)],
         check=True,
@@ -212,6 +213,8 @@ def test_running_uv_tool_replaces_itself_in_custom_directories(tmp_path: Path, s
     assert completed.returncode == 0, completed.stderr
     assert ("handed over: yes" if system_store else "handed over: no") in completed.stderr, completed.stderr
     assert "system certificate store" not in completed.stderr, completed.stderr
+    # From uv 0.11.9 to 0.12.15 the older name draws a deprecation warning even beside the new one.
+    assert "UV_NATIVE_TLS" not in completed.stderr, completed.stderr
     assert "Raven upgraded: 1.0.0 -> 2.0.0" in completed.stdout
     version = subprocess.run(
         [str(executable), "--version"],
