@@ -347,6 +347,43 @@ def test_an_entry_that_lost_its_address_is_refused_by_name_not_as_a_network_faul
         remote.session_dir(bare, handle="t1")
 
 
+@pytest.mark.parametrize(
+    "said",
+    [
+        "mkdir: cannot create directory '/root/raven-work': No space left on device",
+        "mkdir: cannot create directory '/dev/raven-work': Read-only file system",
+    ],
+)
+def test_a_host_that_is_a_plain_word_does_not_hide_the_machine_s_reason(tmp_path, monkeypatch, said):
+    # Review of #893: filtering on the host as a substring made a host called
+    # "dev" swallow "No space left on device". ssh's own lines go by their shape.
+    dev = Machine(id="dev", display_name="Dev box", _row={**ROW, "id": "dev", "host": "dev"})
+
+    def runner_from(row, *, cap_seconds=None):
+        return lambda cmd: (1, f"\nWarning: Permanently added '[dev]:22' (ED25519) to the list of known hosts.\n{said}")
+
+    monkeypatch.setattr(remote, "runner_from", runner_from)
+
+    with pytest.raises(RemoteMachineError) as caught:
+        remote.session_dir(dev, root="/srv/x", handle="t1")
+
+    assert str(caught.value).endswith(said)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"Warning: Permanently added '[{HOST}]:{PORT}' (ED25519) to the list of known hosts.",
+        f"ssh: connect to host {HOST} port {PORT}: Connection refused",
+        f"worker@{HOST}: Permission denied (publickey).",
+        f"Connection to {HOST} closed by remote host.",
+        f"ssh: Could not resolve hostname {HOST}: Name or service not known",
+    ],
+)
+def test_ssh_s_own_lines_are_never_quoted_as_the_machine_s_reason(line):
+    assert remote._far_side_words(_box(), ["mkdir: failed", line]) == "mkdir: failed"
+
+
 def test_a_failure_whose_only_words_are_ssh_s_gives_no_reason_rather_than_the_address(tmp_path, monkeypatch):
     def runner_from(row, *, cap_seconds=None):
         return lambda cmd: (1, f"\nWarning: Permanently added '[{HOST}]:{PORT}' (ED25519) to the list of known hosts.")

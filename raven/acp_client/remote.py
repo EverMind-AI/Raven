@@ -338,11 +338,24 @@ def _far_side_words(target: Machine, lines: list[str]) -> str:
     measured 2026-10-10 on a registered machine whose disk had filled), and it
     names nothing of how raven got there. The one-shot runner shares stderr
     with ssh, though, and ssh's lines name the address (on a first connect,
-    "Permanently added '[<ip>]:<n>'"), so a line carrying it is skipped.
+    "Permanently added '[<ip>]:<n>'"), so ssh's own lines are skipped.
+
+    Recognised by ssh's own shapes, not by the host appearing anywhere: a host
+    is often a plain word, and "dev" would otherwise take "No space left on
+    device" with it (review of #893).
     """
     host = str(target._row.get("host") or "").strip()
-    words = [line for line in lines if not (host and host in line)]
+    forms = (f"[{host}]", f"host {host} ", f"@{host}:", f"to {host} ") if host else ()
+    words = [line for line in lines if not _SSH_OWN_LINE.match(line) and not any(form in line for form in forms)]
     return words[-1][:200] if words else ""
+
+
+# How ssh's own diagnostics begin, address or not. Matched at the start of a
+# line, so a machine's message that merely mentions one of these words stays.
+_SSH_OWN_LINE = re.compile(
+    r"(ssh: |Warning: Permanently added |@@@|Host key verification failed|Connection (to|closed by) |"
+    r"kex_exchange_identification|Load key )"
+)
 
 
 def _shell_path(path: str) -> str:
