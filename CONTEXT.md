@@ -2170,11 +2170,17 @@ are diagnostics, not the span clock.
 
 **LLM Purpose** (`raven/observability/purpose.py`):
 The caller's own name for why a model call is made — `main` for the agent
-loop's action call, `synthesis`, `watch_work`, `title`, `permission_judge`,
-`memory_extract`, `skill_gate`, `personalize`, `window_shrink`, `dag_verdict`,
-`playbook` — set with `with purpose(name):` around the provider call and read
-by the `llm.call` span extractor into the `llm.purpose` attribute. A call made
-under no label records nothing: absent means "not said", never "main".
+loop's action call and for its wrap-up when the iterations run out (the turn's
+own conversation plus one instruction), `watch_work`, `title`,
+`permission_judge`, `memory_extract`, `skill_gate`, `dag_verdict`, `playbook` —
+set with `with purpose(name):` around a provider call that records an
+`llm.call` span (`chat_with_retry` or the loop's streaming call; a bare
+`chat()` records none, so a label there would never land) and read by that
+span's extractor into the `llm.purpose` attribute. A call made under no label
+records nothing: absent means "not said", never "main". The trajectory
+projection reads an absent label as unknown rather than as a side question: it
+is compatible with any label when continuity is proven, counts as the turn's
+own output when the turn's end is compared with it, and carries no badge.
 _Avoid_: reading `llm.invocation_source` as the purpose — that is the nearest
 enclosing span's name (`session.turn` for every call of a turn), not the
 caller's intent.

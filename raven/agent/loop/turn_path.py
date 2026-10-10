@@ -517,6 +517,9 @@ class TurnPathMixin:
         """
         if synthesis_policy is not None:
             prompt = f"{prompt}\n\n{synthesis_policy.guidance}"
+        # The turn's own conversation plus one instruction: the main line, not a
+        # side question, so its input reads as a continuation and its output as
+        # the turn's last word.
         synth_messages = messages + [{"role": "user", "content": prompt}]
         # The wrap-up is a model call of the same turn, so it pays the turn's
         # effort; absent, the provider's configured default stands.
@@ -524,7 +527,7 @@ class TurnPathMixin:
         if synthesis_policy is not None:
 
             async def _call(rows: list[dict]) -> str:
-                with _llm_purpose("synthesis"):
+                with _llm_purpose("main"):
                     response = await self.provider.chat_with_retry(
                         messages=rows,
                         tools=None,
@@ -563,7 +566,7 @@ class TurnPathMixin:
             return text
         try:
             if on_token_delta is not None or on_reasoning_delta is not None:
-                with _llm_purpose("synthesis"):
+                with _llm_purpose("main"):
                     response = await self._llm_call_stream(
                         messages=synth_messages,
                         tools=None,
@@ -573,7 +576,7 @@ class TurnPathMixin:
                         **effort_kwargs,
                     )
             else:
-                with _llm_purpose("synthesis"):
+                with _llm_purpose("main"):
                     response = await self.provider.chat_with_retry(
                         messages=synth_messages,
                         tools=None,

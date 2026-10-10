@@ -27,7 +27,6 @@ from raven.agent.window.images import (
     wire_image_bytes,
     withdrawn_image_note,
 )
-from raven.observability.purpose import purpose as _llm_purpose
 from raven.providers.capabilities import image_placeholder_text
 from raven.utils.images import is_image_part
 from raven.utils.tokens import estimate_prompt_tokens
@@ -352,14 +351,13 @@ async def summarize_head(
         )
         return messages, "skipped"
     try:
-        with _llm_purpose("window_shrink"):
-            response = await provider.chat(
-                messages=request,
-                tools=None,
-                model=model,
-                max_tokens=budget,
-                reasoning_effort=compaction.SUMMARY_REASONING_EFFORT,
-            )
+        response = await provider.chat(
+            messages=request,
+            tools=None,
+            model=model,
+            max_tokens=budget,
+            reasoning_effort=compaction.SUMMARY_REASONING_EFFORT,
+        )
     except Exception as exc:
         logger.warning("Transcript head summary call raised: {}", exc)
         return messages, "failed"

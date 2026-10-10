@@ -228,6 +228,29 @@ async def test_synthesis_withholds_tools_and_threads_fallback_chain():
 
 
 @pytest.mark.asyncio
+async def test_the_wrap_up_is_labelled_the_main_line_it_continues():
+    """The wrap-up sends the turn's own conversation plus one instruction, so
+    the trajectory must read it as a continuation of the main line, not as a
+    side question that starts a conversation of its own."""
+    from raven.observability.purpose import current
+
+    labels: list[str | None] = []
+
+    class Labelling(_RecordingProvider):
+        async def chat_with_retry(self, **kwargs):
+            labels.append(current())
+            return await super().chat_with_retry(**kwargs)
+
+    response = LLMResponse(content="wrapped up", finish_reason="stop")
+    await _bind_synth(Labelling(response=response))([{"role": "user", "content": "hi"}], "primary", None)
+    policy = TurnSynthesisPolicy(guidance="Use three sections.", repair_prompt=lambda text: "again")
+    await _bind_synth(Labelling(response=response))([], "primary", None, synthesis_policy=policy)
+
+    assert labels == ["main", "main", "main"]
+    assert current() is None
+
+
+@pytest.mark.asyncio
 async def test_product_synthesis_formats_the_static_fallback():
     provider = _RecordingProvider(raises=RuntimeError("unavailable"))
     synth = _bind_synth(provider)

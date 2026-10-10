@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from raven.observability import semconv
-from raven.observability.purpose import purpose as _llm_purpose
 from raven.tracing import trace
 
 if TYPE_CHECKING:
@@ -171,13 +170,12 @@ class Personalizer:
         )
 
         try:
-            with _llm_purpose("personalize"):
-                response = await self.provider.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=self.model,
-                    temperature=0.0,  # classification needs deterministic output
-                    max_tokens=200,  # JSON is short; cap tokens to save cost
-                )
+            response = await self.provider.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=self.model,
+                temperature=0.0,  # classification needs deterministic output
+                max_tokens=200,  # JSON is short; cap tokens to save cost
+            )
             result = self._parse_json(
                 response.content or "",
                 fallback={"needs_clarification": False, "domain": ""},
@@ -207,13 +205,12 @@ class Personalizer:
         )
 
         try:
-            with _llm_purpose("personalize"):
-                response = await self.provider.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=self.model,
-                    temperature=0.3,  # slight randomness makes the question more natural
-                    max_tokens=240,
-                )
+            response = await self.provider.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=self.model,
+                temperature=0.3,  # slight randomness makes the question more natural
+                max_tokens=240,
+            )
             question = (response.content or "").strip()
             logger.debug("Personalizer.generate_question: {}", question)
             return question
@@ -237,13 +234,12 @@ class Personalizer:
         )
 
         try:
-            with _llm_purpose("personalize"):
-                response = await self.provider.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=self.model,
-                    temperature=0.0,
-                    max_tokens=400,
-                )
+            response = await self.provider.chat(
+                messages=[{"role": "user", "content": prompt}],
+                model=self.model,
+                temperature=0.0,
+                max_tokens=400,
+            )
             result = self._parse_json(
                 response.content or "",
                 fallback={"facts": [], "section": "Preferences"},
