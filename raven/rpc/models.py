@@ -1430,6 +1430,13 @@ class SessionCreateParams(_Strict):
             "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
         ),
     )
+    harness: str | None = Field(
+        default=None,
+        description=(
+            "Name of a stored Harness to open this session on. A snapshot of it is frozen onto the session, "
+            "so the window keeps the Harness it was opened on after the library entry changes."
+        ),
+    )
 
 
 class SessionCreateResult(_Strict):
@@ -1643,6 +1650,8 @@ class SessionHistoryResult(_Strict):
 class TurnSendParams(_Strict):
     session_key: str
     content: str
+    playbook_mode: Literal["off", "task", "persona"] | None = None
+    """Optional per-turn override for dynamic Playbook generation."""
     channel: str | None = None
     chat_id: str | None = None
     sender_id: str | None = None
@@ -2981,6 +2990,19 @@ class SessionSetKnowledgeResult(_Strict):
     knowledge_bases: list[str]
 
 
+class SessionSetHarnessParams(_Strict):
+    session_key: str
+    harness: str | None = Field(
+        None,
+        description="A stored Harness name to bind. Null unbinds. Omit the key entirely to report without changing.",
+    )
+
+
+class SessionSetHarnessResult(_Strict):
+    session_key: str
+    harness: str | None = Field(None, description="The Harness now bound to this session.")
+
+
 class SessionSetModeParams(_Strict):
     session_key: str
     mode: str | None = Field(None, description="The tier id to switch to. Omit it to report without changing.")
@@ -3306,6 +3328,7 @@ class SessionInitInfo(_Strict):
     #: as pointed at nothing.
     knowledge_bases: list[str] = Field(default_factory=list)
     mcp_servers: list[JsonValue]
+    harness: str | None = Field(default=None, description="The Harness this session is bound to, if any.")
     update_available: bool | None = None
     update_command: str | None = Field(default=None, description="The command that would install the newer release.")
     config_notices: list[str] | None = Field(
@@ -5168,6 +5191,19 @@ class PlaybookNodeShape(_Strict):
     depends_on: list[str]
 
 
+class PlaybookWorkerShape(_Strict):
+    """One durable Harness alias and the registered agent behind it."""
+
+    label: str
+    agent: str
+
+
+class PlaybookWorker(PlaybookWorkerShape):
+    """The full worker detail; its brief is the durable per-job instruction."""
+
+    brief: str
+
+
 class PlaybookRow(_Strict):
     """One playbook as the library list needs it.
 
@@ -5180,6 +5216,19 @@ class PlaybookRow(_Strict):
     name: str
     description: str
     task_summary: str
+    schema_version: int
+    artifact_kind: Literal["legacy", "workflow", "harness", "composite"]
+    coordinator: bool = Field(
+        default=False,
+        description="True when the Harness carries a coordinator seat, which is what makes it a Persona.",
+    )
+    coordinator_brief: str | None = Field(
+        None,
+        description=(
+            "What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat."
+        ),
+    )
+    workers: list[PlaybookWorkerShape]
     mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
@@ -5322,6 +5371,19 @@ class PlaybookDetail(_Strict):
     description: str
     task_summary: str
     version: int
+    schema_version: int
+    artifact_kind: Literal["legacy", "workflow", "harness", "composite"]
+    coordinator: bool = Field(
+        default=False,
+        description="True when the Harness carries a coordinator seat, which is what makes it a Persona.",
+    )
+    coordinator_brief: str | None = Field(
+        None,
+        description=(
+            "What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat."
+        ),
+    )
+    workers: list[PlaybookWorker]
     mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
@@ -5548,6 +5610,45 @@ class PlaybooksValidateResult(_Strict):
         description=("Every finding, in the order the validator reports them. Empty when the playbook is sound."),
     )
     path: str = Field(..., description="The file the findings refer to.")
+
+
+class PlaybooksDraftParams(_Strict):
+    session_key: str = Field(
+        ...,
+        description=(
+            "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
+        ),
+    )
+
+
+class PlaybooksDraftResult(_Strict):
+    draft: PlaybookRow | None = Field(
+        None,
+        description="The unsaved Persona, in the row shape the library answers, with origin 'draft'.",
+    )
+
+
+class PlaybooksDraftSaveParams(_Strict):
+    session_key: str
+    name: str | None = Field(
+        None,
+        description=(
+            "The name to keep it under. Kebab-case, because the name resolves a directory under the "
+            "library root. Omitted keeps the generated one."
+        ),
+    )
+
+
+class PlaybooksDraftSaveResult(_Strict):
+    name: str = Field(..., description="The name it was saved under, which a collision may have suffixed.")
+
+
+class PlaybooksDraftDiscardParams(_Strict):
+    session_key: str
+
+
+class PlaybooksDraftDiscardResult(_Strict):
+    discarded: bool
 
 
 class PlaybooksDeleteParams(_Strict):
@@ -5828,6 +5929,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.set_enabled": (PlaybooksSetEnabledParams, PlaybooksSetEnabledResult),
     "playbooks.validate": (PlaybooksValidateParams, PlaybooksValidateResult),
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
+    "playbooks.draft": (PlaybooksDraftParams, PlaybooksDraftResult),
+    "playbooks.draft_save": (PlaybooksDraftSaveParams, PlaybooksDraftSaveResult),
+    "playbooks.draft_discard": (PlaybooksDraftDiscardParams, PlaybooksDraftDiscardResult),
     "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
     "playbooks.create": (PlaybooksCreateParams, PlaybooksCreateResult),
     # playbooks.stints.* -- the multi-round runs a `mode: stint` playbook started
@@ -5872,6 +5976,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.usage": (SessionUsageParams, SessionUsageResult),
     "session.status": (SessionStatusParams, SessionStatusResult),
     "session.set_knowledge": (SessionSetKnowledgeParams, SessionSetKnowledgeResult),
+    "session.set_harness": (SessionSetHarnessParams, SessionSetHarnessResult),
     "session.set_mode": (SessionSetModeParams, SessionSetModeResult),
     # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
     "ext.list": (ExtListParams, ExtListResult),
@@ -6143,6 +6248,8 @@ __all__ = [
     "PlaybookStint",
     "PlaybookNode",
     "PlaybookNodeShape",
+    "PlaybookWorker",
+    "PlaybookWorkerShape",
     "PlaybookParam",
     "PlaybookRow",
     "PlaybooksGetParams",

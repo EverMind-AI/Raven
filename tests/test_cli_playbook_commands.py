@@ -125,7 +125,7 @@ class _FakeGenerator:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def generate(self, user_input: str, skills=None) -> GeneratedPlaybook:
+    async def generate(self, user_input: str, skills=None, *, dag_only=False) -> GeneratedPlaybook:
         spec = PlaybookSpec(
             name="placeholder",
             description="generated from: " + user_input.splitlines()[0][:40],
@@ -161,6 +161,7 @@ def test_create_lands_in_the_user_layer_usable(library, monkeypatch):
     assert "name: weekly-scan" in text
     assert "Assumption: weekly cadence" in text
     assert "Usable now" in r.stdout
+    assert "schemaVersion: 2" in text
     assert "disable weekly-scan" in r.stdout
     # The bracketed capability name is the diagnostic: Rich must not eat it.
     assert "mcp[fs]" in r.output

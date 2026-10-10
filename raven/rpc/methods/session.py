@@ -490,6 +490,15 @@ async def session_create(
     picked = params.get("knowledge_bases")
     if picked:
         info["knowledge_bases"] = _write_knowledge(agent_loop, config, session_id, picked)
+    harness = params.get("harness")
+    if harness:
+        binder = getattr(agent_loop, "bind_session_harness", None)
+        if not callable(binder):
+            raise ConfigValidationError("this build cannot bind a Harness to a session", data={"field": "harness"})
+        try:
+            info["harness"] = binder(session_id, str(harness))
+        except ValueError as e:
+            raise ConfigValidationError(str(e), data={"field": "harness"}) from e
     await _warm_workdir(agent_loop, session_id)
     return {
         "session_id": session_id,
@@ -1428,6 +1437,39 @@ async def session_set_mode(
     return {"mode": tier, "availableModes": menu}
 
 
+async def session_set_harness(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``session.set_harness`` -- report, bind or unbind this session's Harness.
+
+    Three calls told apart by which fields are present, the way
+    ``session.set_mode`` does it: no ``harness`` key reports, a name binds, and
+    an explicit null unbinds.
+
+    Binding freezes a snapshot onto the session rather than storing the name to
+    look up later, so a window a user opened on a Persona keeps the Persona
+    they opened it on even after the library entry is edited or removed.
+    """
+    session_key = str(params.get("session_key") or params.get("session_id") or "")
+    if not session_key:
+        raise ConfigValidationError("session_key is required", data={"field": "session_key"})
+    loop = _safe_invoke_factory(agent_loop_factory)
+    reader = getattr(loop, "session_harness_name", None)
+    if "harness" not in params:
+        return {"session_key": session_key, "harness": reader(session_key) if callable(reader) else None}
+    binder = getattr(loop, "bind_session_harness", None)
+    if not callable(binder):
+        raise ConfigValidationError("this build cannot bind a Harness to a session", data={"field": "harness"})
+    raw = params.get("harness")
+    try:
+        bound = binder(session_key, str(raw) if raw else None)
+    except ValueError as e:
+        raise ConfigValidationError(str(e), data={"field": "harness"}) from e
+    return {"session_key": session_key, "harness": bound}
+
+
 def register_session_methods(
     dispatcher: "Dispatcher",
     *,
@@ -1489,6 +1531,9 @@ def register_session_methods(
     async def _set_mode(params: dict) -> dict:
         return await session_set_mode(params, agent_loop_factory=agent_loop_factory)
 
+    async def _set_harness(params: dict) -> dict:
+        return await session_set_harness(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("session.create", _create)
     dispatcher.register("session.close", _close)
     dispatcher.register("session.resume", _resume)
@@ -1505,6 +1550,7 @@ def register_session_methods(
     dispatcher.register("session.branch", _branch)
     dispatcher.register("session.export", _export)
     dispatcher.register("session.set_mode", _set_mode)
+    dispatcher.register("session.set_harness", _set_harness)
 
     async def _set_knowledge(params: dict) -> dict:
         return await session_set_knowledge(params, agent_loop_factory=agent_loop_factory)
@@ -1530,6 +1576,7 @@ __all__ = [
     "session_usage",
     "session_branch",
     "session_export",
+    "session_set_harness",
     "session_set_mode",
     "register_session_methods",
 ]
