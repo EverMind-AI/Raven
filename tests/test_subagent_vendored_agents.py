@@ -1670,12 +1670,17 @@ class TestResolveSubagentCommand:
 
         assert va._launcher_missing({"command": command}) == r"C:\Program Files\gone\python.exe"
 
-    def test_launcher_is_gone_reads_a_quoted_spaced_path_as_one_token(self) -> None:
+    def test_launcher_is_gone_reads_a_quoted_spaced_path_as_one_token(self, tmp_path: Path) -> None:
+        """The launcher is there and only the quoted, spaced interpreter is not.
+
+        A whitespace split reads that interpreter as two fragments, neither of
+        them absolute, so it would see the launcher alone and call the row live.
+        """
         from raven.config.schema import ThirdPartyCliSubagentConfig
 
-        row = ThirdPartyCliSubagentConfig(
-            name="Raven-Win", command=r'"C:\Program Files\gone\python.exe" C:\exists\run.py'
-        )
+        launcher = tmp_path / "run.py"
+        launcher.write_text("", encoding="utf-8")
+        row = ThirdPartyCliSubagentConfig(name="Raven-Win", command=rf'"C:\Program Files\gone\python.exe" {launcher}')
 
         assert va._launcher_is_gone(row) is True
 
