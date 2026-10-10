@@ -1004,6 +1004,20 @@ def _channel_field(path: str) -> dict[str, Any] | None:
     return declaration[1] if declaration else None
 
 
+def _note_key(path: str) -> str:
+    """The spelling the note catalogue carries ``path``'s zh entry under.
+
+    A channel field resolves to its channel's declared field; a setting under a
+    wildcard pattern names that pattern (``providers.*.apiBase``), the one entry
+    the catalogue grows per declaration rather than per instance.
+    """
+    declared = _channel_declaration(path)
+    if declared is not None:
+        return declared[0]
+    found = find(path)
+    return found[0].path if found is not None else path
+
+
 def channel_key(field: str, specs: dict[str, Any]) -> str:
     """The declared name a channel field spelled ``field`` writes: as given when declared, else in snake_case.
 
@@ -1372,8 +1386,7 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
         view["effect"] = found[0].effect.value
     if leaf_reason := _sensitive_leaf_within(path, params.get("value")):
         view["sensitive"] = leaf_reason[1]
-        declared = _channel_declaration(leaf_reason[0])
-        view["sensitive_key"] = declared[0] if declared else leaf_reason[0]
+        view["sensitive_key"] = _note_key(leaf_reason[0])
     return view
 
 

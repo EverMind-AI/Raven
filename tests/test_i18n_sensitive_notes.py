@@ -7,9 +7,10 @@ and the note is the reader's main input for deciding a security-relevant change.
 This walks every source of reasons and holds the catalogue to them.
 
 The key must also be the path's declared spelling: a channel field accepts
-camelCase and snake_case (``gatewayUrl`` / ``gateway_url``) while the catalogue
-carries only the declared one, so a key sent as the call spelled it misses the
-same way.
+camelCase and snake_case (``gatewayUrl`` / ``gateway_url``) and a setting under
+a wildcard pattern has one entry per pattern (``providers.*.apiBase``), while
+the catalogue carries only the declared spelling, so a key sent as the call
+spelled it misses the same way.
 """
 
 import json
@@ -56,3 +57,14 @@ def test_an_accepted_alias_names_the_declared_key():
 def test_an_alias_nested_in_an_object_set_names_the_declared_key():
     view = surface.change_view({"action": "set", "path": "channels.discord", "value": {"gatewayUrl": "x"}}, {})
     assert view["sensitive_key"] == "channels.discord.gateway_url"
+
+
+def test_an_instance_of_a_wildcard_setting_names_its_pattern():
+    view = surface.change_view({"action": "set", "path": "providers.openai.apiBase", "value": "https://example"}, {})
+    assert view["sensitive_key"] == "providers.*.apiBase"
+    assert f"gui.confirm.cfg.why.{view['sensitive_key']}" in _CATALOGUE
+
+
+def test_a_wildcard_setting_nested_in_an_object_set_names_its_pattern():
+    view = surface.change_view({"action": "set", "path": "subagents.foo", "value": {"description": "x"}}, {})
+    assert view["sensitive_key"] == "subagents.*.description"
