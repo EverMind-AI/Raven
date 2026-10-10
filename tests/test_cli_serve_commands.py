@@ -1193,8 +1193,10 @@ class TestAnUnreadableIdentity:
     def test_a_stop_signals_neither_process_and_keeps_both_records(self, home: Path, monkeypatch, capsys) -> None:
         monkeypatch.setattr("os.kill", lambda *_args: pytest.fail("signalled an unverified process"))
 
-        assert serve_commands._stop_resident() is False
+        with pytest.raises(typer.Exit) as stopped:
+            serve_commands._stop_resident()
 
+        assert stopped.value.exit_code == 1
         assert (home / "serve.json").exists()
         assert (home / "web.json").exists()
         said = capsys.readouterr().out
@@ -1214,7 +1216,7 @@ class TestAnUnreadableIdentity:
         assert (home / "web.json").exists()
 
     def test_a_start_preserves_a_standalone_serve_and_refuses_a_second_engine(
-        self, home: Path, a_built_page, opened, supervised, monkeypatch
+        self, home: Path, a_built_page, opened, supervised, monkeypatch, capsys
     ) -> None:
         (home / "web.json").unlink()
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
@@ -1227,13 +1229,18 @@ class TestAnUnreadableIdentity:
         assert supervised == []
         assert opened == []
         assert (home / "serve.json").exists()
+        said = capsys.readouterr().out
+        assert "check process permissions or stop it manually" in said
+        assert "web --stop" not in said
 
     def test_the_lock_holder_can_still_be_stopped(self, home: Path, monkeypatch) -> None:
         stopped: list[int] = []
         monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: 222)
         monkeypatch.setattr(serve_commands, "_stop_one", lambda _label, pid, _unresponsive: stopped.append(pid))
 
-        assert serve_commands._stop_resident() is True
+        with pytest.raises(typer.Exit) as result:
+            serve_commands._stop_resident()
+        assert result.value.exit_code == 1
         assert stopped == [222]
         assert (home / "web.json").exists()
 
@@ -1244,6 +1251,38 @@ def test_web_is_registered_as_its_own_command() -> None:
     serve_commands.register(app)
 
     assert {c.name for c in app.registered_commands} == {"serve", "web"}
+
+
+@pytest.mark.parametrize("unreadable", [{111, 222}, {111}, {222}])
+def test_web_stop_reports_a_refused_or_partial_stop(home: Path, monkeypatch, unreadable: set[int]) -> None:
+    from typer.testing import CliRunner
+
+    from raven.utils import processes
+
+    TestStopping._resident(home)
+    alive = {111, 222}
+    stopped: list[int] = []
+    monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: pid in alive)
+    monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: None)
+    monkeypatch.setattr(processes, "command_line", lambda pid: None if pid in unreadable else "python -m raven serve")
+
+    def stop(_label, pid, _unresponsive):
+        stopped.append(pid)
+        alive.remove(pid)
+
+    monkeypatch.setattr(serve_commands, "_stop_one", stop)
+    app = typer.Typer()
+    serve_commands.register(app)
+
+    result = CliRunner().invoke(app, ["web", "--stop"])
+
+    assert result.exit_code == 1
+    assert "not fully stopped" in result.output
+    assert "nothing to stop" not in result.output
+    assert set(stopped) == {111, 222} - unreadable
+    for pid, name in [(111, "web.json"), (222, "serve.json")]:
+        if pid in unreadable:
+            assert (home / name).exists()
 
 
 def test_a_resident_below_a_raven_named_directory_keeps_its_record(home: Path, monkeypatch) -> None:
@@ -2546,17 +2585,20 @@ class TestAStopThatLosesItsTarget:
         serve_commands._stop_one("gateway", 4242, unresponsive)
         assert unresponsive == []
 
-    def test_a_supervisor_that_cannot_be_signalled_is_warned_about(self, home: Path, monkeypatch, capsys) -> None:
+    @pytest.mark.parametrize("label", ["supervisor", "gateway"])
+    def test_a_resident_that_cannot_be_signalled_is_warned_about(self, home: Path, monkeypatch, capsys, label) -> None:
         def refuse(label, pid, unresponsive):
             raise PermissionError(1, "not permitted")
 
-        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242)
-        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: None)
+        monkeypatch.setattr(serve_commands, "_read_web_state", lambda: 4242 if label == "supervisor" else None)
+        monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: 4242 if label == "gateway" else None)
         monkeypatch.setattr(serve_commands, "looks_like_raven", lambda _pid: True)
         monkeypatch.setattr(serve_commands, "_stop_one", refuse)
         monkeypatch.setattr(serve_commands, "_pid_alive", lambda pid: True)
-        assert serve_commands._stop_resident() is False
-        assert "could not stop the supervisor (pid 4242)" in capsys.readouterr().out
+        with pytest.raises(typer.Exit) as result:
+            serve_commands._stop_resident()
+        assert result.value.exit_code == 1
+        assert f"could not stop the {label} (pid 4242)" in capsys.readouterr().out
 
     def test_a_supervisor_gone_before_its_signal_is_a_quiet_stop(self, home: Path, monkeypatch, capsys) -> None:
         def gone(label, pid, unresponsive):

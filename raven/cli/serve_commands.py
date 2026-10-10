@@ -1250,6 +1250,8 @@ def _stop_one(label: str, pid: int, unresponsive: list[str]) -> None:
 def _stop_resident() -> bool:
     """Stop the supervisor and the gateway it keeps up. True if anything stopped.
 
+    Refused or incomplete stops raise an error even if the other process stopped.
+
     The supervisor goes first, and by SIGTERM rather than SIGKILL, so its
     ``finally`` removes ``web.json``. Killing the gateway first would only prove
     the supervisor works.
@@ -1280,9 +1282,11 @@ def _stop_resident() -> bool:
     """
     stopped = False
     unresponsive: list[str] = []
+    failed: list[str] = []
 
     supervisor = _read_web_state()
     if supervisor is not None and not _may_signal("supervisor", supervisor):
+        failed.append(f"supervisor (pid {supervisor})")
         supervisor = None
     if supervisor is not None:
         try:
@@ -1295,18 +1299,23 @@ def _stop_resident() -> bool:
             stopped = True
         except OSError as exc:
             typer.echo(f"warning: could not stop the supervisor (pid {supervisor}): {exc}")
+            failed.append(f"supervisor (pid {supervisor})")
         if not _pid_alive(supervisor):
             _web_state_path().unlink(missing_ok=True)
 
     gateway = _read_serve_pid()
-    if gateway is not None and gateway != supervisor and _may_signal("gateway", gateway):
-        try:
-            _stop_one("gateway", gateway, unresponsive)
-            stopped = True
-        except ProcessLookupError:
-            stopped = True
-        except OSError as exc:
-            typer.echo(f"warning: could not stop the gateway (pid {gateway}): {exc}")
+    if gateway is not None and gateway != supervisor:
+        if not _may_signal("gateway", gateway):
+            failed.append(f"gateway (pid {gateway})")
+        else:
+            try:
+                _stop_one("gateway", gateway, unresponsive)
+                stopped = True
+            except ProcessLookupError:
+                stopped = True
+            except OSError as exc:
+                typer.echo(f"warning: could not stop the gateway (pid {gateway}): {exc}")
+                failed.append(f"gateway (pid {gateway})")
     if not stopped and not unresponsive:
         # The stop signalled nothing, so the only honest "done" left to offer
         # is clearing a leftover neither the lock nor the liveness probe will
@@ -1319,6 +1328,9 @@ def _stop_resident() -> bool:
         # Reported, not swallowed: a relaunch from here lands on `serve` and the
         # page comes up without channels, which is worse than refusing to start.
         typer.echo(f"error: still running after SIGKILL: {', '.join(unresponsive)}")
+    if failed:
+        typer.echo(f"error: raven web not fully stopped: {', '.join(failed)}; resolve the warnings before restarting")
+    if unresponsive or failed:
         raise typer.Exit(1)
     return stopped
 
@@ -1486,6 +1498,12 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         # refusal exists to prevent. `--stop` kills it; this does not guess.
         lingering = _read_serve_pid()
         if lingering is not None:
+            if _recorded_is_ours(lingering) is None:
+                typer.echo(
+                    f"error: the recorded gateway (pid {lingering}) is alive but its identity cannot be read; "
+                    "check process permissions or stop it manually before retrying"
+                )
+                raise typer.Exit(1)
             typer.echo(
                 f"error: a gateway (pid {lingering}) is still running but not answering; "
                 "run `raven web --stop`, then `raven web`"
