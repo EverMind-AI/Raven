@@ -18,7 +18,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -1618,12 +1618,16 @@ class TestResolveSubagentCommand:
     that arm's splitter, whichever host the suite runs on.
     """
 
-    def test_windows_spaced_paths_round_trip(self) -> None:
+    @staticmethod
+    def _as(name: str, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+        """The commands module reading ``name`` as its platform, without touching the real ``os``."""
         import raven.utils.commands as cmd
 
-        monkeyed = cmd.os
-        if monkeyed.name != "nt":
-            pytest.skip("the Windows splitter is the host parser here")
+        monkeypatch.setattr(cmd, "os", SimpleNamespace(**{**vars(os), "name": name}))
+        return cmd
+
+    def test_windows_spaced_paths_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        cmd = self._as("nt", monkeypatch)
         python = r"C:\Program Files\Python312\python.exe"
         root = r"C:\raven agents\raven-code"
         out = cmd.resolve_subagent_command(
@@ -1631,11 +1635,8 @@ class TestResolveSubagentCommand:
         )
         assert cmd.command_argv(out) == [python, root + "/run.py", "--acp"]
 
-    def test_posix_spaced_paths_round_trip(self) -> None:
-        import raven.utils.commands as cmd
-
-        if cmd.os.name != "posix":
-            pytest.skip("the POSIX splitter is the host parser here")
+    def test_posix_spaced_paths_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        cmd = self._as("posix", monkeypatch)
         python = "/opt/py/bin/python3"
         root = "/srv/raven agents/raven-code"
         out = cmd.resolve_subagent_command(
