@@ -457,6 +457,118 @@ async def test_a_path_the_os_rejects_drops_the_attachment_not_the_turn(tmp_path,
     assert [m.path for m in scheduler.submitted[0].media] == [str(kept)]
 
 
+class _PinnedLoop:
+    """A loop whose conversations run in ``root``: the session pinned to a project."""
+
+    def __init__(self, root) -> None:
+        self.root = root
+
+    def peek_session_workdir(self, session_key: str) -> str:
+        if isinstance(self.root, Exception):
+            raise self.root
+        return str(self.root)
+
+
+def _pinned(tmp_path):
+    """Agent home and a session project beside it, with a picture in each."""
+    home = tmp_path / "home"
+    (home / "uploads").mkdir(parents=True)
+    shot = home / "uploads" / "shot.png"
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n")
+    project = tmp_path / "project"
+    (project / "out").mkdir(parents=True)
+    chart = project / "out" / "chart.png"
+    chart.write_bytes(b"\x89PNG\r\n\x1a\n")
+    return home, project, shot, chart
+
+
+# The front end shows a picture through `/file`, which reads under the
+# conversation's own working directory; a picture dragged out of the transcript
+# is attached by that same path. With `tools.restrict_to_workspace` on, a fence
+# on agent home alone dropped it while the tray showed it attached.
+async def test_turn_send_admits_the_sessions_own_root_under_restrict_to_workspace(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    home, project, _shot, chart = _pinned(tmp_path)
+
+    with _workspace_cfg(home):
+        await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": [str(chart)]},
+            scheduler=scheduler,
+            turn_ids={},
+            agent_loop_factory=lambda: _PinnedLoop(project),
+        )
+
+    assert [m.path for m in scheduler.submitted[0].media] == [str(chart)]
+
+
+async def test_turn_send_still_refuses_what_neither_root_holds(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    home, project, _shot, _chart = _pinned(tmp_path)
+    secret = tmp_path / "secret.png"
+    secret.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    with _workspace_cfg(home):
+        await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": [str(secret)]},
+            scheduler=scheduler,
+            turn_ids={},
+            agent_loop_factory=lambda: _PinnedLoop(project),
+        )
+
+    assert scheduler.submitted[0].media == ()
+
+
+async def test_turn_send_resolves_a_relative_attachment_the_way_the_viewer_does(tmp_path) -> None:
+    """The conversation's own root first, then agent home for an upload:
+    `console.viewer_root`, which is how `/file` drew the picture."""
+    scheduler = FakeScheduler()
+    home, project, shot, chart = _pinned(tmp_path)
+
+    with _workspace_cfg(home):
+        await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": ["out/chart.png", "uploads/shot.png"]},
+            scheduler=scheduler,
+            turn_ids={},
+            agent_loop_factory=lambda: _PinnedLoop(project),
+        )
+
+    assert [m.path for m in scheduler.submitted[0].media] == [str(chart), str(shot)]
+
+
+async def test_an_inject_admits_the_sessions_own_root_too(tmp_path) -> None:
+    from raven.rpc.methods import turn as turn_mod
+
+    scheduler = FakeScheduler()
+    home, project, _shot, chart = _pinned(tmp_path)
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+
+    with _workspace_cfg(home):
+        await turn_send(
+            {"session_key": "tui:default", "content": "and this", "busy": "inject", "media": [str(chart)]},
+            scheduler=scheduler,
+            turn_ids={"tui:default": "running-1"},
+            agent_loop_factory=lambda: _PinnedLoop(project),
+        )
+
+    assert [m.path for m in scheduler.submitted[0].media] == [str(chart)]
+
+
+async def test_an_unknown_session_root_falls_back_to_agent_home(tmp_path) -> None:
+    scheduler = FakeScheduler()
+    home, _project, shot, _chart = _pinned(tmp_path)
+
+    with _workspace_cfg(home):
+        result = await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": ["uploads/shot.png"]},
+            scheduler=scheduler,
+            turn_ids={},
+            agent_loop_factory=lambda: _PinnedLoop(RuntimeError("no such session")),
+        )
+
+    assert result["accepted"] is True
+    assert [m.path for m in scheduler.submitted[0].media] == [str(shot)]
+
+
 async def test_a_broken_config_drops_attachments_without_failing_the_turn(tmp_path) -> None:
     scheduler = FakeScheduler()
     with patch("raven.config.load_config", side_effect=RuntimeError("config on fire")):

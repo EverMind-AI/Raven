@@ -2057,13 +2057,13 @@ def _safe_name(name: str) -> str:
     return (cleaned or "file")[:120]
 
 
-def viewer_root(workspace: Path, rel: Path) -> Path:
+def viewer_root(workspace: Path, rel: Path, home: Path | None = None) -> Path:
     """Which root a relative path handed to the viewer is relative to.
 
     Two roots, each deliberate, and one kind of path belongs to the other one.
     ``fs.upload`` deposits into agent home whichever session asked -- it is the
-    root always writable, and ``turn.send`` fences an attachment there -- and
-    answers with a path relative to it. Everything else the viewer is handed is
+    root always writable -- and answers with a path relative to it. Everything
+    else the viewer is handed is
     relative to the session's own working directory, which is what the file
     panel browses. The two are the same directory for a session that runs where
     the agent lives, and part company for one pinned elsewhere: there a picture
@@ -2073,11 +2073,16 @@ def viewer_root(workspace: Path, rel: Path) -> Path:
     The session's own root is tried first, so a session that keeps an
     ``uploads`` directory of its own still serves its own file; agent home
     answers only for a path that is an upload and is actually there.
+
+    ``turn.send`` resolves an attachment by this same rule, so a picture the
+    viewer drew is the file the turn receives. It passes ``home`` from the
+    config it already read; other callers leave it to be read here.
     """
     if (workspace / rel).exists():
         return workspace
-    if rel.parts[:1] == (_UPLOAD_DIR,) and (_upload_root() / rel).exists():
-        return _upload_root()
+    upload_root = home if home is not None else _upload_root()
+    if rel.parts[:1] == (_UPLOAD_DIR,) and (upload_root / rel).exists():
+        return upload_root
     return workspace
 
 
@@ -2085,9 +2090,11 @@ def _upload_root() -> Path:
     """Where an uploaded file is deposited: agent home, not the session workdir.
 
     The relative path this handler returns rides back to ``turn.send``, which
-    resolves an attachment against agent home and fences it there, so a file
-    parked anywhere else is dropped from the turn without an error. Agent home
-    is also the one root always writable: a session's working directory is
+    finds it here by :func:`viewer_root`'s rule and, with
+    ``tools.restrict_to_workspace`` on, admits agent home and the session's own
+    working directory alone, so a file parked anywhere else is dropped from the
+    turn without an error.
+    Agent home is also the one root always writable: a session's working directory is
     wherever the engine was launched from, and an engine started by the desktop
     shell inherits ``/``, where creating the directory cannot succeed.
 
