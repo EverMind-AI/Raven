@@ -553,6 +553,87 @@ async def test_an_inject_admits_the_sessions_own_root_too(tmp_path) -> None:
     assert [m.path for m in scheduler.submitted[0].media] == [str(chart)]
 
 
+class _KeyedLoop:
+    """A loop whose conversations each run in their own root.
+
+    ``peek_session_workdir`` answers per key, so a key the handler drops rather
+    than passes on does not quietly resolve the same way.
+    """
+
+    def __init__(self, roots: dict[str, str]) -> None:
+        self.roots = roots
+
+    def peek_session_workdir(self, session_key: str) -> str:
+        if session_key not in self.roots:
+            raise ValueError(f"no such session: {session_key!r}")
+        return self.roots[session_key]
+
+
+async def test_each_session_key_resolves_its_own_root(tmp_path) -> None:
+    """The session key is what picks the root.
+
+    Every other test hands the loop one root whatever it is asked, so dropping
+    the key -- resolving against the policy default instead -- leaves them all
+    green; this loop answers per key, which is what pins the key's journey.
+    """
+    scheduler = FakeScheduler()
+    home, _project, _shot, _chart = _pinned(tmp_path)
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    for side in (left, right):
+        (side / "out").mkdir(parents=True)
+        (side / "out" / "chart.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    with _workspace_cfg(home):
+        await turn_send(
+            {"session_key": "tui:right", "content": "look", "media": ["out/chart.png"]},
+            scheduler=scheduler,
+            turn_ids={},
+            agent_loop_factory=lambda: _KeyedLoop({"tui:left": str(left), "tui:right": str(right)}),
+        )
+
+    assert [m.path for m in scheduler.submitted[0].media] == [str(right / "out" / "chart.png")]
+
+
+async def test_an_upload_is_not_shadowed_by_a_same_named_file_in_the_session_root(tmp_path) -> None:
+    """``fs.upload`` names into agent home, but ``viewer_root`` reads the
+    session's own root first -- and both ``turn.send`` and ``/file`` follow it,
+    so a project already holding ``uploads/image.png`` (every session root that
+    predates the deposit move does) must not capture the fresh upload of that
+    name. It gets a suffixed name instead, and the turn receives the bytes.
+    """
+    import base64
+
+    from raven.rpc.methods.console import fs_upload
+
+    scheduler = FakeScheduler()
+    home, project, _shot, _chart = _pinned(tmp_path)
+    (project / "uploads").mkdir()
+    (project / "uploads" / "image.png").write_bytes(b"\x89PNG\r\n\x1a\nOLD")
+
+    with _workspace_cfg(home) as cfg, patch("raven.config.loader.load_config", cfg):
+        up = await fs_upload(
+            {
+                "name": "image.png",
+                "content_b64": base64.b64encode(b"\x89PNG\r\n\x1a\nNEW").decode(),
+                "session": "tui:default",
+            },
+            agent_loop_factory=lambda: _PinnedLoop(project),
+        )
+        assert up["path"] == "uploads/image-1.png"
+        result = await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": [up["path"]]},
+            scheduler=scheduler,
+            turn_ids={},
+            agent_loop_factory=lambda: _PinnedLoop(project),
+        )
+
+    assert result["accepted"] is True
+    [media] = scheduler.submitted[0].media
+    assert Path(media.path).read_bytes().endswith(b"NEW")
+    assert Path(media.path) != (project / "uploads" / "image.png").resolve()
+
+
 async def test_an_unknown_session_root_falls_back_to_agent_home(tmp_path) -> None:
     scheduler = FakeScheduler()
     home, _project, shot, _chart = _pinned(tmp_path)

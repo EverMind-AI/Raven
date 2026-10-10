@@ -53,6 +53,8 @@ const ORDER: ReadonlyArray<readonly [string, string, string, unknown, string]> =
   ['document', 'click', 'capture', browser.trap, 'the link trap (features/browser)'],
   ['window', 'beforeunload', 'bubble', composer.parkDraftNow, 'the unparked draft (features/composer)'],
   ['window', 'resize', 'bubble', composer.fitField, "the field's height cap (features/composer)"],
+  ['document', 'dragstart', 'bubble', composer.onPageDragStart, 'a drag beginning in this document (features/composer)'],
+  ['document', 'dragend', 'bubble', composer.onPageDragEnd, 'the same drag ending (features/composer)'],
   ['document', 'scroll', 'capture', scrollbars.onScroll, 'the overlay scrollbars (chrome/behaviour/scrollbars)'],
   ['window', 'resize', 'bubble', scrollbars.onResize, 'the same, dropping every bar (chrome/behaviour/scrollbars)'],
   ['window', 'resize', 'bubble', panes.onResize, 'the two panes re-clamping (chrome/behaviour/panes)'],
@@ -106,7 +108,7 @@ afterEach(() => {
 })
 
 describe('the page\'s document and window listeners', () => {
-  it('registers twenty-one, in one order, nothing twice', () => {
+  it('registers twenty-three, in one order, nothing twice', () => {
     const rows = record()
     expect(rows.map(([target, type, phase]) => [target, type, phase]))
       .toEqual(ORDER.map(([target, type, phase]) => [target, type, phase]))

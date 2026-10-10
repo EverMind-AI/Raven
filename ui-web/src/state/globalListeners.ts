@@ -28,7 +28,7 @@ import { onVisible as probeOnVisible } from '../app/updates'
 import { onResize as reclampPanes } from '../chrome/behaviour/panes'
 import { onResize as dropBars, onScroll as barsOnScroll } from '../chrome/behaviour/scrollbars'
 import { trap as linkTrap } from '../features/browser/store'
-import { fitField, parkDraftNow } from '../features/composer/mount'
+import { fitField, onPageDragEnd, onPageDragStart, parkDraftNow } from '../features/composer/mount'
 import { composing } from '../features/composer/store'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
@@ -127,6 +127,11 @@ export function installGlobalListeners(): void {
      height cap is a share of the window. */
   window.addEventListener('beforeunload', parkDraftNow)
   window.addEventListener('resize', fitField)
+  /* Whether a drag under way began in this document, for the composer's drop
+     target: the drag itself can start anywhere in the page, so the document is
+     what listens (features/composer/mount.tsx). */
+  document.addEventListener('dragstart', onPageDragStart)
+  document.addEventListener('dragend', onPageDragEnd)
   /* The overlay scrollbars, which cover a scroller drawn at any time by
      listening in the capture phase rather than per element. */
   document.addEventListener('scroll', barsOnScroll, true)

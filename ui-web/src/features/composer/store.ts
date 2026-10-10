@@ -4,6 +4,7 @@ import { SEND, SEND_PX, SEND_STROKE } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { formatDuration } from '../../lib/duration'
+import { IMG_EXT } from '../../lib/pictureExt'
 import { current as currentSession } from '../../lib/session'
 import { draw as plusDraw } from '../../state/plus'
 import { ds } from '../../state/sources'
@@ -535,15 +536,17 @@ export function addTemplate(row: TemplateRow): void {
 }
 
 /* The picture types, each with the extension a file of that type goes up under
-   when its own name spells no picture. The extensions are the ones
-   features/workspace's fileKind tells a picture by: once the file is uploaded,
-   its name is all that is left of its type. */
+   when its own name spells no picture. Once the file is uploaded, its name is
+   all that is left of its type, so the extension must be one the sent bubble
+   draws as a picture -- a member of the shared table (lib/pictureExt). */
 const PICTURE_EXT: Record<string, string> = {
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
   'image/bmp': 'bmp', 'image/avif': 'avif', 'image/svg+xml': 'svg',
   'image/x-icon': 'ico', 'image/vnd.microsoft.icon': 'ico',
 }
-const PICTURE_NAMES = new Set([...Object.values(PICTURE_EXT), 'jpeg'])
+/* By what name draws as a picture here: the shared image table, plus svg,
+   which the viewer's fileKind gives its own kind. */
+const PICTURE_NAMES = new Set([...IMG_EXT, 'svg'])
 
 const namesPicture = (name: string): boolean => {
   const dot = name.lastIndexOf('.')

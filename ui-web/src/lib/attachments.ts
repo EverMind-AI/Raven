@@ -154,11 +154,20 @@ export function splitAttachments(text: string, notes: readonly string[]): Attach
      Compared with one separator, because the two spellings differ on Windows:
      `fs.upload` answers `uploads/shot.png` and the engine interpolates a path
      object, which prints `C:\\...\\uploads\\shot.png` there, so a literal
-     comparison never matched and the recovery this is for never happened. */
+     comparison never matched and the recovery this is for never happened.
+     Each engine path answers one note entry, in order: two entries can name
+     suffixes of a single path (`out/chart.png` and `chart.png`), and letting
+     both read that one line made the reloaded bubble draw that file twice and
+     lose the other. An entry with no line left keeps the composer's spelling. */
   const slashed = (v: string): string => v.replace(/\\/g, '/')
+  const taken = new Set<number>()
   const resolve = (att: string): string => {
     const want = slashed(att)
-    return absolute.find((abs) => slashed(abs) === want || slashed(abs).endsWith(`/${want}`)) ?? att
+    const at = absolute.findIndex((abs, i) => !taken.has(i)
+      && (slashed(abs) === want || slashed(abs).endsWith(`/${want}`)))
+    if (at < 0) return att
+    taken.add(at)
+    return absolute[at] ?? att
   }
   const s = stripRuntimeNotes(raw)
   for (const note of notes) {

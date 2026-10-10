@@ -2067,10 +2067,13 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
 
     The caller hands the agent a path, not bytes: every tool that reads files is
     already workspace-scoped, so an upload is just a file appearing in the
-    workspace. Collisions get a numeric suffix rather than overwriting.
+    workspace. Collisions get a numeric suffix rather than overwriting -- and
+    the name is kept free under the session's own ``uploads/`` too, because
+    :func:`raven.rpc.files.viewer_root` reads a relative path there before agent
+    home, so ``uploads/<name>`` must never mean two files.
 
-    ``session`` is still accepted (the page sends it) but does not select the
-    root -- see :func:`_upload_root`.
+    ``session`` does not select the root -- see :func:`_upload_root` -- but it
+    is what names the root the collision check above has to look past.
     """
     import base64
 
@@ -2095,10 +2098,22 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
         # the page as a bare -32603 ``internal_error`` with no reason in it.
         raise ConfigValidationError(f"cannot create {target_dir}: {e}") from None
     name = _safe_name(params.get("name", ""))
+    # The session's own root is read first by ``viewer_root``, and both
+    # ``turn.send`` and ``/file`` follow it, so a name the session root already
+    # holds would hand the turn -- and the reloaded bubble -- that file instead
+    # of the bytes just uploaded. A session that cannot be resolved leaves the
+    # old rule alone; ``turn.send``'s own resolve fails the same way there.
+    try:
+        shadow_dir = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / _UPLOAD_DIR
+    except Exception as exc:
+        logger.warning(
+            "fs.upload: cannot read the session's working directory ({}); agent home alone decides the name", exc
+        )
+        shadow_dir = None
     target = target_dir / name
     stem, suffix = target.stem, target.suffix
     n = 1
-    while target.exists():
+    while target.exists() or (shadow_dir is not None and (shadow_dir / target.name).exists()):
         target = target_dir / f"{stem}-{n}{suffix}"
         n += 1
     try:
