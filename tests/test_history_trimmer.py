@@ -365,9 +365,9 @@ def test_trim_ends_when_a_later_turn_reuses_a_call_id(monkeypatch):
 
 # --- The closing sweep looks at each group once --------------------------------
 #
-# Every member of a group answers ``tool_group`` with that same group, and each
-# answer is a pass over the session, so the sweep that refuses a broken pairing
-# asks once per group rather than once per selected message.
+# Every member answers from the same indexed group. Each lookup still copies
+# its members into a set, so the sweep asks once per group rather than repeating
+# that work for every selected member.
 
 
 def _tool_heavy_session(turns: int) -> list[dict]:
