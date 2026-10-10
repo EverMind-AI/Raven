@@ -93,7 +93,8 @@ _USER_UPDATES = ("user_message_chunk",)
 # it is about to do, runs a command and then reports back has sent two messages,
 # and the protocol marks the boundary only by what came between them. Thoughts
 # and usage updates are deliberately not here -- neither ends a message, and
-# breaking on one would split a single reply mid-sentence.
+# breaking on one would split a single reply mid-sentence. An update that says
+# its call is still running is passed over for the same reason.
 _BREAKING_UPDATES = ("tool_call", "tool_call_update")
 _MESSAGE_BREAK = "\n\n"
 
@@ -374,7 +375,14 @@ class _TurnCollector:
             # own row to the transcript: the call names what was run, the update
             # carries how it ended. One branch, because the boundary is the same
             # fact for both -- an answer chunk after either starts a new message.
-            self._tool_ran = True
+            # Not after an update that says the call is still running: raven's
+            # own held prompt beats one on its open wait call every minute, and
+            # the wake turn's report may be mid-sentence when it lands. The
+            # opening frame says `in_progress` too and still ends the message
+            # before the call; a status-less update still ends it, since
+            # claude-agent-acp reports a finished call's result on one.
+            if kind == "tool_call" or update.get("status") not in ("pending", "in_progress"):
+                self._tool_ran = True
             if kind == "tool_call":
                 call = self._dialect.call(update)
                 if call.id and any(e.get("t") == "call" and e.get("id") == call.id for e in self.events):
@@ -794,8 +802,8 @@ class _TurnCollector:
         """What the run hands its caller: the last message, never the ones before it.
 
         A message is what the live view shows between two steps -- a tool call,
-        its update, or a plan opening, the boundary ``_BREAKING_UPDATES``
-        recovers -- so the caller gets the last one exactly as it streamed. A
+        an update that does not say the call is still running, or a plan
+        opening -- so the caller gets the last one exactly as it streamed. A
         steer inside it stays inside it, set apart by its break. A turn that
         ended on a step said nothing after it, and so did one whose last message
         is blank; either way the message before is the answer: still one

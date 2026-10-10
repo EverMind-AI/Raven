@@ -4592,6 +4592,67 @@ async def test_the_reply_ends_a_message_where_the_live_view_does() -> None:
     assert col.reply == "Saved."
 
 
+@pytest.mark.parametrize("status", ["in_progress", "pending"])
+async def test_a_progress_frame_on_an_open_call_does_not_end_the_message(status: str) -> None:
+    """A call still running ends nothing.
+
+    Raven's own held prompt beats an ``in_progress`` update on its open wait call
+    every minute while the wake turn's report streams, and ending the message
+    there handed the caller only the words after the beat while ``closing.md``
+    kept the whole report. The opening frame says ``in_progress`` too, and still
+    ends the message said before the call.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Filed job 7."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "hold-1", "kind": "other", "status": "in_progress"})
+    await feed(
+        {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Round 2: loss converged, "}}
+    )
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "hold-1", "status": status})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "killed job 7."}})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "hold-1", "status": "completed"})
+
+    assert col.reply == "Round 2: loss converged, killed job 7."
+    assert col.closing_text == col.reply, "out.md and closing.md hold the same report"
+    assert "".join(seen) == "Filed job 7.\n\nRound 2: loss converged, killed job 7."
+
+
+async def test_a_status_less_update_still_ends_the_message() -> None:
+    """Only an update that says its call is still running is passed over.
+
+    claude-agent-acp reports a finished call's result on an update with no
+    status at all, sent from its PostToolUse hook -- the captured frame below --
+    so a status-less update is a step, like a completed one. The frames are
+    captured; the words around them are not.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+    from tests import acp_frames
+
+    col = _TurnCollector(prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Looking."}})
+    await feed(acp_frames.CLAUDE_BASH_WITH_DESCRIPTION)
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Listing it."}})
+    await feed(acp_frames.CLAUDE_UPDATE_WITHOUT_KIND)
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "It is messages.json."}})
+
+    assert col.reply == "It is messages.json."
+
+
 async def test_the_live_transcript_streams_only_the_closing_burst() -> None:
     """The live view and the settled record must agree on where prose sits.
 
