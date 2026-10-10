@@ -484,6 +484,12 @@ class SkillRegistry:
 # ----------------------------------------------------------------------
 
 
+# YAML costs about eighty times the line reading in time and far more in memory,
+# and frontmatter is untrusted; real blocks measure under 3 KB, so a block past
+# this size is read line by line instead.
+_YAML_MAX_CHARS = 16 * 1024
+
+
 class _NoAliasSafeLoader(yaml.SafeLoader):
     """``SafeLoader`` that refuses aliases: frontmatter is untrusted text, and a
     few aliased bytes can expand into a value whose string form never ends."""
@@ -516,8 +522,9 @@ def _parse_frontmatter(content: str) -> dict | None:
     A block YAML cannot read (bad syntax, a non-mapping, an alias, a date
     that does not exist) gets :func:`_parse_frontmatter_lines`, the reading
     every skill had before, so a skill that loaded keeps loading the same
-    way. So does a ``name`` or ``description`` that YAML reads as a
-    non-string. Returns ``None`` when no frontmatter is present.
+    way. So does a block over ``_YAML_MAX_CHARS``, and a ``name`` or
+    ``description`` that YAML reads as a non-string. Returns ``None`` when
+    no frontmatter is present.
     """
     if not content.startswith("---"):
         return None
@@ -525,6 +532,8 @@ def _parse_frontmatter(content: str) -> dict | None:
     if not m:
         return None
     lines = _parse_frontmatter_lines(m.group(1))
+    if len(m.group(1)) > _YAML_MAX_CHARS:
+        return lines
     try:
         parsed = _load_yaml(m.group(1))
     except Exception:  # noqa: BLE001 - ValueError and RecursionError are not YAMLError
