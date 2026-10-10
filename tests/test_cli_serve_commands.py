@@ -411,6 +411,7 @@ class TestTheCommand:
         started one, whose gateway could only come up on `serve` -- no channels."""
         monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
         monkeypatch.setattr(serve_commands, "_read_serve_pid", lambda: 4321)
+        monkeypatch.setattr(serve_commands, "_live_gateway_pid", lambda: 4321)
         # So a regression that does spawn fails here, not after the attach ceiling.
         monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: None)
 
