@@ -4536,8 +4536,9 @@ async def test_a_steer_inside_the_final_message_does_not_cut_the_reply() -> None
     next model call, so the words after it can finish the message it landed in.
 
     The steer is set apart in that message and does not end it: the caller gets
-    the message whole, and the live view spends one budget on it -- the break is
-    raven's own, so it spends none, and the steer does not renew it.
+    the message whole, and the live view spends one budget on it -- the steer
+    does not renew it, and its break spends it like the agent's words, since the
+    break is in the reply the cap counts.
     """
     from raven.acp_client.acp_agent import _TurnCollector
 
@@ -4559,7 +4560,7 @@ async def test_a_steer_inside_the_final_message_does_not_cut_the_reply() -> None
     await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPORT PART TWO."}})
 
     assert col.reply == "REPORT PART ONE. \n\nREPORT PART TWO."
-    assert "".join(seen) == "Looking.\n\nREPORT PART ONE. \n\nREP"
+    assert "".join(seen) == "Looking.\n\nREPORT PART ONE. \n\nR"
     assert col.closing_text == "REPORT PART TWO.", "the transcript still draws the steer as a row of its own"
 
 
@@ -4651,6 +4652,40 @@ async def test_a_status_less_update_still_ends_the_message() -> None:
     await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "It is messages.json."}})
 
     assert col.reply == "It is messages.json."
+
+
+@pytest.mark.parametrize("over", [-2, -1, 0])
+async def test_a_steered_message_streams_whole_only_when_its_reply_comes_back_whole(over: int) -> None:
+    """The live view's budget counts what the reply's cap counts.
+
+    A steer's break is raven's, but it is inside the message the reply returns,
+    and the cap counts it. Left out of the budget, a steered message within a
+    break of the cap streamed whole and came back cut, with the truncation
+    notice under a message the screen had shown complete.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent.backends.base import clamp_output
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = "x" * 30 + "\n\n" + "y" * 30
+    limit = len(reply) + over
+    col = _TurnCollector(on_delta, prompt="the task", limit=limit)
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "x" * 30}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "and the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "y" * 30}})
+
+    assert col.reply == reply
+    assert "".join(seen) == reply[:limit]
+    returned = await clamp_output(col.reply, limit, agent="probe")
+    assert ("".join(seen) == reply) == (returned == reply)
 
 
 async def test_the_live_transcript_streams_only_the_closing_burst() -> None:
