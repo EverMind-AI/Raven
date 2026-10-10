@@ -244,6 +244,87 @@ def doctor(as_json: bool = typer.Option(False, "--json")) -> None:
     raise typer.Exit(0 if fit else 1)
 
 
+@connection_app.command("install-node")
+def install_node(
+    conn_id: str = typer.Argument(..., help="The machine's id in the registry."),
+    node_dir: str = typer.Option(
+        "", "--dir", help="Where on the machine to keep Raven nodes (default ~/.raven-node); kept in the registry."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Install without asking first."),
+    prune: bool = typer.Option(
+        False, "--prune", help="Also remove the nodes of other Raven versions from that directory."
+    ),
+) -> None:
+    """Put this Raven's node on a registered machine, so file calls can be answered there.
+
+    The node is this Raven's own code in a small virtualenv of its own, under
+    ``<dir>/<version>-<digest>``; nothing else on the machine changes. Asks
+    before installing; a machine that already has this node is left as it is.
+    """
+    import asyncio
+
+    from raven.node import install as node_install
+    from raven.node.client import NodeError, NodePool
+
+    chosen = node_dir.strip().rstrip("/")
+    try:
+        plan = node_install.plan(conn_id, node_dir=chosen or None)
+    except node_install.InstallError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+    if plan.present:
+        console.print(f"Machine {plan.target.label} already has the Raven node {plan.install_name} in {plan.node_dir}.")
+    else:
+        if (why := node_install.refusal(plan)) is not None:
+            console.print(f"[red]{why}[/red]")
+            raise typer.Exit(1)
+        console.print(plan.describe())
+        if not yes and not typer.confirm("Install it?", default=False):
+            raise typer.Exit(1)
+        try:
+            done = node_install.install(plan)
+        except node_install.InstallError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from None
+        size = f" ({done.size_kb // 1024} MB)" if done.size_kb else ""
+        console.print(f"Installed the Raven node {done.install_name} in {done.node_dir}{size}.")
+        if not done.rg:
+            console.print(
+                "[yellow]ripgrep-bin was not available from the machine's package index or PyPI; "
+                "grep there runs Raven's own Python search, as it does on a computer without rg.[/yellow]"
+            )
+    if prune:
+        try:
+            removed = node_install.prune(plan)
+        except node_install.InstallError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from None
+        console.print(f"Removed {len(removed)} other node(s) from {plan.node_dir}: {', '.join(removed) or 'none'}.")
+    if chosen and chosen != str(plan.target.field("node_dir") or "").strip().rstrip("/"):
+        from raven.ops.connection_add import set_fields
+
+        try:
+            set_fields(conn_id, {"node_dir": chosen})
+        except ValueError as exc:
+            console.print(f"[red]The node is installed, but {chosen} could not be recorded: {exc}[/red]")
+            raise typer.Exit(1) from None
+        console.print(f"Recorded {chosen} as where machine {plan.target.label} keeps its Raven nodes.")
+
+    async def answer() -> dict:
+        pool = NodePool()
+        try:
+            return await pool.hello(conn_id)
+        finally:
+            await pool.close_all()
+
+    try:
+        hello = asyncio.run(answer())
+    except NodeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+    console.print(f"[green]The node answers: Python {hello.get('python')}, code {hello.get('digest')}.[/green]")
+
+
 # The host's `ops` group holds only the registry. The campaign commands stay in
 # the on-call agent's own checkout: the host needs to know which machines exist
 # and to write one down while the owner is in the conversation, not to run

@@ -148,6 +148,45 @@ def _kill_process_tree(proc: subprocess.Popen, grace_s: float = 2.0) -> None:
 ISOLATE_IDENTITY = ("-F", "/dev/null", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none")
 
 
+def ssh_argv(
+    host: str,
+    port: int,
+    key: str,
+    *,
+    user: str = "root",
+    connect_timeout: int = 15,
+    identities_only: bool = False,
+    extra: tuple[str, ...] = (),
+) -> list[str]:
+    """The ssh command line up to, and not including, the remote command.
+
+    One spelling of how raven reaches a registered machine, shared by the
+    one-shot runner below and by an ACP sub-agent that lives on the machine
+    (``raven.acp_client.remote``), so the two cannot drift on host-key policy or
+    on never stopping to ask for a password. ``extra`` is placed before the
+    destination, where ssh reads options; a caller that keeps the session open
+    passes its keepalives there.
+    """
+    argv = [
+        "ssh",
+        "-i",
+        key,
+        "-p",
+        str(port),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={connect_timeout}",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]
+    if identities_only:
+        argv += list(ISOLATE_IDENTITY)
+    argv += list(extra)
+    argv.append(f"{user}@{host}")
+    return argv
+
+
 def make_ssh_runner(
     host: str,
     port: int,
@@ -179,25 +218,9 @@ def make_ssh_runner(
     """
 
     def run(cmd: str) -> tuple[int, str]:
-        argv = [
-            "ssh",
-            "-i",
-            key,
-            "-p",
-            str(port),
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            f"ConnectTimeout={connect_timeout}",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-        ]
-        if identities_only:
-            argv += list(ISOLATE_IDENTITY)
-        argv += [
-            f"{user}@{host}",
-            cmd,
-        ]
+        argv = ssh_argv(
+            host, port, key, user=user, connect_timeout=connect_timeout, identities_only=identities_only
+        ) + [cmd]
         try:
             proc = subprocess.run(argv, capture_output=True, text=True, timeout=cap_seconds)
         except subprocess.TimeoutExpired as exc:
@@ -226,17 +249,26 @@ def runner_from(row: dict[str, Any], *, cap_seconds: float | None = None) -> Com
         # runner.
         return make_local_runner(cap_seconds) if cap_seconds else make_local_runner()
 
+    host, port, key, user = ssh_target(row)
+    return make_ssh_runner(host, port, key, user=user, cap_seconds=cap_seconds)
+
+
+def ssh_target(row: dict[str, Any]) -> tuple[str, int, str, str]:
+    """``(host, port, key, user)`` for an ssh row, with the registry's defaults.
+
+    Raises :class:`TransportError` on a row that names no host, for the reason
+    :func:`runner_from` gives; every way onto a machine reads the row here.
+    """
     host = str(row.get("host") or "").strip()
     if not host:
         raise TransportError(
             f"connection {str(row.get('id') or '?')!r} has no address to run on: its row names no host"
         )
-    return make_ssh_runner(
+    return (
         host,
         int(row.get("port") or 22),
         os.path.expanduser(str(row.get("key") or "~/.ssh/id_rsa")),
         # A connection names the account to log in as. Dropping it would make
         # that field one more setting that is written, accepted and does nothing.
-        user=str(row.get("user") or "root"),
-        cap_seconds=cap_seconds,
+        str(row.get("user") or "root"),
     )

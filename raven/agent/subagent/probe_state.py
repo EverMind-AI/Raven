@@ -197,6 +197,10 @@ def fingerprint(cfg: Any) -> str:
         # set, so every verdict recorded before the field existed holds.
         if getattr(cfg, "lend_keys", None):
             payload["lend_keys"] = list(cfg.lend_keys)
+        # The machine an acp row runs on, by the same only-when-set rule.
+        for field in ("machine", "remote_cwd"):
+            if getattr(cfg, field, None):
+                payload[field] = getattr(cfg, field)
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 

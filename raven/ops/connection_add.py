@@ -113,19 +113,15 @@ def probe(row: dict[str, Any], *, timeout: float = 30.0, isolate_key: bool = Fal
     authenticated, and the registry would then hold a path that stops working
     the day that agent or config changes.
     """
-    from raven.ops.transport import TIMED_OUT_RC, TransportError, make_ssh_runner, runner_from
+    from raven.ops.transport import TIMED_OUT_RC, TransportError, make_ssh_runner, runner_from, ssh_target
 
     where = "this computer" if transport_of(row) == LOCAL else f"{row.get('user')}@{row.get('host')}:{row.get('port')}"
     try:
         if isolate_key and transport_of(row) == SSH:
-            runner = make_ssh_runner(
-                str(row.get("host") or ""),
-                int(row.get("port") or 22),
-                os.path.expanduser(str(row.get("key") or "")),
-                user=str(row.get("user") or "root"),
-                identities_only=True,
-                cap_seconds=timeout,
-            )
+            # The row read the one way every other route onto a machine reads
+            # it (review of #893); only the key restriction is added.
+            host, port, key, user = ssh_target(row)
+            runner = make_ssh_runner(host, port, key, user=user, identities_only=True, cap_seconds=timeout)
         else:
             runner = runner_from(row, cap_seconds=timeout)
         code, out = runner(PROBE_SCRIPT)
@@ -196,6 +192,32 @@ def write(row: dict[str, Any]) -> Path:
         raise ValueError(f"a machine with id {row['id']!r} is already listed in {path}")
     rows.append(row)
     path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return path
+
+
+def set_fields(conn_id: str, fields: dict[str, Any]) -> Path:
+    """Change ``fields`` on the one machine listed as ``conn_id``, keeping every other row as it was.
+
+    For what is learned about a machine after it was added -- where its Raven
+    node is kept (``node_dir``), set by ``raven ops connection install-node
+    --dir``. Refuses on the same grounds as :func:`write`, and when the id is
+    not listed exactly once.
+    """
+    path = connections.store_path()
+    found = connections.read()
+    if found.state == UNREADABLE:
+        raise ValueError(f"{found.detail}\nFix or move that file before changing it.")
+    if found.detail:
+        raise ValueError(
+            f"{found.detail}\nChanging a machine here would rewrite the file without them. "
+            "Give those entries an id (or remove them) first."
+        )
+    rows = list(found.rows)
+    hits = [r for r in rows if str(r.get("id") or "").strip() == conn_id]
+    if len(hits) != 1:
+        raise ValueError(f"machine {conn_id!r} is listed {len(hits)} times in {path}; it has to be listed once")
+    hits[0].update(fields)
     path.write_text(json.dumps({"connections": rows}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return path
 
