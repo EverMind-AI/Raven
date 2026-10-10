@@ -4,8 +4,8 @@ The pool and :class:`~raven.acp_client.client.AcpClient` only ever start a local
 process and talk to its stdio. For an agent on another machine that local
 process is ``ssh``, and the far end of its stdio is the agent, so nothing above
 the launch line has to change. What does change is everything that assumed the
-agent shares this disk; the design and its constraints (C1-C14) are in
-``docs/specs/2026-10-10-acp-agents-on-registered-machines-design.md``.
+agent shares this disk: its working directory, the MCP servers lent through a
+local socket, the files a turn is credited with, and the paths handed to it.
 
 This module owns the three things only a remote agent needs:
 
