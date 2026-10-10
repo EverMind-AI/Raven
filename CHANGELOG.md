@@ -65,8 +65,9 @@ All notable changes to Raven are documented here.
   them - and the last section names what could not be verified
   (`## Limitations` in English, with no English word in the heading
   otherwise; the shape gate reads the last `##` section as the limits when
-  no word it knows names them). A length the brief sets bounds the body:
-  every markdown file the turn writes or edits gets a `[report length: ...]`
+  no word it knows names them, or only the first heading has one with no
+  body above it, as in a body heading on export limits). A length the brief
+  sets bounds the body: every markdown file the turn writes or edits gets a `[report length: ...]`
   line on its tool result - CJK characters and other words, a total with
   prose and tables apart, by `##` section, link targets not counted - and
   the report checks its length
@@ -88,9 +89,11 @@ All notable changes to Raven are documented here.
   `##` headings are mostly the reply's counts as the report, so a notes
   file or a source index saved beside it is left alone; of several such
   files the reply's named one is synced, and none when it names none or
-  several. A file the session did not write whole (a log the user keeps,
-  appended or edited) is not synced, since the rest of it was there before;
-  a later turn that only edits the report an earlier turn wrote syncs it.
+  several. A file appended to or edited is synced only when the turn wrote
+  it whole first, or it still holds exactly what an earlier turn of the
+  session left in it: a log the user keeps, or a report the user changed
+  between turns, holds their text, and the reply would erase it. A later
+  turn that only edits a report nobody else touched syncs it.
   The file is left as the model wrote it when the reply is not a report, and
   when the reply is under 80% of the file's length - a brief that asks for a
   summary reply gets that summary, and it must not replace the report. The

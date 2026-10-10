@@ -93,7 +93,7 @@ from research_flow.support.fetch_gate_core import FetchGate
 from research_flow.support.harness_text import harness_ask_kind
 from research_flow.support.ledger import close_product_ledger, ledger_path, open_product_ledger
 from research_flow.support.process_appendix import build_appendix, read_ledger
-from research_flow.support.report_file import sync_report_file, written_markdown
+from research_flow.support.report_file import file_digest, still_held, sync_report_file, written_markdown
 from research_flow.support.search_saturation import SearchSaturation
 from research_flow.support.turn_observers import turn_observers
 from research_flow.tools.web import set_current_session
@@ -154,6 +154,10 @@ _TURN_MODE_KEY = "dr_turn_mode"
 # The markdown files the turn's ``write_file`` calls wrote, read off the transcript
 # in the iteration phases - the only ones that carry it - for the turn end.
 _REPORT_FILES_KEY = "dr_report_files"
+
+# The report files an earlier turn left that still hold what it left, read at turn start
+# before any tool runs; only these, and files the turn writes whole, are the session's.
+_HELD_FILES_KEY = "dr_held_report_files"
 
 
 @dataclass
@@ -279,6 +283,8 @@ class TurnFrame(Gate):
         ctx.metadata[_USER_TEXT_KEY] = text
         ctx.metadata.update(_turn_cargo(self._cfg, text))
         record = self._store.load(ctx.session_key)
+        if self._report_file:
+            ctx.metadata[_HELD_FILES_KEY] = still_held(record.report_files)
         if self._conversation:
             self._consume_pending_clarify(ctx.session_key, record, text)
         content = text
@@ -388,7 +394,8 @@ class TurnFrame(Gate):
 
     async def after_iteration(self, ctx: GateCtx) -> HookDecision:
         if self._report_file:
-            paths = written_markdown(ctx.messages or [], since=ctx.turn_base or 0)
+            held = ctx.metadata.get(_HELD_FILES_KEY) or {}
+            paths = written_markdown(ctx.messages or [], since=ctx.turn_base or 0, held=held)
             if paths:
                 ctx.metadata[_REPORT_FILES_KEY] = paths
         return HookDecision()
@@ -402,6 +409,7 @@ class TurnFrame(Gate):
         turn_mode = ctx.metadata.pop(_TURN_MODE_KEY, None)
         ctx.metadata.pop(_USER_TEXT_KEY, None)
         report_paths = ctx.metadata.pop(_REPORT_FILES_KEY, None)
+        held = ctx.metadata.pop(_HELD_FILES_KEY, None) or {}
         # The gates' own counters first, the turn-level ones over them - the
         # order the fork stamped them in, and the one that lets a turn-level key
         # win a name collision.
@@ -435,6 +443,17 @@ class TurnFrame(Gate):
             else:
                 # A clarify or a reply that is not the report: the model's own file stands.
                 observers["report_file"] = {"synced": False, "reason": "reply_not_a_report"}
+        if self._report_file:
+            # After the sync: what the session leaves in each file is what a later turn
+            # must still find there before an append or an edit makes it the report.
+            left = dict(held)
+            for path in report_paths or []:
+                digest = file_digest(path)
+                if digest is None:
+                    left.pop(path, None)
+                else:
+                    left[path] = digest
+            record.report_files = left
 
         mode = turn_mode
         if isinstance(mode, TurnMode):

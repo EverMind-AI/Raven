@@ -784,14 +784,17 @@ def audit(path: Path) -> Audit:
     result.sections = heads
     if result.layout == "reader":
         # Answer is the opening quote; the limits are the last matching section, or the
-        # last `##` when none matches and a section stands above it (the flow's
-        # ``report_shape`` reads it the same way); every other `##` is the body, which
-        # is where the reader layout puts its headings.
+        # last `##` when none matches, or only the first does with no body above it, and
+        # a section stands above it (the flow's ``report_shape`` reads it the same way);
+        # every other `##` is the body, which is where the reader layout puts its headings.
         limits_at = next((i for i in range(len(heads) - 1, -1, -1) if _READER_LIMITS_RE.search(heads[i])), None)
-        if limits_at is None and len(heads) >= 2:
+        first_head = next((i for i, ln in enumerate(body) if ln.startswith("## ")), len(body))
+        body_above = any(ln.strip() and not ln.lstrip().startswith((">", "#")) for ln in body[:first_head])
+        if (limits_at is None or (limits_at == 0 and not body_above)) and len(heads) >= 2:
             limits_at = len(heads) - 1
         present = {"Answer", *(["Limitations"] if limits_at is not None else [])}
-        if any(i != limits_at and (limits_at is None or i < limits_at) for i in range(len(heads))):
+        # A body written as prose under the answer counts, as the gate counts it.
+        if body_above or any(i != limits_at and (limits_at is None or i < limits_at) for i in range(len(heads))):
             present.add("Findings")
         missing = [s for s in REQUIRED_SECTIONS if s not in present]
     else:

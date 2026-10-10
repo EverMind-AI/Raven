@@ -8,10 +8,12 @@ at turn end the flow writes it over the report file the turn wrote, and the chat
 and the file are one text. The research trail, and the delivery line that names the
 file, stay on the reply only.
 
-Which file is the report: a markdown file the turn wrote, or edited after the session
-wrote it whole - a file only appended to or edited otherwise holds text that was
-already there - and whose ``##`` headings are mostly the reply's, which a notes file
-or a source index saved beside the report does not share. Of several such files the
+Which file is the report: a markdown file the turn wrote whole, or appended to or
+edited when the turn wrote it whole first or it still holds exactly what an earlier
+turn of the session left in it (:func:`still_held`) - any other file holds text
+someone else put there, a user's log or their own edits between turns - and whose
+``##`` headings are mostly the reply's, which a notes file or a source index saved
+beside the report does not share. Of several such files the
 reply names the report, and when it names none or several every file is left alone.
 
 The path is read from the tools' own result line, which names the path the tool
@@ -22,8 +24,9 @@ argument into their results, so any later line may be text the model chose.
 
 from __future__ import annotations
 
+import hashlib
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -60,17 +63,35 @@ def _result_line(content: str) -> str:
     return str(unwrap_untrusted(content)).split("\n", 1)[0].strip()
 
 
-def written_markdown(messages: Sequence[dict[str, Any]], since: int = 0) -> list[str]:
+def file_digest(path: str) -> str | None:
+    """The sha256 of the file's bytes, or None when it cannot be read."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def still_held(left: Mapping[str, str]) -> dict[str, str]:
+    """The entries of ``left`` (path to the digest the session left in it) the file still matches.
+
+    Read at turn start, before the turn's tools run: a file anyone changed since the
+    session last wrote it now holds their text too, and stops being the session's.
+    """
+    return {path: digest for path, digest in left.items() if file_digest(path) == digest}
+
+
+def written_markdown(messages: Sequence[dict[str, Any]], since: int = 0, held: Iterable[str] = ()) -> list[str]:
     """Markdown paths the turn starting at ``messages[since]`` wrote, oldest write first.
 
-    A file counts only once it was written whole, in this turn or an earlier one of the
-    session: an append or an edit to any other file adds to text that was already there,
-    and the reply written over it would erase that text. A later turn that only edits
-    the report an earlier turn wrote still has that report.
+    A file counts once this turn wrote it whole, or when it is in ``held``, the files that
+    still hold what an earlier turn of the session left in them (:func:`still_held`): an
+    append or an edit to any other file adds to text that was already there, and the
+    reply written over it would erase that text. A later turn that only edits the
+    report an earlier turn wrote still has that report, unless someone changed it since.
     """
     paths: list[str] = []
-    whole: set[str] = set()
-    for index, message in enumerate(messages):
+    whole: set[str] = set(held)
+    for message in messages[since:]:
         if message.get("role") != "tool" or message.get("name") not in (_WRITE_TOOL, _EDIT_TOOL):
             continue
         content = message.get("content")
@@ -85,8 +106,6 @@ def written_markdown(messages: Sequence[dict[str, Any]], since: int = 0) -> list
                 continue
         else:
             whole.add(path)
-        if index < since:
-            continue
         if path in paths:
             paths.remove(path)
         paths.append(path)
@@ -271,4 +290,13 @@ def sync_report_file(paths: list[str], reply: str) -> dict[str, Any]:
     return record
 
 
-__all__ = ["file_text", "length_note", "measure_report", "sync_report_file", "touched_markdown", "written_markdown"]
+__all__ = [
+    "file_digest",
+    "file_text",
+    "length_note",
+    "measure_report",
+    "still_held",
+    "sync_report_file",
+    "touched_markdown",
+    "written_markdown",
+]

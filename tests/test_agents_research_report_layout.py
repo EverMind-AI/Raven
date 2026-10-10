@@ -34,8 +34,10 @@ from research_flow.gates.report_shape import (  # noqa: E402
 from research_flow.prompts import render_identity_and_contract, render_parts  # noqa: E402
 from research_flow.state import SessionStore  # noqa: E402
 from research_flow.support.report_file import (  # noqa: E402
+    file_digest,
     file_text,
     measure_report,
+    still_held,
     sync_report_file,
     touched_markdown,
     written_markdown,
@@ -99,6 +101,14 @@ def test_a_missing_part_is_named(text, missing):
 
 def test_a_section_after_the_limits_is_recorded_out_of_order():
     shape = ReportShape(_EN + "\n## Appendix\nmore", READER_LAYOUT)
+    assert shape.well_formed
+    assert not shape.in_order
+
+
+def test_a_first_limits_heading_under_a_body_stays_the_limits():
+    """With the body written as prose above it, a listed first heading is the limits, so a
+    section after it is still out of order rather than becoming the limits."""
+    shape = ReportShape("> x\n\nthe body in prose\n\n## Limitations\nn\n\n## Link checks\nt\n", READER_LAYOUT)
     assert shape.well_formed
     assert not shape.in_order
 
@@ -235,6 +245,29 @@ async def test_the_last_section_is_the_limits_whatever_language_names_it(heading
     assert not (await bar.after_iteration(GateCtx(session_key="s", response=_Response(reply)))).rollback
 
 
+# A first body heading that names a limit, with the limits in the reply's own words.
+_LIMIT_WORD_IN_THE_BODY = [
+    "> x\n\n## \u4e00\u3001\u51fa\u53e3\u9650\u5236\u7684\u6f14\u53d8\nb\n\n## \u672a\u80fd\u9a8c\u8bc1\u7684\u5185\u5bb9\nn\n",
+    "> x\n\n## \u4eba\u624b\u4e0d\u8db3\u306e\u73fe\u72b6\nb\n\n## \u691c\u8a3c\u3067\u304d\u306a\u304b\u3063\u305f\u70b9\nn\n",
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", _LIMIT_WORD_IN_THE_BODY)
+async def test_a_first_body_heading_that_names_a_limit_is_the_body(reply):
+    """The body comes before the limits: a listed word in the first heading, with no body
+    above it, does not make that heading the limits."""
+    bar = ReportShapeGate(layout=READER_LAYOUT)
+    assert not (await bar.after_iteration(GateCtx(session_key="s", response=_Response(reply)))).rollback
+
+
+@pytest.mark.asyncio
+async def test_a_listed_limits_heading_after_the_body_is_still_the_limits():
+    bar = ReportShapeGate(layout=READER_LAYOUT)
+    for reply in ("> x\n\n## Body\nb\n\n## \u5c40\u9650\nn\n", "> x\n\nb\n\n## Limitations\nn\n"):
+        assert not (await bar.after_iteration(GateCtx(session_key="s", response=_Response(reply)))).rollback
+
+
 def test_a_prose_clarify_is_still_exempt_under_the_reader_layout():
     ctx = GateCtx(
         session_key="s",
@@ -301,8 +334,9 @@ async def test_the_report_reader_parses_what_the_real_file_tools_return(tmp_path
     ]
     assert touched_markdown(messages) == [str(report), str(log), str(notes)]
     assert written_markdown(messages) == [str(report)]
-    assert written_markdown(messages, since=3) == [str(report)]
-    assert written_markdown(messages, since=4) == [str(report)]
+    assert written_markdown(messages, since=3) == []
+    assert written_markdown(messages, since=3, held=[str(report)]) == [str(report)]
+    assert written_markdown(messages, since=4, held=[str(report)]) == [str(report)]
 
     same = await run(write, "write_file", path=str(report), content=report.read_text(encoding="utf-8"))
     assert "File unchanged" in same["content"]
@@ -339,9 +373,10 @@ def test_an_append_counts_only_for_a_file_this_turn_wrote_whole():
     assert written_markdown(messages) == ["/w/report.md"]
 
 
-def test_an_edit_counts_for_a_report_the_session_wrote_whole_in_an_earlier_turn():
-    """A follow-up turn that only edits the report still has it; an edit to any other file
-    changes text that was already there, so that file is not the turn's report."""
+def test_an_edit_counts_only_for_a_report_the_session_still_holds():
+    """A follow-up turn that only edits the report still has it while the file holds what
+    the session left; an earlier turn's whole write alone is not ownership, since the
+    user may have changed the file between turns."""
     earlier = [
         _tool("write_file", "Successfully wrote 10 bytes to /w/report.md"),
         {"role": "user", "content": "fix it"},
@@ -350,9 +385,18 @@ def test_an_edit_counts_for_a_report_the_session_wrote_whole_in_an_earlier_turn(
         _tool("edit_file", "Successfully edited /w/report.md"),
         _tool("edit_file", "Successfully edited /w/user_log.md"),
     ]
-    assert written_markdown(earlier + this_turn, since=len(earlier)) == ["/w/report.md"]
-    assert written_markdown(earlier, since=len(earlier)) == []
-    assert written_markdown(this_turn) == []
+    messages = earlier + this_turn
+    assert written_markdown(messages, since=len(earlier), held=["/w/report.md"]) == ["/w/report.md"]
+    assert written_markdown(messages, since=len(earlier)) == []
+
+
+def test_a_file_is_held_only_while_it_holds_what_the_session_left(tmp_path):
+    report, gone = tmp_path / "report.md", tmp_path / "gone.md"
+    report.write_text(_DRAFT, encoding="utf-8")
+    left = {str(report): file_digest(str(report)), str(gone): "0" * 64}
+    assert still_held(left) == {str(report): left[str(report)]}
+    report.write_text(_DRAFT + "a line the user added\n", encoding="utf-8")
+    assert still_held(left) == {}
 
 
 def test_a_path_forged_on_a_later_line_of_the_result_is_not_read():
@@ -505,25 +549,80 @@ async def test_the_reply_and_the_file_are_one_text_and_the_trail_stays_on_the_re
     assert "dr_report_files" not in facts
 
 
+async def _session_turn(frame: TurnFrame, history: list[dict], calls: list[tuple], reply: str) -> dict:
+    """One turn through the frame's own phases, in the loop's order: the tool ``calls``
+    (each ``(tool, kwargs)``) run after the turn starts, over the session's history."""
+    facts: dict = {}
+    await frame.before_user_inbound(GateCtx(session_key="cli:t", inbound_content="go", metadata=facts))
+    this_turn = []
+    for tool, kwargs in calls:
+        result = await tool.execute(**kwargs)
+        this_turn.append(_tool(tool.name, str(getattr(result, "model_text", result))))
+    messages = history + this_turn
+    await frame.after_iteration(GateCtx(session_key="cli:t", messages=messages, turn_base=len(history), metadata=facts))
+    await frame.after_send(GateCtx(session_key="cli:t", outbound_content=reply, metadata=facts))
+    history.extend(this_turn)
+    return facts
+
+
 @pytest.mark.asyncio
 async def test_a_follow_up_turn_that_only_edits_the_report_syncs_it(tmp_path, monkeypatch):
-    report = tmp_path / "report.md"
-    report.write_text(_DRAFT, encoding="utf-8")
+    from raven.agent.tools.filesystem import EditFileTool, WriteFileTool
+
     monkeypatch.setattr(flow_module, "ledger_path", lambda: "ledger")
     monkeypatch.setattr(flow_module, "build_appendix", lambda *a: ("", {"emitted": False}))
-    messages = [
-        _tool("write_file", f"Successfully wrote 9 bytes to {report}"),
-        {"role": "user", "content": "tighten the body"},
-        _tool("edit_file", f"Successfully edited {report}"),
-    ]
+    report = tmp_path / "report.md"
+    frame, history = TurnFrame(_reader_cfg(), SessionStore(tmp_path / "state"), None), []
+    first = await _session_turn(
+        frame, history, [(WriteFileTool(tmp_path), {"path": str(report), "content": _DRAFT})], _EN
+    )
+    assert first["observers"]["report_file"]["synced"] is True
 
-    frame = TurnFrame(_reader_cfg(), SessionStore(tmp_path), None)
-    facts: dict = {}
-    await frame.after_iteration(GateCtx(session_key="cli:t", messages=messages, turn_base=2, metadata=facts))
-    await frame.after_send(GateCtx(session_key="cli:t", outbound_content=_EN, metadata=facts))
+    edit = {"path": str(report), "old_text": "none material", "new_text": "none at all"}
+    facts = await _session_turn(
+        frame, history, [(EditFileTool(tmp_path), edit)], _EN.replace("none material", "none at all")
+    )
 
-    assert report.read_text(encoding="utf-8") == _EN
     assert facts["observers"]["report_file"]["synced"] is True
+    assert report.read_text(encoding="utf-8") == _EN.replace("none material", "none at all")
+    assert "dr_held_report_files" not in facts
+
+
+@pytest.mark.asyncio
+async def test_a_user_edit_between_turns_is_never_written_over(tmp_path, monkeypatch):
+    """The session's earlier whole write says what the file held when that turn ended, not
+    now: a report the user added to, and a log the session only started, are theirs."""
+    from raven.agent.tools.filesystem import EditFileTool, WriteFileTool
+
+    monkeypatch.setattr(flow_module, "ledger_path", lambda: "ledger")
+    monkeypatch.setattr(flow_module, "build_appendix", lambda *a: ("", {"emitted": False}))
+    write, edit = WriteFileTool(tmp_path), EditFileTool(tmp_path)
+    report, log = tmp_path / "report.md", tmp_path / "log.md"
+    frame, history = TurnFrame(_reader_cfg(), SessionStore(tmp_path / "state"), None), []
+    await _session_turn(
+        frame,
+        history,
+        [(write, {"path": str(report), "content": _DRAFT}), (write, {"path": str(log), "content": "# Log\n"})],
+        _EN,
+    )
+    assert report.read_text(encoding="utf-8") == _EN
+
+    with report.open("a", encoding="utf-8") as fh:
+        fh.write("\nthe user's own note\n")
+    log.write_text("# Log\n\n" + "".join(f"- entry {i}\n" for i in range(9)), encoding="utf-8")
+
+    # A full report as the reply, long enough that only ownership stands between it and
+    # either file.
+    reply = _EN.replace("body", "body " + "word " * 100)
+    calls = [
+        (edit, {"path": str(report), "old_text": "none material", "new_text": "none at all"}),
+        (write, {"path": str(log), "content": "\n" + reply, "mode": "append"}),
+    ]
+    facts = await _session_turn(frame, history, calls, reply)
+
+    assert "the user's own note" in report.read_text(encoding="utf-8")
+    assert all(f"- entry {i}" in log.read_text(encoding="utf-8") for i in range(9))
+    assert "report_file" not in facts.get("observers", {})
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.research_report_audit import (
     DERIVED_MARKERS,
     MARKER_GLOSSARY,
@@ -249,6 +251,36 @@ def test_a_reader_report_whose_limits_are_in_other_words_has_them(tmp_path):
     audit grading the same reply must not report them missing."""
     report = tmp_path / "reader_es.md"
     report.write_text("> x\n\n## Body\n\ny\n\n## Lo que no se pudo verificar\n\nz\n", encoding="utf-8")
+    assert "missing_template_section" not in {f.kind for f in audit(report).findings}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "> x\n\n## \u4e00\u3001\u51fa\u53e3\u9650\u5236\u7684\u6f14\u53d8\n\ny\n\n## \u672a\u80fd\u9a8c\u8bc1\u7684\u5185\u5bb9\n\nz\n",
+        "> x\n\n## \u4eba\u624b\u4e0d\u8db3\u306e\u73fe\u72b6\n\ny\n\n## \u691c\u8a3c\u3067\u304d\u306a\u304b\u3063\u305f\u70b9\n\nz\n",
+    ],
+)
+def test_a_first_body_heading_that_names_a_limit_is_graded_as_the_body(tmp_path, text):
+    """The audit reads the limits as the flow's gate does, or it grades a shipped reply as
+    missing its body."""
+    report = tmp_path / "reader_zh.md"
+    report.write_text(text, encoding="utf-8")
+    assert "missing_template_section" not in {f.kind for f in audit(report).findings}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "> x\n\nthe body in prose\n\n## Limitations\n\nz\n",
+        "> x\n\nthe body in prose\n\n## Limitations\n\nz\n\n## Link checks\n\nt\n",
+    ],
+)
+def test_a_body_in_prose_under_the_answer_is_graded_present(tmp_path, text):
+    """The gate ships a reader reply whose body has no heading; the audit must not grade it
+    as missing that body."""
+    report = tmp_path / "reader_prose.md"
+    report.write_text(text, encoding="utf-8")
     assert "missing_template_section" not in {f.kind for f in audit(report).findings}
 
 
