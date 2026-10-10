@@ -12,12 +12,14 @@
  * call is one purple in the row and in the bar. Input and output of one
  * actor share a hue at two strengths; thinking stands apart in amber; every
  * kind the palette does not know is one neutral grey. Both themes are set
- * here, on the same attribute state/look.ts writes.
+ * here, on the same attribute state/look.ts writes; the system theme writes
+ * none, so the dark pair also answers the media query when no theme is set,
+ * the way page.css does.
  */
 
 :root {
   --trajectory-c-user-input-bg: #e3efdc;  --trajectory-c-user-input-fg: #2f6a1f;
-  --trajectory-c-agent-reply-bg: #cfe4c4; --trajectory-c-agent-reply-fg: #245317;
+  --trajectory-c-turn-end-bg: #cfe4c4;    --trajectory-c-turn-end-fg: #245317;
   --trajectory-c-llm-input-bg: #dde8f7;   --trajectory-c-llm-input-fg: #2c5aa0;
   --trajectory-c-llm-output-bg: #c6d8f2;  --trajectory-c-llm-output-fg: #1f4480;
   --trajectory-c-llm-thinking-bg: #f3e8c8; --trajectory-c-llm-thinking-fg: #8a6a12;
@@ -27,13 +29,25 @@
 }
 html[data-theme="dark"] {
   --trajectory-c-user-input-bg: #243a1c;  --trajectory-c-user-input-fg: #9fd48a;
-  --trajectory-c-agent-reply-bg: #2d4a22; --trajectory-c-agent-reply-fg: #b6e3a3;
+  --trajectory-c-turn-end-bg: #2d4a22;    --trajectory-c-turn-end-fg: #b6e3a3;
   --trajectory-c-llm-input-bg: #22314a;   --trajectory-c-llm-input-fg: #9dbdf0;
   --trajectory-c-llm-output-bg: #2a3f63;  --trajectory-c-llm-output-fg: #b7d0f7;
   --trajectory-c-llm-thinking-bg: #46391a; --trajectory-c-llm-thinking-fg: #e8cf6a;
   --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
   --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
   --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --trajectory-c-user-input-bg: #243a1c;  --trajectory-c-user-input-fg: #9fd48a;
+    --trajectory-c-turn-end-bg: #2d4a22;    --trajectory-c-turn-end-fg: #b6e3a3;
+    --trajectory-c-llm-input-bg: #22314a;   --trajectory-c-llm-input-fg: #9dbdf0;
+    --trajectory-c-llm-output-bg: #2a3f63;  --trajectory-c-llm-output-fg: #b7d0f7;
+    --trajectory-c-llm-thinking-bg: #46391a; --trajectory-c-llm-thinking-fg: #e8cf6a;
+    --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
+    --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
+    --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+  }
 }
 
 /* ── the island ─────────────────────────────────────────────────── */
@@ -76,7 +90,7 @@ html[data-theme="dark"] {
   font-family: var(--mono); font-size: 11px; color: var(--faint);
   font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
 }
-.trajectory-turn-sub::after { content: '\\2022'; margin-left: 4px; color: var(--sky); }
+.trajectory-turn-sub::after { content: '\2022'; margin-left: 4px; color: var(--sky); }
 
 .trajectory-fail { width: 14px; height: 14px; display: grid; place-items: center; }
 .trajectory-fail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--chat-danger, var(--clay)); }
@@ -90,7 +104,7 @@ html[data-theme="dark"] {
   background: var(--trajectory-c-other-bg); color: var(--trajectory-c-other-fg);
 }
 .trajectory-k-user-input { background: var(--trajectory-c-user-input-bg); color: var(--trajectory-c-user-input-fg); }
-.trajectory-k-agent-reply { background: var(--trajectory-c-agent-reply-bg); color: var(--trajectory-c-agent-reply-fg); }
+.trajectory-k-turn-end { background: var(--trajectory-c-turn-end-bg); color: var(--trajectory-c-turn-end-fg); }
 .trajectory-k-llm-input { background: var(--trajectory-c-llm-input-bg); color: var(--trajectory-c-llm-input-fg); }
 .trajectory-k-llm-output { background: var(--trajectory-c-llm-output-bg); color: var(--trajectory-c-llm-output-fg); }
 .trajectory-k-llm-thinking { background: var(--trajectory-c-llm-thinking-bg); color: var(--trajectory-c-llm-thinking-fg); }

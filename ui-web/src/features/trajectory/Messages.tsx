@@ -216,11 +216,14 @@ export function MessagesView({ block, entryId, render }: {
   }, [identityKey, measureRows])
 
   /* A body is read with the page it sits on: the page is asked for by the
-     row that starts it, so twenty open rows of one page ask once. */
+     row that starts it, so twenty open rows of one page ask once. A page the
+     gateway cut short to fit one response holds its head but not this row,
+     so the row is then asked for by its own cursor. */
   const pageOf = (item: OutlineItem): { cursor: string; index: number } => {
     const start = item.index - (item.index % details.MESSAGES_PAGE)
     const head = items.find((it) => it.index === start)
-    return head ? { cursor: head.cursor, index: head.index } : { cursor: item.cursor, index: item.index }
+    if (!head || (record && details.pageHolding(record, head.index) !== null)) return { cursor: item.cursor, index: item.index }
+    return { cursor: head.cursor, index: head.index }
   }
   const wanted = useRef(new Set<string>())
   const ask = (item: OutlineItem): void => {

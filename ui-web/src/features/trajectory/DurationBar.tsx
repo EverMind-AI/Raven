@@ -306,12 +306,15 @@ export function DurationBar(): JSX.Element {
     observer.current = ro
   }, [])
 
-  /* The theme: colours are read at paint time, so a change only needs a repaint. */
+  /* The theme: colours are read at paint time, so a change only needs a
+     repaint -- of the attribute, or of the system's scheme when no theme is set. */
   useEffect(() => {
-    if (typeof MutationObserver === 'undefined') return
-    const mo = new MutationObserver(() => { setTheme((n) => n + 1) })
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => mo.disconnect()
+    const again = (): void => { setTheme((n) => n + 1) }
+    const mo = typeof MutationObserver === 'undefined' ? null : new MutationObserver(again)
+    mo?.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    const scheme = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null
+    scheme?.addEventListener?.('change', again)
+    return () => { mo?.disconnect(); scheme?.removeEventListener?.('change', again) }
   }, [])
 
   /* Rows changed under a zoomed view: the anchored place stays where it was,

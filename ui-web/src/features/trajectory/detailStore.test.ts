@@ -403,7 +403,7 @@ describe('the budget', () => {
     }
     let record = details.block('messages')!
     expect(record.pages.map((p) => p.offset).sort((a, b) => a - b)).toEqual([40, 60, 80, 100, 120, 140, 160, 180, 200, 220])
-    expect(record.evicted).toEqual([0, 20])
+    expect(record.evicted).toEqual([[0, 20], [20, 40]])
     expect(details.onEvictedPage(record, 7)).toBe(true)
     /* Back to the first message: its page is asked for by its own cursor, filed, and kept; the stalest other page goes. */
     void details.loadPageAt('messages', 'o0', 0)
@@ -413,7 +413,7 @@ describe('the budget', () => {
     expect(details.messageAt(record, 0)).toEqual({ role: 'user', content: 'first'.length ? 'm0' : 'm0' })
     expect(details.pageHolding(record, 0)?.offset).toBe(0)
     expect(record.pages).toHaveLength(details.PAGE_WINDOW)
-    expect(record.evicted).toEqual([20, 40])
+    expect(record.evicted).toEqual([[20, 40], [40, 60]])
     expect(details.onEvictedPage(record, 7)).toBe(false)
     expect(details.onEvictedPage(record, 45)).toBe(true)
     expect(record.bytes).toBeLessThanOrEqual(details.BUDGET)

@@ -270,7 +270,7 @@ describe('a block tab', () => {
     expect(blockCalls).toHaveLength(asked)
     const record = details.block('messages')!
     expect(record.pages).toHaveLength(details.PAGE_WINDOW)
-    expect(record.evicted).toEqual([0, 20])
+    expect(record.evicted).toEqual([[0, 20], [20, 40]])
     expect(q('.trajectory-msg-open[data-index="239"] .trajectory-text-body')?.textContent).toBe('m239')
     expect(q('.trajectory-msg-open[data-index="0"]')).toBeNull()
     expect(q('.trajectory-msg-fold[data-index="0"]')?.textContent).toContain('m0')
@@ -282,12 +282,33 @@ describe('a block tab', () => {
     expect(blockCalls.at(-1)).toBe('messages|o0')
     await answer(body('messages', { items: messages(0, 20), offset: 0 }, { renderer: 'messages', next_cursor: 'c1', total_items: total }))
     expect(q('.trajectory-msg-open[data-index="0"] .trajectory-text-body')?.textContent).toBe('m0')
-    expect(details.block('messages')!.evicted).toEqual([20, 40])
+    expect(details.block('messages')!.evicted).toEqual([[20, 40], [40, 60]])
     expect(document.querySelectorAll('.trajectory-msg-fold')).toHaveLength(40)
     act(() => { fireEvent.click(q('.trajectory-copy') as HTMLElement) })
     await flush()
     expect(toasts().at(-1)?.text).toBe('gui.trajectory.details.copied_partial')
     expect(JSON.parse(writeText.mock.calls[0]![0])).toHaveLength(details.PAGE_WINDOW * 20)
+  })
+
+  it('reads the rows a page was cut short of by their own cursors, and shows them', async () => {
+    await ready()
+    const total = 40
+    act(() => { list.set({ ...list.get(), ...list.rowsOf([{ ...row, meta: { delta: 'first', new_from: 0, message_count: total } }]) }) })
+    render(<BlockView block={descriptor.blocks[0]!} />, { container: paneOf(30000) })
+    await flush()
+    await answer(body('outline', { items: outlineItems(0, total), offset: 0 }, { renderer: 'items', total_items: total }))
+    expect(blockCalls.at(-1)).toBe('messages|o0')
+    /* The gateway cut the first page to five rows to fit one response. */
+    await answer(body('messages', { items: messages(0, 5), offset: 0 }, { renderer: 'messages', next_cursor: 'c5', total_items: total, truncated: true }))
+    expect(blockCalls.at(-1)).toBe('messages|o5')
+    await answer(body('messages', { items: messages(5, 15), offset: 5 }, { renderer: 'messages', next_cursor: 'c20', total_items: total }))
+    expect(q('.trajectory-msg-open[data-index="4"] .trajectory-text-body')?.textContent).toBe('m4')
+    expect(q('.trajectory-msg-open[data-index="5"] .trajectory-text-body')?.textContent).toBe('m5')
+    expect(q('.trajectory-msg-open[data-index="19"] .trajectory-text-body')?.textContent).toBe('m19')
+    expect(blockCalls.at(-1)).toBe('messages|o20')
+    await answer(body('messages', { items: messages(20, 20), offset: 20 }, { renderer: 'messages', next_cursor: null, total_items: total }))
+    expect(blockCalls.filter((c) => c.startsWith('messages|'))).toEqual(['messages|o0', 'messages|o5', 'messages|o20'])
+    expect(document.querySelectorAll('.trajectory-msg-open .trajectory-text-body')).toHaveLength(total)
   })
 
   it('draws only the rows near the viewport and reads only their pages: no scroll, no walk to the end', async () => {

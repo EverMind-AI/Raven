@@ -42,6 +42,32 @@ describe('the kind palette', () => {
     expect(kindSlug('personalize.classify.input')).toBe('other')
   })
 
+  /* happy-dom does not load the stylesheet, so a class or a token the sheet
+     lacks would pass every DOM test: the sheet itself is read here. */
+  it('gives every coloured kind its class and its pair of tokens in each theme block of the sheet', () => {
+    const sheet = readFileSync('src/features/trajectory/styles.css', 'utf8') as string
+    const block = (head: string): string => {
+      const at = sheet.indexOf(head)
+      expect(at, head).toBeGreaterThanOrEqual(0)
+      return sheet.slice(at, sheet.indexOf('}', at))
+    }
+    const themes = [block(':root {'), block('html[data-theme="dark"] {'), block(':root:not([data-theme="light"]) {')]
+    for (const slug of [...KNOWN_KINDS.map(kindSlug), 'other']) {
+      expect(sheet, slug).toContain(`.trajectory-k-${slug} {`)
+      for (const theme of themes) {
+        expect(theme, slug).toContain(`--trajectory-c-${slug}-bg:`)
+        expect(theme, slug).toContain(`--trajectory-c-${slug}-fg:`)
+      }
+    }
+  })
+
+  it('marks a sub-agent row with the bullet character, not a backslash and its code', () => {
+    const sheet = readFileSync('src/features/trajectory/styles.css', 'utf8') as string
+    const rule = sheet.split('\n').find((line) => line.startsWith('.trajectory-turn-sub::after'))
+    expect(rule).toContain("content: '\\2022'")
+    expect(rule).not.toContain("content: '\\\\2022'")
+  })
+
   it('labels through the translator, naming the raw kind only where it has no word', () => {
     setTranslator((key) => `<${key}>`)
     try {

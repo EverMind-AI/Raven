@@ -1,6 +1,6 @@
 /* The trajectory island: what `#trajHost` shows while the trajectory view is
- * up. A status line for what the index wants said, the list with the details
- * pane beside it, and the duration bar under both.
+ * up. A status line for what the index wants said, the duration bar under
+ * it, and the list with the details pane beside it under both.
  *
  * The root subscribes to the language itself, like every island, and to the
  * store for the few facts the status line reads; the list and the pane have

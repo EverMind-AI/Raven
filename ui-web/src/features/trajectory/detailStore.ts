@@ -65,8 +65,8 @@ export interface BlockRecord {
   nextCursor: string | null
   /** Items of the pages let go to stay inside the page window. */
   letGo: number
-  /** Offsets of the pages let go: a row on one of them folds again until the reader asks for it. */
-  evicted: number[]
+  /** The rows of the pages let go, as [first, end) ranges: a row in one folds again until the reader asks for it. */
+  evicted: Array<[number, number]>
   bytes: number
   at: number
 }
@@ -508,11 +508,12 @@ function dropStalest(record: BlockRecord, keep: number | null): BlockRecord {
   if (!candidates.length || record.pages.length < 2) return record
   const victim = candidates.reduce((a, b) => (b.at < a.at ? b : a))
   const pages = record.pages.filter((p) => p !== victim)
+  const rows: [number, number] = [victim.offset, victim.offset + itemsOf(victim)]
   return {
     ...record,
     pages,
     letGo: record.letGo + itemsOf(victim),
-    evicted: record.evicted.includes(victim.offset) ? record.evicted : [...record.evicted, victim.offset],
+    evicted: [...record.evicted.filter(([a, b]) => a !== rows[0] || b !== rows[1]), rows],
     bytes: pages.reduce((n, p) => n + bytesOf(p.data), 0),
   }
 }
@@ -701,7 +702,7 @@ function filePage(
       /* A page may land at any offset now that rows are opened by their own cursor; one offset, one page. */
       pages: [...have.pages.filter((p) => p.offset !== page.offset), page],
       nextCursor: result.next_cursor ?? null,
-      evicted: have.evicted.filter((offset) => offset !== page.offset),
+      evicted: have.evicted.filter(([a, b]) => a < page.offset || b > page.offset + itemsOf(page)),
       at: touch(),
     }
     : {
@@ -1146,7 +1147,7 @@ export const heldCount = (record: BlockRecord): number => record.pages.reduce((n
 
 /** Whether message `index` sits on a page the window let go and nobody has asked for since. */
 export const onEvictedPage = (record: BlockRecord, index: number): boolean =>
-  record.evicted.includes(index - (index % MESSAGES_PAGE)) && pageHolding(record, index) === null
+  record.evicted.some(([a, b]) => index >= a && index < b) && pageHolding(record, index) === null
 
 /** Whether a read is in the air for the pane's current identity. */
 export const isLoading = (what: 'descriptor' | { blockId: string; more?: boolean }, s: DetailsState = store.get()): boolean => {
