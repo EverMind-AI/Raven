@@ -79,6 +79,10 @@ def _state(index_state: index.IndexState) -> dict[str, Any]:
 async def trajectory_state(params: dict) -> dict:
     _params(TrajectoryStateParams, params)
     current = policy.current()
+    if current.enabled():
+        # An open page asks this every few seconds, whichever view is up: the
+        # beat that lets go of the indexes nobody has read for a while.
+        _indexer().evict_idle()
     return {
         "enabled": current.enabled(),
         "policy_revision": current.revision,
@@ -127,7 +131,9 @@ async def trajectory_detail(params: dict) -> dict:
     request = _params(TrajectoryDetailParams, params)
     _require_enabled()
     session_key = _session_key(request.session_key)
-    session = _indexer().session(session_key)
+    # Refreshed like the list: after a restart or an idle eviction the index
+    # is new, and an entry it has not scanned yet is not a gone one.
+    session = await _indexer().refresh(session_key)
     descriptor = await asyncio.to_thread(
         details.describe,
         session,
@@ -144,7 +150,9 @@ async def trajectory_block(params: dict) -> dict:
     request = _params(TrajectoryBlockParams, params)
     _require_enabled()
     session_key = _session_key(request.session_key)
-    session = _indexer().session(session_key)
+    # Refreshed like the list: after a restart or an idle eviction the index
+    # is new, and an entry it has not scanned yet is not a gone one.
+    session = await _indexer().refresh(session_key)
     try:
         body = await asyncio.to_thread(
             details.read_block,

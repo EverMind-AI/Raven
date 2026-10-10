@@ -177,6 +177,16 @@ async def test_state_is_always_answerable_and_reports_policy(monkeypatch):
     assert (await _call(dispatcher, "trajectory.state", {}))["result"]["recording_enabled"] is False
 
 
+async def test_the_state_poll_lets_go_of_indexes_nobody_reads(monkeypatch):
+    tpol.arm(True)
+    indexer = tidx.indexer_for()
+    evicted: list[bool] = []
+    monkeypatch.setattr(indexer, "evict_idle", lambda: evicted.append(True))
+    dispatcher = _dispatcher()
+    await _call(dispatcher, "trajectory.state", {})
+    assert evicted == [True]
+
+
 async def test_data_methods_refuse_when_disabled():
     dispatcher = _dispatcher()
     calls = {
@@ -269,6 +279,46 @@ async def test_detail_and_block_round_trip(state):
             break
     assert [len(p["data"]["items"]) for p in pages] == [20, 20, 5]
     assert pages[0]["total_items"] == 45
+
+
+async def test_detail_and_block_after_the_index_was_dropped_scan_before_they_answer(state):
+    """A restart or an idle eviction leaves a new, empty index: a read that
+    reaches it first must not call an entry gone that is only not scanned yet."""
+    _seed(state, turns=1)
+    tpol.arm(True)
+    dispatcher = _dispatcher()
+    entries, first = await _list_all(dispatcher)
+    entry = entries[0]
+    tidx._reset_for_tests()
+    detail = await _call(dispatcher, "trajectory.detail", {"session_key": SESSION, "entry_id": entry["entry_id"]})
+    assert "result" in detail, detail
+    assert detail["result"]["entry_id"] == entry["entry_id"]
+    tidx._reset_for_tests()
+    body = await _call(
+        dispatcher,
+        "trajectory.block",
+        {
+            "session_key": SESSION,
+            "entry_id": entry["entry_id"],
+            "entry_revision": entry["revision"],
+            "epoch": first["epoch"],
+            "block_id": "raw",
+        },
+    )
+    # The new index has its own epoch: the caller is told where it is now, not that the entry is gone.
+    assert _error_code(body) == -32023
+    assert body["error"]["data"]["current_epoch"] != first["epoch"]
+
+
+def test_a_read_in_a_left_epoch_for_an_entry_not_reached_yet_is_a_move_not_a_loss(state):
+    from raven.trajectory import details as tdet
+
+    index = tidx.SessionIndex(SESSION, state)
+    with pytest.raises(tdet.RevisionChangedError) as moved:
+        tdet.read_block(index, "t:nope:turn.input", "raw", state=state, entry_revision=1, epoch="an-older-epoch")
+    assert moved.value.current_epoch == index.epoch
+    with pytest.raises(tdet.EntryGoneError):
+        tdet.read_block(index, "t:nope:turn.input", "raw", state=state, entry_revision=1, epoch=index.epoch)
 
 
 async def test_outline_block_lists_every_message_and_hands_out_page_cursors(state):
