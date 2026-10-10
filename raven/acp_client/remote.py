@@ -181,7 +181,11 @@ def session_dir(target: Machine, *, root: str = DEFAULT_ROOT, handle: str, timeo
     if rc == 0 and lines and lines[-1].startswith("/"):
         return lines[-1]
     said = explain(target, rc, out)
-    raise RemoteMachineError(said or f"could not make a working directory under {root!r} on machine {target.label}")
+    if said is None:
+        said = f"could not make a working directory under {root!r} on machine {target.label}"
+        if reason := _far_side_words(target, lines):
+            said += f": {reason}"
+    raise RemoteMachineError(said)
 
 
 def ssh_log_path(agent: str) -> Path:
@@ -268,6 +272,20 @@ def leaf(handle: str) -> str:
     if safe == raw:
         return safe
     return f"{safe}-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:8]}"
+
+
+def _far_side_words(target: Machine, lines: list[str]) -> str:
+    """The machine's own last word on a command that failed past ssh, or ``""``.
+
+    The machine's reason is the useful part ("No space left on device",
+    measured 2026-10-10 on a registered machine whose disk had filled), and it
+    names nothing of how raven got there. The one-shot runner shares stderr
+    with ssh, though, and ssh's lines name the address (on a first connect,
+    "Permanently added '[<ip>]:<n>'"), so a line carrying it is skipped.
+    """
+    host = str(target._row.get("host") or "").strip()
+    words = [line for line in lines if not (host and host in line)]
+    return words[-1][:200] if words else ""
 
 
 def _shell_path(path: str) -> str:
