@@ -4,9 +4,8 @@ The pinned Python SDK sends exactly one request per ``ClientSession.list_*``
 call and leaves the walking to the caller -- the TypeScript SDK aggregates all
 four list verbs itself, the Python one does not. A server that pages a list
 would otherwise hand the model its first page with nothing saying the list is
-incomplete, the silent truncation of #301 and #855. Every list verb therefore
-walks its pages through here, stopping on an absent or a repeated cursor, the
-rule #825 introduced for ``tools/list``.
+incomplete. Every list verb therefore walks its pages through here, stopping
+on an absent or a repeated cursor, the rule ``tools/list`` already follows.
 
 The public surface is one typed walker per verb, so the items a caller loops
 over carry their real SDK type rather than the ``Any`` a session yields at
