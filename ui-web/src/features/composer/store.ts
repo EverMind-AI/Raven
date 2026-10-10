@@ -6,6 +6,7 @@ import * as attachmentCache from '../../lib/attachmentCache'
 import { formatDuration } from '../../lib/duration'
 import { IMG_EXT } from '../../lib/pictureExt'
 import { current as currentSession } from '../../lib/session'
+import { remember as rememberUpload } from '../../lib/uploadPaths'
 import { draw as plusDraw } from '../../state/plus'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -524,6 +525,7 @@ export function addTemplate(row: TemplateRow): void {
       entry.path = r.path
       entry.size = r.size
       entry.uploading = false
+      if (r.abs_path) rememberUpload(r.path, r.abs_path)
       if (entry.url) attachmentCache.set(r.path, entry.url)
       traySet(owner, trayOf(owner).slice())
       goPaint()
@@ -609,6 +611,7 @@ export function addFiles(files: ArrayLike<File>): void {
           entry.path = r.path
           entry.size = r.size
           entry.uploading = false
+          if (r.abs_path) rememberUpload(r.path, r.abs_path)
           if (entry.url) attachmentCache.set(r.path, entry.url)
           traySet(owner, trayOf(owner).slice())
           goPaint()

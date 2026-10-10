@@ -634,6 +634,26 @@ async def test_an_upload_is_not_shadowed_by_a_same_named_file_in_the_session_roo
     assert Path(media.path) != (project / "uploads" / "image.png").resolve()
 
 
+async def test_an_upload_named_absolutely_is_admitted_from_a_pinned_session(tmp_path) -> None:
+    """The spelling the front end now sends for an upload (lib/uploadPaths):
+    the file ``fs.upload`` wrote, named absolutely, while the session runs
+    somewhere else. ``restrict_to_workspace`` admits agent home beside the
+    session's own root, so the reader's own upload is not fenced out of its
+    own turn -- which is what makes the absolute spelling safe to send."""
+    scheduler = FakeScheduler()
+    home, project, shot, _chart = _pinned(tmp_path)
+
+    with _workspace_cfg(home):
+        await turn_send(
+            {"session_key": "tui:default", "content": "look", "media": [str(shot)]},
+            scheduler=scheduler,
+            turn_ids={},
+            agent_loop_factory=lambda: _PinnedLoop(project),
+        )
+
+    assert [m.path for m in scheduler.submitted[0].media] == [str(shot)]
+
+
 async def test_an_unknown_session_root_falls_back_to_agent_home(tmp_path) -> None:
     scheduler = FakeScheduler()
     home, _project, shot, _chart = _pinned(tmp_path)

@@ -31,7 +31,12 @@ export interface UploadReq {
 }
 
 export interface UploadRes {
+  /* The short spelling the note carries and the bubble renders from. */
   path: string
+  /* The file that spelling names, where the host answers one (`fs.upload`
+     does; a test double need not). It is what the turn is handed -- see
+     lib/uploadPaths. */
+  abs_path?: string
   size: number
 }
 

@@ -6,6 +6,7 @@ import { Lightbox } from '../../chrome/Lightbox'
 import { setTranslator } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { IMG_EXT } from '../../lib/pictureExt'
+import * as uploadPaths from '../../lib/uploadPaths'
 import * as confirmStore from '../../state/confirm'
 import { close as closeLightbox } from '../../state/lightbox'
 import * as pageStore from '../../state/page'
@@ -154,6 +155,7 @@ afterEach(() => {
   cleanup()
   store._resetForTests()
   attachmentCache._resetForTests()
+  uploadPaths._resetForTests()
   tail._resetForTests()
   localStorage.clear()
   turn._resetForTests()
@@ -384,6 +386,25 @@ describe('composer drafts', () => {
     let taken: string[] = []
     act(() => { taken = store.takeAtts() })
     expect(taken).toEqual(['uploads/slow.bin'])
+  })
+
+  /* The note keeps the short path its reader renders, while the turn is handed
+     the file the upload wrote: `viewer_root` reads the session's own root
+     first, so a same-named file appearing there after the upload could answer
+     for it (lib/uploadPaths). Recording the answer here is what feeds that. */
+  it('remembers the file an upload wrote, for the send to name absolutely', async () => {
+    wire({
+      upload: (req) => Promise.resolve({
+        path: `uploads/${req.name}`,
+        abs_path: `/home/me/.raven/workspace/uploads/${req.name}`,
+        size: 4,
+      }),
+    })
+    mountTray()
+    await stage('shot.png')
+
+    expect(paths()).toEqual(['uploads/shot.png'])
+    expect(uploadPaths.mediaPath('uploads/shot.png')).toBe('/home/me/.raven/workspace/uploads/shot.png')
   })
 
   /* The other session stages one too: it is what tells a tray that forgot the
