@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -34,6 +36,9 @@ whatever the function does."""
 
 _MISSING_ENGINE = "raven_probe_engine_that_is_not_installed"
 """An import name no environment carries, for the engine-absent branch."""
+
+_SHIPPED = Path(__file__).resolve().parent.parent / "agents"
+"""The checkout's own agent tree, the one the wheel ships."""
 
 _MANIFEST = {
     "name": "Raven-Probe",
@@ -1188,6 +1193,112 @@ class TestTheShippedManifests:
                     continue
                 assert f'"{field}"' in source, f"{folder}: manifest uses {field!r} but install.py does not resolve it"
 
+    @staticmethod
+    def _installer_in(folder: str, landing: Path) -> tuple[Path, ModuleType]:
+        """``folder``'s shipped ``install.py``, copied with its manifest under ``landing`` and loaded."""
+        import importlib.util
+        import shutil
+
+        target = landing / folder
+        target.mkdir(parents=True)
+        for name in ("install.py", "subagent.json"):
+            shutil.copy2(_SHIPPED / folder / name, target / name)
+        spec = importlib.util.spec_from_file_location(
+            f"shipped_{folder.replace('-', '_')}_install", target / "install.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return target.resolve(), module
+
+    @pytest.mark.parametrize("folder", sorted(p.parent.name for p in _SHIPPED.glob("*/install.py")))
+    def test_each_installer_pins_a_spaced_folder_as_discovery_resolves_it(
+        self, folder: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The row ``install.py`` pins goes through the same quoting rule as the discovered one.
+
+        So a folder whose path has a space splits back with its launcher as one
+        argument, and a pinned row and a discovered row cannot disagree about it.
+        """
+        from raven.utils.commands import command_argv, resolve_subagent_command
+
+        target, installer = self._installer_in(folder, tmp_path / "my agents")
+        written: list[dict] = []
+        monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+
+        assert installer.main() == 0
+
+        (row,) = written
+        manifest = json.loads((target / "subagent.json").read_text(encoding="utf-8"))
+        argv = command_argv(row["command"])
+        assert argv[0] == sys.executable
+        assert Path(argv[1]) == target / "run.py"
+        assert row["cwd"] == str(target)
+        for field in va._PLACEHOLDER_FIELDS:
+            if field in manifest:
+                expected = resolve_subagent_command(
+                    manifest[field], python=sys.executable, subagent_dir=str(target), quote=field != "cwd"
+                )
+                assert row[field] == expected, field
+
+    @pytest.mark.parametrize("folder", sorted(p.parent.name for p in _SHIPPED.glob("*/install.py")))
+    def test_an_installer_under_a_raven_without_the_quoting_rule_writes_its_old_row(
+        self, folder: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The folder can outlive the raven that shipped it; an older raven has no ``raven.utils.commands``.
+
+        There the installer writes the row it always wrote, unquoted, rather
+        than failing on the import.
+        """
+        target, installer = self._installer_in(folder, tmp_path / "agents")
+        written: list[dict] = []
+        monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+        monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
+
+        assert installer.main() == 0
+
+        (row,) = written
+        expected_flags = [] if folder == "raven-research" else ["--acp"]
+        assert row["command"].split() == [sys.executable, f"{target}/run.py", *expected_flags]
+        assert row["cwd"] == str(target)
+
+    @pytest.mark.parametrize("folder", sorted(p.parent.name for p in _SHIPPED.glob("*/install.py")))
+    @pytest.mark.parametrize("spaced", ["folder", "python"])
+    def test_an_older_raven_refuses_spaced_paths_before_registering(
+        self, folder, tmp_path, monkeypatch, spaced
+    ) -> None:
+        landing = tmp_path / ("my agents" if spaced == "folder" else "agents")
+        target, installer = self._installer_in(folder, landing)
+        python = str(tmp_path / ("my python" if spaced == "python" else "python"))
+        monkeypatch.setattr(installer, "sys", SimpleNamespace(executable=python))
+        written: list[dict] = []
+        monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+        monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
+
+        with pytest.raises(SystemExit, match="Upgrade Raven"):
+            installer.main()
+
+        assert written == []
+
+    @pytest.mark.parametrize("folder", sorted(p.parent.name for p in _SHIPPED.glob("*/install.py")))
+    def test_an_older_raven_keeps_a_spaced_cwd_when_the_command_uses_no_paths(
+        self, folder, tmp_path, monkeypatch
+    ) -> None:
+        target, installer = self._installer_in(folder, tmp_path / "my agents")
+        manifest_path = target / "subagent.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["command"] = "python run.py"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        monkeypatch.setattr(installer, "sys", SimpleNamespace(executable=str(tmp_path / "my python")))
+        written: list[dict] = []
+        monkeypatch.setattr("raven.config.update_subagents.add_third_party_subagent", written.append)
+        monkeypatch.setitem(sys.modules, "raven.utils.commands", None)
+
+        assert installer.main() == 0
+
+        (row,) = written
+        assert row["command"] == "python run.py"
+        assert row["cwd"] == str(target)
+
 
 def test_a_stored_row_of_the_old_kind_loses_to_the_folders_new_one(tree: Path) -> None:
     """The upgrade path for a folder that changes transport.
@@ -1536,3 +1647,150 @@ class TestOwnKeyIsOneFactPerFolder:
         }
 
         assert kinds == {True, False}
+
+
+class TestResolveSubagentCommand:
+    r"""The shared resolver round-trips a manifest through the spawn parser.
+
+    ``{PYTHON}`` and ``{SUBAGENT_DIR}`` are substituted quoted with
+    ``command_quote`` and the line holds up under the spawning host's parser,
+    so a spaced interpreter or root starts rather than failing on a mangled
+    path, and ``cwd`` stays a plain, unquoted path. Each host arm is exercised
+    by driving ``resolve_subagent_command`` and then reading the result with
+    that arm's splitter, whichever host the suite runs on.
+    """
+
+    @staticmethod
+    def _as(name: str, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+        """The commands module reading ``name`` as its platform, without touching the real ``os``."""
+        import raven.utils.commands as cmd
+
+        monkeypatch.setattr(cmd, "os", SimpleNamespace(**{**vars(os), "name": name}))
+        return cmd
+
+    def test_windows_spaced_paths_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        cmd = self._as("nt", monkeypatch)
+        python = r"C:\Program Files\Python312\python.exe"
+        root = r"C:\raven agents\raven-code"
+        out = cmd.resolve_subagent_command(
+            r"{PYTHON} {SUBAGENT_DIR}/run.py --acp", python=python, subagent_dir=root, quote=True
+        )
+        assert cmd.command_argv(out) == [python, root + "/run.py", "--acp"]
+
+    def test_posix_spaced_paths_round_trip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        cmd = self._as("posix", monkeypatch)
+        python = "/opt/py/bin/python3"
+        root = "/srv/raven agents/raven-code"
+        out = cmd.resolve_subagent_command(
+            "{PYTHON} {SUBAGENT_DIR}/run.py --acp", python=python, subagent_dir=root, quote=True
+        )
+        assert cmd.command_argv(out) == [python, root + "/run.py", "--acp"]
+
+    def test_a_path_free_template_round_trips_unchanged(self) -> None:
+        """``{SUBAGENT_DIR}/run.py`` needs no quoting, so whatever the host's
+        quote style, the parsed argv equals the plainly-substituted tokens --
+        the existing manifests behave exactly as before."""
+        import raven.utils.commands as cmd
+
+        python = "/opt/py/bin/python3"
+        root = "/srv/raven/agents"
+        out = cmd.resolve_subagent_command(
+            "{PYTHON} {SUBAGENT_DIR}/run.py --acp", python=python, subagent_dir=root, quote=True
+        )
+        assert cmd.command_argv(out) == [python, root + "/run.py", "--acp"]
+
+    def test_cwd_is_substituted_unquoted(self) -> None:
+        import raven.utils.commands as cmd
+
+        root = r"C:\Program Files\raven-agents\raven-code"
+        assert cmd.resolve_subagent_command("{SUBAGENT_DIR}", python="py", subagent_dir=root, quote=False) == root
+
+    def test_launcher_missing_reads_a_quoted_spaced_path_as_one_token(self) -> None:
+        """``command_tokens`` keeps a quoted drive-letter path one token on any
+        host, so the spaced launcher is found missing rather than split apart."""
+        command = r'"C:\Program Files\gone\python.exe" C:\also\gone\run.py'
+
+        assert va._launcher_missing({"command": command}) == r"C:\Program Files\gone\python.exe"
+
+    def test_launcher_is_gone_reads_a_quoted_spaced_path_as_one_token(self, tmp_path: Path) -> None:
+        """The launcher is there and only the quoted, spaced interpreter is not.
+
+        A whitespace split reads that interpreter as two fragments, neither of
+        them absolute, so it would see the launcher alone and call the row live.
+        """
+        from raven.config.schema import ThirdPartyCliSubagentConfig
+
+        launcher = tmp_path / "run.py"
+        launcher.write_text("", encoding="utf-8")
+        row = ThirdPartyCliSubagentConfig(name="Raven-Win", command=rf'"C:\Program Files\gone\python.exe" {launcher}')
+
+        assert va._launcher_is_gone(row) is True
+
+
+class TestAQuotedSpacedRootStaysFailClosed:
+    """A product root needing quotes must not read as ready with a launcher gone.
+
+    The producer quotes a spaced ``{SUBAGENT_DIR}`` (single quotes from POSIX
+    ``shlex.quote``, double from Windows), and ``command_tokens`` must group
+    under both or the launcher token stops reading as absolute and a missing
+    launcher is advertised as enabled. Driven through the public
+    ``discover_product_rows`` so the producer and the shape consumer have to
+    agree, the case a quoted-token unit test alone did not pin.
+    """
+
+    def _spaced_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        root = tmp_path / "agents spaced(1)"
+        root.mkdir()
+        monkeypatch.setattr(va, "agents_root", lambda: root)
+        return root
+
+    def test_a_spaced_root_with_a_missing_launcher_stays_disabled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = self._spaced_root(tmp_path, monkeypatch)
+        _product(root, "raven-probe", manifest=_ACP_MANIFEST, launcher=False)
+
+        (row,) = va.discover_product_rows()
+
+        assert row.enabled is False
+        assert va.product_state()["Raven-Probe-Acp"].kind == "launcher"
+
+    def test_a_spaced_root_with_a_present_launcher_is_ready(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The quoting fix must not over-disable: a real launcher still reads ready."""
+        root = self._spaced_root(tmp_path, monkeypatch)
+        _product(root, "raven-probe", manifest=_ACP_MANIFEST, launcher=True)
+
+        (row,) = va.discover_product_rows()
+
+        assert row.enabled is True
+
+    @pytest.mark.parametrize(
+        ("platform", "argument"),
+        [
+            ("posix", r"--name=O\'Brien"),
+            ("posix", r"--name=O\"Brien"),
+            ("nt", "--name=O'Brien"),
+            ("nt", "'/label"),
+            ("nt", r"--name=O\"Brien"),
+        ],
+    )
+    @pytest.mark.parametrize("launcher", [False, True])
+    def test_a_literal_quote_before_the_launcher_preserves_readiness(
+        self, tmp_path, monkeypatch, platform, argument, launcher
+    ) -> None:
+        from raven.utils import commands
+
+        monkeypatch.setattr(commands, "os", SimpleNamespace(name=platform))
+        root = self._spaced_root(tmp_path, monkeypatch)
+        manifest = {**_ACP_MANIFEST, "command": "{PYTHON} " + argument + " {SUBAGENT_DIR}/run.py --acp"}
+        folder = _product(root, "raven-probe", manifest=manifest, launcher=launcher)
+
+        (row,) = va.discover_product_rows()
+
+        assert commands.command_argv(row.command)[-2] == f"{folder}/run.py"
+        assert row.enabled is launcher
+        assert va._launcher_is_gone(row) is not launcher
+        if not launcher:
+            assert va._launcher_missing({"command": row.command}) == f"{folder}/run.py"

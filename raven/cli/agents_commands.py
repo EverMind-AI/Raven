@@ -278,11 +278,8 @@ def _write_tree(
 def _resolved_python() -> str:
     """The interpreter the roster command resolves to: ``SUBAGENT_PYTHON``
     then this process's own -- discovery's own order
-    (``vendored_agents._resolved_python``). One resolver for the whitespace
-    guard AND the register writer, so the value the guard checked is the
-    value that lands in the roster; two spellings here would let a clean
-    ``SUBAGENT_PYTHON`` pass the gate while ``--register`` pinned a spacey
-    ``sys.executable``.
+    (``vendored_agents._resolved_python``), so the row ``--register`` pins
+    names the interpreter discovery would.
     """
     return os.environ.get("SUBAGENT_PYTHON", "").strip() or sys.executable
 
@@ -294,11 +291,15 @@ def _register_row(target: Path) -> str:
     (``add_third_party_subagent``) -- so a ``--register`` run and a later
     ``python install.py`` cannot produce different rows for one folder.
     """
+    from raven.utils.commands import resolve_subagent_command
+
     row = json.loads((target / "subagent.json").read_text(encoding="utf-8"))
     for field in ("command", "cwd"):
         value = row.get(field)
         if isinstance(value, str):
-            row[field] = value.replace("{SUBAGENT_DIR}", str(target)).replace("{PYTHON}", _resolved_python())
+            row[field] = resolve_subagent_command(
+                value, python=_resolved_python(), subagent_dir=str(target), quote=field != "cwd"
+            )
 
     from raven.config.update_subagents import add_third_party_subagent
 
@@ -427,6 +428,8 @@ def _smoke_handshake(row: object) -> tuple[str, str]:
     import subprocess
     import threading
 
+    from raven.utils.commands import command_argv
+
     frame = (
         json.dumps(
             {
@@ -438,7 +441,7 @@ def _smoke_handshake(row: object) -> tuple[str, str]:
         )
         + "\n"
     )
-    command = str(getattr(row, "command", "")).split()
+    command = command_argv(str(getattr(row, "command", "")))
     cwd = str(getattr(row, "cwd", "") or "") or None
     timeout = max(float(getattr(row, "ready_timeout_ms", 120000)) / 1000.0, 10.0)
 
@@ -593,19 +596,6 @@ def new(
         target = raven_home() / "agents" / name
     if target.exists():
         _refuse(f"{target} already exists; there is no --force, move it away or choose another name")
-
-    # The roster command template is split on whitespace -- the documented
-    # platform constraint discovery and the ACP client share -- so a landing
-    # path or interpreter path with whitespace can never be addressed as a
-    # command. Refused whole here; quoting argv would be a seam across both
-    # tokenizers and is not this command's to open.
-    python = _resolved_python()
-    for label, spelled in (("the agent folder path", str(target)), ("the python interpreter path", python)):
-        if any(c.isspace() for c in spelled):
-            _refuse(
-                f"{label} '{spelled}' contains whitespace: the roster command template is split on "
-                "whitespace, so the launcher could not be addressed; choose a location without spaces"
-            )
 
     taken = _discovered_identities(target.parent)
     for candidate in dict.fromkeys((name, shown)):

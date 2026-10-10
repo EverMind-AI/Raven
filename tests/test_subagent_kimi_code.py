@@ -486,3 +486,23 @@ async def test_on_windows_the_kimi_asked_is_the_one_on_the_childs_path(
         0,
         "kimi, version 9.9.9\n",
     )
+
+
+async def test_on_windows_the_kimi_ask_never_starts_a_batch_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ask puts its prompt in argv (``-p``), which a ``.cmd`` would hand to cmd.exe's parser.
+
+    So with only a batch file on the child's PATH the ask finds no program and
+    says nothing, rather than running it.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    batch = bin_dir / "kimi.cmd"
+    batch.write_text("#!/bin/sh\nprintf '%s\\n' 'the batch file ran'\n", encoding="utf-8")
+    batch.chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(bin_dir)})
+
+    cfg = ThirdPartyAcpSubagentConfig(name="Kimi Code", command="kimi acp")
+    assert await kimi_code._run(cfg, "-p", "a & b") == (None, "")

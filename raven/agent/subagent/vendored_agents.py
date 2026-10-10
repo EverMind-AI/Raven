@@ -52,6 +52,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
+from raven.utils.commands import command_tokens, resolve_subagent_command
+
 if TYPE_CHECKING:
     from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
@@ -471,10 +473,9 @@ def _is_absolute_path(token: str) -> bool:
     missing, disabling the row rather than advertising a command this host
     cannot run (and symmetrically for ``/``-rooted tokens on Windows).
 
-    Tokens come from ``str.split()``, so a path containing spaces arrives here
-    as fragments. The command templates the manifests and each ``install.py``
-    emit keep their paths space-free, and that constraint is cheaper than
-    re-tokenizing every stored row's command line.
+    Tokens come from ``command_tokens``, which keeps a token whole under
+    either quote character, so a spaced path its producer quoted is judged as
+    one token. A spaced path written unquoted still arrives as fragments.
     """
     return PureWindowsPath(token).is_absolute() or PurePosixPath(token).is_absolute()
 
@@ -490,7 +491,8 @@ def _launcher_missing(entry: dict) -> str:
     command carries.
     """
     command = str(entry.get("command") or "")
-    for token in command.split():
+    tokens = command_tokens(command)
+    for token in tokens:
         if _is_absolute_path(token) and not Path(token).exists():
             return token
     return ""
@@ -621,7 +623,9 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
                 raise ValueError("manifest is not an object")
             for field in _PLACEHOLDER_FIELDS:
                 if template := entry.get(field):
-                    entry[field] = str(template).replace("{SUBAGENT_DIR}", str(folder)).replace("{PYTHON}", python)
+                    entry[field] = resolve_subagent_command(
+                        str(template), python=python, subagent_dir=str(folder), quote=field != "cwd"
+                    )
             _read_route_notes(folder, entry)
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
             logger.warning("Skipping the agent product in {}: {}", folder.name, exc)
@@ -928,5 +932,6 @@ def _launcher_is_gone(cfg: Any) -> bool:
     manifests can produce, which is exactly the shape this exists to catch.
     """
     command = str(getattr(cfg, "command", "") or "")
-    absolute = [token for token in command.split() if _is_absolute_path(token)]
+    tokens = command_tokens(command)
+    absolute = [token for token in tokens if _is_absolute_path(token)]
     return bool(absolute) and not all(Path(token).exists() for token in absolute)

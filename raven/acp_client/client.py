@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shlex
 import signal
 import time
 from collections import deque
@@ -35,6 +34,7 @@ from raven.acp_client.protocol import (
     AcpRemoteError,
     AcpTimeoutError,
 )
+from raven.utils.commands import command_argv
 
 _STDERR_LINES = 200
 
@@ -233,7 +233,7 @@ class AcpClient:
         from raven.agent.subagent.role import subagent_role_env
 
         try:
-            argv = shlex.split(command)
+            argv = command_argv(command)
         except ValueError as exc:
             raise AcpConnectionError(f"acp agent {name!r}: command cannot be parsed: {exc}") from exc
         if not argv:
@@ -247,7 +247,9 @@ class AcpClient:
         # The role goes on before the caller's own map, so a config ``env`` entry
         # is the way to hand one agent back its full registry.
         child_env = {**base_env, **host_identity_env(), **subagent_role_env(), **(env or {})}
-        argv = resolve_program(argv, child_env)
+        # An acp server's argv is its configuration -- its turns travel over
+        # stdio -- so a batch file may stand in for the program here.
+        argv = resolve_program(argv, child_env, batch_files=True)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
