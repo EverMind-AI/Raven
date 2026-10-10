@@ -473,10 +473,9 @@ def _is_absolute_path(token: str) -> bool:
     missing, disabling the row rather than advertising a command this host
     cannot run (and symmetrically for ``/``-rooted tokens on Windows).
 
-    Tokens come from ``str.split()``, so a path containing spaces arrives here
-    as fragments. The command templates the manifests and each ``install.py``
-    emit keep their paths space-free, and that constraint is cheaper than
-    re-tokenizing every stored row's command line.
+    Tokens come from ``command_tokens``, which keeps a token whole under
+    either quote character, so a spaced path its producer quoted is judged as
+    one token. A spaced path written unquoted still arrives as fragments.
     """
     return PureWindowsPath(token).is_absolute() or PurePosixPath(token).is_absolute()
 
