@@ -2339,6 +2339,24 @@ class TestSpawningLeavesTheMarker:
         assert at_spawn == [True]
         assert handed == [str(isolated_raven_home / "upgrade.json")]
 
+    def test_the_boxlite_flag_crosses_the_detached_handoff_too(
+        self, plan: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The served page reaches the same helper through this spawn, so the
+        sandbox-preservation decision crosses here as well, both ways."""
+        handed: list[str] = []
+
+        def popen(_argv, env=None, **_kwargs):
+            handed.append(env["RAVEN_UPGRADE_KEEP_SANDBOX"])
+            return Mock()
+
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        monkeypatch.setattr(upgrade_commands, "_boxlite_installed", lambda: True)
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+        monkeypatch.setattr(upgrade_commands, "_boxlite_installed", lambda: False)
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+        assert handed == ["1", "0"]
+
     def test_the_marker_names_the_page_port_for_the_helper_to_answer_on(
         self, plan: object, isolated_raven_home: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

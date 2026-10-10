@@ -1225,6 +1225,8 @@ def _boxlite_installed() -> bool:
     except metadata.PackageNotFoundError:
         return False
     return True
+
+
 def _hand_over_system_ca(env: dict[str, str]) -> Path | None:
     """Hand the helper the certificate store this process verifies against.
 
@@ -1368,6 +1370,7 @@ def spawn_detached_upgrade(
     # opens the moment the caller lets go of the port, which is before the
     # helper has run its first instruction.
     env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=plan.release.version, port=status_port))
+    env["RAVEN_UPGRADE_KEEP_SANDBOX"] = "1" if _boxlite_installed() else "0"
     trust_copy = _hand_over_system_ca(env)
     if extra_env:
         env.update(extra_env)
