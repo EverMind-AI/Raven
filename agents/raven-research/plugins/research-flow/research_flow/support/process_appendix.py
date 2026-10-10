@@ -39,11 +39,14 @@ optional:
   and entirely wrong; this measures whether the links are real, not whether the
   reasoning is.
 
-Twin of the fork's ``raven/agent/process_appendix.py``: the same module body,
-kept identical by ``tests/test_agents_research_process_appendix.py`` (both files
-compared with docstrings and comments stripped), so a fix that lands on one side
-cannot ship without the other. Only the prose differs: this file avoids literal
-CJK and full-width characters in code and names the trunk's seams.
+Twin of the fork's ``raven/agent/process_appendix.py``: the same module body
+apart from a named lead, held by ``tests/test_agents_research_process_appendix.py``
+(both files compared definition by definition, docstrings and comments stripped),
+so a fix that lands on one side cannot ship without the other. The lead drops
+click-tracking parameters before matching a citation and counts the pages a site
+refused apart from the pages read; any other difference fails that test. The
+prose differs too: this file avoids literal CJK and full-width characters in code
+and names the trunk's seams.
 """
 
 from __future__ import annotations

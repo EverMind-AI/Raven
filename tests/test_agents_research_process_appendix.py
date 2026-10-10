@@ -876,30 +876,42 @@ def _module_body(path: Path) -> str:
 # named here, definition by definition. A difference outside these sets is drift,
 # and an entry that has stopped differing is a stale allowance.
 
-#: Top-level definitions the twin has that the record does not.
+#: Definitions the twin has that the record does not; a class member is ``Class.member``.
 TWIN_LEADS_ADDED: frozenset[str] = frozenset(
     {"_TRACKING_KEYS", "_is_tracking", "_drop_tracking"}  # click-tracking parameters dropped before matching
+    | {"ResearchTrail.refused"}  # pages the site refused, counted apart
 )
 #: Definitions in both whose bodies the twin changed.
 TWIN_LEADS_CHANGED: frozenset[str] = frozenset(
-    {"_norm", "ResearchTrail", "build_trail"}  # the tracking drop, and pages the site refused counted apart
+    {"_norm", "build_trail"}  # the tracking drop, and the refused pages
+    | {"ResearchTrail._page_split", "ResearchTrail.counters", "ResearchTrail.render"}
 )
 
 
 def _definitions(path: Path) -> dict[str, str]:
-    """Each top-level definition of :func:`_module_body`'s stripped module, by name."""
+    """Each definition of :func:`_module_body`'s stripped module, by name.
+
+    A class is split into its header and one entry per member, so a lead inside a
+    class names the members it changed and the rest of the class stays pinned.
+    """
     import ast
+
+    def name_of(node: ast.stmt, i: int) -> str:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return node.name
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            return node.targets[0].id
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            return node.target.id
+        return f"{i}:{type(node).__name__}"
 
     out: dict[str, str] = {}
     for i, node in enumerate(ast.parse(_module_body(path)).body):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            name = node.name
-        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            name = node.targets[0].id
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            name = node.target.id
-        else:
-            name = f"{i}:{type(node).__name__}"
+        name = name_of(node, i)
+        if isinstance(node, ast.ClassDef):
+            for j, member in enumerate(node.body):
+                out[f"{name}.{name_of(member, j)}"] = ast.unparse(member)
+            node.body = [ast.Pass()]
         out[name] = ast.unparse(node)
     return out
 

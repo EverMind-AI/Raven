@@ -278,6 +278,57 @@ def test_the_notes_appended_after_the_fence_do_not_hide_the_path():
     assert written_markdown([{"role": "tool", "name": "write_file", "content": content}]) == ["/w/r.md"]
 
 
+@pytest.mark.asyncio
+async def test_the_report_reader_parses_what_the_real_file_tools_return(tmp_path):
+    """The success lines are a parsed contract: a rewording in the tools must turn this red."""
+    from raven.agent.tools.filesystem import EditFileTool, WriteFileTool
+
+    write, edit = WriteFileTool(tmp_path), EditFileTool(tmp_path)
+    report, log, notes = tmp_path / "report.md", tmp_path / "log.md", tmp_path / "notes.md"
+    log.write_text("kept\n", encoding="utf-8")
+    notes.write_text("old\n", encoding="utf-8")
+
+    async def run(tool, name: str, **kwargs) -> dict:
+        result = await tool.execute(**kwargs)
+        return _tool(name, str(getattr(result, "model_text", result)))
+
+    messages = [
+        await run(write, "write_file", path=str(report), content="# R\n"),
+        await run(write, "write_file", path=str(log), content="entry\n", mode="append"),
+        await run(edit, "edit_file", path=str(notes), old_text="old", new_text="new"),
+        await run(write, "write_file", path=str(report), content="more\n", mode="append"),
+        await run(edit, "edit_file", path=str(report), old_text="more", new_text="body"),
+    ]
+    assert touched_markdown(messages) == [str(report), str(log), str(notes)]
+    assert written_markdown(messages) == [str(report)]
+    assert written_markdown(messages, since=3) == [str(report)]
+    assert written_markdown(messages, since=4) == [str(report)]
+
+    same = await run(write, "write_file", path=str(report), content=report.read_text(encoding="utf-8"))
+    assert "File unchanged" in same["content"]
+    assert written_markdown([same]) == [str(report)]
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_rewrite_names_its_own_path_whatever_the_path_holds(tmp_path):
+    """A directory name holding the unchanged line's own words must not end the path early:
+    the reader would name ``notes.md`` beside it, a file no tool call wrote."""
+    from raven.agent.tools.filesystem import WriteFileTool
+
+    write = WriteFileTool(tmp_path)
+    (tmp_path / "notes.md").write_text("## Entries\nthe user's own\n", encoding="utf-8")
+    messages = []
+    for decoy in (
+        "notes.md already holds x/r.md",
+        "a.md already holds exactly these 3 bytes, so nothing was written./r.md",
+    ):
+        path = tmp_path / decoy
+        for _ in range(2):
+            result = await write.execute(path=str(path), content="## Entries\n")
+            messages.append(_tool("write_file", str(getattr(result, "model_text", result))))
+        assert written_markdown(messages[-1:]) == [str(path)]
+
+
 def test_an_append_counts_only_for_a_file_this_turn_wrote_whole():
     """Appending a report to the user's own log.md must not make the log the report file."""
     messages = [

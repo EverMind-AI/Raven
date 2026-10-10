@@ -39,7 +39,7 @@ _EDIT_TOOL = "edit_file"
 _RESULT_PATH_RE = re.compile(
     r"Successfully (?P<verb>wrote|appended) \d+ bytes to (?P<written>.+?\.md)"
     r"|Successfully edited (?P<edited>.+?\.md)"
-    r"|File unchanged: (?P<same>.+?\.md) already holds .*",
+    r"|File unchanged: (?P<same>.+?\.md) already holds exactly these \d+ bytes, so nothing was written\.",
     re.I,
 )
 
