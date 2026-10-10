@@ -401,6 +401,37 @@ async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path
     assert started == [(str(fresh_bin / "fresh-agent.exe"), "-p", "task")]
 
 
+async def test_cli_backend_on_windows_never_starts_a_batch_file_for_a_bare_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cli agent's prompt is in its argv, and a ``.cmd`` hands its arguments to cmd.exe's parser.
+
+    So the bare name stays bare even with the batch file on the child's PATH; the
+    acp launch is the one that lets a batch file stand in.
+    """
+    npm_bin = tmp_path / "npm"
+    npm_bin.mkdir()
+    (npm_bin / "codex.cmd").write_text("", encoding="utf-8")
+    (npm_bin / "codex.cmd").chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(npm_bin)})
+    started: list[tuple[str, ...]] = []
+
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse)
+    be = CliAgentBackend(
+        name="codex", command="codex exec {prompt}", registry=InstanceRegistry(path=tmp_path / "i.json")
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await be.run("a & b", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert started == [("codex", "exec", "a & b")]
+
+
 async def test_cli_backend_exposes_parent_model_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
