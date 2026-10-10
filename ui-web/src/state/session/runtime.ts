@@ -34,6 +34,7 @@ import { $ } from '../../lib/dom'
 import { formatDuration as dur } from '../../lib/duration'
 import { show as ntfPush } from '../../lib/notifications'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
+import { mediaPath } from '../../lib/uploadPaths'
 import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
@@ -223,9 +224,13 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
    `media` field as well, recovered from that same note rather than threaded
    separately: a queued message is a plain string by the time it is drained,
    and the draft path sends from a second place, so deriving here covers all
-   three with one rule. */
+   three with one rule. The one thing the note cannot say is which file an
+   upload's short path names, so each path goes through lib/uploadPaths: an
+   upload's bytes are named absolutely there, so a same-named file that
+   appeared under the session's own root after the upload cannot answer for
+   them, and every other path is the one the note carries. */
 export const mediaOf = (text: unknown): { media?: string[] } => {
-  const paths = splitAtts(String(text)).atts
+  const paths = splitAtts(String(text)).atts.map(mediaPath)
   return paths.length ? { media: paths } : {}
 }
 
