@@ -12,6 +12,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.research_report_audit import (
     DERIVED_MARKERS,
     MARKER_GLOSSARY,
@@ -219,6 +221,75 @@ def test_a_missing_template_section_is_named(tmp_path):
     result = audit(report)
     (finding,) = [f for f in result.findings if f.kind == "missing_template_section"]
     assert finding.detail == "Limitations"
+
+
+def test_a_reader_layout_report_is_read_as_its_three_parts(tmp_path):
+    """The opening quote is the answer, not a preamble, and body headings are not extras."""
+    report = tmp_path / "reader.md"
+    report.write_text(
+        "> x\n\n## What the sources show\n\ny\n\n## How it compares\n\nw\n\n## Limitations\n\nz\n\n" + TRAIL,
+        encoding="utf-8",
+    )
+    result = audit(report)
+    kinds = {f.kind for f in result.findings}
+    assert result.layout == "reader"
+    assert not kinds & {"preamble_before_first_heading", "missing_template_section", "extra_h2_heading"}
+
+
+def test_a_chinese_reader_report_names_its_missing_limits(tmp_path):
+    report = tmp_path / "reader_zh.md"
+    # A titled report: the answer quote and one numbered body heading, no limits section.
+    report.write_text("# T\n\n> x\n\n## \u4e00\u3001a\n\ny\n", encoding="utf-8")
+    (finding,) = [f for f in audit(report).findings if f.kind == "missing_template_section"]
+    assert finding.detail == "Limitations"
+    report.write_text(report.read_text(encoding="utf-8") + "\n## \u672a\u80fd\u6838\u5b9e\n\nz\n", encoding="utf-8")
+    assert "missing_template_section" not in {f.kind for f in audit(report).findings}
+
+
+def test_a_reader_report_whose_limits_are_in_other_words_has_them(tmp_path):
+    """The flow's gate reads the last section as the limits when no word names them; the
+    audit grading the same reply must not report them missing."""
+    report = tmp_path / "reader_es.md"
+    report.write_text("> x\n\n## Body\n\ny\n\n## Lo que no se pudo verificar\n\nz\n", encoding="utf-8")
+    assert "missing_template_section" not in {f.kind for f in audit(report).findings}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "> x\n\n## \u4e00\u3001\u51fa\u53e3\u9650\u5236\u7684\u6f14\u53d8\n\ny\n\n## \u672a\u80fd\u9a8c\u8bc1\u7684\u5185\u5bb9\n\nz\n",
+        "> x\n\n## \u4eba\u624b\u4e0d\u8db3\u306e\u73fe\u72b6\n\ny\n\n## \u691c\u8a3c\u3067\u304d\u306a\u304b\u3063\u305f\u70b9\n\nz\n",
+    ],
+)
+def test_a_first_body_heading_that_names_a_limit_is_graded_as_the_body(tmp_path, text):
+    """The audit reads the limits as the flow's gate does, or it grades a shipped reply as
+    missing its body."""
+    report = tmp_path / "reader_zh.md"
+    report.write_text(text, encoding="utf-8")
+    assert "missing_template_section" not in {f.kind for f in audit(report).findings}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "> x\n\nthe body in prose\n\n## Limitations\n\nz\n",
+        "> x\n\nthe body in prose\n\n## Limitations\n\nz\n\n## Link checks\n\nt\n",
+    ],
+)
+def test_a_body_in_prose_under_the_answer_is_graded_present(tmp_path, text):
+    """The gate ships a reader reply whose body has no heading; the audit must not grade it
+    as missing that body."""
+    report = tmp_path / "reader_prose.md"
+    report.write_text(text, encoding="utf-8")
+    assert "missing_template_section" not in {f.kind for f in audit(report).findings}
+
+
+def test_prose_before_the_answer_quote_is_still_a_preamble(tmp_path):
+    report = tmp_path / "leak_reader.md"
+    report.write_text("Here is the corrected report.\n\n> **Conclusion:** x\n\n## A\n\ny\n", encoding="utf-8")
+    result = audit(report)
+    assert result.layout == "sections"
+    assert "preamble_before_first_heading" in {f.kind for f in result.findings}
 
 
 def test_an_appendix_heading_is_not_counted_as_a_body_section(tmp_path):
@@ -544,6 +615,48 @@ def test_the_parser_reads_the_producers_own_clean_trail(tmp_path):
     assert result.pages["chars_median"] == 5_000
     assert not result.pages.get("truncated")
     assert [f.kind for f in result.findings if f.hard] == []
+
+
+def test_the_parser_reads_past_the_producers_refused_page_clause(tmp_path):
+    """The refused clause sits between "pages read" and the duration; the head regex is
+    not end-anchored, so a clause it did not know cut the duration and verdict off."""
+    trail = ResearchTrail(
+        searches=4,
+        distinct_queries=[f"q{i}" for i in range(4)],
+        pages=[("https://a.example/real", 5_000, True), ("https://a.example/stub", 38, True)]
+        + [(f"https://a.example/wall{i}", 862, True) for i in range(2)],
+        refused={2, 3},
+        cited=["https://a.example/real"],
+        span_seconds=130,
+        verify_outcome="pass",
+    )
+    result = audit(_rendered(trail, tmp_path))
+    assert "2 pages read (1 returned almost nothing), 2 refused by the site, 2m of research" in trail.render()
+    assert result.trail["pages_read"] == 2
+    assert result.trail["thin_pages"] == 1
+    assert result.trail["pages_refused"] == 2
+    assert result.trail["research_minutes"] == 2
+    assert result.trail["reviewer"] == "pass"
+    assert result.pages["refused"] == 2
+    assert result.pages["urls"] == ["https://a.example/real"]
+
+
+def test_the_reviewer_verdict_is_read_when_the_trail_names_the_reviewing_model(tmp_path):
+    """Every product trail names the model, and a model id carries ``/`` and ``-``,
+    which the verdict's character class refused, so the verdict read as missing."""
+    trail = ResearchTrail(
+        searches=3,
+        distinct_queries=["q0", "q1", "q2"],
+        pages=[("https://a.example/real", 5_000, True)],
+        cited=["https://a.example/real"],
+        span_seconds=240,
+        verify_outcome="pass",
+        verify_model="deepseek/deepseek-v4-flash",
+    )
+    assert "reviewer: pass via deepseek/deepseek-v4-flash" in trail.render()
+    result = audit(_rendered(trail, tmp_path))
+    assert result.trail["reviewer"] == "pass"
+    assert result.trail["research_minutes"] == 4
 
 
 def test_the_parser_reads_the_producers_own_untraceable_trail(tmp_path):
@@ -1013,3 +1126,15 @@ def test_a_cell_of_nothing_but_urls_is_still_exempt():
     assert link_columns(_tables(_grid(headers, one))[0]) == [8]
     assert link_columns(_tables(_grid(headers, two))[0]) == [8]
     assert check_table_width(_tables(_grid(headers, one))) == []
+
+
+def test_the_reader_limits_matcher_is_the_flows_own():
+    """One heading vocabulary on both sides of the report: a limits heading the gate
+    ships and the audit cannot find is a report that passes in the product and fails
+    its grading. Pinned here because nothing else held the two copies equal."""
+    from research_flow.gates.report_shape import _SECTION_RE
+
+    from scripts.research_report_audit import _READER_LIMITS_RE
+
+    flow = {term.removeprefix("(?<![a-z])") for term in _SECTION_RE["Limitations"].pattern.split("|")}
+    assert set(_READER_LIMITS_RE.pattern.split("|")) == flow

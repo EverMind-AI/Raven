@@ -54,6 +54,64 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Research reports are written for a reader rather than for a grader. The
+  report opens with the answer as a blockquote, with no label or bold lead-in
+  before it, stated first and then why it
+  holds and what it means, then anything the brief asks the report to open
+  with (a retrieval date, the kinds of sources), and any delivery facts the
+  brief asks back (file path, counts) as its last line - a line the chat reply
+  keeps and the saved file leaves out; the body follows under its own `##`
+  headings - the brief's own section names, numbering included, when it gives
+  them - and the last section names what could not be verified
+  (`## Limitations` in English, with no English word in the heading
+  otherwise; the shape gate reads the last `##` section as the limits when
+  no word it knows names them, or only the first heading has one with no
+  body above it, as in a body heading on export limits). A length the brief
+  sets bounds the body: every markdown file the turn writes or edits gets a `[report length: ...]`
+  line on its tool result - CJK characters and other words, a total with
+  prose and tables apart, by `##` section, link targets not counted - and
+  the report checks its length
+  and states any count from that line rather than from an estimate. Unless
+  the brief says otherwise, a length covers prose and tables alike and leaves
+  out only a link-check table. The same line counts the distinct URLs the
+  report cites, read the way the research trail reads them, which is the
+  number of sources the report states and the number of rows a link-check
+  table has. Prose cites through markdown links on the words a source supports
+  instead of bare URLs mid-sentence, with no fetch status or HTTP code beside
+  a link (a brief that asks for link checks gets one table of every cited
+  URL as fetched with its status, marked blocked where the site blocked the
+  fetch, before the limits), and the report is told to carry its
+  argument in prose, define terms the question does not already use, ground
+  abstract points in a concrete case and drop filler. When the turn also saved
+  the report with `write_file`, the delivered reply is written over that
+  file, so the chat reply and the file are the same report, and the file
+  keeps its `#` title when the reply opens without one. Only a file whose
+  `##` headings are mostly the reply's counts as the report, so a notes
+  file or a source index saved beside it is left alone; of several such
+  files the reply's named one is synced, and none when it names none or
+  several. A file appended to or edited is synced only when the turn wrote
+  it whole first, or it still holds exactly what an earlier turn of the
+  session left in it: a log the user keeps, or a report the user changed
+  between turns, holds their text, and the reply would erase it. A later
+  turn that only edits a report nobody else touched syncs it.
+  The file is left as the model wrote it when the reply is not a report, and
+  when the reply is under 80% of the file's length - a brief that asks for a
+  summary reply gets that summary, and it must not replace the report. The
+  research trail stays on the reply only, and its query, page and open-point
+  listings are plain labelled lists instead of `<details>` folds, which a
+  terminal shows as raw tags. The shape gate, the clarify exemption and
+  `scripts/research_report_audit.py` read the new layout, and the old
+  three-heading layout stays the class default (`finalShape.reportLayout`).
+  An install that has already run Raven-Research keeps the contract it seeded
+  into its workspace (`agent_memory/profile/agent.md`), because seeding is
+  once-only so that an operator's edits survive; it moves to the new layout
+  when that file is deleted, and until then the gate still accepts its
+  three-heading replies.
+  The identity no longer carries the measured-guidance block, whose short-run
+  and one-answer numbers came from a short-answer benchmark
+  (`measuredGuidance` off). The product label moves to
+  `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader`.
+
 - A running EverOS whose version no longer matches the installed one is
   replaced rather than reused, through the same precheck, stop and spawn
   chain a rotated credential takes. An upgrade used to leave the old server
@@ -173,11 +231,39 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- The research trail no longer says a cited link "appears nowhere in this
+  run" when a search returned it with a click-tracking parameter
+  (`srsltid`, `utm_*`, `gclid`, `fbclid`, `msclkid`) that the citation left
+  off; such a link is reported as listed but not opened.
+
+- The research fetch tool reports the status the target site returned and
+  marks a CAPTCHA wall as blocked, instead of the reader service's own 200;
+  the research trail counts such pages as refused by the site, not as read.
+  When a thin page is re-read at another address, each address keeps its
+  own status in the trail.
+
+- The file tools refuse a path that carries a line break or other control
+  character. They echo the path into their result lines, and the research
+  report sync reads a file back out of those lines, so such a path could
+  name a second file that no call wrote. The sync also reads only the
+  first line of a `write_file` result.
+
+- `write_file` reports the bytes it wrote. Its success line said "N bytes"
+  and counted characters, so a model sizing a Chinese report off it read
+  about a third of the report's real length.
+
 - When an agent cannot inherit the host's model, its launcher now names
   what is missing -- for example the OpenAI Codex sign-in, with the
   command that adds it -- instead of reporting that the host has no
   provider key, which was untrue when the host's key sits on a provider
   other than the one its selected model uses.
+
+- The research reviewer runs on providers that refuse a forced tool call.
+  DeepSeek in thinking mode, served through LiteLLM and so outside the
+  Anthropic transport's own retry, answers a named `tool_choice` with HTTP
+  400, so every review on it failed open and the report shipped marked
+  unreviewed; the reviewer now asks again with `tool_choice=auto` and keeps
+  doing so.
 
 - `raven doctor` warns when `permissions.mode` is `full` and when
   `tools.sandbox.backend` is `none`. Ask-tier calls then run without asking,
