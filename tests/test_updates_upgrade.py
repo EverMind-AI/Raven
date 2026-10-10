@@ -2603,8 +2603,9 @@ class TestTheHelperVerifiesAgainstTheSystemStore:
             "",
             "error: unexpected argument\n",
             OSError("uv is gone"),
+            subprocess.TimeoutExpired(["uv", "--version"], 30),
         ],
-        ids=["0.10.12", "0.5.0", "says nothing", "says something else", "cannot be asked"],
+        ids=["0.10.12", "0.5.0", "says nothing", "says something else", "cannot be asked", "times out"],
     )
     def test_a_uv_older_than_system_certs_or_that_does_not_say_is_given_the_name_it_reads(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str | Exception
