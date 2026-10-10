@@ -345,14 +345,16 @@ class _TurnCollector:
                     self.events[-1]["text"] += said
                 else:
                     self.events.append({"t": "say", "text": said, "at": self._now()})
-            if broke and self._deliver is not None:
+            if broke:
                 # Raven's separator, not the agent's words. A step's break comes
                 # before the message it opens and is in no reply, so it rides past
                 # the budget the way the partial-turn notice does: counted, it
                 # would cut the last characters of a reply that fits its cap. A
                 # steer's break is inside the message the reply returns, and the
                 # reply's cap counts it, so that message's budget does too.
-                await (self._deliver if step else self._on_delta)(_MESSAGE_BREAK)
+                sink = self._deliver if step else self._on_delta
+                if sink is not None:
+                    await sink(_MESSAGE_BREAK)
             if self._on_delta is not None:
                 for text in texts:
                     await self._on_delta(text)
