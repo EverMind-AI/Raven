@@ -152,6 +152,113 @@ class TestFrontmatterParsing:
         assert _resolve_always({"always": "true"}, {}) is True
         assert _resolve_always({}, {}) is False
 
+    def test_folded_description_is_read_whole(self):
+        content = textwrap.dedent("""\
+            ---
+            name: auditor
+            description: >-
+              Audits workflow files
+              for injection risks.
+            ---
+            body
+        """)
+        assert _parse_frontmatter(content)["description"] == "Audits workflow files for injection risks."
+
+    def test_continuation_lines_belong_to_the_description(self):
+        content = textwrap.dedent("""\
+            ---
+            name: dns
+            description: Configure DNS zones and records.
+              Manage Route53 and self-hosted DNS.
+            ---
+            body
+        """)
+        assert _parse_frontmatter(content)["description"] == (
+            "Configure DNS zones and records. Manage Route53 and self-hosted DNS."
+        )
+
+    def test_escaped_quotes_are_decoded(self):
+        content = '---\nname: clean\ndescription: "Follows \\"Clean Code\\" rules"\n---\nbody\n'
+        assert _parse_frontmatter(content)["description"] == 'Follows "Clean Code" rules'
+
+    def test_a_nested_description_does_not_replace_the_top_level_one(self):
+        content = textwrap.dedent("""\
+            ---
+            name: workspace
+            description: Gmail and Drive through one CLI.
+            required_files:
+              - path: token.json
+                description: OAuth client credentials
+            ---
+            body
+        """)
+        assert _parse_frontmatter(content)["description"] == "Gmail and Drive through one CLI."
+
+    def test_unparseable_yaml_keeps_the_line_reading(self):
+        content = textwrap.dedent("""\
+            ---
+            name: splitter
+            description: Use when: a task splits into steps
+            ---
+            body
+        """)
+        assert _parse_frontmatter(content) == {
+            "name": "splitter",
+            "description": "Use when: a task splits into steps",
+        }
+
+    def test_an_impossible_date_keeps_the_line_reading(self):
+        content = "---\nname: dated\ndescription: Dated skill\ndate_added: 2026-02-30\n---\nbody\n"
+        assert _parse_frontmatter(content) == {
+            "name": "dated",
+            "description": "Dated skill",
+            "date_added": "2026-02-30",
+        }
+
+    def test_a_block_that_is_not_a_mapping_keeps_the_line_reading(self):
+        content = "---\n- first\n- tools: shell\n---\nbody\n"
+        assert _parse_frontmatter(content) == {"- tools": "shell"}
+
+    def test_an_oversized_block_keeps_the_line_reading(self):
+        filler = "\n".join(f"k{i}: v{i}" for i in range(2000))
+        content = f"---\nname: big\ndescription: >-\n  Folded\n  text\n{filler}\n---\nbody\n"
+        assert _parse_frontmatter(content)["description"] == ">-"
+
+    def test_a_block_several_kilobytes_long_still_reads_as_yaml(self):
+        description = " ".join(["word"] * 900)
+        content = f"---\nname: long\ndescription: >-\n  {description}\n---\nbody\n"
+        assert _parse_frontmatter(content)["description"] == description
+
+    def test_a_control_character_keeps_the_line_reading(self):
+        content = "---\nname: bell\ndescription: Rings \x07 twice\n---\nbody\n"
+        assert _parse_frontmatter(content) == {"name": "bell", "description": "Rings \x07 twice"}
+
+    def test_deep_nesting_keeps_the_line_reading(self):
+        content = "---\nname: deep\ndescription: Deep skill\nshape: " + "[" * 5000 + "]" * 5000 + "\n---\nbody\n"
+        fm = _parse_frontmatter(content)
+        assert fm["name"] == "deep"
+        assert fm["description"] == "Deep skill"
+
+    def test_yaml_aliases_are_not_expanded(self):
+        content = textwrap.dedent("""\
+            ---
+            name: aliased
+            description: Aliased skill
+            base: &base [a, b]
+            copy: *base
+            ---
+            body
+        """)
+        assert _parse_frontmatter(content)["copy"] == "*base"
+
+    def test_a_numeric_name_keeps_its_text(self):
+        content = "---\nname: 2048\ndescription: Puzzle helper\n---\nbody\n"
+        assert _parse_frontmatter(content)["name"] == "2048"
+
+    def test_nested_metadata_accepts_a_parsed_mapping(self):
+        raw = {"raven": {"always": True}, "nanobot": {"always": False}}
+        assert _parse_nested_metadata(raw) == {"always": True}
+
 
 class TestRequiresNormalization:
     """Every ``requires`` sub-key is optional and hand-authored, so a wrong
@@ -450,6 +557,57 @@ class TestSkillRegistryInjectResolution:
         assert store.get("always_flag_top").inject == "full"
 
 
+class TestThirdPartyFrontmatter:
+    """Frontmatter written for YAML parsers elsewhere reaches the registry intact,
+    and frontmatter that is not YAML loads the way it always has."""
+
+    def test_a_literal_block_description_becomes_one_line(self, tmp_path):
+        skill_dir = tmp_path / "workspace" / "skills" / "release-notes"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: release-notes\ndescription: |\n  Drafts release notes.\n  Use after tagging.\n---\nbody\n",
+            encoding="utf-8",
+        )
+        store = SkillRegistry(tmp_path / "workspace", builtin_skills_dir=tmp_path / "no-builtin")
+        assert store.get("release-notes").description == "Drafts release notes. Use after tagging."
+
+    def test_a_description_everos_writes_is_read_whole(self, tmp_path):
+        """EverOS dumps an evolved skill with ``yaml.safe_dump``, which wraps a
+        long description onto a second line; the registry must read it back."""
+        everos_frontmatter = pytest.importorskip("everos.core.persistence.markdown.frontmatter")
+        description = (
+            "Use when a deploy to staging fails health checks after a schema migration; "
+            "collects the failing probes, the migration id and the rollback command before asking."
+        )
+        skill_dir = tmp_path / "workspace" / "skills" / "everos" / "42"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            everos_frontmatter.dump_frontmatter({"name": "staging-deploy-triage", "description": description})
+            + "\nbody\n",
+            encoding="utf-8",
+        )
+        store = SkillRegistry(tmp_path / "workspace", builtin_skills_dir=tmp_path / "no-builtin")
+        assert store.get("staging-deploy-triage").description == description
+
+    def test_the_dag_guide_shape_loads_as_before(self, tmp_path):
+        """A colon inside the description makes this invalid YAML, next to
+        one-line JSON metadata: the shape of the shipped orchestration guide."""
+        builtin = tmp_path / "builtin"
+        _write_skill(
+            builtin,
+            "orchestrator",
+            description="Use when a task splits: one node per step.",
+            frontmatter_extra=(
+                'metadata: {"raven":{"always":true,"inject":"description","requires":{"tools":["run_subagent_dag"]}}}'
+            ),
+        )
+        meta = SkillRegistry(tmp_path / "workspace", builtin_skills_dir=builtin).get("orchestrator")
+        assert meta.description == "Use when a task splits: one node per step."
+        assert meta.always is True
+        assert meta.inject == "description"
+        assert meta.requires == {"tools": ["run_subagent_dag"]}
+
+
 class TestAlwaysBlockRendering:
     def _catalog(self, tmp_workspace, tmp_builtin):
         return LocalSkillCatalog(
@@ -732,3 +890,23 @@ class TestRealBuiltinSmokeTest:
         # would be the only alternative.
         assert metas["subagent-dag-orchestration"].always is True
         assert metas["subagent-dag-orchestration"].inject == "description"
+
+    def test_resident_guides_keep_their_tool_gates(self, tmp_path):
+        workspace = tmp_path / "chanwork"
+        workspace.mkdir()
+        metas = {m.name: m for m in SkillRegistry(workspace).list_all()}
+        assert metas["subagent-dag-orchestration"].requires == {"tools": ["run_subagent_dag"]}
+        config_guide = metas["raven-self-config"]
+        assert config_guide.always is True
+        assert config_guide.inject == "description"
+        assert config_guide.requires == {"tools": ["raven_config"]}
+
+    def test_the_dag_guide_description_arrives_whole(self, tmp_path):
+        """It sits in every system prompt, so it is compared with its own
+        frontmatter line; reformatting the guide has to revisit this."""
+        workspace = tmp_path / "chanwork"
+        workspace.mkdir()
+        guide = SkillRegistry(workspace).get("subagent-dag-orchestration")
+        lines = guide.path.read_text(encoding="utf-8").splitlines()
+        written = next(row for row in lines if row.startswith("description: "))
+        assert guide.description == written[len("description: ") :]
