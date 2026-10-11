@@ -114,6 +114,29 @@ class TestCommandTokens:
         _as(platform, monkeypatch)
         assert cmd.command_tokens(f"python {argument} /missing/run.py") == ["python", expected, "/missing/run.py"]
 
+    @pytest.mark.parametrize("platform", ["nt", "posix"])
+    @pytest.mark.parametrize("separator", [" ", "\t", "\n", "\r", "\r\n", "\v", "\f"])
+    def test_separators_follow_the_host_launch_rules(self, monkeypatch, platform, separator) -> None:
+        _as(platform, monkeypatch)
+        command = f"python{separator}/missing/run.py --acp"
+        separates = separator in (" ", "\t") or (platform == "posix" and separator in ("\n", "\r", "\r\n"))
+        expected = (
+            ["python", "/missing/run.py", "--acp"] if separates else [f"python{separator}/missing/run.py", "--acp"]
+        )
+
+        assert cmd.command_argv(command) == expected
+        assert cmd.command_tokens(command) == expected
+
+    @pytest.mark.parametrize("platform", ["nt", "posix"])
+    @pytest.mark.parametrize("separator", ["\n", "\r", "\r\n"])
+    def test_quoted_line_separators_stay_inside_the_argument(self, monkeypatch, platform, separator) -> None:
+        _as(platform, monkeypatch)
+        value = f"before{separator}after"
+        command = f'python "{value}" /missing/run.py'
+
+        assert cmd.command_argv(command) == ["python", value, "/missing/run.py"]
+        assert cmd.command_tokens(command) == ["python", value, "/missing/run.py"]
+
 
 #: Tokens the Windows quoter has to get right: CommandLineToArgvW halves a
 #: backslash run only where a quote follows it, the closing quote included.

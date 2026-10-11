@@ -91,6 +91,7 @@ def _split_shape(command: str) -> list[str]:
     token_started = False
     quote: str | None = None
     windows = os.name == "nt"
+    whitespace = " \t" if windows else " \t\r\n"
     windows_token = windows
     i = 0
     while i < len(command):
@@ -133,7 +134,7 @@ def _split_shape(command: str) -> list[str]:
         ):
             quote = char
             token_started = True
-        elif char in " \t" and quote is None:
+        elif char in whitespace and quote is None:
             if token_started:
                 argv.append("".join(token))
                 token = []

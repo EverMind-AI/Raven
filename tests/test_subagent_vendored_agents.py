@@ -1794,3 +1794,23 @@ class TestAQuotedSpacedRootStaysFailClosed:
         assert va._launcher_is_gone(row) is not launcher
         if not launcher:
             assert va._launcher_missing({"command": row.command}) == f"{folder}/run.py"
+
+    @pytest.mark.parametrize("separator", ["\n", "\r", "\r\n"])
+    @pytest.mark.parametrize("launcher", [False, True])
+    def test_posix_line_separators_preserve_launcher_readiness(
+        self, tmp_path, monkeypatch, separator, launcher
+    ) -> None:
+        from raven.utils import commands
+
+        monkeypatch.setattr(commands, "os", SimpleNamespace(name="posix"))
+        root = self._spaced_root(tmp_path, monkeypatch)
+        manifest = {**_ACP_MANIFEST, "command": f"python{separator}{{SUBAGENT_DIR}}/run.py --acp"}
+        folder = _product(root, "raven-probe", manifest=manifest, launcher=launcher)
+
+        (row,) = va.discover_product_rows()
+
+        assert commands.command_argv(row.command) == ["python", f"{folder}/run.py", "--acp"]
+        assert row.enabled is launcher
+        assert va._launcher_is_gone(row) is not launcher
+        if not launcher:
+            assert va._launcher_missing({"command": row.command}) == f"{folder}/run.py"
