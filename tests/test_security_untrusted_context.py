@@ -915,3 +915,28 @@ async def test_the_a2a_tools_own_transport_error_is_scrubbed(tmp_path, monkeypat
     assert "[redacted: a2a.peers.0.credential]" in str(out)
     content = ContextBuilder(workspace=tmp_path).add_tool_result([], "c1", "a2a_send", str(out))[0]["content"]
     assert _HELD not in str(content)
+
+
+def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
+    """The OAuth token store sits in Raven's home but holds no source: a read of
+    it is another program's settings read (#842). Only the workspace and the
+    scratch directories are exempt, so a turn reading an auth file there loses
+    the tokens before they reach the model."""
+    from raven.config.held_secrets import scrub_tool_output
+    from raven.home import raven_home
+
+    tokens = '{"access_token": "eyJhbGciOiJSUzI1NiJ9.FAKEPAYLOAD.sig", "refresh_token": "rt_FAKE0123456789abcdef"}'
+    own = raven_home()
+    for arguments in (
+        {"path": str(own / "oauth" / "chatgpt" / "auth.json")},
+        {"path": str(own / "oauth" / "github_copilot" / "access-token")},
+        {"path": str(own / "oauth" / "minimax_global.json")},
+        {"command": f"cat {own}/oauth/chatgpt/auth.json"},
+    ):
+        shown = scrub_tool_output(arguments, tokens)
+        assert "FAKEPAYLOAD" not in shown and "rt_FAKE0123456789abcdef" not in shown, (arguments, shown)
+    # A bare listing of the home itself stays out of the pass, and a read whose
+    # arguments never reach into it was never a candidate.
+    source = "token = self.get_token(request)\n"
+    assert scrub_tool_output({"command": f"ls {own}"}, source) == source
+    assert scrub_tool_output({"path": "tests/test_keys.py"}, source) == source

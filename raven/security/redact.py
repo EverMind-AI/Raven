@@ -194,12 +194,15 @@ def redact(text: str, *, truncated: bool = False) -> str:
 
 
 def _home_config() -> re.Pattern[str]:
-    """A path into a dot-directory of the home, Raven's own home excepted.
+    """A path into a dot-directory of the home, Raven's own source directories excepted.
 
     Raven's home holds the default workspace and the channels' scratch
     directories, where a coding turn reads its own source; rewriting that
-    source's ``token = ...`` lines breaks every edit built from them. Raven's
-    own keys are taken out by the exact-match pass in ``held_secrets`` instead.
+    source's ``token = ...`` lines breaks every edit built from them, so those
+    two stay exempt. They are the only parts that are: the rest of Raven's home
+    holds no source to edit, and its OAuth token store (``oauth/<provider>/...``)
+    is a credential file like another program's settings -- a read of it loses
+    its tokens to this pass.
     """
     from raven.home import raven_home
 
@@ -208,7 +211,10 @@ def _home_config() -> re.Pattern[str]:
     own = raven_home()
     skip = ""
     if str(own.parent) == home_dir and own.name.startswith("."):
-        skip = r"(?!" + re.escape(own.name[1:]) + r"(?:/|\\|$|[\"'\s]))"
+        name = re.escape(own.name[1:])
+        boundary = r"(?:/|\\|$|[\"'\s])"
+        source = r"(?:/(?:workspace|tmp)|\\(?:workspace|tmp))" + boundary
+        skip = r"(?!" + name + r"(?:" + source + r"|(?:$|[\"'\s])))"
     return re.compile(r"(?:~|\$HOME|\$\{HOME\}|" + home + r")/\." + skip + r"[A-Za-z0-9_-]")
 
 
