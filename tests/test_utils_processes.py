@@ -12,13 +12,21 @@ from raven.utils import processes
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="procfs is the Linux reader")
 def test_linux_reads_a_live_resident_without_ps(monkeypatch) -> None:
-    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "-m", "raven", "web"])
+    import select
+
+    script = "import os, sys, time; os.write(sys.stdout.fileno(), b'ready\\n'); time.sleep(30)"
+    sleeper = subprocess.Popen([sys.executable, "-c", script, "-m", "raven", "web"], stdout=subprocess.PIPE)
     try:
+        assert sleeper.stdout is not None
+        assert select.select([sleeper.stdout], [], [], 5)[0], "the child did not reach its script"
+        assert sleeper.stdout.readline() == b"ready\n"
         monkeypatch.setenv("PATH", "/nonexistent")
         assert processes.raven_identity(sleeper.pid) is True
     finally:
         sleeper.terminate()
         sleeper.wait(timeout=10)
+        if sleeper.stdout is not None:
+            sleeper.stdout.close()
 
 
 def test_procfs_preserves_spaces_without_starting_a_probe(monkeypatch) -> None:
