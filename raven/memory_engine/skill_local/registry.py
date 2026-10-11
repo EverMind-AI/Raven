@@ -39,7 +39,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
-from raven.utils.text import parse_frontmatter, strip_frontmatter
+from raven.utils.text import parse_frontmatter
 
 # Default builtin skills directory.
 #
@@ -442,14 +442,13 @@ class SkillRegistry:
         except (OSError, UnicodeDecodeError):
             return None
 
-        frontmatter = _parse_frontmatter(body) or {}
+        frontmatter, content = parse_frontmatter(body, line_fallback=True, preserve_body_whitespace=True)
         nested = _parse_nested_metadata(frontmatter.get("metadata", ""))
         requires = nested.get("requires", {}) if isinstance(nested.get("requires"), dict) else {}
         always = _resolve_always(frontmatter, nested)
         if not always_enabled:
             always = False
         inject = _resolve_inject(frontmatter, nested)
-        content = _strip_frontmatter(body)
 
         # ``stable_key`` is the directory name. For everos it is
         # the sqlite ``skills.id`` string (the pipeline materializes
@@ -484,13 +483,13 @@ class SkillRegistry:
 
 def _parse_frontmatter(content: str) -> dict | None:
     """Read SKILL.md with the importers' shared YAML and legacy-fallback rules."""
-    metadata, body = parse_frontmatter(content)
+    metadata, body = parse_frontmatter(content, line_fallback=True)
     return metadata if body != content else None
 
 
 def _strip_frontmatter(content: str) -> str:
     """Return the markdown body with the leading ``---...---`` frontmatter removed."""
-    return strip_frontmatter(content)
+    return parse_frontmatter(content, line_fallback=True, preserve_body_whitespace=True)[1]
 
 
 def _parse_nested_metadata(raw: object) -> dict:

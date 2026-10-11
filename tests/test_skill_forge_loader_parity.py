@@ -138,7 +138,9 @@ class TestFrontmatterParsing:
         monkeypatch.setattr(yaml.SafeLoader, "compose_node", counted)
         shape = "[" * 7000 + "]" * 7000
         content = f"---\nname: deep\nshape: {shape}\n---\nbody"
-        parsed = _parse_frontmatter(content) if reader == "registry" else parse_frontmatter(content)[0]
+        parsed = (
+            _parse_frontmatter(content) if reader == "registry" else parse_frontmatter(content, line_fallback=True)[0]
+        )
         assert parsed == {"name": "deep", "shape": shape}
         assert visits < 100
 
@@ -152,13 +154,20 @@ class TestFrontmatterParsing:
         ],
         ids=["malformed", "non-string", "alias", "oversized"],
     )
-    def test_importers_and_registry_share_frontmatter_rules(self, block):
+    def test_importers_and_registry_share_frontmatter_rules(self, block, tmp_path):
+        from raven.importer.skills import claude_code, hermes, installer
         from raven.utils.text import parse_frontmatter
 
         content = f"---\n{block}\n---\nbody"
-        imported, body = parse_frontmatter(content)
+        imported, body = parse_frontmatter(content, line_fallback=True)
         assert imported == _parse_frontmatter(content)
         assert body == "body"
+        skill = tmp_path / "shared" / "SKILL.md"
+        skill.parent.mkdir()
+        skill.write_text(content, encoding="utf-8")
+        assert claude_code._frontmatter_name(skill) == imported["name"]
+        assert hermes._frontmatter_name(skill) == imported["name"]
+        assert installer._pool_registry_names(tmp_path) == {imported["name"]}
 
     def test_empty_returns_none(self):
         assert _parse_frontmatter("no frontmatter here") is None

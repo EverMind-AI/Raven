@@ -33,14 +33,15 @@ class _FrontmatterLoader(yaml.SafeLoader):
             self._depth -= 1
 
 
-def _parse_frontmatter_block(block: str) -> dict[str, Any]:
+def _parse_frontmatter_block(block: str, *, line_fallback: bool) -> dict[str, Any] | None:
     lines = {}
-    for line in block.splitlines():
-        key, separator, value = line.partition(":")
-        if separator and key.strip():
-            lines[key.strip()] = value.strip().strip("\"'")
+    if line_fallback:
+        for line in block.splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.strip():
+                lines[key.strip()] = value.strip().strip("\"'")
     if len(block) > _YAML_MAX_CHARS:
-        return lines
+        return lines if line_fallback else None
     try:
         loader = _FrontmatterLoader(block)
         try:
@@ -48,10 +49,10 @@ def _parse_frontmatter_block(block: str) -> dict[str, Any]:
         finally:
             loader.dispose()
     except Exception:  # noqa: BLE001 - YAML also raises ValueError and RecursionError
-        return lines
+        return lines if line_fallback else None
     if not isinstance(parsed, dict):
-        return lines
-    for key in ("name", "description"):
+        return lines if line_fallback else {}
+    for key in ("name", "description") if line_fallback else ():
         if key in parsed and not isinstance(parsed[key], str):
             parsed[key] = lines.get(key, "")
     return parsed
@@ -85,27 +86,28 @@ def _split_frontmatter(text: str) -> tuple[str, str] | None:
     return text[opening.end() : closing.start()].strip(), text[closing.end() :]
 
 
-def strip_frontmatter(text: str) -> str:
-    """Remove exactly the header recognized by the metadata reader."""
-    split = _split_frontmatter(text)
-    return split[1] if split is not None else text
-
-
-def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
+def parse_frontmatter(
+    text: str, *, line_fallback: bool = False, preserve_body_whitespace: bool = False
+) -> tuple[dict[str, Any], str]:
     """Extract YAML frontmatter delimited by ``---`` lines.
 
     Returns ``(metadata_dict, body_after_frontmatter)``.
     Returns ``({}, original_text)`` when no complete frontmatter is found.
-    Invalid YAML, aliases, non-mappings, blocks over 16,384 characters, and
-    nesting beyond 32 nodes use the legacy line fallback. Non-string names
-    and descriptions keep their source text.
+    Invalid YAML, aliases, blocks over 16,384 characters, and nesting beyond
+    32 nodes retain the original text by default, so memory imports lose no
+    prose. SKILL readers opt into the legacy line fallback, including textual
+    names/descriptions and non-mapping headers. Body whitespace can be retained
+    for callers that store the original Markdown.
     Valid YAML retains its scalar coercions and inline-comment semantics.
     """
     split = _split_frontmatter(text)
     if split is None:
         return {}, text
     block, body = split
-    return _parse_frontmatter_block(block), body.lstrip("\n")
+    metadata = _parse_frontmatter_block(block, line_fallback=line_fallback)
+    if metadata is None:
+        return {}, text
+    return metadata, body if preserve_body_whitespace else body.lstrip("\n")
 
 
 def parse_iso_ts_ms(raw: Any) -> int | None:
@@ -132,6 +134,5 @@ __all__ = [
     "display_width",
     "is_cjk",
     "parse_frontmatter",
-    "strip_frontmatter",
     "parse_iso_ts_ms",
 ]
