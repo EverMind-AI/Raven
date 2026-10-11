@@ -2732,3 +2732,49 @@ def test_viewer_root_leaves_every_other_path_with_the_session(tmp_path: Path, mo
 
     assert console_module.viewer_root(session, Path("notes/secret.md")) == session
     assert console_module.viewer_root(session, Path("uploads/absent.png")) == session
+
+
+def test_viewer_root_tells_an_upload_by_where_its_path_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An upload is a path that lands in agent home's ``uploads/``, in either spelling.
+
+    The first segment is not the test: ``uploads/../notes/secret.md`` starts like
+    an upload and lands beside it, and a link left under ``uploads/`` can point
+    anywhere, so read by its spelling either reached past the one ambiguity this
+    is for. The absolute spelling of a real upload is an upload too, and it is
+    what the composer stages.
+    """
+    session = tmp_path / "project"
+    session.mkdir()
+    home = tmp_path / "agent-home"
+    (home / "notes").mkdir(parents=True)
+    secret = home / "notes" / "secret.md"
+    secret.write_text("not this session's")
+    (home / "uploads").mkdir()
+    shot = home / "uploads" / "shot.png"
+    shot.write_bytes(b"the picture")
+    (home / "uploads" / "link.md").symlink_to(secret)
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("uploads/../notes/secret.md")) == session
+    assert console_module.viewer_root(session, Path("uploads/link.md")) == session
+    assert console_module.viewer_root(session, home / "uploads" / "link.md") == session
+    assert console_module.viewer_root(session, secret) == session
+    assert console_module.viewer_root(session, shot) == home
+
+
+def test_viewer_root_follows_a_linked_agent_home(tmp_path: Path) -> None:
+    """``workspace_path`` is agent home as configured, not resolved, so it can be
+    reached through a link (``turn.send`` hands it over as is): an upload under
+    it is still an upload, in either spelling."""
+    from raven.rpc.files import viewer_root
+
+    session = tmp_path / "project"
+    session.mkdir()
+    real = tmp_path / "agent-home"
+    (real / "uploads").mkdir(parents=True)
+    (real / "uploads" / "shot.png").write_bytes(b"the picture")
+    linked = tmp_path / "linked-home"
+    linked.symlink_to(real)
+
+    assert viewer_root(session, Path("uploads/shot.png"), linked) == linked
+    assert viewer_root(session, real / "uploads" / "shot.png", linked) == linked

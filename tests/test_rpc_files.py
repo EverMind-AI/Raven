@@ -89,6 +89,71 @@ async def test_file_relative_path_uses_the_session_workdir(tmp_path: Path, monke
         await client.close()
 
 
+def _pinned_gateway(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, Path, Path]:
+    """A serve app with ``tools.restrict_to_workspace`` on, whose sessions run in
+    ``<tmp>/project`` while agent home is ``<tmp>/home``."""
+    home, project = tmp_path / "home", tmp_path / "project"
+    (home / "uploads").mkdir(parents=True)
+    project.mkdir()
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(home)
+    cfg.tools.restrict_to_workspace = True
+    monkeypatch.setattr(files_module, "load_config", lambda: cfg)
+    monkeypatch.setattr("raven.config.loader.load_config", lambda *a, **k: cfg)
+    monkeypatch.setenv("RAVEN_SERVE_TOKEN", TOKEN)
+
+    class Loop:
+        def peek_session_workdir(self, session: str) -> Path:
+            return project
+
+    return TestClient(TestServer(build_app(WsGateway(), None, agent_loop_factory=lambda: Loop()))), home, project
+
+
+async def test_file_serves_an_upload_by_either_spelling_to_a_pinned_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The composer names an upload by the file it wrote, so the bubble's chip asks
+    ``/file`` for that absolute path. Agent home is that file's root, as it is for
+    ``uploads/<name>``, so a session pinned elsewhere is still shown its own upload
+    with ``tools.restrict_to_workspace`` on."""
+    client, home, _project = _pinned_gateway(tmp_path, monkeypatch)
+    (home / "uploads" / "shot.png").write_bytes(b"the picture")
+    await client.start_server()
+    try:
+        for spelling in ("uploads/shot.png", str(home / "uploads" / "shot.png")):
+            r = await client.get("/file", params={"path": spelling, "session": "tui:s"}, headers=auth())
+            assert r.status == 200, spelling
+            assert await r.read() == b"the picture"
+    finally:
+        await client.close()
+
+
+async def test_file_serves_a_pinned_session_nothing_else_of_agent_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Agent home answers for an upload alone, judged by where the path lands: a
+    spelling that starts in ``uploads/`` and climbs out of it, or a link left
+    there, stays the session's own question, and the fence refuses the rest."""
+    client, home, _project = _pinned_gateway(tmp_path, monkeypatch)
+    (home / "notes").mkdir()
+    secret = home / "notes" / "secret.md"
+    secret.write_text("not this session's", encoding="utf-8")
+    (home / "uploads" / "link.md").symlink_to(secret)
+    await client.start_server()
+    try:
+        for spelling in (
+            "uploads/../notes/secret.md",
+            "uploads/link.md",
+            str(home / "uploads" / "link.md"),
+            str(secret),
+        ):
+            r = await client.get("/file", params={"path": spelling, "session": "tui:s"}, headers=auth())
+            assert r.status in (403, 404), (spelling, r.status)
+            assert b"not this session" not in await r.read()
+    finally:
+        await client.close()
+
+
 async def test_file_response_is_sandboxed(client: TestClient, tmp_path: Path) -> None:
     """HTML and SVG the agent produced must not run with the page's origin.
 

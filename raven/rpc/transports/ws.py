@@ -290,6 +290,11 @@ class WsGateway:
                 rel = Path(raw)
                 workspace = viewer_root(workspace, rel)
                 raw = str(workspace / rel)
+            elif raw:
+                # An upload named absolutely is still an upload, and agent home
+                # is its root as it is for the relative spelling: the fence
+                # below then admits it however the session is rooted.
+                workspace = viewer_root(workspace, Path(raw).expanduser())
         try:
             path = resolve_readable(raw, workspace=workspace)
         except ValueError as exc:

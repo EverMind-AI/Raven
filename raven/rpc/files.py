@@ -329,9 +329,17 @@ def viewer_root(workspace: Path, rel: Path, home: Path) -> Path:
     answers only for a path that is an upload and is actually there.
     ``turn.send`` resolves an attachment by this same rule, so a picture the
     viewer drew is the file the turn receives.
+
+    An upload is told by where the path lands, not by how it starts:
+    ``uploads/../notes/x.md`` and a link left under ``uploads/`` both lead out
+    of it. And it can be named absolutely -- the composer stages the file
+    ``fs.upload`` wrote -- in which case it is still agent home's.
     """
+    uploads = (home / UPLOAD_DIR).resolve()
+    if rel.is_absolute():
+        return home if rel.resolve().is_relative_to(uploads) else workspace
     if (workspace / rel).exists():
         return workspace
-    if rel.parts[:1] == (UPLOAD_DIR,) and (home / rel).exists():
+    if (home / rel).exists() and (home / rel).resolve().is_relative_to(uploads):
         return home
     return workspace
