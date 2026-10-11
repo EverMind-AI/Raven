@@ -10,6 +10,38 @@ import pytest
 from raven.utils import processes
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="procfs is the Linux reader")
+def test_linux_reads_a_live_resident_without_ps(monkeypatch) -> None:
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", "-m", "raven", "web"])
+    try:
+        monkeypatch.setenv("PATH", "/nonexistent")
+        assert processes.raven_identity(sleeper.pid) is True
+    finally:
+        sleeper.terminate()
+        sleeper.wait(timeout=10)
+
+
+def test_procfs_preserves_spaces_without_starting_a_probe(monkeypatch) -> None:
+    monkeypatch.setattr(processes.sys, "platform", "linux")
+    monkeypatch.setattr(processes.Path, "read_bytes", lambda _path: b"/home/u/Raven copy/bin/raven\0serve\0")
+    monkeypatch.setattr(processes.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("called ps"))
+    assert processes.command_line(1234) == '"/home/u/Raven copy/bin/raven" serve'
+    assert processes.raven_identity(1234) is True
+
+
+@pytest.mark.parametrize("unavailable", [b"", PermissionError("not readable"), FileNotFoundError("gone")])
+def test_missing_procfs_falls_back_to_ps(monkeypatch, unavailable) -> None:
+    def read(_path):
+        if isinstance(unavailable, Exception):
+            raise unavailable
+        return unavailable
+
+    monkeypatch.setattr(processes.sys, "platform", "linux")
+    monkeypatch.setattr(processes.Path, "read_bytes", read)
+    monkeypatch.setattr(processes, "_command_line_posix", lambda pid: "python -m raven serve" if pid == 1234 else None)
+    assert processes.command_line(1234) == "python -m raven serve"
+
+
 def test_a_module_invocation_is_recognised_anywhere_in_the_argv(monkeypatch) -> None:
     """``-P`` and friends land between the interpreter and ``-m raven``."""
     monkeypatch.setattr(

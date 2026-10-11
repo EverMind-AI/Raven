@@ -7,7 +7,8 @@ state files actually pose: pids are recycled by the kernel, so "alive" says
 nothing about whether the process is the raven one the record names.
 
 The discriminator is the recorded process's own command line, read back from
-the OS's process table. POSIX asks ``ps``; Windows asks CIM for its
+the OS's process table. Linux reads ``/proc`` before trying ``ps``; other
+POSIX hosts ask ``ps``, and Windows asks CIM for its
 ``Win32_Process`` row. An unreadable identity stays unknown: the stop keeps
 its hands off, and state readers keep the record of a process still alive.
 """
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 from typing import Optional
 
 
@@ -29,7 +31,22 @@ def command_line(pid: int) -> Optional[str]:
         return None
     if sys.platform == "win32":  # pragma: no cover - linux is the covered CI host
         return _command_line_windows(pid)
+    if sys.platform.startswith("linux"):
+        line = _command_line_proc(pid)
+        if line is not None:
+            return line
     return _command_line_posix(pid)
+
+
+def _command_line_proc(pid: int) -> Optional[str]:
+    """Read Linux argv without procps, preserving spaces inside arguments."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes().rstrip(b"\0")
+    except OSError:
+        return None
+    if not raw:
+        return None
+    return subprocess.list2cmdline([part.decode("utf-8", errors="replace") for part in raw.split(b"\0")])
 
 
 def _command_line_posix(pid: int) -> Optional[str]:
