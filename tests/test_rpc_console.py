@@ -828,10 +828,11 @@ def _agent_home(monkeypatch, home: Path):
 
 
 async def test_fs_upload_lands_in_agent_home_not_the_session_workdir(tmp_path: Path, monkeypatch) -> None:
-    """The relative path this returns rides back to ``turn.send``, which resolves
-    an attachment against agent home and fences it there. Deposited in the
-    session's working directory instead, the file exists and the turn still drops
-    it, so the reader hands over an attachment the model never sees."""
+    """Agent home is the one root always writable: a session's working
+    directory is wherever the engine was launched from, and an engine the
+    desktop shell started inherits ``/``, where ``uploads/`` cannot be created.
+    ``turn.send`` admits agent home whatever the session's root, with
+    ``tools.restrict_to_workspace`` on as well."""
     import base64
 
     home = tmp_path / "home"
@@ -934,7 +935,7 @@ async def test_fs_reveal_selects_the_file_in_the_host_file_manager(
 
 async def test_fs_reveal_finds_an_uploaded_attachment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The page sends one string to two surfaces. A panel row is relative to the
-    session's working directory; an attachment chip carries ``uploads/<name>``,
+    session's working directory; an attachment chip can carry ``uploads/<name>``,
     which only agent home holds -- so rooting at the workdir alone made Reveal
     fail on the very file the viewer had just rendered from that same string."""
     home = tmp_path / "raven-home"

@@ -123,31 +123,18 @@ async function harness({ reject = null as { code?: number; message?: string } | 
 afterEach(() => { turn._resetForTests() })
 
 describe('the files a message hands to the turn', () => {
-  it('answers an upload path as the file the upload wrote', async () => {
-    /* The note keeps `uploads/shot.png` -- the bubble renders it and `/file`
-       re-roots it -- while the turn is handed the absolute file, because
-       `viewer_root` reads the session's own root before agent home: a
-       same-named file appearing there after the upload would otherwise answer
-       for it (lib/uploadPaths). */
-    const h = await harness()
-    /* The registry the loaded graph reads: `loadPart` resets the module
-       registry, so the case's own import has to be the one the graph took. */
-    const uploads = await import('../../lib/uploadPaths')
-    uploads.remember('uploads/shot.png', '/home/me/.raven/workspace/uploads/shot.png')
-
-    h.runtime.send('look\n\n[attachments, saved in the workspace]\n- uploads/shot.png')
-    await h.tick()
-
-    expect(h.sends()[0]?.media).toEqual(['/home/me/.raven/workspace/uploads/shot.png'])
-  })
-
-  it('leaves a path no upload minted to the resolver', async () => {
+  /* The note is the record of what was handed over, and the turn receives its
+     paths as it names them: an upload as the file it wrote, a file attached
+     where it already was by the path it was dragged with -- here a session
+     root's own file that shares the upload's name. */
+  it('hands the turn the paths the note names, as it names them', async () => {
     const h = await harness()
 
-    h.runtime.send('look\n\n[attachments, saved in the workspace]\n- uploads/dragged.png')
+    h.runtime.send('look\n\n[attachments, saved in the workspace]\n'
+      + '- /home/me/.raven/workspace/uploads/shot.png\n- uploads/shot.png')
     await h.tick()
 
-    expect(h.sends()[0]?.media).toEqual(['uploads/dragged.png'])
+    expect(h.sends()[0]?.media).toEqual(['/home/me/.raven/workspace/uploads/shot.png', 'uploads/shot.png'])
   })
 })
 

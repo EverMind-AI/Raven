@@ -2044,14 +2044,15 @@ def viewer_root(workspace: Path, rel: Path) -> Path:
 def _upload_root() -> Path:
     """Where an uploaded file is deposited: agent home, not the session workdir.
 
-    The relative path this handler returns rides back to ``turn.send``, which
-    finds it here by :func:`viewer_root`'s rule and, with
-    ``tools.restrict_to_workspace`` on, admits agent home and the session's own
-    working directory alone, so a file parked anywhere else is dropped from the
-    turn without an error.
-    Agent home is also the one root always writable: a session's working directory is
-    wherever the engine was launched from, and an engine started by the desktop
-    shell inherits ``/``, where creating the directory cannot succeed.
+    The path this handler returns rides back to ``turn.send`` -- the web UI's
+    composer sends ``abs_path``, the file itself, and a caller that keeps the
+    relative ``path`` has it found here by :func:`viewer_root`'s rule -- which,
+    with ``tools.restrict_to_workspace`` on, admits agent home and the session's
+    own working directory alone, so a file parked anywhere else is dropped from
+    the turn without an error. Agent home is also the one root always writable:
+    a session's working directory is wherever the engine was launched from, and
+    an engine started by the desktop shell inherits ``/``, where creating the
+    directory cannot succeed.
 
     Browsing is the other way round on purpose -- ``fs.list`` / ``fs.read`` /
     ``fs.reveal`` stay rooted at the session's working directory, because the
@@ -2068,9 +2069,13 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     The caller hands the agent a path, not bytes: every tool that reads files is
     already workspace-scoped, so an upload is just a file appearing in the
     workspace. Collisions get a numeric suffix rather than overwriting -- and
-    the name is kept free under the session's own ``uploads/`` too, because
-    :func:`raven.rpc.files.viewer_root` reads a relative path there before agent
-    home, so ``uploads/<name>`` must never mean two files.
+    the name is kept free under the session's own ``uploads/`` too, as it
+    stands at the upload, because :func:`raven.rpc.files.viewer_root` reads a
+    relative path there before agent home: a caller that hands ``turn.send``
+    the relative ``path`` would otherwise send that session's file. Only
+    ``abs_path`` names the upload whatever appears there later, or under
+    another session's root, which is why the web UI's composer sends that
+    one.
 
     ``session`` does not select the root -- see :func:`_upload_root` -- but it
     is what names the root the collision check above has to look past.
@@ -2224,7 +2229,7 @@ async def fs_reveal(params: dict, *, agent_loop_factory=None) -> dict:
         # panel lists; agent home second, by handing the relative path to
         # ``resolve_readable``, which roots it there. Both are needed because
         # the page sends one string to two surfaces: the panel's own rows are
-        # relative to the workdir, while an uploaded attachment's chip carries
+        # relative to the workdir, while an uploaded attachment's chip can carry
         # ``uploads/<name>``, and only agent home holds that.
         listed = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / raw
         p = listed if listed.exists() else Path(raw)
@@ -2315,7 +2320,7 @@ async def fs_open(params: dict, *, agent_loop_factory=None) -> dict:
     if not p.is_absolute():
         # Same two roots as fs.reveal, for the same reason: the panel's rows are
         # relative to the session's working directory, an uploaded attachment's
-        # chip carries `uploads/<name>` and only agent home holds that.
+        # chip can carry `uploads/<name>` and only agent home holds that.
         listed = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / raw
         p = listed if listed.exists() else Path(raw)
     try:

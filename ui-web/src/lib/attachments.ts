@@ -53,10 +53,11 @@ const FILE_NOTE = /^\[(?:Image|Attachment): .*\(path: .+?\).*\]$/
 const IMAGE_PART = /^(?:\[image\]\s*)+/
 
 /* The absolute path each of those lines names, which is the one thing in them
-   worth keeping. The note lists what the composer handed over -- an upload's
-   path, relative to the agent home it was uploaded into, or the own path of a
-   file attached where it already was -- and the file route resolves a relative
-   path against the SESSION's own root, which is not always agent home: a
+   worth keeping. The note lists what the composer handed over -- an upload,
+   named by the file it wrote (a note written before the composer did that
+   spells it relative to the agent home it was uploaded into), or the own path
+   of a file attached where it already was -- and the file route resolves a
+   relative path against the SESSION's own root, which is not always agent home: a
    conversation whose root is elsewhere asked for `uploads/x.png` under its own
    root and got a 404, so the file fell back to its name on every reload. The
    engine's line carries the absolute path of the same file, and that one

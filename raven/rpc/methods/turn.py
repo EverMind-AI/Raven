@@ -51,13 +51,15 @@ def _resolve_media(paths: list[str] | None, root: Path | None = None) -> tuple[M
     """Turn the front end's attachment paths into ``Media`` for the spine.
 
     Resolved with the filesystem tools' own policy rather than against the
-    process cwd. A caller sends what it holds: an upload's path relative to
-    agent home (``uploads/shot.png``), or the absolute path of a file the front
-    end attached where it already was -- the spellings every file tool takes,
-    and the first one resolves to nothing from wherever ``raven serve`` happens
-    to have been started. The downstream check is a bare ``is_file()`` that
-    drops a miss in silence, so a cwd-relative resolve loses the attachment with
-    no error anywhere.
+    process cwd. A caller sends what it holds: the file an upload wrote, named
+    absolutely (the web UI's composer stages ``fs.upload``'s ``abs_path``), an
+    upload's path relative to agent home (``uploads/shot.png``) from a caller
+    that keeps that answer, or the path of a file the front end attached where
+    it already was -- the spellings every file tool takes, and a relative one
+    resolves to nothing from wherever ``raven serve`` happens to have been
+    started. The downstream check is a bare ``is_file()`` that drops a miss in
+    silence, so a cwd-relative resolve loses the attachment with no error
+    anywhere.
 
     The mime is left generic on purpose: ``render.build_user_content`` sniffs
     the magic bytes, and the channels' own intake does the same thing here.

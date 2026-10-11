@@ -706,8 +706,8 @@ async def test_an_upload_is_not_shadowed_by_a_same_named_file_in_the_session_roo
 
 
 async def test_an_upload_named_absolutely_is_admitted_from_a_pinned_session(tmp_path) -> None:
-    """The spelling the front end now sends for an upload (lib/uploadPaths):
-    the file ``fs.upload`` wrote, named absolutely, while the session runs
+    """The spelling the front end sends for an upload -- the composer stages the
+    file ``fs.upload`` wrote, named absolutely -- while the session runs
     somewhere else. ``restrict_to_workspace`` admits agent home beside the
     session's own root, so the reader's own upload is not fenced out of its
     own turn -- which is what makes the absolute spelling safe to send."""

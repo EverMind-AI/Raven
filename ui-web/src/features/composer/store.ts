@@ -6,7 +6,6 @@ import * as attachmentCache from '../../lib/attachmentCache'
 import { formatDuration } from '../../lib/duration'
 import { IMG_EXT } from '../../lib/pictureExt'
 import { current as currentSession } from '../../lib/session'
-import { remember as rememberUpload } from '../../lib/uploadPaths'
 import { draw as plusDraw } from '../../state/plus'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -509,8 +508,9 @@ export function canPickTemplate(): boolean {
 
 /* A picked template is staged like a file that is still uploading -- the
    server is copying it under uploads -- and becomes an ordinary attachment
-   once the path lands. The cover rides as the chip's picture, so the tray
-   shows which template was picked rather than a file name. */
+   once the path lands, named like an upload by the file the server wrote.
+   The cover rides as the chip's picture, so the tray shows which template was
+   picked rather than a file name. */
 export function addTemplate(row: TemplateRow): void {
   const api = source().templates
   if (!api) return
@@ -522,11 +522,10 @@ export function addTemplate(row: TemplateRow): void {
   goPaint()
   api.pick(row.name)
     .then((r) => {
-      entry.path = r.path
+      entry.path = r.abs_path || r.path
       entry.size = r.size
       entry.uploading = false
-      if (r.abs_path) rememberUpload(r.path, r.abs_path)
-      if (entry.url) attachmentCache.set(r.path, entry.url)
+      if (entry.url) attachmentCache.set(entry.path, entry.url)
       traySet(owner, trayOf(owner).slice())
       goPaint()
     })
@@ -581,7 +580,13 @@ export function addPaths(refs: ReadonlyArray<{ path: string; url: string }>): vo
 
 /* Files are uploaded into <workspace>/uploads and handed to the agent as
    paths: every file tool is already workspace-scoped, so a path is all it
-   needs. Bytes never ride inside the message. */
+   needs. Bytes never ride inside the message.
+
+   The path staged is the file the upload wrote (`abs_path`), not the short
+   `uploads/<name>` the server answers as well: a session root can hold an
+   `uploads/<name>` of its own, which the workspace pane lists and a drag stages
+   by that very spelling, so only the absolute one says which of the two was
+   meant. */
 export function addFiles(files: ArrayLike<File>): void {
   const up = source().upload
   if (!up) return
@@ -608,11 +613,10 @@ export function addFiles(files: ArrayLike<File>): void {
       if (/^image\//.test(file.type || '')) entry.url = dataUrl
       up({ name, content_b64: b64 })
         .then((r) => {
-          entry.path = r.path
+          entry.path = r.abs_path || r.path
           entry.size = r.size
           entry.uploading = false
-          if (r.abs_path) rememberUpload(r.path, r.abs_path)
-          if (entry.url) attachmentCache.set(r.path, entry.url)
+          if (entry.url) attachmentCache.set(entry.path, entry.url)
           traySet(owner, trayOf(owner).slice())
           goPaint()
         })

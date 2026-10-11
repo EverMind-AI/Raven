@@ -31,11 +31,10 @@ export interface UploadReq {
 }
 
 export interface UploadRes {
-  /* The short spelling the note carries and the bubble renders from. */
   path: string
-  /* The file that spelling names, where the host answers one (`fs.upload`
-     does; a test double need not). It is what the turn is handed -- see
-     lib/uploadPaths. */
+  /* The file itself, which is what the composer stages: `path` is relative to
+     agent home, and `uploads/<name>` can also name a session root's own file.
+     A test double need not answer one. */
   abs_path?: string
   size: number
 }

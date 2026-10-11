@@ -25,6 +25,7 @@ import * as lang from '../state/lang'
 import * as pageStore from '../state/page'
 import * as perm from '../state/perm'
 import * as plus from '../state/plus'
+import { mediaOf } from '../state/session/runtime'
 import { setSources } from '../state/sources'
 import * as tier from '../state/tier'
 import * as wd from '../state/workdir'
@@ -699,5 +700,35 @@ describe('a drop onto the field', () => {
     fire('dragstart', picture(), carrying([`${location.origin}/file?path=uploads%2fshot.png&session=s1`]))
     fire('drop', field(), carrying([`${location.origin}/file?session=s1&path=uploads/shot.png`]))
     expect(staged()).toEqual(['uploads/shot.png'])
+  })
+
+  /* `uploads/shot.png` can name two files: what an upload wrote under agent
+     home, and a session root's own file, which the workspace pane lists and a
+     drag stages by that spelling. An upload staged earlier must not answer for
+     the dragged one, so the two are told apart where they are staged. */
+  it('hands the turn a dragged file, not an earlier upload of the same name', async () => {
+    const upload = vi.fn(async (req: { name: string }) => ({
+      path: `uploads/${req.name}`,
+      abs_path: `/home/me/.raven/workspace/uploads/${req.name}`,
+      size: 4,
+    }))
+    render({ upload })
+    /* The i18n catalogue's own words: the send reads the note back by its heading. */
+    resetTranslator()
+    composer.install()
+    fire('drop', field(), carrying([], [new File(['x'], 'shot.png', { type: 'image/png' })]))
+    await settle()
+    act(() => { store.fireSend() })
+    const dt = carrying([fileAt('uploads/shot.png')])
+    fire('dragstart', picture(), dt)
+    fire('drop', field(), dt)
+    await settle()
+    act(() => { store.fireSend() })
+
+    expect(upload).toHaveBeenCalledTimes(1)
+    expect(sent.map((text) => mediaOf(text).media)).toEqual([
+      ['/home/me/.raven/workspace/uploads/shot.png'],
+      ['uploads/shot.png'],
+    ])
   })
 })
