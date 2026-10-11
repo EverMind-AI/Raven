@@ -47,6 +47,14 @@ def test_reused_prompt_tokenization_matches_whole_payload_counts() -> None:
         assert [tokens.estimate_prompt_tokens(history) for history in histories] == expected
 
 
+def test_cache_boundaries_match_the_selected_encoding() -> None:
+    history = [{"role": "user", "content": "!\n/s"}]
+    expected = tokens.estimate_prompt_tokens(history)
+    with tokens.reuse_prompt_tokenization():
+        tokens.estimate_prompt_tokens([{"role": "user", "content": "warmup"}])
+        assert tokens.estimate_prompt_tokens(history) == expected
+
+
 def test_reused_prompt_tokens_keep_reasoning_tools_images_and_error_fallback() -> None:
     image = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
     history = [

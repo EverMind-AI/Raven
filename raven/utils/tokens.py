@@ -18,6 +18,7 @@ from raven.utils.images import estimate_content_part_tokens
 
 # A cl100k regex piece cannot cross a newline followed by non-whitespace.
 # These boundaries preserve full-prompt tokenization, unlike message boundaries.
+_ENCODING_NAME = "cl100k_base"
 _TOKEN_BOUNDARY = re.compile(r"(?<=[\r\n])(?=\S)")
 
 
@@ -107,7 +108,7 @@ def estimate_prompt_tokens(
             cache.clear()
         return extra_tokens
     try:
-        enc = tiktoken.get_encoding("cl100k_base")
+        enc = tiktoken.get_encoding(_ENCODING_NAME)
         text_tokens = len(enc.encode(payload)) if cache is None else cache.count(payload, enc)
     except Exception:
         if cache is not None:
@@ -152,7 +153,7 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     if not payload:
         return max(1, extra_tokens)
     try:
-        enc = tiktoken.get_encoding("cl100k_base")
+        enc = tiktoken.get_encoding(_ENCODING_NAME)
         text_tokens = len(enc.encode(payload))
     except Exception:
         text_tokens = len(payload) // 4
