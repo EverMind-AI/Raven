@@ -1775,7 +1775,11 @@ on; a conversation can run in a mode of its own (`config.set` with its
 `session_id`), kept the way its model is kept: in memory by
 `permissions/session.py` and on the conversation's record
 (`metadata["permissions_mode"]`), so a restart does not undo it. The gate
-reads both live per tool call, the conversation's own first.
+reads both live per tool call, the conversation's own first. A direct chat with
+an instance *is* that conversation: it runs on the instance's lane, and the
+entrance that knows the turn is direct hands the conversation over
+(`PermissionTurn.session`), so the conversation's mode governs it as it governs
+the main agent's turns.
 
 **Tier**:
 One tool call's standing with the gate: `allow` runs, `ask` needs a human (as
@@ -1792,7 +1796,9 @@ the click two ways. `allow_session` remembers the still-asking parts of the
 action on the conversation (`permissions/session.py`: for `exec` one key per
 segment no rule covers, with the machine and the directory it runs in; for a
 file tool its path), and a later call whose every such part was granted runs
-without asking. `allow_always` writes the prefix rule the human confirmed --
+without asking. A direct chat with an instance is that conversation here too:
+a grant given while talking to one instance covers the conversation's other
+turns, and a grant made in the conversation covers its direct chats. `allow_always` writes the prefix rule the human confirmed --
 suggested by the gate, validated the same way, and editable before it is sent
 on the terminal while the page sends the suggestion as it stands -- into
 `permissions.tools.exec`,

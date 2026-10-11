@@ -191,6 +191,10 @@ class RpcTurnRunner(AgentTurnRunner):
         start_permission_turn(
             self._approval_responder if watched else None,
             conversation_id=cid,
+            # A direct chat answers to the permission state of the
+            # conversation its lane belongs to, and this is the one place that
+            # knows the turn is direct (see ``PermissionTurn.session``).
+            session=session_of(cid) if req.direct_target else "",
             turn_id=req.turn_id or "",
             on_review=_on_review if watched else None,
             # A direct chat is a person's turn answered by a named instance, and

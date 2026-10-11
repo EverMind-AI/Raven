@@ -23,7 +23,7 @@ from raven.spine import OriginPools, Scheduler
 from raven.spine.delivery import DeliveryHub
 from raven.spine.events import Text, TurnEnded, TurnFailed, TurnStarted
 from raven.spine.message import Source
-from raven.spine.turn import Origin
+from raven.spine.turn import Origin, session_of
 
 if TYPE_CHECKING:
     from raven.agent.loop import AgentLoop
@@ -126,6 +126,9 @@ class GatewayTurnRunner(AgentTurnRunner):
         start_permission_turn(
             ApprovalViaAsk(asker, cid) if asker is not None else None,
             conversation_id=cid,
+            # Nothing here is direct today; handed over anyway so a lane that
+            # ever reaches this entrance keeps the rule (PermissionTurn.session).
+            session=session_of(cid) if req.direct_target else "",
             turn_id=req.turn_id or "",
             origin=req.origin.value,
         )

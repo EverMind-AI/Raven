@@ -83,6 +83,11 @@ class PermissionTurn:
     #: on the same terms: only where a person is there to type it.
     credentials: CredentialAsker | None = None
     conversation_id: str = ""
+    # The conversation this turn belongs to, when the entrance knows it is not
+    # ``conversation_id``: a direct chat runs on the instance's lane, and the
+    # conversation is that lane's session. Empty for every other turn, whose
+    # conversation_id already is the conversation -- see ``session_key``.
+    session: str = ""
     turn_id: str = ""
     # Who this turn speaks for, as the approval prompt names it: the request's
     # origin ("user", "subagent", ...) and, for a sub-agent, the agent's name.
@@ -99,27 +104,25 @@ class PermissionTurn:
 
     @property
     def session_key(self) -> str:
-        """The conversation this turn belongs to: a direct chat's lane is not one.
+        """The conversation this turn belongs to: the entrance's answer, else its own id.
 
-        A direct chat runs on ``<session>#<agent>/<handle>``
-        (``raven.spine.turn.direct_lane``), so ``conversation_id`` names the
-        instance's own lane, while everything a *conversation* settles -- its
-        permission mode, its session grants -- is settled per conversation and
-        written under the bare session key. Keyed by the lane instead, the two
-        id spaces meet nothing: the conversation's mode never reached its
-        direct chats, and a grant made in one of them never reached the
-        conversation. Splits on the first separator, which is what makes a
-        handle containing anything at all safe; on a key without one this is
-        the identity, so an ordinary turn is unaffected.
+        A direct chat runs on the instance's lane, ``<session>#<agent>/<handle>``
+        (``raven.spine.turn.direct_lane``), and everything a *conversation*
+        settles -- its permission mode, its session grants -- is settled per
+        conversation and written under the bare session key. Keyed by the lane,
+        the two id spaces meet nothing: the conversation's mode never reached
+        its direct chats, and a grant made in one of them never reached the
+        conversation.
+
+        Only the entrance knows a turn is direct (``req.direct_target``), so it
+        is the entrance that hands the session over, the way
+        ``raven.rpc.spine`` does with ``session_of(cid)``. Nothing is split
+        here: a person may name a conversation whose key contains the lane
+        separator -- ``raven agent --session cli:issue#42`` keeps it as typed --
+        and splitting it would merge two conversations into one permission
+        scope.
         """
-        # Imported here rather than at module scope, the way
-        # ``raven.permissions.builtin`` reaches ``raven.agent.workdir``: the
-        # gate is assembled on every surface's startup path, and this shelf
-        # keeps what it drags in small. The same read as
-        # ``raven.acp.permissions``'s ``_session_for``.
-        from raven.spine import session_of
-
-        return session_of(self.conversation_id)
+        return self.session or self.conversation_id
 
 
 _TURN: ContextVar[PermissionTurn | None] = ContextVar("permission_turn", default=None)
@@ -136,6 +139,7 @@ def start_permission_turn(
     *,
     conversation_id: str,
     turn_id: str,
+    session: str = "",
     on_review: Callable[[str, str], Awaitable[None]] | None = None,
     origin: str = "",
     origin_name: str = "",
@@ -153,6 +157,7 @@ def start_permission_turn(
         responder=responder,
         credentials=credentials,
         conversation_id=conversation_id,
+        session=session,
         turn_id=turn_id,
         origin=origin,
         origin_name=origin_name,
