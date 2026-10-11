@@ -4595,7 +4595,7 @@ async def test_the_reply_ends_a_message_where_the_live_view_does() -> None:
 
 @pytest.mark.parametrize("status", ["in_progress", "pending"])
 async def test_a_progress_frame_on_an_open_call_does_not_end_the_message(status: str) -> None:
-    """A call still running ends nothing.
+    """A pending or in-progress call ends nothing.
 
     Raven's own held prompt beats an ``in_progress`` update on its open wait call
     every minute while the wake turn's report streams, and ending the message
@@ -4630,7 +4630,7 @@ async def test_a_progress_frame_on_an_open_call_does_not_end_the_message(status:
 
 
 async def test_a_status_less_update_still_ends_the_message() -> None:
-    """Only an update that says its call is still running is passed over.
+    """Only an update marked pending or in_progress is passed over.
 
     claude-agent-acp reports a finished call's result on an update with no
     status at all, sent from its PostToolUse hook -- the captured frame below --

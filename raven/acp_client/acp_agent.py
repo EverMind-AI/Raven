@@ -94,7 +94,7 @@ _USER_UPDATES = ("user_message_chunk",)
 # and the protocol marks the boundary only by what came between them. Thoughts
 # and usage updates are deliberately not here -- neither ends a message, and
 # breaking on one would split a single reply mid-sentence. An update that says
-# its call is still running is passed over for the same reason.
+# its call is pending or in progress is passed over for the same reason.
 _BREAKING_UPDATES = ("tool_call", "tool_call_update")
 _MESSAGE_BREAK = "\n\n"
 
@@ -399,7 +399,7 @@ class _TurnCollector:
             # own row to the transcript: the call names what was run, the update
             # carries how it ended. One branch, because the boundary is the same
             # fact for both -- an answer chunk after either starts a new message.
-            # Not after an update that says the call is still running: raven's
+            # Not after a pending or in_progress update: raven's
             # own held prompt beats one on its open wait call every minute, and
             # the wake turn's report may be mid-sentence when it lands. The
             # opening frame says `in_progress` too and still ends the message
@@ -826,7 +826,7 @@ class _TurnCollector:
         """What the run hands its caller: the last message, never the ones before it.
 
         A message is what the live view shows between two steps -- a tool call,
-        an update that does not say the call is still running, or a plan
+        an update whose status is neither pending nor in_progress, or a plan
         opening -- so the caller gets the last one exactly as it streamed. A
         steer inside it stays inside it, set apart by a break that the
         message's stream budget counts the way the reply's cap does. A turn that
