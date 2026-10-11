@@ -42,15 +42,6 @@ def fenced(tmp_path: Path) -> ExecTool:
     return ExecTool(working_dir=str(tmp_path), restrict_to_workspace=True)
 
 
-#: Every refusal the fence can answer with, for the cases that assert only
-#: that it answers at all rather than which way.
-_REFUSALS = (
-    "Error: Command blocked by safety guard (path traversal detected)",
-    "Error: Command blocked by safety guard (directory change outside working dir)",
-    "Error: Command blocked by safety guard (path outside working dir)",
-)
-
-
 def refusal(tool: ExecTool, command: str) -> str | None:
     return tool._check_workspace_restriction(command, str(tool.working_dir))
 
@@ -548,15 +539,37 @@ def test_a_destination_that_cannot_be_resolved_at_all_is_refused(fenced: ExecToo
     assert refusal(fenced, "cd ~nosuchuserxyz") is not None
 
 
-def test_a_nesting_deeper_than_the_cap_still_answers(fenced: ExecTool, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The cap is there so a crafted command cannot drive the scan down
-    forever. What it must not do is fail to answer."""
-    monkeypatch.setenv("HOME", "/home/victim")
-    command = "cat $HOME/.ssh/id_rsa"
-    for _ in range(6):
-        command = f"sh -c {shlex.quote(command)}"
+def test_the_shell_nesting_bound_refuses_unscanned_payloads(fenced: ExecTool, monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.agent.tools.shell as shell_module
 
-    assert refusal(fenced, command) in (None, *_REFUSALS)
+    monkeypatch.setattr(shell_module, "_MAX_EMBEDDED_SHELL_DEPTH", 2)
+    command = "printf ready"
+    for _ in range(2):
+        command = f"sh -c {shlex.quote(command)}"
+    assert refusal(fenced, command) is None
+    command = f"sh -c {shlex.quote(command)}"
+    assert refusal(fenced, command) == "Error: Command blocked by safety guard (shell nesting limit exceeded)"
+
+
+@pytest.mark.parametrize("pipeline", ["ls | wc -l", "ls | cat | wc -l", "ls |& wc -l"])
+def test_a_pipeline_keeps_the_directory_established_before_it(fenced: ExecTool, pipeline: str) -> None:
+    assert refusal(fenced, f"cd build && {pipeline} && cd .. && ls") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd build | cat && cd ..",
+        "cat | cd build && cd ..",
+        "cd build | cd other && cd ..",
+        "false && cd build && ls | wc -l; cd ..",
+        "cd build && ls | wc -l; cd ..",
+        "true || cd build && cd ..",
+        "false | true || cd build && cd .. | cd build",
+    ],
+)
+def test_a_pipeline_does_not_prove_an_uncertain_directory_change(fenced: ExecTool, command: str) -> None:
+    assert refusal(fenced, command) is not None
 
 
 # ---------- a wrapper in front of the thing that runs -------------------------
