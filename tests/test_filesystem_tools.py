@@ -8,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from raven.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+from raven.agent.tools import filesystem
+from raven.agent.tools.filesystem import (
+    EditFileTool,
+    ReadFileTool,
+    WriteFileTool,
+    _is_device_name,
+    resolve_path,
+)
 from raven.agent.tools.registry import ToolRegistry
 from raven.contracts.tool import ToolOutput, ToolResult
 
@@ -231,3 +238,102 @@ def test_a_file_too_large_to_preview_is_not_read_at_all(tmp_path: Path):
     view = WriteFileTool(workspace=tmp_path).approval_evidence({"path": "big.log", "content": "small"})
 
     assert view == {"path": str(target.resolve()), "created": False}
+
+
+# ---------------------------------------------------------------------------
+# The Windows device-name fence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "segment",
+    [
+        "nul",
+        "NUL",
+        "nul.md",
+        "Nul.Md",
+        "nul.tar.gz",
+        "con",
+        "con.txt",
+        "aux",
+        "prn",
+        "com0",
+        "com1",
+        "com9",
+        "lpt0",
+        "lpt9",
+        "conin$",
+        "conout$",
+        "nul ",
+        "nul.",
+        "nul .md",
+    ],
+)
+def test_a_device_segment_is_one_in_any_spelling(segment):
+    assert _is_device_name(segment)
+
+
+@pytest.mark.parametrize(
+    "segment",
+    ["report.md", "null", "nulx", "nulx.md", "com10", "com19", "config.json", "auxiliary.md", "con an.md", "", "."],
+)
+def test_an_ordinary_segment_is_not_a_device_name(segment):
+    assert not _is_device_name(segment)
+
+
+def test_a_device_name_is_refused_the_way_an_out_of_fence_path_is(monkeypatch, tmp_path: Path):
+    """On Windows ``nul`` names the NUL device in every directory (CPython 95486).
+
+    ``Path.resolve()`` cannot see it coming: ``ntpath.realpath`` maps only a
+    path that is exactly ``nul`` to ``\\\\.\\NUL`` and hands
+    ``<workspace>\\nul`` back unchanged, so the allowed-dir check accepts it
+    and a write answers success for content no file received. The fence has to
+    catch the name itself.
+    """
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+    for name in ("nul", "nul.md", "con.md", "subdir/nul"):
+        with pytest.raises(PermissionError, match="reserved device name"):
+            resolve_path(name, workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+
+def test_a_device_name_is_refused_when_the_path_is_absolute(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    with pytest.raises(PermissionError, match="reserved device name"):
+        resolve_path(str(tmp_path / "nul"), workspace=tmp_path, allowed_dirs=(tmp_path,))
+
+
+def test_an_ordinary_name_resolves_with_the_gate_on(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    assert resolve_path("report.md", workspace=tmp_path, allowed_dirs=(tmp_path,)) == tmp_path / "report.md"
+
+
+def test_a_device_like_name_stays_legal_off_windows(monkeypatch, tmp_path: Path):
+    """POSIX puts no devices in names: a workspace file called ``nul`` is a file."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", False)
+
+    assert resolve_path("nul", workspace=tmp_path, allowed_dirs=(tmp_path,)) == tmp_path / "nul"
+
+
+@pytest.mark.asyncio
+async def test_a_write_to_a_device_name_answers_an_error_and_writes_nothing(monkeypatch, tmp_path: Path):
+    """The defect was a success receipt for content no file received."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    answer = await WriteFileTool(workspace=tmp_path).execute(path="nul", content="hello\n")
+
+    assert isinstance(answer, str)
+    assert "reserved device name" in answer
+    assert not (tmp_path / "nul").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_read_of_a_device_name_answers_an_error_not_a_missing_file(monkeypatch, tmp_path: Path):
+    """ "File not found" reads as a misspelling; the name is the problem itself."""
+    monkeypatch.setattr(filesystem, "_WINDOWS", True)
+
+    answer = await ReadFileTool(workspace=tmp_path).execute(path="nul.md")
+
+    assert isinstance(answer, str)
+    assert "reserved device name" in answer
