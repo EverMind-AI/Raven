@@ -12,15 +12,24 @@ import yaml
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _FM_CLOSE_RE = re.compile(r"^---\s*$", re.MULTILINE)
 _YAML_MAX_CHARS = 16 * 1024
+_YAML_MAX_DEPTH = 32
 
 
 class _FrontmatterLoader(yaml.SafeLoader):
-    """Refuse aliases in untrusted frontmatter before constructing their values."""
+    """Bound composition before untrusted nesting or aliases expand into values."""
+
+    _depth = 0
 
     def compose_node(self, parent, index):
         if self.check_event(yaml.AliasEvent):
             raise yaml.YAMLError("aliases are not accepted in frontmatter")
-        return super().compose_node(parent, index)
+        if self._depth >= _YAML_MAX_DEPTH:
+            raise yaml.YAMLError("frontmatter nesting is too deep")
+        self._depth += 1
+        try:
+            return super().compose_node(parent, index)
+        finally:
+            self._depth -= 1
 
 
 def _parse_frontmatter_block(block: str) -> dict[str, Any]:
@@ -70,8 +79,9 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
     Returns ``(metadata_dict, body_after_frontmatter)``.
     Returns ``({}, original_text)`` when no complete frontmatter is found.
-    Invalid YAML, aliases, non-mappings, and blocks over 16 KiB use the legacy
-    line fallback. Non-string names and descriptions keep their source text.
+    Invalid YAML, aliases, non-mappings, blocks over 16,384 characters, and
+    nesting beyond 32 nodes use the legacy line fallback. Non-string names
+    and descriptions keep their source text.
     Valid YAML retains its scalar coercions and inline-comment semantics.
     """
     if not text.startswith("---"):

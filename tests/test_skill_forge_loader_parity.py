@@ -121,6 +121,27 @@ def tmp_builtin(tmp_path: Path):
 
 
 class TestFrontmatterParsing:
+    @pytest.mark.parametrize("reader", ["registry", "importer"])
+    def test_deep_frontmatter_stops_composing_early(self, monkeypatch, reader):
+        import yaml
+
+        from raven.utils.text import parse_frontmatter
+
+        compose = yaml.SafeLoader.compose_node
+        visits = 0
+
+        def counted(self, parent, index):
+            nonlocal visits
+            visits += 1
+            return compose(self, parent, index)
+
+        monkeypatch.setattr(yaml.SafeLoader, "compose_node", counted)
+        shape = "[" * 7000 + "]" * 7000
+        content = f"---\nname: deep\nshape: {shape}\n---\nbody"
+        parsed = _parse_frontmatter(content) if reader == "registry" else parse_frontmatter(content)[0]
+        assert parsed == {"name": "deep", "shape": shape}
+        assert visits < 100
+
     @pytest.mark.parametrize(
         "block",
         [

@@ -9,6 +9,10 @@ contain a whitespace-prefixed `#`, or YAML treats the rest as a comment;
 Likewise, `inject: description # digest` selects description-only injection.
 Malformed or unsupported frontmatter uses the legacy line fallback, and
 non-string `name` and `description` values retain their source spelling.
+The registry and importers use the same parser. YAML composition rejects aliases
+and stops at 32 nested nodes; blocks over 16,384 characters use the line fallback
+without invoking YAML. These limits bound parser work without promising a fixed
+time per skill.
 
 ## Available Skills
 
