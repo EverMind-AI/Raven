@@ -218,10 +218,9 @@ def may_prompt(model: str) -> bool:
     return any((drivers / part / "authenticator.py").exists() for part in model.split("/") if part)
 
 
-# LiteLLM answers a huggingface id's context window by fetching the repo's
-# `config.json` over the network -- `utils.py::_get_max_position_embeddings`,
-# on every call, cached nowhere. `allow_fetch=False` does not reach it: that
-# flag governs this module's own OpenRouter fetch, not LiteLLM's.
+# LiteLLM fetches a huggingface id's config.json for its context window.
+# Skip this driver even when SDK lookups are allowed: the routing prefix
+# becomes part of the repository name, so the request returns 404.
 _NETWORK_METADATA_VENDORS = frozenset({"huggingface"})
 
 
@@ -794,7 +793,7 @@ def _litellm_ready() -> bool:
     return not getattr(getattr(module, "__spec__", None), "_initializing", False)
 
 
-def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | None:
+def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
     """The model's own output ceiling, from the same metadata as the window.
 
     ``max_tokens`` is a legitimate fallback here in a way it is not on the
@@ -804,6 +803,9 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
     Both tiers are filtered through ``_trustworthy_ceiling``: the rows that get
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
+
+    ``allow_fetch=False`` reads only the static table: ``get_model_info`` can
+    query a provider even when LiteLLM itself is already imported.
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -818,7 +820,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True) -> int | N
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if may_prompt(candidate) or may_fetch(candidate):
+        if not allow_fetch or may_prompt(candidate) or may_fetch(candidate):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -880,9 +882,9 @@ def declared_max_output_tokens(model: str | None, *, allow_fetch: bool = True) -
     """
     if not model:
         return None
-    return _try_litellm_max_output(model, allow_import=allow_fetch) or _try_openrouter_max_output(
-        model, allow_fetch=allow_fetch
-    )
+    return _try_litellm_max_output(
+        model, allow_import=allow_fetch, allow_fetch=allow_fetch
+    ) or _try_openrouter_max_output(model, allow_fetch=allow_fetch)
 
 
 def resolve_max_output_tokens(model: str | None, *, window: int | None = None, allow_fetch: bool = True) -> int:
@@ -941,8 +943,8 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     return max(1, min(ceiling, room, MAX_OUTPUT_TOKENS_PER_ITERATION))
 
 
-def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int | None:
-    """LiteLLM's static model metadata -- offline, covers most mapped providers.
+def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
+    """LiteLLM's model metadata, covering most mapped providers.
 
     Falls back to ``max_tokens`` (the output ceiling) for the handful of rows
     that carry no ``max_input_tokens``. Not because the two mean the same
@@ -958,6 +960,9 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
     only, not to wait out the import it is trying to defer. Once LiteLLM is in
     hand the check is free and the lookup proceeds exactly as with
     ``allow_import=True``.
+
+    ``allow_fetch=False`` reads only the static table: ``get_model_info`` can
+    query a provider even when LiteLLM itself is already imported.
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -974,7 +979,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True) -> int
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if may_prompt(candidate) or may_fetch(candidate):
+        if not allow_fetch or may_prompt(candidate) or may_fetch(candidate):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -1003,11 +1008,11 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
 
     ``allow_fetch=False`` means "answer from what is already on hand": it
     passes through to the OpenRouter tier (see ``_fetch_openrouter_models``)
-    and also tells the LiteLLM tier not to import LiteLLM on this caller's
-    behalf (see ``_try_litellm_context_window``) -- a caller cheap enough to
-    pass this is cheap enough not to pay a fresh import either.
+    and limits the LiteLLM tier to its already loaded static table. No fresh
+    import or SDK metadata lookup runs on this caller's behalf (see
+    ``_try_litellm_context_window``).
     """
-    window = _try_litellm_context_window(model, allow_import=allow_fetch)
+    window = _try_litellm_context_window(model, allow_import=allow_fetch, allow_fetch=allow_fetch)
     if window:
         return window
 
