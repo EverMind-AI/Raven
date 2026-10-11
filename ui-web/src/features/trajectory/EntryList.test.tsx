@@ -303,11 +303,11 @@ describe('the entry list', () => {
 })
 
 describe('what the rows say about themselves', () => {
-  it('draws the visible rows only, marks a revealed one, reads a missing record in red and names a side question', async () => {
+  it('draws the visible rows only, marks a revealed one and reads a missing record in red without appending purposes', async () => {
     const list = [
       entry('ask', 0, { kind: 'user.input', turn_start: true, turn_number: 1, turn_span_id: 'turn' }),
       entry('side', 1, { kind: 'llm.input', meta: { purpose: 'watch_work' } }),
-      entry('main', 2, { kind: 'llm.input', meta: { purpose: 'main' } }),
+      entry('main', 2, { kind: 'llm.output', meta: { purpose: 'permission_judge' } }),
       entry('gone', 3, { kind: 'tool.output', integrity: ['artifact_missing'], preview: 'stale words' }),
       entry('reply', 4, { kind: 'turn.end', slot: 'turn.output', turn_span_id: 'turn', charged_ms: 9000, meta: { hidden: 'redundant_reply' } }),
       entry('enq', 5, { kind: 'memory.enqueue.summary', meta: { hidden: 'empty_internal' } }),
@@ -319,8 +319,10 @@ describe('what the rows say about themselves', () => {
     expect(document.querySelector('.trajectory-row[data-entry="ask"]')?.getAttribute('aria-setsize')).toBe('4')
     /* The turn's number carries the whole turn's time, the hidden reply's charge. */
     expect(document.querySelector('.trajectory-row[data-entry="ask"] .trajectory-turn')?.getAttribute('title')).toBe('gui.trajectory.turn_total {"n":1,"dur":"9s"}')
-    expect(document.querySelector('.trajectory-row[data-entry="side"] .trajectory-purpose')?.textContent).toBe('watch_work')
-    expect(document.querySelector('.trajectory-row[data-entry="main"] .trajectory-purpose')).toBeNull()
+    expect(document.querySelector('.trajectory-row[data-entry="side"] .trajectory-kind')?.textContent).toBe('gui.trajectory.kind.llm_input')
+    expect(document.querySelector('.trajectory-row[data-entry="main"] .trajectory-kind')?.textContent).toBe('gui.trajectory.kind.llm_output')
+    expect(document.querySelector('.trajectory-list')?.textContent).not.toContain('watch_work')
+    expect(document.querySelector('.trajectory-list')?.textContent).not.toContain('permission_judge')
     const missing = document.querySelector('.trajectory-row[data-entry="gone"] .trajectory-text') as HTMLElement
     expect(missing.classList.contains('trajectory-text-missing')).toBe(true)
     expect(missing.textContent).toBe('gui.trajectory.missing_record')

@@ -89,7 +89,6 @@ function Row({ entry, at, selected, total, revealed, turnTotal }: {
   const turnTitle = turnShown && turnTotal !== null
     ? t('gui.trajectory.turn_total', { n: entry.turn_number as number, dur: formatDuration(turnTotal) })
     : undefined
-  const purpose = typeof entry.meta?.purpose === 'string' && entry.meta.purpose !== 'main' ? entry.meta.purpose : null
   const missing = isMissing(entry)
   const classes = ['trajectory-row']
   if (selected) classes.push('trajectory-row-on')
@@ -118,7 +117,6 @@ function Row({ entry, at, selected, total, revealed, turnTotal }: {
         <span className={`trajectory-tag ${kindClass(entry.kind)}`} title={known ? undefined : entry.span_name}>
           {kindLabel(entry.kind)}
         </span>
-        {purpose ? <span className="trajectory-purpose" title={t('gui.trajectory.purpose_title', { purpose })}>{purpose}</span> : null}
       </span>
       {missing
         ? <span className="trajectory-text trajectory-text-missing" title={entry.integrity.join(', ')}>{t('gui.trajectory.missing_record')}</span>

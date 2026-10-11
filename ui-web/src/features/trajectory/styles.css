@@ -116,8 +116,6 @@ html[data-theme="dark"] {
 .trajectory-text-none { color: var(--faint); font-style: italic; }
 /* A row whose record is not there to read says so, in the failure colour. */
 .trajectory-text-missing { color: var(--chat-danger, var(--clay)); }
-/* The small word after a model row's tag naming the side question it answers. */
-.trajectory-purpose { margin-left: 4px; font-size: 10px; color: var(--faint); white-space: nowrap; }
 /* A hidden row shown because something pointed at it: a dashed edge on the left. */
 .trajectory-row-revealed { box-shadow: inset 3px 0 0 var(--line); color: var(--muted); }
 
