@@ -55,6 +55,25 @@ def test_cache_boundaries_match_the_selected_encoding() -> None:
         assert tokens.estimate_prompt_tokens(history) == expected
 
 
+@pytest.mark.parametrize("reset", ["empty", "unavailable"])
+def test_the_initial_prompt_is_forgotten_when_the_cache_clears(monkeypatch, reset) -> None:
+    history = [{"role": "user", "content": "The first prompt has more than one token."}]
+    expected = tokens.estimate_prompt_tokens(history)
+    with tokens.reuse_prompt_tokenization():
+        assert tokens.estimate_prompt_tokens(history) == expected
+        if reset == "empty":
+            tokens.estimate_prompt_tokens([])
+        else:
+
+            def unavailable(_name):
+                raise RuntimeError("encoding unavailable")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(tokens.tiktoken, "get_encoding", unavailable)
+                tokens.estimate_prompt_tokens(history)
+        assert tokens.estimate_prompt_tokens(history) == expected
+
+
 def test_reused_prompt_tokens_keep_reasoning_tools_images_and_error_fallback() -> None:
     image = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
     history = [
