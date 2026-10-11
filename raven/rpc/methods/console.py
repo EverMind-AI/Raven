@@ -2103,11 +2103,16 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
         # the page as a bare -32603 ``internal_error`` with no reason in it.
         raise ConfigValidationError(f"cannot create {target_dir}: {e}") from None
     name = _safe_name(params.get("name", ""))
-    # The session's own root is read first by ``viewer_root``, and both
-    # ``turn.send`` and ``/file`` follow it, so a name the session root already
-    # holds would hand the turn -- and the reloaded bubble -- that file instead
-    # of the bytes just uploaded. A session that cannot be resolved leaves the
-    # old rule alone; ``turn.send``'s own resolve fails the same way there.
+    # The session's own root is read first by ``viewer_root``, which both
+    # ``turn.send`` and ``/file`` follow, so a name that root already holds
+    # would hand a caller that sends the relative ``path`` that file instead of
+    # the bytes just uploaded. An empty ``session`` -- a draft, which has no
+    # conversation yet -- is checked against the resolver's policy default (the
+    # launch directory under ``raven serve``, ``<session root>/_`` under
+    # ``raven gateway``), which need not be where the draft will run: the web
+    # UI's composer sends ``abs_path``, which no root can stand in for. A root
+    # that cannot be read at all leaves agent home to decide alone, as
+    # ``turn.send`` falls back to agent home there.
     try:
         shadow_dir = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / _UPLOAD_DIR
     except Exception as exc:
