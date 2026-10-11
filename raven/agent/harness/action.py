@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from raven.agent.harness.participants import Verdict, compose_judge, compose_review, compose_salvage
 from raven.contracts.harness import ActionModule, ActionRequest
 from raven.contracts.participant import AgentParticipant, StepView
+from raven.observability.purpose import purpose as _llm_purpose
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMResponse
@@ -73,21 +74,23 @@ class DefaultAction:
 
     async def decide(self, request: ActionRequest) -> "LLMResponse":
         if request.on_token_delta is not None or request.on_reasoning_delta is not None:
-            return await request.stream_call(
+            with _llm_purpose("main"):
+                return await request.stream_call(
+                    messages=request.messages,
+                    tools=request.tools,
+                    model=request.model,
+                    on_token_delta=request.on_token_delta,
+                    on_reasoning_delta=request.on_reasoning_delta,
+                    **request.generation_overrides,
+                )
+        with _llm_purpose("main"):
+            return await request.provider.chat_with_retry(
                 messages=request.messages,
                 tools=request.tools,
                 model=request.model,
-                on_token_delta=request.on_token_delta,
-                on_reasoning_delta=request.on_reasoning_delta,
+                fallback_models=request.fallback_models,
                 **request.generation_overrides,
             )
-        return await request.provider.chat_with_retry(
-            messages=request.messages,
-            tools=request.tools,
-            model=request.model,
-            fallback_models=request.fallback_models,
-            **request.generation_overrides,
-        )
 
 
 def bind(action: DefaultAction) -> ActionModule:

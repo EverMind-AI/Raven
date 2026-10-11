@@ -90,6 +90,7 @@ from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
 from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
 from raven.contracts.loop_hooks import HookDecision
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.permissions.turn import set_current_tool_call_id
 from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
@@ -516,6 +517,9 @@ class TurnPathMixin:
         """
         if synthesis_policy is not None:
             prompt = f"{prompt}\n\n{synthesis_policy.guidance}"
+        # The turn's own conversation plus one instruction: the main line, not a
+        # side question, so its input reads as a continuation and its output as
+        # the turn's last word.
         synth_messages = messages + [{"role": "user", "content": prompt}]
         # The wrap-up is a model call of the same turn, so it pays the turn's
         # effort; absent, the provider's configured default stands.
@@ -523,13 +527,14 @@ class TurnPathMixin:
         if synthesis_policy is not None:
 
             async def _call(rows: list[dict]) -> str:
-                response = await self.provider.chat_with_retry(
-                    messages=rows,
-                    tools=None,
-                    model=model,
-                    fallback_models=fallback_models,
-                    **effort_kwargs,
-                )
+                with _llm_purpose("main"):
+                    response = await self.provider.chat_with_retry(
+                        messages=rows,
+                        tools=None,
+                        model=model,
+                        fallback_models=fallback_models,
+                        **effort_kwargs,
+                    )
                 return (self._strip_think(response.content) or "") if response.finish_reason != "error" else ""
 
             try:
@@ -561,22 +566,24 @@ class TurnPathMixin:
             return text
         try:
             if on_token_delta is not None or on_reasoning_delta is not None:
-                response = await self._llm_call_stream(
-                    messages=synth_messages,
-                    tools=None,
-                    model=model,
-                    on_token_delta=on_token_delta,
-                    on_reasoning_delta=on_reasoning_delta,
-                    **effort_kwargs,
-                )
+                with _llm_purpose("main"):
+                    response = await self._llm_call_stream(
+                        messages=synth_messages,
+                        tools=None,
+                        model=model,
+                        on_token_delta=on_token_delta,
+                        on_reasoning_delta=on_reasoning_delta,
+                        **effort_kwargs,
+                    )
             else:
-                response = await self.provider.chat_with_retry(
-                    messages=synth_messages,
-                    tools=None,
-                    model=model,
-                    fallback_models=fallback_models,
-                    **effort_kwargs,
-                )
+                with _llm_purpose("main"):
+                    response = await self.provider.chat_with_retry(
+                        messages=synth_messages,
+                        tools=None,
+                        model=model,
+                        fallback_models=fallback_models,
+                        **effort_kwargs,
+                    )
             text = self._strip_think(response.content)
             if response.finish_reason != "error" and text:
                 return text

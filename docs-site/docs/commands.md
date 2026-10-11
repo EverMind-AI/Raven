@@ -8,6 +8,7 @@ lists its subcommands and options.
 | `raven` or `raven tui` | Launch the terminal UI |
 | `raven web` | Open the WebUI and keep Raven running in the background |
 | `raven web --stop` | Stop the background WebUI service |
+| `raven web --dev` | Open the WebUI with the developer-only trajectory view enabled (also `raven --dev`) |
 | `raven agent -m "..."` | Run a single task from the command line |
 | `raven onboard` | Set up model providers, sandboxing, messaging channels, memory, web tool credentials, subagents, and data import |
 | `raven status` | Show configuration and runtime status |
@@ -22,9 +23,9 @@ lists its subcommands and options.
 | `raven playbook` | Create, validate, manage, and run reusable agent workflows |
 | `raven provider` | Configure providers and endpoints, authenticate, test connectivity, and select the active model |
 | `raven channels` | List, configure, authenticate, enable, or disable messaging channels |
-| `raven gateway` | Start the gateway and its configured services |
+| `raven gateway` | Start the gateway and its configured services; `--dev` enables the trajectory view in the page it hosts |
 | `raven gateway status` / `raven gateway reload` / `raven gateway stop` | Inspect, reload configuration, or gracefully stop a running gateway |
-| `raven serve` | Start the WebSocket RPC service and serve the WebUI when its build is available |
+| `raven serve` | Start the WebSocket RPC service and serve the WebUI when its build is available; `--dev` enables the trajectory view |
 | `raven skill` | Browse SkillForge skills, inspect their contents, block or unblock skills, and remove installed bundles |
 | `raven plugins` | List installed plugins and the active memory backend |
 | `raven plugin auth <server>` | Authenticate or refresh OAuth access for an MCP server |

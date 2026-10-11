@@ -2103,6 +2103,91 @@ unreadable expected payload always yields a record.
 _Avoid_: confusing with the session's conversation history — a Conversation
 Record derives from trace spans, not from session messages.
 
+**Trajectory Entry** (`raven/trajectory/entries.py`):
+One row of the trajectory view, projected by `project_entries` from a logical
+span (`traceId + spanId`, checkpoints merged last-write-wins, an in-progress
+snapshot never overriding a terminal record) at a stable slot (`llm.input`,
+`tool.output`, `artifact:<key>`, `summary`, `error`, …). Its id is
+`trace:span:slot` — never a sequence number, array index or text hash — so it
+survives re-reads, late inputs and checkpoint upgrades. It carries the owning
+operation's status (`running` / `ok` / `error` / `cancelled` / `unknown`) with the
+evidence codes that produced it, data-integrity codes kept separate from status,
+and the span's clock with a Timing Owner. A base span that expands to nothing
+gets a `summary` entry; a failed span with no completion slot gets an `error`
+entry, so exactly one entry per failed span is the `failure_entry`. A turn
+opens with `user.input` (slot `turn.input`) and closes with `turn.end` (slot
+`turn.output`): the turn's end is the Timing Owner of the whole turn, its event
+time is the turn's end, and its content is the text the turn delivered, which
+may be empty. Its `meta` carries what the projection derives from the cached
+records around it: for a model input the Message Delta (`delta` ∈ `first` /
+`continued` / `independent` / `unknown`, `new_from`, `echo_at`,
+`message_count`) and the LLM Purpose (`purpose`); and `hidden` for a row the
+list need not show — `redundant_reply`, a turn's end that repeats the turn's
+last model output word for word; `empty_reply`, a turn's end of a turn that
+finished `ok` whose recorded content was read and is null or blank;
+`empty_internal`, an outer-only summary that recorded nothing. A hidden row
+stays in the index and keeps its clock. While the recorder writes the turn's
+end as `{"content": null}` (`semconv.turn` reads `.content` off the tuple the
+turn returns), every ok turn end it records is `empty_reply` and
+`redundant_reply` cannot fire; the latter takes effect once that is fixed.
+_Avoid_: calling a Conversation Record an entry — that is the CLI's text
+projection, without identity, structured status or timing.
+
+**Message Delta** (`raven/trajectory/entries.py`, `_apply_delta`):
+What one model input adds to the conversation before it, proven rather than
+assumed: an earlier input of the same chain (the main line, or one sub-agent
+trace) with a compatible LLM Purpose counts as the predecessor only when its
+message sequence — the content addresses of a v2 artifact's messages — is an
+ordered prefix of this one; then `new_from = len(prefix)`, one more when the
+message right after the prefix is an assistant one — the predecessor's own
+output written back into the history, already a row of its own (`echo_at`
+names it; the role of a referenced message is learnt by a bounded read, and
+until then the prefix alone counts). The chain's first
+input is `first` (all new); an input no candidate precedes is `independent`
+(all new); an input whose own or whose candidates' messages are not read yet is
+`unknown`, decided again when they are. Computed at projection time from the
+preview cache, so a predecessor read later changes the row under a new
+revision. The row's preview is the first message that is not a system one of
+what the input brought and has text — the whole list for `first` and
+`independent`, the added messages for `continued`; the prompt stands while
+`unknown` or when nothing was added — read straight from an inline payload, or
+fetched for a referenced one with bounded reads the index queues
+(`_schedule_preview_repairs`): each opens one message and records its role and
+the start of its text, the probes kept being the scan window and the echo's
+place, a failed read being terminal.
+_Avoid_: calling two inputs of one trace a conversation because they share a
+turn — the watch-work judgement shares the turn and nothing else.
+
+**Timing Owner** (`raven/trajectory/entries.py`):
+The single Trajectory Entry charged a logical span's whole `end - start`
+duration (`charged_ms`, `timing_basis="span_full"`): the output slot when there
+is one, else the `error` entry, else the span's single event or last artifact
+slot, else its `summary`. Inputs and turn markers are charged zero
+(`"zero"`), `llm.thinking` is `"not_recorded"` (no independent timing exists in
+the record), other artifact slots of the same span are `"shared"`, and a span
+without a trustworthy end time charges `None` (`"unknown"`, never zero). A span's
+time is therefore counted at most once, while parent and child spans each keep
+their own, so the duration bar sums charged time, not wall-clock time.
+_Avoid_: reading `tool.duration_ms` or usage fields as the owner's charge — they
+are diagnostics, not the span clock.
+
+**LLM Purpose** (`raven/observability/purpose.py`):
+The caller's own name for why a model call is made — `main` for the agent
+loop's action call and for its wrap-up when the iterations run out (the turn's
+own conversation plus one instruction), `watch_work`, `title`,
+`permission_judge`, `memory_extract`, `skill_gate`, `dag_verdict`, `playbook` —
+set with `with purpose(name):` around a provider call that records an
+`llm.call` span (`chat_with_retry` or the loop's streaming call; a bare
+`chat()` records none, so a label there would never land) and read by that
+span's extractor into the `llm.purpose` attribute. A call made under no label
+records nothing: absent means "not said", never "main". The trajectory
+projection reads an absent label as unknown rather than as a side question: it
+is compatible with any label when continuity is proven, counts as the turn's
+own output when the turn's end is compared with it, and carries no badge.
+_Avoid_: reading `llm.invocation_source` as the purpose — that is the nearest
+enclosing span's name (`session.turn` for every call of a turn), not the
+caller's intent.
+
 ### Workspace & Onboarding
 
 **Agent home** (`get_workspace_path()`, `raven/config/paths.py`):

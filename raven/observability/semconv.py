@@ -13,6 +13,7 @@ import json
 from collections import Counter
 from typing import Any
 
+from raven.observability import purpose as _purpose
 from raven.observability import usage as usage_mod
 from raven.tracing import artifact_v2, config
 from raven.tracing import spans as _spans
@@ -802,9 +803,16 @@ def llm_call(span, bound: dict[str, Any], result: Any, exc: BaseException | None
     attrs.update(_generation_attrs(generation))
     if span.invocation_source:
         attrs["llm.invocation_source"] = span.invocation_source
+    _purpose_attr(attrs)
     span.set(attrs)
     span.artifact("llm.output", llm_output_payload(result))
     _finish_error(span, result)
+
+
+def _purpose_attr(attrs: dict[str, Any]) -> None:
+    label = _purpose.current()
+    if label:
+        attrs["llm.purpose"] = label
 
 
 def llm_call_stream(span, bound: dict[str, Any], result: Any, exc: BaseException | None) -> None:
@@ -829,6 +837,7 @@ def llm_call_stream(span, bound: dict[str, Any], result: Any, exc: BaseException
     attrs["llm.stream"] = True
     if span.invocation_source:
         attrs["llm.invocation_source"] = span.invocation_source
+    _purpose_attr(attrs)
     span.set(attrs)
     span.artifact("llm.output", llm_output_payload(result))
     _finish_error(span, result)

@@ -38,6 +38,7 @@ from loguru import logger
 from pydantic import ValidationError
 
 from raven.agent.subagent.prompt_placeholders import iter_placeholders
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.playbook.agent_profiles import AgentProfileSource, validate_node_capabilities
 from raven.playbook.credentials import credential_scope, stored_secret_params
 from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, required_tool_arguments
@@ -541,12 +542,13 @@ class PlaybookExecutor:
         errors: list[str] = []
         for _ in range(2):
             try:
-                response = await self._provider.chat_with_retry(
-                    messages=messages,
-                    tools=compose_tool(),
-                    model=self._compose_model,
-                    tool_choice={"type": "function", "function": {"name": COMPOSE_TOOL_NAME}},
-                )
+                with _llm_purpose("playbook"):
+                    response = await self._provider.chat_with_retry(
+                        messages=messages,
+                        tools=compose_tool(),
+                        model=self._compose_model,
+                        tool_choice={"type": "function", "function": {"name": COMPOSE_TOOL_NAME}},
+                    )
             except Exception as exc:  # noqa: BLE001 - composition failure degrades, never raises
                 return None, [str(exc)]
             try:

@@ -142,6 +142,41 @@ is why the transcript's store keeps a listener set per lane -- a token appended
 to the open step re-renders that leaf and nothing else -- and why a resident
 conversation keeps the detached host its lane is mounted in.
 
+**Trajectory View**:
+The chat column's second view: the conversation's trace entries as a list, in
+place of the transcript, drawn by `features/trajectory/` into `#trajHost` -- the
+box `src/chrome/ChatTop.tsx` renders beside `#scroll` and hands over empty.
+Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
+hidden, its size and scroll position kept) rather than unmounting it, so the
+transcript goes on streaming underneath and comes back exactly where it was.
+The header's toggle (`#trajBtn`) appears only when the gateway announced
+`trajectory-v1` (only a gateway launched with `--dev` does), `trajectory.state` says the view is on, a conversation is open
+and that conversation is not in its empty state (`state/session/conversation.ts`'s
+flag); the store's `available` is that one condition. Picking a row opens the
+details pane beside the list (`features/trajectory/detailStore.ts`): a descriptor
+read through `trajectory.detail` and block bodies read through
+`trajectory.block`, each filed under its whole identity (session, epoch,
+entry, revision, block) and shown only under the ticket it was asked with.
+Above the list sits the duration bar (`features/trajectory/DurationBar.tsx`,
+arithmetic in `geometry.ts`): every entry as a block as wide as what it is
+charged, zoomed about the pointer and dragged, dense blocks where the fit has
+no room, a click on a block being one more door to the same `select`. The list
+store keeps two indexes: the server's whole `entries` (every coordinate, change
+feeds and the anchor) and the derived `visible` rows, which leave out the
+entries the index marked `meta.hidden` (a turn's end that repeats the turn's
+last model output or delivered nothing, an internal step that recorded
+nothing) unless "show hidden entries" is on or a link `revealed` one. That
+switch and the bar's duration threshold (`minChargedMs`, a detent from 0 to
+1000 ms that leaves out of the bar -- never the list -- the entries charged
+less) are the viewer's `prefs`, kept in `localStorage` and never in the session
+memory. A hidden turn's end is drawn as the turn's band under the blocks rather
+than a block of its own. Under the raw record the details pane lists the files
+the span names (`features/trajectory/Files.tsx`): the `files` directory whole,
+each file's content read by its own cursor while it is open and in view, kept
+apart from the block pages and let go stalest first when the budget is short.
+_Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
+records, the trajectory is how this page reads it back.
+
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order
 `src/state/portals.ts`'s `BOOT_BODY_ORDER` declares: `div.app`, the collapse's

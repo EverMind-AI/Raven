@@ -999,3 +999,13 @@ def test_v2_mixed_missing_and_oversize_notes_combine(state):
         "1 message blob(s) missing — placeholders shown; 1 message blob(s) over the 512 KiB cap — placeholders shown"
     )
     assert "q" in record.text
+
+
+def test_tool_call_brief_names_the_call_without_its_id():
+    assert (
+        tconv._tool_call_brief({"id": "call_1", "name": "web_fetch", "arguments": '{"url": "u"}'})
+        == 'web_fetch {"url": "u"}'
+    )
+    assert tconv._tool_call_brief({"function": {"name": "f", "arguments": {"a": 1}}}) == 'f {"a": 1}'
+    assert tconv._tool_call_brief({"name": "bare"}) == "bare"
+    assert tconv._tool_call_brief("odd") == '"odd"'

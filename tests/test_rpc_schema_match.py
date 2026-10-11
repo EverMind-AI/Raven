@@ -570,7 +570,21 @@ EXPECTED_ERROR_CODES = {
     -32017: "subagent_not_found",
     -32018: "session_title_too_long",
     -32019: "subagent_not_ready",
+    -32020: "trajectory_disabled",
+    -32021: "entry_not_found",
+    -32022: "cursor_expired",
+    -32023: "revision_changed",
 }
+
+
+def test_every_spec_error_code_maps_back_to_its_class() -> None:
+    from raven.rpc import errors
+
+    for code, message in EXPECTED_ERROR_CODES.items():
+        cls = errors.JSONRPC_ERROR_REGISTRY.get(code)
+        assert cls is not None, f"{code} has no class in JSONRPC_ERROR_REGISTRY"
+        assert cls.MESSAGE == message
+        assert cls.__name__ in errors.__all__
 
 
 def test_error_codes_match_spec(schema: dict[str, Any]) -> None:

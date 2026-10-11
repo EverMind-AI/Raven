@@ -39,6 +39,10 @@ import {
   byKey as taskByKey, onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus,
   refresh as refreshTasks, reset as resetTasks,
 } from '../features/tasks/store'
+import * as trajectoryDetails from '../features/trajectory/detailStore'
+import * as trajectoryPoll from '../features/trajectory/poll'
+import { trajectorySource } from '../features/trajectory/source'
+import * as trajectoryStore from '../features/trajectory/store'
 import {
   actLabel, branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList,
 } from '../features/transcript/source'
@@ -51,6 +55,7 @@ import { $ } from '../lib/dom'
 import { hostPlatform } from '../lib/platform'
 import { current as sessionCurrent, onChange as onSessionChange } from '../lib/session'
 import { refusal as uploadRefusal } from '../lib/upload'
+import { forget as forgetAbsent, servesTrajectory } from '../rpc/capabilities'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
@@ -62,6 +67,7 @@ import { installComposerActions, installSlashActions } from '../state/session/ru
 import * as settingsDialog from '../state/settings'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
+import * as visibility from '../state/visibility'
 import { onReset as onWsReset } from '../state/ws'
 import { installConnectionUI, onReconnect, surface } from './connection'
 import { showUpNote } from './updates'
@@ -210,6 +216,7 @@ export function installSources(): void {
   })
   sources.browser = browserSource
   sources.subagents = agentsSource
+  sources.trajectory = trajectorySource
   /* One source either way: `tasks.list` is a real gateway method now, so the
      offline page reads it through the fixture transport the same way every
      other domain does, rather than through a stand-in library of its own.
@@ -344,11 +351,28 @@ async function afterReconnect(): Promise<void> {
      ended, without this page hearing; the row reads them again the way the
      boot did. */
   void importSyncStore.refresh()
+  /* The trajectory surface, asked again of the gateway that answered this
+     handshake. A refusal remembered from the gateway before it is forgotten
+     only when the new one announces the surface, so every other memory
+     stands; the store's handshake drops whatever the old one still owes. */
+  if (servesTrajectory()) forgetAbsent('trajectory')
+  trajectoryStore.handshake()
+  await trajectoryStore.refreshState()
+  trajectoryPoll.sync()
 }
 
 /** The composer's two actions, the rail's three writes, and the new-task button. */
 export function installActions(): void {
   onReconnect(() => { void afterReconnect() })
+  /* The trajectory view: its store mirrors the column's empty-state flag and
+     follows the conversation on screen, its two poll chains follow the store,
+     and the tab coming back to the front spends the page's one visibility
+     slot on a fresh beat of both. */
+  trajectoryStore.install()
+  trajectoryDetails.install()
+  trajectoryPoll.install()
+  onSessionChange(() => { trajectoryStore.sessionChanged(sessionCurrent()) })
+  visibility.onVisibleAgain(() => { trajectoryPoll.sync() })
   installComposerActions()
   installSessionActions()
   /* The slash palette's two session verbs, on the rows the dock declares. */

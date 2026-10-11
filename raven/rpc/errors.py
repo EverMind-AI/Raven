@@ -19,6 +19,10 @@ Code table (server-defined range -32000..-32099):
 | -32014 | cli_command_timeout           | cli.dispatch 30s timeout         |
 | -32015 | not_dispatch_compatible       | interactive Rich widget rejected |
 | -32017 | subagent_not_found            | subagent name unknown            |
+| -32020 | trajectory_disabled           | trajectory view not enabled here |
+| -32021 | entry_not_found               | trajectory entry / block unknown |
+| -32022 | cursor_expired                | trajectory page cursor stale     |
+| -32023 | revision_changed              | trajectory entry moved on        |
 
 JSON-RPC pre-defined codes (-32700/-32600/-32601) are emitted directly by the
 dispatcher and have no dedicated exception class.
@@ -165,6 +169,26 @@ class SubagentNotReadyError(RpcError):
     MESSAGE = "subagent_not_ready"
 
 
+class TrajectoryDisabledError(RpcError):
+    CODE = -32020
+    MESSAGE = "trajectory_disabled"
+
+
+class EntryNotFoundError(RpcError):
+    CODE = -32021
+    MESSAGE = "entry_not_found"
+
+
+class CursorExpiredRpcError(RpcError):
+    CODE = -32022
+    MESSAGE = "cursor_expired"
+
+
+class RevisionChangedRpcError(RpcError):
+    CODE = -32023
+    MESSAGE = "revision_changed"
+
+
 # JSON-RPC pre-defined ``invalid_params`` (-32602). Class added for the same
 # reason as the one below: a handler that validates its own params answers the
 # caller with the code for a bad request, instead of letting the pydantic
@@ -212,7 +236,12 @@ JSONRPC_ERROR_REGISTRY: dict[int, type[RpcError]] = {
         NotDispatchCompatibleError,
         SubscriptionCapacityExceededError,
         SubagentNotFoundError,
+        SessionTitleTooLongError,
         SubagentNotReadyError,
+        TrajectoryDisabledError,
+        EntryNotFoundError,
+        CursorExpiredRpcError,
+        RevisionChangedRpcError,
         InvalidParamsError,
         InternalError,
     )
@@ -237,7 +266,12 @@ __all__ = [
     "NotDispatchCompatibleError",
     "SubscriptionCapacityExceededError",
     "SubagentNotFoundError",
+    "SessionTitleTooLongError",
     "SubagentNotReadyError",
+    "TrajectoryDisabledError",
+    "EntryNotFoundError",
+    "CursorExpiredRpcError",
+    "RevisionChangedRpcError",
     "InvalidParamsError",
     "InternalError",
     "JSONRPC_ERROR_REGISTRY",

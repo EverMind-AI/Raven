@@ -1255,3 +1255,65 @@ def test_an_explicit_node_env_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("NODE_ENV", "development")
 
     assert tui_commands.child_env()["NODE_ENV"] == "development"
+
+
+def test_bare_raven_dev_reaches_the_web_launcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, serve_commands
+
+    opened: list[tuple[int, bool]] = []
+    monkeypatch.setattr(commands, "_can_open_a_browser", lambda: True)
+    monkeypatch.setattr(serve_commands, "_web", lambda port, **kwargs: opened.append((port, kwargs.get("dev", False))))
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, ["--dev"])
+
+    assert r.exit_code == 0, r.output
+    assert opened == [(serve_commands.DEFAULT_PORT if hasattr(serve_commands, "DEFAULT_PORT") else 18792, True)]
+
+
+@pytest.mark.parametrize(
+    ("argv", "says"),
+    [
+        (["--dev", "web"], "raven web --dev"),
+        (["--dev", "serve"], "raven serve --dev"),
+        (["--dev", "gateway"], "raven gateway --dev"),
+        (["--dev", "tui"], "bare `raven` only"),
+    ],
+)
+def test_root_dev_ahead_of_a_subcommand_is_refused_with_the_right_form(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], says: str
+) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, serve_commands, tui_commands
+
+    started: list[str] = []
+    monkeypatch.setattr(serve_commands, "_web", lambda *a, **k: started.append("web"))
+    monkeypatch.setattr(tui_commands, "tui", lambda *a, **k: started.append("tui"))
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, argv)
+
+    assert r.exit_code == 2
+    assert says in " ".join(r.stderr.replace("\u2502", " ").split())
+    assert started == []
+
+
+def test_bare_raven_dev_without_a_browser_keeps_the_tui_flag_plain(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, tui_commands
+
+    received: dict[str, Any] = {}
+
+    def recorder(_ctx, **kwargs: Any) -> None:
+        received.update(kwargs)
+
+    monkeypatch.setattr(tui_commands, "tui", recorder)
+    monkeypatch.setattr(commands, "_can_open_a_browser", lambda: False)
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, ["--dev"])
+
+    assert r.exit_code == 0, r.output
+    assert received["dev"] is False
+    assert "--dev is ignored" in r.output

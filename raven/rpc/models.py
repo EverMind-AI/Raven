@@ -5560,6 +5560,179 @@ class SubagentCancelInstanceResult(_Strict):
     handle: str
 
 
+# ---------------------------------------------------------------------------
+# trajectory.* -- the Web trajectory view's read surface
+# ---------------------------------------------------------------------------
+
+TrajectoryPhase = Literal["scanning", "ready", "failed"]
+TrajectoryStatus = Literal["running", "ok", "error", "cancelled", "unknown"]
+TrajectoryTimingBasis = Literal["zero", "span_full", "shared", "not_recorded", "unknown"]
+TrajectoryOrigin = Literal["main", "subagent"]
+TrajectoryAvailability = Literal[
+    "available", "empty", "not_recorded", "missing", "truncated", "unreadable", "unsupported"
+]
+TrajectoryRenderer = Literal["text", "json", "messages", "key_values", "items", "references"]
+
+
+class _StrictParams(_Strict):
+    """Params models that reject coercion: a string "20" or a bool is not a limit."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class TrajectoryStateParams(_StrictParams):
+    pass
+
+
+class TrajectoryStateResult(_Strict):
+    enabled: bool
+    policy_revision: int
+    recording_enabled: bool
+
+
+class TrajectoryIndexState(_Strict):
+    """Where the session index stands; ``scanning`` means an empty list is not yet an answer."""
+
+    phase: TrajectoryPhase
+    scanned_bytes: int
+    total_bytes: int
+    head_truncated: int
+    recovering_traces: int
+    unresolved_traces: int
+    unresolved_dropped: int
+    oversized_lines_dropped: int
+    preview_pending: int
+    failure: str | None = None
+
+
+class TrajectoryEntry(_Strict):
+    """One row of the trajectory view; see raven/trajectory/entries.py."""
+
+    entry_id: str
+    revision: int
+    kind: str
+    span_name: str
+    slot: str
+    trace_id: str
+    span_id: str
+    parent_span_id: str | None = None
+    turn_span_id: str | None = None
+    turn_number: int | None = None
+    turn_start: bool
+    origin: TrajectoryOrigin
+    sort_key: list[JsonValue]
+    event_time: str
+    preview: str | None = None
+    operation_status: TrajectoryStatus
+    status_evidence: list[str]
+    failure_entry: bool
+    integrity: list[str]
+    operation_start: str | None = None
+    operation_end: str | None = None
+    duration_ms: int | None = None
+    charged_ms: int | None = None
+    timing_basis: TrajectoryTimingBasis
+    duration_owner: str | None = None
+    meta: dict[str, JsonValue]
+
+
+class TrajectoryListParams(_StrictParams):
+    session_key: str
+    cursor: str | None = None
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+class TrajectoryListResult(_Strict):
+    epoch: str
+    snapshot_revision: int
+    entries: list[TrajectoryEntry]
+    next_cursor: str | None = None
+    index_state: TrajectoryIndexState
+    complete: bool
+
+
+class TrajectoryChangesParams(_StrictParams):
+    session_key: str
+    epoch: str = Field(min_length=1)
+    after_revision: int = Field(ge=0)
+    limit: int = Field(default=500, ge=1, le=500)
+
+
+class TrajectoryRemoved(_Strict):
+    entry_id: str
+    revision: int
+    replaced_by: str | None = None
+
+
+class TrajectoryChangesResult(_Strict):
+    epoch: str
+    from_revision: int
+    to_revision: int
+    upserts: list[TrajectoryEntry]
+    removed: list[TrajectoryRemoved]
+    has_more: bool
+    reset_required: bool
+    index_state: TrajectoryIndexState
+
+
+class TrajectoryDetailParams(_StrictParams):
+    session_key: str
+    entry_id: str = Field(min_length=1)
+    entry_revision: int | None = Field(default=None, ge=0)
+
+
+class TrajectoryBlockDescriptor(_Strict):
+    id: str
+    renderer: TrajectoryRenderer
+    availability: TrajectoryAvailability
+    preview: JsonValue = None
+    total_items: int | None = None
+    related_operation: str | None = None
+    reason: str | None = None
+
+
+class TrajectoryDetailResult(_Strict):
+    session_key: str
+    epoch: str
+    entry_id: str
+    entry_revision: int
+    kind: str
+    span_name: str
+    slot: str
+    operation_status: TrajectoryStatus
+    status_evidence: list[str]
+    failure_entry: bool
+    integrity: list[str]
+    notes: list[str]
+    blocks: list[TrajectoryBlockDescriptor]
+    revision_changed: bool
+    truncated: bool
+
+
+class TrajectoryBlockParams(_StrictParams):
+    session_key: str
+    entry_id: str = Field(min_length=1)
+    entry_revision: int = Field(ge=0)
+    epoch: str = Field(min_length=1)
+    block_id: str = Field(min_length=1)
+    cursor: str | None = None
+
+
+class TrajectoryBlockResult(_Strict):
+    entry_id: str
+    entry_revision: int
+    epoch: str
+    block_id: str
+    renderer: TrajectoryRenderer
+    availability: TrajectoryAvailability
+    reason: str | None = None
+    data: JsonValue = None
+    next_cursor: str | None = None
+    total_items: int | None = None
+    integrity: list[str]
+    truncated: bool
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -5681,6 +5854,12 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
+    # trajectory.* -- the Web trajectory view
+    "trajectory.state": (TrajectoryStateParams, TrajectoryStateResult),
+    "trajectory.list": (TrajectoryListParams, TrajectoryListResult),
+    "trajectory.changes": (TrajectoryChangesParams, TrajectoryChangesResult),
+    "trajectory.detail": (TrajectoryDetailParams, TrajectoryDetailResult),
+    "trajectory.block": (TrajectoryBlockParams, TrajectoryBlockResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),
@@ -5916,6 +6095,27 @@ __all__ = [
     "PlaybooksGetResult",
     "PlaybooksListParams",
     "PlaybooksListResult",
+    # trajectory
+    "TrajectoryAvailability",
+    "TrajectoryBlockDescriptor",
+    "TrajectoryBlockParams",
+    "TrajectoryBlockResult",
+    "TrajectoryChangesParams",
+    "TrajectoryChangesResult",
+    "TrajectoryDetailParams",
+    "TrajectoryDetailResult",
+    "TrajectoryEntry",
+    "TrajectoryIndexState",
+    "TrajectoryListParams",
+    "TrajectoryListResult",
+    "TrajectoryOrigin",
+    "TrajectoryPhase",
+    "TrajectoryRemoved",
+    "TrajectoryRenderer",
+    "TrajectoryStateParams",
+    "TrajectoryStateResult",
+    "TrajectoryStatus",
+    "TrajectoryTimingBasis",
     # registry
     "METHOD_MODELS",
 ]

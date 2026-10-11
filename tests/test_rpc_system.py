@@ -30,6 +30,15 @@ from raven.rpc.methods.system import (
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+def dev_launch():
+    from raven.trajectory import policy
+
+    policy.arm(True)
+    yield
+    policy._reset_for_tests()
+
+
 async def test_hello_returns_versions():
     result = await system_hello({"client_version": "0.1.0"})
     assert "server_version" in result
@@ -37,6 +46,7 @@ async def test_hello_returns_versions():
     assert "server_capabilities" in result
     assert isinstance(result["server_capabilities"], list)
     assert "jsonrpc-2.0" in result["server_capabilities"]
+    assert "trajectory-v1" not in result["server_capabilities"]
     assert "session" in result
     assert result["session"]["default_channel"] == "tui"
     assert result["session"]["default_session_key"].startswith("tui:")
@@ -454,9 +464,38 @@ async def test_upgrade_hands_off_then_stops_the_gateway(monkeypatch: pytest.Monk
     assert spawned["parent_pid"] > 0
 
 
+async def test_a_dev_launch_comes_back_with_its_trajectory_view(monkeypatch, tmp_path, dev_launch):
+    import asyncio
+
+    from raven.cli.serve_commands import SERVE
+    from raven.rpc.methods.system import system_upgrade
+
+    bin_dir, spawned = _plan(tmp_path, monkeypatch)
+    SERVE.arm(18792, "tok", "cookie", asyncio.Event())
+    try:
+        await system_upgrade({})
+    finally:
+        SERVE.disarm()
+    assert spawned["relaunch"] == [str(bin_dir / "raven"), "serve", "--port", "18792", "--dev"]
+
+    _bin_dir, spawned = _plan(tmp_path, monkeypatch)
+    SERVE.arm_hosted(18792, "tok", "cookie")
+    SERVE.hand_over(lambda: None, lambda: None, 4242)
+    try:
+        await system_upgrade({})
+    finally:
+        SERVE.disarm()
+    assert spawned["relaunch"] == [str(bin_dir / "raven"), "web", "--supervise", "--port", "18792", "--dev"]
+
+
 # ---------------------------------------------------------------------------
 # The handshake reports the channel the dispatcher was actually built for
 # ---------------------------------------------------------------------------
+
+
+async def test_hello_announces_the_trajectory_surface_only_on_a_dev_launch(dev_launch) -> None:
+    result = await system_hello({"client_version": "0.1.0"})
+    assert "trajectory-v1" in result["server_capabilities"]
 
 
 async def test_hello_defaults_to_the_shared_local_channel() -> None:

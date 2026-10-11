@@ -24,6 +24,7 @@ import { loadSessions, sessionsSource } from '../features/rail/source'
 import { draw as sessionDraw, hold as holdRail, release as releaseRail } from '../features/rail/store'
 import { loadSettingsWithProviders, pushPermMode } from '../features/settings/source'
 import { redraw as redrawSettings } from '../features/settings/store'
+import { refreshState as refreshTrajectoryState } from '../features/trajectory/store'
 import { hostPlatformSet } from '../lib/platform'
 import { setCurrent as sessionSet } from '../lib/session'
 import { hasUpdateFlag } from '../rpc/capabilities'
@@ -120,6 +121,9 @@ async function sequence(): Promise<void> {
       .catch(() => {})
     await loadSessions()
     releaseRail()
+    /* Whether the trajectory view is on for this gateway; the poller keeps
+       asking from here on (features/trajectory/poll.ts). */
+    void refreshTrajectoryState()
     /* Home is the new-task screen, never the last session: opening straight
        into someone else's half-finished transcript is a worse first frame than
        an empty composer, and the rail is one click away. A draft writes nothing
