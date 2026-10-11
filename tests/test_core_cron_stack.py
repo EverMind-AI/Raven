@@ -543,6 +543,16 @@ def test_every_process_opens_the_one_cron_store(monkeypatch, tmp_path) -> None:
     assert service.allowed_channels == {"tui"}
 
 
+def test_a_new_cron_uses_the_schema_default_when_no_setting_was_written(monkeypatch, tmp_path):
+    from raven.config.schema import CronConfig
+    from raven.core.cron_stack import build_cron_service
+
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "config.json")
+    service = build_cron_service(allowed_channels=None)
+    job = service.add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily")
+    assert job.schedule.tz == CronConfig().default_timezone
+
+
 # --- make_on_session_wake: a wake runs on the session that armed it ------------
 
 

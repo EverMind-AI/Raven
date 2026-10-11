@@ -890,6 +890,17 @@ def test_config_set_default_timezone_valid(runner, isolated_config):
     assert data["cron"]["defaultTimezone"] == "America/New_York"
 
 
+@pytest.mark.parametrize("explicit", [None, "UTC"])
+def test_add_uses_the_configured_default_timezone(runner, fake_cron_dir, isolated_config, explicit):
+    isolated_config.write_text('{"cron": {"default_timezone": "Asia/Tokyo"}}', encoding="utf-8")
+    args = ["add", "--name", "daily", "--message", "daily", "--cron", "0 9 * * *", "--channel", "tui"]
+    if explicit:
+        args += ["--tz", explicit]
+    result = runner.invoke(cron_app, args)
+    assert result.exit_code == 0, result.output
+    assert CronService(fake_cron_dir / "jobs.json").list_jobs()[0].schedule.tz == (explicit or "Asia/Tokyo")
+
+
 def test_config_set_default_timezone_invalid(runner, isolated_config):
     r = runner.invoke(
         cron_app,

@@ -303,7 +303,11 @@ class CronConfig(Base):
     """
 
     default_timezone: str = "Asia/Shanghai"
-    """Default IANA timezone for cron expressions without explicit ``--tz``."""
+    """IANA timezone stored on new cron-expression jobs without an explicit zone.
+
+    Read at creation, including in a running process. Existing jobs keep their
+    stored timezone; legacy jobs without one continue to use local time.
+    """
 
     notify_missed: bool = True
     """When True, the gateway observes one-shot reminders bound to other

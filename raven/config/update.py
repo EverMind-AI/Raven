@@ -51,9 +51,11 @@ def update_cron_config(
     def _apply(_text: str | None) -> tuple[str, Any]:
         data = read_raw_or_raise(path)
         cron_section = data.setdefault("cron", {})
-        camel_key = to_camel(key)
-        prev = cron_section.get(camel_key)
-        cron_section[camel_key] = value
+        written = to_camel(key)
+        if written not in cron_section and key in cron_section:
+            written = key
+        prev = cron_section.get(written)
+        cron_section[written] = value
         return json.dumps(data, indent=2, ensure_ascii=False), prev
 
     prev = atomic_update(path, _apply)

@@ -762,13 +762,33 @@ class TestTheCronTimezoneControl:
 
         assert r["applied"] is True
         assert _read(cfg)["cron"]["defaultTimezone"] == "Asia/Tokyo"
-        # Landing in the file is half of it: the writer spells the key one way
-        # and the loader has to read that same spelling back. Deliberately not a
-        # claim about scheduling -- ``CronConfig.default_timezone`` has exactly
-        # one consumer today, the ``raven cron config get`` display path, and
-        # ``_compute_next_run`` falls back to the machine's local zone rather
-        # than to this field.
         assert load_config(cfg).cron.default_timezone == "Asia/Tokyo"
+
+    @pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+    async def test_the_saved_default_reaches_new_jobs_on_the_running_service(self, cfg, spelling):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        from raven.core.cron_stack import build_cron_service
+
+        cfg.write_text(json.dumps({"cron": {spelling: "UTC"}}), encoding="utf-8")
+        service = build_cron_service(allowed_channels=None)
+        service._now_fn = lambda: datetime(2026, 1, 1, tzinfo=timezone.utc)
+        loop = SimpleNamespace(cron_service=service)
+        params = {"kind": "cron", "expr": "0 9 * * *", "name": "first", "message": "first"}
+        first = (await rpc_console.cron_save(params, agent_loop_factory=lambda: loop))["job"]
+        result = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
+        assert result["previous"] == "UTC"
+        assert _read(cfg)["cron"] == {spelling: "Asia/Tokyo"}
+        second = (
+            await rpc_console.cron_save(
+                {**params, "name": "second", "message": "second"}, agent_loop_factory=lambda: loop
+            )
+        )["job"]
+        assert first["tz"] == "UTC"
+        assert second["tz"] == "Asia/Tokyo"
+        assert first["next_run_at_ms"] == int(datetime(2026, 1, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        assert second["next_run_at_ms"] == int(datetime(2026, 1, 2, tzinfo=timezone.utc).timestamp() * 1000)
 
     async def test_the_previous_timezone_comes_back(self, cfg):
         await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})

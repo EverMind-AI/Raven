@@ -495,10 +495,17 @@ def build_cron_service(*, allowed_channels: "set[str] | None") -> "CronService":
     """Open the shared cron store for one process. ``allowed_channels`` is the
     set this process can deliver to (``None`` for management commands that
     only inspect the store), so two runners never claim each other's jobs."""
+    from raven.config.live import default_live
     from raven.config.paths import get_cron_dir
+    from raven.config.schema import CronConfig
     from raven.proactive_engine.schedulers.cron.service import CronService
 
-    return CronService(get_cron_dir() / "jobs.json", allowed_channels=allowed_channels)
+    def default_timezone() -> str:
+        return CronConfig.model_validate(default_live().get("cron") or {}).default_timezone
+
+    return CronService(
+        get_cron_dir() / "jobs.json", allowed_channels=allowed_channels, default_timezone=default_timezone
+    )
 
 
 def make_on_session_wake(

@@ -10,6 +10,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from raven.proactive_engine.schedulers.cron.tool import CronTool
 
 
@@ -19,6 +21,21 @@ def _tool() -> tuple[CronTool, MagicMock]:
     tool = CronTool(cron)
     tool.set_context("tui", "default")
     return tool, cron
+
+
+@pytest.mark.parametrize("explicit", [None, "UTC"])
+async def test_tool_uses_the_runtime_default_timezone(tmp_path, monkeypatch, explicit):
+    from raven.core.cron_stack import build_cron_service
+
+    config = tmp_path / "config.json"
+    config.write_text('{"cron": {"defaultTimezone": "Asia/Tokyo"}}', encoding="utf-8")
+    monkeypatch.setattr("raven.home._current_config_path", config)
+    cron = build_cron_service(allowed_channels=None)
+    tool = CronTool(cron)
+    tool.set_context("tui", "default")
+    result = await tool.execute(action="add", message="daily", cron_expr="0 9 * * *", tz=explicit)
+    assert result.startswith("Created job"), result
+    assert cron.list_jobs()[0].schedule.tz == (explicit or "Asia/Tokyo")
 
 
 async def test_add_every_with_tz_is_tolerated_and_dropped() -> None:
