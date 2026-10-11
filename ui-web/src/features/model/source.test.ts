@@ -35,6 +35,7 @@ interface Options {
 async function live({ session = null, answers = null }: Options = {}) {
   const calls: Call[] = []
   const pending: Deferred[] = []
+  const selections: Deferred[] = []
   /* A view switch re-reads the default model and the permission mode, and
      those two reads are the switch's own -- no case here settles them. Held
      apart so the indices below stay the indices of the calls under test. */
@@ -63,6 +64,7 @@ async function live({ session = null, answers = null }: Options = {}) {
       },
       'src/features/model/store': {
         current: () => '',
+        loadStatus: () => 'ready',
         setCurrent: (m: string) => calls.push(['modelSet', m]),
       },
       'src/lib/dom': {
@@ -79,8 +81,14 @@ async function live({ session = null, answers = null }: Options = {}) {
       },
     },
   })
+  const { absorb } = await import('../../rpc/capabilities')
+  absorb(['model.options.selection_only'])
   await fakeGateway((method: string, params: Record<string, unknown>) => {
     if (switching) return new Promise(() => {})
+    if (method === 'model.options' && params.include_providers === false) {
+      if (answers) return Promise.resolve(answers[method] ?? { model: '', provider: '', providers: [] })
+      return new Promise((res, rej) => selections.push({ method, params, res, rej }))
+    }
     calls.push([method, params])
     /* `?? {}` so a call the case did not name -- the refresh a write kicks
        off behind `void` -- answers an empty envelope rather than crashing
@@ -136,8 +144,20 @@ async function live({ session = null, answers = null }: Options = {}) {
     gen: () => generation(),
     inFlight: () => pending.map((p) => p.method),
     param: (i: number) => pending[i]!.params,
-    settle: (i: number, answer: unknown) => { pending[i]!.res(answer); return tick() },
-    fail: (i: number, error: unknown) => { pending[i]!.rej(error); return tick() },
+    settle: (i: number, answer: unknown) => {
+      pending[i]!.res(answer)
+      if (pending[i]!.method === 'model.options') {
+        selections.filter((p) => p.params.session_id === pending[i]!.params.session_id).forEach((p) => p.res(answer))
+      }
+      return tick()
+    },
+    fail: (i: number, error: unknown) => {
+      pending[i]!.rej(error)
+      if (pending[i]!.method === 'model.options') {
+        selections.filter((p) => p.params.session_id === pending[i]!.params.session_id).forEach((p) => p.rej(error))
+      }
+      return tick()
+    },
     modelsSet: () => calls.filter((c) => c[0] === 'modelSet').map((c) => c[1]),
   }
 }
@@ -454,8 +474,7 @@ describe('the follows-default repaint under navigation', () => {
     h.bump()
     await h.settle(0, { applied: true, applies_to_session: true })
     await write
-    expect(h.inFlight()).toEqual(['config.set', 'model.options'])
-    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.inFlight()).toEqual(['config.set'])
     expect(h.modelsSet()).toEqual([])
   })
 
@@ -510,8 +529,7 @@ describe('the staged draft-write recovery', () => {
     h.bump()
     await h.fail(0, { data: { detail: 'credential gone' } })
     await applied
-    expect(h.inFlight()).toEqual(['config.set', 'model.options'])
-    await h.settle(1, { model: 'model-a', providers: [] })
+    expect(h.inFlight()).toEqual(['config.set'])
     expect(h.modelsSet()).toEqual([])
     expect(h.calls.some((c) => c[0] === 'toast')).toBe(true)
   })

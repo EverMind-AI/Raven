@@ -1,12 +1,29 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
+import { resetCapabilities, supportsModelSelectionOnly } from './capabilities'
 import { FixtureTransport } from './fixtureTransport'
 import { RpcError } from './transport'
 
 import type { Fixtures } from './fixtureTransport'
 import type { ConnectionState } from './transport'
 
+beforeEach(resetCapabilities)
+
 describe('FixtureTransport', () => {
+  it.each([false, true])('refreshes handshake capabilities from a responder (async: %s)', async (asyncReply) => {
+    const hello = {
+      server_version: '0.1.0',
+      server_capabilities: ['model.options.selection_only'],
+      session: { default_channel: 'gui' as const, default_session_key: '' },
+    }
+    const t = new FixtureTransport({ 'system.hello': asyncReply ? async () => hello : hello })
+    await t.call('system.hello', { client_version: '0.1.0' })
+    expect(supportsModelSelectionOnly()).toBe(true)
+    const legacy = new FixtureTransport({ 'system.hello': { ...hello, server_capabilities: [] } })
+    await legacy.call('system.hello', { client_version: '0.1.0' })
+    expect(supportsModelSelectionOnly()).toBe(false)
+  })
+
   it('answers a value responder as-is', async () => {
     const t = new FixtureTransport({ 'cron.list': { jobs: [] } })
     await expect(t.call('cron.list', {})).resolves.toEqual({ jobs: [] })

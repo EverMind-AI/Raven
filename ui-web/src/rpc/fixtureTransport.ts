@@ -1,3 +1,4 @@
+import { absorb } from './capabilities'
 import { RpcError } from './transport'
 
 import type { ParamsOf, ResultOf, RpcMethod } from './generated'
@@ -101,10 +102,13 @@ export class FixtureTransport implements RpcTransport {
     if (responder === undefined) {
       throw new RpcError(-32601, `fixture: no response recorded for ${method}`)
     }
-    if (typeof responder === 'function') {
-      return await (responder as (p: ParamsOf<M>) => ResultOf<M> | Promise<ResultOf<M>>)(params)
+    const result = typeof responder === 'function'
+      ? await (responder as (p: ParamsOf<M>) => ResultOf<M> | Promise<ResultOf<M>>)(params)
+      : responder as ResultOf<M>
+    if (method === 'system.hello') {
+      absorb((result as ResultOf<'system.hello'>).server_capabilities)
     }
-    return responder as ResultOf<M>
+    return result
   }
 
   async callUnchecked(method: string, params: Record<string, unknown>): Promise<unknown> {

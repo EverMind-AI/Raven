@@ -39,6 +39,8 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
       'src/i18n/t': { t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
     },
   }) as Source
+  const { absorb } = await import('../../rpc/capabilities')
+  absorb(['model.options.selection_only'])
   await fakeGateway(async (method: string, params: unknown) => {
     seen.push([method, params])
     if (method in answers) return answers[method]
@@ -207,10 +209,12 @@ describe('settings source', () => {
     expect(seen.filter(([m]) => m.startsWith('model.') || m === 'settings.get')).toEqual([
       ['model.set_fields', { slug: 'openrouter', fields: { extra_headers: { 'X-Title': 'raven' } } }],
       ['settings.get', {}],
+      ['model.options', { include_providers: false }],
       ['model.options', {}],
       ['model.options', {}],
       ['model.add_models', { slug: 'openrouter', models: ['a', 'b'] }],
       ['settings.get', {}],
+      ['model.options', { include_providers: false }],
       ['model.options', {}],
       ['model.options', {}],
     ])
@@ -227,9 +231,10 @@ describe('settings source', () => {
     await mod.settingsSource.addModels('deepseek', ['deepseek/deepseek-v9-pro'])
 
     const scopes = seen.filter(([m]) => m === 'model.options').map(([, params]) => params)
-    expect(scopes).toHaveLength(2)
+    expect(scopes).toHaveLength(3)
     expect(scopes).toContainEqual({})
     expect(scopes).toContainEqual({ session_id: 's1' })
+    expect(scopes).toContainEqual({ session_id: 's1', include_providers: false })
   })
 
   it('inspectSkill and openSkillFile speak skills.manage with the action and the file', async () => {

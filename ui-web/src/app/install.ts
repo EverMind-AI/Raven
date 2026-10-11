@@ -25,7 +25,7 @@ import { importSyncSource } from '../features/importSync/source'
 import * as importSyncStore from '../features/importSync/store'
 import { capabilitiesSource, loadExt } from '../features/installed/source'
 import { memorySource } from '../features/memory/source'
-import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
+import { blockSendForModel, modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { isOpen as onboardOpen, setBodies as setOnboardBodies, subscribe as onOnboard } from '../features/onboard/store'
 import { markNew } from '../features/rail/store'
@@ -144,7 +144,7 @@ export function installSources(): void {
   sources.settings = settingsSource
   sources.tier = tierSource
   sources.model = modelSource
-  composer.beforeSend = openModelsForMissingProvider
+  composer.beforeSend = blockSendForModel
 
   sources.capabilities = capabilitiesSource
   sources.cron = cronSource

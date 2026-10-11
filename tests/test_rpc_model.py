@@ -63,6 +63,50 @@ def _entry(result: dict, slug: str) -> dict:
 # ----------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("provider", ["anthropic", "openrouter", None])
+async def test_options_selection_skips_catalogue(fake_home: Path, monkeypatch, provider: str | None) -> None:
+    defaults = {"model": "anthropic/claude-sonnet-4-5"}
+    if provider:
+        defaults["provider"] = provider
+    _write_config(fake_home, {"agents": {"defaults": defaults}})
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("selection-only reads must not build or warm catalogues")
+
+    monkeypatch.setattr(model_module, "_entries_off_loop", unexpected)
+    monkeypatch.setattr("raven.providers.rates.warm_catalog_in_background", unexpected)
+    result = await model_options({"include_providers": False})
+    assert result == {
+        "model": "anthropic/claude-sonnet-4-5",
+        "provider": provider or "anthropic",
+        "providers": [],
+    }
+
+
+@pytest.mark.parametrize("own_binding", [True, False])
+async def test_options_selection_respects_session_binding(fake_home: Path, monkeypatch, own_binding: bool) -> None:
+    from types import SimpleNamespace
+
+    _write_config(
+        fake_home,
+        {"agents": {"defaults": {"model": "anthropic/claude-sonnet-4-5", "provider": "openrouter"}}},
+    )
+    loop = SimpleNamespace(
+        has_session_binding=lambda key: own_binding,
+        session_model=lambda key: "deepseek/deepseek-chat",
+    )
+    monkeypatch.setattr(model_module, "_entries_off_loop", lambda *args: pytest.fail("unexpected catalogue read"))
+    result = await model_options(
+        {"session_id": "web:selection", "include_providers": False},
+        agent_loop_factory=lambda: loop,
+    )
+    assert result == {
+        "model": "deepseek/deepseek-chat" if own_binding else "anthropic/claude-sonnet-4-5",
+        "provider": "deepseek" if own_binding else "openrouter",
+        "providers": [],
+    }
+
+
 async def test_options_authed_provider_lists_models(fake_home: Path) -> None:
     _write_config(
         fake_home,
