@@ -314,6 +314,17 @@ class TestRequirementsHelpers:
 
 
 class TestSkillRegistryListAndPrecedence:
+    @pytest.mark.parametrize("metadata", ["!!binary //79", "!!binary gA==", "!!binary eyJyYXZlbiI6IDF9"])
+    def test_binary_metadata_does_not_abort_the_skill_pool(self, tmp_path, metadata):
+        workspace = tmp_path / "workspace"
+        _write_skill(workspace / "skills", "good", description="A valid skill")
+        _write_skill(workspace / "skills", "bad", description="Odd metadata", frontmatter_extra=f"metadata: {metadata}")
+        registry = SkillRegistry(workspace, builtin_skills_dir=tmp_path / "builtin")
+
+        assert sorted(meta.name for meta in registry.list_all()) == ["bad", "good"]
+        catalog = LocalSkillCatalog(workspace, builtin_skills_dir=tmp_path / "builtin", start_watcher=False)
+        assert catalog.registry.get("good") is not None
+
     def test_lists_workspace_and_builtin(self, tmp_workspace, tmp_builtin):
         store = SkillRegistry(tmp_workspace, builtin_skills_dir=tmp_builtin)
         names = {m.name for m in store.list_all()}

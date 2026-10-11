@@ -566,7 +566,7 @@ def _strip_frontmatter(content: str) -> str:
     return content[m.end() :]
 
 
-def _parse_nested_metadata(raw: str | dict) -> dict:
+def _parse_nested_metadata(raw: object) -> dict:
     """Extract Raven-namespaced metadata from ``metadata``: a JSON string, or
     the mapping YAML reads the same one-line JSON as.
 
@@ -575,7 +575,7 @@ def _parse_nested_metadata(raw: str | dict) -> dict:
     """
     if isinstance(raw, dict):
         data = raw
-    elif not raw:
+    elif not isinstance(raw, str) or not raw:
         return {}
     else:
         try:
