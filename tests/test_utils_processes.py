@@ -53,7 +53,7 @@ def test_a_module_invocation_is_recognised_anywhere_in_the_argv(monkeypatch) -> 
 
 
 def test_a_console_script_serve_is_recognised(monkeypatch) -> None:
-    """The documented entry point: ``raven serve`` runs ``commands:run`` in
+    """The documented entry point: ``raven serve`` runs ``entry:run`` in
     this process, so its argv is the console script plus the subcommand."""
     monkeypatch.setattr(processes, "command_line", lambda _pid: "C:/raven/Scripts/raven.exe serve --port 18792")
     assert processes.looks_like_raven(1234)
@@ -118,6 +118,8 @@ def test_a_resident_command_has_a_positive_identity(monkeypatch, line: str) -> N
         r"C:\Users\Raven Smith\.venv\Scripts\raven.exe serve",
         r'"C:\Users\Raven Smith\python.exe" "C:\Users\Raven Smith\raven.exe" web --supervise',
         "/Users/x/Raven 2/.venv/bin/raven web --supervise --port 9",
+        "/home/u/raven copy/.venv/bin/python3 /home/u/raven copy/.venv/bin/raven serve --port 8765",
+        "/home/u/bin/RAVEN serve --port 8765",
     ],
 )
 def test_a_raven_named_directory_does_not_hide_the_resident(monkeypatch, line: str) -> None:
