@@ -102,6 +102,28 @@ async def test_acp_child_is_told_it_serves_as_a_subagent(tmp_path: Path, monkeyp
     assert is_subagent_process(), f"the child was handed {arrived!r}, which it does not read as a sub-agent role"
 
 
+@pytest.mark.parametrize("legacy", [True, False])
+async def test_acp_launch_preserves_stored_windows_path_quotes(tmp_path, monkeypatch, legacy):
+    from types import SimpleNamespace
+
+    from raven.utils import commands
+
+    monkeypatch.setattr(commands, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: dict(os.environ))
+    folder = tmp_path / "agent's saved files"
+    script = folder / "reply argv.py"
+    config = folder / "config.json"
+    quote = shlex.quote if legacy else commands.command_quote
+    command = f"{quote(sys.executable)} {quote(str(script))} --config {quote(str(config))}"
+    started: list[tuple[str, ...]] = []
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_refusal(started))
+
+    with pytest.raises(AcpConnectionError):
+        await AcpClient.launch(name="stored-command", command=command)
+
+    assert started == [(sys.executable, str(script), "--config", str(config))]
+
+
 # --- Windows: the capture --------------------------------------------------
 #
 # Windows has no login shell. The capture rebuilds PATH from the two registry

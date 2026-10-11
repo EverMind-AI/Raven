@@ -12,6 +12,7 @@ drive-letter path be judged on POSIX.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from types import SimpleNamespace
 
@@ -136,6 +137,57 @@ class TestCommandTokens:
 
         assert cmd.command_argv(command) == ["python", value, "/missing/run.py"]
         assert cmd.command_tokens(command) == ["python", value, "/missing/run.py"]
+
+
+class TestLegacyWindowsPaths:
+    @pytest.mark.parametrize(
+        "paths",
+        [
+            [r"C:\Python312\python.exe", r"C:\jobs\agent.py"],
+            [r"C:\Program Files\python.exe", r"C:\my agents\run.py"],
+            [r"\\server\runtime\python.exe", r"\\server\my agents\run.py"],
+            [r"C:\O'Brien\python.exe", r"C:\agents\O'Brien\run.py"],
+        ],
+    )
+    def test_stored_path_quotes_reach_launch_and_readiness(self, monkeypatch, paths):
+        _as("nt", monkeypatch)
+        command = " ".join(shlex.quote(path) for path in paths) + " --acp"
+
+        assert cmd.command_argv(command) == [*paths, "--acp"]
+        assert cmd.command_tokens(command) == [*paths, "--acp"]
+
+    @pytest.mark.parametrize("prefix", ["", "--config="])
+    def test_a_legacy_path_does_not_change_neighboring_native_arguments(self, monkeypatch, prefix):
+        _as("nt", monkeypatch)
+        path = r"C:\old configs\config.json"
+        command = f"python {prefix}{shlex.quote(path)} C:\\native\\run.py --name=O'Brien"
+
+        expected = ["python", prefix + path, r"C:\native\run.py", "--name=O'Brien"]
+        assert cmd.command_argv(command) == expected
+        assert cmd.command_tokens(command) == expected
+
+    def test_a_quoted_root_and_its_launcher_remain_one_argument(self, monkeypatch):
+        _as("nt", monkeypatch)
+        root = "C:\\my agents\\"
+        command = f"python {shlex.quote(root)}/run.py --acp"
+
+        assert cmd.command_argv(command) == ["python", root + "/run.py", "--acp"]
+        assert cmd.command_tokens(command) == ["python", root + "/run.py", "--acp"]
+
+    @pytest.mark.parametrize("value", ["O'Brien", "'quoted'", "'/label", r"'C:\literal'", r"='C:\literal' suffix", ""])
+    def test_native_quoted_arguments_keep_their_literal_apostrophes(self, monkeypatch, value):
+        _as("nt", monkeypatch)
+        command = f"python {cmd.command_quote(value)}"
+
+        assert cmd.command_argv(command) == ["python", value]
+        assert cmd.command_tokens(command) == ["python", value]
+
+    @pytest.mark.parametrize("value", ["O'Brien", "'quoted'", "'/label", r"'C:\unterminated"])
+    def test_other_bare_apostrophes_stay_literal(self, monkeypatch, value):
+        _as("nt", monkeypatch)
+
+        assert cmd.command_argv(f"python {value}") == ["python", value]
+        assert cmd.command_tokens(f"python {value}") == ["python", value]
 
 
 #: Tokens the Windows quoter has to get right: CommandLineToArgvW halves a

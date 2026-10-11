@@ -401,6 +401,31 @@ async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path
     assert started == [(str(fresh_bin / "fresh-agent.exe"), "-p", "task")]
 
 
+@pytest.mark.parametrize("legacy", [True, False])
+async def test_cli_backend_preserves_stored_windows_path_quotes(tmp_path, monkeypatch, legacy):
+    from types import SimpleNamespace
+
+    from raven.utils import commands
+
+    monkeypatch.setattr(commands, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr("raven.agent.subagent.backends.cli_agent.login_shell_env", lambda: dict(os.environ))
+    folder = tmp_path / "agent's saved files"
+    folder.mkdir()
+    script = folder / "echo argv.py"
+    script.write_text("import json, sys\nprint(json.dumps(sys.argv[1:]))\n", encoding="utf-8")
+    config = folder / "config.json"
+    quote = shlex.quote if legacy else commands.command_quote
+    command = f"{quote(sys.executable)} {quote(str(script))} --config {quote(str(config))} {{prompt}}"
+    backend = CliAgentBackend(
+        name="stored-command", command=command, registry=InstanceRegistry(path=tmp_path / "inst.json")
+    )
+    prompt = "a & O'Brien; keep these characters"
+
+    output = await backend.run(prompt, task_id="stored", workspace=tmp_path, executor=None)
+
+    assert json.loads(output) == ["--config", str(config), prompt]
+
+
 async def test_cli_backend_on_windows_never_starts_a_batch_file_for_a_bare_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

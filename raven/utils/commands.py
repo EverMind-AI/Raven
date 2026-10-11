@@ -6,8 +6,9 @@ they want different tokenisers:
 
 - to **start** it, the split must match the parser the spawn applies --
   ``shlex`` on POSIX, the Win32 ``CommandLineToArgvW`` backslash rules on
-  Windows. POSIX shlex on a Windows drive path eats the backslashes, so
-  ``C:\\Users\\..`` reached ``CreateProcess`` as ``C:Users..``.
+  Windows, with compatibility for single-quoted absolute paths already stored
+  by older callers. POSIX shlex on an unquoted Windows drive path eats the
+  backslashes, so ``C:\\Users\\..`` reached ``CreateProcess`` as ``C:Users..``.
 - to **judge** it (does the launcher it names exist?), the split must keep
   each token's shape so ``_is_absolute_path`` can read a Windows drive-letter
   path as absolute on any host -- a discovered agent with missing Windows
@@ -21,10 +22,29 @@ see a quoted Windows path as one token.
 import os
 import re
 import shlex
+from io import StringIO
+
+_LEGACY_PATH_PREFIX = re.compile(r"'(?:[A-Za-z]:[/\\]|\\\\|/)")
+
+
+def _legacy_path_token(command: str, offset: int) -> tuple[str, int] | None:
+    """Read an older caller's single-quoted path without changing neighboring tokens."""
+    if _LEGACY_PATH_PREFIX.match(command, offset) is None:
+        return None
+    stream = StringIO(command[offset:])
+    lexer = shlex.shlex(stream, posix=True)
+    lexer.whitespace = " \t"
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        value = next(lexer)
+    except ValueError:
+        return None
+    return value, offset + stream.tell()
 
 
 def _split_windows(command: str) -> list[str]:
-    """Tokenise one Windows command line by the CommandLineToArgvW rules.
+    """Read native Windows quoting and older single-quoted absolute path tokens.
 
     Narrower than the real parser in two places, neither of them a spelling
     ``command_quote`` produces: a ``""`` pair inside quotes, which Windows reads
@@ -39,6 +59,14 @@ def _split_windows(command: str) -> list[str]:
     length = len(command)
     while i < length:
         char = command[i]
+        if not in_quotes and (not token_started or token[-1:] == ["="]):
+            legacy = _legacy_path_token(command, i)
+            if legacy is not None:
+                value, i = legacy
+                argv.append("".join(token) + value)
+                token = []
+                token_started = False
+                continue
         if char == "\\":
             token_started = True
             run = 0
@@ -81,9 +109,9 @@ def _split_shape(command: str) -> list[str]:
     """Read host quoting while preserving absolute paths from the other host.
 
     Windows drive and UNC paths retain Windows backslash rules on POSIX, and
-    a single-quoted POSIX absolute path stays grouped on Windows. Other tokens
-    follow the host's escape rules, so a literal quote in an argument cannot
-    swallow the launcher that follows it. Unclosed groups consume the rest
+    older single-quoted absolute paths share the Windows launcher's decoder.
+    Other tokens follow the host's escape rules, so a literal quote in an
+    argument cannot swallow the launcher that follows it. Unclosed groups consume the rest
     of the command; syntax validation belongs to the launch parser.
     """
     argv: list[str] = []
@@ -96,6 +124,15 @@ def _split_shape(command: str) -> list[str]:
     i = 0
     while i < len(command):
         char = command[i]
+        if windows and quote is None and (not token_started or token[-1:] == ["="]):
+            legacy = _legacy_path_token(command, i)
+            if legacy is not None:
+                value, i = legacy
+                argv.append("".join(token) + value)
+                token = []
+                token_started = False
+                windows_token = windows
+                continue
         if not token and quote != "'" and re.match(r"(?:[A-Za-z]:[\\/]|\\\\)", command[i:]):
             windows_token = True
         if char == "\\" and quote != "'":
@@ -122,16 +159,7 @@ def _split_shape(command: str) -> list[str]:
                 token.append(char)
         elif char == quote:
             quote = None
-        elif quote is None and (
-            char == '"'
-            or (
-                char == "'"
-                and (
-                    not windows_token
-                    or (not token_started and command[i + 1 :].startswith("/") and "'" in command[i + 1 :])
-                )
-            )
-        ):
+        elif quote is None and (char == '"' or (char == "'" and not windows_token)):
             quote = char
             token_started = True
         elif char in whitespace and quote is None:
@@ -153,6 +181,10 @@ def command_argv(command: str) -> list[str]:
     """Turn a stored launch-command string into an argv list for spawning.
 
     POSIX mode shlex on a POSIX host, the CommandLineToArgvW rules on Windows.
+    Windows also accepts older single-quoted absolute paths as complete tokens
+    or after ``=``. Other apostrophes remain literal; double-quote a native
+    argument to keep literal single quotes surrounding a path. Decoding only
+    the legacy token preserves unquoted Windows paths elsewhere in the line.
     Raises ``ValueError`` on an unbalanced double quote (shlex's "No closing
     quotation", or the Windows half's own check), the same class callers catch
     today.

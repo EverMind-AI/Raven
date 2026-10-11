@@ -1766,6 +1766,23 @@ class TestAQuotedSpacedRootStaysFailClosed:
 
         assert row.enabled is True
 
+    @pytest.mark.parametrize("present", [False, True])
+    def test_windows_legacy_path_quotes_preserve_launcher_readiness(self, tmp_path, monkeypatch, present):
+        import shlex
+
+        from raven.utils import commands
+
+        monkeypatch.setattr(commands, "os", SimpleNamespace(name="nt"))
+        folder = tmp_path / "agent's saved files"
+        folder.mkdir()
+        launcher = folder / "run.py"
+        if present:
+            launcher.touch()
+        command = f"{shlex.quote(sys.executable)} {shlex.quote(str(launcher))} --acp"
+
+        assert va._launcher_missing({"command": command}) == ("" if present else str(launcher))
+        assert va._launcher_is_gone(SimpleNamespace(command=command)) is not present
+
     @pytest.mark.parametrize(
         ("platform", "argument"),
         [
