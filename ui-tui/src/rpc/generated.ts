@@ -5144,9 +5144,12 @@ export interface FsUploadParams {
  */
 export interface FsUploadResult {
   /**
-   * Workspace-relative path to hand the agent; uploads never return bytes.
+   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.
    */
   path: string;
+  /**
+   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.
+   */
   abs_path: string;
   size: number;
 }
@@ -5211,9 +5214,12 @@ export interface DeckTemplatesPickParams {
  */
 export interface DeckTemplatesPickResult {
   /**
-   * Workspace-relative path to hand the agent; uploads never return bytes.
+   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.
    */
   path: string;
+  /**
+   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.
+   */
   abs_path: string;
   size: number;
 }

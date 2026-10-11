@@ -4028,8 +4028,21 @@ class FsUploadParams(_Strict):
 
 
 class FsUploadResult(_Strict):
-    path: str = Field(..., description="Workspace-relative path to hand the agent; uploads never return bytes.")
-    abs_path: str
+    path: str = Field(
+        ...,
+        description=(
+            "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the "
+            "conversation's own working directory first, so a same-named file there answers for it; uploads "
+            "never return bytes."
+        ),
+    )
+    abs_path: str = Field(
+        ...,
+        description=(
+            "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the "
+            "conversation's own directory holds."
+        ),
+    )
     size: int
 
 

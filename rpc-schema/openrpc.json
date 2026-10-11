@@ -5470,7 +5470,7 @@
     },
     {
       "name": "fs.upload",
-      "summary": "Store an uploaded file under agent home and return its workspace-relative path.",
+      "summary": "Store an uploaded file under agent home and return its path, relative to agent home and absolute.",
       "params": [
         {
           "name": "name",
@@ -5500,10 +5500,11 @@
           "additionalProperties": false,
           "properties": {
             "path": {
-              "description": "Workspace-relative path to hand the agent; uploads never return bytes.",
+              "description": "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.",
               "type": "string"
             },
             "abs_path": {
+              "description": "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.",
               "type": "string"
             },
             "size": {
@@ -5612,10 +5613,11 @@
           "additionalProperties": false,
           "properties": {
             "path": {
-              "description": "Workspace-relative path to hand the agent; uploads never return bytes.",
+              "description": "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.",
               "type": "string"
             },
             "abs_path": {
+              "description": "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.",
               "type": "string"
             },
             "size": {
