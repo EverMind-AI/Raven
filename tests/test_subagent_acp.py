@@ -4743,6 +4743,7 @@ async def test_blank_prefixes_do_not_spend_the_returned_reply_budget(
     await say("agent_message_chunk", "y" * 15)
 
     assert col.reply == "x" * 15 + "y" * 15
+    assert "".join(seen).startswith(("\n\n" if after_step else "") + prefix)
     assert "".join(seen).lstrip() == col.reply
     assert await clamp_output(col.reply, 30, agent="probe") == col.reply
 
