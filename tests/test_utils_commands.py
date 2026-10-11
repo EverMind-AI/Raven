@@ -12,6 +12,7 @@ drive-letter path be judged on POSIX.
 from __future__ import annotations
 
 import os
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -53,6 +54,16 @@ class TestCommandArgv:
         """CommandLineToArgvW's one escape: ``\\\"`` ends in a literal quote."""
         _as("nt", monkeypatch)
         assert cmd.command_argv(r'"C:\Program Files\\" x') == ["C:\\Program Files\\", "x"]
+
+    @pytest.mark.parametrize("value", ["\\", "\\\\", '"', '\\"'])
+    @pytest.mark.parametrize("following", [[], ["acp"]])
+    def test_windows_preserves_arguments_made_only_of_escapes(self, monkeypatch, value, following) -> None:
+        _as("nt", monkeypatch)
+        argv = [r"C:\Program Files\agent\agent.exe", "--root", value, *following]
+        command = subprocess.list2cmdline(argv)
+
+        assert cmd.command_argv(command) == argv
+        assert cmd.command_tokens(command) == argv
 
     def test_unbalanced_quotes_raise_valueerror_on_both(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for name in ("posix", "nt"):

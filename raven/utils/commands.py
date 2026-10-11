@@ -40,6 +40,7 @@ def _split_windows(command: str) -> list[str]:
     while i < length:
         char = command[i]
         if char == "\\":
+            token_started = True
             run = 0
             while i < length and command[i] == "\\":
                 run += 1
