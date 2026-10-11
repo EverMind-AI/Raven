@@ -121,6 +121,24 @@ def tmp_builtin(tmp_path: Path):
 
 
 class TestFrontmatterParsing:
+    @pytest.mark.parametrize(
+        "block",
+        [
+            "name: shared\ndescription: Use when: a task starts",
+            "name: 2048\ndescription: 3.14",
+            "name: shared\nbase: &base [a, b]\ncopy: *base",
+            "name: shared\ndescription: >-\n  First\n  second\n" + "x: value\n" * 3000,
+        ],
+        ids=["malformed", "non-string", "alias", "oversized"],
+    )
+    def test_importers_and_registry_share_frontmatter_rules(self, block):
+        from raven.utils.text import parse_frontmatter
+
+        content = f"---\n{block}\n---\nbody"
+        imported, body = parse_frontmatter(content)
+        assert imported == _parse_frontmatter(content)
+        assert body == "body"
+
     def test_empty_returns_none(self):
         assert _parse_frontmatter("no frontmatter here") is None
 

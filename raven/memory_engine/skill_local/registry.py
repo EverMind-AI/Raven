@@ -37,11 +37,10 @@ import threading
 from collections.abc import Collection
 from pathlib import Path
 
-import yaml
-
 log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
+from raven.utils.text import parse_frontmatter
 
 # Default builtin skills directory.
 #
@@ -484,80 +483,10 @@ class SkillRegistry:
 # ----------------------------------------------------------------------
 
 
-# YAML costs about eighty times the line reading in time and far more in memory,
-# and frontmatter is untrusted; real blocks measure under 3 KB, so a block past
-# this size is read line by line instead.
-_YAML_MAX_CHARS = 16 * 1024
-
-
-class _NoAliasSafeLoader(yaml.SafeLoader):
-    """``SafeLoader`` that refuses aliases: frontmatter is untrusted text, and a
-    few aliased bytes can expand into a value whose string form never ends."""
-
-    def compose_node(self, parent, index):
-        if self.check_event(yaml.AliasEvent):
-            raise yaml.YAMLError("aliases are not accepted in frontmatter")
-        return super().compose_node(parent, index)
-
-
-def _load_yaml(block: str) -> object:
-    loader = _NoAliasSafeLoader(block)
-    try:
-        return loader.get_single_data()
-    finally:
-        loader.dispose()
-
-
 def _parse_frontmatter(content: str) -> dict | None:
-    """Parse SKILL.md frontmatter as YAML.
-
-    Expected format::
-
-        ---
-        name: foo
-        description: "bar"
-        metadata: {"raven": {...}}
-        ---
-
-    A block YAML cannot read (bad syntax, a non-mapping, an alias, a date
-    that does not exist) gets :func:`_parse_frontmatter_lines`, the reading
-    every skill had before. So does a block over ``_YAML_MAX_CHARS``, and a ``name`` or
-    ``description`` that YAML reads as a non-string. Returns ``None`` when
-    no frontmatter is present.
-
-    Valid YAML follows YAML scalar and comment rules: unquoted ``on`` is a
-    boolean, numeric ``always`` values retain their numeric truth value, and
-    an unquoted whitespace-prefixed ``#`` starts a comment. Quote text when
-    those spellings should remain literal.
-    """
-    if not content.startswith("---"):
-        return None
-    m = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-    if not m:
-        return None
-    lines = _parse_frontmatter_lines(m.group(1))
-    if len(m.group(1)) > _YAML_MAX_CHARS:
-        return lines
-    try:
-        parsed = _load_yaml(m.group(1))
-    except Exception:  # noqa: BLE001 - ValueError and RecursionError are not YAMLError
-        return lines
-    if not isinstance(parsed, dict):
-        return lines
-    for key in ("name", "description"):
-        if key in parsed and not isinstance(parsed[key], str):
-            parsed[key] = lines.get(key, "")
-    return parsed
-
-
-def _parse_frontmatter_lines(block: str) -> dict:
-    """One ``key: value`` per line, surrounding quotes stripped, no nesting."""
-    metadata: dict = {}
-    for line in block.split("\n"):
-        if ":" in line:
-            key, value = line.split(":", 1)
-            metadata[key.strip()] = value.strip().strip("\"'")
-    return metadata
+    """Read SKILL.md with the importers' shared YAML and legacy-fallback rules."""
+    metadata, body = parse_frontmatter(content)
+    return metadata if body != content else None
 
 
 def _strip_frontmatter(content: str) -> str:

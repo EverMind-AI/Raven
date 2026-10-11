@@ -11,6 +11,40 @@ import yaml
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _FM_CLOSE_RE = re.compile(r"^---\s*$", re.MULTILINE)
+_YAML_MAX_CHARS = 16 * 1024
+
+
+class _FrontmatterLoader(yaml.SafeLoader):
+    """Refuse aliases in untrusted frontmatter before constructing their values."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise yaml.YAMLError("aliases are not accepted in frontmatter")
+        return super().compose_node(parent, index)
+
+
+def _parse_frontmatter_block(block: str) -> dict[str, Any]:
+    lines = {}
+    for line in block.splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key.strip():
+            lines[key.strip()] = value.strip().strip("\"'")
+    if len(block) > _YAML_MAX_CHARS:
+        return lines
+    try:
+        loader = _FrontmatterLoader(block)
+        try:
+            parsed = loader.get_single_data()
+        finally:
+            loader.dispose()
+    except Exception:  # noqa: BLE001 - YAML also raises ValueError and RecursionError
+        return lines
+    if not isinstance(parsed, dict):
+        return lines
+    for key in ("name", "description"):
+        if key in parsed and not isinstance(parsed[key], str):
+            parsed[key] = lines.get(key, "")
+    return parsed
 
 
 def is_cjk(text: str, sample: int = 200) -> bool:
@@ -35,7 +69,10 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Extract YAML frontmatter delimited by ``---`` lines.
 
     Returns ``(metadata_dict, body_after_frontmatter)``.
-    Returns ``({}, original_text)`` when no valid frontmatter is found.
+    Returns ``({}, original_text)`` when no complete frontmatter is found.
+    Invalid YAML, aliases, non-mappings, and blocks over 16 KiB use the legacy
+    line fallback. Non-string names and descriptions keep their source text.
+    Valid YAML retains its scalar coercions and inline-comment semantics.
     """
     if not text.startswith("---"):
         return {}, text
@@ -44,11 +81,7 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         return {}, text
     fm_str = text[3 : m.start()].strip()
     body = text[m.end() :].lstrip("\n")
-    try:
-        fm = yaml.safe_load(fm_str)
-        return (fm if isinstance(fm, dict) else {}), body
-    except yaml.YAMLError:
-        return {}, text
+    return _parse_frontmatter_block(fm_str), body
 
 
 def parse_iso_ts_ms(raw: Any) -> int | None:
