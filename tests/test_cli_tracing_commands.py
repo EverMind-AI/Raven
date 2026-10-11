@@ -259,7 +259,7 @@ def test_tracing_keeps_an_unreadable_live_viewer_record(tmp_path, monkeypatch, a
 
     assert result.exit_code == 1
     assert "cannot verify" in result.output.lower()
-    assert "viewer.pid" in result.output
+    assert "viewer.pid" in result.output.replace("\n", "")
     assert "after confirming the record is stale" in " ".join(result.output.split())
     assert "stop it manually" not in result.output
     assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
