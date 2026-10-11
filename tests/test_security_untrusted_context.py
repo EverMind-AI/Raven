@@ -466,3 +466,28 @@ def test_ravens_own_home_is_not_read_as_another_programs_settings() -> None:
     settings = '{"apiKey": "sk-or-v1-0123456789abcdef0123456789abcdef"}'
     qwen = os.path.join(os.path.expanduser("~"), ".qwen", "settings.json")
     assert "0123456789abcdef0123456789abcdef" not in redact_home_config_read({"path": qwen}, settings)
+
+
+def test_ravens_own_oauth_tokens_are_redacted_like_another_programs() -> None:
+    """The OAuth token store sits in Raven's home but holds no source: a read of
+    it is another program's settings read (#842). Only the workspace and the
+    scratch directories are exempt, so a turn reading an auth file there loses
+    the tokens before they reach the model."""
+    from raven.config.held_secrets import scrub_tool_output
+    from raven.home import raven_home
+
+    tokens = '{"access_token": "eyJhbGciOiJSUzI1NiJ9.FAKEPAYLOAD.sig", "refresh_token": "rt_FAKE0123456789abcdef"}'
+    own = raven_home()
+    for arguments in (
+        {"path": str(own / "oauth" / "chatgpt" / "auth.json")},
+        {"path": str(own / "oauth" / "github_copilot" / "access-token")},
+        {"path": str(own / "oauth" / "minimax_global.json")},
+        {"command": f"cat {own}/oauth/chatgpt/auth.json"},
+    ):
+        shown = scrub_tool_output(arguments, tokens)
+        assert "FAKEPAYLOAD" not in shown and "rt_FAKE0123456789abcdef" not in shown, (arguments, shown)
+    # A bare listing of the home itself stays out of the pass, and a read whose
+    # arguments never reach into it was never a candidate.
+    source = "token = self.get_token(request)\n"
+    assert scrub_tool_output({"command": f"ls {own}"}, source) == source
+    assert scrub_tool_output({"path": "tests/test_keys.py"}, source) == source
