@@ -363,16 +363,17 @@ class TestRequirementsHelpers:
 
 class TestSkillRegistryListAndPrecedence:
     @pytest.mark.parametrize("opener", ["--- ", "--------"])
-    def test_metadata_and_body_share_the_same_header_boundaries(self, tmp_path, opener):
+    @pytest.mark.parametrize("body", ["body\n", "\nbody\n"])
+    def test_metadata_and_body_share_the_same_header_boundaries(self, tmp_path, opener, body):
         workspace = tmp_path / "workspace"
         skill = workspace / "skills" / "boundary" / "SKILL.md"
         skill.parent.mkdir(parents=True)
-        text = f"{opener}\nname: sp-name\ndescription: spaced opener\n---\nbody\n"
+        text = f"{opener}\nname: sp-name\ndescription: spaced opener\n---\n{body}"
         skill.write_text(text, encoding="utf-8")
         [meta] = SkillRegistry(workspace, builtin_skills_dir=tmp_path / "builtin").list_all()
 
         if opener == "--- ":
-            assert (meta.name, meta.description, meta.content) == ("sp-name", "spaced opener", "body\n")
+            assert (meta.name, meta.description, meta.content) == ("sp-name", "spaced opener", body)
         else:
             assert (meta.name, meta.description, meta.content) == ("boundary", "boundary", text)
 
