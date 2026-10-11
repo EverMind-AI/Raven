@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from raven.config.raven import ContextConfig
-from raven.context_engine.history_trimmer import HistoryTrimmer
+from raven.context_engine.history_trimmer import HistoryTrimmer, _tool_parents
 from raven.contracts.assembled import AssembledContext, TokenBudget
 from raven.contracts.context import AssembledPrefix, TurnContext
 from raven.contracts.llm_provider import LLMProvider
@@ -886,32 +886,20 @@ def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | No
     if not wanted:
         return set()
 
-    results_by_call: dict[str, list[int]] = {}
-    for idx, message in enumerate(messages):
-        if message.get("role") == "tool" and message.get("tool_call_id"):
-            results_by_call.setdefault(str(message["tool_call_id"]), []).append(idx)
-
     latest: dict[str, int] = {}
-    calls_by_parent: dict[int, list[str]] = {}
     for idx, message in enumerate(messages):
         if message.get("role") != "assistant" or not message.get("tool_calls"):
             continue
         for tool_call in message.get("tool_calls") or []:
             name, args = _tool_call_name_args(tool_call)
-            call_id = tool_call.get("id") if isinstance(tool_call, dict) else None
-            if call_id:
-                calls_by_parent.setdefault(idx, []).append(str(call_id))
             if name not in _SKILL_FETCH_TOOLS:
                 continue
             skill_id = args.get("skill_id")
             if isinstance(skill_id, str) and skill_id in wanted:
                 latest[skill_id] = idx
 
-    pinned: set[int] = set()
-    for parent_idx in set(latest.values()):
-        pinned.add(parent_idx)
-        for call_id in calls_by_parent.get(parent_idx, []):
-            pinned.update(results_by_call.get(call_id, []))
+    parents = set(latest.values())
+    pinned = parents | {result for result, parent in _tool_parents(messages).items() if parent in parents}
     return pinned
 
 

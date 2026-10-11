@@ -363,6 +363,27 @@ def test_pinned_scan_covers_sibling_results_of_the_pinned_turn() -> None:
     assert pinned_message_ids(messages, ["local/guide"]) == {1, 2, 3}
 
 
+@pytest.mark.parametrize("later_id", ["first", "different"])
+@pytest.mark.parametrize("reread", [False, True])
+def test_pinned_scan_pairs_reused_ids_by_position(tmp_path, later_id, reread):
+    from raven.context_engine.curator import CuratorArchiveStore, pinned_message_ids
+    from raven.context_engine.history_trimmer import HistoryTrimmer
+
+    messages = [
+        {"role": "user", "content": "read the guide"},
+        *_use_skill_exchange("first", "local/guide", "original guide"),
+        {"role": "user", "content": "continue"},
+        *_use_skill_exchange(later_id, "local/guide" if reread else "local/unrelated", "later body"),
+    ]
+    expected = {4, 5} if reread else {1, 2}
+    pinned = pinned_message_ids(messages, ["local/guide"])
+    assert pinned == expected
+    assert HistoryTrimmer.canonical_ids(messages, [0, *pinned]) == [0, *sorted(expected)]
+    store = CuratorArchiveStore(tmp_path, ContextConfig(pinned_skill_ids=["local/guide"]))
+    manifest = store.build_manifest("cli:pin-reused", messages)
+    assert {item.id for item in manifest if item.pinned} == expected
+
+
 @pytest.mark.parametrize(
     "tool_calls",
     [
