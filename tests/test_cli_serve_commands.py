@@ -1203,6 +1203,10 @@ class TestAnUnreadableIdentity:
         said = capsys.readouterr().out
         assert "not stopping the supervisor (pid 111)" in said
         assert "not stopping the gateway (pid 222)" in said
+        assert str(home / "web.json") in said
+        assert str(home / "serve.json") in said
+        assert "after confirming the record is stale" in said
+        assert "Do not signal an unverified PID" in said
 
     def test_a_start_waits_instead_of_spawning_another_supervisor(
         self, home: Path, a_built_page, opened, supervised, monkeypatch
@@ -1231,7 +1235,9 @@ class TestAnUnreadableIdentity:
         assert opened == []
         assert (home / "serve.json").exists()
         said = capsys.readouterr().out
-        assert "check process permissions or stop it manually" in said
+        assert str(home / "serve.json") in said
+        assert "after confirming the record is stale" in said
+        assert "stop it manually" not in said
         assert "web --stop" not in said
 
     def test_the_lock_holder_can_still_be_stopped(self, home: Path, monkeypatch) -> None:

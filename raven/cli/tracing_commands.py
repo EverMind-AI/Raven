@@ -159,7 +159,8 @@ def _checked_viewer(pid: int) -> bool:
     if identity is None:
         console.print(
             f"[yellow]Cannot verify the tracing viewer (pid {pid}); its record is kept. "
-            "Check process permissions or stop it manually before retrying.[/yellow]"
+            "Restore process access, or after confirming the record is stale, "
+            f"remove {escape(str(_pid_file()))} and retry. Do not signal an unverified PID.[/yellow]"
         )
         raise typer.Exit(1)
     return identity

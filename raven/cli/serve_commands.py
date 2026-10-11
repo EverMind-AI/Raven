@@ -1339,8 +1339,11 @@ def _may_signal(label: str, pid: int) -> bool:
     """State readers retain an uncertain identity; stopping requires proof."""
     if _recorded_is_ours(pid) is True:
         return True
+    record = _web_state_path() if label == "supervisor" else _state_path()
     typer.echo(
-        f"warning: not stopping the {label} (pid {pid}): its identity could not be confirmed; its record is kept"
+        f"warning: not stopping the {label} (pid {pid}): its identity could not be confirmed; its record is kept. "
+        f"Restore process access, or after confirming the record is stale, remove {record} and retry. "
+        "Do not signal an unverified PID."
     )
     return False
 
@@ -1501,7 +1504,8 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
             if _recorded_is_ours(lingering) is None:
                 typer.echo(
                     f"error: the recorded gateway (pid {lingering}) is alive but its identity cannot be read; "
-                    "check process permissions or stop it manually before retrying"
+                    f"restore process access, or after confirming the record is stale, remove {_state_path()} "
+                    "and retry. Do not signal an unverified PID."
                 )
                 raise typer.Exit(1)
             typer.echo(
