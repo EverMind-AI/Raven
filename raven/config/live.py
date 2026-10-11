@@ -46,6 +46,7 @@ __all__ = [
     "hold_for_this_turn",
     "held",
     "context_window_tokens",
+    "cron_default_timezone",
     "curator_pin",
     "default_live",
     "default_model",
@@ -218,6 +219,33 @@ def _admit(live: LiveConfig, slot: str, *, present: bool, value: Any) -> Any:
         return live._admitted.get(slot)
     live._admitted[slot] = value
     return value
+
+
+def cron_default_timezone(live: LiveConfig) -> str:
+    """The zone a new cron-expression job captures, keeping the last valid answer.
+
+    An invalid edit must not prevent scheduling or silently move reminders to
+    another zone. Removing the field resets the preference to its schema default;
+    existing jobs already hold their own zone and never consult this reader.
+    """
+    from zoneinfo import ZoneInfo
+
+    from raven.config.schema import CronConfig
+
+    raw = live.raw()
+    section = raw.get("cron")
+    present = "cron" in raw and (
+        not isinstance(section, dict) or "defaultTimezone" in section or "default_timezone" in section
+    )
+    value = None
+    if present and isinstance(section, dict):
+        candidate = section.get("defaultTimezone", section.get("default_timezone"))
+        try:
+            value = CronConfig.model_validate({"default_timezone": candidate}).default_timezone
+            ZoneInfo(value)
+        except (ValueError, TypeError, KeyError):
+            value = None
+    return _admit(live, "cron_default_timezone", present=present, value=value) or CronConfig().default_timezone
 
 
 def exec_extra_deny_patterns(live: LiveConfig) -> list[str] | None:

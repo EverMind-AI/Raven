@@ -553,6 +553,41 @@ def test_a_new_cron_uses_the_schema_default_when_no_setting_was_written(monkeypa
     assert job.schedule.tz == CronConfig().default_timezone
 
 
+@pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+def test_cron_creation_keeps_the_last_admitted_timezone(monkeypatch, tmp_path, spelling):
+    from raven.config.live import LiveConfig
+    from raven.config.schema import CronConfig
+    from raven.core.cron_stack import build_cron_service
+
+    config = tmp_path / "config.json"
+    monkeypatch.setattr("raven.home._current_config_path", config)
+    live = LiveConfig(config)
+    monkeypatch.setattr("raven.config.live.default_live", lambda: live)
+    service = build_cron_service(allowed_channels=None)
+    sequence = 0
+
+    def create():
+        nonlocal sequence
+        sequence += 1
+        return service.add_job(
+            "daily", CronSchedule(kind="cron", expr="0 9 * * *"), f"daily-{sequence}", to=f"recipient-{sequence}"
+        )
+
+    config.write_text(json.dumps({"cron": {spelling: "UTC"}}), encoding="utf-8")
+    original = create()
+    assert original.schedule.tz == "UTC"
+    for invalid in (7, None, "Not/AZone"):
+        config.write_text(json.dumps({"cron": {spelling: invalid}}), encoding="utf-8")
+        assert create().schedule.tz == "UTC"
+    config.write_text('{"cron":', encoding="utf-8")
+    assert create().schedule.tz == "UTC"
+    config.write_text(json.dumps({"cron": {spelling: "Europe/Paris"}}), encoding="utf-8")
+    assert create().schedule.tz == "Europe/Paris"
+    config.write_text('{"cron": {}}', encoding="utf-8")
+    assert create().schedule.tz == CronConfig().default_timezone
+    assert next(job for job in service.list_jobs() if job.id == original.id).schedule.tz == "UTC"
+
+
 # --- make_on_session_wake: a wake runs on the session that armed it ------------
 
 

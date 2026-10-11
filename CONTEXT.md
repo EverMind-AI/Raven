@@ -1537,7 +1537,8 @@ The module is the roster -- every key this lane serves has a named reader there 
 spellings), and machinery on this lane asks the reader, never the file by key: `disabled_tool_names`,
 `disabled_playbook_names`, `exec_extra_deny_patterns`, `web_search_key`,
 `media_tool_config`, `mcp_server_configs` (feeding the turn-boundary reconcile),
-`routing_profile`, `default_model`. The boundary is the module docstring's rule: anything
+`routing_profile`, `default_model`, `cron_default_timezone` (captured by each new
+cron-expression job; existing jobs retain their stored zone). The boundary is the module docstring's rule: anything
 whose change implies WORK rather than a different answer (constructing a provider,
 an MCP handshake, moving a workspace) keeps its apply path -- a door, the pool's
 fingerprint cache, or the generation swap. Timing is asymmetric by design: a revocation
