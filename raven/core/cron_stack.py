@@ -239,9 +239,10 @@ def make_on_cron_job(
 
             # Derived, not hardcoded: the lane hangs off whatever session this
             # job's (channel, to) binds to, which is the same session key the
-            # main-agent lane for this outlet uses. ``RpcOutlet`` maps it back
-            # via ``session_of``, so the client's one subscription receives it.
-            conversation = direct_lane(f"{channel}:{chat_id}", *target)
+            # main-agent lane for this outlet uses. Permission and record
+            # lookups keep the original session independently of this lane.
+            parent_session = f"{channel}:{chat_id}"
+            conversation = direct_lane(parent_session, *target)
             req = TurnRequest(
                 origin=Origin.CRON,
                 source=source,
@@ -250,7 +251,7 @@ def make_on_cron_job(
                 text=job.payload.message,
                 conversation=conversation,
                 direct_target=target,
-                parent_session=f"{channel}:{chat_id}",
+                parent_session=parent_session,
             )
         else:
             # The creation-time binding is the one delivery target: submitting

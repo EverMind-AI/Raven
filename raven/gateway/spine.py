@@ -126,8 +126,7 @@ class GatewayTurnRunner(AgentTurnRunner):
         start_permission_turn(
             ApprovalViaAsk(asker, cid) if asker is not None else None,
             conversation_id=cid,
-            # Nothing here is direct today; handed over anyway so a lane that
-            # ever reaches this entrance keeps the rule (PermissionTurn.session).
+            # An instance-addressed cron wake uses its conversation's policy.
             session=session_key_for(req) if req.direct_target else "",
             turn_id=req.turn_id or "",
             origin=req.origin.value,

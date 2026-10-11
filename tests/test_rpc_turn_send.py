@@ -92,6 +92,7 @@ async def test_direct_requests_keep_separator_named_permission_scopes(monkeypatc
 
     monkeypatch.setattr(permissions_session, "_GRANTS", {})
     monkeypatch.setattr(permissions_session, "_MODES", {})
+    monkeypatch.setattr(permissions_session, "_LOOKED_UP", set())
     monkeypatch.setattr(permissions_session, "_RESTORE", None)
     config = PermissionsConfig(mode="full")
     gate = PermissionGate(config_source=lambda: config, builtin=BuiltinRulings(), allow_ask=True)

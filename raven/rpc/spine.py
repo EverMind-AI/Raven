@@ -194,7 +194,7 @@ class RpcTurnRunner(AgentTurnRunner):
             self._approval_responder if watched else None,
             conversation_id=cid,
             # A direct chat answers to the permission state of the
-            # conversation its lane belongs to, and this is the one place that
+            # conversation its lane belongs to, and this entrance
             # knows the turn is direct (see ``PermissionTurn.session``).
             session=session_key_for(req) if req.direct_target else "",
             turn_id=req.turn_id or "",
