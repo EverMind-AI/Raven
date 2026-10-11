@@ -197,9 +197,9 @@ function pageFiles(list: string, carried: string): Array<{ path: string; url: st
 
 let wired = false
 
-/* The page's dragstart and dragend, registered with the page's other document
- * listeners (state/globalListeners): what a drag carries is read from the drag
- * that began in this document, wherever in it that was. */
+/* The document's dragstart and dragend, registered with its other listeners
+ * (state/globalListeners): what a drag carries is read from the drag that
+ * began in this document, wherever in it that was. */
 export function onPageDragStart(e: DragEvent): void {
   pageDrag = e.dataTransfer?.getData('text/uri-list') || ''
 }

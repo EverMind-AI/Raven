@@ -282,7 +282,7 @@ UPLOAD_DIR = "uploads"
 
 
 def workspace_root(loop, session_key: str = "") -> Path:
-    """The directory the page's file panel is rooted at.
+    """The directory the web UI's workspace pane is rooted at.
 
     The working directory the session's turns run in, not agent home: home is
     ``~/.raven/workspace`` by default, which holds the agent's own memory and
@@ -319,7 +319,7 @@ def viewer_root(workspace: Path, rel: Path, home: Path) -> Path:
     ``fs.upload`` deposits into agent home (``home``) whichever session asked --
     it is the root always writable -- and answers with a path relative to it.
     Everything else the viewer is handed is relative to the session's own
-    working directory (``workspace``), which is what the file panel browses.
+    working directory (``workspace``), which is what the workspace pane browses.
     The two are the same directory for a session that runs where the agent
     lives, and part company for one pinned elsewhere: there a picture the
     reader attached came back 404 from ``/file`` and its bubble fell back to a

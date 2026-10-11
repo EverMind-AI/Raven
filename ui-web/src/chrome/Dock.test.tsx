@@ -598,9 +598,9 @@ describe('the anchored popovers', () => {
    is taken at its word only when it began in this document: any site the
    reader drags from can put one of these addresses in the list just as well. */
 describe('a drop onto the field', () => {
-  /* The page registers the two drag listeners with its other document
-     listeners (state/globalListeners), which this harness does not install; a
-     case here registers just those two. */
+  /* state/globalListeners registers the two drag listeners with the
+     document's other listeners, which this harness does not install; a case
+     here registers just those two. */
   beforeEach(() => {
     document.addEventListener('dragstart', composer.onPageDragStart)
     document.addEventListener('dragend', composer.onPageDragEnd)

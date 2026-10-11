@@ -129,8 +129,8 @@ export function installGlobalListeners(): void {
   window.addEventListener('beforeunload', parkDraftNow)
   window.addEventListener('resize', fitField)
   /* Whether a drag under way began in this document, for the composer's drop
-     target: the drag itself can start anywhere in the page, so the document is
-     what listens (features/composer/mount.tsx). */
+     target: the drag itself can start anywhere in the document, so the
+     document is what listens (features/composer/mount.tsx). */
   document.addEventListener('dragstart', onPageDragStart)
   document.addEventListener('dragend', onPageDragEnd)
   /* The overlay scrollbars, which cover a scroller drawn at any time by
