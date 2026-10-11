@@ -1780,6 +1780,11 @@ an instance *is* that conversation: it runs on the instance's lane, and the
 entrance that knows the turn is direct hands the conversation over
 (`PermissionTurn.session`), so the conversation's mode governs it as it governs
 the main agent's turns.
+The request carries the original key in `TurnRequest.parent_session`; the RPC,
+Gateway and one-shot entrances read it through `session_key_for`. A parent key
+such as `cli:issue#42` stays intact even when the instance handle also contains
+`#`. Requests from older internal callers can remove their known complete target
+suffix instead; splitting on the first separator is not a permission-scope rule.
 
 **Tier**:
 One tool call's standing with the gate: `allow` runs, `ask` needs a human (as

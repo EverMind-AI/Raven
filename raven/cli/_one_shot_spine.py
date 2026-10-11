@@ -27,7 +27,7 @@ from raven.spine import (
     TurnEvent,
     TurnFailed,
     TurnRequest,
-    session_of,
+    session_key_for,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub, make_hub_sink
 
@@ -167,7 +167,7 @@ class _OneShotTurnRunner(AgentTurnRunner):
         self.last_turn = start_permission_turn(
             None,
             conversation_id=cid,
-            session=session_of(cid) if req.direct_target else "",
+            session=session_key_for(req) if req.direct_target else "",
             turn_id=req.turn_id or "",
         )
         self.turns.append(self.last_turn)

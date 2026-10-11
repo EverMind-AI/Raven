@@ -116,7 +116,7 @@ class PermissionTurn:
 
         Only the entrance knows a turn is direct (``req.direct_target``), so it
         is the entrance that hands the session over, the way
-        ``raven.rpc.spine`` does with ``session_of(cid)``. Nothing is split
+        ``raven.rpc.spine`` does with ``session_key_for(req)``. Nothing is split
         here: a person may name a conversation whose key contains the lane
         separator -- ``raven agent --session cli:issue#42`` keeps it as typed --
         and splitting it would merge two conversations into one permission

@@ -250,6 +250,7 @@ def make_on_cron_job(
                 text=job.payload.message,
                 conversation=conversation,
                 direct_target=target,
+                parent_session=f"{channel}:{chat_id}",
             )
         else:
             # The creation-time binding is the one delivery target: submitting

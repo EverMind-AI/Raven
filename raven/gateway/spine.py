@@ -19,11 +19,11 @@ from raven.agent.spine_runner import AgentTurnRunner
 from raven.contracts.asking import SupportsDirectAsk
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.providers.base import bound_llm_detail, llm_error_summary, parse_llm_error
-from raven.spine import OriginPools, Scheduler
+from raven.spine import OriginPools, Scheduler, session_key_for
 from raven.spine.delivery import DeliveryHub
 from raven.spine.events import Text, TurnEnded, TurnFailed, TurnStarted
 from raven.spine.message import Source
-from raven.spine.turn import Origin, session_of
+from raven.spine.turn import Origin
 
 if TYPE_CHECKING:
     from raven.agent.loop import AgentLoop
@@ -128,7 +128,7 @@ class GatewayTurnRunner(AgentTurnRunner):
             conversation_id=cid,
             # Nothing here is direct today; handed over anyway so a lane that
             # ever reaches this entrance keeps the rule (PermissionTurn.session).
-            session=session_of(cid) if req.direct_target else "",
+            session=session_key_for(req) if req.direct_target else "",
             turn_id=req.turn_id or "",
             origin=req.origin.value,
         )

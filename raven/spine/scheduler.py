@@ -18,7 +18,7 @@ from loguru import logger
 
 from raven.spine.events import RunnerEvent, TurnEnded, TurnEvent, TurnFailed, TurnStarted, bound_failure_text
 from raven.spine.runner import Emit, TurnOutcome, TurnRunner
-from raven.spine.turn import AnswerlessTurnError, BusyPolicy, Origin, TurnRequest
+from raven.spine.turn import AnswerlessTurnError, BusyPolicy, Origin, TurnRequest, direct_lane
 
 
 def describe_failure(exc: BaseException) -> str:
@@ -63,6 +63,20 @@ def conversation_id(req: TurnRequest) -> str:
     if req.conversation is not None:
         return req.conversation
     return f"{req.source.channel}:{req.source.chat_id}"
+
+
+def session_key_for(req: TurnRequest) -> str:
+    """The original session, independent of an instance's serial lane.
+
+    Older submitters may omit the parent; their known full target suffix is
+    sufficient to undo direct_lane without splitting separators inside it.
+    """
+    lane = conversation_id(req)
+    if req.direct_target is None:
+        return lane
+    if req.parent_session is not None:
+        return req.parent_session
+    return lane.removesuffix(direct_lane("", *req.direct_target))
 
 
 EventSink = Callable[[TurnEvent], Awaitable[None]]

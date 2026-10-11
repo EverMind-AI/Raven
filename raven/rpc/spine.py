@@ -46,6 +46,8 @@ from raven.spine import (
     TurnRequest,
     TurnStarted,
     conversation_id,
+    direct_lane,
+    session_key_for,
 )
 from raven.spine.delivery import Capabilities, DeliveryHub
 from raven.spine.events import TurnEvent
@@ -194,7 +196,7 @@ class RpcTurnRunner(AgentTurnRunner):
             # A direct chat answers to the permission state of the
             # conversation its lane belongs to, and this is the one place that
             # knows the turn is direct (see ``PermissionTurn.session``).
-            session=session_of(cid) if req.direct_target else "",
+            session=session_key_for(req) if req.direct_target else "",
             turn_id=req.turn_id or "",
             on_review=_on_review if watched else None,
             # A direct chat is a person's turn answered by a named instance, and
@@ -348,8 +350,7 @@ class RpcOutlet:
             payload = self._tagged({"turn_id": turn_id, "content": content}, conversation_id)
             await self._emitter.emit(cid, {"type": "message.start", "payload": payload})
 
-    @staticmethod
-    def _subscription(conversation_id: str | None) -> str | None:
+    def _subscription(self, conversation_id: str | None, target: dict[str, str] | None = None) -> str | None:
         """The subscription an event on this lane belongs to.
 
         A direct chat runs on its own lane so it can be concurrent, but the
@@ -357,10 +358,17 @@ class RpcOutlet:
         event's ``target``. Emitting on the lane key instead would reach a
         subscription nobody registered. See ``raven.spine.turn.session_of``.
 
+        A known target supplies the whole suffix, preserving separators in the
+        parent. Closing events pass the target captured before slot cleanup.
+
         An unstamped event passes through untouched: the lane stamps every event
         it routes, so this is only reachable from a caller driving the outlet
         directly.
         """
+        if target is None and conversation_id:
+            target = self._direct_targets.get(conversation_id)
+        if conversation_id and target is not None:
+            return conversation_id.removesuffix(direct_lane("", target["agent"], target["handle"]))
         return session_of(conversation_id) if conversation_id else conversation_id
 
     def _tagged(self, payload: dict[str, Any], conversation_id: str) -> dict[str, Any]:
@@ -501,7 +509,9 @@ class RpcOutlet:
             payload["target"] = target
         if duration_ms is not None:
             payload["duration_ms"] = duration_ms
-        await self._emitter.emit(self._subscription(conversation_id), {"type": "message.complete", "payload": payload})
+        await self._emitter.emit(
+            self._subscription(conversation_id, target), {"type": "message.complete", "payload": payload}
+        )
 
     async def emit_error(
         self,
@@ -530,7 +540,7 @@ class RpcOutlet:
             payload["detail"] = detail
         if target is not None:
             payload["target"] = target
-        await self._emitter.emit(self._subscription(conversation_id), {"type": "error", "payload": payload})
+        await self._emitter.emit(self._subscription(conversation_id, target), {"type": "error", "payload": payload})
 
 
 def _make_rpc_sink(
