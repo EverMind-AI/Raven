@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import shutil
 import threading
 from collections.abc import Collection
@@ -40,7 +39,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
-from raven.utils.text import parse_frontmatter
+from raven.utils.text import parse_frontmatter, strip_frontmatter
 
 # Default builtin skills directory.
 #
@@ -491,12 +490,7 @@ def _parse_frontmatter(content: str) -> dict | None:
 
 def _strip_frontmatter(content: str) -> str:
     """Return the markdown body with the leading ``---...---`` frontmatter removed."""
-    if not content.startswith("---"):
-        return content
-    m = re.match(r"^---\n.*?\n---\n?", content, re.DOTALL)
-    if not m:
-        return content
-    return content[m.end() :]
+    return strip_frontmatter(content)
 
 
 def _parse_nested_metadata(raw: object) -> dict:

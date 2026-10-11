@@ -10,7 +10,8 @@ from typing import Any
 import yaml
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-_FM_CLOSE_RE = re.compile(r"^---\s*$", re.MULTILINE)
+_FM_OPEN_RE = re.compile(r"\A---[ \t]*\r?\n")
+_FM_CLOSE_RE = re.compile(r"^---[ \t]*(?:\r?\n|$)", re.MULTILINE)
 _YAML_MAX_CHARS = 16 * 1024
 _YAML_MAX_DEPTH = 32
 
@@ -74,6 +75,22 @@ def display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
 
 
+def _split_frontmatter(text: str) -> tuple[str, str] | None:
+    opening = _FM_OPEN_RE.match(text)
+    if opening is None:
+        return None
+    closing = _FM_CLOSE_RE.search(text, pos=opening.end())
+    if closing is None:
+        return None
+    return text[opening.end() : closing.start()].strip(), text[closing.end() :]
+
+
+def strip_frontmatter(text: str) -> str:
+    """Remove exactly the header recognized by the metadata reader."""
+    split = _split_frontmatter(text)
+    return split[1] if split is not None else text
+
+
 def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Extract YAML frontmatter delimited by ``---`` lines.
 
@@ -84,14 +101,11 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     and descriptions keep their source text.
     Valid YAML retains its scalar coercions and inline-comment semantics.
     """
-    if not text.startswith("---"):
+    split = _split_frontmatter(text)
+    if split is None:
         return {}, text
-    m = _FM_CLOSE_RE.search(text, pos=4)
-    if m is None:
-        return {}, text
-    fm_str = text[3 : m.start()].strip()
-    body = text[m.end() :].lstrip("\n")
-    return _parse_frontmatter_block(fm_str), body
+    block, body = split
+    return _parse_frontmatter_block(block), body.lstrip("\n")
 
 
 def parse_iso_ts_ms(raw: Any) -> int | None:
@@ -118,5 +132,6 @@ __all__ = [
     "display_width",
     "is_cjk",
     "parse_frontmatter",
+    "strip_frontmatter",
     "parse_iso_ts_ms",
 ]
