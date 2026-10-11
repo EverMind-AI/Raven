@@ -294,7 +294,8 @@ class _TurnCollector:
         if deliver is None or self._limit is None:
             return deliver
         bounded = bounded_delta(deliver, self._limit)
-        assert bounded is not None
+        if bounded is None:
+            return None
         leading = True
 
         async def emit(text: str) -> None:
