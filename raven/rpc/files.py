@@ -289,7 +289,8 @@ def workspace_root(loop, session_key: str = "") -> Path:
     is not where a launch-directory turn reads or writes anything. Resolved
     per session because a session can be pinned to its own directory (the
     persisted ``workdir`` override); an empty key falls through to the
-    resolver's policy default, which for the gateway is the launch directory.
+    resolver's policy default: the launch directory under ``raven serve``,
+    ``<session root>/_`` under ``raven gateway``.
 
     Here rather than beside the console handlers so ``turn.send`` can ask the
     same question without importing them: ``rpc.methods.console`` reaches
