@@ -314,6 +314,15 @@ class TestRequirementsHelpers:
 
 
 class TestSkillRegistryListAndPrecedence:
+    @pytest.mark.parametrize("description", ["3.14", "false", "null", "[one, two]"])
+    def test_non_string_description_keeps_its_source_text(self, tmp_path, description):
+        workspace = tmp_path / "workspace"
+        _write_skill(workspace / "skills", "pi", description=description)
+        registry = SkillRegistry(workspace, builtin_skills_dir=tmp_path / "builtin")
+
+        [meta] = registry.list_all()
+        assert (meta.name, meta.description) == ("pi", description)
+
     @pytest.mark.parametrize("metadata", ["!!binary //79", "!!binary gA==", "!!binary eyJyYXZlbiI6IDF9"])
     def test_binary_metadata_does_not_abort_the_skill_pool(self, tmp_path, metadata):
         workspace = tmp_path / "workspace"
