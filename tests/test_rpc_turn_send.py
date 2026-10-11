@@ -78,7 +78,8 @@ def dispatcher() -> Dispatcher:
 
 
 @pytest.mark.parametrize("entrance", ["rpc", "gateway", "one_shot"])
-async def test_direct_requests_keep_separator_named_permission_scopes(monkeypatch, entrance) -> None:
+@pytest.mark.parametrize("direct", [False, True])
+async def test_requests_keep_separator_named_permission_scopes(monkeypatch, entrance, direct) -> None:
     from raven.cli._one_shot_spine import _OneShotTurnRunner
     from raven.config.schema import PermissionsConfig
     from raven.contracts.permissions import Allow, DecisionSource, NeedsApproval
@@ -116,7 +117,11 @@ async def test_direct_requests_keep_separator_named_permission_scopes(monkeypatc
     async def run(parent):
         scheduler = FakeScheduler()
         await turn_send(
-            {"session_key": parent, "content": "check", "target": {"agent": "Raven", "handle": "h#1"}},
+            {
+                "session_key": parent,
+                "content": "check",
+                "target": {"agent": "Raven", "handle": "h#1"} if direct else None,
+            },
             scheduler=scheduler,
             turn_ids={},
         )
