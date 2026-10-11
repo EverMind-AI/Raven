@@ -4712,6 +4712,41 @@ async def test_a_steered_message_streams_whole_only_when_its_reply_comes_back_wh
     assert ("".join(seen) == reply) == (returned == reply)
 
 
+@pytest.mark.parametrize("prefix", ["   ", "\n\t", " " * 40])
+@pytest.mark.parametrize("steers", [0, 1, 2])
+@pytest.mark.parametrize("after_step", [False, True])
+async def test_blank_prefixes_do_not_spend_the_returned_reply_budget(
+    prefix: str, steers: int, after_step: bool
+) -> None:
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent.backends.base import clamp_output
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="task", limit=30)
+
+    async def say(kind: str, text: str) -> None:
+        await col("session/update", {"update": {"sessionUpdate": kind, "content": {"type": "text", "text": text}}})
+
+    if after_step:
+        await say("agent_message_chunk", "Earlier narration.")
+        await col("session/update", {"update": {"sessionUpdate": "tool_call", "toolCallId": "read-1", "kind": "read"}})
+        seen.clear()
+    await say("agent_message_chunk", prefix)
+    for index in range(steers):
+        await say("user_message_chunk", f"steer {index}")
+        await say("agent_message_chunk", prefix)
+    await say("agent_message_chunk", "x" * 15)
+    await say("agent_message_chunk", "y" * 15)
+
+    assert col.reply == "x" * 15 + "y" * 15
+    assert "".join(seen).lstrip() == col.reply
+    assert await clamp_output(col.reply, 30, agent="probe") == col.reply
+
+
 async def test_the_live_transcript_streams_only_the_closing_burst() -> None:
     """The live view and the settled record must agree on where prose sits.
 

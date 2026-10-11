@@ -290,7 +290,26 @@ class _TurnCollector:
         return datetime.now().isoformat()
 
     def _budgeted(self) -> Callable[[str], Awaitable[None]] | None:
-        return self._deliver if self._limit is None else bounded_delta(self._deliver, self._limit)
+        deliver = self._deliver
+        if deliver is None or self._limit is None:
+            return deliver
+        bounded = bounded_delta(deliver, self._limit)
+        assert bounded is not None
+        leading = True
+
+        async def emit(text: str) -> None:
+            nonlocal leading
+            if leading:
+                stripped = text.lstrip()
+                prefix = text[: len(text) - len(stripped)]
+                if prefix:
+                    # reply strips this prefix, so it cannot spend its cap.
+                    await deliver(prefix)
+                text = stripped
+                leading = not bool(text)
+            await bounded(text)
+
+        return emit
 
     async def __call__(self, method: str, params: dict[str, Any]) -> None:
         # Any frame from the agent is the run moving, whatever it carries. The

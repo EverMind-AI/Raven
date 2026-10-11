@@ -2323,6 +2323,9 @@ rendered cannot be retried without duplicating itself). What streams ends with t
 record stores - a lane that narrates between its steps streams that narration first and
 returns only its last message, and acp caps each message at `maxOutputChars` the way the
 reply is capped - so a caller that rendered the deltas must not deliver the return value again.
+Leading whitespace remains visible but spends no ACP message budget, because the returned
+reply strips it. This includes a steer's separator before the first nonblank text; a
+separator inside nonblank message text still spends that message's budget.
 _Avoid_: conflating it with the roster's `live-progress` tag, which says a transport reports
 its *intermediate work* (acp only) and is advertised to the model. Reply streaming is
 invisible to the model and is about the answer itself.
