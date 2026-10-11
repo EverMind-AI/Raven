@@ -152,6 +152,31 @@ def _unified(before: str, after: str, name: str) -> str | None:
     return "\n".join(out)
 
 
+# A DOS device name opens the device, not a file: ``nul`` maps to NUL in every
+# directory on every Windows version (CPython issue 95486), the whole set on
+# Windows 10 and earlier, with or without an extension (``nul.md`` is NUL).
+# ``Path.resolve()`` cannot catch one: on Windows that is ``ntpath.realpath``,
+# which maps only a path that is exactly ``nul`` to ``\\.\NUL`` and hands
+# ``<workspace>\nul`` back unchanged, so the allowed-dir check then accepts it.
+# The set matches Python 3.13's ``os.path.isreserved`` device names (COM/LPT
+# widened to 0-9 as the issue's naming rules have them); trailing dots and
+# spaces are how Windows trims a name before that comparison.
+_WINDOWS_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {f"COM{i}" for i in range(10)} | {f"LPT{i}" for i in range(10)}
+)
+
+
+def _is_device_name(segment: str) -> bool:
+    """Whether a path segment is a DOS device name in one of its spellings."""
+    return segment.partition(".")[0].rstrip(" ").upper() in _WINDOWS_DEVICE_NAMES
+
+
+# Read once: the platform of a process never changes, and keying the fence on
+# the module global keeps it testable off Windows (where ``os.name = "nt"``
+# cannot be patched without breaking ``Path`` itself).
+_WINDOWS = os.name == "nt"
+
+
 def resolve_path(
     path: str,
     workspace: Path | None = None,
@@ -163,6 +188,8 @@ def resolve_path(
     if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in str(path)):
         raise PermissionError(f"Path {path!r} contains a line break or control character")
     p = Path(path).expanduser()
+    if _WINDOWS and _is_device_name(p.name):
+        raise PermissionError(f"Path {path} is a reserved device name on Windows; choose a different name")
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
