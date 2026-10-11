@@ -128,7 +128,7 @@ async def test_file_serves_an_upload_by_either_spelling_to_a_pinned_session(
         await client.close()
 
 
-async def test_file_serves_a_pinned_session_nothing_else_of_agent_home(
+async def test_file_judges_an_upload_by_where_its_path_lands_for_a_pinned_session(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Agent home answers for an upload alone, judged by where the path lands: a
