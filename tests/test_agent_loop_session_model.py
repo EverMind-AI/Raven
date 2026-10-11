@@ -33,7 +33,7 @@ from raven.context_engine.segments.skills import SkillsSegmentBuilder
 from raven.providers.base import LLMResponse
 from raven.providers.binding import ModelBinding, active_binding
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import Origin, TurnRequest, direct_lane
 
 
 def _configure_pins(**blocks: dict) -> None:
@@ -184,6 +184,37 @@ async def test_a_turn_runs_on_its_own_session_model(tmp_path) -> None:
     assert seen["loop"] == ("prov-a", "vendor-a/model")
     assert seen["subagents"] == ("prov-a", "vendor-a/model")
     assert seen["consolidator"] == "prov-a"
+
+
+@pytest.mark.asyncio
+async def test_a_direct_chat_turn_runs_on_its_session_model(tmp_path) -> None:
+    """A direct chat is a sub-conversation of its session, so it follows the
+    session's switch. Its ``conversation`` is the instance's lane though, and
+    nothing ever stores a binding under a lane -- the switch lives on the
+    session key -- so resolving the lane as a session of its own sent the
+    direct chat to the default while the rest of the conversation ran on the
+    model the user picked.
+    """
+    loop = _loop(tmp_path)
+    loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
+
+    seen: list[str] = []
+
+    async def _body(*args, **kwargs):
+        seen.append(loop.model)
+        return "done"
+
+    loop._run_turn = _body
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+        text="hi",
+        conversation=direct_lane("tui:a", "Raven", "h1"),
+        direct_target=("Raven", "h1"),
+    )
+    await loop.run_turn(req, None, None)
+
+    assert seen == ["vendor-a/model"], "the direct chat must run on the session's choice, not the default"
 
 
 @pytest.mark.asyncio
