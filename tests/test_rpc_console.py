@@ -875,6 +875,42 @@ async def test_fs_upload_survives_a_session_workdir_that_takes_no_files(tmp_path
     assert r["path"] == "uploads/image.png"
 
 
+async def test_fs_upload_survives_a_session_root_it_may_not_read(tmp_path: Path, monkeypatch) -> None:
+    """The name check reads the session's own ``uploads/`` as well, and a pinned
+    folder the engine may not read -- one macOS keeps from it, another user's
+    directory -- answers with EACCES, which ``Path.exists`` raises instead of
+    answering False. Agent home can still name the upload, so the check gives
+    way rather than failing it as -32603. Denied by a stub: root reads through
+    any mode, so a chmod would prove nothing on the box that runs this."""
+    import base64
+
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "project"
+    (project / "uploads").mkdir(parents=True)
+    _agent_home(monkeypatch, home)
+    denied = project.resolve()
+    refused: list[str] = []
+    real_exists = Path.exists
+
+    def exists(self: Path, *args, **kwargs) -> bool:
+        if Path(self).is_relative_to(denied):
+            refused.append(Path(self).name)
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+
+    r = await console_module.fs_upload(
+        {"name": "image.png", "content_b64": base64.b64encode(b"bytes").decode(), "session": "web:1"},
+        agent_loop_factory=_loop_factory(_WorkdirLoop({}, project)),
+    )
+
+    assert refused == ["image.png"], "the session's folder was asked, and refused"
+    assert r["path"] == "uploads/image.png"
+    assert (home / "uploads" / "image.png").read_bytes() == b"bytes"
+
+
 async def test_fs_upload_names_the_directory_it_could_not_create(tmp_path: Path, monkeypatch) -> None:
     """An unwritable agent home is a real configuration, and the page can only
     report what the error carries: unguarded, ``mkdir`` escaped as -32603 with

@@ -2115,10 +2115,23 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
             "fs.upload: cannot read the session's working directory ({}); agent home alone decides the name", exc
         )
         shadow_dir = None
+
+    def shadowed(candidate: str) -> bool:
+        if shadow_dir is None:
+            return False
+        try:
+            return (shadow_dir / candidate).exists()
+        except OSError as exc:
+            # ``Path.exists`` raises EACCES rather than answering False: a folder
+            # the engine may not read must not cost the upload, which agent home
+            # alone can still name.
+            logger.warning("fs.upload: cannot read {} ({}); agent home alone decides the name", shadow_dir, exc)
+            return False
+
     target = target_dir / name
     stem, suffix = target.stem, target.suffix
     n = 1
-    while target.exists() or (shadow_dir is not None and (shadow_dir / target.name).exists()):
+    while target.exists() or shadowed(target.name):
         target = target_dir / f"{stem}-{n}{suffix}"
         n += 1
     try:
