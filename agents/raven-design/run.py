@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import shlex
+import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -270,13 +271,13 @@ def serve(args: argparse.Namespace) -> int:
     The engine precheck comes before the render, the fork launcher's order: a
     missing engine is the answer whoever installed this needs first, and no
     file holding merged secrets should exist for a run that cannot start.
-    After rendering, this process execs ``python -m raven acp`` on its own
-    interpreter (the roster row's ``{PYTHON}`` resolves at install time to
-    one that imports raven), so the server inherits this pid, process group
-    and stdio untouched. No chdir: the fork engine resolved its corpus
+    The launcher serves ``python -m raven acp`` on this
+    interpreter with inherited stdio: POSIX exec preserves the pid, while
+    Windows waits for the child to keep the config's owner alive.
+    No chdir: the fork engine resolved its corpus
     relative to its checkout, the wheel resolves it relative to its own
-    package. Nothing runs after the exec, so the pid-liveness sweep in
-    render_config is the only cleanup this hosting has.
+    package. The pid-liveness sweep in render_config removes configurations
+    from exited launchers.
     """
     if importlib.util.find_spec(ENGINE_PACKAGE) is None:
         raise SystemExit(
@@ -286,8 +287,11 @@ def serve(args: argparse.Namespace) -> int:
         )
 
     rendered = render_config(Path(args.config).resolve())
-    log(f"[run] exec {sys.executable} -m raven acp (config {rendered})")
-    os.execv(sys.executable, [sys.executable, "-m", "raven", "acp", "--config", str(rendered)])
+    log(f"[run] serve {sys.executable} -m raven acp (config {rendered})")
+    argv = [sys.executable, "-m", "raven", "acp", "--config", str(rendered)]
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.call(argv))
+    os.execv(sys.executable, argv)
     raise AssertionError("unreachable: execv does not return")
 
 

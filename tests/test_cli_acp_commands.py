@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ctypes
 import io
 import os
 import sys
@@ -122,6 +123,85 @@ class TestServe:
 
 
 class TestOpenStdin:
+    @pytest.mark.parametrize("error", [38, 109])
+    def test_windows_pipe_reader_reports_a_closed_pipe_as_eof(self, monkeypatch, error):
+        monkeypatch.setattr(
+            acp_commands,
+            "_windows_stdin_api",
+            lambda fd: (
+                lambda *args: pytest.fail("an empty closed pipe must not be read"),
+                lambda *args: False,
+                42,
+                lambda: error,
+            ),
+        )
+        read = acp_commands._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
+        assert read(64) == b""
+
+    def test_windows_pipe_reader_reads_only_available_bytes(self, monkeypatch):
+        waits = []
+        sizes = []
+        checks = iter([0, 5])
+
+        def peek(handle, buffer, size, count, available, remaining):
+            available._obj.value = next(checks)
+            return True
+
+        def read_file(handle, buffer, size, count, overlapped):
+            sizes.append(size)
+            ctypes.memmove(buffer, b"hello", size)
+            count._obj.value = size
+            return True
+
+        monkeypatch.setattr(acp_commands, "_windows_stdin_api", lambda fd: (read_file, peek, 42, lambda: 0))
+        monkeypatch.setattr(acp_commands.time, "sleep", waits.append)
+        read = acp_commands._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
+
+        assert read(64) == b"hello"
+        assert sizes == [5], "reading more than the pipe holds can block native imports"
+        assert waits == [0.01]
+
+    @pytest.mark.parametrize("phase", ["peek", "read"])
+    def test_windows_pipe_reader_preserves_input_errors(self, monkeypatch, phase):
+        def peek(handle, buffer, size, count, available, remaining):
+            available._obj.value = 5
+            return phase != "peek"
+
+        monkeypatch.setattr(acp_commands, "_windows_stdin_api", lambda fd: (lambda *args: False, peek, 42, lambda: 5))
+        read = acp_commands._windows_stdin_read(SimpleNamespace(fileno=lambda: 0))
+
+        with pytest.raises(OSError) as caught:
+            read(64)
+        assert caught.value.errno == 5
+
+    def test_windows_file_input_uses_the_stream_reader(self, monkeypatch):
+        monkeypatch.setattr(acp_commands, "_windows_stdin_api", lambda fd: None)
+        assert acp_commands._windows_stdin_read(SimpleNamespace(fileno=lambda: 0)) is None
+
+    async def test_windows_pipes_deliver_frames_without_an_overlapped_transport(self, monkeypatch):
+        read_fd, write_fd = os.pipe()
+        loop = asyncio.get_running_loop()
+
+        async def _forbid_pipe_transport(*args):
+            raise AssertionError("Windows stdin must not require an overlapped pipe handle")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(loop, "connect_read_pipe", _forbid_pipe_transport)
+        try:
+            with os.fdopen(read_fd, "rb") as stream:
+                monkeypatch.setattr(sys, "stdin", stream)
+                async with acp_commands._open_stdin() as reader:
+                    os.write(write_fd, b"first\n")
+                    assert await asyncio.wait_for(reader.readline(), timeout=5) == b"first\n"
+                    os.write(write_fd, b"second\n")
+                    assert await asyncio.wait_for(reader.readline(), timeout=5) == b"second\n"
+                    os.close(write_fd)
+                    write_fd = None
+                    assert await asyncio.wait_for(reader.read(), timeout=5) == b""
+        finally:
+            if write_fd is not None:
+                os.close(write_fd)
+
     async def test_it_reads_the_process_stdin(self, monkeypatch):
         """Pinned because the wiring is easy to get subtly wrong: attaching to
         ``sys.stdin``'s buffer rather than the object, or to a descriptor that
@@ -134,6 +214,9 @@ class TestOpenStdin:
         async with acp_commands._open_stdin() as reader:
             assert await reader.readline() == b"payload\n"
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows stdin uses a daemon feeder instead of a pipe transport"
+    )
     async def test_the_transport_is_closed_on_the_way_out(self, monkeypatch):
         """An unclosed read transport is collected with the loop still holding
         its descriptor, which surfaces later as an unraisable error with no

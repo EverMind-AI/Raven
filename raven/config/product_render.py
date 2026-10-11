@@ -39,6 +39,7 @@ from typing import Any, Callable, Iterable
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
 from raven.home import raven_home
 from raven.utils.paths import safe_path_segment
+from raven.utils.pid import pid_alive
 
 
 def env_value(name: str, *, env_file: Path | None = None) -> str | None:
@@ -552,7 +553,7 @@ def seed_once(target: Path, render: Callable[[], str]) -> bool:
     if target.exists():
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render(), encoding="utf-8")
+    target.write_text(render(), encoding="utf-8", newline="")
     return True
 
 
@@ -623,20 +624,21 @@ def sweep_stale_renders(root: Path) -> None:
     for stale in root.glob(".config.rendered.*.json"):
         try:
             pid = int(stale.name.split(".")[3])
-            os.kill(pid, 0)
-        except (IndexError, ValueError, ProcessLookupError):
+        except (IndexError, ValueError):
             stale.unlink(missing_ok=True)
-        except PermissionError:
             continue
+        if not pid_alive(pid):
+            stale.unlink(missing_ok=True)
 
 
 def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ()) -> Path:
-    """Write the rendered config under ``root``, owner-only, named by pid.
+    """Write the rendered config under ``root``, owner-only on POSIX, named by pid.
 
     The location is the mechanism: raven derives its data dir from the
     config file's own parent, so wherever this file goes, sessions and cache
-    go too. Owner-only because the render is where the secrets landed; the
-    pid in the name is what :func:`sweep_stale_renders` reads back.
+    go too. POSIX permissions are owner-only because the render is where the
+    secrets landed; Windows uses the containing directory's inherited ACLs.
+    The pid in the name is what :func:`sweep_stale_renders` reads back.
 
     The host's refusals (:func:`inherit_host_denials`) and plugin opt-outs
     (:func:`inherit_plugin_opt_outs`) are merged in here rather than by each
@@ -650,7 +652,8 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ())
     inherit_plugin_opt_outs(config, host, own=own_plugins)
     rendered = root / f".config.rendered.{os.getpid()}.json"
     fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        if hasattr(os, "fchmod"):
+            os.fchmod(stream.fileno(), 0o600)
         json.dump(config, stream, indent=2, ensure_ascii=False)
     return rendered

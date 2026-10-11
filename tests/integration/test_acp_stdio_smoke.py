@@ -12,12 +12,17 @@ from __future__ import annotations
 
 import json
 import os
+import queue
+import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
+
+from raven.config import product_render
 
 pytestmark = pytest.mark.integration
 
@@ -193,3 +198,111 @@ def test_closing_stdin_exits_cleanly():
     result = _run(b"")
 
     assert result.returncode == 0, f"stderr:\n{result.stderr.decode('utf-8', 'replace')[:2000]}"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("product", ["raven-code", "raven-design", "raven-oncall", "raven-ppt", "raven-research"])
+def test_bundled_launcher_keeps_its_config_and_connection_alive(product, tmp_path):
+    repo = Path(__file__).resolve().parents[2]
+    folder = repo / "agents" / product
+    host = tmp_path / "host"
+    host.mkdir()
+    (host / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"openrouter": {"apiKey": "synthetic-host-key"}},
+                "agents": {"defaults": {"provider": "openrouter", "model": "openrouter/openai/gpt-4o"}},
+                "tools": {"web": {"providers": {"serper": {"apiKey": "synthetic-search-key"}}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    profile = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+    profile.setdefault("memory", {})["backend"] = None
+    profile.setdefault("plugins", {}).setdefault("disabled", []).append("everos-memory")
+    source = tmp_path / "profile.json"
+    source.write_text(json.dumps(profile), encoding="utf-8")
+    state = tmp_path / "state"
+    root = state / "acp" if product == "raven-code" else state
+    root.mkdir(parents=True)
+    stale = root / ".config.rendered.999999.json"
+    stale.write_text("{}", encoding="utf-8")
+    state_id = "raven-research-ng" if product == "raven-research" else product
+    stem = state_id.removeprefix("raven-").replace("-", "_").upper()
+    env = dict(os.environ)
+    env.update(
+        RAVEN_HOME=str(host),
+        RAVEN_SUBAGENT="1",
+        SERPER_API_KEY="synthetic-search-key",
+        PYTHONUTF8="1",
+        LITELLM_LOCAL_MODEL_COST_MAP="True",
+        PPT_CONTEXT_WINDOW="128000",
+    )
+    env[f"{stem}_STATE_ROOT"] = str(state)
+    env[f"{stem}_ACP_HOME"] = str(state / "acp")
+    for key in ("MODEL", "PROVIDER", "PROTOCOL", "REASONING_EFFORT"):
+        env.pop(f"RAVEN_PARENT_{key}", None)
+    manifest = json.loads((folder / "subagent.json").read_text(encoding="utf-8"))
+    ready_timeout = max(_TIMEOUT, manifest.get("readyTimeoutMs", _TIMEOUT * 1000) / 1000)
+    command = [
+        arg.replace("{PYTHON}", sys.executable).replace("{SUBAGENT_DIR}", str(folder))
+        for arg in shlex.split(manifest["command"])
+    ]
+
+    replies = queue.Queue()
+    with tempfile.TemporaryFile() as errors:
+        proc = subprocess.Popen(
+            [*command, "--config", str(source)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            cwd=folder,
+            env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+
+        def read_replies():
+            for line in proc.stdout:
+                replies.put(line)
+            replies.put(b"")
+
+        reader = threading.Thread(target=read_replies, daemon=True)
+        reader.start()
+        try:
+            for request_id in (1, 2):
+                proc.stdin.write(
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": request_id,
+                            "method": "initialize",
+                            "params": {"protocolVersion": 1},
+                        }
+                    ).encode()
+                    + b"\n"
+                )
+                proc.stdin.flush()
+                line = replies.get(timeout=ready_timeout if request_id == 1 else _TIMEOUT)
+                assert line, "the agent closed stdout before answering"
+                (frame,) = _frames(line)
+                assert frame["id"] == request_id
+                assert frame["result"]["protocolVersion"] == 1
+                assert proc.poll() is None, "the host must still see a running agent"
+                assert not stale.exists()
+                renders = list(root.glob(".config.rendered.*.json"))
+                assert renders
+                product_render.sweep_stale_renders(root)
+                assert all(path.exists() for path in renders), "a live agent's config must survive the next launch"
+        finally:
+            proc.stdin.close()
+            try:
+                proc.wait(timeout=_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)
+            reader.join(timeout=10)
+            proc.stdout.close()
+
+        errors.seek(0)
+        assert proc.returncode == 0, errors.read().decode("utf-8", "replace")
+        assert not reader.is_alive(), "the agent must close stdout when stdin closes"

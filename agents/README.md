@@ -26,13 +26,15 @@ it has. The agent then reads that home instead of the host's.
 What one agent directory carries:
 
 - `run.py` -- a stdlib-only launcher: render the agent's config (secret
-  slots, host LLM inheritance, mode catalogue), then exec
-  `python -m raven acp --config <rendered>` on the installed raven.
+  slots, host LLM inheritance, mode catalogue), then serve
+  `python -m raven acp --config <rendered>` on the installed raven. POSIX replaces
+  the launcher; Windows keeps it alive until the server exits, so the host and
+  configuration cleanup still see the owning process.
 - `config.json` -- the baseline profile.
 - `modes/*.json` -- optional per-session overlays, surfaced as `acp.modes`
   for a client's mode picker (`research`, `raven-oncall`, and `code` ship one today).
   An agent that ships no `modes/` renders no `acp` block, and the raven it
-  execs then falls back to its own three built-in tiers -- so
+  serves then falls back to its own three built-in tiers -- so
   `session/set_mode` answers with those rather than method-not-found. An
   overlay's `agents.defaults.reasoningEffort` is lifted onto the mode entry as
   the trunk's `reasoningEffort` knob; the rest of an overlay is the agent's
@@ -168,7 +170,7 @@ What one agent directory carries:
 
 Agent vocabulary:
 
-- **Rendered config** -- what `run.py` writes and execs against: the baseline
+- **Rendered config** -- what `run.py` writes and serves from: the baseline
   `config.json` after secret slots, host LLM inheritance and the mode
   catalogue are applied. Rendered files live under the state root, never in
   the agent directory.

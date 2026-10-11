@@ -12,6 +12,8 @@ import json
 import os
 import re
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -639,11 +641,50 @@ def test_sweep_removes_only_the_dead(tmp_path):
     assert not malformed.exists()
 
 
+def test_sweep_preserves_a_running_child_and_removes_its_render_after_exit(tmp_path):
+    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"], stdin=subprocess.PIPE)
+    rendered = tmp_path / f".config.rendered.{child.pid}.json"
+    rendered.write_text("{}", encoding="utf-8")
+    try:
+        render.sweep_stale_renders(tmp_path)
+        assert rendered.exists()
+        with pytest.raises(subprocess.TimeoutExpired):
+            child.wait(timeout=1)
+        child.communicate(input=b"x", timeout=10)
+        render.sweep_stale_renders(tmp_path)
+        assert not rendered.exists()
+    finally:
+        child.kill()
+        child.wait(timeout=10)
+
+
 def test_write_rendered_is_owner_only_and_pid_named(tmp_path):
     rendered = render.write_rendered({"a": 1}, tmp_path)
     assert rendered.name == f".config.rendered.{os.getpid()}.json"
-    assert stat.S_IMODE(rendered.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(rendered.stat().st_mode) == 0o600
     assert json.loads(rendered.read_text()) == {"a": 1}
+
+
+def test_write_rendered_works_without_fchmod(tmp_path, monkeypatch):
+    monkeypatch.delattr(os, "fchmod", raising=False)
+
+    rendered = render.write_rendered({"a": 1}, tmp_path)
+
+    assert rendered.name == f".config.rendered.{os.getpid()}.json"
+    assert json.loads(rendered.read_text(encoding="utf-8")) == {"a": 1}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
+def test_write_rendered_narrows_existing_permissions(tmp_path):
+    rendered = tmp_path / f".config.rendered.{os.getpid()}.json"
+    rendered.write_text("{}", encoding="utf-8")
+    rendered.chmod(0o644)
+
+    assert render.write_rendered({"a": 1}, tmp_path) == rendered
+
+    assert stat.S_IMODE(rendered.stat().st_mode) == 0o600
+    assert json.loads(rendered.read_text(encoding="utf-8")) == {"a": 1}
 
 
 # --- product_acp_home: the engine home never inside the host's (w109) ---------
@@ -684,7 +725,9 @@ def test_acp_home_falls_beside_a_host_home_that_swallows_the_default(homed):
 def test_acp_home_refuses_loud_when_no_outside_placement_exists(homed, monkeypatch):
     """A host home at the filesystem root leaves nowhere beside it; the
     refusal names the product's own override variable."""
-    (homed / "config.json").write_text(json.dumps({"agents": {"defaults": {"workspace": "/"}}}), encoding="utf-8")
+    (homed / "config.json").write_text(
+        json.dumps({"agents": {"defaults": {"workspace": homed.anchor}}}), encoding="utf-8"
+    )
     with pytest.raises(SystemExit) as caught:
         render.product_acp_home("raven-ppt")
     assert "PPT_ACP_HOME" in str(caught.value)
@@ -851,6 +894,82 @@ def test_write_rendered_carries_the_hosts_denials(homed):
 LAUNCHERS = sorted(Path(__file__).resolve().parents[1].glob("agents/*/run.py")) + [
     Path(__file__).resolve().parents[1] / "raven" / "templates" / "agents_scaffold" / "run.py"
 ]
+
+
+@pytest.mark.parametrize("launcher_path", LAUNCHERS, ids=lambda p: p.parent.name)
+@pytest.mark.parametrize("exit_code", [0, 17])
+def test_windows_launchers_wait_for_the_server_and_forward_its_exit(launcher_path, tmp_path, monkeypatch, exit_code):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        f"waiting_{launcher_path.parent.name.replace('-', '_')}", launcher_path
+    )
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+    rendered = tmp_path / "rendered.json"
+    monkeypatch.setattr(launcher, "render_config", lambda *args, **kwargs: rendered)
+    if hasattr(launcher, "render_acp_config"):
+        monkeypatch.setattr(launcher, "render_acp_config", lambda *args, **kwargs: rendered)
+    monkeypatch.setattr(launcher, "log", lambda message: None)
+    monkeypatch.setattr(
+        sys, "argv", ["run.py"] if launcher_path.parent.name == "raven-research" else ["run.py", "--acp"]
+    )
+    monkeypatch.setattr(sys, "platform", "win32")
+    calls = []
+
+    def wait_for_child(argv):
+        calls.append(argv)
+        return exit_code
+
+    monkeypatch.setattr(launcher.subprocess, "call", wait_for_child)
+    monkeypatch.setattr(os, "execv", lambda *args: pytest.fail("Windows must keep the launcher alive"))
+
+    with pytest.raises(SystemExit) as caught:
+        launcher.main()
+
+    assert caught.value.code == exit_code
+    assert calls == [[sys.executable, "-m", "raven", "acp", "--config", str(rendered)]]
+
+
+@pytest.mark.parametrize("launcher_path", LAUNCHERS[:-1], ids=lambda p: p.parent.name)
+def test_launchers_render_after_sweeping_dead_configs(launcher_path, homed, monkeypatch):
+    import importlib.util
+
+    from raven.config.loader import load_config
+
+    monkeypatch.setenv("SERPER_API_KEY", "synthetic-search-key")
+    (homed / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"openrouter": {"apiKey": "synthetic-host-key"}},
+                "agents": {"defaults": {"provider": "openrouter", "model": "openrouter/openai/gpt-4o"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = importlib.util.spec_from_file_location(f"stale_{launcher_path.parent.name.replace('-', '_')}", launcher_path)
+    launcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launcher)
+    monkeypatch.setattr(launcher, "env_value", lambda name: None)
+    monkeypatch.setattr(launcher, "log", lambda message: None)
+    if launcher_path.parent.name == "raven-ppt":
+        monkeypatch.setattr(launcher, "resolve_context_window", lambda *args: None)
+    is_code = launcher_path.parent.name == "raven-code"
+    root = render.product_acp_home(launcher.PRODUCT).resolve() if is_code else launcher.state_root()
+    root.mkdir(parents=True, exist_ok=True)
+    stale = root / ".config.rendered.999999.json"
+    stale.write_text("{}", encoding="utf-8")
+
+    rendered = (
+        launcher.render_acp_config(launcher.DEFAULT_CONFIG)
+        if is_code
+        else launcher.render_config(launcher.DEFAULT_CONFIG)
+    )
+
+    assert not stale.exists()
+    assert rendered.parent == root
+    assert rendered.name == f".config.rendered.{os.getpid()}.json"
+    assert load_config(rendered).get_api_key() == "synthetic-host-key"
 
 
 @pytest.mark.parametrize("launcher", LAUNCHERS, ids=lambda p: p.parent.name)

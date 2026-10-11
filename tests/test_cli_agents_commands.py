@@ -185,6 +185,9 @@ def test_the_default_landing_is_the_raven_home_agents_tree(raven_home: Path) -> 
 
     assert r.exit_code == 0, r.output
     assert (raven_home / "agents" / "demo-agent" / "run.py").is_file()
+    launcher = (raven_home / "agents" / "demo-agent" / "run.py").read_text(encoding="utf-8")
+    assert 'sys.platform == "win32"' in launcher
+    assert "subprocess.call(argv)" in launcher
 
 
 def test_here_lands_in_the_working_directory_agents_tree(raven_home: Path, tmp_path: Path, monkeypatch) -> None:

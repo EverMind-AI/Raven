@@ -28,9 +28,9 @@ architecture doing the job the fork used to:
   client's picker shows, applied per session over the baseline flow config
   instead of being compiled into the loop the way the fork did.
 
-After rendering, this process execs ``python -m raven acp`` on its own
-interpreter (the row's ``{PYTHON}`` resolves at install time to one that
-imports raven), so the server inherits this pid, process group and stdio.
+After rendering, the launcher serves ``python -m raven acp`` on this
+interpreter with inherited stdio. POSIX replaces the launcher; Windows
+keeps it alive until the child exits, preserving the rendered config's owner.
 stdout belongs to the protocol; every diagnostic goes to stderr.
 """
 
@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import get_args
@@ -455,8 +456,11 @@ def main() -> int:
     args = parser.parse_args()
 
     rendered = render_config(Path(args.config).resolve())
-    log(f"[run] exec {sys.executable} -m raven acp (config {rendered})")
-    os.execv(sys.executable, [sys.executable, "-m", "raven", "acp", "--config", str(rendered)])
+    log(f"[run] serve {sys.executable} -m raven acp (config {rendered})")
+    argv = [sys.executable, "-m", "raven", "acp", "--config", str(rendered)]
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.call(argv))
+    os.execv(sys.executable, argv)
     raise AssertionError("unreachable: execv does not return")
 
 

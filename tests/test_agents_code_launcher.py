@@ -457,6 +457,7 @@ def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path)
     assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only(grounded):
     assert stat.S_IMODE(_render(grounded).stat().st_mode) == 0o600
 
@@ -491,6 +492,7 @@ def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
     the exec, so no process starts and no secret-holding render survives."""
     monkeypatch.delenv("CODE_API_KEY", raising=False)
     monkeypatch.setattr(grounded.os, "execv", lambda *a: pytest.fail("execv must not be reached"))
+    monkeypatch.setattr(grounded.subprocess, "call", lambda *a: pytest.fail("ACP serving must not be reached"))
     with pytest.raises(SystemExit):
         grounded.serve(SimpleNamespace(config=str(RUN_PY.parent / "config.json")))
 
@@ -500,9 +502,10 @@ def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
 
 def test_the_acp_exec_lane_is_installed_ravens(grounded, tmp_path, monkeypatch):
     """The served process is ``python -m raven acp`` on this interpreter,
-    execed so it inherits this pid and stdio; the rendered file is on disk at
+    execed on POSIX so it inherits this pid and stdio; the rendered file is on disk at
     exec time; and the fork's env arming is gone -- the flow is switched on
     through the rendered slice, not the process environment."""
+    monkeypatch.setattr(sys, "platform", "linux")
     calls = {}
 
     def fake_execv(binary, argv):
@@ -1187,6 +1190,7 @@ def test_an_overlay_that_moves_nothing_refuses_to_launch(grounded, tmp_path, mon
 
 
 def test_a_mode_flag_starts_sessions_on_that_tier(grounded, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     calls = {}
 
     def fake_execv(binary, argv):
