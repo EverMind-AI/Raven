@@ -174,9 +174,8 @@ async def test_windows_probes_find_a_legacy_single_quoted_program(tmp_path, monk
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell line: a lone quote is not a parse error to CreateProcess")
 async def test_cli_probe_reports_unparseable_command_as_unknown() -> None:
-    # On Windows the CommandLineToArgvW reader only treats a double quote as
-    # special, so `'unbalanced` tokenises fine and the probe reports the agent
-    # missing (the shell's own reading) rather than unparseable.
+    # This single quote belongs to a non-path token, so it stays literal on
+    # Windows and the probe reports a missing agent rather than invalid syntax.
     res = await probe_one(_cli("claude -p 'unbalanced {prompt}"), source="config", path="/usr/bin")
     assert res.status == "unknown"
     assert "cannot be parsed" in res.detail

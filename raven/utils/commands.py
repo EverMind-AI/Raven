@@ -14,9 +14,8 @@ they want different tokenisers:
   path as absolute on any host -- a discovered agent with missing Windows
   paths stays disabled on POSIX instead of losing its separators in shlex.
 
-Without this module every caller reached for ``shlex.split`` (POSIX mode) on
-any host, so the launch arm mangled Windows paths and the shape arm could not
-see a quoted Windows path as one token.
+Launch callers and readiness probes share compatibility rules without applying
+POSIX backslash escapes to native Windows argument tokens.
 """
 
 import os
