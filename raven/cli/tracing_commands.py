@@ -147,11 +147,16 @@ def _pid_is_viewer(pid: int) -> bool | None:
     out = command_line(pid)
     if not out:
         return None if pid_alive(pid) else False
-    match = re.match(r'"([^"]+)"|(\S+)', out)
-    if match is None:
-        return False
-    name = re.split(r"[/\\]", match.group(1) or match.group(2))[-1].lower()
-    return re.fullmatch(r"node(?:js)?(?:-?v?\d+(?:\.\d+)*)?(?:\.exe)?", name) is not None and "server.js" in out
+    node = r"node(?:js)?(?:-?v?\d+(?:\.\d+)*)?(?:\.exe)?"
+    quoted = re.match(r"""^"([^"]+)"|^'([^']+)'""", out)
+    if quoted is not None:
+        name = re.split(r"[/\\]", quoted.group(1) or quoted.group(2))[-1]
+        return re.fullmatch(node, name, re.IGNORECASE) is not None and "server.js" in out[quoted.end() :]
+    # ps leaves spaces unquoted; an argument starting with a new absolute path
+    # must not be consumed as part of the executable's directory.
+    prefix = r"(?:(?:[A-Za-z]:)?[/\\]+)?(?:[^\s/\\]+(?:[ \t]+[^\s/\\]+)*[/\\])*"
+    match = re.match(prefix + node + r"(?=\s|$)", out, re.IGNORECASE)
+    return match is not None and "server.js" in out[match.end() :]
 
 
 def _checked_viewer(pid: int) -> bool:

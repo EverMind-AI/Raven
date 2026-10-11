@@ -217,6 +217,10 @@ def test_pid_is_viewer_rejects_foreign_process():
         (r'"C:\Node\nodejs.exe" "C:\Raven\tracing_viewer\server.js"', True),
         ('"C:\\Program Files\\nodejs\\node.exe" "C:\\Raven\\tracing_viewer\\server.js"', True),
         ('"/opt/node runtime/node" /opt/raven/cli/tracing_viewer/server.js', True),
+        ("/Users/x/Raven copy/.venv/bin/node /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/Users/x/node copy/bin/node22 /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/usr/bin/python /opt/node server.js", False),
+        ("python /opt/node server.js", False),
         (None, None),
         ("", None),
         ("node.exe unrelated.js", False),
@@ -259,6 +263,24 @@ def test_tracing_keeps_an_unreadable_live_viewer_record(tmp_path, monkeypatch, a
     assert "after confirming the record is stale" in " ".join(result.output.split())
     assert "stop it manually" not in result.output
     assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
+
+
+def test_tracing_stops_a_viewer_with_an_unquoted_spaced_node_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+    monkeypatch.setattr(
+        "raven.utils.processes.command_line",
+        lambda _pid: "/Users/x/Raven copy/.venv/bin/node /opt/raven/cli/tracing_viewer/server.js",
+    )
+    killed = []
+    monkeypatch.setattr(tc.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    result = runner.invoke(app, ["tracing", "stop"])
+
+    assert result.exit_code == 0
+    assert killed == [(4242, signal.SIGTERM)]
+    assert not pidfile.exists()
 
 
 def test_an_unreadable_dead_viewer_record_can_be_cleared(tmp_path, monkeypatch):
