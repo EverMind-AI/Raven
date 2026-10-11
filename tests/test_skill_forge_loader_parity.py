@@ -314,6 +314,20 @@ class TestRequirementsHelpers:
 
 
 class TestSkillRegistryListAndPrecedence:
+    @pytest.mark.parametrize("always", ["on", "2"])
+    def test_valid_yaml_uses_scalar_and_comment_rules(self, tmp_path, always):
+        workspace = tmp_path / "workspace"
+        _write_skill(
+            workspace / "skills",
+            "yaml",
+            description="Handles issue #42 and C# code",
+            frontmatter_extra=f"always: {always}\ninject: description # digest",
+        )
+        [meta] = SkillRegistry(workspace, builtin_skills_dir=tmp_path / "builtin").list_all()
+        assert meta.description == "Handles issue"
+        assert meta.always is True
+        assert meta.inject == "description"
+
     @pytest.mark.parametrize("description", ["3.14", "false", "null", "[one, two]"])
     def test_non_string_description_keeps_its_source_text(self, tmp_path, description):
         workspace = tmp_path / "workspace"

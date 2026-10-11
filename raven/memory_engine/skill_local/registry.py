@@ -521,10 +521,14 @@ def _parse_frontmatter(content: str) -> dict | None:
 
     A block YAML cannot read (bad syntax, a non-mapping, an alias, a date
     that does not exist) gets :func:`_parse_frontmatter_lines`, the reading
-    every skill had before, so a skill that loaded keeps loading the same
-    way. So does a block over ``_YAML_MAX_CHARS``, and a ``name`` or
+    every skill had before. So does a block over ``_YAML_MAX_CHARS``, and a ``name`` or
     ``description`` that YAML reads as a non-string. Returns ``None`` when
     no frontmatter is present.
+
+    Valid YAML follows YAML scalar and comment rules: unquoted ``on`` is a
+    boolean, numeric ``always`` values retain their numeric truth value, and
+    an unquoted whitespace-prefixed ``#`` starts a comment. Quote text when
+    those spellings should remain literal.
     """
     if not content.startswith("---"):
         return None

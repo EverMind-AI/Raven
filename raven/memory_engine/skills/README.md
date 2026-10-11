@@ -2,6 +2,14 @@
 
 This directory holds skills shipped with Raven. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter (name, description, metadata) and Markdown instructions for the agent.
 
+Frontmatter follows YAML scalar and comment rules. For example, `always: on`
+is true, and a nonzero numeric `always` value is true. Quote descriptions that
+contain a whitespace-prefixed `#`, or YAML treats the rest as a comment;
+`description: "Handles issue #42 and C# code"` keeps the whole description.
+Likewise, `inject: description # digest` selects description-only injection.
+Malformed or unsupported frontmatter uses the legacy line fallback, and
+non-string `name` and `description` values retain their source spelling.
+
 ## Available Skills
 
 | Skill | Description |
