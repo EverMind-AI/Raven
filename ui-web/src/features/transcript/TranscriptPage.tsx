@@ -16,7 +16,7 @@ import { ds } from '../../state/sources'
 import * as dag from '../dag/graph'
 import { getVersion as deliveriesVersion, humanSize, subscribe as deliveriesSubscribe } from '../workspace/deliveries'
 import {
-  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL,
+  fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL, versioned,
 } from '../workspace/store'
 import * as store from './store'
 import * as tail from './tail'
@@ -1308,9 +1308,12 @@ const DeliveryShot = memo(function DeliveryShot({ row, broken, src }: {
   row: DeliveryRow; broken: () => void; src?: string
 }): ReactElement {
   const [ready, setReady] = useState(false)
+  /* Versioned by the delivery: a path delivered again keeps its token and a
+     thumb is named by its path, so without the stamp the new card's picture
+     is the URL the old card already drew. */
   return (
     <span className={'pic shot' + (ready ? '' : ' skel')}>
-      <img src={src || row.downloadPath} alt="" loading="lazy" decoding="async"
+      <img src={versioned(src || row.downloadPath, row.when)} alt="" loading="lazy" decoding="async"
         onLoad={() => setReady(true)} onError={broken} />
       {ready ? null : <span className="sk" />}
     </span>

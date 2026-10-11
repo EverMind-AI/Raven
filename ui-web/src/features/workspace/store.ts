@@ -176,6 +176,14 @@ export const renderURL = (p: string): string => fileURL(p) + '&render=pdf'
 /* The first page of a deck as a picture, for a tile that has room for one
    picture and not for a viewer. */
 export const thumbURL = (p: string): string => fileURL(p) + '&render=thumb'
+/* A picture the document has drawn from one URL is drawn again from memory
+   for that URL without asking -- the HTML list of available images, which no
+   Cache-Control reaches. So a file rewritten under the same path needs a URL
+   the document has not drawn yet, or the old picture comes back. `version` is
+   whatever moves when the bytes may have, riding along as a query the gateway
+   ignores. */
+export const versioned = (url: string, version?: number | null): string =>
+  url + (version ? '&v=' + version : '')
 /* One page of the rendering as a picture. The viewer draws a PDF this way
    rather than framing the document: Safari does not draw a framed PDF served
    under the sandbox policy these files carry, and that policy is what keeps an
@@ -185,7 +193,7 @@ export const thumbURL = (p: string): string => fileURL(p) + '&render=thumb'
    `version` rides along as a query the gateway ignores, so a deck delivered
    again under the same path is fetched again rather than shown from cache. */
 export const pageURL = (p: string, n: number, version?: number | null): string =>
-  fileURL(p) + '&render=page&p=' + n + (version ? '&v=' + version : '')
+  versioned(fileURL(p) + '&render=page&p=' + n, version)
 
 /* The same route, asked to serve the file under a policy that lets its scripts
    run. One view of one file: the route remembers nothing, so the next request

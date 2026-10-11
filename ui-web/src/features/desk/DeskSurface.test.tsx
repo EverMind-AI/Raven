@@ -200,6 +200,30 @@ describe('the pane of a delivered file', () => {
     expect(deliveries.byPath('/w/gone.md')?.missing).toBe(true)
     expect(deliveries.byPath('/w/denied.md')?.missing).toBe(false)
   })
+
+  /* A document that drew a picture from one URL draws it again from memory for
+     the same URL without asking -- the HTML list of available images, which no
+     Cache-Control reaches -- so a picture the agent rewrote under the same path
+     came back as the one it replaced, whichever door re-opened it. Only a
+     browser shows the pixels; pinned here is the mechanism: each open asks
+     under a URL of its own, and a repaint of the same open does not. */
+  it.each([
+    ['/w/out/shot.png', '/file?path=%2Fw%2Fout%2Fshot.png'],
+    ['/w/out/logo.svg', '/file?path=%2Fw%2Fout%2Flogo.svg'],
+  ])('asks for %s under a URL of its own on every open', async (path, route) => {
+    const view = render(<DeskSurface />)
+    const src = (): string => document.querySelector('.desk-pane .fview .shot img')?.getAttribute('src') || ''
+    await act(async () => { desk.openDeskFile(path) })
+    const first = src()
+    view.rerender(<DeskSurface />)
+    expect(src()).toBe(first)
+
+    await act(async () => { desk.openDeskFile(path) })
+
+    expect(first).toContain(route)
+    expect(src()).toContain(route)
+    expect(src()).not.toBe(first)
+  })
 })
 
 /* happy-dom lays nothing out, so the geometry the gesture reads is stubbed at

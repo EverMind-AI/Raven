@@ -9,7 +9,7 @@ import { show as toast } from '../../state/toast'
 import * as deliveries from './deliveries'
 import {
   RENDERED, TWO_VIEWS, appFor, canOpenInApp, copyToClip, extOf, fileURL, pageURL,
-  hostPlatform, looksBinary, mdHtml, openInApp, runURL, setAppFor,
+  hostPlatform, looksBinary, mdHtml, openInApp, runURL, setAppFor, versioned,
 } from './store'
 import * as store from './store'
 import './styles.css'
@@ -549,11 +549,14 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
   if (f.err) {
     body = <div className="verr">{f.err}</div>
   } else if (asImage) {
+    /* Versioned by the open, not by the paint: every open is a fresh `seq`, so
+       a re-open draws the file as it stands now -- what the text kinds get from
+       their own fetch -- and a repaint of the same open asks for nothing. */
     body = (
       <div className="shot">
         {broken
           ? <div className="verr">{broken}</div>
-          : <img src={fileURL(f.path)} alt={f.path}
+          : <img src={versioned(fileURL(f.path), f.seq)} alt={f.path}
             /* The picture kinds never read text, so this is the only place they
                learn why nothing came -- and the error itself does not say, which
                is why the probe asks for a status: gone, over the ceiling, or
@@ -620,7 +623,7 @@ function DeckBody({ f }: { f: WsFile }): JSX.Element {
   /* A deck the agent rebuilt and delivered again keeps its path; the delivery's
      own stamp is what tells this view the bytes behind the path moved. */
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
-  const version = (deliveries.byPath(f.path) as { when?: number | null } | null)?.when ?? null
+  const version = deliveries.byPath(f.path)?.when ?? null
   const first = pageURL(f.path, 1, version)
   useEffect(() => {
     setPages(null)
