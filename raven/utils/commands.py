@@ -10,8 +10,8 @@ they want different tokenisers:
   ``C:\\Users\\..`` reached ``CreateProcess`` as ``C:Users..``.
 - to **judge** it (does the launcher it names exist?), the split must keep
   each token's shape so ``_is_absolute_path`` can read a Windows drive-letter
-  path as absolute on any host -- the shape judgment is what fail-closes a
-  Windows-shaped product on a POSIX scan, which POSIX shlex would destroy.
+  path as absolute on any host -- a discovered agent with missing Windows
+  paths stays disabled on POSIX instead of losing its separators in shlex.
 
 Without this module every caller reached for ``shlex.split`` (POSIX mode) on
 any host, so the launch arm mangled Windows paths and the shape arm could not
