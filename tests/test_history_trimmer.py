@@ -392,6 +392,36 @@ def _tool_heavy_session(turns: int) -> list[dict]:
     return messages
 
 
+def test_a_fitting_trim_encodes_the_whole_prompt_once(monkeypatch):
+    from raven.utils import tokens
+
+    real = tokens.tiktoken.get_encoding(tokens._ENCODING_NAME)
+    encoded: list[str] = []
+
+    class MeasuredEncoding:
+        def encode(self, payload):
+            encoded.append(payload)
+            return real.encode(payload)
+
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: MeasuredEncoding())
+    messages = _tool_heavy_session(8)
+    trimmer = HistoryTrimmer(_CharProvider(), "fake", lambda: [], 100_000)
+    arguments = dict(
+        session_messages=messages,
+        ids=list(range(len(messages))),
+        protected_ids=set(),
+        reserved_output=0,
+        build_messages=lambda history: [{"role": "system", "content": "system"}, *history],
+    )
+    expected = HistoryTrimmer.trim.__wrapped__(trimmer, **arguments)
+    uncached = encoded.copy()
+    encoded.clear()
+
+    assert trimmer.trim(**arguments) == expected
+    assert len(uncached) == 1
+    assert encoded == uncached
+
+
 def test_trimming_reuses_tokenization_of_retained_history(monkeypatch):
     from raven.utils import tokens
 

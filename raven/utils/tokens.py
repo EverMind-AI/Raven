@@ -27,13 +27,24 @@ class _PromptTokenCache:
         self.counts: Counter[str] = Counter()
         self.costs: dict[str, int] = {}
         self.total = 0
+        self.initial_payload: str | None = None
 
     def clear(self) -> None:
         self.counts.clear()
         self.costs.clear()
         self.total = 0
+        self.initial_payload = None
 
     def count(self, payload: str, encoding: tiktoken.Encoding) -> int:
+        if not self.counts:
+            if self.initial_payload is None:
+                self.total = len(encoding.encode(payload))
+                self.initial_payload = payload
+                return self.total
+            if payload == self.initial_payload:
+                return self.total
+            self.initial_payload = None
+            self.total = 0
         counts = Counter(_TOKEN_BOUNDARY.split(payload))
         costs: dict[str, int] = {}
         total = self.total
@@ -54,7 +65,7 @@ _prompt_cache: ContextVar[_PromptTokenCache | None] = ContextVar("prompt_token_c
 
 @contextmanager
 def reuse_prompt_tokenization() -> Iterator[None]:
-    """Reuse retained text within one synchronous trim, keeping only current pieces."""
+    """Count the first prompt whole; index fragments only when a trim changes it."""
     token = _prompt_cache.set(_PromptTokenCache())
     try:
         yield
