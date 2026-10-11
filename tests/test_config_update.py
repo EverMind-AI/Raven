@@ -548,6 +548,16 @@ def test_skill_block_writes_camel_into_empty_config(cfg_path: Path) -> None:
     assert _read(cfg_path)["skillForge"] == {"blocklist": ["alpha"]}
 
 
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("invalid", [[], 1, "invalid"])
+def test_skill_block_preserves_an_invalid_section(cfg_path, spelling, invalid):
+    cfg_path.write_text(json.dumps({spelling: invalid}), encoding="utf-8")
+    before = cfg_path.read_bytes()
+    with pytest.raises(ValueError, match="object or null"):
+        set_skill_blocked("alpha", True, config_path=cfg_path)
+    assert cfg_path.read_bytes() == before
+
+
 def test_skill_block_respects_existing_snake_casing(cfg_path: Path) -> None:
     cfg_path.write_text(
         json.dumps({"skill_forge": {"auto_install": "off"}}),

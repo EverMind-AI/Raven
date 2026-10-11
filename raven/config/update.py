@@ -248,9 +248,15 @@ def set_skill_blocked(
             sf_key = "skillForge"
         elif isinstance(data.get("skill_forge"), dict):
             sf_key = "skill_forge"
+        elif "skill_forge" in data and "skillForge" not in data:
+            sf_key = "skill_forge"
         else:
             sf_key = "skillForge"
-        section = data.setdefault(sf_key, {})
+        section = data.get(sf_key)
+        if section is None:
+            section = data[sf_key] = {}
+        elif not isinstance(section, dict):
+            raise ValueError(f"{sf_key} must be an object or null")
         current = [str(x) for x in (section.get("blocklist") or [])]
         lowered = {x.casefold() for x in current}
         if blocked:
