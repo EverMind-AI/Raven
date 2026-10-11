@@ -195,6 +195,10 @@ class TestThePosixReader:
     reader the suite ships is the reader the suite measures. Skipped on
     Windows, whose reader is a different mechanism."""
 
+    @pytest.fixture(autouse=True)
+    def _without_procfs(self, monkeypatch):
+        monkeypatch.setattr(processes, "_command_line_proc", lambda _pid: None)
+
     def test_a_live_process_s_argv_is_read_back(self) -> None:
         import os
         import sys
