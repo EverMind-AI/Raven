@@ -13,6 +13,26 @@ from raven.session.manager import Session
 from raven.utils import images, tokens
 
 
+@pytest.mark.parametrize("after_scope", [False, True])
+def test_estimates_outside_a_trim_do_not_share_cached_state(monkeypatch, after_scope) -> None:
+    calls: list[str] = []
+
+    class MeasuredEncoding:
+        def encode(self, payload):
+            calls.append(payload)
+            return list(payload)
+
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: MeasuredEncoding())
+    history = [{"role": "user", "content": "unscoped estimate"}]
+    if after_scope:
+        with tokens.reuse_prompt_tokenization():
+            tokens.estimate_prompt_tokens(history)
+        calls.clear()
+    tokens.estimate_prompt_tokens(history)
+    tokens.estimate_prompt_tokens(history)
+    assert calls == ["unscoped estimate", "unscoped estimate"]
+
+
 def test_reused_prompt_tokenization_matches_whole_payload_counts() -> None:
     rng = random.Random(886)
     atoms = ["alpha", "123456", "?!", "\n", "\r", "\t", " ", "  ", "A\u0301", "\u2603", "{}", "'s"]
