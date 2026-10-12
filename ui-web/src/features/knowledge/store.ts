@@ -877,6 +877,16 @@ export async function write(base: KbBase, settings: KbSettings): Promise<void> {
       bases: (get().bases ?? []).map((row) => (row.id === written.id ? written : row)),
       ...(get().opened?.id === written.id ? { opened: written } : {}),
     })
+    /* The composer's menu holds its own list of names, read once and kept.
+       Making a base and dropping one were the only two things that dropped
+       that list, and a rename reaches it through here -- so the menu went on
+       offering the name the base used to have, for the life of the tab,
+       because the list is never read a second time.
+
+       Compared rather than keyed on the field being passed: every card
+       control writes through this one path, and a star or a pin is not worth
+       dropping a list that shows neither. */
+    if (written.name !== base.name) mentions.invalidate()
     /* Moving the model drops the collection and sends every document in the
        base back to the queue, and nothing else drains it: `index_pending` has
        no caller, and `added` only indexes the one file it just took. Without

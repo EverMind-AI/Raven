@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as mentions from '../../state/mentions'
 import { resetSources, sources } from '../../state/sources'
 import * as store from './store'
 
@@ -114,6 +115,13 @@ function arrived(source: string): KbDoc {
   docs = [...docs, made]
   added.push(source)
   return made
+}
+
+/* Seed the composer menu's own cache, the way one open of it would. Seeded
+   rather than loaded: that list comes over the gateway, which is a layer below
+   the source these tests fake, and what is under test here is what drops it. */
+function heldByTheMenu(bases: { id: string; name: string; documents: number }[]): void {
+  mentions.set((prev) => ({ ...prev, bases }))
 }
 
 function install(rows: KbBase[]): Fake {
@@ -294,6 +302,31 @@ describe('the knowledge store', () => {
 
     expect(fake.wrote).toEqual([['a', { starred: true }]])
     expect(store.get().bases![0]!.starred).toBe(true)
+  })
+
+  it('drops the composer menu list when a base is renamed', async () => {
+    /* The menu reads its list once and keeps it. Making a base and dropping
+       one were the only two things that dropped that list, so a renamed base
+       went on being offered under its old name for the life of the tab. */
+    install([base({ id: 'a', name: 'Handbook' })])
+    await store.load()
+    heldByTheMenu([{ id: 'a', name: 'Handbook', documents: 0 }])
+
+    await store.write(store.get().bases![0]!, { name: 'Field guide' })
+
+    expect(mentions.get().bases).toBeNull()
+  })
+
+  it('keeps that list when a write changes something the menu does not show', async () => {
+    /* Every card control writes through the one path, and a star is not worth
+       a round trip to redraw a list of names that has not changed. */
+    install([base({ id: 'a', name: 'Handbook' })])
+    await store.load()
+    heldByTheMenu([{ id: 'a', name: 'Handbook', documents: 0 }])
+
+    await store.write(store.get().bases![0]!, { starred: true })
+
+    expect(mentions.get().bases?.map((row) => row.name)).toEqual(['Handbook'])
   })
 
   it('turns a mark off again', async () => {
