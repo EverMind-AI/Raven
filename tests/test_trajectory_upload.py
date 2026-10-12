@@ -19,7 +19,7 @@ from aiohttp.test_utils import TestServer
 from raven.trajectory import bugreport as breport
 from raven.trajectory import receiver as rcv
 from raven.trajectory import upload as tupload
-from tests.bug_report_receiver_stub import PROXY_VARIABLES
+from tests.bug_report_receiver_stub import clear_proxy_env
 from tests.test_trajectory_bugreport import _full_flow, _valid_payload
 from tests.test_trajectory_receiver import DIFFERENT, DIFFERENT_SHA, OTHER_ID, PACKAGE, ROOT, SHA
 
@@ -35,8 +35,7 @@ GOOD_RECEIPT = {
 
 @pytest.fixture(autouse=True)
 def no_proxy_env(monkeypatch):
-    for name in PROXY_VARIABLES:
-        monkeypatch.delenv(name, raising=False)
+    clear_proxy_env(monkeypatch)
 
 
 @pytest.fixture
@@ -152,6 +151,17 @@ def test_allow_http_opens_the_lan_but_not_nonsense():
     assert tupload.validate_upload_url("http://10.1.2.3/", environ=env) == "http://10.1.2.3"
     with pytest.raises(tupload.UploadConfigError):
         tupload.validate_upload_url("not a url", environ=env)
+
+
+BROKEN_URLS = ["https://[broken", "https://ops.example:notaport", "https://ops.example:99999", "https://ops.example:0"]
+
+
+@pytest.mark.parametrize("url", BROKEN_URLS)
+@pytest.mark.parametrize("allow_http", [False, True])
+def test_structurally_broken_urls_are_config_errors(url, allow_http):
+    env = {"RAVEN_BUGREPORT_ALLOW_HTTP": "1"} if allow_http else {}
+    with pytest.raises(tupload.UploadConfigError):
+        tupload.validate_upload_url(url, environ=env)
 
 
 def test_resolve_upload_url_three_states(monkeypatch):
@@ -399,6 +409,40 @@ async def test_compressed_responses_are_refused_unexpanded(tmp_path, monkeypatch
     finally:
         await server.close()
     assert exc.value.retryable is False and "compressed" in str(exc.value)
+
+
+DEEP_JSON = b"[" * 10_000 + b"0" + b"]" * 10_000
+
+
+@pytest.mark.parametrize(
+    "status,retryable,needle", [(201, False, "malformed receipt: not JSON"), (500, True, "server returned 500")]
+)
+async def test_deeply_nested_json_stays_an_upload_error(tmp_path, status, retryable, needle):
+    async def respond(_request):
+        return web.Response(status=status, body=DEEP_JSON, content_type="application/json")
+
+    server, url, _fake = await _fake_server(respond)
+    try:
+        with pytest.raises(tupload.UploadError) as exc:
+            await _upload(_package_file(tmp_path), base_url=url)
+    finally:
+        await server.close()
+    assert exc.value.retryable is retryable and needle in str(exc.value)
+
+
+async def test_a_deeply_nested_receipt_is_recorded_as_a_failure(state, workspace):
+    async def respond(_request):
+        return web.Response(status=201, body=DEEP_JSON, content_type="application/json")
+
+    record_dir, _ = _full_flow(state, workspace)
+    server, url, _fake = await _fake_server(respond)
+    try:
+        with pytest.raises(tupload.UploadError):
+            await asyncio.to_thread(tupload.upload_record, record_dir, base_url=url)
+    finally:
+        await server.close()
+    upload = breport.load_record(record_dir)["upload"]
+    assert upload["state"] == "failed" and "malformed receipt" in upload["error"]
 
 
 async def test_redirects_and_error_statuses(tmp_path):

@@ -1710,10 +1710,9 @@ def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets,
 
 @pytest.fixture
 def no_proxy_env(monkeypatch):
-    from tests.bug_report_receiver_stub import PROXY_VARIABLES
+    from tests.bug_report_receiver_stub import clear_proxy_env
 
-    for name in PROXY_VARIABLES:
-        monkeypatch.delenv(name, raising=False)
+    clear_proxy_env(monkeypatch)
 
 
 @pytest.fixture
@@ -1761,10 +1760,13 @@ def test_report_bug_without_a_receiver_keeps_the_old_words(state, _no_machine_se
     assert "Nothing will be uploaded" in r.output and "Not uploaded" in r.output
 
 
-def test_report_bug_misconfigured_url_fails_before_side_effects(state, _no_machine_secrets, monkeypatch):
+@pytest.mark.parametrize(
+    "url", ["http://10.1.2.3", "https://[broken", "https://ops.example:notaport", "https://ops.example:99999"]
+)
+def test_report_bug_misconfigured_url_fails_before_side_effects(state, _no_machine_secrets, monkeypatch, url):
     from raven.trajectory import bugreport as breport
 
-    monkeypatch.setenv("RAVEN_BUGREPORT_URL", "http://10.1.2.3")
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", url)
     _simple_log(state)
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
 

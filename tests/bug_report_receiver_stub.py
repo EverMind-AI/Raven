@@ -22,6 +22,16 @@ PROXY_VARIABLES = (
 )
 
 
+def clear_proxy_env(monkeypatch) -> None:
+    """Keep every upload in a test on the loopback: no environment proxies, and no
+    system-configured ones either (urllib falls back to the macOS proxy settings
+    when the environment names none; a wildcard NO_PROXY stops that lookup)."""
+    for name in PROXY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("NO_PROXY", "*")
+    monkeypatch.setenv("no_proxy", "*")
+
+
 @contextmanager
 def receiver_thread(save_dir: Path) -> Iterator[str]:
     """Serve a receiver on an ephemeral port until the block exits; yields its base URL."""

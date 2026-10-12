@@ -101,11 +101,23 @@ def upload_url(environ: Mapping[str, str] | None = None) -> str:
 
 
 def validate_upload_url(url: str, *, environ: Mapping[str, str] | None = None) -> str:
-    """``url`` without its trailing slash, or :class:`UploadConfigError`."""
+    """``url`` without its trailing slash, or :class:`UploadConfigError`.
+
+    The structure is checked the way the request will parse it, so a URL
+    that passes here can be sent: a malformed host or port must fail before
+    anything is collected, not after the package exists.
+    """
     url = url.strip()
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+        httpx.URL(url)
+    except (ValueError, httpx.InvalidURL) as exc:
+        raise UploadConfigError(f"{UPLOAD_URL_ENV} is not a valid URL: {url!r} ({exc})") from exc
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise UploadConfigError(f"{UPLOAD_URL_ENV} must be an absolute http(s) URL: {url!r}")
+    if port is not None and not 1 <= port <= 65535:
+        raise UploadConfigError(f"{UPLOAD_URL_ENV} has a port outside 1-65535: {url!r}")
     if _environ(environ).get(ALLOW_HTTP_ENV, "").strip().lower() not in _TRUTHY:
         try:
             require_https(url, what=UPLOAD_URL_ENV)
@@ -162,11 +174,19 @@ async def _read_bounded(response: httpx.Response) -> bytes:
     return bytes(body)
 
 
-def _rejection(status: int, body: bytes) -> str:
+_NOT_JSON = object()
+
+
+def _parse_json(body: bytes) -> Any:
+    """The decoded body, or :data:`_NOT_JSON`; nesting deep enough to overflow counts as not JSON."""
     try:
-        payload = json.loads(body)
-    except ValueError:
-        payload = None
+        return json.loads(body)
+    except (ValueError, RecursionError):
+        return _NOT_JSON
+
+
+def _rejection(status: int, body: bytes) -> str:
+    payload = _parse_json(body)
     if isinstance(payload, dict) and isinstance(payload.get("error"), str):
         message = payload.get("message")
         return f"server rejected ({status} {payload['error']}): {message if isinstance(message, str) else ''}"
@@ -209,10 +229,9 @@ async def _receipt_of(response: httpx.Response, *, report_id: str, sha256: str, 
         raise UploadError(_rejection(status, body), status=status, retryable=retryable)
     if not response.headers.get("Content-Type", "").lower().startswith("application/json"):
         raise UploadError("malformed receipt: not JSON", status=status, retryable=False)
-    try:
-        payload = json.loads(body)
-    except ValueError as exc:
-        raise UploadError("malformed receipt: not JSON", status=status, retryable=False) from exc
+    payload = _parse_json(body)
+    if payload is _NOT_JSON:
+        raise UploadError("malformed receipt: not JSON", status=status, retryable=False)
     problem = _receipt_problem(payload, report_id=report_id, sha256=sha256, size=size, duplicate=status == 200)
     if problem is not None:
         raise UploadError(f"malformed receipt: {problem}", status=status, retryable=False)

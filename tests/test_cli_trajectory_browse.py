@@ -2737,10 +2737,9 @@ def test_reports_do_not_cross_sessions(state, workspace, _no_machine_secrets):
 
 @pytest.fixture
 def no_proxy_env(monkeypatch):
-    from tests.bug_report_receiver_stub import PROXY_VARIABLES
+    from tests.bug_report_receiver_stub import clear_proxy_env
 
-    for name in PROXY_VARIABLES:
-        monkeypatch.delenv(name, raising=False)
+    clear_proxy_env(monkeypatch)
 
 
 @pytest.fixture
@@ -2813,10 +2812,11 @@ def test_bug_report_upload_failure_is_shown(state, workspace, monkeypatch, capsy
     assert record["status"] == "local_ready" and record["upload"]["state"] == "failed"
 
 
-def test_bug_report_misconfigured_url_collects_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+@pytest.mark.parametrize("url", ["http://10.1.2.3", "https://[broken", "https://ops.example:notaport"])
+def test_bug_report_misconfigured_url_collects_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets, url):
     from raven.trajectory import bugreport as breport
 
-    monkeypatch.setenv("RAVEN_BUGREPORT_URL", "http://10.1.2.3")
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", url)
     _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
 
     _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), ("pick", "Report a bug"), _CANCEL], workspace)
