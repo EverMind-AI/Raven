@@ -392,6 +392,26 @@ def test_pinned_scan_pairs_reused_ids_by_position(tmp_path, later_id, reread):
     assert [item["group_id"] for item in saved["items"]] == [item.group_id for item in manifest]
 
 
+@pytest.mark.parametrize("later_id", ["first", "different"])
+def test_manifest_keeps_two_exchanges_of_one_turn_apart(tmp_path: Path, later_id: str) -> None:
+    from raven.context_engine.curator import CuratorArchiveStore
+
+    messages = [
+        {"role": "user", "content": "read the guide, then continue"},
+        *_use_skill_exchange("first", "local/guide", "guide body"),
+        *_use_skill_exchange(later_id, "local/unrelated", "other body"),
+    ]
+    store = CuratorArchiveStore(tmp_path, ContextConfig(pinned_skill_ids=["local/guide"]))
+    manifest = store.build_manifest("cli:one-turn", messages)
+    assert manifest[1].turn_id == manifest[3].turn_id
+    assert manifest[1].group_id is not None
+    assert manifest[3].group_id is not None
+    assert manifest[1].group_id == manifest[2].group_id
+    assert manifest[3].group_id == manifest[4].group_id
+    assert manifest[1].group_id != manifest[3].group_id
+    assert {item.id for item in manifest if item.pinned} == {1, 2}
+
+
 def test_manifest_leaves_unpaired_messages_without_a_tool_group(tmp_path: Path) -> None:
     from raven.context_engine.curator import CuratorArchiveStore
 
