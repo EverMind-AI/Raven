@@ -253,6 +253,23 @@ def may_fetch(model: str) -> bool:
     return any(part in _NETWORK_METADATA_VENDORS for part in model.split("/") if part)
 
 
+# Ollama's driver answers a table miss by POSTing `{api_base}/api/show` to the
+# daemon serving the model. That is a request, not a read: worth making when the
+# caller allows a fetch, and what held `session/new` past its EOF grace when not.
+_ENDPOINT_METADATA_VENDORS = frozenset({"ollama", "ollama_chat"})
+
+
+def _may_query_endpoint(model: str) -> bool:
+    """Would ``get_model_info`` ask this model's own server rather than a table?
+
+    Every other driver answers offline: it strips the routing prefix and reads
+    the table, which files most direct vendors under the bare name
+    (``openai/gpt-4o-mini`` is keyed ``gpt-4o-mini``). That normalization is
+    what a cache-only lookup still needs. Any segment counts, as in ``may_fetch``.
+    """
+    return any(part in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part)
+
+
 def _numeric(entry: dict | None, *fields: str) -> float | None:
     """First numeric value among ``fields``, or None.
 
@@ -804,8 +821,8 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetc
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
 
-    ``allow_fetch=False`` reads only the static table: ``get_model_info`` can
-    query a provider even when LiteLLM itself is already imported.
+    ``allow_fetch=False`` skips ``get_model_info`` only where it would ask the
+    model's own server (see ``_may_query_endpoint``).
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -820,7 +837,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetc
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if not allow_fetch or may_prompt(candidate) or may_fetch(candidate):
+        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(candidate)):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -961,8 +978,8 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_
     hand the check is free and the lookup proceeds exactly as with
     ``allow_import=True``.
 
-    ``allow_fetch=False`` reads only the static table: ``get_model_info`` can
-    query a provider even when LiteLLM itself is already imported.
+    ``allow_fetch=False`` skips ``get_model_info`` only where it would ask the
+    model's own server (see ``_may_query_endpoint``).
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -979,7 +996,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if not allow_fetch or may_prompt(candidate) or may_fetch(candidate):
+        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(candidate)):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -1008,9 +1025,9 @@ def resolve_context_window(model: str, *, allow_fetch: bool = True) -> int | Non
 
     ``allow_fetch=False`` means "answer from what is already on hand": it
     passes through to the OpenRouter tier (see ``_fetch_openrouter_models``)
-    and limits the LiteLLM tier to its already loaded static table. No fresh
-    import or SDK metadata lookup runs on this caller's behalf (see
-    ``_try_litellm_context_window``).
+    and keeps the LiteLLM tier to lookups that read: no fresh import, and no
+    metadata request to the model's own server, runs on this caller's behalf
+    (see ``_try_litellm_context_window``).
     """
     window = _try_litellm_context_window(model, allow_import=allow_fetch, allow_fetch=allow_fetch)
     if window:

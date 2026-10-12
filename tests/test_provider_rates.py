@@ -998,11 +998,10 @@ def _seed_catalog(monkeypatch, table: dict) -> None:
         "ollama/raven-uncached-model",
         "ollama_chat/raven-uncached-model",
         "openrouter/ollama/raven-uncached-model",
-        "custom/raven-uncached-model",
     ],
 )
 @pytest.mark.parametrize("lookup", [rates.resolve_context_window, rates.declared_max_output_tokens])
-def test_no_fetch_metadata_does_not_ask_litellm_on_a_table_miss(monkeypatch, model, lookup):
+def test_no_fetch_metadata_does_not_ask_the_ollama_driver_on_a_table_miss(monkeypatch, model, lookup):
     asked = []
 
     def info(candidate):
@@ -1013,6 +1012,63 @@ def test_no_fetch_metadata_does_not_ask_litellm_on_a_table_miss(monkeypatch, mod
 
     assert lookup(model, allow_fetch=False) is None
     assert asked == []
+
+
+@pytest.mark.parametrize(
+    ("lookup", "expected"),
+    [(rates.resolve_context_window, 16384), (rates.declared_max_output_tokens, 4096)],
+)
+def test_no_fetch_metadata_still_asks_litellm_for_a_driver_that_reads_a_table(monkeypatch, lookup, expected):
+    model = "custom/raven-uncached-model"
+    asked = []
+
+    def info(candidate):
+        asked.append(candidate)
+        return {"max_input_tokens": 16384, "max_output_tokens": 4096}
+
+    _patch_table(monkeypatch, {}, info=info)
+
+    assert lookup(model, allow_fetch=False) == expected
+    assert asked == [model]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["openai/gpt-4o-mini", "openai/gpt-4o", "vertex_ai/gemini-2.5-pro", "anthropic/claude-sonnet-4-5"],
+)
+def test_no_fetch_metadata_answers_a_direct_vendor_the_way_a_fetch_does(model):
+    """The table files these under the bare name, so only ``get_model_info`` finds them.
+
+    It finds them offline, by stripping the routing prefix. Skipping it on a
+    cache-only lookup sized the turn on the fallback window, or on the
+    ``openrouter/`` alias row, which carries OpenRouter's numbers rather than
+    the vendor's.
+    """
+    assert rates._table_entry(model) is None
+    assert rates._try_litellm_context_window(model, allow_fetch=False) == rates._try_litellm_context_window(model)
+    assert rates._try_litellm_max_output(model, allow_fetch=False) == rates._try_litellm_max_output(model)
+    assert rates._try_litellm_context_window(model, allow_fetch=False)
+    assert rates._try_litellm_max_output(model, allow_fetch=False)
+
+
+@pytest.mark.parametrize("model", ["ollama/raven-uncached-model", "ollama_chat/raven-uncached-model"])
+def test_no_fetch_metadata_does_not_reach_the_ollama_daemon(monkeypatch, model):
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+    asked = []
+
+    def info(self, model, api_base=None):
+        asked.append(model)
+        return {"max_input_tokens": 16384, "max_output_tokens": 4096}
+
+    monkeypatch.setattr(OllamaConfig, "get_model_info", info)
+
+    assert rates.resolve_context_window(model, allow_fetch=False) is None
+    assert rates.declared_max_output_tokens(model, allow_fetch=False) is None
+    assert asked == []
+
+    assert rates.resolve_context_window(model, allow_fetch=True) == 16384
+    assert asked
 
 
 @pytest.mark.parametrize(
