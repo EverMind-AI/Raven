@@ -58,6 +58,7 @@ _DENY_REASONS: dict[str, str] = {
     "catastrophic_delete": "recursively deletes the filesystem root or the home directory",
     "disk_format": "formats a disk using the format command",
     "system_power": "powers the machine off or reboots it",
+    "shell_nesting_limit": "command nesting exceeds the safety inspection limit",
     "parse_error": "could not be parsed as a shell command; an unbalanced quote is the usual cause",
 }
 

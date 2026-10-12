@@ -143,6 +143,7 @@ class CommandDecision(StrEnum):
 # literally named ``|``. Both used to segment identically, and the second one
 # published without asking.
 _OPERATORS = ("|&", "&&", "||", ";;", ";", "&", "|", "(", ")", "`", "\n")
+_FLOW_OPERATORS = frozenset({"&&", "||", "|", "|&"})
 # ``{`` and ``}`` are reserved words rather than operators: they separate
 # commands only as whole words (``{ rm x; }``). A brace glued to other characters
 # is an ordinary argument, which is what ``find -exec rm {} \;`` and ``xargs
@@ -193,7 +194,8 @@ def _split_on_operators(command: str) -> Iterator[str]:
     """Yield the command's pieces, split at unquoted operators."""
 
     for piece, _ in _split_on_operators_with_separators(command):
-        yield piece
+        if piece:
+            yield piece
 
 
 def _split_on_operators_with_separators(command: str) -> Iterator[tuple[str, str]]:
@@ -207,8 +209,9 @@ def _split_on_operators_with_separators(command: str) -> Iterator[tuple[str, str
 
     The operator belongs to the piece before it, because that is the question a
     caller asks of it: whether what follows runs, and whether it runs *because*
-    this piece succeeded. An empty piece is dropped along with its operator, so
-    a later piece never inherits a separator that was not its own.
+    this piece succeeded. A flow operator after a group terminator remains a
+    separate empty piece: the directory walk needs both the group boundary and
+    the decision about whether the next command runs.
     """
 
     piece: list[str] = []
@@ -239,7 +242,7 @@ def _split_on_operators_with_separators(command: str) -> Iterator[tuple[str, str
         operator = _operator_at(command, index)
         if operator is not None:
             text = "".join(piece).strip()
-            if text:
+            if text or operator in _FLOW_OPERATORS:
                 yield text, operator
             piece = []
             index += len(operator)
@@ -362,7 +365,8 @@ def _command_segments(command: str) -> Iterator[list[str]]:
     """
 
     for segment, _ in _command_segments_with_separators(command):
-        yield segment
+        if segment:
+            yield segment
 
 
 def _command_segments_with_separators(command: str) -> Iterator[tuple[list[str], str]]:
@@ -373,8 +377,7 @@ def _command_segments_with_separators(command: str) -> Iterator[tuple[list[str],
         lexer.commenters = ""
         lexer.whitespace_split = True
         segment = list(lexer)
-        if segment:
-            yield segment, operator
+        yield segment, operator
 
 
 def _embedded_shell_command(segment: list[str]) -> str | None:
@@ -782,6 +785,26 @@ def _iter_argv(command: str, *, _depth: int = 0) -> Iterator[list[str]]:
         for nested in (_embedded_shell_command(segment), _runner_inner_command(segment)):
             if nested is not None:
                 yield from _iter_argv(nested, _depth=_depth + 1)
+
+
+def _exceeds_shell_nesting_bound(command: str, *, _depth: int = 0) -> bool:
+    """Whether a shell or command runner would leave a payload uninspected."""
+    for segment in _command_segments(command):
+        segment = _unwrap_command_wrappers(segment)
+        commands = [segment]
+        if segment and PurePath(segment[0]).name == "find":
+            commands.extend(
+                _unwrap_command_wrappers(segment[i + 1 :])
+                for i, arg in enumerate(segment[1:], start=1)
+                if arg in {"-exec", "-execdir"}
+            )
+        for argv in commands:
+            for nested in (_embedded_shell_command(argv), _runner_inner_command(argv)):
+                if nested and (
+                    _depth >= _MAX_EMBEDDED_SHELL_DEPTH or _exceeds_shell_nesting_bound(nested, _depth=_depth + 1)
+                ):
+                    return True
+    return False
 
 
 # Global options that take their value as the next word, per executable. This is
@@ -1296,6 +1319,8 @@ class ShellCommandPolicy:
         if any(pattern.search(executable) for pattern in self._deny_patterns):
             return PolicyOutcome(CommandDecision.HARD_DENY, "deny_pattern")
         try:
+            if _exceeds_shell_nesting_bound(executable):
+                return PolicyOutcome(CommandDecision.HARD_DENY, "shell_nesting_limit")
             if any(
                 PurePath(argv[0]).name.lower() in {"format", "format.exe", "format.com"}
                 for argv in _iter_argv(executable)
