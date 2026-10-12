@@ -45,9 +45,88 @@ raven trajectory report-bug ATTEMPT_ID \
   --actual "The next request has no tool result"
 ```
 
-它创建本地记录/包，不会创建 GitHub issue 或上传报告。分享前检查 findings 和包内容。
+它创建本地记录/包，不会创建 GitHub issue；只有当 `RAVEN_BUGREPORT_URL` 指向一个
+Bug Report Receiver 时才上传（见[发送与接收问题报告](#send-and-receive-bug-reports)），
+回执随后写入记录。分享前检查 findings 和包内容。
 `--yes` 不代表敏感数据风险授权，不应习惯性使用 `--accept-risk` 绕过，
 或宣称所有 token 都无害。
+
+## 发送与接收问题报告 { #send-and-receive-bug-reports }
+
+### 接收器
+
+Bug Report Receiver 是一个小型 HTTP 服务：接收 Bug Report Package、校验、按日
+落盘、返回回执。它不做别的事：不鉴权，也不提供列表或下载。谁能连上它，由它
+监听的网络决定。
+
+```bash
+raven trajectory receiver --save-dir /srv/raven-bugreports
+```
+
+| 选项 | 默认 | 含义 |
+| --- | --- | --- |
+| `--save-dir` | 必填 | 接收包的目录；以 0700 创建 |
+| `--host` / `--port` | `127.0.0.1` / `18795` | 绑定地址；`--port 0` 自动选端口并打印 |
+| `--trusted-proxy CIDR` | 无 | 可信反代网段，其 `X-Forwarded-For` 才被采信（可重复） |
+| `--max-package-mib` / `--max-unpacked-mib` | 64 / 256 | 最大包体，以及校验时解压的最大体积 |
+| `--max-daily-mib` / `--max-daily-count` | 2048 / 500 | 一个 UTC 日可接收的字节数与包数 |
+| `--min-free-mib` | 1024 | 保留的磁盘剩余空间 |
+| `--rate-burst` / `--rate-per-10min` | 10 / 30 | 一个地址可连续上传的次数，以及每十分钟恢复的次数；`--rate-burst 0` 关闭限速 |
+| `--concurrency` | 4 | 同时处理的上传数；超出返回 503 |
+| `--idle-timeout` / `--total-timeout` | 30 / 600 | 无 body 数据的秒数上限，以及单次上传的总秒数上限 |
+
+包以原始字节落在 `<save-dir>/<YYYY-MM-DD>/<report-id>.tar.gz`，旁边的
+`<report-id>.json` sidecar 保存回执、发送方地址和 `bugreport.json` 的分诊摘要
+（reporter、描述、严重程度、完整度、脱敏分类），读者不解包即可分拣。日期是上传
+被准入的 UTC 日：跨午夜才完成的包留在开始的那一天，sidecar 的 `received_at` 记
+录真实落地时刻。同一个包再发一次返回已存的回执；同一 report id 的不同内容会被
+拒绝。保留与清理由运维负责——按日的目录让 `find -mtime` 式清理很简单。
+
+### 部署
+
+接收器只说明文 HTTP，默认只绑 loopback。要让本机以外访问，必须放在终止 TLS 的
+反代之后；绝不要把端口直接暴露到公网。可用的 nginx location：
+
+```nginx
+location /v1/bugreports {
+    proxy_pass http://127.0.0.1:18795;
+    proxy_request_buffering off;
+    client_max_body_size 64m;      # 不小于 --max-package-mib
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+加上 `--trusted-proxy 127.0.0.0/8`（或反代所在网段），限速和 sidecar 的 `client`
+地址才按真实发送方计，否则经反代的所有上传共用一个桶。`GET /healthz` 返回
+`{"status": "ok"}` 供探活。用非特权账号运行，并把 `--save-dir` 当作敏感材料的
+目录：包只做了凭据脱敏，没有匿名化。
+
+### 告诉客户端往哪发
+
+`report-bug`、浏览器里的 *Report a bug* 和 `raven trajectory upload-bug-report`
+读同一个设置：
+
+| `RAVEN_BUGREPORT_URL` | 效果 |
+| --- | --- |
+| 未设置 | 用构建内置的默认值（本仓库为空：包留在本机） |
+| 设为空值 | 关闭上传，即使构建内置了默认地址 |
+| `https://ops.example.com/raven-bugreports` | 上传到那里；可以带路径前缀，客户端自己拼 `/v1/bugreports` |
+| `http://127.0.0.1:18795` | 明文 HTTP 只在本机被接受 |
+| `http://10.1.2.3:18795` | 除非 `RAVEN_BUGREPORT_ALLOW_HTTP=1` 声明网络上的明文可接受，否则拒绝 |
+
+URL 配置错误会让 `report-bug` 在采集任何东西之前停下。配置就绪后，确认页会显示
+`Will upload to ...`，包一落地就发送，回执写入记录。上传失败时包保留、记录写明
+原因，用下面的命令重传：
+
+```bash
+raven trajectory upload-bug-report REPORT_ID
+```
+
+### 接收器校验什么
+
+存入之前，包的大小、gzip 与 tar 结构、成员名与类型、清单哈希，以及
+`needs_review`/`risk_accepted` 不变量都以流式方式校验，不解包任何内容。接收器
+不扫描内容里的秘密：脱敏仍是发送方的责任，确认页上展示的就是外发的。
 
 ## 回放 Harness，而不重复动作 { #replay-the-harness-without-repeating-actions }
 
@@ -146,4 +225,5 @@ System prompt 装配应使用针对性单元测试；provider 行为、浏览器
 也不会给既有 bundle 脱敏。证据保留、分享和删除是不同决策。
 
 实现位于 `raven/trajectory/replay.py`、`regression.py`、`cassette.py`、
-`redact.py` 和 `raven/cli/trajectory_commands.py`。
+`redact.py`、`package_check.py`、`receiver.py`、`upload.py` 和
+`raven/cli/trajectory_commands.py`。

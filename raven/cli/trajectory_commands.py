@@ -16,7 +16,14 @@ wrappers over the trajectory layer:
   ``report``, its deliverable embeds the trajectory inside a problem-metadata
   envelope and is gated by the redaction classification: review findings are
   adjudicated per item, and shipping a review report always takes an explicit
-  risk authorization (never implied by ``--yes``).
+  risk authorization (never implied by ``--yes``). When ``RAVEN_BUGREPORT_URL``
+  names a receiver, the package is uploaded as soon as it lands
+  (:mod:`raven.trajectory.upload`).
+- ``upload-bug-report`` — send (or send again) a filed report's package to the
+  receiver; the same package twice yields the same receipt.
+- ``receiver`` — run the Bug Report Receiver itself: the HTTP service that takes
+  packages in, checks them, and stores them by day
+  (:mod:`raven.trajectory.receiver`).
 - ``replay``  — feed a bundle's recorded model replies and tool results back
   through the live harness (:func:`raven.trajectory.replay.run_replay`; no
   real tool code runs, no spans are emitted).
@@ -569,6 +576,94 @@ def trajectory_upload_bug_report(
         console.print(f"[red]✗ Bug report {escape(report_id)} is damaged: {escape(str(exc))}[/red]", highlight=False)
         raise typer.Exit(code=1)
     raise typer.Exit(code=_upload_and_report(record_dir, base_url))
+
+
+def _receiver_address(host: str, port: int) -> str:
+    return f"http://[{host}]:{port}" if ":" in host else f"http://{host}:{port}"
+
+
+@trajectory_app.command("receiver")
+def trajectory_receiver(
+    save_dir: Path = typer.Option(..., "--save-dir", help="Directory that receives packages (created 0700)"),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="Bind address; anything but loopback belongs behind a TLS proxy"
+    ),
+    port: int = typer.Option(18795, "--port", min=0, max=65535, help="TCP port; 0 picks a free one and prints it"),
+    trusted_proxy: list[str] = typer.Option(
+        [], "--trusted-proxy", help="CIDR of a proxy whose X-Forwarded-For is believed (repeatable)"
+    ),
+    max_package_mib: int = typer.Option(64, "--max-package-mib", min=1, help="Largest package accepted, in MiB"),
+    max_unpacked_mib: int = typer.Option(
+        256, "--max-unpacked-mib", min=1, help="Largest decompressed volume inspected per package, in MiB"
+    ),
+    max_daily_mib: int = typer.Option(2048, "--max-daily-mib", min=0, help="Bytes accepted per UTC day, in MiB"),
+    max_daily_count: int = typer.Option(500, "--max-daily-count", min=0, help="Packages accepted per UTC day"),
+    min_free_mib: int = typer.Option(1024, "--min-free-mib", min=0, help="Free disk space to keep, in MiB"),
+    rate_burst: int = typer.Option(
+        10, "--rate-burst", min=0, help="Uploads one address may make at once; 0 disables rate limiting"
+    ),
+    rate_per_10min: int = typer.Option(
+        30, "--rate-per-10min", min=0, help="Uploads one address regains per ten minutes"
+    ),
+    concurrency: int = typer.Option(4, "--concurrency", min=1, help="Uploads handled at the same time"),
+    idle_timeout: float = typer.Option(
+        30.0, "--idle-timeout", min=0.0, help="Seconds without body data before an upload is dropped"
+    ),
+    total_timeout: float = typer.Option(600.0, "--total-timeout", min=0.0, help="Seconds one upload may take"),
+) -> None:
+    """Run the Bug Report Receiver: accept packages into --save-dir until stopped.
+
+    The receiver authenticates nobody; who can reach it is decided by the
+    network it listens on. It binds loopback by default -- put a TLS proxy in
+    front of it for anything else, and name that proxy with --trusted-proxy
+    so uploads are rate-limited per real client. Ctrl-C or SIGTERM stops it.
+    """
+    import ipaddress
+
+    from raven.trajectory import receiver as trecv
+    from raven.trajectory.package_check import PackageLimits
+
+    for cidr in trusted_proxy:
+        try:
+            ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            raise typer.BadParameter(f"not a CIDR network: {cidr}", param_hint="--trusted-proxy")
+    save_dir = save_dir.resolve()
+    if save_dir.exists() and not save_dir.is_dir():
+        console.print(f"[red]✗ --save-dir is not a directory: {escape(str(save_dir))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    config = trecv.ReceiverConfig(
+        save_dir=save_dir,
+        host=host,
+        port=port,
+        trusted_proxies=tuple(trusted_proxy),
+        limits=PackageLimits(max_package_bytes=max_package_mib * 2**20, max_unpacked_bytes=max_unpacked_mib * 2**20),
+        max_daily_bytes=max_daily_mib * 2**20,
+        max_daily_count=max_daily_count,
+        min_free_bytes=min_free_mib * 2**20,
+        rate_burst=rate_burst,
+        rate_per_10min=rate_per_10min,
+        concurrency=concurrency,
+        idle_timeout=idle_timeout,
+        total_timeout=total_timeout,
+    )
+
+    def _announce(bound_host: str, bound_port: int) -> None:
+        console.print(
+            f"Bug report receiver listening on {escape(_receiver_address(bound_host, bound_port))}", highlight=False
+        )
+        console.print(f"Saving packages under {escape(str(save_dir))}", highlight=False)
+        console.print("Press Ctrl-C to stop.")
+
+    try:
+        trecv.run_receiver(config, ready=_announce)
+    except OSError as exc:
+        console.print(
+            f"[red]✗ Cannot prepare the receiver (save dir {escape(str(save_dir))}): {escape(str(exc))}[/red]",
+            highlight=False,
+        )
+        raise typer.Exit(code=1)
+    console.print("Bug report receiver stopped.")
 
 
 def _print_bug_cli_summary(prep, *, upload_target: str = "") -> None:
