@@ -576,7 +576,7 @@ class NodePool:
             client = await AcpClient.launch(
                 name=f"raven-node@{target.id}",
                 # The argv itself: a line would be read by this host's own
-                # grammar, which is not the far shell's (Windows, 2026-10-12).
+                # grammar, which is not the far shell's (a Windows host's is not).
                 command=argv,
                 # Fixed rather than any caller's workspace: the ssh needs none.
                 cwd=str(Path.home()),

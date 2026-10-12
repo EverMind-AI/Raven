@@ -355,7 +355,7 @@ class AcpClient:
         it that is a command for another machine keeps that machine's
         quoting, which this host's grammar would read apart (a Windows host's
         parser made twelve words of a node's one remote-command word while it
-        went as a line; reviewed 2026-10-12).
+        went as a line).
 
         Raises :class:`AcpConnectionError` if the process cannot be started; a
         server that starts but never speaks is a per-request timeout, not a

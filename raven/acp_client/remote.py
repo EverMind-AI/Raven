@@ -174,7 +174,7 @@ def ssh_command(
     it is, so no host's own grammar reads it again: the one word that is the
     remote command keeps the POSIX quoting the far shell reads, whatever this
     host is (a Windows host's parser made twelve words of it while it went as
-    a line; reviewed 2026-10-12). Built at launch and held in memory only: it
+    a line). Built at launch and held in memory only: it
     carries the address. ``command`` is sent through :func:`posix`,
     so the machine user's login shell may be any shell; it carries no
     variable and reads no login profile -- the node captures the login
