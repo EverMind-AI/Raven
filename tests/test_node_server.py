@@ -1200,6 +1200,7 @@ def test_the_socket_s_directory_is_this_user_s_own_or_is_not_used(tmp_path, monk
 
     (tmp_path / "file").write_text("", encoding="utf-8")
     (tmp_path / "real").mkdir()
+    os.chmod(tmp_path / "real", 0o755)  # an explicit mode: mkdir's is whatever the umask leaves
     (tmp_path / "link").symlink_to(tmp_path / "real")
     for other in (tmp_path / "file", tmp_path / "link"):
         with pytest.raises(PermissionError, match="is not a directory only this user may open"):
