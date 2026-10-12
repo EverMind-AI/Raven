@@ -415,10 +415,26 @@ async def test_a_file_on_a_machine_is_brought_back_and_delivered(tool, tmp_path,
     manifest = tool.take_metadata()["raven_delivery"]
     assert manifest["invalid"] == [], summary
     (entry,) = manifest["files"]
-    landed = tmp_path / "chanwork" / "pulled" / "box" / "report.pdf"
+    landed = tmp_path / "chanwork" / "pulled" / "box" / "root" / "raven-work" / "t1" / "report.pdf"
     assert entry["name"] == "report.pdf" and entry["path"] == str(landed) and entry["size"] == 5
     assert landed.read_bytes() == b"xxxxx"
     assert machines.pulled == [("/root/raven-work/t1/report.pdf", landed, ["/root/raven-work"])]
+
+
+async def test_two_files_of_one_name_from_two_directories_land_apart(tool, tmp_path, machines) -> None:
+    summary = await tool.execute(
+        files=[{"path": "box:raven-work/a/report.pdf"}, {"path": "box:raven-work/b/report.pdf"}]
+    )
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    landed = [Path(entry["path"]) for entry in manifest["files"]]
+    pulled = tmp_path / "chanwork" / "pulled" / "box" / "root" / "raven-work"
+    assert landed == [pulled / "a" / "report.pdf", pulled / "b" / "report.pdf"]
+    assert [where for where, _, _ in machines.pulled] == [
+        "/root/raven-work/a/report.pdf",
+        "/root/raven-work/b/report.pdf",
+    ]
 
 
 async def test_a_file_over_the_budget_stays_on_its_machine(tool, machines) -> None:
@@ -439,6 +455,7 @@ async def test_what_was_not_delivered_says_why(tool, machines) -> None:
     outside = await tool.execute(files=[{"path": "box:.ssh/id_rsa"}])
     remote_path.remember_read("box", "/root/.ssh/id_rsa", "ab" * 32)
     read_first = await tool.execute(files=[{"path": "box:.ssh/id_rsa"}])
+    after_a_read = read_first
     nobody = await tool.execute(files=[{"path": "nobox:/etc/hostname"}])
     machines.kind = "dir"
     folder = await tool.execute(files=[{"path": "box:raven-work/t1"}])
@@ -448,10 +465,11 @@ async def test_what_was_not_delivered_says_why(tool, machines) -> None:
         in big
     )
     assert (
-        "is outside the directories this Raven's agents work in on machine 'Lab box' (box); read it with read_file first"
+        "is outside the directories this Raven's agents work in on machine 'Lab box' (box); read it there instead"
         in outside
     )
-    assert "id_rsa" in read_first and "outside" not in read_first, "a file already read was allowed to be"
+    assert "outside" in after_a_read, "a read by some conversation is no evidence for this one"
+    assert machines.pulled == [], "nothing outside the roots is fetched"
     assert "is written as a path on another machine" in nobody
     assert "not found or not a regular file on machine 'Lab box' (box)" in folder
     # The machine is named by its label in every sentence; its address appears

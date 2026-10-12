@@ -189,7 +189,7 @@ async def test_a_dispatch_runs_on_the_machine_in_a_directory_made_there_and_says
     assert f"in scp://worker@{HOST}:{PORT}//{str(there.resolve()).lstrip('/')};" in reply
     assert "not on this computer" in reply
     assert "the files it wrote are there, not on this computer" in reply
-    assert "read_file" not in reply, "no tool is named that this change does not give a remote path to"
+    assert "read_file, list_dir, find, grep, write_file and edit_file take that path as it is" in reply
     assert not local.exists(), "the caller's workspace is never touched"
     for argv in box.calls():
         assert str(local) not in " ".join(argv), "this computer's workspace path never reaches the machine"

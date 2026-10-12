@@ -64,13 +64,15 @@ def _on_machine(raw: str) -> RemotePath | str | None:
 
 
 async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path | None, str]:
-    """``where``'s file, fetched from its machine to ``<workspace>/pulled/<machine>/``; or why it was not.
+    """``where``'s file, fetched from its machine to ``<workspace>/pulled/<machine>/<its path>``; or why it was not.
 
-    Only a file this process may read without asking -- under the directories
-    this Raven's agents work in there, or one it has already read (and so was
-    allowed) -- is fetched here: a delivery is not a way around the read
-    check. One over :data:`PULL_FILE_BUDGET` stays, and is named with its
-    size.
+    Only a file under the directories this Raven's agents work in on that
+    machine is fetched here, since this tool asks nothing: a delivery is not
+    a way around the read check, and what another conversation was allowed
+    to read is no evidence for this one. A file elsewhere is read there. One
+    over :data:`PULL_FILE_BUDGET` stays, and is named with its size. The file
+    lands under its whole path on the machine, so two files of one name from
+    two directories never land on each other.
     """
     pool = remote_path.nodes()
     label = remote_path._label(where._row)
@@ -80,11 +82,10 @@ async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path
         home = await pool.home(where.machine)
         place = where.absolute(home)
         roots = remote_path.reading_roots(where)
-        inside = any(remote_path.within(place, remote_path.absolute(root, home)) for root in roots)
-        if not inside and remote_path.last_read(where.machine, place) is None:
+        if not any(remote_path.within(place, remote_path.absolute(root, home)) for root in roots):
             return None, (
                 f"{where.display(place)} is outside the directories this Raven's agents work in on machine "
-                f"{label}; read it with read_file first"
+                f"{label}; read it there instead"
             )
         fence = [remote_path.fence("read_file", where, place, home)]
         info = await pool.stat(where.machine, place, roots=fence)
@@ -96,7 +97,7 @@ async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path
                 f"{_human_size(size)} is over the {_human_size(PULL_FILE_BUDGET)} "
                 f"limit for a file brought back from machine {label}; read it there instead"
             )
-        local = (workspace or Path.cwd()) / "pulled" / where.machine / Path(place).name
+        local = (workspace or Path.cwd()) / "pulled" / where.machine / Path(place).relative_to("/")
         await pool.pull_file(where.machine, place, local, roots=fence)
     except remote_path.NodeCallError as exc:
         return None, str(exc)

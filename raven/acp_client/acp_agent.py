@@ -1832,7 +1832,8 @@ class AcpAgentBackend:
                     notes.append(
                         f"Ran on machine {launched.target.label}, in "
                         f"{remote.shown(launched.target, session_cwd)}; the files it wrote are there, "
-                        "not on this computer"
+                        "not on this computer -- read_file, list_dir, find, grep, write_file and edit_file take "
+                        "that path as it is, and deliver_files fetches one by it"
                     )
                 for note in filter(None, notes):
                     notice = f"\n\n[raven] {note}."

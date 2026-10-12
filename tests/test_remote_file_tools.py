@@ -310,6 +310,47 @@ def _writers(tmp_path: Path) -> dict[str, Any]:
     return {"write_file": WriteFileTool(**fenced), "edit_file": EditFileTool(**fenced)}
 
 
+async def test_a_read_s_own_lines_come_back_as_they_are_and_only_the_tool_s_sentences_show_addresses(
+    registry, pool, tmp_path
+):
+    pool.answer = {
+        "text": f"1| export ROOT={HOME}/raven-work\n2| cd {HOME}/raven-work/t1\n\n(Showing lines 1-2 of 2. Use offset=3 to continue.)",
+        "sha256": "ab" * 32,
+    }
+
+    got = await _tools(tmp_path)["read_file"].execute("box:raven-work/t1/env.sh")
+
+    assert got.startswith(f"1| export ROOT={HOME}/raven-work\n2| cd {HOME}/raven-work/t1\n"), "the file's bytes"
+    assert SHOWN not in got.split("\n\n")[0] and "(Showing lines 1-2 of 2." in got
+
+
+async def test_a_search_s_matches_and_a_diff_s_body_keep_their_lines(registry, pool, tmp_path):
+    pool.answer = {
+        "text": f"t1/env.sh:1:export ROOT={HOME}/raven-work\nt1/env.sh-2-cd {HOME}/raven-work/t1\n\n1 match in 1 file"
+    }
+    matches = await _tools(tmp_path)["grep"].execute("ROOT", "box:raven-work")
+
+    place = f"{HOME}/raven-work/t1/env.sh"
+    pool.answer = {
+        "text": f"Successfully wrote 30 bytes to {place}",
+        "display": None,
+        "ok": True,
+        "blocks": [],
+        "diff": f"--- {place}\n+++ {place}\n@@ -0,0 +1 @@\n+export ROOT={HOME}/raven-work",
+        "file_change": {"path": place, "after": f"export ROOT={HOME}/raven-work\n", "before": None},
+    }
+    written = await _writers(tmp_path)["write_file"].execute(
+        "box:raven-work/t1/env.sh", f"export ROOT={HOME}/raven-work\n"
+    )
+
+    assert matches.startswith(f"t1/env.sh:1:export ROOT={HOME}/raven-work\nt1/env.sh-2-cd {HOME}/raven-work/t1\n")
+    assert SHOWN not in matches
+    assert isinstance(written, ToolResult)
+    assert written.model_text == f"Successfully wrote 30 bytes to {SHOWN}{place}"
+    assert written.diff == f"--- {SHOWN}{place}\n+++ {SHOWN}{place}\n@@ -0,0 +1 @@\n+export ROOT={HOME}/raven-work"
+    assert written.file_change is not None and written.file_change.path == f"{SHOWN}{place}"
+
+
 async def test_a_write_and_an_edit_go_to_the_node_and_come_back_as_the_tool_s_result(registry, pool, tmp_path):
     place = f"{HOME}/raven-work/t1/a.md"
     pool.answer = {
