@@ -26,7 +26,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import tempfile
 import time
 from collections.abc import Sequence
@@ -41,6 +40,7 @@ from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
 from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError, reason_of
 from raven.utils.atomic_io import atomic_update
+from raven.utils.commands import command_argv
 
 _FILENAME = "subagent_acp_capabilities.json"
 
@@ -724,7 +724,7 @@ _NPM_STATUS_CODE = re.compile(r"E\d{3}")
 def launches_with_npx(command: str) -> bool:
     """Whether ``command`` is run by ``npx``, which fetches what it names on first use."""
     try:
-        argv = shlex.split(command or "")
+        argv = command_argv(command or "")
     except ValueError:
         return False
     if not argv:

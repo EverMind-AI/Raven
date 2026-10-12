@@ -496,6 +496,7 @@ async def turn_send(
         # When set, the turn skips the model entirely and runs one direct-chat
         # turn against that instance (see AgentLoop.run_turn).
         direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
+        parent_session=parsed.session_key if parsed.target is not None else None,
         # The id this call returns and puts on message.start, so the lane stamps
         # THIS value on the turn's lifecycle events and the client's correlation
         # key survives end to end.
@@ -606,6 +607,7 @@ async def _inject_into_running(
         media=_resolve_media(parsed.media),
         conversation=lane,
         direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
+        parent_session=parsed.session_key if parsed.target is not None else None,
         busy=BusyPolicy.INJECT,
         turn_id=turn_id,
         # The text waits for the running turn's next gap, which is minutes away

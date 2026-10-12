@@ -401,6 +401,62 @@ async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path
     assert started == [(str(fresh_bin / "fresh-agent.exe"), "-p", "task")]
 
 
+@pytest.mark.parametrize("legacy", [True, False])
+async def test_cli_backend_preserves_stored_windows_path_quotes(tmp_path, monkeypatch, legacy):
+    from types import SimpleNamespace
+
+    from raven.utils import commands
+
+    monkeypatch.setattr(commands, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr("raven.agent.subagent.backends.cli_agent.login_shell_env", lambda: dict(os.environ))
+    folder = tmp_path / "agent's saved files"
+    folder.mkdir()
+    script = folder / "echo argv.py"
+    script.write_text("import json, sys\nprint(json.dumps(sys.argv[1:]))\n", encoding="utf-8")
+    config = folder / "config.json"
+    quote = shlex.quote if legacy else commands.command_quote
+    command = f"{quote(sys.executable)} {quote(str(script))} --config {quote(str(config))} {{prompt}}"
+    backend = CliAgentBackend(
+        name="stored-command", command=command, registry=InstanceRegistry(path=tmp_path / "inst.json")
+    )
+    prompt = "a & O'Brien; keep these characters"
+
+    output = await backend.run(prompt, task_id="stored", workspace=tmp_path, executor=None)
+
+    assert json.loads(output) == ["--config", str(config), prompt]
+
+
+async def test_cli_backend_on_windows_never_starts_a_batch_file_for_a_bare_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cli agent's prompt is in its argv, and a ``.cmd`` hands its arguments to cmd.exe's parser.
+
+    So the bare name stays bare even with the batch file on the child's PATH; the
+    acp launch is the one that lets a batch file stand in.
+    """
+    npm_bin = tmp_path / "npm"
+    npm_bin.mkdir()
+    (npm_bin / "codex.cmd").write_text("", encoding="utf-8")
+    (npm_bin / "codex.cmd").chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(npm_bin)})
+    started: list[tuple[str, ...]] = []
+
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse)
+    be = CliAgentBackend(
+        name="codex", command="codex exec {prompt}", registry=InstanceRegistry(path=tmp_path / "i.json")
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await be.run("a & b", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert started == [("codex", "exec", "a & b")]
+
+
 async def test_cli_backend_exposes_parent_model_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -111,7 +111,7 @@ class PermissionGate:
         allow, then the mode's reading of the ask tier."""
         cfg = self._config_source()
         try:
-            mode = PermissionMode(session_mode(current_turn().conversation_id) or cfg.mode)
+            mode = PermissionMode(session_mode(current_turn().session_key) or cfg.mode)
         except ValueError:
             mode = PermissionMode.ASK
         ruling = self._builtin.ruling(tool_name, params)
@@ -193,7 +193,7 @@ class PermissionGate:
             shape = exec_approval_shape(params["command"], exec_rules if isinstance(exec_rules, dict) else {})
             ask_segments, suggested_pattern = shape.ask_segments, shape.suggested_pattern
         keys = session_keys(tool_name, params, ask_segments)
-        if session_allows(current_turn().conversation_id, keys):
+        if session_allows(current_turn().session_key, keys):
             return Allow(source=DecisionSource.SESSION)
         # Deliberately NOT auto-allowing a sandboxed exec here: the Boxlite VM
         # mounts the real workspace at /workspace read-write (plus any
@@ -337,7 +337,7 @@ class PermissionGate:
             if outcome.choice is ApprovalChoice.ALLOW_SESSION or (
                 outcome.choice is ApprovalChoice.ALLOW_ALWAYS and not covered
             ):
-                remember_allowed(turn.conversation_id, decision.session_keys)
+                remember_allowed(turn.session_key, decision.session_keys)
             return None
         turn.denied_digests.add(digest)
         if not outcome.answered:

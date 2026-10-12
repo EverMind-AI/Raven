@@ -50,7 +50,7 @@ def _frontmatter_name(skill_md: Path) -> str:
         text = skill_md.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    frontmatter, _ = parse_frontmatter(text)
+    frontmatter, _ = parse_frontmatter(text, line_fallback=True)
     name = frontmatter.get("name") if isinstance(frontmatter, dict) else None
     return str(name).strip() if name else ""
 

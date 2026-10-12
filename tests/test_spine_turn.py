@@ -11,6 +11,19 @@ def _src():
     return Source(channel="t", chat_id="c", sender_id="u", chat_type=ChatType.DM)
 
 
+@pytest.mark.parametrize("parent", ["tui:plain", "tui:issue#42", "email:name#tag@example.com"])
+def test_session_key_retains_the_complete_direct_parent(parent):
+    from raven.spine import direct_lane, session_key_for
+
+    target = ("Raven", "handle#1")
+    request = TurnRequest(
+        origin=Origin.USER, source=_src(), text="hi", conversation=direct_lane(parent, *target), direct_target=target
+    )
+    assert session_key_for(request) == parent
+    assert session_key_for(dataclasses.replace(request, parent_session="tui:declared#parent")) == "tui:declared#parent"
+    assert session_key_for(dataclasses.replace(request, direct_target=None)) == request.conversation
+
+
 def test_origin_is_closed_five_value_enum_without_system():
     assert {o.value for o in Origin} == {"user", "sentinel", "cron", "heartbeat", "subagent"}
     assert not hasattr(Origin, "SYSTEM")  # a zero-producer origin, intentionally absent

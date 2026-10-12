@@ -152,7 +152,30 @@ async def test_cli_probe_reports_missing_and_still_names_what_it_looked_for(tmp_
     assert "definitely-not-installed" in res.detail
 
 
+@pytest.mark.parametrize("kind", ["cli", "acp"])
+async def test_windows_probes_find_a_legacy_single_quoted_program(tmp_path, monkeypatch, kind):
+    import shlex
+    from types import SimpleNamespace
+
+    from raven.utils import commands
+
+    monkeypatch.setattr(commands, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda _cfg: None)
+    program = _fake_executable(tmp_path, "saved agent.exe")
+    command = shlex.quote(str(program))
+    cfg = _cli(command) if kind == "cli" else ThirdPartyAcpSubagentConfig(name="saved-command", command=command)
+
+    result = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert result.target == str(program)
+    assert result.status == ("ready" if kind == "cli" else "attention")
+    assert result.absent is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell line: a lone quote is not a parse error to CreateProcess")
 async def test_cli_probe_reports_unparseable_command_as_unknown() -> None:
+    # This single quote belongs to a non-path token, so it stays literal on
+    # Windows and the probe reports a missing agent rather than invalid syntax.
     res = await probe_one(_cli("claude -p 'unbalanced {prompt}"), source="config", path="/usr/bin")
     assert res.status == "unknown"
     assert "cannot be parsed" in res.detail

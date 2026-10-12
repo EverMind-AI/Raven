@@ -19,7 +19,6 @@ import asyncio
 import json
 import os
 import re
-import shlex
 import signal
 import tempfile
 import time
@@ -58,6 +57,7 @@ from raven.agent.subagent.mcp_grant import (
 from raven.agent.subagent.role import subagent_role_env
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.spine.message import Media
+from raven.utils.commands import command_argv
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -260,7 +260,7 @@ class CliAgentBackend:
     ) -> tuple[list[str], bool]:
         argv: list[str] = []
         used_placeholder = False
-        for tok in shlex.split(template):
+        for tok in command_argv(template):
             if agent_id is not None:
                 tok = tok.replace("{agent_id}", agent_id)
             if mcp_file is not None:
