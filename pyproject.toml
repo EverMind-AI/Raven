@@ -68,9 +68,6 @@ dependencies = [
     "aiohttp>=3.13.4",
     "click>=8.1",
     "pyarrow>=17",
-    # Reading PDFs into a knowledge base (raven.knowledge.parser.pdf_parser).
-    # PyMuPDF does the text, the page geometry and the page rendering.
-    "pymupdf>=1.24,<2",
     # The deepdoc vision pipeline: layout detection, text detection and
     # recognition, and table structure, all as ONNX graphs. onnxruntime runs
     # them; opencv, shapely and pyclipper are what the pre- and post-processing
@@ -96,7 +93,29 @@ dependencies = [
     # core is not theirs to keep working. Range-matched to the engine's own pin.
     "lxml>=5.0,<7",
     "truststore>=0.10.1,<1.0.0",
+    # Every PDF this wheel reads, through raven.knowledge.parser._pdfdoc: the
+    # text and its geometry, the tables, and the rendering (which it does with
+    # pypdfium2). The same reader RAGFlow uses, which is where the deepdoc
+    # pipeline beside it was ported from.
+    #
+    # One library does all of this on its own, and PyMuPDF is what the port
+    # first used -- but it is AGPL-3.0, and a knowledge base is part of this
+    # wheel, so carrying it put that obligation on every install including the
+    # ones that never open a PDF. The plugins that need its writing side pin it
+    # themselves and keep the obligation on their own wheels.
+    #
+    # Capped below 0.11.10 rather than left open: that release requires
+    # pypdfium2 5.x, and both bundled deck engines pin pypdfium2 4.x. One
+    # PDFium in the workspace is worth more than the newer reader, and lifting
+    # the cap is the deck engines' bump to make.
     "pdfplumber>=0.11.4,<0.11.10",
+    # pdfplumber's own text engine, declared because one name is imported from
+    # it directly: the error a locked file raises. pdfplumber wraps every cause
+    # it can hit in one exception type, so a truncated download and a
+    # password-protected file arrive identically and only what is underneath
+    # tells them apart -- and a reader can do something about a password and
+    # nothing about a corrupt file.
+    "pdfminer-six>=20250416",
 ]
 
 [project.optional-dependencies]
@@ -330,7 +349,10 @@ ignore = ["DEP002", "DEP004"]
 #   rpc/deck_templates.py, imported inside a function and probed with find_spec
 #   first. The gallery only exists when the ppt-engine plugin is installed, and
 #   that plugin is what pins PyMuPDF (under either import name); the core must
-#   not carry an AGPL dependency for a feature that is absent without the plugin.
+#   not carry an AGPL dependency for a feature that is absent without the
+#   plugin. It is in the dev group as well, as a PDF *writer*: the fixtures
+#   these tests read are built by drawing one, which the reader the wheel ships
+#   cannot do. A dev group is not distributed, so no obligation rides with it.
 #
 # The list is per-module, not per-file, so a later unguarded import of any other
 # package is still caught by both rules.
@@ -620,6 +642,10 @@ dev = [
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",
+    # Writes the PDFs the tests read. The reader this wheel ships cannot draw
+    # one, and a fixture has to be drawn before it can be parsed. Tests only --
+    # see the deptry note above for why it is not in [project.dependencies].
+    "pymupdf>=1.24,<2",
     "pyte>=0.8",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
