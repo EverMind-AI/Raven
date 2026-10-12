@@ -216,12 +216,13 @@ def steps(p: Plan) -> list[tuple[str, str]]:
         out.append(
             (
                 "uv",
-                head + f'mkdir -p "$dir/.uv" && {fetch} | UV_INSTALL_DIR="$dir/.uv" UV_NO_MODIFY_PATH=1 '
+                head
+                + f'mkdir -p "$dir/.uv" && chmod 700 "$dir" && {fetch} | UV_INSTALL_DIR="$dir/.uv" UV_NO_MODIFY_PATH=1 '
                 'INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null && test -x "$dir/.uv/uv"',
             )
         )
     python = shlex.quote(p.python) if p.how == "python" else "3.12"
-    venv = f'mkdir -p "$dir" && {env} "$uv" venv --quiet --python {python} "$node"'
+    venv = f'mkdir -p "$dir" && chmod 700 "$dir" && {env} "$uv" venv --quiet --python {python} "$node"'
     pip = f'{env} "$uv" pip install --quiet --python "$node/bin/python"'
     requirements = " ".join(shlex.quote(r) for r in bundle.pinned(protocol.REQUIREMENTS))
     deps = f"{pip} {requirements}"

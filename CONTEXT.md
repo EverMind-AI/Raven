@@ -408,7 +408,9 @@ implementation detail).
 The Raven process on a registered **Machine** that owns the agents the host runs there:
 a daemon (`python -I -m raven.node --serve --dir <node_dir>`) that the host's relay
 starts over ssh when none is up (`--attach`: the relay bridges the ssh session to the
-daemon's socket under `node_dir/run/` and leaves with the ssh; the daemon leaves on its
+daemon's socket -- under `node_dir/run/`, or in a directory of the user's own under the temp
+directory when that path is too long for a socket; either way the relay forwards only to a
+socket of the user's -- and leaves with the ssh; the daemon leaves on its
 own once idle). It does three things there and nothing else: answers file calls with
 Raven's own file tools (`read_file`, `list_dir`, `find`, `grep`, `write_file`, `edit_file`)
 fenced to the directories each call names, so a read of 50 lines of a large file moves
@@ -416,7 +418,8 @@ those 50 lines, and fetches one file whole (`fs/pull`); starts the `acp` agents 
 entries name the machine, each under a task id of the host's, in its own process group in
 the machine user's login environment, forwards their ACP frames on numbered channels of
 the connection that holds them and keeps those frames in the task's record
-(`node_dir/tasks/<task>/`), so a connection that goes leaves the agent running and the next
+(`node_dir/tasks/<task>/`, owner-only like the host's journal), so a connection that goes
+leaves the agent running and the next
 one takes it over from the frame the host last read (`agent/attach`); and answers probes of
 the machine and of an agent's command. It holds no conversation, calls no model and opens
 no network port. It runs exactly the host's code, checked by protocol and digest at every

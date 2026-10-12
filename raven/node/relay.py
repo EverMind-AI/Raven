@@ -29,9 +29,7 @@ _BLOCK = 65536
 
 def start_daemon(root: Path, *, python: str | None = None) -> subprocess.Popen[bytes]:
     """Start the daemon under ``root`` in a session of its own; its words go to ``log/serve.log``."""
-    log_dir = root / server.LOG_DIR
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log = (log_dir / "serve.log").open("ab")
+    log = server.own_file(server.own_dir(root / server.LOG_DIR) / "serve.log")
     argv = [python or sys.executable, "-I", "-m", "raven.node", "--serve", "--dir", str(root)]
     # How long the daemon stays idle is the daemon's default, unless the
     # environment the relay runs in says otherwise (tests end theirs quickly).
@@ -54,11 +52,20 @@ def start_daemon(root: Path, *, python: str | None = None) -> subprocess.Popen[b
 async def connect(
     root: Path, *, python: str | None = None, timeout_s: float = START_TIMEOUT_S
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-    """A connection to the daemon under ``root``, started here when none answers."""
+    """A connection to the daemon under ``root``, started here when none answers.
+
+    The socket's directory is this user's own (:func:`raven.node.server.own_dir`),
+    so what listens there is this user's daemon; a thing at the socket's place
+    that is somebody else's is not forwarded to, and no daemon is started
+    beside it.
+    """
     sock = server.socket_path(root)
+    server.own_dir(sock.parent)
     deadline = time.monotonic() + timeout_s
     started = False
     while True:
+        if not server.owned(sock):
+            raise ConnectionError(f"{sock} is not this user's own; the relay forwards to this user's Raven daemon only")
         try:
             return await asyncio.open_unix_connection(str(sock), limit=_BLOCK)
         except (FileNotFoundError, ConnectionRefusedError, OSError):
@@ -110,7 +117,7 @@ def run_attach(root: Path) -> int:
     async def main() -> int:
         try:
             reader, writer = await connect(root)
-        except ConnectionError as exc:
+        except (ConnectionError, PermissionError) as exc:
             sys.stderr.write(f"{exc}\n")
             return 1
         loop = asyncio.get_running_loop()

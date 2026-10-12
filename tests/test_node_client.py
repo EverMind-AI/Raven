@@ -389,11 +389,30 @@ async def test_a_machine_that_is_not_registered_is_refused_before_any_ssh(box, p
     assert box.launches() == []
 
 
-async def test_an_ssh_line_that_cannot_be_made_is_one_sentence(box, pool, monkeypatch):
+async def test_the_ssh_argv_reaches_the_connection_as_it_is_for_no_host_grammar_to_read_again(box, pool, monkeypatch):
+    launched: list[Any] = []
+
+    class _Stub:
+        @classmethod
+        async def launch(cls, **kw: Any) -> None:
+            launched.append(kw["command"])
+            raise AcpConnectionError("stood in")
+
+    monkeypatch.setattr(node_client, "AcpClient", _Stub)
+
+    with pytest.raises(NodeError, match="could not start ssh to machine 'Lab box'"):
+        await pool.hello("box")
+
+    (argv,) = launched
+    assert isinstance(argv, list) and argv[0] == "ssh" and argv[-2] == "--", "an argv, not a line to split again"
+    assert argv[-1].startswith("exec /bin/sh -c 'echo; exec ") and "-m raven.node --attach --dir" in argv[-1]
+
+
+async def test_an_ssh_command_that_cannot_be_made_is_one_sentence(box, pool, monkeypatch):
     def refuse(*args: Any, **kwargs: Any) -> str:
         raise ValueError("a command for a registered machine must be one line")
 
-    monkeypatch.setattr(remote, "ssh_line", refuse)
+    monkeypatch.setattr(remote, "ssh_command", refuse)
 
     with pytest.raises(NodeError, match=r"^machine 'Lab box' \(box\): a command .* must be one line$") as caught:
         await pool.hello("box")
@@ -781,6 +800,28 @@ async def test_a_node_left_idle_is_closed_when_another_machine_is_asked_for_unle
     assert not old.alive and busy.alive and recent.alive and asked.alive
     assert sorted(pool.live()) == ["asked", "busy", "recent"]
     assert old.asked == [], "a link closed by choice is just closed; its agents stay with the machine"
+
+
+async def test_a_call_on_its_way_to_a_node_keeps_its_link_however_long_ago_it_was_last_used(tmp_path):
+    pool = NodePool(idle_close_s=60.0)
+
+    class _Slow(_Client):
+        async def request(self, method: str, params: dict[str, Any], *, timeout: float) -> Any:
+            await asyncio.sleep(0.3)
+            return await super().request(method, params, timeout=timeout)
+
+    _live(pool, tmp_path, "slow")
+    pool._nodes["slow"].client = slow = _Slow()  # type: ignore[assignment]
+    pool._nodes["slow"].used = time.monotonic() - 61.0
+    _live(pool, tmp_path, "other")
+    on_its_way = asyncio.create_task(pool.call("slow", protocol.READ, {}))
+    await asyncio.sleep(0.05)
+
+    await pool.call("other", protocol.READ, {})
+
+    assert slow.alive and "slow" in pool.live(), "a link with a call on its way is in use, not idle"
+    assert await on_its_way == {"text": "ok"}
+    assert pool._nodes["slow"].calls == 0
 
 
 async def test_live_lists_only_the_nodes_still_running_and_close_ends_them(tmp_path):
