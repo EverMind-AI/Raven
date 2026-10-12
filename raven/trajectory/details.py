@@ -43,7 +43,7 @@ from raven.tracing import artifact_v2
 from raven.trajectory import conversation as _conv
 from raven.trajectory import entries as _entries
 from raven.trajectory import store as tstore
-from raven.trajectory.index import CursorExpiredError, EntryView, SessionIndex
+from raven.trajectory.index import PHASE_SCANNING, CursorExpiredError, EntryView, SessionIndex
 
 AVAILABLE = "available"
 EMPTY = "empty"
@@ -1623,6 +1623,11 @@ def describe(
     """The overview descriptor for ``entry_id``, or None when the entry is gone."""
     view = index.capture(entry_id)
     if view is None:
+        if index.index_state().phase == PHASE_SCANNING:
+            # The caller has no epoch to compare, and an index still scanning
+            # may not have reached an entry the caller's older list holds: the
+            # list must catch up first. No revision exists for it here.
+            raise RevisionChangedError(0, index.epoch)
         return None
     reader = _describe_reader(state)
     _, descriptors, codes = _describe_pass(view, reader)

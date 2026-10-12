@@ -134,13 +134,18 @@ async def trajectory_detail(params: dict) -> dict:
     # Refreshed like the list: after a restart or an idle eviction the index
     # is new, and an entry it has not scanned yet is not a gone one.
     session = await _indexer().refresh(session_key)
-    descriptor = await asyncio.to_thread(
-        details.describe,
-        session,
-        request.entry_id,
-        state=tracing_config.state_dir(),
-        expected_revision=request.entry_revision,
-    )
+    try:
+        descriptor = await asyncio.to_thread(
+            details.describe,
+            session,
+            request.entry_id,
+            state=tracing_config.state_dir(),
+            expected_revision=request.entry_revision,
+        )
+    except details.RevisionChangedError as exc:
+        raise RevisionChangedRpcError(
+            str(exc), data={"current_revision": exc.current_revision, "current_epoch": exc.current_epoch}
+        ) from None
     if descriptor is None:
         raise EntryNotFoundError(request.entry_id)
     return asdict(descriptor)

@@ -653,6 +653,10 @@ export async function loadDescriptor(opts: { fresh?: boolean; force?: boolean } 
       return
     }
     if (!live(t, g, id.entryId)) { store.set(s); return }
+    /* An index newer than the list, still scanning, that has not reached the
+       entry yet: the list's to bring, as with a descriptor from ahead of it. */
+    const moved = revisionChange(e)
+    if (moved && moved.epoch !== id.epoch) { store.set({ ...s, waitingEpoch: moved.epoch }); return }
     if (isEntryGone(e)) {
       bump()
       store.set({ ...s, open: false })

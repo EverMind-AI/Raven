@@ -321,6 +321,34 @@ def test_a_read_in_a_left_epoch_for_an_entry_not_reached_yet_is_a_move_not_a_los
         tdet.read_block(index, "t:nope:turn.input", "raw", state=state, entry_revision=1, epoch=index.epoch)
 
 
+async def test_a_detail_the_rebuilt_index_has_not_scanned_to_yet_points_at_the_new_epoch(state, monkeypatch):
+    """A rebuilt index whose scan has not reached the entry yet answers a
+    detail read with its own epoch, the way a block read is answered."""
+    _seed(state, turns=1)
+    tpol.arm(True)
+    dispatcher = _dispatcher()
+    entries, first = await _list_all(dispatcher)
+    tidx._reset_for_tests()
+    monkeypatch.setattr(tidx.SessionIndex, "refresh_sync", lambda self, deadline=None: None)
+    detail = await _call(dispatcher, "trajectory.detail", {"session_key": SESSION, "entry_id": entries[0]["entry_id"]})
+    assert _error_code(detail) == -32023
+    assert detail["error"]["data"]["current_revision"] == 0
+    assert detail["error"]["data"]["current_epoch"] != first["epoch"]
+
+
+def test_a_detail_for_an_entry_a_scanning_index_has_not_reached_is_a_move_not_a_loss(state):
+    from raven.trajectory import details as tdet
+
+    index = tidx.SessionIndex(SESSION, state)
+    assert index.index_state().phase == tidx.PHASE_SCANNING
+    with pytest.raises(tdet.RevisionChangedError) as moved:
+        tdet.describe(index, "t:nope:turn.input", state=state)
+    assert (moved.value.current_revision, moved.value.current_epoch) == (0, index.epoch)
+    index.refresh_sync(None)
+    assert index.index_state().phase == tidx.PHASE_READY
+    assert tdet.describe(index, "t:nope:turn.input", state=state) is None
+
+
 async def test_outline_block_lists_every_message_and_hands_out_page_cursors(state):
     _seed(state, turns=1, v2_messages=45)
     tpol.arm(True)

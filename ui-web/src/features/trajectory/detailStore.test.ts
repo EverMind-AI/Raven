@@ -569,6 +569,25 @@ describe('a changed revision', () => {
     expect(details.mayRead(details.get())).toBe(false)
   })
 
+  it('keeps the pane on its entry while a rebuilt index that has not reached it yet scans, and reads it in the new epoch', async () => {
+    await ready()
+    list.select('r1', { source: 'click' })
+    void details.loadDescriptor()
+    await failDetail(new RpcError(-32023, 'revision_changed', { current_revision: 0, current_epoch: 'e2' }))
+    expect(details.get().open).toBe(true)
+    expect(list.get().selectedId).toBe('r1')
+    expect(details.fault('descriptor')).toBeNull()
+    expect(details.get().waitingEpoch).toBe('e2')
+    void details.loadDescriptor()
+    expect(detailCalls).toHaveLength(1)
+    list.set({ ...list.get(), epoch: 'e2' })
+    expect(details.get().waitingEpoch).toBeNull()
+    void details.loadDescriptor()
+    expect(detailCalls).toHaveLength(2)
+    await answerDetail(descriptor('r1', 1, ['result'], { epoch: 'e2' }))
+    expect(details.get().current).toEqual({ sessionKey: 'gui:a', epoch: 'e2', entryId: 'r1', revision: 1 })
+  })
+
   it('drops a revision bound from the epoch before when the index is rebuilt, and takes the new epoch\'s descriptor once', async () => {
     await ready()
     list.select('r1', { source: 'click' })
