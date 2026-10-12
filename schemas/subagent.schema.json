@@ -157,6 +157,18 @@
           "title": "Lendkeys",
           "type": "array"
         },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Machine"
+        },
         "maxOutputChars": {
           "default": 30000,
           "title": "Maxoutputchars",
@@ -237,6 +249,18 @@
           "default": 30000,
           "title": "Readytimeoutms",
           "type": "integer"
+        },
+        "remoteCwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remotecwd"
         },
         "routes": {
           "items": {

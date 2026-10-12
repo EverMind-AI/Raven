@@ -1175,10 +1175,17 @@ class SubagentManager:
         self.remember_session(session_key)
         self._require_addressable(agent, doing=f"chat with instance {handle!r}")
         row = self.registry.get(agent)
-        if media and row is not None and not row.caps.reads_local_files:
+        # A row on a registered machine cannot read a path here either, but its
+        # attachments are sent there by the backend, which tells the agent
+        # where they landed in its own terms; so they are kept, and the
+        # bullets are left as the page wrote them rather than pointed at this
+        # computer's disk.
+        on_machine = bool(row is not None and row.caps.machine)
+        if media and row is not None and not row.caps.reads_local_files and not on_machine:
             text = with_undeliverable_note(text, media)
             media = ()
-        text = retarget_note(text, media, self.workspace)
+        if not on_machine:
+            text = retarget_note(text, media, self.workspace)
         recorded = with_attachment_note(text, media)
 
         session_dir = self.session_dir_for(session_key)
@@ -1736,6 +1743,12 @@ class SubagentManager:
         agent = origin.get("agent") or GENERIC_AGENT
         handle = origin.get("handle") or task_id
         effective_workspace = origin.get("workspace") or self.workspace
+        # A run on a registered machine works there, in a directory the
+        # machine makes; the record names it as written, since this computer's
+        # workspace is not where anything of the run is.
+        machine, where = self._machine_workdir(agent, handle)
+        if machine:
+            effective_workspace = f"{machine}:{where}"
         # Opened before dispatch so a call that never returns still leaves its
         # input on disk. Rooted at the session's metadata directory, not at
         # effective_workspace: the record has to outlive whatever the working
@@ -2041,6 +2054,16 @@ class SubagentManager:
             payload["ended_at"] = ended_at
         self._emit_event(origin["session_key"], {"type": "subagent.status", "payload": payload})
 
+    def _machine_workdir(self, agent: str, handle: str) -> tuple[str, str]:
+        """``(machine, <remoteCwd>/<handle>)`` for an agent on a registered machine, else two empty strings."""
+        row = self.registry.get(agent)
+        machine = row.caps.machine if row is not None else ""
+        if not machine:
+            return "", ""
+        from raven.acp_client import remote
+
+        return machine, remote.session_root(getattr(row.config, "remote_cwd", None), handle)
+
     async def _announce_result(
         self,
         task_id: str,
@@ -2085,6 +2108,13 @@ class SubagentManager:
         # Where the run was dispatched to work, so the parent can find what it
         # left there without searching the disk for it.
         workdir_line = f"Working directory: {origin['workspace']}\n" if origin.get("workspace") else ""
+        machine, where = self._machine_workdir(origin.get("agent") or "", origin.get("handle") or task_id)
+        if machine:
+            # Not this computer's directory: the agent worked on its machine,
+            # in a directory made there when the run started. Named here on
+            # every path, since a failed or cancelled run's result does not
+            # close with it the way a finished one's does.
+            workdir_line = f"Working directory: on machine {machine!r}, {where} (made there when the run started)\n"
         record_line = f"\n\nRecord: {record_path}" if record_path else ""
         # How the run's calls went, which nothing on this path carried. Measured
         # on a real dispatch: two of three calls timed out, the run produced no

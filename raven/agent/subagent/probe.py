@@ -312,6 +312,19 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP], remedy
 
 
+def _on_machine(text: str, machine: str) -> str:
+    """``text`` closed with where any fix is made, kept whole inside the cap however long ``text`` is.
+
+    Except for the one fix made here: the machine's Raven node, which this
+    computer installs (``install-node``), and whose absence ``text`` already
+    answers with that command.
+    """
+    if "install-node" in text:
+        return text[:_DETAIL_CAP]
+    note = f" (on machine {machine!r}: any fix is made there)"
+    return text[: _DETAIL_CAP - len(note)].rstrip() + note
+
+
 def _remedy_for(cfg: Any) -> Remedy:
     """What fixes a refusal already known to be about a credential, on this machine."""
     if getattr(cfg, "kind", None) == "openai":
@@ -588,6 +601,8 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
         return done("unknown", f"command cannot be parsed: {exc}")
     if not argv:
         return done("unknown", "command is empty")
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        return _probe_remote_acp(cfg, machine_id, done)
     exe = argv[0]
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
@@ -865,6 +880,13 @@ def _ping_bounds(cfg: Any) -> tuple[int, int, float]:
     return ready_ms, answer, ready_ms / 1000 + answer
 
 
+def remote_check_handle() -> str:
+    """The handle every check of an agent on a registered machine runs under."""
+    from raven.acp_client import remote
+
+    return remote.CHECK_HANDLE
+
+
 def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
     """What a ping that raised is reported as, and the fix when one is known.
 
@@ -914,6 +936,38 @@ class PingResult:
     remedy: Remedy | None = None
 
 
+def _probe_remote_acp(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
+    """The free check for an acp agent on a registered machine: still registered, and verified?
+
+    No ssh: this runs on every listing, and one machine slow to answer would hold
+    the whole roster behind it. ``which`` here would answer for this computer,
+    which is not where the agent runs. What can be said for free is whether the
+    registry still names a usable machine, and what the last test recorded.
+    """
+    from raven.acp_client import remote
+    from raven.ops import remote_path
+
+    try:
+        target = remote.machine(machine_id)
+    except remote.RemoteMachineError as exc:
+        return done("attention", str(exc), machine_id)
+    where = f"runs on machine {target.label}"
+    # The link's state is known here without a round trip: connected and
+    # how many agents it carries, idle, or the sentence of its last failure.
+    if (link := remote_path.nodes()) is not None and (said := link.status(machine_id).said()):
+        where += f" ({said})"
+    snapshot = acp_snapshot_for(cfg)
+    if snapshot is None:
+        return done("attention", f"{where}; its ACP capabilities have not been recorded yet -- run a test", machine_id)
+    if snapshot.stale:
+        return done(
+            "attention", f"{where}, but its launch config changed since the last test -- run a test", machine_id
+        )
+    if not getattr(snapshot, "model_menu_measured", True):
+        return done("attention", f"{where}, but its model menu has not been measured yet -- run a test", machine_id)
+    return done(snapshot.status, snapshot.detail, machine_id)
+
+
 async def ping_agent(cfg: Any) -> PingResult:
     """Send one prompt and report whether the agent answered. Never raises.
 
@@ -945,6 +999,7 @@ async def ping_agent(cfg: Any) -> PingResult:
     from raven.acp_client import pool as acp_pool
 
     ready_ms, answer_s, wait_s = _ping_bounds(cfg)
+    machine = (getattr(cfg, "machine", None) or "").strip()
     pool = acp_pool.AcpConnectionPool()
     reply: str | None = None
     failure: Exception | None = None
@@ -964,6 +1019,10 @@ async def ping_agent(cfg: Any) -> PingResult:
             # model -- the fix for a default its provider refuses -- was judged
             # by the model it was pinned away from.
             pinned = optional_keyword(backend, "session_model", getattr(cfg, "model", None) or None)
+            # On a registered machine the session directory is named by the
+            # handle; one shared by every check leaves one directory there
+            # rather than one per press.
+            checked = {"instance": remote_check_handle()} if machine else {}
             reply = await asyncio.wait_for(
                 backend.run(
                     PROBE_PROMPT,
@@ -971,12 +1030,14 @@ async def ping_agent(cfg: Any) -> PingResult:
                     workspace=Path(tmp),
                     executor=None,
                     **pinned,
+                    **checked,
                 ),
                 timeout=wait_s,
             )
     except asyncio.TimeoutError:
         said = f"it did not answer within {wait_s:.0f}s"
-        run = diagnose_hint_for(cfg)
+        # A diagnosis names a command to run here, and the agent is not here.
+        run = None if machine else diagnose_hint_for(cfg)
         return PingResult(False, _silent_detail(said, run), Remedy("silent", run)) if run else PingResult(False, said)
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
         failure = exc
@@ -992,6 +1053,14 @@ async def ping_agent(cfg: Any) -> PingResult:
         if github_copilot.applies(cfg) and (named := github_copilot.read(reply)) is not None:
             return PingResult(False, named[0][:_DETAIL_CAP], named[1])
         return PingResult(True, "it ran and replied")
+    if machine:
+        # The local follow-ups below -- asking the agent again in print mode,
+        # reading this computer's node, a fix command offered to run -- all act
+        # on this computer, and this agent is on another one.
+        if failure is None:
+            return PingResult(False, "it started and then answered nothing")
+        text, _fix = _refusal(cfg, *_said(failure))
+        return PingResult(False, _on_machine(text, machine))
     # An agent whose ACP answer leaves the reason out is asked for it its own way,
     # once the pool is closed, so the process asked is not racing the one pinged.
     if (explained := await kimi_code.explain(cfg, failure, prompt=PROBE_PROMPT)) is not None:
@@ -1042,6 +1111,14 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     # minute, while the menu and the statefulness it holds are launch facts.
     snapshot = await record_capabilities(cfg)
     reply = ", ".join(snapshot.available_models[:5]) or None
+    if not snapshot.usable and (machine := (getattr(cfg, "machine", None) or "").strip()):
+        # The follow-ups below -- asking the agent again in print mode, a fix
+        # command resolved on this computer's PATH, a crash read off this
+        # computer's node -- act here, and the agent is there. Recorded with no
+        # remedy: the one that applies is made on the machine, and a sign-in
+        # command the page offered to copy would fix this computer.
+        detail = _on_machine(snapshot.detail, machine) if snapshot.needs_auth else snapshot.detail
+        return TestResult(cfg.name, source, "acp", False, detail[:_DETAIL_CAP], reply, elapsed(), None)
     if not snapshot.usable:
         # The handshake already classified the refusal (`needs_auth`, from the
         # agent's own answer), so the remedy is read off that verdict rather than
@@ -1351,6 +1428,11 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
     for row in rows:
         cfg = getattr(row, "config", None)
         if cfg is None:
+            continue
+        if (getattr(cfg, "machine", None) or "").strip():
+            # A verify of a row on a registered machine logs in there and
+            # starts the agent, and an unattended boot does neither: the
+            # listing says "run a test", and that press is the owner's own.
             continue
         try:
             snapshot = acp_snapshot_for(cfg)

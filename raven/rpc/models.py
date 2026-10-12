@@ -105,6 +105,13 @@ class SubagentRow(_Strict):
     description: str
     enabled: bool
     configured: bool
+    machine: str | None = Field(
+        default=None,
+        description=(
+            "The registered machine an acp row runs on, by its id in the machine registry; null for this "
+            "computer, and on a server that predates the field."
+        ),
+    )
     vendored: bool = Field(
         default=False,
         description=(
@@ -2648,6 +2655,18 @@ class SubagentsAddParams(_Strict):
             "A Raven provider (e.g. openrouter) whose key the agent is started with, read from Raven's config at "
             "each start; refused unless the preset reads a key for it and Raven holds one."
         ),
+    )
+    machine: str | None = Field(
+        default=None,
+        description=(
+            "A registered machine, by its id in the machine registry, for an acp preset: the preset's command is "
+            "started there by the machine's Raven node and signed in there, and the row's name defaults to "
+            "<preset>@<machine>. Refused unless the machine lane is on and the machine is registered and usable."
+        ),
+    )
+    remote_cwd: str | None = Field(
+        default=None,
+        description="Where on `machine` the agent works (`~/raven-work` when unset); ignored without `machine`.",
     )
     api_key: str | None = None
     mcps: list[str] | None = None

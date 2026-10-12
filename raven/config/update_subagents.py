@@ -132,6 +132,14 @@ def reject_unsupported_acp_fields(entries: list[dict]) -> None:
                 "server, not one task -- the task is delivered as a session/prompt request, so the "
                 "placeholder would be passed through literally and the handshake would fail"
             )
+        machine = entry.get("machine")
+        lent = entry.get("lendKeys") or entry.get("lend_keys")
+        if isinstance(machine, str) and machine.strip() and lent:
+            raise ValueError(
+                f"acp sub-agent {name!r} runs on machine {machine.strip()!r}, so it cannot be started with "
+                f"Raven's keys {sorted(lent)}: they would have to be copied to that machine; sign it in there "
+                "and remove lendKeys"
+            )
 
 
 def _raw_config(path: Path) -> dict[str, Any]:

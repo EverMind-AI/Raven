@@ -1,0 +1,764 @@
+"""An acp sub-agent whose entry names a registered machine, end to end.
+
+Nothing here needs a second computer. A stand-in ``ssh`` on PATH does what sshd
+does with the one remote-command argument it is sent -- hands it to the user's
+shell, in that user's home -- so the real ssh line, the real Raven node and the
+real stub ACP server the node starts all run: only the network is missing. The
+stand-in can also fail the way ssh fails, writing its own address-bearing words
+where the ssh line asked (``-E``).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from raven.acp_client.capabilities import snapshot_fingerprint, verify_agent
+from raven.acp_client.pool import close_pool, get_pool
+from raven.acp_client.protocol import AcpConnectionError
+from raven.agent.subagent import probe
+from raven.agent.subagent.backends import (
+    agent_meta,
+    build_third_party_backend,
+    format_agent_listing,
+    session_mcp_effective,
+)
+from raven.agent.subagent.backends import env as backend_env
+from raven.agent.subagent.mcp_grant import GrantedServer, McpGrant
+from raven.agent.subagent.probe_state import fingerprint
+from raven.agent.subagent.registry import _row_for
+from raven.config.schema import MCPServerConfig, ThirdPartyAcpSubagentConfig
+from raven.config.update_subagents import reject_unsupported_acp_fields
+from raven.node import bundle
+from raven.node.client import NodePool
+from raven.ops import remote_path
+
+_STUB = Path(__file__).with_name("acp_stub_server.py")
+HOST = "203.0.113.7"
+PORT = 58717
+
+_FAKE_SSH = """#!{python}
+import json, os, sys
+here = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+with open(os.path.join(here, "calls"), "a") as f:
+    f.write(json.dumps(args) + "\\n")
+mode = open(os.path.join(here, "mode")).read().strip()
+home = open(os.path.join(here, "home")).read().strip()
+launch = "-T" in args  # a held session; the one-shot runner sends no -T
+log = args[args.index("-E") + 1] if "-E" in args else None
+
+def fail(said):
+    if log:
+        open(log, "a").write(said + "\\n")
+    else:
+        sys.stderr.write(said + "\\n")
+    sys.exit(255)
+
+if mode == "unreachable":
+    fail("ssh: connect to host {host} port {port}: Operation timed out")
+if mode == "launch_denied" and launch:
+    fail("worker@{host}: Permission denied (publickey).")
+command = args[args.index("--") + 1] if "--" in args else args[-1]
+os.chdir(home)
+os.execve("/bin/sh", ["/bin/sh", "-c", command], {{"HOME": home, "SHELL": "/bin/sh", "PATH": os.environ["PATH"]}})
+"""
+
+
+# Every dispatch, verify and ping here starts a real node over the stand-in
+# ssh, and the agent through it: real processes, real seconds.
+pytestmark = pytest.mark.slow
+
+
+@pytest.fixture(autouse=True)
+async def _no_pooled_connections():
+    yield
+    await close_pool()
+
+
+class Machine:
+    """The stand-in machine: its home, its ssh, and what was asked of it."""
+
+    def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.home = root / "box-home"
+        self.home.mkdir()
+        self.bin = root / "fakebin"
+        self.bin.mkdir()
+        ssh = self.bin / "ssh"
+        ssh.write_text(_FAKE_SSH.format(python=sys.executable, host=HOST, port=PORT), encoding="utf-8")
+        ssh.chmod(0o755)
+        (self.bin / "home").write_text(str(self.home), encoding="utf-8")
+        self.mode("ok")
+        registry = root / "connections.json"
+        registry.write_text(
+            json.dumps(
+                {
+                    "connections": [
+                        {
+                            "id": "box",
+                            "display_name": "Lab box",
+                            "host": HOST,
+                            "port": PORT,
+                            "user": "worker",
+                            "key": "/keys/id_test",
+                        }
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("RAVEN_CONNECTIONS", str(registry))
+        # The lane is debug-only; these tests are about what it does when on.
+        monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+        path = f"{self.bin}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}"
+        # Both ways ssh is started: the one-shot runner inherits this process's
+        # PATH, and an agent's launch takes the captured login-shell one.
+        monkeypatch.setenv("PATH", path)
+        monkeypatch.setattr(backend_env, "_LOGIN_ENV", {**os.environ, "PATH": path})
+        monkeypatch.setattr("raven.config.paths.get_logs_dir", lambda: root / "logs")
+        # This Raven's node, installed where the host looks for it: its
+        # ``bin/python`` is this test run's own interpreter.
+        python = self.home / ".raven-node" / bundle.install_name() / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text(f'#!/bin/sh\nexec {sys.executable} "$@"\n', encoding="utf-8")
+        python.chmod(0o755)
+        # The link to the machine, as assembly hands it to the file tools and
+        # the dispatch: one pool for this test, closed with it.
+        self.nodes = NodePool()
+        monkeypatch.setattr(remote_path, "_NODES", lambda: self.nodes)
+
+    def mode(self, mode: str) -> None:
+        (self.bin / "mode").write_text(mode, encoding="utf-8")
+
+    def calls(self) -> list[list[str]]:
+        path = self.bin / "calls"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+@pytest.fixture
+async def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    if not Path("/bin/sh").exists():
+        pytest.skip("the stand-in ssh hands the ssh line to a POSIX shell")
+    machine = Machine(tmp_path, monkeypatch)
+    yield machine
+    await machine.nodes.close_all()
+
+
+def _agent_pid(name: str = "stub@box") -> int | None:
+    """The pid of the agent process on the machine, read off the pooled connection's endpoint."""
+    (connection,) = get_pool().connections(name)
+    return connection.client._endpoint.pid
+
+
+def remote_config(*, mode: str = "ok", command: str | None = None, **kw: Any) -> ThirdPartyAcpSubagentConfig:
+    return ThirdPartyAcpSubagentConfig(
+        name=kw.pop("name", "stub@box"),
+        command=command or f"{sys.executable} {_STUB}",
+        env={"ACP_STUB_MODE": mode, **kw.pop("env", {})},
+        machine="box",
+        remote_cwd=kw.pop("remote_cwd", "~/raven-work"),
+        ready_timeout_ms=kw.pop("ready_timeout_ms", 15000),
+        **kw,
+    )
+
+
+# ---- a dispatch ----------------------------------------------------------------
+
+
+async def test_a_dispatch_runs_on_the_machine_in_a_directory_made_there_and_says_where(box, tmp_path):
+    backend = build_third_party_backend(remote_config())
+    local = tmp_path / "local-workspace"
+
+    reply = await backend.run("hi", task_id="t1", workspace=local, executor=None, instance="reviewer")
+
+    there = box.home / "raven-work" / "reviewer"
+    assert there.is_dir(), "the session directory is made on the machine"
+    assert "[raven] Ran on machine 'Lab box' (box), in " in reply
+    # Shown the way scp writes it, which the file tools read back as it is.
+    assert f"in scp://worker@{HOST}:{PORT}//{str(there.resolve()).lstrip('/')};" in reply
+    assert "not on this computer" in reply
+    assert "read_file, list_dir, find, grep, write_file and edit_file take that path as it is" in reply
+    assert not local.exists(), "the caller's workspace is never touched"
+    for argv in box.calls():
+        assert str(local) not in " ".join(argv), "this computer's workspace path never reaches the machine"
+
+
+async def test_the_entry_s_env_reaches_the_agent_over_the_link_and_never_an_ssh_argument(box, tmp_path):
+    # env is where credentials live, and an argument is in the process list
+    # at both ends. The stub answers in the mode its env names, so an echo
+    # proves the variables arrived; no ssh argv may carry any of them.
+    cfg = remote_config(mode="echo_blocks")
+    cfg = cfg.model_copy(update={"env": {**cfg.env, "OPENAI_API_KEY": "sk-raven-test-not-real"}})
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, model="parent-model")
+
+    assert json.loads(reply.split("\n\n[raven]")[0]) == [{"type": "text", "text": "hi"}]
+    (launch,) = [argv for argv in box.calls() if "-T" in argv]
+    for argv in box.calls():
+        joined = " ".join(argv)
+        assert "sk-raven-test-not-real" not in joined and "ACP_STUB_MODE" not in joined
+    remote = launch[launch.index("--") + 1]
+    assert "RAVEN_PARENT_MODEL" not in remote, "the parent binding is this computer's process env"
+    assert "raven.node --attach --dir" in remote, "the one ssh is the relay to the machine's daemon"
+    assert "-E" in launch, "ssh's own messages go to their log"
+
+
+async def test_an_edited_env_value_relaunches_the_agent_on_the_same_link(box, tmp_path):
+    # The values travel on the link, and the pool keys on them: an edit must
+    # not be answered by the agent process started before it.
+    first = build_third_party_backend(remote_config())
+    await first.run("one", task_id="t1", workspace=tmp_path, executor=None)
+    before = _agent_pid()
+    edited = remote_config().model_copy(update={"env": {"ACP_STUB_MODE": "ok", "EXTRA": "2"}})
+    await build_third_party_backend(edited).run("two", task_id="t2", workspace=tmp_path, executor=None)
+
+    assert _agent_pid() != before, "a new agent process"
+    assert len([argv for argv in box.calls() if "-T" in argv]) == 1, "on the one link"
+
+
+async def test_two_handles_on_one_machine_work_in_two_directories(box, tmp_path):
+    backend = build_third_party_backend(remote_config())
+
+    await backend.run("one", task_id="t1", workspace=tmp_path, executor=None, instance="a")
+    await backend.run("two", task_id="t2", workspace=tmp_path, executor=None, instance="b")
+
+    assert (box.home / "raven-work" / "a").is_dir()
+    assert (box.home / "raven-work" / "b").is_dir()
+
+
+async def test_an_unreachable_machine_fails_the_dispatch_in_one_sentence(box, tmp_path):
+    box.mode("unreachable")
+    backend = build_third_party_backend(remote_config())
+
+    with pytest.raises(AcpConnectionError) as caught:
+        await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
+
+    said = str(caught.value)
+    assert "machine 'Lab box' (box) did not answer within the connection timeout" in said
+    assert HOST not in said and str(PORT) not in said
+
+
+async def test_a_launch_ssh_refuses_is_read_from_its_own_log_not_its_stderr(box, tmp_path):
+    box.mode("launch_denied")
+    backend = build_third_party_backend(remote_config())
+
+    with pytest.raises(AcpConnectionError) as caught:
+        await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
+
+    said = str(caught.value)
+    assert "refused the login" in said
+    assert HOST not in said
+
+
+async def test_an_agent_not_installed_on_the_machine_says_so(box, tmp_path):
+    backend = build_third_party_backend(remote_config(command="no-such-agent-for-raven-tests --acp"))
+
+    with pytest.raises(AcpConnectionError, match="command was not found on machine 'Lab box'"):
+        await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
+
+    snapshot = await verify_agent(remote_config(command="no-such-agent-for-raven-tests --acp"))
+    assert snapshot.status == "attention" and "command was not found on machine 'Lab box'" in snapshot.detail
+
+
+async def test_an_unregistered_machine_fails_before_anything_starts(box, tmp_path):
+    backend = build_third_party_backend(remote_config().model_copy(update={"machine": "elsewhere"}))
+
+    with pytest.raises(AcpConnectionError, match="machine 'elsewhere' is not registered"):
+        await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
+    assert box.calls() == []
+
+
+async def test_two_parent_models_share_one_agent_process_rather_than_starting_one_each(box, tmp_path):
+    # The parent binding is launch environment for a process of raven's own;
+    # carried, each parent model would start an agent process on the machine.
+    backend = build_third_party_backend(remote_config())
+
+    await backend.run("one", task_id="t1", workspace=tmp_path, executor=None, model="parent-a")
+    first = _agent_pid()
+    await backend.run("two", task_id="t2", workspace=tmp_path, executor=None, model="parent-b")
+
+    assert _agent_pid() == first
+    assert len([argv for argv in box.calls() if "-T" in argv]) == 1
+
+
+async def test_this_computer_s_files_are_not_accounted_for_a_remote_turn(box, tmp_path, monkeypatch):
+    from raven.acp_client import acp_agent
+
+    built: list[dict[str, Any]] = []
+    real = acp_agent._TurnCollector.__init__
+
+    def spy(self, *args, **kwargs):
+        built.append(kwargs)
+        real(self, *args, **kwargs)
+
+    monkeypatch.setattr(acp_agent._TurnCollector, "__init__", spy)
+    backend = build_third_party_backend(remote_config())
+
+    await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert built and built[0]["track_files"] is False and built[0]["workspace"] is None
+
+
+async def test_the_node_s_ssh_starts_from_an_empty_log(box):
+    from raven.acp_client import remote
+
+    log = remote.ssh_log_path("raven-node@box")
+    log.write_text("worker@host: Permission denied (publickey).\n", encoding="utf-8")
+
+    hello = await box.nodes.hello("box")
+
+    assert hello["digest"] == bundle.digest()
+    assert log.read_text(encoding="utf-8") == "", "a failure is read from this launch's lines"
+
+
+async def test_a_connection_that_ends_mid_turn_is_reported_as_it_ended(box, tmp_path):
+    # Past ssh: the agent itself exits during the turn, so there is no ssh
+    # failure to classify and the connection's own report stands.
+    backend = build_third_party_backend(remote_config(mode="elicits_then_dies"))
+
+    with pytest.raises(AcpConnectionError, match="connection ended"):
+        await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None)
+
+
+async def test_granted_mcp_servers_are_withheld_on_the_wire_and_named_in_the_reply(box, tmp_path):
+    backend = build_third_party_backend(remote_config(mode="echo_blocks"))
+    grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="/bin/true")),))
+
+    reply = await backend.run("hi", task_id="t1", workspace=tmp_path, executor=None, mcp_grant=grant)
+
+    assert "MCP servers 'pg' were not lent to acp agent 'stub@box'" in reply
+    assert "Ran on machine 'Lab box' (box)" in reply
+
+
+# ---- what it is not given ------------------------------------------------------
+
+
+def test_mcp_is_not_lent_to_an_agent_on_a_machine_and_the_reply_says_why():
+    cfg = remote_config()
+    backend = build_third_party_backend(cfg)
+    grant = McpGrant(granted=(GrantedServer("pg", "stdio", MCPServerConfig(command="/bin/true")),))
+
+    assert backend._session_mcp_refused
+    note = backend._mcp_note(grant)
+    assert "were not lent" in note and "runs on machine 'box'" in note
+    assert session_mcp_effective(cfg) is False
+    assert _row_for(cfg).injectable.mcps is False
+
+
+def test_the_roster_names_the_machine_and_hands_it_no_paths():
+    cfg = remote_config()
+    meta = agent_meta(cfg)
+
+    assert meta.machine == "box"
+    assert meta.reads_local_files is False
+    listing = format_agent_listing([meta])
+    assert "on machine box" in listing and "no-local-files" in listing
+    assert HOST not in listing
+    assert _row_for(cfg).caps.machine == "box"
+    assert _row_for(cfg).meta().machine == "box"
+
+
+def test_a_local_row_is_listed_as_before():
+    cfg = ThirdPartyAcpSubagentConfig(name="here", command="qwen --acp")
+
+    meta = agent_meta(cfg)
+    assert meta.machine == "" and meta.reads_local_files is True
+    assert "on machine" not in format_agent_listing([meta])
+
+
+def test_raven_s_keys_are_not_lent_to_a_machine_row():
+    loaded = ThirdPartyAcpSubagentConfig(name="x", command="pi", machine="box", lend_keys=["openrouter"])
+    assert loaded.lend_keys == [], "dropped on load, with a warning"
+
+    with pytest.raises(ValueError, match="runs on machine 'box'"):
+        reject_unsupported_acp_fields(
+            [{"kind": "acp", "name": "x", "command": "pi", "machine": "box", "lendKeys": ["openrouter"]}]
+        )
+
+
+def test_moving_a_row_to_a_machine_is_a_new_launch_and_a_local_row_s_digest_is_untouched():
+    here = ThirdPartyAcpSubagentConfig(name="a", command="qwen --acp")
+    there = here.model_copy(update={"machine": "box"})
+    elsewhere_root = there.model_copy(update={"remote_cwd": "/srv/agents"})
+
+    assert len({snapshot_fingerprint(c) for c in (here, there, elsewhere_root)}) == 3
+    assert len({fingerprint(c) for c in (here, there, elsewhere_root)}) == 3
+    # A row that names no machine digests exactly as it did before the fields
+    # existed, so no recorded measurement is discarded by the upgrade.
+    assert snapshot_fingerprint(here) == snapshot_fingerprint(here.model_copy(update={"remote_cwd": None}))
+
+
+# ---- checks -------------------------------------------------------------------------
+
+
+async def test_the_free_probe_does_not_reach_the_machine(box):
+    result = await probe.probe_one(remote_config(), source="config")
+
+    assert result.status == "attention"
+    assert "runs on machine 'Lab box' (box)" in result.detail
+    assert "run a test" in result.detail
+    assert box.calls() == [], "a listing never opens an ssh connection"
+
+
+async def test_the_free_probe_shows_the_link_s_state_once_a_dispatch_has_opened_it(box, tmp_path):
+    cfg = remote_config()
+    await build_third_party_backend(cfg).run("hi", task_id="t1", workspace=tmp_path, executor=None)
+
+    result = await probe.probe_one(cfg, source="config")
+
+    assert "runs on machine 'Lab box' (box) (connected, 1 agent running)" in result.detail
+    await close_pool()
+    assert "(connected, idle)" in (await probe.probe_one(cfg, source="config")).detail
+
+
+async def test_a_link_that_goes_mid_turn_is_waited_out_and_the_turn_finishes_when_it_is_back(box, tmp_path):
+    """The ssh is the way to the machine, not the agent's life: the agent answers after the link is back."""
+    box.nodes._heartbeat_s = 0.1
+    box.nodes._lost_after_s = 1.0
+    box.nodes._backoff_s = (0.2,)
+    backend = build_third_party_backend(remote_config(env={"ACP_STUB_PROMPT_DELAY_S": "4"}))
+    turn = asyncio.ensure_future(backend.run("hi", task_id="t1", workspace=tmp_path, executor=None))
+    deadline = time.monotonic() + 20
+    while box.nodes.status("box").agents != 1:
+        assert time.monotonic() < deadline and not turn.done(), "the agent never started"
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)
+    daemon = box.nodes._nodes["box"].hello["pid"]
+
+    os.kill(box.nodes._nodes["box"].client._proc.pid, signal.SIGKILL)
+
+    reply = await asyncio.wait_for(turn, timeout=30)
+    assert reply.split("\n\n[raven]")[0] == "pong", "the agent's answer, through the link that came back"
+    assert box.nodes._nodes["box"].hello["pid"] == daemon, "the same daemon, reached by a new ssh"
+    assert len([argv for argv in box.calls() if "-T" in argv]) == 2
+
+
+async def test_a_daemon_that_stops_mid_turn_fails_the_turn_in_one_sentence(box, tmp_path):
+    box.nodes._heartbeat_s = 0.1
+    box.nodes._lost_after_s = 1.0
+    box.nodes._backoff_s = (0.2,)
+    backend = build_third_party_backend(remote_config(mode="prompt_hangs"))
+    turn = asyncio.ensure_future(backend.run("hi", task_id="t1", workspace=tmp_path, executor=None))
+    deadline = time.monotonic() + 20
+    while box.nodes.status("box").agents != 1:
+        assert time.monotonic() < deadline and not turn.done(), "the agent never started"
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)
+
+    os.kill(box.nodes._nodes["box"].hello["pid"], signal.SIGTERM)
+
+    with pytest.raises(AcpConnectionError) as caught:
+        await asyncio.wait_for(turn, timeout=30)
+    said = str(caught.value)
+    assert said.startswith("acp agent 'stub@box'") and "connection ended" in said
+    assert HOST not in said and str(PORT) not in said
+
+
+async def test_the_free_probe_names_a_machine_that_is_gone(box):
+    result = await probe.probe_one(remote_config().model_copy(update={"machine": "elsewhere"}), source="config")
+
+    assert result.status == "attention"
+    assert "machine 'elsewhere' is not registered" in result.detail
+
+
+async def test_verify_handshakes_on_the_machine_in_the_one_check_directory(box):
+    snapshot = await verify_agent(remote_config())
+
+    assert snapshot.status == "ready", snapshot.detail
+    assert (box.home / "raven-work" / "raven-check").is_dir()
+
+
+async def test_verify_starts_the_agent_with_the_entry_s_env(box):
+    # The stub refuses session/new when its env names that mode; started without
+    # the variables it would default to answering, and the check would read ready.
+    snapshot = await verify_agent(remote_config(mode="no_session"))
+
+    assert snapshot.status == "attention"
+    assert "no session could be opened" in snapshot.detail
+
+
+async def test_verify_of_an_unreachable_machine_is_attention_never_missing(box):
+    box.mode("unreachable")
+
+    snapshot = await verify_agent(remote_config())
+
+    assert snapshot.status == "attention", "missing would offer an installer that runs on this computer"
+    assert "did not answer within the connection timeout" in snapshot.detail
+    assert HOST not in snapshot.detail
+
+
+async def test_verify_of_a_launch_ssh_refuses_says_so(box):
+    box.mode("launch_denied")
+
+    snapshot = await verify_agent(remote_config())
+
+    assert snapshot.status == "attention"
+    assert "refused the login" in snapshot.detail
+    assert HOST not in snapshot.detail
+
+
+async def test_verify_of_a_root_the_machine_cannot_make_is_attention_in_its_own_words(box):
+    # Measured 2026-10-10: a registered machine with a full disk, where the
+    # root's mkdir fails before the agent starts. The node says why.
+    snapshot = await verify_agent(remote_config(remote_cwd="/proc/raven-cannot-make-this"))
+
+    assert snapshot.status == "attention", "missing would offer an installer that runs on this computer"
+    assert "could not make /proc/raven-cannot-make-this" in snapshot.detail
+    assert HOST not in snapshot.detail
+
+
+async def test_verify_of_an_unregistered_machine_names_it(box):
+    snapshot = await verify_agent(remote_config().model_copy(update={"machine": "elsewhere"}))
+
+    assert snapshot.status == "attention"
+    assert "machine 'elsewhere' is not registered" in snapshot.detail
+    assert box.calls() == []
+
+
+async def test_verify_that_cannot_make_its_directory_says_so(box):
+    (box.home / "raven-work").write_text("a file where the root should be\n", encoding="utf-8")
+
+    snapshot = await verify_agent(remote_config())
+
+    assert snapshot.status == "attention"
+    assert "could not make" in snapshot.detail and HOST not in snapshot.detail
+
+
+async def test_verify_with_no_ssh_here_is_attention_with_the_reason(box, monkeypatch):
+    # A PATH holding no ssh at all, so nothing falls through to the real one.
+    (box.bin / "ssh").unlink()
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", {**os.environ, "PATH": str(box.bin)})
+
+    snapshot = await verify_agent(remote_config())
+
+    assert snapshot.status == "attention"
+    assert "ssh" in snapshot.detail
+
+
+async def test_the_free_probe_reads_the_recorded_verdict_until_the_entry_changes(box):
+    cfg = remote_config()
+    await probe.record_capabilities(cfg)
+
+    recorded = await probe.probe_one(cfg, source="config")
+    moved = await probe.probe_one(cfg.model_copy(update={"remote_cwd": "/srv/elsewhere"}), source="config")
+
+    assert recorded.status == "ready", recorded.detail
+    assert moved.status == "attention" and "launch config changed" in moved.detail
+    assert [argv for argv in box.calls() if "-T" in argv], "only the recording reached the machine"
+
+
+async def test_a_node_whose_ssh_log_cannot_be_emptied_still_starts(box):
+    from raven.acp_client import remote
+
+    remote.ssh_log_path("raven-node@box").mkdir()
+
+    assert (await box.nodes.hello("box"))["digest"] == bundle.digest()
+
+
+async def test_a_ping_answers_from_the_machine_and_leaves_one_directory(box):
+    result = await probe.ping_agent(remote_config())
+
+    assert result.ok, result.detail
+    made = sorted(p.name for p in (box.home / "raven-work").iterdir())
+    assert made == ["raven-check"], "every check reuses one directory instead of one per press"
+
+
+async def test_a_failed_ping_on_a_machine_offers_no_fix_to_run_here(box):
+    box.mode("launch_denied")
+
+    result = await probe.ping_agent(remote_config())
+
+    assert result.ok is False
+    assert result.remedy is None
+    assert "on machine 'box'" in result.detail
+    assert HOST not in result.detail
+
+
+# ---- the announce ------------------------------------------------------------------
+
+
+async def test_the_announce_does_not_point_at_this_computer_s_workspace(box, tmp_path):
+    from raven.agent.subagent.manager import SubagentManager
+
+    class _Provider:
+        def get_default_model(self) -> str:
+            return "m"
+
+    mgr = SubagentManager(provider=_Provider(), workspace=Path("/tmp"), agents=[remote_config()])
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    origin = {"channel": "web", "chat_id": "d", "session_key": "web:s1", "agent": "stub@box", "workspace": "/tmp"}
+    await mgr._announce_result("t1", "Look", "look", "done", origin, "ok")
+
+    text = submitted[0].text
+    # Named on every path, as written: a failed or cancelled run's result does
+    # not close with the resolved directory the way a finished one's does.
+    assert "Working directory: on machine 'box', ~/raven-work/t1 (made there when the run started)" in text
+    assert "Working directory: /tmp" not in text
+    assert "Collected outputs:" not in text, "nothing came back from this run"
+
+    record = tmp_path / "nodes" / "t1.out.md"
+    await mgr._announce_result("t1", "Look", "look", "done", origin, "ok", record_path=str(record))
+    assert "Collected outputs:" not in submitted[1].text, "nothing is brought back from a machine unasked"
+
+
+async def test_the_announce_and_the_record_name_the_machine_s_directory_for_any_handle(box):
+    from raven.agent.subagent.manager import SubagentManager
+
+    class _Provider:
+        def get_default_model(self) -> str:
+            return "m"
+
+    mgr = SubagentManager(
+        provider=_Provider(),
+        workspace=Path("/tmp"),
+        agents=[remote_config(), remote_config(name="deep@box", remote_cwd="/srv/agents/")],
+    )
+
+    assert mgr._machine_workdir("stub@box", "reviewer") == ("box", "~/raven-work/reviewer")
+    assert mgr._machine_workdir("deep@box", "a b") == (
+        "box",
+        "/srv/agents/a_b-" + mgr._machine_workdir("deep@box", "a b")[1][-8:],
+    )
+    assert mgr._machine_workdir("nobody", "t1") == ("", "")
+
+
+# ---- the lane is debug-only --------------------------------------------------------------
+
+
+def _lane_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+
+
+def test_with_the_lane_off_a_machine_row_stays_off_the_table(box, monkeypatch):
+    from raven.agent.subagent.registry import AgentRegistry
+
+    local = ThirdPartyAcpSubagentConfig(name="here", command=f"{sys.executable} {_STUB}")
+    registry = AgentRegistry(build_builtin=lambda row, narrowed: ("backend", row.name))
+
+    _lane_off(monkeypatch)
+    registry.apply([remote_config(), local])
+    assert "stub@box" not in registry.names() and "here" in registry.names()
+
+    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+    registry.apply([remote_config(), local])
+    assert "stub@box" in registry.names()
+
+
+async def test_with_the_lane_off_nothing_reaches_the_machine_and_each_door_says_so(box, monkeypatch, tmp_path):
+    _lane_off(monkeypatch)
+    said = "the machine lane is debug-only and off; start raven with RAVEN_DEBUG_MACHINES=1"
+
+    with pytest.raises(AcpConnectionError, match=said):
+        await build_third_party_backend(remote_config()).run("hi", task_id="t1", workspace=tmp_path, executor=None)
+    probed = await probe.probe_one(remote_config(), source="config")
+    assert probed.status == "attention" and said in probed.detail
+    verified = await verify_agent(remote_config())
+    assert verified.status == "attention" and said in verified.detail
+    tested = await probe.run_test(remote_config(), source="config")
+    assert tested.ok is False and said in tested.detail and tested.remedy is None
+    assert box.calls() == [], "off is off: no ssh for a dispatch, a probe, a verify or a test"
+
+
+async def test_the_boot_backfill_never_logs_in_to_a_machine(box):
+    from raven.agent.subagent.backends import acp_snapshot_for
+
+    cfg = remote_config()
+    await probe._verify_missing_snapshots(object(), [_row_for(cfg)])
+
+    assert box.calls() == [], "an unattended boot opens no ssh session"
+    assert acp_snapshot_for(cfg) is None, "the first listing says 'run a test', and that press is the owner's"
+
+
+# ---- what a test on a machine row reports --------------------------------------------------
+
+
+async def test_a_test_of_a_machine_row_that_needs_a_sign_in_offers_no_fix_for_this_computer(box, monkeypatch):
+    async def never(*args, **kwargs):
+        raise AssertionError("asked the agent again in print mode, on this computer")
+
+    monkeypatch.setattr(probe.kimi_code, "explain_refusal", never)
+    monkeypatch.setattr(probe, "_remedy_for", lambda cfg: pytest.fail("a fix resolved on this computer's PATH"))
+
+    result = await probe.run_test(remote_config(mode="no_session"), source="config")
+
+    assert result.ok is False
+    assert result.remedy is None, "a sign-in command the page offered to copy would fix this computer"
+    assert result.detail.endswith("(on machine 'box': any fix is made there)")
+    assert HOST not in result.detail
+
+
+async def test_the_machine_note_survives_a_refusal_longer_than_the_detail_cap(box):
+    long_reason = "Authentication required: " + "x" * 2500
+    cfg = remote_config(mode="no_session").model_copy(
+        update={"env": {"ACP_STUB_MODE": "no_session", "ACP_STUB_MESSAGE": long_reason}}
+    )
+
+    pinged = await probe.ping_agent(cfg)
+    tested = await probe.run_test(cfg, source="config")
+
+    for detail in (pinged.detail, tested.detail):
+        assert len(detail) <= probe._DETAIL_CAP
+        assert detail.endswith("(on machine 'box': any fix is made there)")
+
+
+def test_the_machine_note_is_kept_whole_inside_the_cap():
+    assert probe._on_machine("x" * 5000, "box").endswith(" (on machine 'box': any fix is made there)")
+    assert len(probe._on_machine("x" * 5000, "box")) == probe._DETAIL_CAP
+    assert probe._on_machine("short", "box") == "short (on machine 'box': any fix is made there)"
+
+
+# ---- one owner for "no session MCP on a machine" ------------------------------------------
+
+
+def test_the_one_mcp_predicate_answers_for_a_machine_row_too():
+    from raven.agent.subagent.backends import session_mcp_delivered
+
+    assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="box") is False
+    assert session_mcp_delivered(session_mcp=True, snapshot=None, machine="") is True
+    assert session_mcp_delivered(session_mcp=True, snapshot=None) is True
+
+
+# ---- the write doors ------------------------------------------------------------------------
+
+
+@pytest.fixture
+def config_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "config.json"
+    row = {"name": "pi-box", "kind": "acp", "preset": "pi", "command": "pi --acp", "machine": "box", "enabled": False}
+    config = {"providers": {"openrouter": {"apiKey": "sk-raven-test-not-real"}}, "subagents": {"agents": [row]}}
+    path.write_text(json.dumps(config), encoding="utf-8")
+    for module in ("raven.config.loader", "raven.config.self_surface", "raven.rpc.methods.subagents"):
+        monkeypatch.setattr(f"{module}.get_config_path", lambda: path)
+    return path
+
+
+def _stored(path: Path) -> dict:
+    (row,) = json.loads(path.read_text(encoding="utf-8"))["subagents"]["agents"]
+    return row
+
+
+async def test_the_update_door_refuses_lending_keys_to_a_machine_row(box, config_file):
+    from raven.rpc.methods.subagents import ConfigValidationError, subagents_update
+
+    # The schema would drop the value on load and the handler would answer
+    # "updated", so the one path that can say no is the write door.
+    with pytest.raises(ConfigValidationError, match="cannot be started with Raven's keys"):
+        await subagents_update({"name": "pi-box", "lend_keys": ["openrouter"]})
+
+    assert "lendKeys" not in _stored(config_file) and "lend_keys" not in _stored(config_file)
+
+
+# ---- two machines on one disk ---------------------------------------------------------------

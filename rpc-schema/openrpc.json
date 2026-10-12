@@ -2142,6 +2142,22 @@
           }
         },
         {
+          "name": "machine",
+          "required": false,
+          "description": "A registered machine, by its id in the machine registry, for an acp preset: the preset's command is started there by the machine's Raven node and signed in there, and the row's name defaults to <preset>@<machine>. Refused unless the machine lane is on and the machine is registered and usable.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "remote_cwd",
+          "required": false,
+          "description": "Where on `machine` the agent works (`~/raven-work` when unset); ignored without `machine`.",
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
           "name": "api_key",
           "required": false,
           "schema": {
@@ -12016,6 +12032,10 @@
           },
           "configured": {
             "type": "boolean"
+          },
+          "machine": {
+            "type": "string",
+            "description": "The registered machine an acp row runs on, by its id in the machine registry; null for this computer, and on a server that predates the field."
           },
           "vendored": {
             "type": "boolean",

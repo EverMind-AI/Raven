@@ -827,6 +827,10 @@ export interface SubagentRow {
   enabled: boolean;
   configured: boolean;
   /**
+   * The registered machine an acp row runs on, by its id in the machine registry; null for this computer, and on a server that predates the field.
+   */
+  machine?: string;
+  /**
    * Discovered under the `agents/` product tree rather than written into config: one of the agent products that ship with this raven, materialized as a row on every table build. Like `builtin` it leaves `configured` false -- there is no config entry to delete, and removing it means removing its folder -- but unlike `builtin` it is a real subprocess with a command, so it is probed and it can be unready (a missing engine wheel leaves it listed and disabled). The wire name predates the tree's rename. Absent from a server that predates discovery.
    */
   vendored?: boolean;
@@ -2856,6 +2860,8 @@ export interface SubagentsAddParams {
   description?: string;
   model?: string;
   lend_key?: string;
+  machine?: string;
+  remote_cwd?: string;
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;

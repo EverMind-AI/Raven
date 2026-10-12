@@ -1693,3 +1693,100 @@ async def test_a_write_refused_partway_names_what_already_took(config_file):
     batch = {"agents.defaults.temperature": 0.5, "subagents.codex.enabled": False}
     reply = await _run(tool, action="set", value=json.dumps(batch))
     assert reply.startswith("Error") and "applied before it" in reply and "agents.defaults.temperature" in reply
+
+
+# --- an agent on a registered machine ----------------------------------------
+
+
+_LAB_ROW: dict[str, Any] = {
+    "name": "claude_code@ravenx2",
+    "preset": "claude_code",
+    "kind": "acp",
+    "description": "Claude Code",
+    "enabled": True,
+    "configured": True,
+    "machine": "ravenx2",
+    "probe_status": "ready",
+    "probe_detail": "runs on machine 'RavenX 2' (ravenx2); it ran and replied",
+    "model_choices": [],
+}
+
+
+@pytest.mark.asyncio
+async def test_an_add_on_a_registered_machine_passes_the_machine_through_and_says_where_it_runs(config_file):
+    calls = Calls(
+        {"subagents.add": {"added": True, "name": "claude_code@ravenx2"}, "subagents.list": {"rows": [_LAB_ROW]}}
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(
+        tool,
+        action="add",
+        path="subagents",
+        value='{"preset": "claude_code", "machine": "ravenx2", "remote_cwd": "~/raven-work"}',
+    )
+
+    sent = next(p for m, p in calls.calls if m == "subagents.add")
+    assert sent == {"preset": "claude_code", "machine": "ravenx2", "remote_cwd": "~/raven-work"}
+    assert "Connected sub-agent claude_code@ravenx2" in reply
+    assert "runs on machine 'RavenX 2' (ravenx2)" in reply
+    assert "on machine ravenx2" in await _run(tool, action="describe", path="subagents")
+    assert '"machine": "ravenx2"' in await _run(tool, action="describe", path="subagents.claude_code@ravenx2")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_add_on_a_machine_sends_the_user_to_that_machine_and_runs_nothing_here(config_file):
+    """A refusal from a machine names no command to run here: the agent, its install and its sign-in are there."""
+    refusal = _Refused(
+        "sub-agent 'claude_code@ravenx2' did not answer a test message, so it was not added: 'claude' is not on "
+        "the login shell PATH (on machine 'ravenx2': any fix is made there)",
+        {},
+    )
+    calls = Calls({"subagents.add": refusal, "subagents.list": {"rows": [_LAB_ROW | {"configured": False}]}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "claude_code", "machine": "ravenx2"}')
+
+    assert reply.startswith("Not added:") and "on machine 'ravenx2': any fix is made there" in reply
+    assert "It runs on machine 'ravenx2', so every fix is made there by the user" in reply
+    assert "exec refuses ssh to a registered machine" in reply
+    assert "Install it with exec" not in reply and "Run it on its own with exec" not in reply
+
+
+@pytest.mark.asyncio
+async def test_describe_names_the_registered_machines_only_while_the_lane_is_on(config_file, tmp_path, monkeypatch):
+    from raven.ops import connections
+
+    registry = tmp_path / "connections.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "connections": [
+                    {
+                        "id": "ravenx2",
+                        "display_name": "RavenX 2",
+                        "host": "203.0.113.8",
+                        "port": 22,
+                        "user": "root",
+                        "key": "/k",
+                    },
+                    {"id": "this-one", "transport": "local"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(connections, "store_path", lambda: registry)
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.list": {"rows": []}}))
+
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    assert "machines an acp preset" not in await _run(tool, action="describe", path="subagents")
+
+    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+    said = await _run(tool, action="describe", path="subagents")
+    line = next(ln for ln in said.splitlines() if ln.strip().startswith("machines an acp preset"))
+    assert line.split("on:", 1)[1].split("--", 1)[0].strip() == "ravenx2 (RavenX 2)", "the local row is no machine"
+    assert '"machine": "<id>"' in line and "203.0.113" not in said

@@ -145,6 +145,8 @@ npm error A complete log of this run can be found in: /home/someone/.npm/_logs/2
 # A real server mints a distinct id per session; the counter keeps the stub from
 # making concurrent sessions collide in a way no real agent would.
 _SESSIONS = 0
+# The cwd the last session/new named, for the mode that writes a file there.
+_SESSION_CWD = ""
 # What each session is currently answering with, so a resumed one can report it.
 _SESSION_MODELS: dict[str, str] = {}
 
@@ -314,6 +316,18 @@ def handle_prompt(request_id, params) -> None:
         update(
             session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": json.dumps(seen)}}
         )
+        ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE == "writes_file":
+        # Leaves a file in the session directory, the way an agent's own tools
+        # would, so a test can see what the host collects afterwards.
+        import pathlib
+
+        out = pathlib.Path(_SESSION_CWD or ".") / "out"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "result.txt").write_text("made by the agent\n", encoding="utf-8")
+        (pathlib.Path(_SESSION_CWD or ".") / "notes.md").write_text("# notes\n", encoding="utf-8")
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "wrote it"}})
         ok(request_id, {"stopReason": "end_turn"})
         return
     if MODE == "asks_late":
@@ -595,6 +609,9 @@ def handle_prompt(request_id, params) -> None:
         # Kimi Code waiting on a provider that never answers: the prompt is
         # taken and never finished.
         return
+    if delay := os.environ.get("ACP_STUB_PROMPT_DELAY_S"):
+        # A provider that takes its time: the prompt is answered after the delay.
+        time.sleep(float(delay))
     if MODE == "empty_turn":
         print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
         ok(request_id, {"stopReason": "end_turn"})
@@ -733,6 +750,8 @@ def main() -> None:
         elif not _INITIALIZED:
             err(request_id, -32603, "Internal error: no initialize was received on this connection")
         elif method == "session/new":
+            global _SESSION_CWD
+            _SESSION_CWD = str(params.get("cwd") or "")
             if MODE == "no_session":
                 err(request_id, -32000, "no api key configured for this agent")
             elif MODE == "no_session_other":

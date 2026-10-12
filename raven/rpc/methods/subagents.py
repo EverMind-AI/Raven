@@ -44,6 +44,7 @@ from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
 from raven.config.update_subagents import (
     get_agents,
+    reject_unsupported_acp_fields,
     reject_unsupported_openai_fields,
     remove_agent,
     set_agents,
@@ -373,6 +374,7 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # The row's editing rule, not ownership: what `subagents.update`
                 # accepts for `model` on this row. `own` is the ownership mark.
                 "model_source": _model_rule(cfg, snapshot, meta),
+                "machine": (getattr(cfg, "machine", None) or "").strip() or None,
             }
         )
     return rows
@@ -456,9 +458,19 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
             data={"preset": preset_name, "known": sorted(THIRD_PARTY_SUBAGENT_PRESETS)},
         )
     entry = third_party_subagent_preset(preset_name)
+    machine = _clean_name(params.get("machine"), field="machine")
+    if machine:
+        _refuse_unless_it_can_run_there(entry, machine)
+        entry["machine"] = machine
+        if isinstance(params.get("remote_cwd"), str) and params["remote_cwd"].strip():
+            entry["remoteCwd"] = params["remote_cwd"].strip()
     name = _clean_name(params.get("name"), field="name")
     if name:
         entry["name"] = name
+    elif machine:
+        # One preset is added once per machine it runs on; the shipped name
+        # alone would be every one of them, so the machine is in the default.
+        entry["name"] = f"{preset_name}@{machine}"
     if params.get("description"):
         entry["description"] = params["description"]
     if (params.get("lend_key") or "").strip():
@@ -489,6 +501,7 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     # the first of two, so it would prove a row this call is not writing.
     try:
         reject_unsupported_openai_fields([entry])
+        reject_unsupported_acp_fields([entry])
         entries = [*_read_agents(), entry]
         validate_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
@@ -508,6 +521,28 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
     return {"added": True, "name": entry["name"]}
+
+
+def _refuse_unless_it_can_run_there(entry: dict, machine: str) -> None:
+    """Refuse an add on a registered machine before anything is spent on it.
+
+    Only an acp preset runs on a machine: its command is started there by the
+    machine's Raven node. The machine is judged the way a dispatch judges it
+    (:func:`raven.acp_client.remote.machine`): the lane on, the row registered
+    and usable -- each refusal one sentence, with no address in it.
+    """
+    from raven.acp_client import remote
+
+    if entry.get("kind") != "acp":
+        raise ConfigValidationError(
+            f"preset {str(entry.get('preset') or entry.get('name'))!r} is not an acp agent; only an acp agent "
+            "runs on a registered machine",
+            data={"field": "machine", "machine": machine},
+        )
+    try:
+        remote.machine(machine)
+    except remote.RemoteMachineError as exc:
+        raise ConfigValidationError(str(exc), data={"field": "machine", "machine": machine}) from exc
 
 
 def _lend_keys(preset: Any, providers: list[Any]) -> list[str]:
@@ -838,6 +873,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
         entries, target = _merged_over_the_ping(target, row_before, name_before, materialized=materialized_discovered)
     try:
         reject_unsupported_openai_fields([target])
+        reject_unsupported_acp_fields([target])
         set_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
@@ -967,9 +1003,12 @@ async def _read_the_shell_again(cfg: Any) -> None:
     Only for the kinds that launch a process: an endpoint is called from this
     process, whose own environment a capture does not change. The capture runs
     the user's shell and can take seconds, which a press about to spend a real
-    prompt can afford and a listing cannot.
+    prompt can afford and a listing cannot. Not for an agent on a registered
+    machine either: its node starts it in that machine's login environment,
+    captured there, and this computer's shell says nothing about it.
     """
-    if getattr(cfg, "kind", None) in ("cli", "acp"):
+    on_machine = bool((getattr(cfg, "machine", None) or "").strip())
+    if getattr(cfg, "kind", None) in ("cli", "acp") and not on_machine:
         await asyncio.to_thread(refresh_login_shell_env)
 
 

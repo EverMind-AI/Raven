@@ -1661,3 +1661,17 @@ def _fake_executable(tmp_path: Path, name: str) -> Path:
     exe.write_text("#!/bin/sh\nexit 0\n")
     exe.chmod(0o755)
     return exe
+
+
+def test_a_machine_failure_says_where_the_fix_is_made_unless_the_fix_is_the_node_installed_from_here():
+    from raven.agent.subagent import probe
+
+    there = probe._on_machine("'claude' is not on the login shell PATH", "ravenx2")
+    assert there.endswith("(on machine 'ravenx2': any fix is made there)")
+
+    here = probe._on_machine(
+        "Raven node 0.2.4-abc is not installed on machine 'RavenX 2' (ravenx2); install it with "
+        "`raven ops connection install-node ravenx2`",
+        "ravenx2",
+    )
+    assert "any fix is made there" not in here and here.endswith("install-node ravenx2`")

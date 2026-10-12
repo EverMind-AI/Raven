@@ -381,8 +381,22 @@ keeping the registry and handing it over: a launcher points the agent's
 `RAVEN_CONNECTIONS` at the owner's store rather than copying rows into the
 agent's own home, and a sub-agent inherits `RAVEN_HOME` so it resolves the
 same file. Which machine a job lands on, and whether it can run at all, is
-settled inside the agent that runs it. Nothing on the dispatch path reads the
-registry, so no graph and no spawn is ever refused over the state of it.
+settled inside the agent that runs it, with one exception: an `acp` agent entry
+that names a `machine` is started there by the machine's **Raven node**, reached over
+the one ssh link the host keeps to the machine (`raven/node/client.py`) -- a link that
+may go and come back while the agent runs on; the row's
+address, port, key and user are read for that link alone (`raven/acp_client/remote.py`).
+Its dispatch reads the registry once (`remote.machine`), and the run fails before
+anything starts when the id is not registered, is listed twice, cannot be used, or
+is this computer; the `spawn` itself has already answered that it started. No other
+dispatch reads the registry, so no graph and no spawn is ever refused over the state
+of it. The address stays in the ssh line, in memory; the entry names only the
+machine's id, and the entry's `env` reaches the agent on the link, never on a
+command line. Such an entry is added the way any preset is, with `machine` (and
+`remote_cwd`) on `subagents.add` — from the page or from a chat through `raven_config`,
+which lists the registered machines while the lane is on — refused before anything
+is spent when the lane is off or the id is not usable, and proved by the same
+readiness ping as a local add, run on that machine through its node.
 _Avoid_: "host" / "server" / "node" (too broad, no link to the
 `ops connection` registry that supplies the rows); "GPU box" (only some are
 GPU hosts, and the term covers any registered compute destination);
@@ -424,7 +438,10 @@ The agent table rendered as the text spliced into `spawn`'s and `run_subagent_da
 descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
 account of which agents exist, so an agent absent from it cannot be chosen; the `enum` on
 the `subagent` parameter constrains the same set. All three capabilities render positive *or*
-negative, because "no tag" and "the roster does not say" are indistinguishable otherwise.
+negative, because "no tag" and "the roster does not say" are indistinguishable otherwise. An
+acp row that names a **Machine** renders a fourth tag after them, `on machine <id>`: the one
+conditional tag, since a local row has nothing to say in that position, and the id only, never
+the address.
 Also spliced into the skill gate's prompt under push discovery, where it is the account of
 what can be delegated and so decides which candidate skills are dropped as already covered;
 that copy omits the generic `builtin` row, which claims no capability bias and would read as
@@ -485,7 +502,15 @@ one the dispatching turn's own tools get. Every dispatch supplies it — `spawn`
 read), a DAG node takes the same, and a Direct Chat resolves `session_workdir` because its
 branch returns before `workdir.bind` wraps the turn body. Distinct from **Agent home**
 (`SubagentManager.workspace`, `~/.raven/workspace`), which holds raven's memory and skills
-and is only the fallback for a dispatch that supplied nothing.
+and is only the fallback for a dispatch that supplied nothing. An `acp` entry that names a
+**Machine** is the exception: its session works on that machine, in
+`<remoteCwd>/<instance or task id>` (`remoteCwd` defaults to `~/raven-work`), made and
+resolved there by the machine's **Raven node** for each dispatch before the session
+opens (`session/dir`); this computer's working directory never reaches the machine.
+The files that come with the turn are named to the agent by address (`remote.files_note`);
+nothing is copied to the machine, and nothing comes back unasked: what the session made
+stays there, named in the reply by address, and `deliver_files` fetches one file by its
+remote path on request.
 _Avoid_: treating the fallback as the default — a sub-agent working in Agent home inspects
 raven's own memory instead of the user's checkout, and says nothing about having done so.
 

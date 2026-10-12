@@ -78,11 +78,16 @@ SessionSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 # hold the two in step: a parameter added to `acquire` and not to the key would
 # be silently discarded for the life of the process, which is the exact bug this
 # key exists to prevent.
-LAUNCH_PARAMS = ("command", "cwd", "env", "binding")
+LAUNCH_PARAMS = ("command", "cwd", "env", "binding", "machine")
 
 
 def launch_key(
-    *, command: str, cwd: str | None, env: dict[str, str] | None, binding: dict[str, str] | None = None
+    *,
+    command: str,
+    cwd: str | None,
+    env: dict[str, str] | None,
+    binding: dict[str, str] | None = None,
+    machine: str | None = None,
 ) -> str:
     """A digest of what a connection was launched from.
 
@@ -95,10 +100,14 @@ def launch_key(
 
     `binding` is launch environment too, so it is in the key; the pool keeps it
     apart from `env` because the two are answered differently (see `acquire`).
+    `machine` is where the process runs: a row moved to another machine, or
+    back to this computer, is another process. Folded in only when set, so no
+    key of a local agent changes.
     """
-    raw = json.dumps(
-        {"command": command, "cwd": cwd, "env": env or {}, "binding": binding or {}}, sort_keys=True, default=str
-    )
+    params: dict[str, Any] = {"command": command, "cwd": cwd, "env": env or {}, "binding": binding or {}}
+    if machine:
+        params["machine"] = machine
+    raw = json.dumps(params, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -387,6 +396,8 @@ class AcpConnectionPool:
         binding: dict[str, str] | None = None,
         on_request: Any = None,
         ready_timeout_s: float | None = None,
+        machine: str | None = None,
+        launcher: Callable[[], Awaitable[Any]] | None = None,
     ) -> _Connection:
         """The live connection for ``name`` under ``binding``, starting or restarting it if needed.
 
@@ -407,11 +418,18 @@ class AcpConnectionPool:
         invoking session's model/provider/protocol, and two sessions on two
         bindings dispatch to the same agent at once. Each binding holds its own
         connection under the name, and a new binding leaves the others' turns
-        running. A change to the config half (`command`, `cwd`, `env`) still
-        retires every connection of the name, as it always did.
+        running. A change to the config half (`command`, `cwd`, `env`,
+        `machine`) still retires every connection of the name, as it always did.
+
+        ``launcher`` opens the endpoint the connection runs over when the
+        process is not started here: an agent on a registered machine is
+        started by that machine's Raven node, and the launcher is the call
+        that asks it to (``NodePool.open_channel``). The launch arguments
+        still describe the process, so the key covers them as it covers a
+        local one's; ``machine`` says where.
         """
-        config = launch_key(command=command, cwd=cwd, env=env)
-        key = launch_key(command=command, cwd=cwd, env=env, binding=binding)
+        config = launch_key(command=command, cwd=cwd, env=env, machine=machine)
+        key = launch_key(command=command, cwd=cwd, env=env, binding=binding, machine=machine)
         bkey = _binding_key(binding)
         launch_env = {**(env or {}), **binding} if binding else env
         async with self._lock_for(name):
@@ -440,26 +458,39 @@ class AcpConnectionPool:
             # `initialize` exchange belongs to the connection, not to whichever
             # call happened to be the one that started it.
             journal = open_journal(name)
-            client = await AcpClient.launch(
-                name=name,
-                command=command,
-                cwd=cwd,
-                env=launch_env,
-                # Defaulted here rather than at the caller: answering a
-                # permission request is a property of raven-as-an-ACP-client,
-                # not of whichever backend happens to hold the turn, and every
-                # caller leaving it unset is how an unanswered request came to
-                # cancel turns.
-                on_request=on_request
-                if on_request is not None
-                else request_dispatcher(name, router.dispatch, elicitors=elicitors),
-                # Wrapped rather than routed straight through: an
-                # `ask_user_request` is a question raven has to answer with a
-                # request of its own, and a sink returns nothing. See
-                # `ask_user.notification_dispatcher` -- everything still routes.
-                on_notification=notification_dispatcher(name, router.dispatch, responders=responders),
-                journal=journal,
+            # Defaulted here rather than at the caller: answering a
+            # permission request is a property of raven-as-an-ACP-client,
+            # not of whichever backend happens to hold the turn, and every
+            # caller leaving it unset is how an unanswered request came to
+            # cancel turns.
+            answering = (
+                on_request if on_request is not None else request_dispatcher(name, router.dispatch, elicitors=elicitors)
             )
+            # Wrapped rather than routed straight through: an
+            # `ask_user_request` is a question raven has to answer with a
+            # request of its own, and a sink returns nothing. See
+            # `ask_user.notification_dispatcher` -- everything still routes.
+            notifying = notification_dispatcher(name, router.dispatch, responders=responders)
+            if launcher is not None:
+                try:
+                    endpoint = await launcher()
+                except BaseException:
+                    if journal is not None:
+                        journal.close()
+                    raise
+                client = AcpClient.over(
+                    endpoint, name=name, on_request=answering, on_notification=notifying, journal=journal
+                )
+            else:
+                client = await AcpClient.launch(
+                    name=name,
+                    command=command,
+                    cwd=cwd,
+                    env=launch_env,
+                    on_request=answering,
+                    on_notification=notifying,
+                    journal=journal,
+                )
             # The handshake belongs to establishing the connection, not to the
             # first caller: ACP has no usable state before `initialize`, and an
             # agent is entitled to reject anything sent ahead of it. Two of the

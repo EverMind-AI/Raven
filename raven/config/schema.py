@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from raven.config.agent_names import THIRD_PARTY_PRESET_NAMES
 from raven.contracts.path_policy import WORKSPACE_DEFAULT_SENTINEL
+from raven.home import MACHINE_LANE_ENV, machine_lane_enabled
 from raven.sandbox.config import SandboxConfig
 
 #: The loop's outer LLM-error retry ladder when the config names none: one wait
@@ -2029,6 +2030,26 @@ class ThirdPartyAcpSubagentConfig(Base):
     the field on the write path."""
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    machine: str | None = None
+    """The registered machine this agent runs on, by its ``connections.json`` id, or
+    ``None`` for this computer.
+
+    Set, ``command`` is what runs on that machine, started there by the
+    machine's Raven node in its registered user's login environment, with
+    this entry's ``env`` over it; raven reaches the machine over one ssh link
+    with the address, port and key the registry holds, and none of those is
+    written here. Each session works in ``<remoteCwd>/<instance or task id>``
+    there. MCP servers are not lent to it, files are not handed to it, and
+    what it writes stays on that machine. See :mod:`raven.node.client` and
+    :mod:`raven.acp_client.remote`.
+
+    Debug-only until the lane matures: unless raven was started with
+    ``RAVEN_DEBUG_MACHINES=1`` (:func:`raven.home.machine_lane_enabled`), an
+    entry that names a machine is left off the table and no machine is
+    reached for it."""
+    remote_cwd: str | None = None
+    """Where on ``machine`` this agent works, ``~/raven-work`` when unset; ignored
+    without ``machine``. ``~`` is the registered user's home there."""
     lend_keys: list[str] = Field(default_factory=list)
     """Raven providers whose key this agent is started with, by name (``openrouter``).
 
@@ -2093,6 +2114,37 @@ class ThirdPartyAcpSubagentConfig(Base):
                 data.get("name") or "<unnamed>",
             )
         return data
+
+    @model_validator(mode="after")
+    def _remote_rows_borrow_no_keys(self) -> "ThirdPartyAcpSubagentConfig":
+        """A row on another machine is started without Raven's keys; drop and warn.
+
+        Lending lets an agent here use a provider key Raven holds without
+        holding it itself; on another machine it would mean copying Raven's key
+        to that machine, which is that machine's own sign-in to provide.
+        Warn-and-drop on load for the startup reason
+        ``_warn_on_declared_cli_fields`` gives; the write path refuses it
+        (``update_subagents.reject_unsupported_acp_fields``).
+        """
+        self.machine = (self.machine or "").strip() or None
+        if self.machine and not machine_lane_enabled():
+            logger.info(
+                "sub-agent {!r} names machine {!r}, and the machine lane is debug-only: the entry stays "
+                "off the table until raven is started with {}=1",
+                self.name,
+                self.machine,
+                MACHINE_LANE_ENV,
+            )
+        if self.machine and self.lend_keys:
+            logger.warning(
+                "sub-agent {!r} runs on machine {!r}, so Raven's keys {} are not lent to it; "
+                "sign it in on that machine instead",
+                self.name,
+                self.machine,
+                sorted(self.lend_keys),
+            )
+            self.lend_keys = []
+        return self
 
     @model_validator(mode="after")
     def _warn_on_prompt_placeholders(self) -> "ThirdPartyAcpSubagentConfig":
