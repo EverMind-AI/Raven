@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+import raven.agent.subagent.backends.env as backend_env
 from raven import home as raven_home
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import console as rpc_console
@@ -264,7 +265,9 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
 
 
-async def test_secret_key_writes_string(cfg):
+async def test_secret_key_writes_string(cfg, monkeypatch):
+    # A mirrored key's write takes the login-shell capture again, in the host's own shell.
+    monkeypatch.setattr(backend_env, "refresh_login_shell_env", lambda: True)
     r = await rpc_console.settings_set({"key": "tools.web.search.apiKey", "value": "sk-x"})
     assert r["applied"] is True
     assert _read(cfg)["tools"]["web"]["search"]["apiKey"] == "sk-x"

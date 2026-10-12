@@ -8,12 +8,15 @@ those, so the property it pins is one somebody already proved was unguarded.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import raven.agent.subagent.backends.env as backend_env
 import raven.home as raven_home_module
 from raven.config import update_tools
 from raven.config.env_file import MIRRORED_KEYS
@@ -1625,6 +1628,23 @@ def test_the_mirror_cases_cover_every_mirrored_key() -> None:
     assert [key for key, _ in _MIRRORED_KEY_ENV_VARS] == list(MIRRORED_KEYS)
 
 
+@pytest.fixture
+def retaken(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Each time a write takes the login-shell capture again, recorded rather than run.
+
+    The real one runs the login shell of whoever started pytest.
+    """
+    calls: list[bool] = []
+
+    def refresh() -> bool:
+        calls.append(True)
+        return True
+
+    monkeypatch.setattr(backend_env, "refresh_login_shell_env", refresh)
+    return calls
+
+
+@pytest.mark.usefixtures("retaken")
 @pytest.mark.parametrize(("key", "env_var"), _MIRRORED_KEY_ENV_VARS)
 async def test_settings_set_refreshes_the_shell_env_mirror(
     settings_cfg: Path, tmp_path: Path, key: str, env_var: str
@@ -1651,6 +1671,58 @@ async def test_settings_set_of_an_unrelated_key_does_not_create_the_mirror(setti
     await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
 
     assert not (tmp_path / ".raven" / "env").exists()
+
+
+@pytest.mark.parametrize("key", MIRRORED_KEYS)
+async def test_a_mirrored_key_write_takes_the_login_shell_capture_again(
+    settings_cfg: Path, retaken: list[bool], key: str
+) -> None:
+    """A sub-agent reads the mirror through that capture, and a running raven keeps the one it took."""
+    await console_module.settings_set({"key": key, "value": "rotated"})
+
+    assert retaken == [True]
+
+
+async def test_an_unrelated_key_write_leaves_the_login_shell_capture_alone(
+    settings_cfg: Path, retaken: list[bool]
+) -> None:
+    await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
+
+    assert retaken == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the mirror is a POSIX shell file")
+async def test_a_rotated_key_reaches_the_capture_the_next_spawn_reads(
+    settings_cfg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rewriting the mirror alone left every later spawn on the key it replaced until a restart.
+
+    The login shell is a real bash that sources the mirror and nothing else, so
+    the test reads neither the host's profile nor its login shell.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("needs bash to source the mirror")
+    mirror = tmp_path / ".raven" / "env"
+    real_run = subprocess.run
+
+    def run(argv, *args, **kwargs):
+        if list(argv[1:]) == ["-lic", "env -0"]:
+            argv = [bash, "--noprofile", "--norc", "-c", f'. "{mirror}"; env -0']
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV_FAILED", False)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: False)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(subprocess, "run", run)
+    key = "tools.web.providers.tavily.apiKey"
+
+    await console_module.settings_set({"key": key, "value": "tvly-first"})
+    assert backend_env.login_shell_env()["TAVILY_API_KEY"] == "tvly-first"
+
+    await console_module.settings_set({"key": key, "value": "tvly-second"})
+    assert backend_env.login_shell_env()["TAVILY_API_KEY"] == "tvly-second"
 
 
 async def test_settings_set_writes_the_config_in_the_shared_formatting(settings_cfg: Path) -> None:

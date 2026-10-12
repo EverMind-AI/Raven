@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from contextlib import closing, suppress
@@ -307,6 +308,73 @@ def test_a_reader_during_a_refresh_gets_the_old_capture_not_a_second_one(
     assert refresh_login_shell_env() is True
     assert seen_during == ["/usr/bin"]
     assert len(calls) == 2, "the reader in the middle started no capture of its own"
+
+
+def test_a_refresh_that_read_the_shell_first_cannot_land_after_a_later_one(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A key saved while another refresh is still reading the shell, as with a Connect in flight.
+
+    That refresh read ``~/.raven/env`` before the save, and landing after the
+    save's own refresh it put the key the save rotated out back in the memo.
+    """
+    mirror = {"TAVILY_API_KEY": "old"}
+    first_read, release, second_read = threading.Event(), threading.Event(), threading.Event()
+
+    def fake_run(argv, **kwargs):
+        value = mirror["TAVILY_API_KEY"]
+        if threading.current_thread().name == "first":
+            first_read.set()
+            release.wait(5)
+        else:
+            second_read.set()
+        return subprocess.CompletedProcess(argv, 0, f"TAVILY_API_KEY={value}\0".encode(), b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"TAVILY_API_KEY": "old"})
+    first = threading.Thread(target=refresh_login_shell_env, name="first")
+    first.start()
+    assert first_read.wait(5)
+    mirror["TAVILY_API_KEY"] = "new"
+    second = threading.Thread(target=refresh_login_shell_env, name="second")
+    second.start()
+    # Run side by side, the second reads the shell and lands here, before the first.
+    second_read.wait(0.5)
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert login_shell_env()["TAVILY_API_KEY"] == "new"
+
+
+def test_readers_that_find_no_capture_share_the_one_in_flight(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """Once per process holds for readers that arrive together, too."""
+    started, release = threading.Event(), threading.Event()
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        started.set()
+        release.wait(5)
+        return subprocess.CompletedProcess(argv, 0, b"PATH=/usr/bin\0", b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    paths: list[str] = []
+    first = threading.Thread(target=lambda: paths.append(login_shell_env()["PATH"]))
+    first.start()
+    assert started.wait(5)
+    second = threading.Thread(target=lambda: paths.append(login_shell_env()["PATH"]))
+    second.start()
+    # Without waiting, the second reader starts a capture of its own here.
+    second.join(0.3)
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert paths == ["/usr/bin", "/usr/bin"]
+    assert len(calls) == 1
 
 
 def test_login_shell_env_capture_starts_from_a_minimal_base_not_ravens_env(

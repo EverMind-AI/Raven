@@ -55,10 +55,14 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from collections.abc import Mapping
 
 from loguru import logger
 
+# Held for the length of every capture, so they run one at a time and the one
+# that lands last is the one that read the shell last.
+_CAPTURE_LOCK = threading.Lock()
 _LOGIN_ENV: dict[str, str] | None = None
 _LOGIN_ENV_FAILED = False
 
@@ -140,18 +144,25 @@ def login_shell_env() -> dict[str, str]:
 
     Once per process is what makes it cheap, and also what makes it go stale;
     `refresh_login_shell_env` is the way to take it again without a restart.
+    Readers that arrive while the first capture runs wait for it rather than
+    each running the shell.
     """
     global _LOGIN_ENV, _LOGIN_ENV_FAILED
     if _LOGIN_ENV is not None:
         return dict(_LOGIN_ENV)
     if _LOGIN_ENV_FAILED:
         return dict(os.environ)
-    captured = _capture_now(consequence="subagents inherit raven's environment")
-    if captured is None:
-        _LOGIN_ENV_FAILED = True
-        return dict(os.environ)
-    _LOGIN_ENV = captured
-    return dict(captured)
+    with _CAPTURE_LOCK:
+        if _LOGIN_ENV is not None:
+            return dict(_LOGIN_ENV)
+        if _LOGIN_ENV_FAILED:
+            return dict(os.environ)
+        captured = _capture_now(consequence="subagents inherit raven's environment")
+        if captured is None:
+            _LOGIN_ENV_FAILED = True
+            return dict(os.environ)
+        _LOGIN_ENV = captured
+        return dict(captured)
 
 
 def refresh_login_shell_env() -> bool:
@@ -172,13 +183,18 @@ def refresh_login_shell_env() -> bool:
     and a process whose earlier capture failed gets another try: the memo is
     read before the failure flag, so a landed capture is what every later read
     returns. Returns whether a capture landed.
+
+    Refreshes run one at a time. ``settings.set`` refreshes after writing a key
+    to ``~/.raven/env``, and a refresh still reading the shell from before that
+    write would otherwise land after it and put back the key it replaced.
     """
     global _LOGIN_ENV
-    captured = _capture_now(consequence="keeping the environment captured earlier")
-    if captured is None:
-        return False
-    _LOGIN_ENV = captured
-    return True
+    with _CAPTURE_LOCK:
+        captured = _capture_now(consequence="keeping the environment captured earlier")
+        if captured is None:
+            return False
+        _LOGIN_ENV = captured
+        return True
 
 
 def _capture_now(*, consequence: str) -> dict[str, str] | None:

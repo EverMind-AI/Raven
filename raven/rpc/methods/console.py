@@ -720,6 +720,12 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
             # to follow the write or they keep running on the key this call
             # just replaced.
             refresh_env_file()
+            # They read the mirror only through the login-shell capture, and
+            # this process keeps the one it took, so it is taken again before
+            # the reply: the next spawn then starts on the key just written.
+            from raven.agent.subagent.backends.env import refresh_login_shell_env
+
+            await asyncio.to_thread(refresh_login_shell_env)
         return written
 
     raise ConfigValidationError(f"key not writable via settings.set: {key}")
