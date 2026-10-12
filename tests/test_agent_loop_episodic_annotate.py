@@ -493,3 +493,47 @@ class TestMachineTurnsInsideTheTail:
         contents = [m["content"] for m in fake.tails[0]]
         assert "SENTINEL NOTICE" not in contents
         assert contents == ["q0", "a0", "q1", "a1"]
+
+
+class TestTheNewCommandDoesNotRedoTheWork:
+    async def test_new_starts_from_whichever_cursor_ran_last(self, tmp_path: Path) -> None:
+        """``/new`` and the after-turn step write the same file.
+
+        ``last_consolidated`` only moves in the token path, which the shipped
+        context engine owns and so never runs. Sliced from it alone, ``/new``
+        hands the annotator every message the step already wrote: the same
+        episodes a second time, and every tag counted twice toward the
+        threshold that rewrites the profile.
+        """
+        from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
+
+        loop = _make_loop(tmp_path, every=3)
+        session = _session_with(loop, "cli:new", turns=0)
+        for i in range(3):
+            session.messages.extend(_turn(i))
+        session.metadata["annotated_through"] = 6
+        loop.sessions.save(session)
+        assert session.last_consolidated == 0
+
+        seen: list[list[dict[str, Any]]] = []
+
+        class _Recording(MemoryConsolidator):
+            def __init__(self) -> None:
+                self._locks: dict[str, asyncio.Lock] = {}
+
+            def get_lock(self, key: str) -> asyncio.Lock:
+                return self._locks.setdefault(key, asyncio.Lock())
+
+            async def consolidate_messages(self, messages: list[dict[str, Any]]) -> bool:
+                seen.append(list(messages))
+                return True
+
+            async def maybe_refresh_hot_tags(self) -> int:
+                return 0
+
+        assert await _Recording().consolidate_unconsolidated(session) is True
+        assert seen == [], "nothing is left unannotated, so nothing is handed over"
+
+        session.messages.extend(_turn(3))
+        await _Recording().consolidate_unconsolidated(session)
+        assert [m["content"] for m in seen[-1]] == ["q3", "a3"]

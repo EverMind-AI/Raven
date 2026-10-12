@@ -1734,7 +1734,13 @@ class MemoryConsolidator:
         """
         lock = self.get_lock(session.key)
         async with lock:
-            snapshot = session.messages[session.last_consolidated :]
+            # Whichever ran last. ``last_consolidated`` only moves in the token
+            # path, which the shipped context engine owns and so never runs, so
+            # on its own it would hand the whole session over again -- every
+            # episode the after-turn annotator already wrote, a second time,
+            # and every tag counted twice toward its refresh threshold.
+            start = max(session.last_consolidated, int(session.metadata.get("annotated_through") or 0))
+            snapshot = session.messages[min(start, len(session.messages)) :]
             if not snapshot:
                 return True
             ok = await self.consolidate_messages(snapshot)
