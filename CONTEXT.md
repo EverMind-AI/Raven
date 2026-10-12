@@ -390,6 +390,35 @@ GPU hosts, and the term covers any registered compute destination);
 here the rows name compute destinations with that binding as an
 implementation detail).
 
+**Raven node** (`raven/node/`):
+The Raven process on a registered **Machine** that owns the agents the host runs there:
+a daemon (`python -I -m raven.node --serve --dir <node_dir>`) that the host's relay
+starts over ssh when none is up (`--attach`: the relay bridges the ssh session to the
+daemon's socket under `node_dir/run/` and leaves with the ssh; the daemon leaves on its
+own once idle). It does three things there and nothing else: answers file calls with
+Raven's own file tools (`read_file`, `list_dir`, `find`, `grep`, `write_file`, `edit_file`)
+fenced to the directories each call names, so a read of 50 lines of a large file moves
+those 50 lines, and fetches one file whole (`fs/pull`); starts the `acp` agents whose
+entries name the machine, each under a task id of the host's, in its own process group in
+the machine user's login environment, forwards their ACP frames on numbered channels of
+the connection that holds them and keeps those frames in the task's record
+(`node_dir/tasks/<task>/`), so a connection that goes leaves the agent running and the next
+one takes it over from the frame the host last read (`agent/attach`); and answers probes of
+the machine and of an agent's command. It holds no conversation, calls no model and opens
+no network port. It runs exactly the host's code, checked by protocol and digest at every
+connection (`raven/node/bundle.py`); `raven ops connection install-node` puts it on a
+machine, under the row's `node_dir` (`~/.raven-node` when it names none), in a directory
+named by the code's version and digest -- its install name, `bundle.install_name()`. The
+host keeps at most one live link per machine and watches it with a heartbeat
+(`raven/node/client.py`): a link silent for 15 s is lost, the agents on it wait, and the
+link is tried again on a backoff for as long as any waits; a link that comes back attaches
+each agent again by its task id. Only `--stdio` (tests, a fallback) ties the agents to the
+connection.
+_Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
+entry already rules the bare word out for a computer); "node id" for the install
+name (a **Node id** is a delegated task's address); "agent" or "server" (it
+answers only the Raven that reaches it, only over ssh).
+
 **Roster** (`format_agent_listing`):
 The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
 descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only
@@ -1633,9 +1662,9 @@ turns through its schedulers and sentinel but is an engine the loop and the asse
 consume, not a transport), and `core` (the L2 assembly root). `templates` is packaged data
 and takes no seat. Surfaces: `cli`, `rpc`, `acp` (an entrance: Raven serving as an
 agent for another host) and `a2a` (the same entrance for a peer agent, over
-Agent2Agent rather than ACP). `browser` and `importer` are seated inner (feature
-libraries consumed by surfaces, importing none themselves -- the edge is watched
-by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
+Agent2Agent rather than ACP). `browser`, `importer` and `node` (the **Raven node**)
+are seated inner (feature libraries consumed by surfaces, importing none themselves --
+the edge is watched by the contract now, not by a ruling note). `evolver` is not a seat at all: it left the
 package for the repo-level `evolver/` tool (outside the wheel) that drives raven as a library,
 and a fifth import-linter contract keeps the runtime from importing it back. `agents/` is the
 same kind of non-seat: repo-level agent definitions (the A/B pilots whose A side is the

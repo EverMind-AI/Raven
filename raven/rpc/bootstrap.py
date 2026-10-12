@@ -600,11 +600,15 @@ async def build_rpc_stack(
         except Exception:
             logger.exception("serve: browser close failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
-        # terminal's signals and outlive this process unless the pool is closed.
+        # terminal's signals and outlive this process unless the pool is closed;
+        # so does the ssh of a Raven node on a registered machine, whose pool is
+        # closed after the agents' so a closing agent still has its link.
         try:
             from raven.acp_client.pool import close_pool
+            from raven.node.client import close_node_pool
 
             await close_pool()
+            await close_node_pool()
         except Exception:
             logger.exception("serve: acp pool close failed; continuing shutdown")
 

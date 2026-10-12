@@ -381,3 +381,44 @@ def test_with_no_config_path_to_stand_beside_the_home_is_the_answer(tmp_path, mo
     monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
     monkeypatch.delenv(connections.CONNECTIONS_ENV, raising=False)
     assert _REAL_STORE_PATH() == tmp_path / "home" / "connections.json"
+
+
+# --- what is learned about a machine after it was added ------------------------------
+
+
+def _store(_home, rows) -> object:
+    path = _home / "connections.json"
+    path.write_text(rows if isinstance(rows, str) else json.dumps({"connections": rows}), encoding="utf-8")
+    return path
+
+
+def test_set_fields_changes_one_machine_and_keeps_everything_else(_home):
+    path = _store(_home, [{"id": "a", "host": "h1", "note": "kept"}, {"id": "b", "host": "h2"}])
+
+    assert adder.set_fields("a", {"node_dir": "/data/raven-node"}) == path
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "connections": [
+            {"id": "a", "host": "h1", "note": "kept", "node_dir": "/data/raven-node"},
+            {"id": "b", "host": "h2"},
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("rows", "said"),
+    [
+        ([{"id": "b"}], "machine 'a' is listed 0 times"),
+        ([{"id": "a"}, {"id": " a "}], "machine 'a' is listed 2 times"),
+        ([{"id": "a"}, {"host": "no id"}], "Give those entries an id"),
+        ("{not json", "Fix or move that file before changing it."),
+    ],
+)
+def test_set_fields_refuses_rather_than_guess_or_lose_rows(_home, rows, said):
+    path = _store(_home, rows)
+    before = path.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match=said):
+        adder.set_fields("a", {"node_dir": "/x"})
+
+    assert path.read_text(encoding="utf-8") == before

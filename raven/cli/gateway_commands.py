@@ -1301,6 +1301,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await control.stop()
                 from raven.acp_client.client import begin_drain
                 from raven.acp_client.pool import close_pool
+                from raven.node.client import close_node_pool
 
                 # Before anything tears a transport down: an ACP connection
                 # closed first fails every pending turn with a connection error,
@@ -1322,8 +1323,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await gw_teardown()
                 # ACP agents are launched with start_new_session, so they do not
                 # get this process's signals and outlive it unless the pool is
-                # closed.
+                # closed. The ssh of each Raven node on a registered machine is
+                # launched the same way, and the agents the node started end
+                # with it; the node pool is closed after the agents' so a
+                # closing agent still has its link to be ended through.
                 await close_pool()
+                await close_node_pool()
                 await agent.close_mcp()
                 agent.stop()
                 # Not folded into AgentLoop.stop: its other caller is the
