@@ -273,6 +273,48 @@ describe('the entry list', () => {
     expect(el.scrollTop).toBe(50 * ROW_HEIGHT)
   })
 
+  it.each(['bar', 'link'] as const)('keeps following the tail after a row selected from the %s was already in view', async (source) => {
+    rows = Array.from({ length: 50 }, (_, k) => entry(`r${k}`, k))
+    await draw()
+    const el = list()
+    size(el, 320, 50 * ROW_HEIGHT)
+    el.scrollTop = 50 * ROW_HEIGHT - 320
+    act(() => { fireEvent.scroll(el) })
+    expect(store.get().follow).toBe(true)
+    act(() => { store.select('r48', { source }) })
+    expect(el.scrollTop).toBe(50 * ROW_HEIGHT - 320)
+    size(el, 320, 51 * ROW_HEIGHT)
+    act(() => {
+      store.applyChanges({
+        epoch: 'e1', from_revision: 100, to_revision: 101, upserts: [entry('r50', 50)], removed: [],
+        has_more: false, reset_required: false, index_state: READY,
+      })
+    })
+    expect(store.get().follow).toBe(true)
+    expect(el.scrollTop).toBe(51 * ROW_HEIGHT)
+  })
+
+  it('brings the selected row back into view when a link shows it again after a switch hid it', async () => {
+    rows = Array.from({ length: 200 }, (_, k) => (k === 50
+      ? entry('reply50', k, { kind: 'turn.end', slot: 'turn.output', meta: { hidden: 'empty_reply' } })
+      : entry(`r${k}`, k)))
+    await draw()
+    const el = list()
+    size(el, 320, 199 * ROW_HEIGHT)
+    el.scrollTop = 0
+    act(() => { fireEvent.scroll(el) })
+    expect(store.get().follow).toBe(false)
+    act(() => { store.select('reply50', { source: 'link' }) })
+    expect(el.scrollTop).toBe(50 * ROW_HEIGHT)
+    act(() => { store.setPrefs({ minChargedMs: 50 }) })
+    expect(store.get().visibleIndex.reply50).toBeUndefined()
+    el.scrollTop = 0
+    act(() => { fireEvent.scroll(el) })
+    act(() => { store.select('reply50', { source: 'link' }) })
+    expect(store.get().visibleIndex.reply50).toBe(50)
+    expect(el.scrollTop).toBe(50 * ROW_HEIGHT)
+  })
+
   it('draws the rows of a short list swapped in under a deep scroll position', () => {
     render(<EntryList />)
     act(() => { feed(Array.from({ length: 600 }, (_, k) => entry(`r${k}`, k))) })

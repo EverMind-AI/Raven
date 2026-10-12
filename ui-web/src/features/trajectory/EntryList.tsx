@@ -172,17 +172,22 @@ export function EntryList(): JSX.Element {
   /* A selection made elsewhere -- on the duration bar, or a link in the
      details -- brings its row into view too; a click here already has it. The
      follow flag is the reader's and is left alone. */
-  const selectedBy = state.selectedBy
+  const { selectedBy, selections } = state
   /* Such a selection can show a hidden row, which changes the rows in the
-     same commit; the tail-following below must not take the view back down
-     in that commit. Moving the view off the tail then stops the following,
-     through the scroll handler, the way a reader's own scroll does. */
+     same commit; neither the tail-following nor the anchor below may take
+     the view away from it in that commit. The scroll handler then settles
+     the follow flag and the anchor, the way it does after a reader's scroll. */
   const revealing = useRef(false)
+  /* Once per selection: `reveal` changes with every batch of rows, and a
+     selection answered again on each would keep the tail from being followed. */
+  const answered = useRef<number | null>(null)
   useLayoutEffect(() => {
+    if (answered.current === selections) return
+    answered.current = selections
     if (selectedBy !== 'bar' && selectedBy !== 'link') return
     reveal()
     revealing.current = true
-  }, [selectedBy, reveal])
+  }, [selections, selectedBy, reveal])
 
   /* The viewport's size, measured the moment the scroller exists and again
      whenever the browser says it changed. Bound to the node rather than to
@@ -211,9 +216,8 @@ export function EntryList(): JSX.Element {
      where it was. Layout-time, so the reader never sees the frame in between. */
   useLayoutEffect(() => {
     const el = box.current
-    if (!el) return
+    if (!el || revealing.current) return
     if (follow) {
-      if (revealing.current) return
       el.scrollTop = el.scrollHeight
       setScrollTop(el.scrollTop)
       return

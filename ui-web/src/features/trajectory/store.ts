@@ -104,6 +104,8 @@ export interface TrajectoryState {
   selectedId: string | null
   /** Which door the selection came through, for a surface that treats its own differently. */
   selectedBy: SelectSource | null
+  /** Bumped by every selection `select` makes, so a surface that answers each one once tells it from a re-render. */
+  selections: number
   /** Within reach of the tail, so new rows pull the viewport down. */
   follow: boolean
   anchor: Anchor | null
@@ -208,6 +210,7 @@ const initial: TrajectoryState = {
   fault: null,
   selectedId: null,
   selectedBy: null,
+  selections: 0,
   follow: true,
   anchor: null,
   timeline: initialTimeline,
@@ -393,7 +396,7 @@ export function select(entryId: string | null, opts: { source: SelectSource }): 
   if (s.selectedId === entryId && !reveal) return
   const revealed = reveal ? [...s.revealed, entryId as string] : s.revealed
   patch({
-    selectedId: entryId, selectedBy: entryId === null ? null : opts.source,
+    selectedId: entryId, selectedBy: entryId === null ? null : opts.source, selections: s.selections + 1,
     ...(reveal ? { revealed, ...rows(s.entries, { ...s, revealed }) } : {}),
   })
 }
