@@ -715,10 +715,10 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if checker is not None:
         written = _write_raw_key(key, checker(value), merge=key in _MERGED_KEYS)
         if key in MIRRORED_KEYS:
-            # cli/acp sub-agents read every web credential from the
-            # environment, not from the config, so the ~/.raven/env mirror has
-            # to follow the write or they keep running on the key this call
-            # just replaced.
+            # POSIX cli/acp sub-agents read every web credential from the
+            # environment their login shell builds, not from the config, so the
+            # ~/.raven/env mirror has to follow the write or they keep running
+            # on the key this call just replaced (see ``raven.config.env_file``).
             refresh_env_file()
         return written
 
