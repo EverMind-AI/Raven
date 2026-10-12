@@ -911,6 +911,50 @@ async def test_on_a_windows_host_a_program_s_whole_path_keeps_its_backslashes_an
     assert not marker.exists()
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        'ssh -p 58717 "root@203.0.113.7" true',
+        'scp -P "58717" a.txt root@203.0.113.7:/tmp/a',
+        'sftp -P "58717" "root@203.0.113.7"',
+        "rsync -av -e 'ssh -p 58717' ./dir \"root@203.0.113.7:/data/\"",
+        'ssh -p"58717" root@203.0.113.7 true',
+    ],
+)
+async def test_on_a_windows_host_a_quoted_destination_or_port_is_matched_like_a_bare_one(
+    registry, tmp_path, monkeypatch, command
+):
+    # That shell takes the quotes off before the program sees the word; read with them on, the
+    # host and the port went unmatched and the command reached the executor (reviewed 2026-10-12).
+    monkeypatch.setattr(machine_exec, "_WINDOWS", True)
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"{command}; touch {marker}")
+
+    assert out.startswith("Error:") and "the way scp writes it" in out and "Nothing was run." in out
+    assert "203.0.113.7" not in out.replace("user@host", "")
+    assert not marker.exists()
+
+
+def test_on_a_windows_host_the_words_are_read_without_their_quotes(monkeypatch):
+    monkeypatch.setattr(machine_exec, "_WINDOWS", True)
+    assert machine_exec._words('scp -P "58717" a.txt "root@h:/x" && -p"2222" \'two words\'') == [
+        "scp",
+        "-P",
+        "58717",
+        "a.txt",
+        "root@h:/x",
+        "&&",
+        "-p2222",
+        "two words",
+    ]
+    assert machine_exec._words("scp 'unbalanced") == []
+
+    monkeypatch.setattr(machine_exec, "_WINDOWS", False)
+    assert machine_exec._words('scp -P "58717" a.txt "root@h:/x"') == ["scp", "-P", "58717", "a.txt", "root@h:/x"]
+
+
 async def test_a_copy_to_the_same_address_on_another_port_is_another_machine(registry):
     assert machine_exec.raw_copy_target("scp a.txt root@203.0.113.7:/tmp/") is None
     assert machine_exec.raw_copy_target("scp -P 58717 a.txt root@203.0.113.7:/tmp/") == dict(ROW)

@@ -108,6 +108,34 @@ _COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
 #: keeps its name (reviewed 2026-10-12).
 _WINDOWS = os.name == "nt"
 
+
+def _words(command: str) -> list[str]:
+    """The command's words as the shell that runs it reads them; none for a line it cannot read.
+
+    POSIX quoting here. On a Windows host a backslash is a path's own and is
+    kept, and the quotes around a word, or inside one, are taken off the way
+    that shell takes them, so a quoted destination or port is matched like a
+    bare one (reviewed 2026-10-12: ``"root@host"`` and ``-P "58717"`` went
+    past the refusals with their quotes on). An unbalanced quote is not a
+    line this can read; the shell rejects it too, so nothing reaches a
+    machine either way.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=not _WINDOWS, punctuation_chars=True)
+        lexer.whitespace_split = True
+        words = list(lexer)
+    except ValueError:
+        return []
+    return [_unquoted(word) for word in words] if _WINDOWS else words
+
+
+def _unquoted(word: str) -> str:
+    """``word`` without the quotes a Windows shell takes off: a pair around it, or double quotes inside it."""
+    if len(word) >= 2 and word[0] == word[-1] and word[0] in "\"'":
+        return word[1:-1]
+    return word.replace('"', "")
+
+
 # A redirection does not end the command: `ssh 2>/dev/null -p 58717 root@host`
 # is a single ssh. Reading one as a terminator -- or, worse, reading `&>` as a
 # word and taking it for the destination -- lost the registered host that came
@@ -208,13 +236,8 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     not an option (``ssh root@h -p 58717 true`` is port 58717, ``ssh root@h
     true -p 58717`` is 22) or a ``--``.
     """
-    try:
-        lexer = shlex.shlex(command, posix=not _WINDOWS, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        # An unbalanced quote is not a shell line this can read; the shell will
-        # reject it too, so nothing reaches a machine either way.
+    tokens = _words(command)
+    if not tokens:
         return []
 
     found: list[tuple[str, int]] = []
@@ -383,11 +406,8 @@ def _copy_destinations(command: str) -> list[tuple[str, int]]:
     or the ssh its ``-e``/``--rsh`` names, else 22; every operand written as a
     remote path names the host, and all of one command's share its port.
     """
-    try:
-        lexer = shlex.shlex(command, posix=not _WINDOWS, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
+    tokens = _words(command)
+    if not tokens:
         return []
     found: list[tuple[str, int]] = []
     index = 0

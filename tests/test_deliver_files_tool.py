@@ -421,6 +421,34 @@ async def test_a_file_on_a_machine_is_brought_back_and_delivered(tool, tmp_path,
     assert machines.pulled == [("/root/raven-work/t1/report.pdf", landed, ["/root/raven-work"])]
 
 
+async def test_a_name_holding_the_other_platform_s_separators_lands_as_one_name_under_the_delivery_directory(
+    tool, tmp_path, machines
+) -> None:
+    # A Linux file name may hold backslashes, which a Windows host reads as steps up (reviewed 2026-10-12).
+    summary = await tool.execute(files=[{"path": "box:raven-work/t1/..\\..\\..\\review_escape.txt"}])
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    (landed,) = (Path(entry["path"]) for entry in manifest["files"])
+    pulled = tmp_path / "chanwork" / "pulled" / "box"
+    assert landed == pulled / "root" / "raven-work" / "t1" / "..%5C..%5C..%5Creview_escape.txt"
+    assert landed.is_file() and not list(tmp_path.glob("**/review_escape.txt"))
+    assert machines.pulled[0][0] == "/root/raven-work/t1/..\\..\\..\\review_escape.txt"
+
+
+async def test_nothing_is_fetched_to_a_landing_outside_the_delivery_directory(
+    tool, tmp_path, machines, monkeypatch
+) -> None:
+    from raven.agent.tools import deliver
+
+    monkeypatch.setattr(deliver, "_local_name", lambda part: "..")
+
+    summary = await tool.execute(files=[{"path": "box:raven-work/t1/report.pdf"}])
+
+    assert "has a name this computer cannot keep under its delivery directory; read it there instead" in summary
+    assert machines.pulled == [] and not (tmp_path / "chanwork" / "pulled").exists()
+
+
 async def test_two_files_of_one_name_from_two_directories_land_apart(tool, tmp_path, machines) -> None:
     summary = await tool.execute(
         files=[{"path": "box:raven-work/a/report.pdf"}, {"path": "box:raven-work/b/report.pdf"}]

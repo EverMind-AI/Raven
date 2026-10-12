@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import mimetypes
+import re
 import time
 from contextvars import ContextVar
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
 
@@ -71,8 +72,10 @@ async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path
     a way around the read check, and what another conversation was allowed
     to read is no evidence for this one. A file elsewhere is read there. One
     over :data:`PULL_FILE_BUDGET` stays, and is named with its size. The file
-    lands under its whole path on the machine, so two files of one name from
-    two directories never land on each other.
+    lands under its whole path on the machine, each component written as one
+    name here (:func:`_landing`), so two files of one name from two
+    directories never land on each other and no name reaches above the
+    delivery directory.
     """
     pool = remote_path.nodes()
     label = remote_path._label(where._row)
@@ -97,7 +100,13 @@ async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path
                 f"{_human_size(size)} is over the {_human_size(PULL_FILE_BUDGET)} "
                 f"limit for a file brought back from machine {label}; read it there instead"
             )
-        local = (workspace or Path.cwd()) / "pulled" / where.machine / Path(place).relative_to("/")
+        try:
+            local = _landing(workspace, where.machine, place)
+        except ValueError:
+            return None, (
+                f"{where.display(place)} has a name this computer cannot keep under its delivery directory; "
+                "read it there instead"
+            )
         await pool.pull_file(where.machine, place, local, roots=fence)
     except remote_path.NodeCallError as exc:
         return None, str(exc)
@@ -108,6 +117,36 @@ async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path
 
 #: The most a file fetched from a registered machine for a delivery may weigh; a bigger one is read there.
 PULL_FILE_BUDGET = 20 * 1024 * 1024
+
+#: What a component of a fetched file's path may not hold as a name on this
+#: computer: the other platform's separator, what Windows reserves in a name,
+#: a control character. A Linux file name may hold any of them, and ``..\``
+#: inside one, read by a Windows host as two steps up, put a fetched file
+#: above the workspace (reviewed 2026-10-12). Each is written as its
+#: percent-code, the way a URL writes one.
+_NOT_A_NAME_HERE = re.compile(r'[\\<>:"|?*\x00-\x1f]')
+
+
+def _local_name(part: str) -> str:
+    """One component of a path on the machine, as one name on this computer's filesystem."""
+    if part in (".", ".."):
+        return part.replace(".", "%2E")
+    return _NOT_A_NAME_HERE.sub(lambda m: f"%{ord(m.group(0)):02X}", part)
+
+
+def _landing(workspace: Path | None, machine: str, place: str) -> Path:
+    """Where ``place`` on ``machine`` lands: under ``pulled/<machine>/``, by its POSIX components, each one name here.
+
+    Checked before anything is made or written: a landing that resolves
+    outside its machine's delivery directory is refused, whatever the name
+    did to get there.
+    """
+    pulled = (workspace or Path.cwd()) / "pulled" / _local_name(machine)
+    parts = [_local_name(part) for part in PurePosixPath(place).parts if part != "/"]
+    local = pulled.joinpath(*parts)
+    if not parts or local.resolve() == pulled.resolve() or not local.resolve().is_relative_to(pulled.resolve()):
+        raise ValueError(f"{place} would not land under {pulled}")
+    return local
 
 
 def _human_size(size: int) -> str:
