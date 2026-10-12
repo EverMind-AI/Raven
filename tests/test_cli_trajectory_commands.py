@@ -1703,3 +1703,117 @@ def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets,
     assert confirms == ["Ship the package with the risks listed above?"]
     assert len(breport.list_reports(state)) == 1  # only the first run's report
     assert _staging_entries(state) == []
+
+
+# ── report-bug upload (RAVEN_BUGREPORT_URL) ───────────────────────────
+
+
+@pytest.fixture
+def no_proxy_env(monkeypatch):
+    from tests.bug_report_receiver_stub import PROXY_VARIABLES
+
+    for name in PROXY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def receiver_url(tmp_path, no_proxy_env):
+    from tests.bug_report_receiver_stub import receiver_thread
+
+    with receiver_thread(tmp_path / "inbox") as url:
+        yield url
+
+
+def _dead_url():
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return f"http://127.0.0.1:{port}"
+
+
+def test_report_bug_uploads_when_a_receiver_is_configured(
+    state, _no_machine_secrets, receiver_url, monkeypatch, tmp_path
+):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 0, r.output
+    assert f"Will upload to {receiver_url} after the package is created." in r.output
+    assert "Uploaded — receipt rc-" in r.output
+    assert "Not uploaded" not in r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["upload"]["state"] == "uploaded"
+    assert list((tmp_path / "inbox").glob(f"*/{record['report_id']}.tar.gz"))
+
+
+def test_report_bug_without_a_receiver_keeps_the_old_words(state, _no_machine_secrets, monkeypatch):
+    monkeypatch.delenv("RAVEN_BUGREPORT_URL", raising=False)
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 0, r.output
+    assert "Nothing will be uploaded" in r.output and "Not uploaded" in r.output
+
+
+def test_report_bug_misconfigured_url_fails_before_side_effects(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", "http://10.1.2.3")
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 1 and "misconfigured" in r.output
+    assert not breport.bugreports_root(state).exists()
+
+
+def test_report_bug_upload_failure_keeps_the_package(state, _no_machine_secrets, monkeypatch, no_proxy_env):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
+    _simple_log(state)
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"])
+
+    assert r.exit_code == 1, r.output
+    assert "✗ Upload failed:" in r.output and "raven trajectory upload-bug-report br-" in r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["status"] == "local_ready"
+    assert record["upload"]["state"] == "failed" and record["upload"]["error"]
+
+
+def test_upload_bug_report_retries_and_repeats(state, _no_machine_secrets, receiver_url, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
+    _simple_log(state)
+    assert runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "it broke", "--yes"]).exit_code == 1
+    ((_dir, record),) = breport.list_reports(state)
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    r = runner.invoke(trajectory_app, ["upload-bug-report", record["report_id"]])
+    assert r.exit_code == 0, r.output
+    assert "Uploaded — receipt rc-" in r.output
+    assert breport.load_record(_dir)["upload"]["state"] == "uploaded"
+
+    r = runner.invoke(trajectory_app, ["upload-bug-report", record["report_id"]])
+    assert r.exit_code == 0 and "Already uploaded — receipt rc-" in r.output
+
+
+def test_upload_bug_report_argument_errors(state, _no_machine_secrets, receiver_url, monkeypatch):
+    monkeypatch.delenv("RAVEN_BUGREPORT_URL", raising=False)
+    r = runner.invoke(trajectory_app, ["upload-bug-report", "br-20260904-abcdef"])
+    assert r.exit_code == 2 and "No upload URL is configured" in r.output
+
+    r = runner.invoke(trajectory_app, ["upload-bug-report", "br-20260904-abcdef", "--url", receiver_url])
+    assert r.exit_code == 1 and "Unknown bug report" in r.output
+
+    r = runner.invoke(trajectory_app, ["upload-bug-report", "../x", "--url", receiver_url])
+    assert r.exit_code == 1 and "Unknown bug report" in r.output
+
+    r = runner.invoke(trajectory_app, ["upload-bug-report", "br-20260904-abcdef", "--url", "http://10.1.2.3"])
+    assert r.exit_code == 1 and "misconfigured" in r.output

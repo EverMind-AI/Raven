@@ -82,6 +82,7 @@ from raven.trajectory import bugreport as breport
 from raven.trajectory import conversation as tconversation
 from raven.trajectory import review as treview
 from raven.trajectory import store as tstore
+from raven.trajectory import upload as tupload
 from raven.trajectory.bundle import _default_workspace, collect_bundle
 from raven.trajectory.cassette import minimize_bundle
 from raven.trajectory.verdict import VERDICT_STATUSES, read_verdicts, record_verdict
@@ -1131,11 +1132,52 @@ def _print_stale_refresh() -> None:
     console.print("The list was refreshed; pick the attempt again.")
 
 
-def _print_report_ready(record: dict[str, Any]) -> None:
+def _print_upload_state(record: dict[str, Any]) -> None:
+    upload = record.get("upload") or {}
+    state = upload.get("state", "")
+    if state == breport.UPLOAD_STATE_UPLOADED:
+        console.print(f"  Uploaded — receipt {escape(str(upload.get('receipt') or ''))}", highlight=False)
+    elif state == breport.UPLOAD_STATE_FAILED:
+        console.print(f"  [red]Upload failed: {escape(str(upload.get('error') or ''))}[/red]", highlight=False)
+        console.print('  Retry from this attempt\'s "Bug reports" entry (Upload).')
+    else:
+        console.print("  Not uploaded — hand the package file to a developer yourself.")
+
+
+def _print_report_ready(record: dict[str, Any], *, upload_state: bool = True) -> None:
     console.print(f"[green]✓[/green] Bug report {escape(record['report_id'])} ready (local_ready)", highlight=False)
     console.print(f"  Package: [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
-    console.print("  Not uploaded — hand the package file to a developer yourself.")
+    if upload_state:
+        _print_upload_state(record)
     console.print('  Reopen this attempt\'s actions to view it under "Bug reports".')
+
+
+def _resolved_upload_url() -> str | None:
+    """The receiver to upload to, "" when uploading is off, None (after a message) when misconfigured."""
+    try:
+        return tupload.resolve_upload_url()
+    except tupload.UploadConfigError as exc:
+        console.print(f"[red]✗ Bug report upload is misconfigured: {escape(str(exc))}[/red]", highlight=False)
+        return None
+
+
+def _upload_and_report(record_dir: Path, base_url: str) -> dict[str, Any]:
+    """Upload a landed report's package, say how it went, and return the record as it now is.
+
+    The outcome of this attempt is always printed from the exception or the
+    receipt, not from the record: a package that vanished or changed is
+    refused without touching the record, and the user still has to see why.
+    """
+    try:
+        with console.status("Uploading the package...", spinner="dots"):
+            record, receipt = tupload.upload_record(record_dir, base_url=base_url)
+    except tupload.UploadError as exc:
+        console.print(f"  [red]✗ Upload failed: {escape(str(exc))}[/red]", highlight=False)
+        console.print('  Retry from this attempt\'s "Bug reports" entry (Upload).')
+        return breport.load_record(record_dir)
+    verb = "Already uploaded" if receipt.duplicate else "Uploaded"
+    console.print(f"  {verb} — receipt {escape(receipt.receipt_id)}", highlight=False)
+    return record
 
 
 def _print_packaging_failure(report_id: str, reason: str, *, retryable: bool) -> None:
@@ -1412,7 +1454,9 @@ def _summary_line(label: str, value: str) -> None:
     console.print(f"  {label + ':':<14}{value}", highlight=False)
 
 
-def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, prep: Any) -> None:
+def _print_bug_summary(
+    session_row: SessionRow, index: int, row: AttemptRow, prep: Any, *, upload_target: str = ""
+) -> None:
     """The final confirmation block, rendered from the frozen canonical
     metadata (the text the user approves is the text that ships)."""
     meta = prep.package_metadata
@@ -1457,7 +1501,10 @@ def _print_bug_summary(session_row: SessionRow, index: int, row: AttemptRow, pre
         _summary_line("Redaction", f"{counts} · residual scan: clean")
     console.print(_PII_NOTE, highlight=False)
     _summary_line("Will produce", f"bug report package {prep.report_id}.tar.gz (kept locally)")
-    console.print("  Nothing will be uploaded — the package stays on this machine.")
+    if upload_target:
+        console.print(f"  Will upload to {escape(upload_target)} after the package is created.", highlight=False)
+    else:
+        console.print("  Nothing will be uploaded — the package stays on this machine.")
 
 
 def _confirm_create(questionary: Any, style: Any, prep: Any) -> bool:
@@ -1488,6 +1535,9 @@ def _bug_report_action(
     Any exit before the record lands deletes the staging directory; the pin
     from bundling stays (it cannot be told apart from a user's own pin, and
     the disclosure line covers it)."""
+    base_url = _resolved_upload_url()
+    if base_url is None:
+        return
     status = console.status("Collecting the trajectory snapshot...", spinner="dots")
 
     def _collected() -> None:
@@ -1515,12 +1565,14 @@ def _bug_report_action(
                 f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False
             )
             return
-        _print_bug_summary(session_row, index, row, prep)
+        _print_bug_summary(
+            session_row, index, row, prep, upload_target=tupload.upload_target(base_url) if base_url else ""
+        )
         if not _confirm_create(questionary, style, prep):
             console.print(_CANCELLED_MESSAGE)
             return
         try:
-            _record_dir, record = breport.confirm_and_package(prep)
+            record_dir, record = breport.confirm_and_package(prep)
         except breport.StaleAttemptError:
             _print_stale_refresh()
             return
@@ -1532,7 +1584,11 @@ def _bug_report_action(
         except breport.PackagingError as exc:
             _print_packaging_failure(prep.report_id, str(exc), retryable=exc.retryable)
             return
-        _print_report_ready(record)
+        if base_url:
+            _print_report_ready(record, upload_state=False)
+            _upload_and_report(record_dir, base_url)
+        else:
+            _print_report_ready(record)
     except (_ActionCancelledError, treview.ReviewCancelledError):
         console.print(_CANCELLED_MESSAGE)
     finally:
@@ -1556,14 +1612,25 @@ def _print_report_details(record: dict[str, Any]) -> None:
         console.print(f"  [yellow]! {escape(notice)}[/yellow]", highlight=False)
     if record["status"] == breport.STATUS_LOCAL_READY:
         console.print(f"  Package:  [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
-        console.print("  Not uploaded — hand the package file to a developer yourself.")
+        _print_upload_state(record)
     elif record["status"] == breport.STATUS_FAILED:
         console.print(f"  Failure:  {escape(record['failure'].get('reason') or '')}", highlight=False)
 
 
+def _report_actions(record: dict[str, Any], base_url: str | None, questionary: Any) -> list[Any]:
+    choices = []
+    if record["status"] == breport.STATUS_FAILED and record["failure"].get("retryable"):
+        choices.append(questionary.Choice("Retry packaging", value="retry"))
+    uploaded = (record.get("upload") or {}).get("state") == breport.UPLOAD_STATE_UPLOADED
+    if record["status"] == breport.STATUS_LOCAL_READY and not uploaded and base_url:
+        choices.append(questionary.Choice("Upload", value="upload"))
+    return choices
+
+
 def _bug_reports_screen(row: AttemptRow, questionary: Any, style: Any) -> None:
-    """List, inspect, and retry this attempt's bug reports (design 1.8)."""
+    """List, inspect, retry, and upload this attempt's bug reports (design 1.8)."""
     reports = breport.reports_for_attempt(row.key, row.traces)
+    base_url = _resolved_upload_url() if reports else ""
     while reports:
         choices = []
         for record_dir, record in reports:
@@ -1578,20 +1645,22 @@ def _bug_reports_screen(row: AttemptRow, questionary: Any, style: Any) -> None:
             return
         record_dir, record = picked
         _print_report_details(record)
-        if record["status"] == breport.STATUS_FAILED and record["failure"].get("retryable"):
-            action = _select_screen(
-                questionary, style, "Action:", _HELP_ACTION, [questionary.Choice("Retry packaging", value="retry")]
-            )
+        choices = _report_actions(record, base_url, questionary)
+        if choices:
+            action = _select_screen(questionary, style, "Action:", _HELP_ACTION, choices)
             if action is _BACK:
                 reports = breport.reports_for_attempt(row.key, row.traces)
                 continue
-            try:
-                with console.status("Packing the report...", spinner="dots"):
-                    retried = breport.retry_packaging(record_dir)
-            except breport.PackagingError as exc:
-                _print_packaging_failure(record["report_id"], str(exc), retryable=exc.retryable)
-            else:
-                _print_report_ready(retried)
+            if action == "retry":
+                try:
+                    with console.status("Packing the report...", spinner="dots"):
+                        retried = breport.retry_packaging(record_dir)
+                except breport.PackagingError as exc:
+                    _print_packaging_failure(record["report_id"], str(exc), retryable=exc.retryable)
+                else:
+                    _print_report_ready(retried)
+            elif action == "upload" and base_url:
+                _print_report_details(_upload_and_report(record_dir, base_url))
         reports = breport.reports_for_attempt(row.key, row.traces)
     console.print("[dim]No bug reports for this attempt.[/dim]")
 

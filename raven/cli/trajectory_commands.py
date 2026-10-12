@@ -327,6 +327,7 @@ def trajectory_report_bug(
     """
     from raven.trajectory import bugreport as breport
     from raven.trajectory import review as treview
+    from raven.trajectory import upload as tupload
 
     description = description.strip()
     if not description:
@@ -350,6 +351,7 @@ def trajectory_report_bug(
     if not interactive and not yes:
         console.print("[red]--yes is required without a TTY; nothing was collected or pinned.[/red]")
         raise typer.Exit(code=1)
+    base_url = _resolved_upload_url()
 
     try:
         prep = breport.prepare_trajectory(id_, workspace=workspace, config_path=config)
@@ -447,7 +449,7 @@ def trajectory_report_bug(
             exit_code = 1
             return
 
-        _print_bug_cli_summary(prep)
+        _print_bug_cli_summary(prep, upload_target=tupload.upload_target(base_url) if base_url else "")
         if prep.classification == breport.CLASSIFICATION_NEEDS_REVIEW and not accept_risk:
             # The review authorization can only come from --accept-risk or
             # this risk-worded consent; --yes never grants it.
@@ -468,7 +470,7 @@ def trajectory_report_bug(
             return
 
         try:
-            _record_dir, record = breport.confirm_and_package(prep)
+            record_dir, record = breport.confirm_and_package(prep)
         except breport.StaleAttemptError:
             console.print("[red]The attempt changed while the report was being prepared — nothing was created.[/red]")
             exit_code = 1
@@ -487,7 +489,10 @@ def trajectory_report_bug(
             return
         console.print(f"[green]✓[/green] Bug report {escape(record['report_id'])} ready (local_ready)", highlight=False)
         console.print(f"  Package: [cyan]{escape(record['package']['path'])}[/cyan]", highlight=False)
-        console.print("  Not uploaded — hand the package file to a developer yourself.")
+        if base_url:
+            exit_code = _upload_and_report(record_dir, base_url)
+        else:
+            console.print("  Not uploaded — hand the package file to a developer yourself.")
     finally:
         # A no-op once the record landed; on every earlier exit it removes the
         # pre-confirmation staging state (mirrors the browser flow).
@@ -502,12 +507,77 @@ def _stdin_is_tty() -> bool:
     return sys.stdin.isatty()
 
 
-def _print_bug_cli_summary(prep) -> None:
+def _resolved_upload_url() -> str:
+    """The receiver to upload to ("" when off), or exit before any side effect."""
+    from raven.trajectory import upload as tupload
+
+    try:
+        return tupload.resolve_upload_url()
+    except tupload.UploadConfigError as exc:
+        console.print(f"[red]✗ Bug report upload is misconfigured: {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+
+
+def _upload_and_report(record_dir: Path, base_url: str) -> int:
+    """Upload a landed report's package and print the outcome; the exit code to use."""
+    from raven.trajectory import upload as tupload
+
+    try:
+        with console.status("Uploading the package...", spinner="dots"):
+            _record, receipt = tupload.upload_record(record_dir, base_url=base_url)
+    except tupload.UploadError as exc:
+        console.print(f"  [red]✗ Upload failed: {escape(str(exc))}[/red]", highlight=False)
+        console.print(
+            f"  The package is kept; retry with: raven trajectory upload-bug-report {escape(record_dir.name)}",
+            highlight=False,
+        )
+        return 1
+    verb = "Already uploaded" if receipt.duplicate else "Uploaded"
+    console.print(f"  {verb} — receipt {escape(receipt.receipt_id)}", highlight=False)
+    return 0
+
+
+@trajectory_app.command("upload-bug-report")
+def trajectory_upload_bug_report(
+    report_id: str = typer.Argument(..., metavar="REPORT_ID", help="Bug report id (br-...)"),
+    url: str | None = typer.Option(None, "--url", help="Receiver base URL (default: $RAVEN_BUGREPORT_URL)"),
+) -> None:
+    """Upload, or upload again, a filed Bug Report Package to the receiver.
+
+    The package is the one the report was created with; a package that has
+    been changed since is refused. Uploading the same package twice is safe:
+    the receiver answers with the receipt it already holds.
+    """
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import upload as tupload
+
+    try:
+        base_url = tupload.validate_upload_url(url) if url is not None else tupload.resolve_upload_url()
+    except tupload.UploadConfigError as exc:
+        console.print(f"[red]✗ Bug report upload is misconfigured: {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    if not base_url:
+        console.print(f"[red]✗ No upload URL is configured; set {tupload.UPLOAD_URL_ENV} or pass --url.[/red]")
+        raise typer.Exit(code=2)
+    record_dir = breport.bugreports_root() / report_id
+    if not breport.is_report_id(report_id) or not (record_dir / breport.RECORD_FILE).is_file():
+        console.print(f"[red]✗ Unknown bug report {escape(report_id)}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    try:
+        breport.load_record(record_dir)
+    except ValueError as exc:
+        console.print(f"[red]✗ Bug report {escape(report_id)} is damaged: {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=_upload_and_report(record_dir, base_url))
+
+
+def _print_bug_cli_summary(prep, *, upload_target: str = "") -> None:
     """The final confirmation block, rendered from the frozen canonical metadata.
 
     Everything the package will carry must be on screen at the confirmation
     point — the optional problem fields, the externally shipped reporter
-    identity, and the full completeness reasons included.
+    identity, the full completeness reasons, and whether the package will
+    leave this machine.
     """
     from raven.trajectory import bugreport as breport
 
@@ -567,7 +637,10 @@ def _print_bug_cli_summary(prep) -> None:
         highlight=False,
     )
     console.print(f"  Will produce: bug report package {escape(prep.report_id)}.tar.gz (kept locally)")
-    console.print("  Nothing will be uploaded — the package stays on this machine.")
+    if upload_target:
+        console.print(f"  Will upload to {escape(upload_target)} after the package is created.", highlight=False)
+    else:
+        console.print("  Nothing will be uploaded — the package stays on this machine.")
 
 
 def _manifest_summary(bundle_dir: Path) -> dict[str, Any] | None:

@@ -66,7 +66,8 @@ _CHUNK = 64 * 1024
 _DATE_DIR = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATE_GLOB = "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
-_RECEIPT_ID = re.compile(r"^rc-[0-9a-f]{12}$")
+RECEIPT_ID = re.compile(r"^rc-[0-9a-f]{12}$")
+_RECEIPT_ID = RECEIPT_ID
 _RECEIPT_FIELDS = ("receipt_id", "report_id", "sha256", "size_bytes", "received_at")
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
 _BUSY_RETRY_AFTER = 5
@@ -901,7 +902,7 @@ async def serve(
             try:
                 loop.add_signal_handler(sig, stop.set)
                 previous[sig] = handler
-            except (NotImplementedError, RuntimeError) as exc:
+            except (NotImplementedError, RuntimeError, ValueError) as exc:
                 logger.debug("not handling {} for the receiver: {}", sig.name, exc)
         try:
             await stop.wait()

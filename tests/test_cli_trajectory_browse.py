@@ -2730,3 +2730,180 @@ def test_reports_do_not_cross_sessions(state, workspace, _no_machine_secrets):
     assert rows["trace-1"].reported is True
     assert rows["trace-2"].reported is False
     assert breport.reports_for_attempt("trace-2", ("trace-2",), state) == []
+
+
+# ── bug report upload (RAVEN_BUGREPORT_URL) ───────────────────────────
+
+
+@pytest.fixture
+def no_proxy_env(monkeypatch):
+    from tests.bug_report_receiver_stub import PROXY_VARIABLES
+
+    for name in PROXY_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def receiver_url(tmp_path, no_proxy_env):
+    from tests.bug_report_receiver_stub import receiver_thread
+
+    with receiver_thread(tmp_path / "inbox") as url:
+        yield url
+
+
+def _dead_url():
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return f"http://127.0.0.1:{port}"
+
+
+def _landed_report(state, workspace):
+    from raven.trajectory import bugreport as breport
+
+    prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="it broke")
+    return breport.confirm_and_package(prep, state_dir=state)
+
+
+def _one_report_screen(monkeypatch, workspace, *answers):
+    return _browse(
+        monkeypatch,
+        [
+            ("pick", "session"),
+            ("pick", "#1"),
+            ("pick", "Bug reports (1)"),
+            ("pick", "br-"),
+            *answers,
+            _BACK,
+            _BACK,
+            _CANCEL,
+        ],
+        workspace,
+    )
+
+
+def test_bug_report_uploads_when_configured(state, workspace, monkeypatch, capsys, _no_machine_secrets, receiver_url):
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert f"Will upload to {receiver_url} after the package is created." in out
+    assert "Uploaded — receipt rc-" in out
+    assert "Not uploaded" not in out
+    _record_dir, record = _single_report(state)
+    assert record["upload"]["state"] == "uploaded"
+
+
+def test_bug_report_upload_failure_is_shown(state, workspace, monkeypatch, capsys, _no_machine_secrets, no_proxy_env):
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", _dead_url())
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+
+    out = capsys.readouterr().out
+    assert "✗ Upload failed:" in out
+    assert 'Retry from this attempt\'s "Bug reports" entry (Upload).' in out
+    _record_dir, record = _single_report(state)
+    assert record["status"] == "local_ready" and record["upload"]["state"] == "failed"
+
+
+def test_bug_report_misconfigured_url_collects_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", "http://10.1.2.3")
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _browse(monkeypatch, [("pick", "session"), ("pick", "#1"), ("pick", "Report a bug"), _CANCEL], workspace)
+
+    out = capsys.readouterr().out
+    assert "misconfigured" in out
+    assert not breport.bugreports_root(state).exists()
+
+
+def test_bug_reports_screen_uploads(state, workspace, monkeypatch, capsys, _no_machine_secrets, receiver_url):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    record_dir, _record = _landed_report(state, workspace)
+
+    fake = _one_report_screen(monkeypatch, workspace, ("pick", "Upload"))
+
+    out = capsys.readouterr().out
+    assert out.count("Uploaded — receipt rc-") == 2
+    assert out.count("Not uploaded") == 1
+    assert breport.load_record(record_dir)["upload"]["state"] == "uploaded"
+    actions = next(titles for kind, msg, titles in fake.prompts if msg == "Action:" and "Upload" in titles)
+    assert "Retry packaging" not in actions
+
+
+@pytest.mark.parametrize("variant", ["no-url", "uploaded", "failed-record"])
+def test_upload_action_only_when_it_applies(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets, receiver_url, variant
+):
+    import os as _os
+
+    from raven.trajectory import bugreport as breport
+
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    if variant == "no-url":
+        monkeypatch.delenv("RAVEN_BUGREPORT_URL", raising=False)
+        _landed_report(state, workspace)
+    elif variant == "uploaded":
+        monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+        record_dir, record = _landed_report(state, workspace)
+        record["upload"] = {"state": "uploaded", "issue_url": "", "receipt": "rc-0123456789ab"}
+        breport.save_record(record_dir, record)
+    else:
+        monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+        prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+        prep = breport.freeze_export(prep, description="tool call crashed the session")
+        breport.save_record(prep.staging_dir, breport._new_record_payload(prep))
+        _os.replace(prep.staging_dir, breport.bugreports_root(state) / prep.report_id)
+
+    fake = _one_report_screen(monkeypatch, workspace)
+
+    out = capsys.readouterr().out
+    upload_menus = [titles for kind, msg, titles in fake.prompts if msg == "Action:" and "Upload" in titles]
+    assert upload_menus == []
+    if variant == "uploaded":
+        assert "Uploaded — receipt rc-0123456789ab" in out
+    elif variant == "failed-record":
+        assert any("Retry packaging" in titles for kind, msg, titles in fake.prompts if msg == "Action:")
+
+
+@pytest.mark.parametrize("damage", ["missing", "tampered", "missing-after-failure"])
+def test_upload_action_shows_a_failure_the_record_does_not_carry(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets, receiver_url, damage
+):
+    from pathlib import Path as _Path
+
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_URL", receiver_url)
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+    record_dir, record = _landed_report(state, workspace)
+    package = _Path(record["package"]["path"])
+    if damage == "tampered":
+        package.write_bytes(package.read_bytes() + b"x")
+    else:
+        package.unlink()
+    if damage == "missing-after-failure":
+        record["upload"] = {"state": "failed", "issue_url": "", "receipt": "", "error": "old reason"}
+        breport.save_record(record_dir, record)
+
+    _one_report_screen(monkeypatch, workspace, ("pick", "Upload"))
+
+    out = capsys.readouterr().out
+    assert "✗ Upload failed:" in out and "changed since it was created" in out
+    upload = breport.load_record(record_dir)["upload"]
+    if damage == "missing-after-failure":
+        assert upload["state"] == "failed" and upload["error"] == "old reason"
+    else:
+        assert upload["state"] == ""
