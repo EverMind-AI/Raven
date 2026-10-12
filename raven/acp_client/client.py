@@ -7,15 +7,18 @@ lives here; deciding when to have one lives in the pool.
 
 Process discipline is copied deliberately from
 :class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`: own session, pgid
-captured at spawn, ``killpg`` on teardown. An ACP server that reparents a worker
-would otherwise survive ``proc.kill()`` exactly as a ``codex``-style CLI does.
+captured at spawn, ``killpg`` on teardown (``taskkill /T`` by pid where there is
+no ``killpg``). An ACP server that reparents a worker would otherwise survive
+``proc.kill()`` exactly as a ``codex``-style CLI does.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import signal
+import subprocess
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -67,6 +70,13 @@ it here: the signal is delivered synchronously above, and a caller that is
 exiting hands any child it did not collect to init regardless. Measured: an
 ``openclaw acp`` bridge takes longer than this to be collected and is gone
 moments later anyway.
+"""
+
+_TEARDOWN_TASKKILL_S = 5.0
+"""How long ``close`` waits for ``taskkill`` where there is no ``killpg``.
+
+A bound rather than an estimate: the walk returns well inside a second, and
+``close`` has to finish whatever ``taskkill`` does.
 """
 
 _CANCEL_SETTLE_S = 5.0
@@ -311,10 +321,7 @@ class AcpClient:
         if self._closed:
             return
         self._closed = True
-        try:
-            os.killpg(self._pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        await self._kill_process_tree()
         for task in (self._reader_task, self._stderr_task):
             if task is not None:
                 task.cancel()
@@ -345,6 +352,40 @@ class AcpClient:
         # Last, so the frames the teardown itself produced are in the file.
         if self._journal is not None:
             self._journal.close()
+
+    async def _kill_process_tree(self) -> None:
+        """SIGKILL the process group; where there is none, end the tree by pid.
+
+        Windows ignores ``start_new_session`` and has no ``os.killpg``, which
+        raised here before any of the teardown ran. ``taskkill /T /F`` walks
+        the launcher's children, which a bare ``Process.kill`` does not reach
+        (the same split as ``raven.ops.transport._kill_process_tree``). It runs
+        only while the launcher is alive: once it has exited, its pid may
+        already name another process.
+        """
+        if hasattr(os, "killpg"):
+            try:
+                os.killpg(self._pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            return
+        taskkill = shutil.which("taskkill")
+        if taskkill and self._proc.returncode is None:
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    [taskkill, "/T", "/F", "/PID", str(self._proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=_TEARDOWN_TASKKILL_S,
+                    check=False,
+                )
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                pass
+        try:
+            self._proc.kill()
+        except OSError:
+            pass
 
     def _release_transport(self) -> None:
         """Close the subprocess transport while there is still a loop to close it on.

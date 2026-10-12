@@ -3174,6 +3174,72 @@ async def test_a_request_after_the_child_died_still_names_the_exit_and_the_reaso
         await client.request("initialize", acp_protocol.initialize_params(), timeout=10)
 
 
+def _without_killpg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Windows as ``close`` sees it: no ``os.killpg``, and a ``taskkill`` on PATH.
+
+    The ``taskkill`` runs are recorded rather than made.
+    """
+    import os
+    import shutil
+    import subprocess
+
+    real_which = shutil.which
+    ran: list[list[str]] = []
+
+    def run(argv: list[str], **_kw: Any) -> subprocess.CompletedProcess:
+        ran.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.delattr(os, "killpg")
+    monkeypatch.setattr(
+        shutil, "which", lambda name: r"C:\Windows\System32\taskkill.exe" if name == "taskkill" else real_which(name)
+    )
+    monkeypatch.setattr(subprocess, "run", run)
+    return ran
+
+
+async def test_close_without_killpg_ends_the_tree_through_taskkill(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows has no ``os.killpg``, and calling it raised before any teardown ran.
+
+    The connection was left marked closed with its process, its read loops and
+    its transport all still there. ``taskkill /T`` reaches what the launcher
+    started, which a bare ``Process.kill`` does not.
+    """
+    from raven.acp_client.client import AcpClient
+
+    cfg = stub_config("windows-close")
+    client = await AcpClient.launch(name="windows-close", command=cfg.command, env=dict(cfg.env))
+    proc = client._proc
+    ran = _without_killpg(monkeypatch)
+
+    await client.close()
+
+    assert ran == [[r"C:\Windows\System32\taskkill.exe", "/T", "/F", "/PID", str(proc.pid)]]
+    assert proc.returncode is not None, "the Process.kill after it must still stop the launcher"
+    assert client.closed and not client.alive
+
+
+async def test_close_without_killpg_kills_nothing_by_the_pid_of_an_exited_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once the launcher has exited, its pid may already name another process."""
+    from raven.acp_client.client import AcpClient
+
+    cfg = stub_config("abort", mode="abort")
+    client = await AcpClient.launch(name="abort", command=cfg.command, env=dict(cfg.env))
+    for _ in range(200):
+        if client._proc.returncode is not None:
+            break
+        await asyncio.sleep(0.025)
+    assert client._proc.returncode is not None, "the stub must be gone before the close, or this tests nothing"
+    ran = _without_killpg(monkeypatch)
+
+    await client.close()
+
+    assert ran == []
+    assert client.closed
+
+
 async def test_an_unanswered_request_does_not_stall_the_read_loop() -> None:
     """A handler that never returns must not stop `session/update` delivery.
 
