@@ -3136,6 +3136,10 @@ _MACHINES = [
 ]
 
 
+async def _no_record(cfg: object) -> None:
+    """A ``record_capabilities`` stand-in: the real one would open the machine's link, over a real ssh."""
+
+
 @pytest.fixture
 def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A machine registry with one usable row, and the machine lane on."""
@@ -3159,6 +3163,7 @@ async def test_add_on_a_registered_machine_writes_the_machine_and_names_the_row_
         return await _pings_ok(cfg)
 
     monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _capture)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
 
     out = await subagents_add({"preset": "claude_code", "machine": " ravenx2 ", "remote_cwd": " ~/work "})
 
@@ -3174,6 +3179,7 @@ async def test_add_on_a_machine_keeps_the_name_the_caller_chose(
     config_path: Path, registry: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("raven.rpc.methods.subagents.ping_agent", _pings_ok)
+    monkeypatch.setattr("raven.rpc.methods.subagents.record_capabilities", _no_record)
 
     out = await subagents_add({"preset": "claude_code", "machine": "ravenx2", "name": "lab"})
 

@@ -69,7 +69,8 @@ if mode == "launch_denied" and launch:
     fail("worker@{host}: Permission denied (publickey).")
 command = args[args.index("--") + 1] if "--" in args else args[-1]
 os.chdir(home)
-os.execve("/bin/sh", ["/bin/sh", "-c", command], {{"HOME": home, "SHELL": "/bin/sh", "PATH": os.environ["PATH"]}})
+# A daemon these tests start leaves soon after they do; the relay reads the idle time from its environment.
+os.execve("/bin/sh", ["/bin/sh", "-c", command], {{"HOME": home, "SHELL": "/bin/sh", "PATH": os.environ["PATH"], "RAVEN_NODE_IDLE_S": "2"}})
 """
 
 
@@ -187,7 +188,8 @@ async def test_a_dispatch_runs_on_the_machine_in_a_directory_made_there_and_says
     # Shown the way scp writes it, which the file tools read back as it is.
     assert f"in scp://worker@{HOST}:{PORT}//{str(there.resolve()).lstrip('/')};" in reply
     assert "not on this computer" in reply
-    assert "read_file, list_dir, find, grep, write_file and edit_file take that path as it is" in reply
+    assert "the files it wrote are there, not on this computer" in reply
+    assert "read_file" not in reply, "no tool is named that this change does not give a remote path to"
     assert not local.exists(), "the caller's workspace is never touched"
     for argv in box.calls():
         assert str(local) not in " ".join(argv), "this computer's workspace path never reaches the machine"
