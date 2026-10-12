@@ -14,9 +14,11 @@ This module owns what only a machine needs and the node cannot own:
 - the registry lookup, refused up front for a row that cannot be used, so a
   dispatch fails before anything starts rather than as a network fault
   minutes in;
-- the ssh line that carries a node, built from the registry at launch and
-  never stored, so no address, port or key path reaches a config file, a log
-  line or a model;
+- the ssh argv that carries a node, built from the registry at launch and
+  never stored, so the way in -- the key path, ssh's options, the address as
+  ssh takes it -- reaches no config file, log line or model; the address does
+  reach a model as part of a path on the machine, written the way scp writes
+  it (:func:`shown`), because that is how a file there is named to the tools;
 - one sentence for an ssh failure, naming the machine and never its address;
   ssh's own messages, which do name it, go to an owner-only log rather than to
   the stderr the connection journals and quotes;
@@ -71,9 +73,9 @@ _LEAF_MAX = 64
 class RemoteMachineError(RuntimeError):
     """A remote agent's machine could not be used. The message is safe to show.
 
-    It names the machine by its id and display name only: the registry keeps
-    the address out of anything a model reads (``connections.shown``), and an
-    error is read by one.
+    It names the machine by its id and display name only, never by its
+    address: an error is read by a model, and what an address does in front
+    of one is name a file there (:func:`shown`), not a fault.
     """
 
 
@@ -98,7 +100,7 @@ class Machine:
         For what a caller needs to know about the machine itself -- where a
         Raven node is kept on it (``node_dir``), the directories its owner
         listed (``paths``). The address, port, account and key stay behind
-        :func:`ssh_line`, :func:`run` and :func:`push`.
+        :func:`ssh_command`, :func:`run` and :func:`push`.
         """
         if name in _WAY_IN:
             raise KeyError(f"{name!r} is how raven reaches the machine, not a fact about it")
@@ -163,13 +165,17 @@ def posix(command: str) -> str:
     return "exec /bin/sh -c " + shlex.quote(f"echo; {command}").replace("!", "'\\!'")
 
 
-def ssh_line(target: Machine, command: str, *, ssh_log: str | os.PathLike[str], connect_timeout: int = 15) -> str:
-    """The ssh that keeps ``command`` running on ``target`` for as long as it is read: one shell-quoted line.
+def ssh_command(
+    target: Machine, command: str, *, ssh_log: str | os.PathLike[str], connect_timeout: int = 15
+) -> list[str]:
+    """The ssh that keeps ``command`` running on ``target`` for as long as it is read: its argv.
 
-    What a Raven node is started with. A string because that is what the
-    connection takes (it ``shlex.split``\\ s it); ``shlex.join`` makes the
-    split give back exactly this argv. Built at launch and held in memory
-    only: it carries the address. ``command`` is sent through :func:`posix`,
+    What a Raven node is started with. An argv, handed to the connection as
+    it is, so no host's own grammar reads it again: the one word that is the
+    remote command keeps the POSIX quoting the far shell reads, whatever this
+    host is (a Windows host's parser made twelve words of it while it went as
+    a line; reviewed 2026-10-12). Built at launch and held in memory only: it
+    carries the address. ``command`` is sent through :func:`posix`,
     so the machine user's login shell may be any shell; it carries no
     variable and reads no login profile -- the node captures the login
     environment itself, for the agents it starts.
@@ -185,7 +191,7 @@ def ssh_line(target: Machine, command: str, *, ssh_log: str | os.PathLike[str], 
     # ``--`` so nothing in the remote command is read as an option to ssh,
     # which also parses options that follow the destination.
     argv += ["--", posix(command)]
-    return shlex.join(argv)
+    return argv
 
 
 def failure(target: Machine, log: str | os.PathLike[str], exc: BaseException) -> str | None:
@@ -432,6 +438,6 @@ __all__ = [
     "session_root",
     "shell_path",
     "shown",
-    "ssh_line",
+    "ssh_command",
     "ssh_log_path",
 ]

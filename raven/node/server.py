@@ -47,6 +47,7 @@ import stat as filemode
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -325,9 +326,10 @@ async def _write(params: dict[str, Any]) -> dict[str, Any]:
 
     ``expect`` is the file as the host last read it -- its digest, or
     ``absent`` -- and a file that is not so any more is left alone, with
-    :data:`raven.node.protocol.CHANGED`. The check and the write are one
-    stretch with no await between them, and this node's requests interleave
-    only at awaits, so what was checked is what is written over.
+    :data:`raven.node.protocol.CHANGED`. The check and the write run in one
+    worker thread under the daemon's write lock (:func:`_apart`), so no other
+    write comes between them: what was checked is what is written over, and
+    the loop is not held while a whole file is hashed.
     """
     from raven.agent.tools.filesystem import WriteFileTool
 
@@ -353,7 +355,7 @@ async def _write(params: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _edit(params: dict[str, Any]) -> dict[str, Any]:
-    """The host's ``edit_file`` on this machine: one read, the replacement, one write, with nothing between."""
+    """The host's ``edit_file`` on this machine: one read, the replacement, one write, with nothing between (under the write lock, :func:`_apart`)."""
     from raven.agent.tools.filesystem import EditFileTool
 
     tool = _tool(EditFileTool, params)
@@ -543,17 +545,73 @@ _SOCKET_PATH_MAX = 100
 
 
 def socket_path(root: Path) -> Path:
-    """Where the daemon of this install listens for ``root``: under it, or in the temp directory when that is too long.
+    """Where the daemon of this install listens for ``root``: under ``run/``, or when that path is too long for a socket, in a directory of this user's own in the temp directory.
 
     A unix socket's path is short by the system's rule, and a node directory
-    is wherever the owner put it; the fallback is named after ``root`` so a
-    relay and a daemon given the same directory meet, whichever they use.
+    is wherever the owner put it. The fallback is named after ``root`` so a
+    relay and a daemon given the same directory meet, and it lies in a
+    directory only this user may open (:func:`own_dir`), as ``run/`` is, so
+    what listens there is this user's own daemon and nothing else.
     """
     under = root / RUN_DIR / f"{bundle.install_name()}.sock"
     if len(os.fsencode(under)) <= _SOCKET_PATH_MAX:
         return under
     tag = hashlib.sha256(os.fsencode(root.resolve())).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / f"raven-node-{tag}.sock"
+    return Path(tempfile.gettempdir()) / f"raven-node-{os.getuid()}" / f"{tag}.sock"
+
+
+def own_dir(path: Path) -> Path:
+    """``path`` as a directory only this user may open: made so, or refused.
+
+    What the socket's directory and the records' must be for what is in them
+    to be this user's alone: a directory of this user's, not a link, with no
+    group or other bits. One of this user's with wider bits is narrowed;
+    anything else is left as it is and named, never used.
+    """
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        try:
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+            st = path.lstat()
+        except OSError as exc:
+            raise PermissionError(f"could not make {path}: {exc.strerror or exc}") from None
+    ours = filemode.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
+    if ours and st.st_mode & 0o077:
+        try:
+            os.chmod(path, 0o700)
+            st = path.lstat()
+        except OSError as exc:
+            raise PermissionError(f"could not make {path} this user's own: {exc.strerror or exc}") from None
+    if not ours or st.st_mode & 0o077:
+        raise PermissionError(
+            f"{path} is not a directory only this user may open; remove it, or give the node a shorter directory"
+        )
+    return path
+
+
+def owned(path: Path) -> bool:
+    """Whether what is at ``path`` is this user's own, or nothing is there yet.
+
+    What a relay checks before it forwards to a socket: in a directory of this
+    user's own (:func:`own_dir`) anything that is somebody else's is root's,
+    and the relay neither forwards to it nor removes it.
+    """
+    try:
+        return path.lstat().st_uid == os.getuid()
+    except FileNotFoundError:
+        return True
+
+
+def own_file(path: Path, mode: str = "ab") -> Any:
+    """``path`` opened to append (or, ``"w"``, to write over), made with no group or other bits when it is new.
+
+    A task's record holds the agent's frames as they were -- its replies, its
+    tool results, which quote what it read -- so it is its owner's alone, as
+    the host's own journal is.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if "a" in mode else os.O_TRUNC)
+    return os.fdopen(os.open(path, flags, 0o600), mode, **({} if "b" in mode else {"encoding": "utf-8"}))
 
 
 def pid_path(root: Path) -> Path:
@@ -614,8 +672,8 @@ class _Task:
         self.frames = 0
         self.subscriber: tuple[Node, int] | None = None
         self._send_lock = asyncio.Lock()
-        self._frames_file = (record / "frames.jsonl").open("ab")
-        self._stderr_file = (record / "stderr.log").open("ab")
+        self._frames_file = own_file(record / "frames.jsonl")
+        self._stderr_file = own_file(record / "stderr.log")
         self.write_record("running")
         self._forwarders = [
             asyncio.create_task(self._forward(proc.stdout, frames=True)),
@@ -759,7 +817,8 @@ class _Task:
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
+    with own_file(tmp, "w") as handle:
+        handle.write(json.dumps(data))
     os.replace(tmp, path)
 
 
@@ -795,7 +854,7 @@ class Daemon:
         self._env: dict[str, str] | None = None
         self._env_lock = asyncio.Lock()
         self.last_activity = time.monotonic()
-        (root / TASKS_DIR).mkdir(parents=True, exist_ok=True)
+        own_dir(root / TASKS_DIR)
 
     def touch(self) -> None:
         self.last_activity = time.monotonic()
@@ -831,7 +890,7 @@ class Daemon:
             cwd.mkdir(parents=True, exist_ok=True)
             if record.exists():
                 shutil.rmtree(record)
-            record.mkdir(parents=True)
+            record.mkdir(mode=0o700, parents=True)
         except OSError as exc:
             raise _RefusedError(_INTERNAL_ERROR, f"could not make {cwd}: {exc.strerror or exc}") from None
         try:
@@ -1046,6 +1105,27 @@ class Node:
         return {}
 
 
+#: The file calls that touch a whole file -- a page read beside the file's
+#: digest, a stat with one, a chunk, a write checked against one -- answered
+#: in a thread, so the loop that answers the heartbeat and forwards every
+#: agent's frames is not held for as long as a large file takes (measured
+#: 2026-10-12: 3.5 s for a 1 GiB file, with no ping answered meanwhile).
+_WHOLE_FILE = frozenset({protocol.READ, protocol.STAT, protocol.WRITE, protocol.EDIT, protocol.PULL})
+#: The ones that change a file, one at a time: what a write checked is what it writes over.
+_WRITERS = frozenset({protocol.WRITE, protocol.EDIT})
+_WRITE_LOCK = threading.Lock()
+
+
+def _apart(
+    handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]], params: dict[str, Any], *, serial: bool
+) -> dict[str, Any]:
+    """``handler`` run to completion in this worker thread, on a loop of its own; a writer one at a time."""
+    if not serial:
+        return asyncio.run(handler(params))
+    with _WRITE_LOCK:
+        return asyncio.run(handler(params))
+
+
 _HANDLERS: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = {
     protocol.PING: _ping,
     protocol.PROBE_MACHINE: _probe_machine,
@@ -1102,7 +1182,11 @@ async def handle(frame: Any, node: Node | None = None) -> dict[str, Any] | None:
         params = params or {}
         if not isinstance(params, dict):
             raise _RefusedError(_INVALID_PARAMS, "params must be an object")
-        return {"jsonrpc": "2.0", "id": request_id, "result": await handler(params)}
+        if method in _WHOLE_FILE:
+            result = await asyncio.to_thread(_apart, handler, params, serial=method in _WRITERS)
+        else:
+            result = await handler(params)
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
     except _RefusedError as exc:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": exc.code, "message": exc.message}}
     except Exception as exc:  # noqa: BLE001 - the host gets a reason; the daemon keeps serving
@@ -1200,18 +1284,27 @@ async def _connection(daemon: Daemon, reader: asyncio.StreamReader, writer: asyn
 
 async def run_daemon_async(root: Path, *, idle_s: float = IDLE_EXIT_S) -> int:
     """Serve on the socket under ``root`` until idle for ``idle_s`` or told to stop; 0 when another daemon already does."""
-    run_dir = root / RUN_DIR
-    run_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(run_dir, 0o700)
+    run_dir = own_dir(root / RUN_DIR)
     sock = socket_path(root)
+    if sock.parent != run_dir:
+        own_dir(sock.parent)
     lock = (run_dir / f"{bundle.install_name()}.lock").open("w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         lock.close()
         return 0
-    with contextlib.suppress(FileNotFoundError):
+    try:
         sock.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        # Whatever is there is not this daemon's to remove -- in a directory
+        # of this user's own, root's -- and the daemon does not listen beside it.
+        lock.close()
+        raise PermissionError(
+            f"{sock} is in the way of the daemon and cannot be removed: {exc.strerror or exc}"
+        ) from None
     pid_path(root).write_text(str(os.getpid()), encoding="utf-8")
     daemon = Daemon(root)
     daemon.sweep()

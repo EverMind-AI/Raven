@@ -23,6 +23,9 @@ from typing import Any
 
 import pytest
 
+if sys.platform == "win32":
+    pytest.skip("the daemon is POSIX: it locks with fcntl and listens on a unix socket", allow_module_level=True)
+
 from raven.agent.tools.file_search import FindTool, GrepTool
 from raven.agent.tools.filesystem import ListDirTool, ReadFileTool
 from raven.node import __main__ as node_main
@@ -341,6 +344,56 @@ def test_a_node_process_answers_until_its_stdin_closes(tree):
     assert "hay" in second["result"]["text"]
 
 
+# A node with nothing importable beyond the standard library, its own code and
+# the packages it is installed with: what the next change to raven/agent/tools
+# must not break, since every installed node runs it.
+_BUDGETED_NODE = """
+import sys
+allowed = set(sys.stdlib_module_names) | set(sys.modules) | {"raven", *%r}
+
+
+class _Budget:
+    def find_spec(self, name, path=None, target=None):
+        # The build's own sysconfig data is the standard library's, under a name of the platform's.
+        if name.partition(".")[0] in allowed or name.startswith("_sysconfigdata"):
+            return None
+        raise ImportError(f"{name} is not among a node's requirements")
+
+
+sys.meta_path.insert(0, _Budget())
+from raven.node import server
+sys.exit(server.run_stdio())
+"""
+_MODULE_OF = {"pillow": "PIL"}
+
+
+@pytest.mark.slow
+def test_a_node_answers_every_file_call_with_only_its_requirements_importable(tree):
+    importable = tuple(_MODULE_OF.get(name, name) for name in protocol.REQUIREMENTS)
+    calls = [
+        (protocol.READ, {"path": "b.md"}),
+        (protocol.LIST, {"path": "."}),
+        (protocol.FIND, {"pattern": "*.py", "path": "."}),
+        (protocol.GREP, {"pattern": "needle", "path": "."}),
+        (protocol.STAT, {"path": "b.md", "hash": True}),
+        (protocol.WRITE, {"path": "new.txt", "content": "x\n"}),
+        (protocol.EDIT, {"path": "new.txt", "old_text": "x", "new_text": "y"}),
+        (protocol.PULL, {"path": "b.md"}),
+    ]
+    requests = [{"jsonrpc": "2.0", "id": 1, "method": protocol.HELLO, "params": {"protocol": protocol.PROTOCOL}}]
+    requests += [
+        {"jsonrpc": "2.0", "id": n, "method": method, "params": {**params, "roots": [str(tree)]}}
+        for n, (method, params) in enumerate(calls, start=2)
+    ]
+
+    done = _node(["-c", _BUDGETED_NODE % (importable,)], requests, tree)
+
+    assert done.returncode == 0, done.stderr
+    answers = [json.loads(line) for line in done.stdout.splitlines()]
+    assert [answer.get("error") for answer in answers] == [None] * len(requests), answers
+    assert answers[0]["result"]["digest"] == bundle.digest()
+
+
 @pytest.mark.slow
 def test_stdout_carries_only_frames_whatever_else_prints(tree):
     done = _node(["-c", _NOISY_NODE], [{"jsonrpc": "2.0", "id": 1, "method": "x/noisy"}], tree)
@@ -383,6 +436,17 @@ def test_stdio_serves(monkeypatch):
     monkeypatch.setattr(server, "run_stdio", lambda: 0)
 
     assert node_main.main(["--stdio"]) == 0
+
+
+def test_a_daemon_refused_its_socket_s_place_says_so_in_one_line_and_leaves(tmp_path, monkeypatch, capsys):
+    def refuse(root: Path, *, idle_s: float) -> int:
+        raise PermissionError(f"{root} is in the way of the daemon")
+
+    monkeypatch.setattr("raven.node.server.run_daemon", refuse)
+
+    assert node_main.main(["--serve", "--dir", str(tmp_path)]) == 1
+
+    assert f"raven node: {tmp_path} is in the way of the daemon" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("argv", [[], ["--stdio", "--version"]])
@@ -1017,6 +1081,30 @@ def test_sweep_drops_the_records_of_tasks_that_ended_long_ago_and_keeps_the_rest
 
 
 @pytest.mark.slow
+async def test_a_task_s_records_are_its_owner_s_alone(tmp_path, agent):
+    daemon = server.Daemon(tmp_path / "node")
+    conn = _Conn(daemon)
+
+    started = await conn.ask(
+        protocol.AGENT_LAUNCH, {"channel": 1, "task": "t-own", "command": agent, "cwd": str(tmp_path / "w")}
+    )
+
+    try:
+        assert started["result"]["task"] == "t-own"
+        record = daemon.record_dir("t-own")
+        assert (tmp_path / "node" / server.TASKS_DIR).stat().st_mode & 0o777 == 0o700
+        assert record.stat().st_mode & 0o777 == 0o700
+        assert {p.name: p.stat().st_mode & 0o777 for p in record.iterdir()} == {
+            "task.json": 0o600,
+            "frames.jsonl": 0o600,
+            "stderr.log": 0o600,
+        }, "the frames hold the agent's output as it was"
+    finally:
+        daemon.tasks["t-own"].end()
+        await daemon.tasks["t-own"].proc.wait()
+
+
+@pytest.mark.slow
 async def test_shutdown_from_a_host_leaves_a_daemon_s_tasks_running(tmp_path, agent):
     daemon = server.Daemon(tmp_path / "node")
     reader = asyncio.StreamReader()
@@ -1095,6 +1183,69 @@ async def test_a_second_daemon_under_the_same_directory_leaves_at_once(tmp_path,
     assert await asyncio.wait_for(server.run_daemon_async(root), timeout=5) == 0
     assert server.socket_path(root).exists(), "the first daemon's socket is untouched"
     assert await asyncio.wait_for(first, timeout=10) == 0
+
+
+def test_the_socket_s_directory_is_this_user_s_own_or_is_not_used(tmp_path, monkeypatch):
+    monkeypatch.setattr(server.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    assert server.socket_path(Path("/srv/node")) == Path("/srv/node") / server.RUN_DIR / f"{bundle.install_name()}.sock"
+    sock = server.socket_path(tmp_path / ("n" * 120))
+    assert sock.parent == tmp_path / "tmp" / f"raven-node-{os.getuid()}" and sock.suffix == ".sock"
+    assert len(os.fsencode(sock)) < len(os.fsencode(tmp_path / ("n" * 120) / server.RUN_DIR))
+
+    assert server.own_dir(sock.parent) == sock.parent
+    assert sock.parent.stat().st_mode & 0o777 == 0o700
+    os.chmod(sock.parent, 0o755)
+    server.own_dir(sock.parent)
+    assert sock.parent.stat().st_mode & 0o777 == 0o700, "this user's, with wider bits: narrowed"
+
+    (tmp_path / "file").write_text("", encoding="utf-8")
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    for other in (tmp_path / "file", tmp_path / "link"):
+        with pytest.raises(PermissionError, match="is not a directory only this user may open"):
+            server.own_dir(other)
+    assert server.owned(tmp_path / "file") and server.owned(tmp_path / "nothing-there")
+
+    me = os.getuid()
+    monkeypatch.setattr(server.os, "getuid", lambda: me + 1)
+    with pytest.raises(PermissionError, match="is not a directory only this user may open"):
+        server.own_dir(tmp_path / "real")
+    assert (tmp_path / "real").stat().st_mode & 0o777 == 0o755, "another user's: left as it is"
+    assert not server.owned(tmp_path / "file") and server.owned(tmp_path / "nothing-there")
+
+
+@pytest.mark.slow
+async def test_the_daemon_does_not_listen_beside_a_thing_it_cannot_remove_from_its_socket_s_place(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    root = tmp_path / "n"
+    sock = server.socket_path(root)
+    sock.parent.mkdir(parents=True, exist_ok=True)
+    sock.mkdir()
+
+    with pytest.raises(PermissionError, match="is in the way of the daemon and cannot be removed"):
+        await server.run_daemon_async(root, idle_s=0.3)
+
+    assert sock.is_dir() and not server.pid_path(root).exists()
+
+
+async def test_a_whole_file_s_digest_is_taken_off_the_loop_the_heartbeat_is_answered_on(tree, monkeypatch):
+    digest = server._sha256
+
+    def slowly(path: Path) -> str:
+        time.sleep(0.4)
+        return digest(path)
+
+    monkeypatch.setattr(server, "_sha256", slowly)
+    read = asyncio.create_task(_result(protocol.READ, {"path": str(tree / "b.md"), "roots": [str(tree)]}))
+    await asyncio.sleep(0.05)
+    before = time.monotonic()
+
+    assert await _result(protocol.PING, {"t": 1}) == {"t": 1}
+
+    assert time.monotonic() - before < 0.3, "answered while the digest was still being taken"
+    assert (await read)["sha256"] == hashlib.sha256(b"hay\n").hexdigest()
 
 
 @pytest.mark.parametrize("argv", [["--serve"], ["--attach"]])

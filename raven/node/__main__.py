@@ -42,7 +42,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.serve:
         from raven.node.server import IDLE_EXIT_S, run_daemon
 
-        return run_daemon(root, idle_s=IDLE_EXIT_S if args.idle is None else args.idle)
+        try:
+            return run_daemon(root, idle_s=IDLE_EXIT_S if args.idle is None else args.idle)
+        except PermissionError as exc:
+            # The socket's place is not this user's to use; said in one line, in the serve log.
+            print(f"raven node: {exc}", file=sys.stderr)
+            return 1
     from raven.node.relay import run_attach
 
     return run_attach(root)

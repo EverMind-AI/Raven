@@ -25,7 +25,7 @@ import os
 import signal
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
 from typing import Any, Protocol
 
@@ -341,7 +341,7 @@ class AcpClient:
         cls,
         *,
         name: str,
-        command: str,
+        command: str | Sequence[str],
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         on_request: RequestHandler | None = None,
@@ -349,6 +349,13 @@ class AcpClient:
         journal: FrameJournal | None = None,
     ) -> "AcpClient":
         """Start the agent's ACP server on this computer and begin reading it.
+
+        ``command`` is the line a config stores, split the way this host reads
+        a line, or an argv a caller split already, taken as it is: a word of
+        it that is a command for another machine keeps that machine's
+        quoting, which this host's grammar would read apart (a Windows host's
+        parser made twelve words of a node's one remote-command word while it
+        went as a line; reviewed 2026-10-12).
 
         Raises :class:`AcpConnectionError` if the process cannot be started; a
         server that starts but never speaks is a per-request timeout, not a
@@ -360,10 +367,13 @@ class AcpClient:
         from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
         from raven.agent.subagent.role import subagent_role_env
 
-        try:
-            argv = command_argv(command)
-        except ValueError as exc:
-            raise AcpConnectionError(f"acp agent {name!r}: command cannot be parsed: {exc}") from exc
+        if isinstance(command, str):
+            try:
+                argv = command_argv(command)
+            except ValueError as exc:
+                raise AcpConnectionError(f"acp agent {name!r}: command cannot be parsed: {exc}") from exc
+        else:
+            argv = [str(word) for word in command]
         if not argv:
             raise AcpConnectionError(f"acp agent {name!r}: command is empty")
 

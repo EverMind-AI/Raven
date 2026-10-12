@@ -289,7 +289,8 @@ def test_the_steps_build_a_virtualenv_with_uv_then_fill_it_with_uv():
     assert all(command.startswith(head) for _, command in steps)
     commands = dict(steps)
     assert commands["virtualenv"] == (
-        head + f'mkdir -p "$dir" && {_UV_ENV} "$uv" venv --quiet --python \'/opt/py 3.12/bin/python3\' "$node"'
+        head
+        + f'mkdir -p "$dir" && chmod 700 "$dir" && {_UV_ENV} "$uv" venv --quiet --python \'/opt/py 3.12/bin/python3\' "$node"'
     )
     pip = f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python"'
     assert commands["packages"] == head + f"{pip} " + " ".join(bundle.pinned(protocol.REQUIREMENTS))
@@ -308,7 +309,7 @@ def test_uv_makes_its_python_inside_the_node_dir():
     commands = dict(install.steps(_plan(python="", uv="/root/.local/bin/uv")))
 
     assert commands["virtualenv"].endswith(
-        f'uv=/root/.local/bin/uv; mkdir -p "$dir" && {_UV_ENV} "$uv" venv --quiet --python 3.12 "$node"'
+        f'uv=/root/.local/bin/uv; mkdir -p "$dir" && chmod 700 "$dir" && {_UV_ENV} "$uv" venv --quiet --python 3.12 "$node"'
     )
 
 
@@ -323,7 +324,8 @@ def test_a_machine_without_uv_fetches_it_under_the_node_dir_first(fetch, fetched
     head = "dir=~/.raven-node; id=" + bundle.install_name() + '; node="$dir/$id"; uv="$dir/.uv/uv"; '
     assert all(command.startswith(head) for _, command in steps)
     assert dict(steps)["uv"] == (
-        head + f'mkdir -p "$dir/.uv" && {fetched_with} | UV_INSTALL_DIR="$dir/.uv" UV_NO_MODIFY_PATH=1 '
+        head
+        + f'mkdir -p "$dir/.uv" && chmod 700 "$dir" && {fetched_with} | UV_INSTALL_DIR="$dir/.uv" UV_NO_MODIFY_PATH=1 '
         'INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null && test -x "$dir/.uv/uv"'
     )
     assert dict(steps)["virtualenv"].endswith('"$uv" venv --quiet --python /usr/bin/python3.12 "$node"')
