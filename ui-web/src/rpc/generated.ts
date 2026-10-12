@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 210 methods, 121 component schemas.
+// 215 methods, 125 component schemas.
 
 /* eslint-disable */
 /**
@@ -2222,6 +2222,114 @@ export interface StintTakeUp {
   rounds: StintRoundRow[];
   questions: StintQuestionRow[];
   reply: string;
+}
+/**
+ * Where the session index stands.
+ */
+export interface TrajectoryIndexState {
+  /**
+   * scanning: the log chain is still being read, so an empty list is not an answer yet.
+   */
+  phase: 'scanning' | 'ready' | 'failed';
+  scanned_bytes: number;
+  total_bytes: number;
+  /**
+   * Entries dropped from the head to stay under the entry limit.
+   */
+  head_truncated: number;
+  recovering_traces: number;
+  unresolved_traces: number;
+  unresolved_dropped: number;
+  oversized_lines_dropped: number;
+  /**
+   * Spans whose list previews are still being filled.
+   */
+  preview_pending: number;
+  failure?: string | null;
+}
+/**
+ * One row of the trajectory view.
+ */
+export interface TrajectoryEntry {
+  /**
+   * trace:span:slot, stable across re-reads and checkpoint upgrades.
+   */
+  entry_id: string;
+  revision: number;
+  kind: string;
+  span_name: string;
+  slot: string;
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  turn_span_id?: string | null;
+  turn_number?: number | null;
+  turn_start: boolean;
+  /**
+   * Whether the trace is the session's own or a dispatched sub-agent's.
+   */
+  origin: 'main' | 'subagent';
+  sort_key: JsonValue[];
+  event_time: string;
+  /**
+   * One-line preview; null until the lazy preview fill reaches it.
+   */
+  preview?: string | null;
+  /**
+   * The owning operation's recorded status.
+   */
+  operation_status: 'running' | 'ok' | 'error' | 'cancelled' | 'unknown';
+  status_evidence: string[];
+  /**
+   * True on exactly one entry of a failed span: the one carrying the failure mark.
+   */
+  failure_entry: boolean;
+  integrity: string[];
+  operation_start?: string | null;
+  operation_end?: string | null;
+  duration_ms?: number | null;
+  /**
+   * What the duration bar charges this entry; null means unknown, never zero.
+   */
+  charged_ms?: number | null;
+  /**
+   * Why charged_ms is what it is.
+   */
+  timing_basis: 'zero' | 'span_full' | 'shared' | 'not_recorded' | 'unknown';
+  duration_owner?: string | null;
+  meta: {
+    [k: string]: JsonValue;
+  };
+}
+/**
+ * An entry that left the list.
+ */
+export interface TrajectoryRemoved {
+  entry_id: string;
+  revision: number;
+  /**
+   * The entry that took this one's place (an error placeholder replaced by the real output), so a selection can follow.
+   */
+  replaced_by?: string | null;
+}
+/**
+ * One block of an entry's detail: a tab, and its overview summary.
+ */
+export interface TrajectoryBlockDescriptor {
+  id: string;
+  /**
+   * How the block's body renders.
+   */
+  renderer: 'text' | 'json' | 'messages' | 'key_values' | 'items' | 'references';
+  /**
+   * Whether the block's data could be served.
+   */
+  availability:
+    'available' | 'empty' | 'not_recorded' | 'missing' | 'truncated' | 'unreadable' | 'unsupported';
+  preview?: JsonValue;
+  total_items?: number | null;
+  related_operation?: string | null;
+  reason?: string | null;
 }
 export interface SessionListParams {
   /**
@@ -5261,6 +5369,95 @@ export interface PlaybooksStintsExtendResult {
   questions: StintQuestionRow[];
   reply: string;
 }
+export interface TrajectoryStateParams {}
+export interface TrajectoryStateResult {
+  enabled: boolean;
+  policy_revision: number;
+  recording_enabled: boolean;
+}
+export interface TrajectoryListParams {
+  session_key: string;
+  cursor?: string | null;
+  limit?: number;
+}
+export interface TrajectoryListResult {
+  epoch: string;
+  snapshot_revision: number;
+  entries: TrajectoryEntry[];
+  next_cursor?: string | null;
+  index_state: TrajectoryIndexState;
+  complete: boolean;
+}
+export interface TrajectoryChangesParams {
+  session_key: string;
+  epoch: string;
+  after_revision: number;
+  limit?: number;
+}
+export interface TrajectoryChangesResult {
+  epoch: string;
+  from_revision: number;
+  to_revision: number;
+  upserts: TrajectoryEntry[];
+  removed: TrajectoryRemoved[];
+  has_more: boolean;
+  reset_required: boolean;
+  index_state: TrajectoryIndexState;
+}
+export interface TrajectoryDetailParams {
+  session_key: string;
+  entry_id: string;
+  entry_revision?: number | null;
+}
+export interface TrajectoryDetailResult {
+  session_key: string;
+  epoch: string;
+  entry_id: string;
+  entry_revision: number;
+  kind: string;
+  span_name: string;
+  slot: string;
+  /**
+   * The owning operation's recorded status.
+   */
+  operation_status: 'running' | 'ok' | 'error' | 'cancelled' | 'unknown';
+  status_evidence: string[];
+  failure_entry: boolean;
+  integrity: string[];
+  notes: string[];
+  blocks: TrajectoryBlockDescriptor[];
+  revision_changed: boolean;
+  truncated: boolean;
+}
+export interface TrajectoryBlockParams {
+  session_key: string;
+  entry_id: string;
+  entry_revision: number;
+  epoch: string;
+  block_id: string;
+  cursor?: string | null;
+}
+export interface TrajectoryBlockResult {
+  entry_id: string;
+  entry_revision: number;
+  epoch: string;
+  block_id: string;
+  /**
+   * How the body renders.
+   */
+  renderer: 'text' | 'json' | 'messages' | 'key_values' | 'items' | 'references';
+  /**
+   * Whether the data could be served.
+   */
+  availability:
+    'available' | 'empty' | 'not_recorded' | 'missing' | 'truncated' | 'unreadable' | 'unsupported';
+  reason?: string | null;
+  data?: JsonValue;
+  next_cursor?: string | null;
+  total_items?: number | null;
+  integrity: string[];
+  truncated: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -5478,6 +5675,11 @@ export interface RpcMethods {
   'playbooks.stints.pause': { params: PlaybooksStintsPauseParams; result: PlaybooksStintsPauseResult };
   'playbooks.stints.resume': { params: PlaybooksStintsResumeParams; result: PlaybooksStintsResumeResult };
   'playbooks.stints.extend': { params: PlaybooksStintsExtendParams; result: PlaybooksStintsExtendResult };
+  'trajectory.state': { params: TrajectoryStateParams; result: TrajectoryStateResult };
+  'trajectory.list': { params: TrajectoryListParams; result: TrajectoryListResult };
+  'trajectory.changes': { params: TrajectoryChangesParams; result: TrajectoryChangesResult };
+  'trajectory.detail': { params: TrajectoryDetailParams; result: TrajectoryDetailResult };
+  'trajectory.block': { params: TrajectoryBlockParams; result: TrajectoryBlockResult };
 }
 
 /** The literal union of callable method names. */
@@ -5692,6 +5894,11 @@ export const RPC_METHODS = [
   "tasks.list",
   "terminal.resize",
   "tools.configure",
+  "trajectory.block",
+  "trajectory.changes",
+  "trajectory.detail",
+  "trajectory.list",
+  "trajectory.state",
   "turn.cancel",
   "turn.send",
   "turn.subscribe",

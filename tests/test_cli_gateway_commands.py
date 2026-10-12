@@ -1741,3 +1741,24 @@ def test_the_gateway_takes_its_control_port_from_the_fallback() -> None:
     src = inspect.getsource(gateway_commands.register)
     assert "ControlPlaneServer(await _control_plane_port()" in src
     assert "pick_port(8765)" not in src, "an inline probe has no fallback to fall back to"
+
+
+def test_gateway_dev_flag_arms_the_trajectory_policy(monkeypatch, tmp_config) -> None:
+    """`--dev` is read before anything heavy starts: the install guard is the
+    first real step, so stopping it there proves the policy was armed first."""
+    from raven.cli import serve_commands
+    from raven.trajectory import policy
+
+    policy._reset_for_tests()
+
+    def halt(*_a, **_k):
+        raise RuntimeError("halt here")
+
+    monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", halt)
+    try:
+        r = runner.invoke(app, ["gateway", "--dev"])
+        assert r.exit_code != 0 and policy.current().enabled() is True
+        r = runner.invoke(app, ["gateway"])
+        assert r.exit_code != 0 and policy.current().enabled() is False
+    finally:
+        policy._reset_for_tests()

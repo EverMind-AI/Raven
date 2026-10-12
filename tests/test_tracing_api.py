@@ -1197,3 +1197,24 @@ def test_child_scope_without_a_caller_context_starts_its_own_trace() -> None:
         assert ctx_mod.current() is None
     finally:
         ctx_mod._CTX.reset(token)
+
+
+def test_llm_purpose_is_recorded_from_the_enclosing_caller(trace_dir):
+    from raven.observability import semconv
+    from raven.observability.purpose import current, purpose
+
+    assert current() is None
+    with purpose("title"):
+        assert current() == "title"
+        with purpose("watch_work"):
+            assert current() == "watch_work"
+        with trace.span("session.turn"):
+            with trace.span("llm.call") as s:
+                semconv.llm_call(s, {"self": None, "messages": [], "tools": None, "model": "openrouter/m"}, None, None)
+    assert current() is None
+    with trace.span("session.turn"):
+        with trace.span("llm.call") as plain:
+            semconv.llm_call(plain, {"self": None, "messages": [], "tools": None, "model": "openrouter/m"}, None, None)
+    labelled, unlabelled = (x for x in _spans_written(trace_dir) if x["name"] == "llm.call")
+    assert labelled["attributes"]["llm.purpose"] == "title"
+    assert "llm.purpose" not in unlabelled["attributes"]

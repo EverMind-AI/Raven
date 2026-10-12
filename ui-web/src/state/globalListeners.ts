@@ -45,6 +45,7 @@ import { clamp as clampSelection } from './selection'
 import { close as closeSettings, isOpen as settingsIsOpen } from './settings'
 import { onDblClick as shellZoom, onMouseDown as shellDrag } from './shellWindow'
 import * as tip from './tooltip'
+import * as visibility from './visibility'
 import { close as closeWorkdir } from './workdir'
 
 /* The three composer popovers have no close button: a pointer landing outside
@@ -164,4 +165,9 @@ export function installGlobalListeners(): void {
      watcher decides whether there is anything to look for; until it has
      started, this answers nothing (app/updates.ts). */
   document.addEventListener('visibilitychange', probeOnVisible)
+  /* The same two moments, spent on the one slot an island may fill
+     (state/visibility.ts): a live value an island stopped asking for while
+     nobody was looking is asked for again the moment somebody is. */
+  document.addEventListener('visibilitychange', visibility.fire)
+  window.addEventListener('focus', visibility.fire)
 }

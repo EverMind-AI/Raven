@@ -13,7 +13,7 @@
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
  * fullscreen -> node -> pane -> collapse retreat). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all fifty-five pairs of layers. The capture-phase handlers
+ * fixture page, and all sixty-six pairs of layers. The capture-phase handlers
  * the open sheets register run before the table. An approval consumes Escape
  * after denying, leaving the running turn alone until a later Escape: that is
  * pinned here with the real sheets.
@@ -26,6 +26,7 @@ import { open as openConfirm, openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
 import * as desk from '../features/desk/store'
 import * as extAgents from '../features/extAgents/store'
+import * as trajectoryDetails from '../features/trajectory/detailStore'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as escapeOrder from './escapeOrder'
@@ -41,7 +42,7 @@ import * as workdir from './workdir'
 
 import type { ComposerSource } from '../features/composer/types'
 
-/* The eleven, in the order Escape reaches them. Each item is the text the chain
+/* The twelve, in the order Escape reaches them. Each item is the text the chain
    tests to decide whether that layer is on screen -- a selector for the seven
    elements, the predicate's own name for the three that have no element of
    their own to look at.
@@ -59,6 +60,7 @@ const LAYER_IDS = [
   '#permPop',
   '#plusPop',
   '#wdPop',
+  'trajectory.escapeOpen()',
   'turn.busy()',
 ] as const
 
@@ -76,7 +78,8 @@ const PAGE = [
   '<div class="dock-in"><textarea id="ta"></textarea>',
   '<div class="pop" id="permPop" data-open="false"></div>',
   '<div class="pop" id="plusPop" data-open="false"></div>',
-  '<div class="pop" id="wdPop" data-open="false"></div></div></div></div>',
+  '<div class="pop" id="wdPop" data-open="false"></div></div></div>',
+  '<div class="trajectory-details"><button id="trajFocus"></button></div></div>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
   '<section class="page" id="connectionsPage" data-open="false"></section>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
@@ -138,6 +141,15 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
   '#permPop': { up: flag('permPop'), taken: called(spies.permClose) },
   '#plusPop': { up: flag('plusPop'), taken: called(spies.plusClose) },
   '#wdPop': { up: flag('wdPop'), taken: called(spies.wdClose) },
+  /* Open AND holding the focus: the pane answers closed to a key pressed
+     anywhere else, which escapeOrder.test's own case below pins. */
+  'trajectory.escapeOpen()': {
+    up: () => {
+      trajectoryDetails.set({ ...trajectoryDetails.get(), open: true })
+      document.getElementById('trajFocus')!.focus()
+    },
+    taken: () => !trajectoryDetails.get().open,
+  },
   'turn.busy()': { up: () => turn.dispatch({ type: 'send' }), taken: called(spies.stop) },
 }
 
@@ -171,6 +183,7 @@ beforeEach(() => {
   setCurrent('a')
   sheets._resetForTests()
   desk._resetForTests()
+  trajectoryDetails._resetForTests()
 })
 
 afterEach(() => {
@@ -193,7 +206,7 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the eleven layers in', () => {
+  it('is the order the table reaches the twelve layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
@@ -220,8 +233,8 @@ describe('the Escape priority order', () => {
   const pairs = LAYER_IDS.flatMap((first, i) =>
     LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
 
-  it('has fifty-five pairs to answer for', () => {
-    expect(pairs).toHaveLength(55)
+  it('has sixty-six pairs to answer for', () => {
+    expect(pairs).toHaveLength(66)
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {

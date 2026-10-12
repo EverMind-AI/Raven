@@ -9792,6 +9792,468 @@
           "$ref": "#/components/schemas/StintTakeUp"
         }
       }
+    },
+    {
+      "name": "trajectory.state",
+      "summary": "Whether this process serves the trajectory view, and whether tracing records anything.",
+      "params": [],
+      "result": {
+        "name": "TrajectoryStateResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "policy_revision",
+            "recording_enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "policy_revision": {
+              "type": "integer"
+            },
+            "recording_enabled": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.list",
+      "summary": "A consistent snapshot of a session's trajectory entries, paged.",
+      "description": "The first page freezes the snapshot; later pages read it through next_cursor. After the last page, follow with trajectory.changes from snapshot_revision.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session whose trajectory to read."
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "From the previous page; omit for the first page."
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "description": "Entries per page (default 200)."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryListResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "epoch",
+            "snapshot_revision",
+            "entries",
+            "index_state",
+            "complete"
+          ],
+          "properties": {
+            "epoch": {
+              "type": "string"
+            },
+            "snapshot_revision": {
+              "type": "integer"
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TrajectoryEntry"
+              }
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "index_state": {
+              "$ref": "#/components/schemas/TrajectoryIndexState"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.changes",
+      "summary": "Entries changed or removed since a revision, in revision order.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session whose trajectory to read."
+        },
+        {
+          "name": "epoch",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The epoch the client's list came from; a different one answers reset_required."
+        },
+        {
+          "name": "after_revision",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500
+          },
+          "description": "Changes per batch (default 500)."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryChangesResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "epoch",
+            "from_revision",
+            "to_revision",
+            "upserts",
+            "removed",
+            "has_more",
+            "reset_required",
+            "index_state"
+          ],
+          "properties": {
+            "epoch": {
+              "type": "string"
+            },
+            "from_revision": {
+              "type": "integer"
+            },
+            "to_revision": {
+              "type": "integer"
+            },
+            "upserts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TrajectoryEntry"
+              }
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TrajectoryRemoved"
+              }
+            },
+            "has_more": {
+              "type": "boolean"
+            },
+            "reset_required": {
+              "type": "boolean"
+            },
+            "index_state": {
+              "$ref": "#/components/schemas/TrajectoryIndexState"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.detail",
+      "summary": "One entry's overview: status, notes and a bounded summary per block.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session whose trajectory to read."
+        },
+        {
+          "name": "entry_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        {
+          "name": "entry_revision",
+          "required": false,
+          "schema": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "description": "The revision the client holds; a newer one is answered with revision_changed set."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryDetailResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_key",
+            "epoch",
+            "entry_id",
+            "entry_revision",
+            "kind",
+            "span_name",
+            "slot",
+            "operation_status",
+            "status_evidence",
+            "failure_entry",
+            "integrity",
+            "notes",
+            "blocks",
+            "revision_changed",
+            "truncated"
+          ],
+          "properties": {
+            "session_key": {
+              "type": "string"
+            },
+            "epoch": {
+              "type": "string"
+            },
+            "entry_id": {
+              "type": "string"
+            },
+            "entry_revision": {
+              "type": "integer"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "span_name": {
+              "type": "string"
+            },
+            "slot": {
+              "type": "string"
+            },
+            "operation_status": {
+              "type": "string",
+              "enum": [
+                "running",
+                "ok",
+                "error",
+                "cancelled",
+                "unknown"
+              ],
+              "description": "The owning operation's recorded status."
+            },
+            "status_evidence": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "failure_entry": {
+              "type": "boolean"
+            },
+            "integrity": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "notes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/TrajectoryBlockDescriptor"
+              }
+            },
+            "revision_changed": {
+              "type": "boolean"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "trajectory.block",
+      "summary": "One block of an entry, at the revision and epoch the client holds; paged where the renderer pages.",
+      "params": [
+        {
+          "name": "session_key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          },
+          "description": "The session whose trajectory to read."
+        },
+        {
+          "name": "entry_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        {
+          "name": "entry_revision",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        {
+          "name": "epoch",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        {
+          "name": "block_id",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        {
+          "name": "cursor",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": "From the previous page of this block."
+        }
+      ],
+      "result": {
+        "name": "TrajectoryBlockResult",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "entry_id",
+            "entry_revision",
+            "epoch",
+            "block_id",
+            "renderer",
+            "availability",
+            "integrity",
+            "truncated"
+          ],
+          "properties": {
+            "entry_id": {
+              "type": "string"
+            },
+            "entry_revision": {
+              "type": "integer"
+            },
+            "epoch": {
+              "type": "string"
+            },
+            "block_id": {
+              "type": "string"
+            },
+            "renderer": {
+              "type": "string",
+              "enum": [
+                "text",
+                "json",
+                "messages",
+                "key_values",
+                "items",
+                "references"
+              ],
+              "description": "How the body renders."
+            },
+            "availability": {
+              "type": "string",
+              "enum": [
+                "available",
+                "empty",
+                "not_recorded",
+                "missing",
+                "truncated",
+                "unreadable",
+                "unsupported"
+              ],
+              "description": "Whether the data could be served."
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "data": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "total_items": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "integrity": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
     }
   ],
   "components": {
@@ -15180,6 +15642,318 @@
           "questions",
           "reply"
         ]
+      },
+      "TrajectoryIndexState": {
+        "description": "Where the session index stands.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "phase",
+          "scanned_bytes",
+          "total_bytes",
+          "head_truncated",
+          "recovering_traces",
+          "unresolved_traces",
+          "unresolved_dropped",
+          "oversized_lines_dropped",
+          "preview_pending"
+        ],
+        "properties": {
+          "phase": {
+            "type": "string",
+            "enum": [
+              "scanning",
+              "ready",
+              "failed"
+            ],
+            "description": "scanning: the log chain is still being read, so an empty list is not an answer yet."
+          },
+          "scanned_bytes": {
+            "type": "integer"
+          },
+          "total_bytes": {
+            "type": "integer"
+          },
+          "head_truncated": {
+            "type": "integer",
+            "description": "Entries dropped from the head to stay under the entry limit."
+          },
+          "recovering_traces": {
+            "type": "integer"
+          },
+          "unresolved_traces": {
+            "type": "integer"
+          },
+          "unresolved_dropped": {
+            "type": "integer"
+          },
+          "oversized_lines_dropped": {
+            "type": "integer"
+          },
+          "preview_pending": {
+            "type": "integer",
+            "description": "Spans whose list previews are still being filled."
+          },
+          "failure": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TrajectoryEntry": {
+        "description": "One row of the trajectory view.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "revision",
+          "kind",
+          "span_name",
+          "slot",
+          "trace_id",
+          "span_id",
+          "turn_start",
+          "origin",
+          "sort_key",
+          "event_time",
+          "operation_status",
+          "status_evidence",
+          "failure_entry",
+          "integrity",
+          "timing_basis",
+          "meta"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "description": "trace:span:slot, stable across re-reads and checkpoint upgrades."
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "span_name": {
+            "type": "string"
+          },
+          "slot": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "span_id": {
+            "type": "string"
+          },
+          "parent_span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn_span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn_number": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "turn_start": {
+            "type": "boolean"
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "main",
+              "subagent"
+            ],
+            "description": "Whether the trace is the session's own or a dispatched sub-agent's."
+          },
+          "sort_key": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          },
+          "event_time": {
+            "type": "string"
+          },
+          "preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One-line preview; null until the lazy preview fill reaches it."
+          },
+          "operation_status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "ok",
+              "error",
+              "cancelled",
+              "unknown"
+            ],
+            "description": "The owning operation's recorded status."
+          },
+          "status_evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "failure_entry": {
+            "type": "boolean",
+            "description": "True on exactly one entry of a failed span: the one carrying the failure mark."
+          },
+          "integrity": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "operation_start": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_end": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "charged_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "What the duration bar charges this entry; null means unknown, never zero."
+          },
+          "timing_basis": {
+            "type": "string",
+            "enum": [
+              "zero",
+              "span_full",
+              "shared",
+              "not_recorded",
+              "unknown"
+            ],
+            "description": "Why charged_ms is what it is."
+          },
+          "duration_owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            }
+          }
+        }
+      },
+      "TrajectoryRemoved": {
+        "description": "An entry that left the list.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "revision"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "replaced_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The entry that took this one's place (an error placeholder replaced by the real output), so a selection can follow."
+          }
+        }
+      },
+      "TrajectoryBlockDescriptor": {
+        "description": "One block of an entry's detail: a tab, and its overview summary.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "renderer",
+          "availability"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "renderer": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json",
+              "messages",
+              "key_values",
+              "items",
+              "references"
+            ],
+            "description": "How the block's body renders."
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "empty",
+              "not_recorded",
+              "missing",
+              "truncated",
+              "unreadable",
+              "unsupported"
+            ],
+            "description": "Whether the block's data could be served."
+          },
+          "preview": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "total_items": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "related_operation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     },
     "errors": {
@@ -15250,6 +16024,22 @@
       "SubagentNotReady": {
         "code": -32019,
         "message": "subagent_not_ready"
+      },
+      "TrajectoryDisabled": {
+        "code": -32020,
+        "message": "trajectory_disabled"
+      },
+      "EntryNotFound": {
+        "code": -32021,
+        "message": "entry_not_found"
+      },
+      "CursorExpired": {
+        "code": -32022,
+        "message": "cursor_expired"
+      },
+      "RevisionChanged": {
+        "code": -32023,
+        "message": "revision_changed"
       }
     }
   }

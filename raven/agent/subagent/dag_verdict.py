@@ -25,6 +25,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.security.trust import wrap_untrusted
 
 _TOOL_NAME = "report_verdict"
@@ -239,15 +240,16 @@ _DESCRIBE_INSTRUCTION = (
 
 
 async def _call(provider: Any, messages: list[dict], model: str | None, timeout_s: float) -> Any:
-    return await asyncio.wait_for(
-        provider.chat_with_retry(
-            messages=messages,
-            tools=verdict_tool_schema(),
-            model=model,
-            tool_choice="auto",
-        ),
-        timeout=timeout_s,
-    )
+    with _llm_purpose("dag_verdict"):
+        return await asyncio.wait_for(
+            provider.chat_with_retry(
+                messages=messages,
+                tools=verdict_tool_schema(),
+                model=model,
+                tool_choice="auto",
+            ),
+            timeout=timeout_s,
+        )
 
 
 async def judge(

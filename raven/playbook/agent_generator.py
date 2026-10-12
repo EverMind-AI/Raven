@@ -19,6 +19,7 @@ from loguru import logger
 
 from raven.agent.harness_capabilities import function_enabled, parameter_enabled
 from raven.agent.subagent.delegate import DelegateTable, Worker
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.playbook.agent_spec import AgentPlaybookSpec
 
 if TYPE_CHECKING:
@@ -1037,12 +1038,13 @@ class _PlaybookGenerator:
         roster = set(agent_names)
         for _ in range(1 + MAX_REPAIR_ROUNDS):
             try:
-                response = await self._provider.chat_with_retry(
-                    messages=messages,
-                    tools=tools,
-                    model=self._model or None,
-                    tool_choice={"type": "function", "function": {"name": self.tool_name}},
-                )
+                with _llm_purpose("playbook"):
+                    response = await self._provider.chat_with_retry(
+                        messages=messages,
+                        tools=tools,
+                        model=self._model or None,
+                        tool_choice={"type": "function", "function": {"name": self.tool_name}},
+                    )
             except Exception as exc:  # noqa: BLE001 - setup failure must not cost the turn
                 logger.warning("agent playbook: {} generation failed ({}); running unconfigured", self.mode, exc)
                 return HarnessResolution()

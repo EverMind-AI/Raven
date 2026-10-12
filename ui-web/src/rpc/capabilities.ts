@@ -12,8 +12,9 @@
  *     tolerances read as a list instead of being found by grep.
  *
  * `system.hello` is the third source and the coarsest: `server_capabilities`
- * announces "jsonrpc-2.0", "subscriptions" and "cli-dispatch" and nothing
- * finer (raven/rpc/methods/system.py), so `absorb()` records it and `serves()`
+ * announces "jsonrpc-2.0", "subscriptions" and "cli-dispatch", plus
+ * "trajectory-v1" from a process launched with `--dev`, and nothing finer
+ * (raven/rpc/methods/system.py), so `absorb()` records it and `serves()`
  * reads it -- and none of the field questions below can be answered from it.
  */
 
@@ -51,6 +52,16 @@ export function has(name: string): boolean {
   return !absent.has(name)
 }
 
+/**
+ * Take one name back off the absent list. A refusal is remembered for the
+ * gateway that gave it, and a reconnect may land on a newer one; the caller
+ * that knows the new handshake announced the surface forgets exactly that
+ * name, so every other memory stands.
+ */
+export function forget(name: string): void {
+  absent.delete(name)
+}
+
 /** Back to the state a fresh page starts in. For tests. */
 export function resetCapabilities(): void {
   absent.clear()
@@ -59,6 +70,13 @@ export function resetCapabilities(): void {
 
 const field = (holder: unknown, name: string): unknown =>
   holder !== null && typeof holder === 'object' ? (holder as Record<string, unknown>)[name] : undefined
+
+/**
+ * The gateway serves the `trajectory.*` methods: it announces them only when
+ * it was launched with the view enabled. `trajectory.state` still says whether
+ * the view is on, and a refusal still stops the asking.
+ */
+export const servesTrajectory = (): boolean => serves('trajectory-v1')
 
 /* ── the eleven version tolerances, each one site's own condition ────── */
 

@@ -7,6 +7,7 @@
 | `raven` 或 `raven tui` | 启动终端界面 |
 | `raven web` | 打开 WebUI，并让 Raven 在后台运行 |
 | `raven web --stop` | 停止 WebUI 后台服务 |
+| `raven web --dev` | 打开 WebUI 并启用仅供开发者使用的轨迹视图（也可用 `raven --dev`） |
 | `raven agent -m "..."` | 从命令行执行单次任务 |
 | `raven onboard` | 配置模型服务商、沙箱、消息渠道、记忆、网络工具凭据、子 Agent 和数据导入 |
 | `raven status` | 查看配置与运行状态 |
@@ -21,9 +22,9 @@
 | `raven playbook` | 创建、校验、管理和运行可复用的 Agent 工作流 |
 | `raven provider` | 配置模型服务商与端点、完成认证、测试连通性并选择当前模型 |
 | `raven channels` | 列出、配置、认证、启用或禁用消息渠道 |
-| `raven gateway` | 启动网关及已配置的服务 |
+| `raven gateway` | 启动网关及已配置的服务；`--dev` 在其托管的页面中启用轨迹视图 |
 | `raven gateway status` / `raven gateway reload` / `raven gateway stop` | 查看网关状态、重新加载配置，或有序停止网关 |
-| `raven serve` | 启动 WebSocket RPC 服务，并在 WebUI 构建产物可用时提供页面 |
+| `raven serve` | 启动 WebSocket RPC 服务，并在 WebUI 构建产物可用时提供页面；`--dev` 启用轨迹视图 |
 | `raven skill` | 浏览 SkillForge 技能、查看内容、屏蔽或解除屏蔽技能，以及移除已安装的技能包 |
 | `raven plugins` | 列出已安装的插件和当前记忆后端 |
 | `raven plugin auth <server>` | 为 MCP 服务完成认证或刷新 OAuth 授权 |

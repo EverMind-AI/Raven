@@ -94,6 +94,11 @@ def _can_open_a_browser() -> bool:
 def main(
     ctx: typer.Context,
     version: bool = typer.Option(None, "--version", "-v", callback=version_callback, is_eager=True),
+    dev: bool = typer.Option(
+        False,
+        "--dev",
+        help="Developer launch: enable the trajectory view in the web page (bare `raven` only).",
+    ),
 ):
     """Raven - Agent Framework.
 
@@ -109,14 +114,28 @@ def main(
     """
     i18n.set_language(_saved_language())
     if ctx.invoked_subcommand is not None:
+        if dev:
+            # The root flag shapes the bare launch only; ahead of a subcommand
+            # it would be dropped without a word, so it is refused instead.
+            sub = ctx.invoked_subcommand
+            hint = (
+                f"put --dev after the subcommand: raven {sub} --dev"
+                if sub in ("web", "serve", "gateway")
+                else "--dev ahead of a subcommand applies to bare `raven` only"
+            )
+            raise typer.BadParameter(hint, param_hint="'--dev'")
         return
     if _can_open_a_browser():
         from raven.cli.serve_commands import _web
         from raven.rpc.transports.ws import DEFAULT_PORT
 
-        _web(DEFAULT_PORT)
+        _web(DEFAULT_PORT, dev=dev)
         return
     console.print("No browser to open the page with; starting the terminal UI. `raven web` prints the URL instead.")
+    if dev:
+        # The TUI's own --dev means "run from the TypeScript source", so the
+        # flag is dropped here rather than forwarded under a different meaning.
+        console.print("the terminal UI has no trajectory view; --dev is ignored here")
     from raven.cli.tui_commands import tui as _tui_entry
 
     # Delegate to the exact `raven tui` callback so the onboarding gate and

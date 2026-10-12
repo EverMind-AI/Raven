@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 from pydantic import ValidationError
 
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.playbook.agent_spec import AgentPlaybookSpec
 from raven.playbook.prompt import _inline_local_refs
 from raven.playbook.types import ParamSpec, slugify
@@ -186,12 +187,13 @@ class WorkflowCompiler:
         ]
         for _ in range(2):
             try:
-                response = await self._provider.chat_with_retry(
-                    messages=messages,
-                    tools=_tool(),
-                    model=self._model or None,
-                    tool_choice={"type": "function", "function": {"name": EMIT_WORKFLOW}},
-                )
+                with _llm_purpose("playbook"):
+                    response = await self._provider.chat_with_retry(
+                        messages=messages,
+                        tools=_tool(),
+                        model=self._model or None,
+                        tool_choice={"type": "function", "function": {"name": EMIT_WORKFLOW}},
+                    )
                 data = _args(response)
                 if data is None:
                     raise ValueError(f"model did not call {EMIT_WORKFLOW}")

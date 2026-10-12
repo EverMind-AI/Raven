@@ -412,10 +412,16 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 "for normal operation."
             ),
         ),
+        dev: bool = typer.Option(
+            False, "--dev", help="Developer launch: serve the trajectory view in the hosted page."
+        ),
     ):
         """Start the Raven gateway."""
         if ctx.invoked_subcommand is not None:
             return
+        from raven.trajectory import policy as trajectory_policy
+
+        trajectory_policy.arm(dev)
         # Before the instance lock, not after: the wait inside can last the
         # whole install, and holding the lock through it is what would stop the
         # gateway that the finished install is supposed to bring back.

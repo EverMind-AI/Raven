@@ -38,6 +38,7 @@ from raven.memory_engine.consolidate.behaviors import (
     BehaviorEvent,
     render_append_block,
 )
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.session.manager import SessionManager
 
 if TYPE_CHECKING:
@@ -424,15 +425,16 @@ class BehaviorsExtractor:
                 "content": (f"Session: {session_key}\n\nMessages:\n{rendered}"),
             },
         ]
-        response = await self.provider.chat_with_retry(
-            messages=messages,
-            tools=build_extract_tool(),
-            model=self.model or None,
-            tool_choice={
-                "type": "function",
-                "function": {"name": _EXTRACT_TOOL_NAME},
-            },
-        )
+        with _llm_purpose("memory_extract"):
+            response = await self.provider.chat_with_retry(
+                messages=messages,
+                tools=build_extract_tool(),
+                model=self.model or None,
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": _EXTRACT_TOOL_NAME},
+                },
+            )
         if not response.has_tool_calls:
             return []
         args = response.tool_calls[0].arguments

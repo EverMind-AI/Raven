@@ -47,6 +47,7 @@ from raven.rpc.methods.subagents import register_subagents_methods
 from raven.rpc.methods.system import register_system_methods
 from raven.rpc.methods.tasks import register_tasks_methods
 from raven.rpc.methods.terminal import register_terminal_methods
+from raven.rpc.methods.trajectory import register_trajectory_methods
 from raven.rpc.methods.turn import (
     register_session_interrupt_method,
     register_turn_methods,
@@ -237,6 +238,7 @@ def register_aligned_methods_except_system(
     # without an RPC surface. (A matching subagent.* view waits for the
     # transcript writer that would give it anything to list.)
     register_memory_methods(dispatcher)
+    register_trajectory_methods(dispatcher)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the
     # page can list what is stored and read one whole spec. Registered

@@ -14,14 +14,28 @@
 import { ask as drawAsk, dropSeg, note as drawNote } from '../../features/transcript/mount'
 import { setStuck } from '../../features/transcript/tail'
 import { readMessage } from '../../lib/attachments'
+import { makeStore } from '../store'
 
 import type { NoteHandle } from '../../features/transcript/types'
+
+/* The same flag as a value, for a module that cannot read the column's
+   attribute: the trajectory island decides whether its toggle may appear by
+   whether the conversation on screen has content, and reaching for `.chat`
+   from a feature is not its to do. Written by the two verbs below, never
+   separately, so the attribute and the value cannot disagree. */
+const fresh = makeStore<boolean>(true)
+
+/** Whether the column is in its empty state. */
+export const isFresh = fresh.get
+/** For `useSyncExternalStore` and for a store that mirrors the flag. */
+export const onFresh = fresh.subscribe
 
 /* The empty state is the composer itself, moved to the visual centre -- no
    mark, no facts, no title. `unpitch` lifts the flag again. */
 export function pitch(): void {
   const c = document.querySelector('.chat') as HTMLElement | null
   if (c) c.dataset.fresh = '1'
+  fresh.set(true)
 }
 
 /* Leaving the empty state. Its own verb, because the flag drives a whole layout
@@ -33,6 +47,11 @@ export function pitch(): void {
 export function unpitch(): void {
   const c = document.querySelector('.chat') as HTMLElement | null
   if (c) delete c.dataset.fresh
+  fresh.set(false)
+}
+
+export function _resetFreshForTests(): void {
+  fresh._resetForTests()
 }
 
 /* The composer appends an "[attachments]" note plus "- path" bullets for the
