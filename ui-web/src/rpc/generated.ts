@@ -3890,7 +3890,14 @@ export interface FsReadResult {
 export interface FsUploadParams {
   name: string;
   content_b64: string;
+  /**
+   * An existing session key, or a channel prefix such as tui: for a draft.
+   */
   session?: string;
+  /**
+   * A draft's selected working directory, used only to avoid attachment name collisions.
+   */
+  workdir?: string;
 }
 export interface FsUploadResult {
   /**
@@ -3937,6 +3944,14 @@ export interface DeckTemplatesPickParams {
    * A row's name from deck.templates.list.
    */
   name: string;
+  /**
+   * An existing session key, or a channel prefix such as tui: for a draft.
+   */
+  session?: string;
+  /**
+   * A draft's selected working directory, used only to avoid attachment name collisions.
+   */
+  workdir?: string;
 }
 export interface DeckTemplatesPickResult {
   /**

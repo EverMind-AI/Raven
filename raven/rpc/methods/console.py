@@ -2063,6 +2063,26 @@ def _upload_root() -> Path:
     return Path(load_config().workspace_path).expanduser().resolve()
 
 
+def _upload_shadow_dirs(params: dict, home: Path, agent_loop_factory) -> tuple[Path, ...]:
+    """Check the draft's selection and the runtime root, which a process override can pin."""
+    roots: list[Path] = []
+    workdir = params.get("workdir")
+    if workdir:
+        from raven.agent.workdir import validate_override
+
+        try:
+            roots.append(validate_override(workdir, home) / _UPLOAD_DIR)
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc), data={"field": "workdir"}) from exc
+    try:
+        resolved = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / _UPLOAD_DIR
+        if resolved not in roots and resolved != home / _UPLOAD_DIR:
+            roots.append(resolved)
+    except Exception as exc:
+        logger.warning("uploads: cannot read the session's working directory ({}); skipping this name check", exc)
+    return tuple(roots)
+
+
 async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     """Store an uploaded file under ``<agent home>/uploads`` and return its path.
 
@@ -2077,12 +2097,13 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     another session's root, which is why the web UI's composer sends that
     one.
 
-    ``session`` does not select the root -- see :func:`_upload_root` -- but it
-    is what names the root the collision check above has to look past.
+    ``session`` selects the collision check's root. A draft supplies its
+    channel prefix and optional ``workdir`` before it has a session key;
+    neither changes where the upload is written.
     """
     import base64
 
-    from raven.rpc.files import MAX_UPLOAD_BYTES
+    from raven.rpc.files import MAX_UPLOAD_BYTES, upload_target
 
     root = _upload_root()
     raw = params.get("content_b64") or ""
@@ -2095,6 +2116,7 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
     if len(data) > MAX_UPLOAD_BYTES:
         raise ConfigValidationError(f"file exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit")
 
+    shadow_dirs = _upload_shadow_dirs(params, root, agent_loop_factory)
     target_dir = root / _UPLOAD_DIR
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -2103,42 +2125,7 @@ async def fs_upload(params: dict, *, agent_loop_factory=None) -> dict:
         # the page as a bare -32603 ``internal_error`` with no reason in it.
         raise ConfigValidationError(f"cannot create {target_dir}: {e}") from None
     name = _safe_name(params.get("name", ""))
-    # The session's own root is read first by ``viewer_root``, which both
-    # ``turn.send`` and ``/file`` follow, so a name that root already holds
-    # would hand a caller that sends the relative ``path`` that file instead of
-    # the bytes just uploaded. An empty ``session`` -- a draft, which has no
-    # conversation yet -- is checked against the resolver's policy default (the
-    # launch directory under ``raven serve``, ``<session root>/_`` under
-    # ``raven gateway``), which need not be where the draft will run: the web
-    # UI's composer sends ``abs_path``, which no root can stand in for. A root
-    # that cannot be read at all leaves agent home to decide alone, as
-    # ``turn.send`` falls back to agent home there.
-    try:
-        shadow_dir = _workspace_root(_safe_loop(agent_loop_factory), str(params.get("session") or "")) / _UPLOAD_DIR
-    except Exception as exc:
-        logger.warning(
-            "fs.upload: cannot read the session's working directory ({}); agent home alone decides the name", exc
-        )
-        shadow_dir = None
-
-    def shadowed(candidate: str) -> bool:
-        if shadow_dir is None:
-            return False
-        try:
-            return (shadow_dir / candidate).exists()
-        except OSError as exc:
-            # ``Path.exists`` raises EACCES rather than answering False: a folder
-            # the engine may not read must not cost the upload, which agent home
-            # alone can still name.
-            logger.warning("fs.upload: cannot read {} ({}); agent home alone decides the name", shadow_dir, exc)
-            return False
-
-    target = target_dir / name
-    stem, suffix = target.stem, target.suffix
-    n = 1
-    while target.exists() or shadowed(target.name):
-        target = target_dir / f"{stem}-{n}{suffix}"
-        n += 1
+    target = upload_target(target_dir, name, shadow_dirs)
     try:
         target.write_bytes(data)
     except OSError as e:
@@ -2214,8 +2201,10 @@ async def deck_templates_pick(params: dict, *, agent_loop_factory=None) -> dict:
     template = deck_templates.find(name)
     if template is None:
         raise ConfigValidationError(f"no bundled deck template named {name!r}")
+    home = _upload_root()
+    shadow_dirs = _upload_shadow_dirs(params, home, agent_loop_factory)
     try:
-        target = deck_templates.deposit(template, _upload_root() / _UPLOAD_DIR, _reader_language())
+        target = deck_templates.deposit(template, home / _UPLOAD_DIR, _reader_language(), shadow_dirs=shadow_dirs)
     except OSError as e:
         raise ConfigValidationError(f"cannot place the template under uploads: {e}") from None
     return {"path": f"{_UPLOAD_DIR}/{target.name}", "abs_path": str(target), "size": target.stat().st_size}

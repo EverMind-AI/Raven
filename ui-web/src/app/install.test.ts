@@ -80,6 +80,43 @@ describe('the tasks seam installSources grows', () => {
   })
 })
 
+describe('attachment destination context', () => {
+  it.each(['upload', 'template'])('passes the current draft or session directory on each %s', async (kind) => {
+    let session: string | null = null
+    let workdir: string | null = '/projects/pinned'
+    const wiring = await harness({
+      'src/lib/session': { current: () => session, onChange: () => {} },
+      'src/state/workdir': { staged: () => workdir },
+    })
+    const { setSources, sources } = await import('../state/sources')
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+    wiring.installSources()
+    const calls: Array<{ method: string; params: unknown }> = []
+    await fakeGateway(async (method: string, params: unknown) => {
+      calls.push({ method, params })
+      return { path: 'uploads/amber.pptx', abs_path: '/home/uploads/amber.pptx', size: 1 }
+    })
+    const attach = () => kind === 'upload'
+      ? sources.composer!.upload!({ name: 'amber.pptx', content_b64: 'eA==' })
+      : sources.composer!.templates!.pick('amber')
+
+    await attach()
+    workdir = null
+    await attach()
+    session = 'tui:created'
+    workdir = '/projects/stale-draft'
+    await attach()
+
+    const method = kind === 'upload' ? 'fs.upload' : 'deck.templates.pick'
+    const payload = kind === 'upload' ? { name: 'amber.pptx', content_b64: 'eA==' } : { name: 'amber' }
+    expect(calls).toEqual([
+      { method, params: { ...payload, session: 'tui:', workdir: '/projects/pinned' } },
+      { method, params: { ...payload, session: 'tui:' } },
+      { method, params: { ...payload, session: 'tui:created' } },
+    ])
+  })
+})
+
 describe('the session-pointer reload (installActions)', () => {
   it('asks the seam for the conversation arrived at, not only when nothing has loaded yet', async () => {
     const wiring = await harness()

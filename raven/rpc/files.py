@@ -1,4 +1,4 @@
-"""Path policy for the front end's file viewer.
+"""Path policy for the front end's file viewer and attachment deposits.
 
 The viewer may render exactly what the agent may read: the resolver below is the
 same one the filesystem tools use, given the same workspace and the same
@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
+
+from loguru import logger
 
 from raven.agent.tools.filesystem import resolve_path
 from raven.agent.workdir import default_channel_root
@@ -279,6 +281,28 @@ def content_type_for(path: Path) -> str:
 
 UPLOAD_DIR = "uploads"
 """Where ``fs.upload`` deposits under agent home, and the prefix an upload's path carries."""
+
+
+def upload_target(uploads: Path, name: str, shadow_dirs: tuple[Path, ...] = ()) -> Path:
+    """Choose a free path for a sanitized filename across attachment directories."""
+    target = uploads / name
+    stem, suffix = target.stem, target.suffix
+    n = 1
+    readable = list(shadow_dirs)
+    while True:
+        occupied = target.exists()
+        for shadow_dir in tuple(readable):
+            if occupied:
+                break
+            try:
+                occupied = (shadow_dir / target.name).exists()
+            except OSError as exc:
+                logger.warning("uploads: cannot read {} ({}); skipping this name check", shadow_dir, exc)
+                readable.remove(shadow_dir)
+        if not occupied:
+            return target
+        target = uploads / f"{stem}-{n}{suffix}"
+        n += 1
 
 
 def workspace_root(loop, session_key: str = "") -> Path:

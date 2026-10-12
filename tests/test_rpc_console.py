@@ -932,6 +932,105 @@ async def test_fs_upload_names_the_directory_it_could_not_create(tmp_path: Path,
     assert "uploads" in str(excinfo.value)
 
 
+@pytest.mark.parametrize("method", ["fs_upload", "deck_templates_pick"])
+@pytest.mark.parametrize("context", ["draft_launch", "draft_gateway", "draft_pinned", "draft_process", "session"])
+async def test_attachment_deposits_keep_relative_paths_unambiguous(
+    tmp_path: Path, monkeypatch, method, context
+) -> None:
+    import base64
+
+    from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
+    from raven.rpc.files import viewer_root
+
+    home = tmp_path / "home"
+    launch = tmp_path / "launch"
+    channels = tmp_path / "channels"
+    pinned = tmp_path / "pinned"
+    policy = WorkdirPolicy.LAUNCH_DIR if context == "draft_launch" else WorkdirPolicy.PER_CHANNEL
+    resolver = WorkdirResolver(
+        policy,
+        agent_home=home,
+        launch_dir=launch,
+        session_root=channels,
+        explicit_workdir=launch if context == "draft_process" else None,
+    )
+    session = "tui:existing" if context == "session" else "tui:"
+    project = pinned if context in {"draft_pinned", "session"} else resolver.resolve(session, create=False)
+    loop = SimpleNamespace(peek_session_workdir=lambda key: resolver.resolve(key, create=False))
+    if context == "session":
+        loop = _WorkdirLoop({session: project}, resolver.resolve("", create=False))
+    _agent_home(monkeypatch, home)
+    (home / "uploads").mkdir(parents=True)
+    (project / "uploads").mkdir(parents=True)
+    (project / "uploads" / "amber.pptx").write_bytes(b"project original")
+    (home / "uploads" / "amber-1.pptx").write_bytes(b"previous upload")
+    (project / "uploads" / "amber-2.pptx").write_bytes(b"project second")
+    params = {"name": "amber.pptx", "session": session}
+    if context in {"draft_pinned", "draft_process"}:
+        params["workdir"] = str(pinned)
+    if context == "draft_pinned":
+        loop = _WorkdirLoop({}, channels / "tui")
+    if method == "fs_upload":
+        params["content_b64"] = base64.b64encode(b"new attachment").decode()
+        expected = b"new attachment"
+    else:
+        _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+        expected = b"PKamber"
+
+    handler = getattr(console_module, method)
+    for suffix in (3, 4):
+        result = await handler(params, agent_loop_factory=_loop_factory(loop))
+        assert result["path"] == f"uploads/amber-{suffix}.pptx"
+        relative = Path(result["path"])
+        resolved = viewer_root(project, relative, home) / relative
+        assert resolved == Path(result["abs_path"])
+        assert resolved.read_bytes() == expected
+    assert (project / "uploads" / "amber.pptx").read_bytes() == b"project original"
+    assert (project / "uploads" / "amber-2.pptx").read_bytes() == b"project second"
+    assert (home / "uploads" / "amber-1.pptx").read_bytes() == b"previous upload"
+
+
+@pytest.mark.parametrize("method", ["fs_upload", "deck_templates_pick"])
+@pytest.mark.parametrize("workdir", ["relative", "home", "parent", "memory"])
+async def test_attachment_deposits_validate_draft_workdirs(tmp_path: Path, monkeypatch, method, workdir) -> None:
+    import base64
+
+    home = tmp_path / "home"
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+    paths = {"relative": "project", "home": str(home), "parent": str(tmp_path), "memory": str(home / "user_memory")}
+    params = {"name": "amber.pptx", "session": "tui:", "workdir": paths[workdir]}
+    if method == "fs_upload":
+        params["content_b64"] = base64.b64encode(b"attachment").decode()
+
+    with pytest.raises(ConfigValidationError, match="working directory"):
+        await getattr(console_module, method)(params, agent_loop_factory=_loop_factory(None))
+    assert not (home / "uploads" / "amber.pptx").exists()
+
+
+async def test_deck_templates_pick_survives_an_unreadable_session_root(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+    real_exists = Path.exists
+    refused = []
+
+    def exists(path: Path, *args, **kwargs) -> bool:
+        if path.is_relative_to(project):
+            refused.append(path)
+            raise PermissionError("session directory is unreadable")
+        return real_exists(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    result = await console_module.deck_templates_pick(
+        {"name": "amber", "session": "tui:pinned"},
+        agent_loop_factory=_loop_factory(_WorkdirLoop({"tui:pinned": project}, tmp_path / "default")),
+    )
+    assert refused == [project / "uploads" / "amber.pptx"]
+    assert Path(result["abs_path"]).read_bytes() == b"PKamber"
+
+
 async def test_fs_root_survives_a_loop_without_the_resolver(tmp_path: Path) -> None:
     """An older loop object has no ``peek_session_workdir``; the handler falls
     back to its workspace rather than crashing the panel."""
@@ -2647,7 +2746,7 @@ async def test_deck_templates_pick_says_why_when_the_copy_cannot_land(tmp_path: 
     _agent_home(monkeypatch, home)
     _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
 
-    def full_disk(template, uploads, *_):
+    def full_disk(template, uploads, *_, **kwargs):
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(deck_templates, "deposit", full_disk)

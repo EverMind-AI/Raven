@@ -5490,7 +5490,16 @@
           "name": "session",
           "required": false,
           "schema": {
-            "type": "string"
+            "type": "string",
+            "description": "An existing session key, or a channel prefix such as tui: for a draft."
+          }
+        },
+        {
+          "name": "workdir",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "A draft's selected working directory, used only to avoid attachment name collisions."
           }
         }
       ],
@@ -5604,6 +5613,22 @@
           "schema": {
             "type": "string",
             "description": "A row's name from deck.templates.list."
+          }
+        },
+        {
+          "name": "session",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "An existing session key, or a channel prefix such as tui: for a draft."
+          }
+        },
+        {
+          "name": "workdir",
+          "required": false,
+          "schema": {
+            "type": "string",
+            "description": "A draft's selected working directory, used only to avoid attachment name collisions."
           }
         }
       ],
