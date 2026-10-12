@@ -126,7 +126,7 @@ upload-bug-report` all read one setting:
 | --- | --- |
 | not set | the build's default (empty in this repository: packages stay local) |
 | set to an empty value | uploading off, even in a build that ships a default |
-| `https://ops.example.com/raven-bugreports` | upload there; a path prefix is fine, the client adds `/v1/bugreports` |
+| `https://ops.example.com/raven-bugreports` | upload there; a path prefix is fine, the client adds `/v1/bugreports`; a query, a fragment or credentials in the URL are refused |
 | `http://127.0.0.1:18795` | plain HTTP is accepted on this machine only |
 | `http://10.1.2.3:18795` | refused unless `RAVEN_BUGREPORT_ALLOW_HTTP=1` says plaintext on the network is acceptable |
 

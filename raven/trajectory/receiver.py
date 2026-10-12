@@ -359,7 +359,7 @@ class ReceiverStore:
             payload = json.loads(sidecar.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, RecursionError) as exc:
             logger.warning("sidecar {} is unreadable ({}); rebuilding it", sidecar.name, exc)
             return None
         problem = _sidecar_problem(

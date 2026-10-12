@@ -136,6 +136,12 @@ def test_upload_url_prefers_the_environment(monkeypatch):
         ("ftp://ops.example", False),
         ("ops.example.com", False),
         ("", False),
+        ("https://ops.example/base?token=x", False),
+        ("https://ops.example/base#frag", False),
+        ("https://ops.example/base?", False),
+        ("https://user:secret@ops.example/base", False),
+        ("https://user@ops.example/base", False),
+        ("https://@ops.example/base", False),
     ],
 )
 def test_validate_upload_url(url, ok):
@@ -151,6 +157,31 @@ def test_allow_http_opens_the_lan_but_not_nonsense():
     assert tupload.validate_upload_url("http://10.1.2.3/", environ=env) == "http://10.1.2.3"
     with pytest.raises(tupload.UploadConfigError):
         tupload.validate_upload_url("not a url", environ=env)
+
+
+@pytest.mark.parametrize("allow_http", [False, True])
+def test_credentials_in_the_url_are_refused_without_being_echoed(allow_http):
+    env = {"RAVEN_BUGREPORT_ALLOW_HTTP": "1"} if allow_http else {}
+    for url in (
+        "http://user:secret@10.1.2.3/base",
+        "http://user:secret@127.0.0.1/base",
+        "https://user:secret@ops.example",
+    ):
+        with pytest.raises(tupload.UploadConfigError) as exc:
+            tupload.validate_upload_url(url, environ=env)
+        assert "credentials" in str(exc.value) and "secret" not in str(exc.value)
+
+
+def test_query_and_fragment_are_refused_so_the_endpoint_path_is_never_swallowed():
+    env = {"RAVEN_BUGREPORT_ALLOW_HTTP": "1"}
+    for url in ("http://10.1.2.3/base?token=x", "http://10.1.2.3/base#frag", "https://ops.example/base?a=1#b"):
+        with pytest.raises(tupload.UploadConfigError, match="query or fragment"):
+            tupload.validate_upload_url(url, environ=env)
+
+
+def test_upload_target_never_names_credentials():
+    assert tupload.upload_target("https://user:secret@ops.example:8443/base/") == "https://ops.example:8443"
+    assert tupload.upload_target("http://[::1]:18795/x") == "http://[::1]:18795"
 
 
 BROKEN_URLS = ["https://[broken", "https://ops.example:notaport", "https://ops.example:99999", "https://ops.example:0"]

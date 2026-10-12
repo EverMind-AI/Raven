@@ -110,7 +110,7 @@ location /v1/bugreports {
 | --- | --- |
 | 未设置 | 用构建内置的默认值（本仓库为空：包留在本机） |
 | 设为空值 | 关闭上传，即使构建内置了默认地址 |
-| `https://ops.example.com/raven-bugreports` | 上传到那里；可以带路径前缀，客户端自己拼 `/v1/bugreports` |
+| `https://ops.example.com/raven-bugreports` | 上传到那里；可以带路径前缀，客户端自己拼 `/v1/bugreports`；URL 里带查询串、片段或凭据会被拒绝 |
 | `http://127.0.0.1:18795` | 明文 HTTP 只在本机被接受 |
 | `http://10.1.2.3:18795` | 除非 `RAVEN_BUGREPORT_ALLOW_HTTP=1` 声明网络上的明文可接受，否则拒绝 |
 

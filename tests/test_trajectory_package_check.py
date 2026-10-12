@@ -374,6 +374,12 @@ def test_long_json_integer_is_metadata_invalid(tmp_path):
     assert isinstance(error, PackageError)
 
 
+def test_deeply_nested_json_is_metadata_invalid(tmp_path):
+    nested = b"[" * 10_000 + b"]" * 10_000
+    error = _rejects(_package(tmp_path, _entries(metadata=nested)), pcheck.CODE_METADATA_INVALID)
+    assert "not UTF-8 JSON" in error.message
+
+
 # --- sparse members ---------------------------------------------------------
 
 
@@ -428,10 +434,13 @@ def test_harmless_pax_headers_still_pass(tmp_path):
 
 
 def test_tarfile_value_errors_become_package_errors(tmp_path, monkeypatch):
+    """Patched at ``fromtarfile``, the public entry ``TarFile.next`` calls on every
+    Python; ``frombuf`` is bypassed by the private ``_frombuf`` since 3.12.15."""
+
     def _boom(cls, *args, **kwargs):
         raise ValueError("boom")
 
-    monkeypatch.setattr(pcheck._StrictTarInfo, "frombuf", classmethod(_boom))
+    monkeypatch.setattr(pcheck._StrictTarInfo, "fromtarfile", classmethod(_boom))
     error = _rejects(_package(tmp_path), pcheck.CODE_NOT_GZIP_TAR)
     assert error.message == "boom"
 

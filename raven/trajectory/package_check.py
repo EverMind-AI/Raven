@@ -373,9 +373,11 @@ def _check_metadata(walk: _Walk, expected_report_id: str | None) -> PackageSumma
     try:
         text = walk.metadata.decode("utf-8")
         metadata = json.loads(text)
-    except ValueError as exc:
-        # UnicodeDecodeError and JSONDecodeError, plus the plain ValueError the
-        # decoder raises for an integer longer than its digit limit.
+    except (ValueError, RecursionError) as exc:
+        # UnicodeDecodeError and JSONDecodeError, the plain ValueError the
+        # decoder raises for an integer longer than its digit limit, and the
+        # RecursionError it raises for nesting deeper than the interpreter
+        # allows: all of them describe the sender's bytes, not this process.
         raise PackageError(CODE_METADATA_INVALID, f"{PACKAGE_METADATA_FILE} is not UTF-8 JSON: {exc}") from exc
     if not isinstance(metadata, dict):
         raise PackageError(CODE_METADATA_INVALID, f"{PACKAGE_METADATA_FILE} is not a JSON object")

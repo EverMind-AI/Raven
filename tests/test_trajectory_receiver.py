@@ -354,6 +354,8 @@ def _corrupt(payload, spec):
         payload["accounting_date"] = "2026-01-01"
     elif spec == "not-json":
         return "{not json"
+    elif spec == "nested-beyond-recursion":
+        return "[" * 10_000 + "]" * 10_000
     return payload
 
 
@@ -368,6 +370,7 @@ _CORRUPTIONS = [
     "notices-string",
     "wrong-date",
     "not-json",
+    "nested-beyond-recursion",
 ]
 
 
@@ -404,6 +407,15 @@ async def test_broken_sidecar_is_rebuilt_at_startup(config, save_dir, clock, spe
 async def test_broken_sidecar_is_rebuilt_on_lookup(client, save_dir, clock, spec):
     _place(save_dir, payload=_corrupt(_valid_payload(save_dir, clock), spec))
     await _assert_repaired(client, save_dir)
+
+
+async def test_metadata_nested_beyond_recursion_is_a_bad_package(client, save_dir):
+    body = _package_bytes(metadata=b"[" * 10_000 + b"]" * 10_000)
+    resp = await _post(client, body, sha=hashlib.sha256(body).hexdigest())
+    assert resp.status == 400
+    payload = await resp.json()
+    assert payload["error"] == "bad_package" and payload["message"].startswith("metadata_invalid:")
+    assert not list(save_dir.glob("*/*"))
 
 
 # --- fault injection --------------------------------------------------------

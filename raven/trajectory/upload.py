@@ -118,6 +118,17 @@ def validate_upload_url(url: str, *, environ: Mapping[str, str] | None = None) -
         raise UploadConfigError(f"{UPLOAD_URL_ENV} must be an absolute http(s) URL: {url!r}")
     if port is not None and not 1 <= port <= 65535:
         raise UploadConfigError(f"{UPLOAD_URL_ENV} has a port outside 1-65535: {url!r}")
+    if parts.username is not None or parts.password is not None:
+        # The URL is not echoed: a secret typed into the variable must not
+        # resurface on the terminal or in a record.
+        raise UploadConfigError(f"{UPLOAD_URL_ENV} must not carry credentials in the URL")
+    if "?" in url or "#" in url:
+        # Checked on the string: urlsplit reports a bare trailing "?" as an
+        # empty query, and the endpoint path appended after it would still be
+        # swallowed.
+        raise UploadConfigError(
+            f"{UPLOAD_URL_ENV} must not carry a query or fragment, the client appends the endpoint path: {url!r}"
+        )
     if _environ(environ).get(ALLOW_HTTP_ENV, "").strip().lower() not in _TRUTHY:
         try:
             require_https(url, what=UPLOAD_URL_ENV)
@@ -133,9 +144,9 @@ def resolve_upload_url(environ: Mapping[str, str] | None = None) -> str:
 
 
 def upload_target(base_url: str) -> str:
-    """What a disclosure line names: the scheme and host, never a path or query."""
+    """What a disclosure line names: the scheme and host, never a path, query or credentials."""
     parts = urlsplit(base_url)
-    return f"{parts.scheme}://{parts.netloc}"
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}"
 
 
 def _file_sha256(path: Path) -> str:
