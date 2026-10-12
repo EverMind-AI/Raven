@@ -310,7 +310,24 @@ class ExecTool(Tool):
                 f"this computer, and that machine is registered as {conn_id!r}. Look at it with "
                 f"exec(machine={conn_id!r}) (capped at 60s, nothing left running), and hand anything "
                 "longer, or anything that must keep running, to the on-call agent's ops_submit "
-                "(budget, dedup, ledger). scp and rsync to it are still fine here. Nothing was run."
+                "(budget, dedup, ledger). Its files are read and written with read_file, write_file "
+                "and edit_file on the path the way scp writes it. Nothing was run."
+            )
+        from raven.agent.tools.machine_exec import raw_copy_target
+
+        if (row := raw_copy_target(command)) is not None:
+            # A copy over scp, sftp or rsync starts nothing there, but it
+            # carries the address into the model's text and goes around the
+            # file tools' budgets and read check. The tools take the same
+            # spelling, so the model learns the path, not just that this
+            # one closed.
+            conn_id = str(row.get("id") or "").strip()
+            return (
+                f"Error: this command copies files to or from {row.get('display_name') or conn_id} with scp, "
+                f"sftp or rsync from this computer, and that machine is registered as {conn_id!r}. Its files "
+                "are reached through its Raven node instead: give read_file, list_dir, find, grep, write_file "
+                "and edit_file the path the way scp writes it (user@host:/path, or scp://user@host:port//path), "
+                "and deliver_files brings a file back. Nothing was run."
             )
 
         cwd = self._cwd_for(working_dir)

@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from raven.agent import workdir
-from raven.agent.tools import tree_walk
+from raven.agent.tools import remote_files, tree_walk
 from raven.contracts.tool import FileChange, Tool, ToolResult
+from raven.ops import remote_path
 from raven.utils.images import detect_image_mime
 
 _DIFF_MAX_LINES = 400
@@ -29,6 +30,15 @@ def _write_text_bytes(content: str) -> bytes:
     plain UTF-8 encoding of the string.
     """
     return content.replace("\n", os.linesep).encode("utf-8")
+
+
+def _machine_of(path: str) -> str | None:
+    """The registered machine ``path`` is written for, or ``None`` for a path here (or one that names no machine)."""
+    try:
+        where = remote_path.target(path)
+    except remote_path.RemotePathError:
+        return None
+    return where.machine if where is not None else None
 
 
 def _unified(before: str, after: str, name: str) -> str | None:
@@ -228,6 +238,9 @@ class ReadFileTool(_FsTool):
         )
 
     async def execute(self, path: str, offset: int = 1, limit: int | None = None, **kwargs: Any) -> str | ToolResult:
+        # A file on a registered machine is read there, by its Raven node.
+        if (remote := await remote_files.answer("read_file", path, {"offset": offset, "limit": limit})) is not None:
+            return remote
         try:
             fp = self._resolve(path)
             if not fp.exists():
@@ -315,6 +328,10 @@ class WriteFileTool(_FsTool):
         """The write as a diff against the file as it stands, before it happens."""
         path = str(params.get("path") or "")
         content = str(params.get("content") or "")
+        if (where := _machine_of(path)) is not None:
+            # The file is on another machine, so there is no file here to diff
+            # against; the card names the machine and shows the path as written.
+            return {"path": path, "machine": where}
         try:
             fp = self._resolve(path)
         except PermissionError:
@@ -382,6 +399,9 @@ class WriteFileTool(_FsTool):
         # it must never silently become is an overwrite.
         if mode == "append" and not content:
             return "Error: write_file with mode=append needs content; refusing to append nothing."
+        # A file on a registered machine is written there, by its Raven node.
+        if (remote := await remote_files.answer("write_file", path, {"content": content, "mode": mode})) is not None:
+            return remote
         try:
             fp = self._resolve(path)
             # Read before writing: a whole-file write carries no record of what
@@ -503,11 +523,13 @@ class EditFileTool(_FsTool):
         The snippets, not the file: the file is read only if the edit runs, and
         what the reader is asked to allow is exactly this substitution."""
         path = str(params.get("path") or "")
+        old, new = str(params.get("old_text") or ""), str(params.get("new_text") or "")
+        if (where := _machine_of(path)) is not None:
+            return {"path": path, "machine": where, "created": False, "diff": _unified(old, new, path)}
         try:
             shown = str(self._resolve(path))
         except PermissionError:
             shown = path
-        old, new = str(params.get("old_text") or ""), str(params.get("new_text") or "")
         return {"path": shown, "created": False, "diff": _unified(old, new, shown)}
 
     @property
@@ -542,6 +564,10 @@ class EditFileTool(_FsTool):
         replace_all: bool = False,
         **kwargs: Any,
     ) -> str | ToolResult:
+        # A file on a registered machine is edited there, by its Raven node.
+        sent = {"old_text": old_text, "new_text": new_text, "replace_all": replace_all}
+        if (remote := await remote_files.answer("edit_file", path, sent)) is not None:
+            return remote
         try:
             fp = self._resolve(path)
             if not fp.exists():
@@ -658,6 +684,9 @@ class ListDirTool(_FsTool):
         max_entries: int | None = None,
         **kwargs: Any,
     ) -> str:
+        params = {"recursive": recursive, "max_entries": max_entries}
+        if (remote := await remote_files.answer("list_dir", path, params)) is not None:
+            return str(remote)
         try:
             dp = self._resolve(path)
             if not dp.exists():

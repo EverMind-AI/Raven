@@ -30,6 +30,7 @@ from typing import Any
 from loguru import logger
 
 from raven.contracts.permissions import DecisionSource, Deny, NeedsApproval
+from raven.ops import remote_path
 from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
 
 # Windows del/rmdir are absent here on purpose too: an ordinary del /f or
@@ -113,9 +114,11 @@ def session_keys(tool_name: str, params: dict[str, Any], ask_segments: tuple[str
     work on that site, and a click and the typing that follows it are one such
     piece of work, not two. One that names no site -- the page it acts on has
     none yet: a tab it is about to open, or one still blank -- keys the exact
-    call, so its grant is never presented by a call to a real site. Every other
-    tool keys the exact call -- a `path` field on an unknown tool says nothing
-    about what its other fields do.
+    call, so its grant is never presented by a call to a real site. A read on a
+    registered machine is keyed by its machine and the directory it reaches,
+    placed on that machine, so the grant covers that directory however the path
+    is written. Every other tool keys the exact call -- a `path` field on an
+    unknown tool says nothing about what its other fields do.
     """
     if tool_name == "exec" and ask_segments:
         working_dir = params.get("working_dir")
@@ -124,6 +127,17 @@ def session_keys(tool_name: str, params: dict[str, Any], ask_segments: tuple[str
         return tuple(
             sha256(f"exec\x00{segment}\x00cwd:{cwd}\x00on:{machine}".encode()).hexdigest() for segment in ask_segments
         )
+    if (reach := remote_path.reading(tool_name, params)) is not None:
+        # A read on a registered machine is granted for its machine and
+        # directory, placed on the machine, so the same file written another
+        # way presents the same grant (C30).
+        material = f"remote-read\x00{reach.target.machine}\x00{reach.directory}"
+        return (sha256(material.encode()).hexdigest(),)
+    if (reach := remote_path.writing(tool_name, params)) is not None:
+        # A write there likewise, and apart from the read: allowing a look at
+        # a directory is not allowing changes to it.
+        material = f"remote-write\x00{reach.target.machine}\x00{reach.directory}"
+        return (sha256(material.encode()).hexdigest(),)
     path = params.get("path")
     if tool_name in PATH_KEYED_TOOLS and isinstance(path, str) and path.strip():
         material = f"{tool_name}\x00path:{os.path.normpath(path.strip())}\x00cwd:{_bound_workdir()}"

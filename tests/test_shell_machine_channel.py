@@ -808,3 +808,73 @@ def test_the_machine_lane_appears_once_a_first_machine_is_added(tmp_path, monkey
     after = served()
     assert "machine" in after["parameters"]["properties"], "the lane the reply names is in the served schema"
     assert "pass 'machine'" in after["description"]
+
+
+# ---- a copy to a registered machine goes through the file tools, not around them ----
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "scp -P 58717 a.txt root@203.0.113.7:/tmp/",
+        "scp -rP 58717 root@203.0.113.7:/tmp/a ./here",
+        "scp -o Port=58717 a.txt 203.0.113.7:a",
+        "scp -P58717 a.txt root@203.0.113.7:",
+        "sftp -P 58717 root@203.0.113.7",
+        "rsync -av -e 'ssh -p 58717' ./dir root@203.0.113.7:/data/",
+        "rsync -avP --rsh='ssh -o Port=58717' root@203.0.113.7:/data/ ./dir",
+        "rsync -av --port 58717 ./dir rsync://203.0.113.7/module",
+        "scp scp://root@203.0.113.7:58717//tmp/a .",
+        "true && \\scp -P 58717 a root@203.0.113.7:b",
+    ],
+)
+async def test_a_copy_to_a_registered_machine_is_refused_and_points_at_the_file_tools(registry, tmp_path, command):
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"{command}; touch {marker}")
+
+    assert out.startswith("Error: this command copies files to or from GPU box")
+    assert "conn_gpu" in out and "read_file" in out and "deliver_files" in out and "Raven node" in out
+    assert "203.0.113.7" not in out.replace("user@host", "")
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("scp a.txt root@203.0.113.7:/tmp/", [("203.0.113.7", 22)]),
+        ("scp -P 58717 a.txt root@203.0.113.7:/tmp/ b.txt h2:x", [("203.0.113.7", 58717), ("h2", 58717)]),
+        ("scp ./a:b /tmp/", []),
+        ("scp /tmp/a:b /tmp/c", []),
+        ("rsync -av ./dir /tmp/dir", []),
+        ("rsync -avP root@h:/data/ ./dir", [("h", 22)]),
+        ("rsync -av --port=873 ./dir h::module", [("h", 873)]),
+        ("rsync -e 'ssh -p 2222' ./x h:y", [("h", 2222)]),
+        ("sftp -P 2222 -b batch.txt h", [("h", 2222)]),
+        ("sftp root@h:uploads", [("h", 22)]),
+        # Read wherever the word stands, as the ssh guard reads `ssh`: a false
+        # refusal of an echo costs a retry, a copy let through costs the address.
+        ("echo scp root@203.0.113.7:/tmp/a", [("203.0.113.7", 22)]),
+        ("scp -i key -P 58717 a root@203.0.113.7:b", [("203.0.113.7", 58717)]),
+        ("scp 'a b:c' root@h:d", [("a b", 22), ("h", 22)]),
+        ("scp a root@h:b 2>&1", [("h", 22)]),
+        ("scp -- -weird:name root@h:b", [("-weird", 22), ("h", 22)]),
+        ("scp 'unbalanced", []),
+    ],
+)
+def test_copy_destinations_are_read_the_way_the_programs_read_them(command, expected):
+    assert machine_exec._copy_destinations(command) == expected
+
+
+async def test_a_copy_to_the_same_address_on_another_port_is_another_machine(registry):
+    assert machine_exec.raw_copy_target("scp a.txt root@203.0.113.7:/tmp/") is None
+    assert machine_exec.raw_copy_target("scp -P 58717 a.txt root@203.0.113.7:/tmp/") == dict(ROW)
+
+
+async def test_typed_ssh_to_a_registered_machine_names_the_file_tools_too(registry, tmp_path):
+    tool = ExecTool(working_dir=str(tmp_path))
+
+    out = await tool.execute(command="ssh -p 58717 root@203.0.113.7 ls")
+
+    assert "write_file and edit_file on the path the way scp writes it" in out

@@ -433,6 +433,18 @@ entry already rules the bare word out for a computer); "node id" for the install
 name (a **Node id** is a delegated task's address); "agent" or "server" (it
 answers only the Raven that reaches it, only over ssh).
 
+**By address** (`remote.files_note`, `raven/ops/remote_path.py`):
+How a file crosses machines: it does not. A file that comes with a task is named to the
+agent on the **Machine** by its address on the computer that sent it, and the agent uses
+it where the machine can read it (the same path on a disk both mount, a copy already
+there) or says it could not be found and goes on; what a session makes stays on the
+machine, named in the reply by address (the scp form), where the file tools read it by
+that address and `deliver_files` fetches one file by it on request. Nothing is copied
+ahead of a prompt, nothing is brought back unasked, and no two machines are ever told to
+share a disk: whether they do shows in whether a path reads there.
+_Avoid_: "transfer", "sync", "collect" (nothing moves on its own); "shared disk" as a
+registry fact (it is not recorded: a path either reads on a machine or does not).
+
 **Roster** (`format_agent_listing`):
 The agent table rendered as the text spliced into `spawn`'s and `run_subagent_dag`'s tool
 descriptions — `name [stateful, local-files, live-progress] (description)`. The model's only

@@ -14,6 +14,8 @@ from raven.agent import workdir
 from raven.agent.tools.deliverables import DeliverableStore
 from raven.agent.tools.filesystem import _with_current_root, resolve_path
 from raven.contracts.tool import Tool
+from raven.ops import remote_path
+from raven.ops.remote_path import RemotePath
 
 _last_stamp = 0
 
@@ -51,6 +53,60 @@ class _DeliverCtx:
     channel: str
     chat_id: str
     session_key: str
+
+
+def _on_machine(raw: str) -> RemotePath | str | None:
+    """The machine ``raw`` names, the sentence for a remote spelling that names none, or ``None`` for a path here."""
+    try:
+        return remote_path.target(raw)
+    except remote_path.RemotePathError as exc:
+        return str(exc)
+
+
+async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path | None, str]:
+    """``where``'s file, fetched from its machine to ``<workspace>/pulled/<machine>/``; or why it was not.
+
+    Only a file this process may read without asking -- under the directories
+    this Raven's agents work in there, or one it has already read (and so was
+    allowed) -- is fetched here: a delivery is not a way around the read
+    check. One over :data:`PULL_FILE_BUDGET` stays, and is named with its
+    size.
+    """
+    pool = remote_path.nodes()
+    label = remote_path._label(where._row)
+    if pool is None:
+        return None, f"files on machine {label} cannot be brought back by this process"
+    try:
+        home = await pool.home(where.machine)
+        place = where.absolute(home)
+        roots = remote_path.reading_roots(where)
+        inside = any(remote_path.within(place, remote_path.absolute(root, home)) for root in roots)
+        if not inside and remote_path.last_read(where.machine, place) is None:
+            return None, (
+                f"{where.display(place)} is outside the directories this Raven's agents work in on machine "
+                f"{label}; read it with read_file first"
+            )
+        fence = [remote_path.fence("read_file", where, place, home)]
+        info = await pool.stat(where.machine, place, roots=fence)
+        if info.get("kind") != "file":
+            return None, f"not found or not a regular file on machine {label}"
+        size = int(info.get("size") or 0)
+        if size > PULL_FILE_BUDGET:
+            return None, (
+                f"{_human_size(size)} is over the {_human_size(PULL_FILE_BUDGET)} "
+                f"limit for a file brought back from machine {label}; read it there instead"
+            )
+        local = (workspace or Path.cwd()) / "pulled" / where.machine / Path(place).name
+        await pool.pull_file(where.machine, place, local, roots=fence)
+    except remote_path.NodeCallError as exc:
+        return None, str(exc)
+    except OSError as exc:
+        return None, f"could not write the file brought back: {exc.strerror or exc}"
+    return local, ""
+
+
+#: The most a file fetched from a registered machine for a delivery may weigh; a bigger one is read there.
+PULL_FILE_BUDGET = 20 * 1024 * 1024
 
 
 def _human_size(size: int) -> str:
@@ -167,15 +223,30 @@ class DeliverFilesTool(Tool):
             if not raw:
                 invalid.append({"path": raw, "reason": "empty path"})
                 continue
-            try:
-                bound = workdir.current()
-                resolved = resolve_path(raw, bound or self._workspace, _with_current_root(self._allowed_dirs, bound))
-            except PermissionError as exc:
-                invalid.append({"path": raw, "reason": str(exc)})
+            elsewhere = _on_machine(raw)
+            if isinstance(elsewhere, str):
+                invalid.append({"path": raw, "reason": elsewhere})
                 continue
-            except (OSError, ValueError, RuntimeError) as exc:
-                invalid.append({"path": raw, "reason": f"cannot resolve path: {exc}"})
-                continue
+            if elsewhere is not None:
+                # A file on a registered machine is brought back first, within
+                # the budget, and delivered from where it landed.
+                brought, reason = await _brought_back(elsewhere, self._workspace)
+                if brought is None:
+                    invalid.append({"path": raw, "reason": reason})
+                    continue
+                resolved = brought
+            else:
+                try:
+                    bound = workdir.current()
+                    resolved = resolve_path(
+                        raw, bound or self._workspace, _with_current_root(self._allowed_dirs, bound)
+                    )
+                except PermissionError as exc:
+                    invalid.append({"path": raw, "reason": str(exc)})
+                    continue
+                except (OSError, ValueError, RuntimeError) as exc:
+                    invalid.append({"path": raw, "reason": f"cannot resolve path: {exc}"})
+                    continue
 
             key = str(resolved)
             if key in seen:

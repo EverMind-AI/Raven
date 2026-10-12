@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 
@@ -361,3 +362,101 @@ def test_a_re_delivery_refreshes_what_the_registry_says_the_file_is(tmp_path) ->
 
     rows = store.for_conversation("web:s1")
     assert [r.title for r in rows] == ["second cut"]
+
+
+# --- a file on a registered machine is brought back first ----------------------------------
+
+
+@pytest.fixture
+def machines(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from raven.ops import remote_path
+    from tests.test_node_client import row
+
+    registry = tmp_path / "connections.json"
+    registry.write_text(json.dumps({"connections": [row()]}), encoding="utf-8")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(registry))
+    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+    monkeypatch.setattr(remote_path, "_HOMES", {})
+    monkeypatch.setattr(remote_path, "_READ", {})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config", lambda *a, **k: SimpleNamespace(subagents=SimpleNamespace(agents=[]))
+    )
+    pool = _RemotePool()
+    monkeypatch.setattr(remote_path, "_NODES", lambda: pool)
+    return pool
+
+
+class _RemotePool:
+    """A node pool with one file of a given size, which it hands over as x's."""
+
+    def __init__(self) -> None:
+        self.size = 5
+        self.kind = "file"
+        self.pulled: list[tuple[str, Path, list[str]]] = []
+
+    async def home(self, machine: str) -> str:
+        return "/root"
+
+    async def stat(self, machine: str, path: str, *, roots: list[str], hash: bool = False) -> dict:
+        return {"exists": self.kind != "missing", "kind": self.kind, "size": self.size, "mtime": 1.0}
+
+    async def pull_file(self, machine: str, remote_file: str, local: Path, *, roots: list[str]) -> int:
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(b"x" * self.size)
+        self.pulled.append((remote_file, local, roots))
+        return self.size
+
+
+async def test_a_file_on_a_machine_is_brought_back_and_delivered(tool, tmp_path, machines) -> None:
+    summary = await tool.execute(files=[{"path": "box:raven-work/t1/report.pdf", "title": "Report"}])
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    (entry,) = manifest["files"]
+    landed = tmp_path / "chanwork" / "pulled" / "box" / "report.pdf"
+    assert entry["name"] == "report.pdf" and entry["path"] == str(landed) and entry["size"] == 5
+    assert landed.read_bytes() == b"xxxxx"
+    assert machines.pulled == [("/root/raven-work/t1/report.pdf", landed, ["/root/raven-work"])]
+
+
+async def test_a_file_over_the_budget_stays_on_its_machine(tool, machines) -> None:
+    machines.size = 21 * 1024 * 1024
+
+    await tool.execute(files=[{"path": "box:raven-work/t1/model.bin"}])
+
+    assert tool.take_metadata() is None, "nothing was delivered, so no manifest"
+    assert machines.pulled == []
+
+
+async def test_what_was_not_delivered_says_why(tool, machines) -> None:
+    from raven.ops import remote_path
+
+    machines.size = 21 * 1024 * 1024
+    big = await tool.execute(files=[{"path": "box:raven-work/t1/model.bin"}])
+    machines.size = 5
+    outside = await tool.execute(files=[{"path": "box:.ssh/id_rsa"}])
+    remote_path.remember_read("box", "/root/.ssh/id_rsa", "ab" * 32)
+    read_first = await tool.execute(files=[{"path": "box:.ssh/id_rsa"}])
+    nobody = await tool.execute(files=[{"path": "nobox:/etc/hostname"}])
+    machines.kind = "dir"
+    folder = await tool.execute(files=[{"path": "box:raven-work/t1"}])
+
+    assert (
+        "21.0 MB is over the 20.0 MB limit for a file brought back from machine 'Lab box' (box); read it there instead"
+        in big
+    )
+    assert (
+        "is outside the directories this Raven's agents work in on machine 'Lab box' (box); read it with read_file first"
+        in outside
+    )
+    assert "id_rsa" in read_first and "outside" not in read_first, "a file already read was allowed to be"
+    assert "is written as a path on another machine" in nobody
+    assert "not found or not a regular file on machine 'Lab box' (box)" in folder
+    # The machine is named by its label in every sentence; its address appears
+    # only inside a path shown the way scp writes it (C28).
+    assert (
+        outside.count("203.0.113.7") == 1 and "scp://worker@203.0.113.7:58717//root/.ssh/id_rsa is outside" in outside
+    )
+    assert "203.0.113.7" not in big + nobody + folder
