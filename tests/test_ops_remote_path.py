@@ -93,8 +93,9 @@ def test_a_user_and_a_machine_id_are_compared_as_written():
         ("scp://[2001:db8::5//x", "opens an address with '['"),
         ("scp://[2001:db8::5]x//x", "something after the address that is not a port"),
         ("nobox:/x", "write it as ./name or as an absolute path"),
-        # C27: a local name holding a colon reads as remote unless written as a path.
-        ("a:b.txt", "write it as ./name or as an absolute path"),
+        # C27: a local name holding a colon reads as remote unless written as a path
+        # (one letter before the colon is a drive on a Windows host: the drive-relative test).
+        ("ab:b.txt", "write it as ./name or as an absolute path"),
     ],
 )
 def test_a_path_that_names_no_registered_machine_is_refused_before_any_ssh(text, said):
