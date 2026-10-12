@@ -938,4 +938,45 @@ describe('the knowledge store', () => {
     expect(store.get().viewing?.id).toBe('d1')
     expect(store.get().aimed).toBe('')
   })
+
+  it('indexes what a model switch requeued', async () => {
+    /* Moving the model drops the collection and sends every document back to
+       the queue, and nothing else drains it: `index_pending` has no caller
+       and `added` only indexes the file it just took. Without this the base
+       comes back reading Queued on every row and stays there. */
+    install([base({ id: 'kb-a' })])
+    docs = [doc({ id: 'd1', status: 'pending' }), doc({ id: 'd2', status: 'pending' })]
+    await store.openBase(base({ id: 'kb-a' }))
+    indexed.length = 0
+
+    await store.write(base({ id: 'kb-a' }), { embedding_model: 'other-model' })
+
+    expect(indexed).toEqual(['d1', 'd2'])
+    expect(store.get().documents?.every((row) => row.status === 'ready')).toBe(true)
+  })
+
+  it('leaves a settings write that is not a model switch alone', async () => {
+    install([base({ id: 'kb-a' })])
+    docs = [doc({ id: 'd1', status: 'pending' })]
+    await store.openBase(base({ id: 'kb-a' }))
+    indexed.length = 0
+
+    await store.write(base({ id: 'kb-a' }), { chunk_size: 1024 })
+
+    expect(indexed).toEqual([])
+  })
+
+  it('re-reads the base row after a document is indexed', async () => {
+    /* The chunk count decides whether the settings sheet offers to move the
+       embedding model. Read from before the upload, the picker was offered
+       over a base that already held pieces -- and saving it dropped them. */
+    const fake = install([base({ id: 'kb-a', chunks: 0 })])
+    docs = []
+    await store.openBase(base({ id: 'kb-a', chunks: 0 }))
+    fake.rows = [base({ id: 'kb-a', chunks: 12 })]
+
+    await store.upload('handbook.pdf', 'Zm9v')
+
+    expect(store.get().opened?.chunks).toBe(12)
+  })
 })

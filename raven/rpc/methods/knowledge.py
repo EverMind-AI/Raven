@@ -293,6 +293,22 @@ async def knowledge_bases_settings(params: dict[str, Any]) -> dict[str, Any]:
         raise ConfigValidationError(f"no such base: {base_id}")
 
     if switching:
+        # Moving the model drops the collection and sends every document in
+        # the base back to `pending`, so a base that holds pieces loses all of
+        # them. The page offers the picker only while a base is empty, and it
+        # reads that from a row it does not refresh after an upload -- so the
+        # picker was still being offered over a base with twelve chunks in it.
+        #
+        # Refused here rather than trusted there: this is where the pieces
+        # are, the panel cannot be the thing that guards them, and a caller
+        # that means it says so.
+        held = sum(int(getattr(row, "chunk_count", 0) or 0) for row in manager.list_documents(base_id))
+        if held and not bool(params.get("rebuild")):
+            raise ConfigValidationError(
+                f"this base holds {held} indexed pieces; moving the embedding model cuts and embeds "
+                "every document again. Send rebuild to confirm.",
+                data={"field": "embedding_model", "chunks": held},
+            )
         # After the settings, not before: the documents this requeues are
         # re-cut on the way back in, and they should be cut by the numbers
         # this same call just wrote rather than by the ones it replaced.

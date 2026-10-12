@@ -431,6 +431,7 @@ export async function deleteChunks(ids: string[]): Promise<void> {
   try {
     await source().deleteChunks(doc.id, ids)
     await reloadChunks()
+    await refreshBase(get().opened?.id ?? '')
   } catch (e) {
     toast(reasonOf(e))
   } finally {
@@ -479,6 +480,7 @@ export async function createChunk(text: string): Promise<void> {
     await source().createChunk(doc.id, written)
     patch({ drafting: false })
     await reloadChunks()
+    await refreshBase(get().opened?.id ?? '')
   } catch (e) {
     toast(reasonOf(e))
   } finally {
@@ -591,6 +593,22 @@ export async function move(doc: KbDoc, folderId: string): Promise<void> {
 
 /** One row into the open list, replacing the row it stands for. Only while
  *  the reader is still in the base it belongs to. */
+/* What a base's own row says is the server's to say: how many documents it
+   holds and how many pieces they were cut into both move when a document is
+   added, removed, reindexed or edited by hand. Re-read rather than adjusted
+   here, because the counts are derived from the records and this page is not
+   the thing that derives them.
+
+   The chunk count in particular decides whether the settings sheet offers to
+   move the embedding model, and reading a count from before the upload is how
+   that picker came to be offered over a base holding twelve pieces. */
+async function refreshBase(baseId: string): Promise<void> {
+  if (!baseId) return
+  await load()
+  const row = (get().bases ?? []).find((one) => one.id === baseId)
+  if (row && get().opened?.id === baseId) patch({ opened: row })
+}
+
 function put(baseId: string, doc: KbDoc): void {
   if (get().opened?.id !== baseId) return
   const rows = get().documents ?? []
@@ -622,6 +640,7 @@ async function added(make: () => Promise<KbDoc>): Promise<void> {
     /* Failure comes back as a row that says failed and why, not as a throw:
        the manager records it on the document. */
     put(base.id, await source().reindex(doc.id))
+    await refreshBase(base.id)
   } catch (e) {
     toast(reasonOf(e))
     /* A call that did not come back leaves this list's copy of the status a
@@ -777,6 +796,7 @@ export async function removeDoc(doc: KbDoc): Promise<void> {
   try {
     await source().removeDoc(doc.id)
     patch({ documents: (get().documents ?? []).filter((row) => row.id !== doc.id) })
+    await refreshBase(get().opened?.id ?? '')
     /* Out of the viewer if it was what was open: a panel reading a document
        that is gone has nothing to show and no way to say why. */
     if (get().viewing?.id === doc.id) closeDoc()
@@ -853,10 +873,41 @@ export async function write(base: KbBase, settings: KbSettings): Promise<void> {
       bases: (get().bases ?? []).map((row) => (row.id === written.id ? written : row)),
       ...(get().opened?.id === written.id ? { opened: written } : {}),
     })
+    /* Moving the model drops the collection and sends every document in the
+       base back to the queue, and nothing else drains it: `index_pending` has
+       no caller, and `added` only indexes the one file it just took. Without
+       this the base comes back reading Queued on every row and stays there
+       until each is rebuilt by hand -- which is the page this change was
+       meant to stop producing. */
+    if (settings.embedding_model !== undefined) await drainPending(written.id)
   } catch (e) {
     toast(reasonOf(e))
   } finally {
     patch({ busy: false })
+  }
+}
+
+/* Index what a rebuild requeued, oldest first and one at a time.
+
+   Sequential on purpose, the way `added` indexes the file it just took: each
+   document is an embedding round trip, and firing a base's worth at once is
+   the same endpoint asked to do everything simultaneously. Each row is put
+   back as it lands, so the panel empties its queue in front of the reader
+   rather than after. */
+async function drainPending(baseId: string): Promise<void> {
+  await loadDocuments(baseId)
+  const queued = (get().documents ?? []).filter((row) => row.status === 'pending').map((row) => row.id)
+  for (const id of queued) {
+    /* The reader can leave while this runs, and the rows being put back
+       belong to the base they came from. */
+    if (get().opened?.id !== baseId) return
+    try {
+      put(baseId, await source().reindex(id))
+    } catch (e) {
+      /* One document failing is not the rebuild failing: the rest of the
+         base still wants indexing, and the row carries its own reason. */
+      toast(reasonOf(e))
+    }
   }
 }
 

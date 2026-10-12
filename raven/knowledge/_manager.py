@@ -1237,9 +1237,17 @@ class KnowledgeManager:
             sections = await parser.parse(content, record.source)
         return await self._chunker_for(base).chunk(sections), joined(notes)
 
-    async def index_pending(self) -> int:
-        """Index everything queued, oldest first. Returns how many were tried."""
+    async def index_pending(self, base_id: str = "") -> int:
+        """Index everything queued, oldest first. Returns how many were tried.
+
+        ``base_id`` narrows it to one base, which is what a model switch wants:
+        that call sends every document of its own base back to the queue, and
+        draining the whole process's queue would pull in documents nobody
+        asked about.
+        """
         pending = self._records.pending_documents()
+        if base_id:
+            pending = [document for document in pending if document.base_id == base_id]
         for document in pending:
             await self.index_document(document.id)
         return len(pending)

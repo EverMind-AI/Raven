@@ -1741,3 +1741,83 @@ async def test_forgetting_pages_never_walks_out_of_its_own_directory(monkeypatch
     knowledge_pages.forget(document_id)
 
     assert (beside / "keep.webp").exists()
+
+
+# -- moving a base onto another embedding model --------------------
+
+
+class _Piece:
+    def __init__(self, chunks: int) -> None:
+        self.chunk_count = chunks
+
+
+class _Holding(_FakeManager):
+    """A manager whose documents say how many pieces they hold."""
+
+    def __init__(self, base: _FakeBase, chunks: list[int]) -> None:
+        super().__init__([base], {})
+        self._held = [_Piece(n) for n in chunks]
+
+    def list_documents(self, base_id: str) -> list[object]:
+        return list(self._held)
+
+    def configure_base(self, base_id: str, **settings: object):
+        base = self.get_base(base_id)
+        for name, value in settings.items():
+            setattr(base, name, value)
+        return base
+
+
+async def test_moving_the_model_on_a_base_that_holds_pieces_is_refused(monkeypatch) -> None:
+    """Dropping the collection and requeueing every document is not something
+    a panel does by being saved.
+
+    The page offers the picker only while a base reads as empty, and it read
+    that from a row it did not refresh after an upload -- so the picker was
+    still offered over a base holding twelve pieces. The guard belongs here,
+    where the pieces are.
+    """
+    base = _FakeBase("b1", "notes")
+    manager = _Holding(base, [7, 5])
+    kb._set_manager_for_tests(manager)
+
+    with pytest.raises(ConfigValidationError) as refused:
+        await kb.knowledge_bases_settings({"base_id": "b1", "embedding_model": "other-model"})
+
+    assert "12" in str(refused.value), "it says how much would be thrown away"
+    assert refused.value.data["field"] == "embedding_model"
+    assert manager.switched is None, "nothing was dropped"
+
+
+async def test_moving_the_model_goes_ahead_when_the_caller_means_it(monkeypatch) -> None:
+    base = _FakeBase("b1", "notes")
+    manager = _Holding(base, [7, 5])
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_bases_settings({"base_id": "b1", "embedding_model": "other-model", "rebuild": True})
+
+    assert manager.switched == ("other-model", "")
+
+
+async def test_moving_the_model_on_an_empty_base_needs_no_confirmation(monkeypatch) -> None:
+    """Nothing to throw away, so nothing to confirm -- which is the case the
+    picker was meant for."""
+    base = _FakeBase("b1", "notes")
+    manager = _Holding(base, [0, 0])
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_bases_settings({"base_id": "b1", "embedding_model": "other-model"})
+
+    assert manager.switched == ("other-model", "")
+
+
+async def test_the_other_settings_are_untouched_by_the_guard(monkeypatch) -> None:
+    """It guards the model, not the panel: the chunk numbers move without a
+    rebuild, and what they change is how the next document is cut."""
+    base = _FakeBase("b1", "notes")
+    manager = _Holding(base, [7])
+    kb._set_manager_for_tests(manager)
+
+    await kb.knowledge_bases_settings({"base_id": "b1", "chunk_size": 1024})
+
+    assert manager.switched is None
