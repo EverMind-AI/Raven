@@ -627,7 +627,7 @@ async def _run_command_turn(
     return completes
 
 
-def _command_script(command: str = "do it", **arguments: Any) -> list[LLMResponse]:
+def _command_script(command: str = "printf ready", **arguments: Any) -> list[LLMResponse]:
     return [
         _tool_call("c1", "exec", {"command": command, **arguments}),
         LLMResponse(content="done", finish_reason="stop"),
