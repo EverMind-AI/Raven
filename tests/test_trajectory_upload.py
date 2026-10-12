@@ -172,6 +172,41 @@ def test_credentials_in_the_url_are_refused_without_being_echoed(allow_http):
         assert "credentials" in str(exc.value) and "secret" not in str(exc.value)
 
 
+SECRET_BEARING_URLS = [
+    "https://user:secret@ops.example:notaport",
+    "https://user:secret@[broken",
+    "https://user:secret@ops.example:99999",
+    "https://user:secret@ops.example:0",
+    "ftp://user:secret@ops.example",
+    "user:secret@ops.example",
+    "https://ops.example/base?token=secret",
+    "https://ops.example/base#secret",
+    "https://ops.example/base?",
+    "http://user:secret@10.1.2.3/base?token=secret",
+]
+
+
+@pytest.mark.parametrize("url", SECRET_BEARING_URLS)
+@pytest.mark.parametrize("allow_http", [False, True])
+def test_no_rejected_url_error_echoes_a_secret(url, allow_http):
+    """Whatever check refuses the URL -- a parse failure before userinfo is even
+    available, the scheme, the port range, the query rule -- the message shows
+    at most scheme, host, port and path."""
+    env = {"RAVEN_BUGREPORT_ALLOW_HTTP": "1"} if allow_http else {}
+    with pytest.raises(tupload.UploadConfigError) as exc:
+        tupload.validate_upload_url(url, environ=env)
+    message = str(exc.value)
+    assert "secret" not in message and "token" not in message and "user" not in message
+    assert tupload.UPLOAD_URL_ENV in message
+
+
+def test_rejected_url_errors_still_name_the_host():
+    with pytest.raises(tupload.UploadConfigError, match=r"'https://ops\.example:notaport'"):
+        tupload.validate_upload_url("https://user:secret@ops.example:notaport", environ={})
+    with pytest.raises(tupload.UploadConfigError, match=r"'https://ops\.example/base\?\.\.\.'"):
+        tupload.validate_upload_url("https://ops.example/base?token=secret", environ={})
+
+
 def test_query_and_fragment_are_refused_so_the_endpoint_path_is_never_swallowed():
     env = {"RAVEN_BUGREPORT_ALLOW_HTTP": "1"}
     for url in ("http://10.1.2.3/base?token=x", "http://10.1.2.3/base#frag", "https://ops.example/base?a=1#b"):

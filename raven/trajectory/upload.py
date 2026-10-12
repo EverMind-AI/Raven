@@ -100,12 +100,30 @@ def upload_url(environ: Mapping[str, str] | None = None) -> str:
     return DEFAULT_UPLOAD_URL.rstrip("/")
 
 
+def _shown(url: str) -> str:
+    """``url`` the way an error message may show it.
+
+    Userinfo and everything from the first ``?`` or ``#`` are cut on the
+    string, before any parsing, so a URL that does not even parse cannot
+    echo a secret typed into it.
+    """
+    cut = min((i for i in (url.find("?"), url.find("#")) if i != -1), default=len(url))
+    head, tail = url[:cut], url[cut:]
+    prefix, sep, rest = head.partition("://")
+    if not sep:
+        prefix, rest = "", head
+    authority, slash, path = rest.partition("/")
+    return f"{prefix}{sep}{authority.rpartition('@')[2]}{slash}{path}{tail[:1] + '...' if tail else ''}"
+
+
 def validate_upload_url(url: str, *, environ: Mapping[str, str] | None = None) -> str:
     """``url`` without its trailing slash, or :class:`UploadConfigError`.
 
     The structure is checked the way the request will parse it, so a URL
     that passes here can be sent: a malformed host or port must fail before
-    anything is collected, not after the package exists.
+    anything is collected, not after the package exists. No error text
+    carries the URL as typed: credentials and query strings are where secrets
+    end up, and the message is printed and recorded.
     """
     url = url.strip()
     try:
@@ -113,26 +131,27 @@ def validate_upload_url(url: str, *, environ: Mapping[str, str] | None = None) -
         port = parts.port
         httpx.URL(url)
     except (ValueError, httpx.InvalidURL) as exc:
-        raise UploadConfigError(f"{UPLOAD_URL_ENV} is not a valid URL: {url!r} ({exc})") from exc
+        raise UploadConfigError(f"{UPLOAD_URL_ENV} is not a valid URL: {_shown(url)!r} ({exc})") from exc
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise UploadConfigError(f"{UPLOAD_URL_ENV} must be an absolute http(s) URL: {url!r}")
+        raise UploadConfigError(f"{UPLOAD_URL_ENV} must be an absolute http(s) URL: {_shown(url)!r}")
     if port is not None and not 1 <= port <= 65535:
-        raise UploadConfigError(f"{UPLOAD_URL_ENV} has a port outside 1-65535: {url!r}")
+        raise UploadConfigError(f"{UPLOAD_URL_ENV} has a port outside 1-65535: {_shown(url)!r}")
     if parts.username is not None or parts.password is not None:
-        # The URL is not echoed: a secret typed into the variable must not
-        # resurface on the terminal or in a record.
-        raise UploadConfigError(f"{UPLOAD_URL_ENV} must not carry credentials in the URL")
+        raise UploadConfigError(f"{UPLOAD_URL_ENV} must not carry credentials in the URL: {_shown(url)!r}")
     if "?" in url or "#" in url:
         # Checked on the string: urlsplit reports a bare trailing "?" as an
         # empty query, and the endpoint path appended after it would still be
         # swallowed.
         raise UploadConfigError(
-            f"{UPLOAD_URL_ENV} must not carry a query or fragment, the client appends the endpoint path: {url!r}"
+            f"{UPLOAD_URL_ENV} must not carry a query or fragment, the client appends the endpoint path: "
+            f"{_shown(url)!r}"
         )
     if _environ(environ).get(ALLOW_HTTP_ENV, "").strip().lower() not in _TRUTHY:
         try:
             require_https(url, what=UPLOAD_URL_ENV)
         except HubTrustError as exc:
+            # Its text quotes the URL; by now that is scheme, host, port and
+            # path only, since everything else was refused above.
             raise UploadConfigError(str(exc)) from exc
     return url.rstrip("/")
 
