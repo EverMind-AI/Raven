@@ -57,8 +57,9 @@ def _plan(**fields: Any) -> Plan:
         "install_name": bundle.install_name(),
         "present": False,
         "python": "/usr/bin/python3.12",
-        "uv": "",
+        "uv": "/usr/bin/uv",
         "free_kb": 10 * 1024 * 1024,
+        "fetch": "/usr/bin/curl",
     }
     return Plan(**{**base, **fields})
 
@@ -221,8 +222,20 @@ def test_an_install_through_uv_needs_room_for_a_python_too():
     p = _plan(python="", uv="/usr/bin/uv", free_kb=None)
 
     assert p.how == "uv" and p.needed_kb == 140 * 1024
-    assert "a Python 3.12 made by the machine's uv, kept beside it" in p.describe()
+    assert "a Python 3.12 made by uv, kept beside it" in p.describe()
     assert p.describe().endswith("About 140 MB. Nothing else on the machine changes.")
+
+
+def test_a_machine_without_uv_gets_one_first_and_the_room_for_it_is_counted():
+    p = _plan(uv="", free_kb=None)
+
+    assert p.uv_from == "fetched" and p.how == "python" and p.needed_kb == 85 * 1024
+    said = p.describe()
+    assert (
+        "uv itself first, under ~/.raven-node/.uv (the machine has none), fetched with its own /usr/bin/curl;" in said
+    )
+    assert "a virtualenv of the machine's own /usr/bin/python3.12" in said and "all through uv" in said
+    assert _plan(uv="", fetch="").how == "" and _plan(uv="", fetch="").uv_from == ""
 
 
 def test_the_machine_s_own_python_wins_over_uv():
@@ -233,9 +246,14 @@ def test_the_machine_s_own_python_wins_over_uv():
     ("fields", "said"),
     [
         (
-            {"python": "", "uv": ""},
-            "machine 'Lab box' (box) has neither a Python 3.12 (with venv) nor uv; "
-            "install one of them there, then run this again",
+            {"python": "", "uv": "", "fetch": ""},
+            "machine 'Lab box' (box) has no uv, and no curl or wget to fetch one with; "
+            f"install uv there ({install.UV_INSTALLER}), then run this again",
+        ),
+        (
+            {"uv": "", "fetch": ""},
+            "machine 'Lab box' (box) has no uv, and no curl or wget to fetch one with; "
+            f"install uv there ({install.UV_INSTALLER}), then run this again",
         ),
         (
             {"free_kb": 10 * 1024},
@@ -243,8 +261,13 @@ def test_the_machine_s_own_python_wins_over_uv():
             "free some space or choose another directory with --dir",
         ),
         (
-            {"python": "", "uv": "/usr/bin/uv", "free_kb": 100 * 1024},
+            {"python": "", "free_kb": 100 * 1024},
             "~/.raven-node on machine 'Lab box' (box) has 100 MB free and a node needs about 140 MB; "
+            "free some space or choose another directory with --dir",
+        ),
+        (
+            {"uv": "", "free_kb": 70 * 1024},
+            "~/.raven-node on machine 'Lab box' (box) has 70 MB free and a node needs about 85 MB; "
             "free some space or choose another directory with --dir",
         ),
         ({"free_kb": 60 * 1024}, None),
@@ -255,19 +278,24 @@ def test_an_install_that_cannot_go_ahead_says_why(fields, said):
     assert install.refusal(_plan(**fields)) == said
 
 
-def test_the_steps_build_a_virtualenv_then_fill_it():
-    steps = install.steps(_plan(python="/opt/py 3.12/bin/python3"))
+_UV_ENV = 'UV_CACHE_DIR="$dir/.uv-cache" UV_PYTHON_INSTALL_DIR="$dir/.uv-python"'
+
+
+def test_the_steps_build_a_virtualenv_with_uv_then_fill_it_with_uv():
+    steps = install.steps(_plan(python="/opt/py 3.12/bin/python3", uv="/opt/uv"))
 
     assert [name for name, _ in steps] == ["virtualenv", "packages", "search", "code", "path", "check"]
-    head = "dir=~/.raven-node; id=" + bundle.install_name() + '; node="$dir/$id"; '
+    head = "dir=~/.raven-node; id=" + bundle.install_name() + '; node="$dir/$id"; uv=/opt/uv; '
     assert all(command.startswith(head) for _, command in steps)
     commands = dict(steps)
-    assert commands["virtualenv"] == head + 'mkdir -p "$dir" && \'/opt/py 3.12/bin/python3\' -m venv "$node"'
-    for pin in bundle.pinned(protocol.REQUIREMENTS):
-        assert pin in commands["packages"]
-    assert "--no-cache-dir" in commands["packages"]
+    assert commands["virtualenv"] == (
+        head + f'mkdir -p "$dir" && {_UV_ENV} "$uv" venv --quiet --python \'/opt/py 3.12/bin/python3\' "$node"'
+    )
+    pip = f'{_UV_ENV} "$uv" pip install --quiet --python "$node/bin/python"'
+    assert commands["packages"] == head + f"{pip} " + " ".join(bundle.pinned(protocol.REQUIREMENTS))
+    assert "python -m pip" not in " ".join(commands.values()) and " -m venv " not in " ".join(commands.values())
     (rg,) = bundle.pinned((protocol.SEARCH_REQUIREMENT,))
-    assert commands["search"].count(rg) == 2
+    assert commands["search"].count(rg) == 2 and commands["search"].count(pip) == 2
     assert f"--extra-index-url {protocol.PUBLIC_INDEX}" in commands["search"]
     assert commands["search"].endswith(">/dev/null 2>&1 && echo RG=1 || echo RG=0")
     assert commands["code"] == head + 'mkdir -p "$node/lib" && tar -xzf - -C "$node/lib"'
@@ -280,9 +308,25 @@ def test_uv_makes_its_python_inside_the_node_dir():
     commands = dict(install.steps(_plan(python="", uv="/root/.local/bin/uv")))
 
     assert commands["virtualenv"].endswith(
-        'mkdir -p "$dir" && UV_CACHE_DIR="$dir/.uv-cache" UV_PYTHON_INSTALL_DIR="$dir/.uv-python" '
-        '/root/.local/bin/uv venv --quiet --seed --python 3.12 "$node"'
+        f'uv=/root/.local/bin/uv; mkdir -p "$dir" && {_UV_ENV} "$uv" venv --quiet --python 3.12 "$node"'
     )
+
+
+@pytest.mark.parametrize(
+    ("fetch", "fetched_with"),
+    [("/usr/bin/curl", f"curl -LsSf {install.UV_INSTALLER}"), ("/usr/bin/wget", f"wget -qO- {install.UV_INSTALLER}")],
+)
+def test_a_machine_without_uv_fetches_it_under_the_node_dir_first(fetch, fetched_with):
+    steps = install.steps(_plan(uv="", fetch=fetch))
+
+    assert [name for name, _ in steps] == ["uv", "virtualenv", "packages", "search", "code", "path", "check"]
+    head = "dir=~/.raven-node; id=" + bundle.install_name() + '; node="$dir/$id"; uv="$dir/.uv/uv"; '
+    assert all(command.startswith(head) for _, command in steps)
+    assert dict(steps)["uv"] == (
+        head + f'mkdir -p "$dir/.uv" && {fetched_with} | UV_INSTALL_DIR="$dir/.uv" UV_NO_MODIFY_PATH=1 '
+        'INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null && test -x "$dir/.uv/uv"'
+    )
+    assert dict(steps)["virtualenv"].endswith('"$uv" venv --quiet --python /usr/bin/python3.12 "$node"')
 
 
 # --- carrying it out --------------------------------------------------------------
@@ -395,8 +439,8 @@ def test_the_last_json_line_is_the_one_checked(small_tarball):
 def test_an_install_that_cannot_go_ahead_sends_nothing():
     machine = Machine()
 
-    with pytest.raises(InstallError, match="has neither a Python 3.12"):
-        install.install(_plan(python="", uv=""), run=machine.run, push=machine.push)
+    with pytest.raises(InstallError, match="has no uv, and no curl or wget"):
+        install.install(_plan(python="", uv="", fetch=""), run=machine.run, push=machine.push)
 
     assert machine.sent == []
 
@@ -406,7 +450,7 @@ def test_an_install_interrupted_by_an_error_still_cleans_up(small_tarball):
 
     def run(target: remote.Machine, command: str) -> tuple[int, str]:
         machine.sent.append(command)
-        if "-m venv" in command:
+        if " venv " in command:
             raise remote.RemoteMachineError("machine 'Lab box' (box): no key")
         return 0, ""
 
@@ -478,9 +522,10 @@ def _lines(out: str) -> dict[str, str]:
 @pytest.mark.slow
 def test_the_probe_finds_the_node_a_new_enough_python_uv_and_the_room(shell):
     home, tools = shell
-    _script(tools / "python3.13", "exit 1\n")  # too old, or without venv
+    _script(tools / "python3.13", "exit 1\n")  # too old
     _script(tools / "python3.12", "exit 0\n")
     _script(tools / "uv", "exit 0\n")
+    _script(tools / "curl", "exit 0\n")
     digest = bundle.digest()
     _script(
         home / ".raven-node" / "0.1-x" / "bin" / "python",
@@ -492,7 +537,18 @@ def test_the_probe_finds_the_node_a_new_enough_python_uv_and_the_room(shell):
     assert seen["PRESENT"] == "1"
     assert seen["PYTHON"] == str(tools / "python3.12")
     assert seen["UV"] == str(tools / "uv")
+    assert seen["FETCH"] == str(tools / "curl")
     assert seen["FREE_KB"].isdigit()
+
+
+@pytest.mark.slow
+def test_the_probe_finds_the_uv_an_earlier_install_put_under_the_node_dir(shell):
+    home, tools = shell
+    _script(home / "nodes" / ".uv" / "uv", "exit 0\n")
+
+    seen = _lines(_sh(install.probe_script(str(home / "nodes"), "0.1-x", "d"), home, str(tools)))
+
+    assert seen["UV"] == str(home / "nodes" / ".uv" / "uv") and "FETCH" not in seen
 
 
 @pytest.mark.slow
@@ -521,19 +577,19 @@ def test_the_probe_finds_a_uv_the_non_login_path_misses(shell):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize(("pip_rc", "said", "tries"), [(0, "RG=1", 1), (1, "RG=0", 2)])
-def test_the_search_package_never_fails_the_install(shell, tmp_path, pip_rc, said, tries):
+@pytest.mark.parametrize(("uv_rc", "said", "tries"), [(0, "RG=1", 1), (1, "RG=0", 2)])
+def test_the_search_package_never_fails_the_install(shell, tmp_path, uv_rc, said, tries):
     home, tools = shell
-    calls = tmp_path / "pip-calls"
+    calls = tmp_path / "uv-calls"
     nodes = tmp_path / "nodes"
-    _script(nodes / "0.1-x" / "bin" / "python", f'echo "$@" >> "{calls}"; exit {pip_rc}\n')
+    uv = _script(tools / "uv", f'echo "$@" >> "{calls}"; exit {uv_rc}\n')
 
-    search = dict(install.steps(_plan(node_dir=str(nodes), install_name="0.1-x")))["search"]
+    search = dict(install.steps(_plan(node_dir=str(nodes), install_name="0.1-x", uv=str(uv))))["search"]
 
     assert _sh(search, home, str(tools)).strip() == said
     asked = calls.read_text(encoding="utf-8").splitlines()
     assert len(asked) == tries
-    assert "--extra-index-url" not in asked[0], "the machine's own index first"
+    assert asked[0].startswith("pip install --quiet --python ") and "--extra-index-url" not in asked[0]
     if tries == 2:
         assert f"--extra-index-url {protocol.PUBLIC_INDEX}" in asked[1]
 
@@ -590,7 +646,10 @@ def test_a_real_install_makes_a_node_that_reports_this_raven_s_code(registry, tm
 
     first = install.plan("box", node_dir=str(nodes), run=run)
     assert not first.present
-    p = dataclasses.replace(first, python=sys.executable, uv="")
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("the install goes through uv, which this computer does not have")
+    p = dataclasses.replace(first, python=sys.executable, uv=uv)
     done = install.install(p, run=run, push=push)
 
     assert done.install_name == bundle.install_name() and done.rg is False and (done.size_kb or 0) > 1000
@@ -608,4 +667,5 @@ def test_a_real_install_makes_a_node_that_reports_this_raven_s_code(registry, tm
     assert install.plan("box", node_dir=str(nodes), run=run).present, "the next look finds it"
 
     assert install.prune(p, run=run) == ("0.0.1-old",)
-    assert sorted(path.name for path in nodes.iterdir()) == [bundle.install_name()]
+    # uv's cache stays beside the install, for the next one; nothing else does.
+    assert sorted(path.name for path in nodes.iterdir()) == [".uv-cache", bundle.install_name()]
