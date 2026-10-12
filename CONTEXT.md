@@ -2053,6 +2053,31 @@ acknowledged. `apply_review_decisions` guarantees the array matches the
 delivered bytes: replaced values are verified gone in every spelling variant
 and kept values verified untouched before the export freezes.
 
+**Bug Report Receiver** (`raven/trajectory/receiver.py`):
+The standalone HTTP service that takes Bug Report Packages in: it validates each
+upload with `package_check.inspect_package` (streaming, never extracting), lands
+the original bytes under `<save_dir>/<UTC date>/<report-id>.tar.gz` beside an
+Upload Receipt sidecar, and answers idempotently by report id — the same bytes
+again return the stored receipt, different bytes are refused. It authenticates
+nobody and serves no listing or download; who can reach it is the network's
+job. The sidecar is written before the package is moved into place, so a
+package in a date directory is always a committed one.
+_Avoid_: "upload server" or "uploader backend" — it is not an `Uploader`
+implementation for Trajectory Reports; it is the far end a Bug Report Package
+is sent to.
+
+**Upload Receipt** (`raven/trajectory/receiver.py`):
+The Receiver's confirmation that one Bug Report Package was received:
+`receipt_id`, `report_id`, `sha256`, `size_bytes`, `received_at`, plus
+`duplicate` in the HTTP response. The server keeps it — with the remote address
+and a triage digest of `bugreport.json` — as the `<report-id>.json` sidecar
+next to the package, and the client records `receipt_id` in
+`record.json.upload.receipt`. A sidecar that is missing or fails its contract
+is rebuilt from the package: the package is the source of truth, the receipt
+is derived from it.
+_Avoid_: "receipt" for the sidecar file — the sidecar carries the receipt plus
+server-side context; the receipt is what the client gets back.
+
 **Trajectory Replay** (`raven/trajectory/replay.py`):
 Mock re-run of the harness against a Trajectory Bundle (`raven trajectory replay`):
 recorded model replies (`llm.output`) and tool results (`tool.output`) are fed back

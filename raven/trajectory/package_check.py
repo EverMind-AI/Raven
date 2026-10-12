@@ -32,7 +32,7 @@ import tarfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO, Iterator
+from typing import Any, BinaryIO, Callable, Iterator
 
 from raven.trajectory.bugreport import (
     CLASSIFICATION_CLEAN,
@@ -93,6 +93,10 @@ class PackageError(ValueError):
         self.message = message
 
 
+class InspectionStoppedError(Exception):
+    """Raised inside :func:`inspect_package` once its ``should_stop`` hook returns true."""
+
+
 class _BoundedGunzip(io.RawIOBase):
     """A forward-only view of a gzip stream's output with hard volume limits.
 
@@ -105,10 +109,13 @@ class _BoundedGunzip(io.RawIOBase):
     and skipped bytes alike — and is checked before decompressing.
     """
 
-    def __init__(self, raw: BinaryIO, *, max_output: int, max_read: int) -> None:
+    def __init__(
+        self, raw: BinaryIO, *, max_output: int, max_read: int, should_stop: Callable[[], bool] | None = None
+    ) -> None:
         self._raw = raw
         self._max_output = max_output
         self._max_read = max_read
+        self._should_stop = should_stop
         self._decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
         self._buffer = bytearray()
         self._produced = 0
@@ -139,6 +146,8 @@ class _BoundedGunzip(io.RawIOBase):
                 raise PackageError(CODE_NOT_GZIP_TAR, "trailing data after gzip stream")
 
     def _take(self, size: int, *, record: bool = True) -> bytes:
+        if self._should_stop is not None and self._should_stop():
+            raise InspectionStoppedError("inspection stopped")
         if size > self._max_read:
             raise PackageError(
                 CODE_HEADER_TOO_LARGE, f"archive header of {size} bytes exceeds the {self._max_read}-byte limit"
@@ -411,14 +420,21 @@ def _check_metadata(walk: _Walk, expected_report_id: str | None) -> PackageSumma
 
 
 def inspect_package(
-    path: Path, *, limits: PackageLimits | None = None, expected_report_id: str | None = None
+    path: Path,
+    *,
+    limits: PackageLimits | None = None,
+    expected_report_id: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> PackageSummary:
     """Validate the package at ``path`` and describe it, or raise :class:`PackageError`.
 
     The archive is read once, front to back, without extracting anything;
     every member's bytes are hashed in passing and compared against the
     manifest inside ``bugreport.json``. ``expected_report_id`` pins the
-    package to the id a caller was told to expect.
+    package to the id a caller was told to expect. ``should_stop`` is polled
+    before every read; once it returns true the walk ends with
+    :class:`InspectionStoppedError`, which is how a caller running this in a
+    worker thread stops it cooperatively.
     """
     limits = limits or PackageLimits()
     size = path.stat().st_size
@@ -427,12 +443,15 @@ def inspect_package(
     if size == 0:
         raise PackageError(CODE_NOT_GZIP_TAR, "empty file")
     with path.open("rb") as raw:
-        stream = _BoundedGunzip(raw, max_output=limits.max_unpacked_bytes, max_read=limits.max_header_bytes)
+        stream = _BoundedGunzip(
+            raw, max_output=limits.max_unpacked_bytes, max_read=limits.max_header_bytes, should_stop=should_stop
+        )
         walk = _walk(stream, limits)
     return _check_metadata(walk, expected_report_id)
 
 
 __all__ = [
+    "InspectionStoppedError",
     "PackageError",
     "PackageLimits",
     "PackageSummary",

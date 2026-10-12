@@ -434,3 +434,28 @@ def test_tarfile_value_errors_become_package_errors(tmp_path, monkeypatch):
     monkeypatch.setattr(pcheck._StrictTarInfo, "frombuf", classmethod(_boom))
     error = _rejects(_package(tmp_path), pcheck.CODE_NOT_GZIP_TAR)
     assert error.message == "boom"
+
+
+# --- cooperative stop -------------------------------------------------------
+
+
+def test_should_stop_ends_the_walk_without_a_package_error(tmp_path):
+    with pytest.raises(pcheck.InspectionStoppedError) as exc:
+        inspect_package(_package(tmp_path), should_stop=lambda: True)
+    assert not isinstance(exc.value, PackageError)
+
+
+def test_should_stop_is_polled_on_every_read(tmp_path):
+    calls = []
+
+    def _after_three():
+        calls.append(None)
+        return len(calls) > 3
+
+    with pytest.raises(pcheck.InspectionStoppedError):
+        inspect_package(_package(tmp_path), should_stop=_after_three)
+    assert len(calls) == 4
+
+
+def test_should_stop_that_never_fires_changes_nothing(tmp_path):
+    assert inspect_package(_package(tmp_path), should_stop=lambda: False).report_id == ROOT
