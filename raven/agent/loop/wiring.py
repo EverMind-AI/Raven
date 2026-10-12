@@ -1479,6 +1479,7 @@ class WiringMixin:
                 control_advert=self.dag_control_advert,
                 provider_for=self._verdict_provider,
                 binding_for=self._turn_binding,
+                sandbox_factory=self.subagents.sandbox_executor_for,
                 verdict_config=self.subagent_dag_config,
             )
         )
@@ -1761,6 +1762,10 @@ class WiringMixin:
             control_reachable=self.dag_control_reachable,
             control_advert=self.dag_control_advert,
             verdict_config=self.subagent_dag_config,
+            # Same sandbox story as the registered tool above: a playbook step
+            # that runs a node runs it under the host's configured executor,
+            # not on the host the loop happens to be.
+            sandbox_factory=self.subagents.sandbox_executor_for,
         )
         from raven.playbook import (
             PlaybookGenerator,

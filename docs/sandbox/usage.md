@@ -462,6 +462,12 @@ to the backend inside `async with executor:`. The VM starts before backend
 execution and is cleaned up when the task finishes, including when it fails.
 Only operations the backend sends through that executor run inside the VM.
 
+A graph dispatch is wired the same way: each DAG run (`run_subagent_dag`, or a
+`mode: dag` playbook) asks the manager for one executor over the run's working
+directory and dispatches every node of the graph under it, entered for the run
+and exited when the run settles. A host with no sandbox configured dispatches
+nodes with no executor — the documented `"none"` behavior, not a fallback.
+
 Each subagent VM incurs its own cold-start (~2–5 s). For workloads that spawn many subagents concurrently, consider pre-pulling the image (`uv sync --extra sandbox` + running the integration tests once) to eliminate the image-pull component of that cost.
 
 `AgentLoop` passes its `sandbox_config` to `SubagentManager`, so the executors

@@ -55,7 +55,7 @@ from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, resolve
 from raven.providers.pool import ProviderPool, live_pin_resolver
-from raven.sandbox import SandboxConfig, build_executor
+from raven.sandbox import SandboxConfig, SandboxExecutor, build_executor
 from raven.security.trust import wrap_untrusted
 from raven.spine.message import Media
 from raven.tracing import trace
@@ -1667,6 +1667,28 @@ class SubagentManager:
             if not dispatched:
                 self._emit_status(origin, task_id, task_summary, "failed", ended_at=int(time.time() * 1000))
             await self._announce_result(task_id, task_summary, task, error_msg, origin, "error")
+
+    def sandbox_executor_for(self, workspace: Path) -> "SandboxExecutor | None":
+        """The executor a node of a dispatched graph runs under, or ``None``.
+
+        Each spawn builds its executor inside ``run``; a DAG node is dispatched
+        by ``SubAgentDagTool``, which owns no sandbox config -- so it asks here
+        with the directory the graph runs in and gets the same recipe a spawn
+        gets: this config, the owned-id set and the agent-home mount. ``None``
+        when no sandbox is configured, which the tool reads as "run as before":
+        with nothing configured there is nothing to build, and a host that
+        never asked for a sandbox keeps its behavior down to the absent
+        executor.
+        """
+        if self._sandbox_config is None:
+            return None
+        return build_executor(
+            self._sandbox_config,
+            workspace,
+            self._owned_ids,
+            self._home_volume(workspace),
+            sandbox_dir=get_sandbox_dir,
+        )
 
     def _home_volume(self, mount_root: Path) -> tuple[tuple[str, str, str], ...]:
         """Mount agent home into the sub-agent's VM unless the run's own mount covers it.

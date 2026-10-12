@@ -515,6 +515,9 @@ def playbook_run(
         # `confirm` means on the command line for every playbook is its own
         # decision, and a script that runs one unattended would start failing.
         ask=ask_at_the_terminal if spec is not None and spec.mode == "stint" else None,
+        # The manager above was built with this config's sandbox; its recipe is
+        # what a node here runs under, the same executor a spawn would.
+        sandbox_factory=manager.sandbox_executor_for,
     )
     executor = PlaybookExecutor(
         dag_tool=dag_tool,
@@ -899,6 +902,10 @@ def _stint_driver(config, home: Path):
         state_for=manager.instance_state,
         session_dir=lambda _key: home,
         ask=ask_at_the_terminal,
+        # Same sandbox story as the run verb's tool: the manager above holds
+        # this config's sandbox, and a round is an ordinary graph dispatched
+        # under its executor rather than on the host.
+        sandbox_factory=manager.sandbox_executor_for,
     )
     driver = PlaybookExecutor(dag_tool=dag_tool, workspace=Path.cwd()).rounds
     if driver is None:
