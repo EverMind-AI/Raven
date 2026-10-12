@@ -5,6 +5,11 @@ side is `raven trajectory report-bug --yes` with `RAVEN_BUGREPORT_URL` pointing
 at it, and the retry is `raven trajectory upload-bug-report`. What this proves
 that the in-process tests cannot: the command line, the environment variable,
 the printed address and the signal-driven shutdown all line up end to end.
+
+The receiver child is owned by whoever started it until it listens: a child
+that stays silent, exits early, refuses its directory, or is abandoned by a
+cancelled test is killed and waited for before the failure is reported, so a
+broken start never leaves a process or a blocked reader behind.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ pytestmark = pytest.mark.integration
 
 LISTEN_DENIED = ("Permission denied", "Operation not permitted")
 LISTEN_WORDS = ("bind", "listen", "socket", "TCPSite")
+STARTUP_DEADLINE = 60.0
 
 
 def _env(tmp_path: Path) -> dict[str, str]:
@@ -44,27 +50,62 @@ def _raven(*args: str) -> list[str]:
     return [sys.executable, "-m", "raven", "trajectory", *args]
 
 
-async def _start_receiver(tmp_path: Path, env: dict[str, str]) -> tuple[subprocess.Popen, int]:
-    proc = subprocess.Popen(
-        _raven("receiver", "--save-dir", str(tmp_path / "inbox"), "--port", "0"),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    line = ""
-    while "listening on" not in line:
-        raw = await asyncio.wait_for(asyncio.to_thread(proc.stdout.readline), 60)
-        if not raw:
-            break
-        line = raw.decode("utf-8", errors="replace")
-    if "listening on" not in line:
-        stderr = proc.stderr.read().decode("utf-8", errors="replace")[-3000:]
-        if "Cannot prepare" in stderr or "is not a directory" in stderr:
-            raise AssertionError(f"the receiver refused its save dir: {stderr}")
-        if any(word in stderr for word in LISTEN_DENIED) and any(word in stderr for word in LISTEN_WORDS):
-            pytest.skip(f"this environment forbids listening: {stderr.strip().splitlines()[-1]}")
-        raise AssertionError(f"the receiver did not start: {stderr}")
-    return proc, int(line.strip().rsplit(":", 1)[1])
+async def _reap(proc: asyncio.subprocess.Process) -> None:
+    """Make sure a child is gone and waited for, whatever state it is in."""
+    if proc.returncode is None:
+        proc.kill()
+    try:
+        await asyncio.wait_for(proc.wait(), 10)
+    except TimeoutError:
+        pass
+
+
+async def _drain(stream: asyncio.StreamReader | None) -> str:
+    if stream is None:
+        return ""
+    try:
+        return (await asyncio.wait_for(stream.read(), 5)).decode("utf-8", errors="replace")
+    except TimeoutError:
+        return ""
+
+
+async def _start_receiver(
+    args: list[str], env: dict[str, str], *, deadline: float = STARTUP_DEADLINE, spawned: list | None = None
+) -> tuple[asyncio.subprocess.Process, int]:
+    """Start a receiver and return it with its port once it listens.
+
+    One deadline covers the whole start. Every other exit -- EOF, the
+    deadline, cancellation, a refusal -- kills and waits for the child before
+    anything is raised; ownership passes to the caller only on success. The
+    diagnostics combine what the child wrote to both streams, since the CLI
+    reports a refused directory on stdout and a crash on stderr.
+    """
+    proc = await asyncio.create_subprocess_exec(*args, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if spawned is not None:
+        spawned.append(proc)
+    seen: list[str] = []
+    try:
+        try:
+            async with asyncio.timeout(deadline):
+                assert proc.stdout is not None
+                while raw := await proc.stdout.readline():
+                    line = raw.decode("utf-8", errors="replace")
+                    seen.append(line)
+                    if "listening on" in line:
+                        return proc, int(line.strip().rsplit(":", 1)[1])
+            outcome = "the receiver exited before it listened"
+        except TimeoutError:
+            outcome = f"the receiver printed no listening line within {deadline}s"
+    except BaseException:
+        await _reap(proc)
+        raise
+    await _reap(proc)
+    text = "".join(seen) + await _drain(proc.stderr)
+    if "Cannot prepare" in text or "is not a directory" in text:
+        raise AssertionError(f"the receiver refused its save dir: {text[-3000:]}")
+    if any(word in text for word in LISTEN_DENIED) and any(word in text for word in LISTEN_WORDS):
+        pytest.skip(f"this environment forbids listening: {text.strip().splitlines()[-1]}")
+    raise AssertionError(f"{outcome}: {text[-3000:]}")
 
 
 def _run(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
@@ -74,7 +115,7 @@ def _run(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
 async def test_report_bug_uploads_through_a_real_receiver(tmp_path):
     env = _env(tmp_path)
     _write_log(tmp_path / "traces" / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
-    proc, port = await _start_receiver(tmp_path, env)
+    proc, port = await _start_receiver(_raven("receiver", "--save-dir", str(tmp_path / "inbox"), "--port", "0"), env)
     try:
         env["RAVEN_BUGREPORT_URL"] = f"http://127.0.0.1:{port}"
         # --accept-risk only matters if this machine's missing config makes the
@@ -98,8 +139,24 @@ async def test_report_bug_uploads_through_a_real_receiver(tmp_path):
         assert "Already uploaded — receipt " + record["upload"]["receipt"] in again.stdout
 
         proc.send_signal(signal.SIGTERM)
-        assert await asyncio.wait_for(asyncio.to_thread(proc.wait), 15) == 0
+        assert await asyncio.wait_for(proc.wait(), 15) == 0
     finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
+        await _reap(proc)
+
+
+async def test_a_silent_receiver_is_killed_at_the_deadline(tmp_path):
+    spawned: list[asyncio.subprocess.Process] = []
+    silent = [sys.executable, "-c", "import time; time.sleep(30)"]
+    with pytest.raises(AssertionError, match="printed no listening line"):
+        await _start_receiver(silent, _env(tmp_path), deadline=0.3, spawned=spawned)
+    (proc,) = spawned
+    assert proc.returncode is not None
+
+
+async def test_a_receiver_that_refuses_its_save_dir_is_reaped_and_reported(tmp_path):
+    spawned: list[asyncio.subprocess.Process] = []
+    refusing = [sys.executable, "-c", "print('Cannot prepare the receiver (save dir /x): boom'); raise SystemExit(1)"]
+    with pytest.raises(AssertionError, match="refused its save dir"):
+        await _start_receiver(refusing, _env(tmp_path), spawned=spawned)
+    (proc,) = spawned
+    assert proc.returncode == 1

@@ -664,6 +664,7 @@ def trajectory_receiver(
         console.print(
             f"[red]✗ Cannot prepare the receiver (save dir {escape(str(save_dir))}): {escape(str(exc))}[/red]",
             highlight=False,
+            soft_wrap=True,
         )
         raise typer.Exit(code=1)
     console.print("Bug report receiver stopped.")

@@ -1937,8 +1937,15 @@ def test_receiver_refuses_a_file_as_save_dir(tmp_path, monkeypatch):
     "exc", [PermissionError(13, "Permission denied", "/srv/inbox"), OSError(28, "No space left on device")]
 )
 def test_receiver_reports_an_unusable_save_dir(tmp_path, monkeypatch, exc):
+    import raven.cli.trajectory_commands as tcmd
+
     _run_receiver_stub(monkeypatch, raise_exc=exc)
-    r = runner.invoke(trajectory_app, ["receiver", "--save-dir", str(tmp_path / "inbox")])
+    # A narrow console and a deep path: the diagnostic has to stay one line
+    # regardless of how long the temporary directory of the host is.
+    monkeypatch.setattr(tcmd.console, "_width", 40)
+    deep = tmp_path.joinpath(*(["a-rather-long-directory-name"] * 4), "inbox")
+    r = runner.invoke(trajectory_app, ["receiver", "--save-dir", str(deep)])
     assert r.exit_code == 1, r.output
-    assert "Cannot prepare" in r.output and "inbox" in r.output and exc.strerror in r.output
+    (line,) = [line for line in r.output.splitlines() if "Cannot prepare" in line]
+    assert str(deep) in line and exc.strerror in line
     assert isinstance(r.exception, SystemExit)
