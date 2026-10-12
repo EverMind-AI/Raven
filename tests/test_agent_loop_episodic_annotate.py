@@ -434,6 +434,45 @@ class TestWhatHappensDuringTheAwait:
         await _settle(loop)
         assert [m["content"] for m in fake.tails[0]] == ["q10", "a10", "q11", "a11", "q12", "a12"]
 
+    async def test_a_truncation_the_cursor_cannot_see_is_still_detected(self, tmp_path: Path) -> None:
+        """The cut can sit above the cursor, which then does not move at all.
+
+        ``undo_last_turn`` only pulls a cursor back when the cut is below it,
+        so a session annotated from zero is truncated with its cursor left at
+        zero. Turns arriving afterwards take the length back past the stale
+        write-back, which then lands inside them. Comparing the cursor's value
+        sees nothing; the truncation counter does.
+        """
+        loop = _make_loop(tmp_path, every=3)
+        gate = asyncio.Event()
+        fake = _FakeConsolidator(hold=gate)
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:silent", turns=0)
+        session.metadata["annotated_through"] = 0
+        for i in range(3):
+            session.messages.extend(_turn(i))
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=4)
+        await asyncio.sleep(0)
+        assert len(fake.tails) == 1  # sliced 0..6, now holding
+
+        assert session.undo_last_turn(2) == 4
+        assert session.metadata["annotated_through"] == 0, "the cut is above the cursor, so it does not move"
+        for i in range(10, 13):
+            session.messages.extend(_turn(i))
+        loop.sessions.save(session)
+
+        gate.set()
+        await _settle(loop)
+
+        assert session.metadata["annotated_through"] == 0, "the stale write-back claimed the new turns"
+
+        fake.tails.clear()
+        loop._maybe_annotate_tail(session, prev_len=len(session.messages) - 2)
+        await _settle(loop)
+        assert [m["content"] for m in fake.tails[0]] == ["q0", "a0", "q10", "a10", "q11", "a11", "q12", "a12"]
+
     async def test_the_tail_ends_on_the_turn_that_asked_for_it(self, tmp_path: Path) -> None:
         """A task that waited must not slice into the turn that overtook it.
 

@@ -173,6 +173,12 @@ class Session:
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
+    # Bumped by every truncation. A background reader that sliced this list and
+    # then awaited cannot tell from the indices alone that they now point at
+    # other messages: a cut below a cursor leaves that cursor's value alone,
+    # and messages arriving afterwards can take the length back past where it
+    # was. In process only -- a task does not outlive the process it ran in.
+    truncations: int = field(default=0, repr=False)
     # ── Personalization state ─────────────────────────────────────────────────
     # Set when the agent asked a clarifying question and is waiting for the answer.
     # Structure: {"original_message": str, "question": str, "domain": str}
@@ -283,6 +289,7 @@ class Session:
         # rule in ``SessionManager._metadata_to_write``: a key this copy merely
         # omits comes back on the next save.
         self.metadata["annotated_through"] = 0
+        self.truncations += 1
         self.updated_at = datetime.now()
 
     def undo_last_turn(self, n: int = 1) -> int:
@@ -307,6 +314,7 @@ class Session:
         cursor = self.metadata.get("annotated_through")
         if isinstance(cursor, int) and cursor > cut_index:
             self.metadata["annotated_through"] = cut_index
+        self.truncations += 1
         self.updated_at = datetime.now()
         return removed
 

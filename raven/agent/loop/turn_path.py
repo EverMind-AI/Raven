@@ -2894,16 +2894,17 @@ class TurnPathMixin:
                     tail = [m for m in session.messages[start:end] if not m.get("origin")]
                     if sum(1 for m in tail if m.get("role") == "user") < every:
                         return
-                    before = session.metadata.get("annotated_through")
+                    before = session.truncations
                     if not await self.memory_consolidator.consolidate_messages(tail):
                         logger.warning("episodic annotate for {} declined; cursor kept at {}", session.key, start)
                         return
-                    # The reader may undo or clear while the annotator runs:
-                    # both move the cursor themselves, and both leave the
-                    # indices this task sliced against meaningless. Writing the
-                    # old arithmetic back would claim the turns that replaced
-                    # them, and those turns would never be annotated.
-                    if session.metadata.get("annotated_through") != before:
+                    # The reader may undo or clear while the annotator runs,
+                    # and both leave the indices this task sliced against
+                    # pointing at other messages. The cursor's value cannot
+                    # carry that: a cut below it leaves it alone, and turns
+                    # arriving after the cut take the length back past where it
+                    # was. The counter moves on every truncation, so it can.
+                    if session.truncations != before:
                         logger.info(
                             "episodic annotate for {}: truncated while it ran; cursor left at {}",
                             session.key,
