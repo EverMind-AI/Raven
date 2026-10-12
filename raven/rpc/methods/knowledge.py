@@ -31,29 +31,25 @@ if TYPE_CHECKING:
     from raven.knowledge import KnowledgeManager
     from raven.rpc.dispatcher import Dispatcher
 
-_manager: KnowledgeManager | None = None
-
 
 def knowledge_manager() -> KnowledgeManager:
-    """The process's one manager, built when something first asks.
+    """The process's one manager.
 
-    Lazily rather than at import time: constructing it resolves and creates a
-    directory, and a deployment whose page never opens the knowledge tab should
-    not grow one.
+    Held by `raven.knowledge` rather than here: the agent's own
+    `knowledge_search` tool needs the same one, and a second manager is a
+    second `records.json` snapshot that never reloads -- a base the page
+    creates after the tool's first search does not exist for the tool.
     """
-    global _manager
-    if _manager is None:
-        from raven.config.paths import get_runtime_subdir
-        from raven.knowledge import KnowledgeManager
+    from raven.knowledge import knowledge_manager as shared
 
-        _manager = KnowledgeManager(get_runtime_subdir("knowledge"))
-    return _manager
+    return shared()
 
 
 def _set_manager_for_tests(manager: KnowledgeManager | None) -> None:
-    """Point the handlers at a manager on a tmp_path, and back again."""
-    global _manager
-    _manager = manager
+    """Point every caller at a manager on a tmp_path, and back again."""
+    from raven.knowledge import set_manager_for_tests
+
+    set_manager_for_tests(manager)
 
 
 async def knowledge_status(_params: dict[str, Any]) -> dict[str, Any]:

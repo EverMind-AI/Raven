@@ -57,9 +57,9 @@ class KnowledgeSearchTool(Tool):
     )
 
     def __init__(self, manager: "KnowledgeManager | None" = None) -> None:
-        # Built lazily and kept: opening the store reads a directory and the
-        # first search opens a connection, neither of which a process that
-        # never searches should pay for.
+        # A library of this tool's own, which only a test passes. Left unset,
+        # every search goes through the process's one manager -- see
+        # `_library` for what two of them cost.
         self._manager = manager
         # What the last search of each conversation found, for the turn stream
         # to render. Written where the call runs and popped where the turn
@@ -102,12 +102,25 @@ class KnowledgeSearchTool(Tool):
         }
 
     def _library(self) -> "KnowledgeManager":
-        if self._manager is None:
-            from raven.config.paths import get_runtime_subdir
-            from raven.knowledge import KnowledgeManager
+        """The manager the gateway is using, not one of this tool's own.
 
-            self._manager = KnowledgeManager(get_runtime_subdir("knowledge"))
-        return self._manager
+        One the caller handed in wins, which is how a case gives this tool a
+        library on a tmp_path. Otherwise the process's own, asked for on every
+        call rather than cached: the shared one can be replaced underneath a
+        tool instance that outlives it.
+
+        Built here instead, it was a second manager over the same directory --
+        and a `RecordStore` reads `records.json` once, when it is constructed.
+        So the tool held a snapshot of its own first use: a base the reader
+        created on the page afterwards did not exist for it, and attaching that
+        base and asking answered that nothing in the attached material does,
+        while the same search over RPC found the passage.
+        """
+        if self._manager is not None:
+            return self._manager
+        from raven.knowledge import knowledge_manager
+
+        return knowledge_manager()
 
     async def execute(self, **kwargs: Any) -> str:
         query = str(kwargs.get("query") or "").strip()

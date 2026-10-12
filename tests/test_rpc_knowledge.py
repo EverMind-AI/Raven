@@ -189,7 +189,9 @@ async def test_the_manager_is_built_once_and_under_the_data_dir(monkeypatch, tmp
             built.append(root)
 
     monkeypatch.setattr("raven.config.paths.get_runtime_subdir", lambda name: tmp_path / name)
-    monkeypatch.setattr("raven.knowledge.KnowledgeManager", _Recorder)
+    # Where the accessor imports it from. Through the package would put
+    # `raven.knowledge` and the accessor both inside an import cycle.
+    monkeypatch.setattr("raven.knowledge._manager.KnowledgeManager", _Recorder)
 
     first, second = kb.knowledge_manager(), kb.knowledge_manager()
 

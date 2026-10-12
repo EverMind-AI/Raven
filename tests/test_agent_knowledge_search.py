@@ -480,3 +480,72 @@ async def test_a_turn_whose_session_named_none_is_offered_none(tmp_path: Any) ->
 
     assert provider.offered, "the turn made no model call"
     assert "knowledge_search" not in provider.offered[0]
+
+
+# -- which library the tool searches -------------------------------
+
+
+async def test_the_tool_and_the_gateway_share_one_manager(monkeypatch, tmp_path) -> None:
+    """Two managers over the same directory is two `records.json` snapshots.
+
+    A `RecordStore` reads the file once, when it is constructed, so the second
+    one holds the moment it was first used: a base the reader creates on the
+    page afterwards does not exist for the tool, and attaching it and asking
+    answers that nothing in the attached material does.
+    """
+    from raven.config import paths
+    from raven.rpc.methods import knowledge as rpc
+
+    monkeypatch.setattr(paths, "get_runtime_subdir", lambda name: tmp_path / name)
+    monkeypatch.setattr("raven.knowledge._library._manager", None)
+
+    assert KnowledgeSearchTool()._library() is rpc.knowledge_manager()
+
+
+async def test_a_base_created_after_the_tool_has_searched_is_still_found(monkeypatch, tmp_path) -> None:
+    """The failure as the reader meets it: search once, make a base, search
+    again. The second search found nothing, because the tool was holding the
+    library as it stood before the base existed."""
+    from raven.config import paths
+    from raven.rpc.methods import knowledge as rpc
+
+    monkeypatch.setattr(paths, "get_runtime_subdir", lambda name: tmp_path / name)
+    monkeypatch.setattr("raven.knowledge._library._manager", None)
+
+    tool = KnowledgeSearchTool()
+    tool._library()  # the tool's first use, before the base exists
+
+    made = await rpc.knowledge_manager().create_base(name="notes", embedding=False)
+
+    assert tool._library().get_base(made.id) is not None
+
+
+async def test_a_library_handed_in_still_wins(monkeypatch, tmp_path) -> None:
+    """Which is how a case gives this tool a library of its own."""
+    from raven.config import paths
+
+    monkeypatch.setattr(paths, "get_runtime_subdir", lambda name: tmp_path / name)
+    monkeypatch.setattr("raven.knowledge._library._manager", None)
+    own = _Library([])
+
+    assert KnowledgeSearchTool(own)._library() is own
+
+
+async def test_the_manager_is_asked_for_on_every_search(monkeypatch, tmp_path) -> None:
+    """Not cached on the instance: the process's manager can be replaced --
+    a test does exactly that -- under a tool that outlives it."""
+    from raven.config import paths
+    from raven.knowledge import set_manager_for_tests
+
+    monkeypatch.setattr(paths, "get_runtime_subdir", lambda name: tmp_path / name)
+    monkeypatch.setattr("raven.knowledge._library._manager", None)
+    tool = KnowledgeSearchTool()
+    first = tool._library()
+
+    replacement = _Library([])
+    set_manager_for_tests(replacement)
+    try:
+        assert tool._library() is replacement
+        assert tool._library() is not first
+    finally:
+        set_manager_for_tests(None)

@@ -18,6 +18,7 @@ from raven.knowledge._embedding import (
     load_embedding_config,
 )
 from raven.knowledge._lancedb import LanceDBVectorStore
+from raven.knowledge._library import knowledge_manager, set_manager_for_tests
 from raven.knowledge._manager import (
     DuplicateBaseNameError,
     KnowledgeError,
@@ -86,6 +87,8 @@ __all__ = [
     "StaleBaseError",
     "StructuredTextParser",
     "embedding_client",
+    "knowledge_manager",
+    "set_manager_for_tests",
     "supported_extensions",
     "TextBlock",
     "TextParser",
