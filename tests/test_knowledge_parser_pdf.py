@@ -9,6 +9,7 @@ import pytest
 from raven.knowledge._naive_chunker import NaiveChunker
 from raven.knowledge._notes import collecting
 from raven.knowledge.parser import ELEMENTS, LAYOUT_TYPE, PAGE_NUMBER, LayoutType
+from raven.knowledge.parser import pdf_parser as pdf_module
 from raven.knowledge.parser.pdf_parser import PdfParser
 
 
@@ -334,3 +335,110 @@ def test_a_picture_page_with_a_caption_is_still_read_as_a_scan() -> None:
 
     assert vision.seen, "the page was sent"
     assert "scanned invoice" in sections[0].content.text
+
+
+# -- what it does to the loop it is awaited on ---------------------
+
+
+def test_reading_the_pages_happens_off_the_event_loop() -> None:
+    """`parse` is awaited by `knowledge.documents.index` on the gateway's own
+    loop -- the one serving every socket, every turn and the heartbeat.
+
+    Reading a page is PyMuPDF rendering and ONNX inference with no await in
+    it. Run inline it stops all of that for as long as the document takes:
+    measured before this moved, a 40-page file blocked the loop for 21
+    seconds and answered no RPC in that time.
+    """
+    import threading
+
+    seen: list[int] = []
+    real = pdf_module._page_elements
+
+    def recording(page, number, body):
+        seen.append(threading.get_ident())
+        return real(page, number, body)
+
+    raw = _pdf(lambda d, m: [_prose(d, m, heading=f"H{n}", body=["text"]) for n in range(3)])
+
+    async def main() -> int:
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(main())
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pdf_module, "_page_elements", recording)
+        asyncio.run(PdfParser(layout=False).parse(raw, "report.pdf"))
+
+    assert seen, "the pages were read"
+    assert all(ident != loop_thread for ident in seen), "read on a worker, not on the loop"
+
+
+def test_the_loop_keeps_running_while_a_document_is_read() -> None:
+    """The same property from the other side: something else awaiting on that
+    loop goes on being served.
+
+    The page reader is made to take a measurable moment, because the question
+    is whether the loop runs *during* a slow read -- a document fast enough to
+    finish between two ticks would pass either way.
+    """
+    import threading
+
+    def slow_reader(page, number):
+        threading.Event().wait(0.05)
+        return None
+
+    raw = _pdf(lambda d, m: [_prose(d, m, heading=f"H{n}", body=["text"]) for n in range(4)])
+
+    async def main() -> int:
+        ticks = 0
+
+        async def ticker() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.005)
+                ticks += 1
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(PdfParser, "_layout_reader", lambda self: slow_reader)
+            beat = asyncio.create_task(ticker())
+            await asyncio.sleep(0)
+            await PdfParser().parse(raw, "report.pdf")
+            beat.cancel()
+        return ticks
+
+    # Four pages at 50ms is 200ms of reading; a loop that is free is ticking
+    # every 5ms through all of it, and a blocked one answers nothing.
+    assert asyncio.run(main()) > 10, "the loop was served while the document was read"
+
+
+def test_two_documents_do_not_run_two_models_at_once() -> None:
+    """Two uploads indexing together otherwise run two ONNX sessions over the
+    same cores, which makes both slower than running them in turn and leaves
+    nothing for the turns the gateway is serving beside them."""
+    import threading
+
+    inside = 0
+    overlapped = False
+
+    def slow_reader(page, number):
+        nonlocal inside, overlapped
+        inside += 1
+        overlapped = overlapped or inside > 1
+        try:
+            threading.Event().wait(0.01)
+        finally:
+            inside -= 1
+        return None
+
+    raw = _pdf(lambda d, m: [_prose(d, m, heading=f"H{n}", body=["text"]) for n in range(4)])
+
+    async def main() -> None:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(PdfParser, "_layout_reader", lambda self: slow_reader)
+            await asyncio.gather(
+                PdfParser().parse(raw, "a.pdf"),
+                PdfParser().parse(raw, "b.pdf"),
+            )
+
+    asyncio.run(main())
+
+    assert not overlapped, "the inference lock serialised the two reads"

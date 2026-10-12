@@ -24,6 +24,7 @@ nothing.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections import Counter
 from io import BytesIO
 from pathlib import Path
@@ -67,6 +68,16 @@ _RENDER_SCALE = 150 / 72
 #: parser: one document at a time reaches here, so this is the whole
 #: concurrency against the endpoint.
 _PAGE_CONCURRENCY = 4
+
+#: Held while a page is read by the models, so two uploads indexing at once do
+#: not run two ONNX sessions over the same cores. Doing that makes both slower
+#: than running them in turn and leaves nothing for the turns the gateway is
+#: serving beside them.
+#:
+#: A thread lock rather than an asyncio one: the work runs in a worker thread,
+#: and a lock that belongs to no event loop is also the one a second loop in a
+#: test cannot be attached to by mistake.
+_INFERENCE = threading.Lock()
 
 
 class PdfParser(ParserBase):
@@ -133,22 +144,49 @@ class PdfParser(ParserBase):
                 raise ValueError(f"{filename!r} is password-protected, so nothing in it can be read")
             body = _body_size(document)
             by_model = self._layout_reader()
-            elements: list[Element] = []
-            unread: list[int] = []
-            for number, page in enumerate(document, start=1):
-                found = by_model(page, number) if by_model is not None else None
-                if found is None:
-                    found = _page_elements(page, number, body)
-                if found:
-                    elements.extend(found)
-                else:
-                    unread.append(number)
+            # Off the loop. Reading a page is seconds of ONNX inference and
+            # PyMuPDF rendering with no await in it, and the caller is the
+            # gateway's own loop -- the one serving every socket, every turn
+            # and the heartbeat. Measured before this moved: a 40-page file
+            # blocked it for 21s and answered no RPC in that time.
+            elements, unread = await asyncio.to_thread(self._read_pages, document, body, by_model)
             if unread:
+                # On the loop, because describing a page is an LLM call.
                 elements.extend(await self._describe(document, unread, filename))
 
         if not elements:
             note(f"nothing could be read out of {filename!r}: it has no text layer and no page could be described.")
         return sections_from(elements, filename)
+
+    def _read_pages(self, document: Any, body: float, by_model: Any) -> "tuple[list[Element], list[int]]":
+        """Every page read, and the numbers of the ones nothing could read.
+
+        The synchronous half of :meth:`parse`, named so it can be handed to a
+        thread. ``document`` is touched by that thread alone: the caller awaits
+        this before going near it again.
+
+        Model inference is serialised across the process. Two uploads indexing
+        at once otherwise run two ONNX sessions over the same cores, which
+        makes both slower than running them in turn and leaves nothing for the
+        turns the gateway is serving. A thread lock rather than an asyncio one
+        because this runs in a worker, and it is held per page rather than per
+        document so a second upload interleaves instead of waiting out the
+        first.
+        """
+        elements: list[Element] = []
+        unread: list[int] = []
+        for number, page in enumerate(document, start=1):
+            found = None
+            if by_model is not None:
+                with _INFERENCE:
+                    found = by_model(page, number)
+            if found is None:
+                found = _page_elements(page, number, body)
+            if found:
+                elements.extend(found)
+            else:
+                unread.append(number)
+        return elements, unread
 
     def _layout_reader(self) -> Any:
         """The model-driven page reader, or ``None`` to read geometrically.

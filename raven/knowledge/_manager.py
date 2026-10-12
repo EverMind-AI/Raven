@@ -8,6 +8,7 @@ model far enough that searching it would be wrong.
 
 from __future__ import annotations
 
+import asyncio
 import mimetypes
 import os
 import re
@@ -889,7 +890,12 @@ class KnowledgeManager:
             ids = chunk_ids_for(document_id, texts)
             # After the ids and before the store, because the id is the
             # crop's filename: nothing else addresses a picture of one piece.
-            self._write_crops(record, chunks, ids)
+            #
+            # Off the loop, for the reason the page read is: cutting a crop
+            # renders the page again and encodes a webp per chunk, with no
+            # await in any of it, and this is awaited on the gateway's own
+            # loop by `knowledge.documents.index`.
+            await asyncio.to_thread(self._write_crops, record, chunks, ids)
             # Replaces rather than appends: a reindex of the same document
             # would otherwise leave the previous run's chunks in the
             # collection, and every hit would come back twice. Everything the
