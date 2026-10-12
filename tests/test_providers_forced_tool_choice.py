@@ -26,7 +26,7 @@ _SSE = (
 )
 
 
-class _Refuse_Then_Accept:
+class _RefuseThenAccept:
     """400 on a forcing tool_choice, 200 once the body says ``auto``."""
 
     bodies: list[Any] = []
@@ -34,7 +34,7 @@ class _Refuse_Then_Accept:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
 
-    async def __aenter__(self) -> "_Refuse_Then_Accept":
+    async def __aenter__(self) -> "_RefuseThenAccept":
         return self
 
     async def __aexit__(self, *exc: Any) -> bool:
@@ -42,7 +42,7 @@ class _Refuse_Then_Accept:
 
     def stream(self, _method: str, _url: str, **kwargs: Any) -> "_Response":
         body = kwargs.get("json") or {}
-        _Refuse_Then_Accept.bodies.append(dict(body))
+        _RefuseThenAccept.bodies.append(dict(body))
         return _Response(forced=body.get("tool_choice") != "auto")
 
 
@@ -89,8 +89,8 @@ class TestTheRelaxation:
 
 class TestTheRetry:
     async def test_a_refused_force_is_retried_once_under_auto(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _Refuse_Then_Accept.bodies = []
-        monkeypatch.setattr(mod.httpx, "AsyncClient", _Refuse_Then_Accept)
+        _RefuseThenAccept.bodies = []
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _RefuseThenAccept)
         provider = mod.OpenAIResponsesProvider(api_key="k", default_model="deepseek/deepseek-v4-pro")
 
         out = await provider.chat(
@@ -99,7 +99,7 @@ class TestTheRetry:
             tool_choice="required",
         )
 
-        sent = [b.get("tool_choice") for b in _Refuse_Then_Accept.bodies]
+        sent = [b.get("tool_choice") for b in _RefuseThenAccept.bodies]
         assert sent == ["required", "auto"], sent
         assert out.finish_reason != "error"
         assert [c.name for c in out.tool_calls] == ["annotate_conversation"]
@@ -107,7 +107,7 @@ class TestTheRetry:
     async def test_the_relaxation_happens_at_most_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A 400 that keeps naming tool_choice must not loop."""
 
-        class _AlwaysRefuse(_Refuse_Then_Accept):
+        class _AlwaysRefuse(_RefuseThenAccept):
             def stream(self, _method: str, _url: str, **kwargs: Any) -> "_Response":
                 _AlwaysRefuse.bodies.append(dict(kwargs.get("json") or {}))
                 return _Response(forced=True)
