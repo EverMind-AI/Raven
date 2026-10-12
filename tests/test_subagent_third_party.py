@@ -8,13 +8,14 @@ import json
 import os
 import re
 import shlex
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, suppress
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -50,6 +51,7 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
+from tests._windows_kill import TASKKILL, windows_kill_path
 
 
 @pytest.fixture(autouse=True)
@@ -3250,6 +3252,74 @@ async def test_cli_backend_timeout_kills_reparented_child_after_launcher_already
             "grandchild survived: the launcher had already exited, so a "
             "returncode-gated killpg would silently no-op here"
         )
+
+
+async def test_cli_backend_cancel_without_killpg_ends_the_tree_through_taskkill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows has no ``os.killpg``: calling it raised ``AttributeError`` in place of
+    the cancel, and the CLI kept running."""
+    calls = windows_kill_path(monkeypatch)
+    pid_file = tmp_path / "launcher.pid"
+    script = tmp_path / "launcher.sh"
+    script.write_text(f"#!/bin/sh\necho $$ > {pid_file}\nexec sleep 30\n", encoding="utf-8")
+
+    be = CliAgentBackend(name="windows", command=f"sh {script}")
+    task = asyncio.create_task(be.run("x", task_id="t1", workspace=tmp_path, executor=None))
+    for _ in range(100):
+        if pid_file.exists() and pid_file.read_text().strip():
+            break
+        await asyncio.sleep(0.05)
+    else:
+        raise AssertionError("launcher never started")
+    pid = int(pid_file.read_text())
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 10)
+
+    assert calls == [[TASKKILL, "/T", "/F", "/PID", str(pid)]]
+    # The taskkill here only records, so what ended the launcher is the kill after it.
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+async def test_cli_backend_timeout_without_killpg_still_reports_the_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = windows_kill_path(monkeypatch)
+    be = CliAgentBackend(name="windows", command="sleep 30", timeout=0.2)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await asyncio.wait_for(be.run("x", task_id="t1", workspace=tmp_path, executor=None), 10)
+
+    assert [call[:4] for call in calls] == [[TASKKILL, "/T", "/F", "/PID"]]
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(calls[0][4]), 0)
+
+
+async def test_cli_backend_without_killpg_kills_nothing_by_the_pid_of_an_exited_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the launcher has exited, its pid may already name another process.
+
+    POSIX still reaches the worker it left holding the pipes, through the group;
+    Windows has no group to address, so that worker outlives the timeout there.
+    """
+    calls = windows_kill_path(monkeypatch)
+    pid_file = tmp_path / "worker.pid"
+    script = tmp_path / "reparent.sh"
+    script.write_text(f"#!/bin/sh\nsleep 30 &\necho $! > {pid_file}\nexit 0\n", encoding="utf-8")
+
+    be = CliAgentBackend(name="reparented", command=f"sh {script}", timeout=0.5)
+    try:
+        with pytest.raises(RuntimeError, match="timed out"):
+            await be.run("x", task_id="t1", workspace=tmp_path, executor=None)
+        assert calls == []
+    finally:
+        if pid_file.exists() and pid_file.read_text().strip():
+            with suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
 
 
 # --- kind-aware stateful ---------------------------------------------------

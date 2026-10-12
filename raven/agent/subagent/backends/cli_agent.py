@@ -19,7 +19,9 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import signal
+import subprocess
 import tempfile
 import time
 import uuid
@@ -72,6 +74,9 @@ _FAILURE_CHARS = 240
 kept on the span (see ``_record``), so this text exists for a person reading a
 conversation, not for diagnosis -- and uncapped it put an entire JSON transcript
 into one."""
+
+_TASKKILL_TIMEOUT_S = 5.0
+"""How long a stop on Windows waits for ``taskkill`` before killing the launcher alone."""
 
 
 def _one_line(said: str) -> str:
@@ -292,11 +297,38 @@ class CliAgentBackend:
         (not re-derived via `os.getpgid(proc.pid)` now, which would risk
         hitting an unrelated process if the launcher's pid was already
         recycled by the OS).
+
+        Windows has no `os.killpg` and ignores `start_new_session`, and calling
+        `killpg` there raised `AttributeError` in place of the timeout or the
+        cancel, with the CLI left running. `taskkill /T` ends the tree from the
+        launcher's pid instead, and only while the launcher is alive, for the
+        same recycling reason: a worker left behind by a launcher that has
+        already exited outlives the stop there.
         """
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if hasattr(os, "killpg"):
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        elif proc.returncode is None:
+            taskkill = shutil.which("taskkill")
+            if taskkill:
+                try:
+                    await asyncio.to_thread(
+                        subprocess.run,
+                        [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=_TASKKILL_TIMEOUT_S,
+                        check=False,
+                    )
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    pass
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
         if proc.returncode is None:
             await proc.wait()
 
