@@ -47,8 +47,8 @@ class _RefuseThenAccept:
 
 
 class _Response:
-    def __init__(self, *, forced: bool) -> None:
-        self.status_code = 400 if forced else 200
+    def __init__(self, *, forced: bool, status: int = 400) -> None:
+        self.status_code = status if forced else 200
 
     async def __aenter__(self) -> "_Response":
         return self
@@ -123,4 +123,32 @@ class TestTheRetry:
         )
 
         assert len(_AlwaysRefuse.bodies) == 2
+        assert out.finish_reason == "error"
+
+
+class TestOnlyA400:
+    async def test_a_500_that_mentions_tool_choice_is_not_relaxed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A gateway can echo the request body into a 5xx; that is not a refusal.
+
+        Relaxing there would silently drop the forced call on a transient
+        upstream fault, and the caller would read the missing tool call as the
+        model declining.
+        """
+
+        class _ServerError(_RefuseThenAccept):
+            def stream(self, _method: str, _url: str, **kwargs: Any) -> "_Response":
+                _ServerError.bodies.append(dict(kwargs.get("json") or {}))
+                return _Response(forced=True, status=500)
+
+        _ServerError.bodies = []
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _ServerError)
+        provider = mod.OpenAIResponsesProvider(api_key="k", default_model="deepseek/deepseek-v4-pro")
+
+        out = await provider.chat(
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "t", "parameters": {}}}],
+            tool_choice="required",
+        )
+
+        assert [b.get("tool_choice") for b in _ServerError.bodies] == ["required"]
         assert out.finish_reason == "error"
