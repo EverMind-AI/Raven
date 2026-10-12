@@ -112,28 +112,21 @@ _WINDOWS = os.name == "nt"
 def _words(command: str) -> list[str]:
     """The command's words as the shell that runs it reads them; none for a line it cannot read.
 
-    POSIX quoting here. On a Windows host a backslash is a path's own and is
-    kept, and the quotes around a word, or inside one, are taken off the way
-    that shell takes them, so a quoted destination or port is matched like a
-    bare one (reviewed 2026-10-12: ``"root@host"`` and ``-P "58717"`` went
-    past the refusals with their quotes on). An unbalanced quote is not a
-    line this can read; the shell rejects it too, so nothing reaches a
-    machine either way.
+    POSIX quoting here. On a Windows host the quotes come off the same way
+    -- around a word or inside it, a quoted piece and a bare one next to it
+    making one word, as that shell's argv has them (``"root@"host``,
+    ``"587"17``; reviewed 2026-10-12) -- but a backslash is a path's own and
+    is kept, never an escape. An unbalanced quote is not a line this can
+    read; the shell rejects it too, so nothing reaches a machine either way.
     """
     try:
-        lexer = shlex.shlex(command, posix=not _WINDOWS, punctuation_chars=True)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
-        words = list(lexer)
+        if _WINDOWS:
+            lexer.escape = ""
+        return list(lexer)
     except ValueError:
         return []
-    return [_unquoted(word) for word in words] if _WINDOWS else words
-
-
-def _unquoted(word: str) -> str:
-    """``word`` without the quotes a Windows shell takes off: a pair around it, or double quotes inside it."""
-    if len(word) >= 2 and word[0] == word[-1] and word[0] in "\"'":
-        return word[1:-1]
-    return word.replace('"', "")
 
 
 # A redirection does not end the command: `ssh 2>/dev/null -p 58717 root@host`

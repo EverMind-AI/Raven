@@ -436,6 +436,24 @@ async def test_a_name_holding_the_other_platform_s_separators_lands_as_one_name_
     assert machines.pulled[0][0] == "/root/raven-work/t1/..\\..\\..\\review_escape.txt"
 
 
+async def test_two_names_that_differ_only_by_one_written_out_land_apart(tool, tmp_path, machines) -> None:
+    # `a\b.txt` is written `a%5Cb.txt` here, so a file named `a%5Cb.txt` must not land on it (reviewed 2026-10-12).
+    summary = await tool.execute(
+        files=[{"path": "box:raven-work/t1/a\\b.txt"}, {"path": "box:raven-work/t1/a%5Cb.txt"}]
+    )
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    landed = [Path(entry["path"]) for entry in manifest["files"]]
+    pulled = tmp_path / "chanwork" / "pulled" / "box" / "root" / "raven-work" / "t1"
+    assert landed == [pulled / "a%5Cb.txt", pulled / "a%255Cb.txt"]
+    assert all(place.is_file() for place in landed)
+    assert [where for where, _, _ in machines.pulled] == [
+        "/root/raven-work/t1/a\\b.txt",
+        "/root/raven-work/t1/a%5Cb.txt",
+    ]
+
+
 async def test_nothing_is_fetched_to_a_landing_outside_the_delivery_directory(
     tool, tmp_path, machines, monkeypatch
 ) -> None:

@@ -919,6 +919,9 @@ async def test_on_a_windows_host_a_program_s_whole_path_keeps_its_backslashes_an
         'sftp -P "58717" "root@203.0.113.7"',
         "rsync -av -e 'ssh -p 58717' ./dir \"root@203.0.113.7:/data/\"",
         'ssh -p"58717" root@203.0.113.7 true',
+        'ssh -p 58717 "root@"203.0.113.7 true',
+        'ssh -p "587"17 root@203.0.113.7 true',
+        'scp -P 58717 a.txt "root@203.0.113.7:"/tmp/a',
     ],
 )
 async def test_on_a_windows_host_a_quoted_destination_or_port_is_matched_like_a_bare_one(
@@ -948,6 +951,19 @@ def test_on_a_windows_host_the_words_are_read_without_their_quotes(monkeypatch):
         "&&",
         "-p2222",
         "two words",
+    ]
+    # A quoted piece and a bare one next to it are one word, as that shell's argv has them; a backslash is kept.
+    assert machine_exec._words('ssh -p "587"17 "root@"h true 2>&1 C:\\dir\\scp.exe "C:\\Program Files\\x"') == [
+        "ssh",
+        "-p",
+        "58717",
+        "root@h",
+        "true",
+        "2",
+        ">&",
+        "1",
+        "C:\\dir\\scp.exe",
+        "C:\\Program Files\\x",
     ]
     assert machine_exec._words("scp 'unbalanced") == []
 
