@@ -8,10 +8,14 @@ import io
 import json
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 
 import pytest
+
+if sys.platform == "win32":
+    pytest.skip("the daemon is POSIX: it locks with fcntl and listens on a unix socket", allow_module_level=True)
 
 from raven.node import __main__ as node_main
 from raven.node import protocol, relay, server
@@ -71,6 +75,25 @@ async def test_the_relay_starts_a_daemon_when_none_answers_and_bridges_bytes_bot
     finally:
         if _alive(pid):
             os.kill(pid, signal.SIGTERM)
+
+
+async def test_the_relay_forwards_to_nothing_that_is_not_this_user_s_own_and_starts_no_daemon_beside_it(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(server.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    monkeypatch.setattr(server, "owned", lambda path: False)
+    started: list[int] = []
+    monkeypatch.setattr(relay, "start_daemon", lambda *a, **k: started.append(1))
+
+    with pytest.raises(
+        ConnectionError, match="is not this user's own; the relay forwards to this user's Raven daemon only"
+    ):
+        await relay.connect(tmp_path / "n", timeout_s=0.5)
+
+    assert started == []
+    assert (server.socket_path(tmp_path / "n").parent.stat().st_mode & 0o777) == 0o700, (
+        "the socket's directory, made first"
+    )
 
 
 async def test_the_relay_gives_up_when_no_daemon_comes_up(tmp_path, monkeypatch):

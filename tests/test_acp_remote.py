@@ -75,11 +75,11 @@ def _run_as_sshd(command: str, home: Path) -> subprocess.CompletedProcess[str]:
 # --- the ssh line -------------------------------------------------------------
 
 
-def test_the_ssh_line_reaches_the_machine_with_the_registry_s_options_and_stays_open(tmp_path: Path):
+def test_the_ssh_command_reaches_the_machine_with_the_registry_s_options_and_stays_open(tmp_path: Path):
     log = tmp_path / "box.log"
-    argv = shlex.split(remote.ssh_line(_box(), "node --stdio", ssh_log=log))
+    argv = remote.ssh_command(_box(), "node --stdio", ssh_log=log)
 
-    assert argv[0] == "ssh"
+    assert isinstance(argv, list) and argv[0] == "ssh"
     assert argv[argv.index("-i") + 1] == KEY
     assert argv[argv.index("-p") + 1] == str(PORT)
     assert "BatchMode=yes" in argv
@@ -98,22 +98,23 @@ def test_the_ssh_line_reaches_the_machine_with_the_registry_s_options_and_stays_
     assert argv.index("-T") < dest and argv.index("-E") < dest
 
 
-def test_the_ssh_line_carries_no_variable_and_reads_no_profile(tmp_path: Path):
+def test_the_ssh_command_carries_no_variable_and_reads_no_profile(tmp_path: Path):
     # The node captures the login environment itself, for the agents it
     # starts; what carries it is one plain line any login shell reads.
-    line = remote.ssh_line(_box(), "~/.raven-node/x/bin/python -I -m raven.node --stdio", ssh_log=tmp_path / "l")
+    argv = remote.ssh_command(_box(), "~/.raven-node/x/bin/python -I -m raven.node --stdio", ssh_log=tmp_path / "l")
 
-    sent = shlex.split(line)[-1]
+    sent = argv[-1]
+    line = shlex.join(argv)
     assert sent == "exec /bin/sh -c 'echo; ~/.raven-node/x/bin/python -I -m raven.node --stdio'"
     assert "-lic" not in line and "mkdir" not in line and "read -r" not in line
 
 
 @_posix_shell
-def test_the_ssh_line_s_command_runs_with_its_arguments_intact_from_the_login_directory(tmp_path: Path):
+def test_the_ssh_command_s_command_runs_with_its_arguments_intact_from_the_login_directory(tmp_path: Path):
     # The trap measured 2026-10-10: `ssh host -- bash -lic 'qwen --acp'` loses
     # `--acp` to the far shell's re-parse and starts qwen interactive.
     command = f"{shlex.quote(sys.executable)} -c {shlex.quote(_PROBE)} --stdio 'two words'"
-    sent = shlex.split(remote.ssh_line(_box(), command, ssh_log=tmp_path / "box.log"))[-1]
+    sent = remote.ssh_command(_box(), command, ssh_log=tmp_path / "box.log")[-1]
 
     done = _run_as_sshd(sent, tmp_path)
 
@@ -144,7 +145,7 @@ def test_an_entry_that_lost_its_address_is_refused_by_name_not_as_a_network_faul
     bare = Machine(id="box", display_name="Lab box", _row={"id": "box"})
 
     with pytest.raises(RemoteMachineError, match=r"'Lab box' \(box\): .*has no address"):
-        remote.ssh_line(bare, "node", ssh_log=tmp_path / "l")
+        remote.ssh_command(bare, "node", ssh_log=tmp_path / "l")
     with pytest.raises(RemoteMachineError, match=r"'Lab box' \(box\): .*has no address"):
         remote.push(bare, "true", b"")
 
@@ -153,7 +154,7 @@ def test_a_line_break_in_what_would_be_sent_is_refused_before_any_ssh(tmp_path: 
     with pytest.raises(ValueError, match="must be one line"):
         remote.posix("echo a\necho b")
     with pytest.raises(ValueError, match="must be one line"):
-        remote.ssh_line(_box(), "node\n--stdio", ssh_log=tmp_path / "l")
+        remote.ssh_command(_box(), "node\n--stdio", ssh_log=tmp_path / "l")
 
 
 def test_an_absolute_root_is_quoted_and_a_bare_tilde_is_left_to_the_shell():
@@ -382,7 +383,9 @@ def _as_user_of(shell: str, command: str, home: Path) -> subprocess.CompletedPro
 @pytest.mark.parametrize("shell", _SHELLS)
 def test_a_command_reads_the_same_under_every_login_shell(tmp_path, shell):
     shell = _shell(shell)
-    command = "printf '%s\\n' 'a!b' \"it's\" '$HOME' && [ ! -d /nonexistent ] && echo done"
+    # A directory the test knows is absent: /nonexistent exists on some machines (nobody's home).
+    absent = shlex.quote(str(tmp_path / "absent"))
+    command = f"printf '%s\\n' 'a!b' \"it's\" '$HOME' && [ ! -d {absent} ] && echo done"
 
     done = _as_user_of(shell, remote.posix(command), tmp_path)
 

@@ -1,6 +1,6 @@
 """The host's side of a Raven node: one live link per registered machine.
 
-A node is reached over ssh (:func:`raven.acp_client.remote.ssh_line`): the
+A node is reached over ssh (:func:`raven.acp_client.remote.ssh_command`): the
 relay the ssh runs bridges it to the daemon on the machine, starting one when
 none is up. It is
 spoken to with the client an ACP agent is (:class:`raven.acp_client.client.AcpClient`),
@@ -298,6 +298,8 @@ class _Node:
     hello: dict[str, Any]
     channels: dict[int, ChannelEndpoint]
     used: float = field(default_factory=time.monotonic)
+    calls: int = 0
+    """Requests on their way to the node, not yet answered: use, to the idle close, as much as an answer is."""
     heartbeat: asyncio.Task[None] | None = None
     next_channel: int = 1
 
@@ -338,6 +340,7 @@ class NodePool:
         """``method`` on the node of ``machine_id``, starting one if none is live."""
         node = await self._acquire(machine_id)
         label = node.target.label
+        node.calls += 1
         try:
             result = await node.client.request(method, params, timeout=timeout)
         except AcpRemoteError as exc:
@@ -355,7 +358,9 @@ class NodePool:
             said = self._ended(node.target, node.log, exc)
             await self._lost(machine_id, node, said)
             raise NodeError(said) from None
-        node.used = time.monotonic()
+        finally:
+            node.calls -= 1
+            node.used = time.monotonic()
         return result if isinstance(result, dict) else {}
 
     async def hello(self, machine_id: str) -> dict[str, Any]:
@@ -530,8 +535,8 @@ class NodePool:
             node.heartbeat = asyncio.create_task(self._heartbeat(machine_id, node), name=f"node-heartbeat-{machine_id}")
         return node
 
-    def _prepare(self, machine_id: str) -> tuple[remote.Machine, Path, str, str]:
-        """The machine, its ssh log (emptied), the ssh line and the install name. Blocking: reads the registry."""
+    def _prepare(self, machine_id: str) -> tuple[remote.Machine, Path, list[str], str]:
+        """The machine, its ssh log (emptied), the ssh argv and the install name. Blocking: reads the registry."""
         target = remote.machine(machine_id)
         install_name = bundle.install_name()
         log = remote.ssh_log_path(f"raven-node@{target.id}")
@@ -556,21 +561,23 @@ class NodePool:
             f"--dir {remote.shell_path(node_dir(target))}"
         )
         try:
-            line = remote.ssh_line(target, command, ssh_log=log)
+            argv = remote.ssh_command(target, command, ssh_log=log)
         except ValueError as exc:
             raise remote.RemoteMachineError(f"machine {target.label}: {exc}") from None
-        return target, log, line, install_name
+        return target, log, argv, install_name
 
     async def _launch(self, machine_id: str) -> _Node:
         try:
-            target, log, line, install_name = await asyncio.to_thread(self._prepare, machine_id)
+            target, log, argv, install_name = await asyncio.to_thread(self._prepare, machine_id)
         except remote.RemoteMachineError as exc:
             raise NodeError(str(exc)) from None
         channels: dict[int, ChannelEndpoint] = {}
         try:
             client = await AcpClient.launch(
                 name=f"raven-node@{target.id}",
-                command=line,
+                # The argv itself: a line would be read by this host's own
+                # grammar, which is not the far shell's (Windows, 2026-10-12).
+                command=argv,
                 # Fixed rather than any caller's workspace: the ssh needs none.
                 cwd=str(Path.home()),
                 env={},
@@ -765,9 +772,11 @@ class NodePool:
         await node.client.close()
 
     async def _close_idle(self, *, keep: str) -> None:
+        """Close the links to other machines that nothing uses: no agent on them, no call on its way to them."""
         now = time.monotonic()
         for machine_id, node in list(self._nodes.items()):
-            if machine_id != keep and not node.channels and now - node.used > self._idle_close_s:
+            idle = not node.channels and not node.calls and now - node.used > self._idle_close_s
+            if machine_id != keep and idle:
                 await self._drop(machine_id)
 
 

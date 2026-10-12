@@ -27,9 +27,15 @@ class _Proc:
         self.killed += 1
 
 
+def _as_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The POSIX branch, wherever the test runs: Windows has no SIGKILL to name, so one is lent for the read."""
+    monkeypatch.setattr(acp_client, "_POSIX", True)
+    monkeypatch.setattr(acp_client.signal, "SIGKILL", getattr(acp_client.signal, "SIGKILL", 9), raising=False)
+
+
 def test_on_posix_the_process_group_is_killed(monkeypatch):
     swept: list[tuple[int, int]] = []
-    monkeypatch.setattr(acp_client, "_POSIX", True)
+    _as_posix(monkeypatch)
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: swept.append((pgid, sig)), raising=False)
     proc = _Proc()
 
@@ -43,7 +49,7 @@ def test_a_group_already_gone_is_not_an_error(monkeypatch):
     def gone(pgid, sig):
         raise ProcessLookupError
 
-    monkeypatch.setattr(acp_client, "_POSIX", True)
+    _as_posix(monkeypatch)
     monkeypatch.setattr(os, "killpg", gone, raising=False)
 
     acp_client._end(4242, _Proc())

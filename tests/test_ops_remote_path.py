@@ -112,11 +112,33 @@ def test_two_rows_on_one_address_and_port_are_named_by_id_instead():
 
 @pytest.mark.parametrize(
     "text",
-    ["./a:b.txt", "/abs/a:b", "C:\\x", "c:/x", "C:", "http://x.org/a", "https://x.org/a:b", "~/x", "dir/a:b", ":x", ""],
+    [
+        "./a:b.txt",
+        "/abs/a:b",
+        "C:\\x",
+        "c:/x",
+        "C:",
+        "\\\\?\\C:\\x\\review_marker.txt",
+        "\\\\server\\share\\f",
+        "http://x.org/a",
+        "https://x.org/a:b",
+        "~/x",
+        "dir/a:b",
+        ":x",
+        "",
+    ],
 )
 def test_a_local_path_is_left_to_this_computer(text):
     assert not looks_remote(text)
     assert parse(text, ROWS) is None
+
+
+def test_a_drive_relative_path_is_this_computer_s_on_a_windows_host_and_scp_s_elsewhere(monkeypatch):
+    monkeypatch.setattr(remote_path, "_WINDOWS", True)
+    assert not looks_remote("C:review_marker.txt") and parse("C:review_marker.txt", ROWS) is None
+
+    monkeypatch.setattr(remote_path, "_WINDOWS", False)
+    assert looks_remote("c:review_marker.txt"), "what scp reads as machine c"
 
 
 # --- shown the way scp writes it ------------------------------------------------------

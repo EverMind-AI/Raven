@@ -33,6 +33,7 @@ did.
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 from collections.abc import Callable
@@ -62,6 +63,9 @@ _FILE_TOOLS = frozenset({"read_file", "write_file", "edit_file"})
 _URI = re.compile(r"^(?:scp|sftp)://", re.IGNORECASE)
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
 _DRIVE = re.compile(r"^[A-Za-z]:(?:[\\/]|$)")
+#: A drive-relative path (``C:file``), which only a Windows host reads as one: elsewhere ``c:file`` is scp's machine ``c``.
+_DRIVE_RELATIVE = re.compile(r"^[A-Za-z]:")
+_WINDOWS = os.name == "nt"
 _PORT = re.compile(r"^[0-9]{1,5}$")
 
 
@@ -323,11 +327,15 @@ def looks_remote(text: str) -> bool:
     """Whether ``text`` is written as a remote path, before asking which machine it names.
 
     Local, as scp reads it: anything starting with ``/``, ``./``, ``../`` or
-    ``~``; a Windows drive (``C:\\`` or ``C:/``); a URL of another scheme;
-    and any path whose first ``/`` comes before its first ``:``.
+    ``~``; a Windows drive (``C:\\`` or ``C:/``), a UNC or extended Windows
+    path (``\\\\server\\share``, ``\\\\?\\C:\\...``) and, on a Windows host,
+    a drive-relative path (``C:file``); a URL of another scheme; and any
+    path whose first ``/`` comes before its first ``:``.
     """
     raw = str(text or "").strip()
-    if not raw or raw.startswith(("/", "./", "../", "~")) or _DRIVE.match(raw):
+    if not raw or raw.startswith(("/", "./", "../", "~", "\\\\")) or _DRIVE.match(raw):
+        return False
+    if _WINDOWS and _DRIVE_RELATIVE.match(raw):
         return False
     if _URI.match(raw):
         return True
