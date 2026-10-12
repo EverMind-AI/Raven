@@ -194,3 +194,82 @@ def test_the_manager_without_a_sandbox_config_builds_nothing(tmp_path: Path, mon
     )
 
     assert manager.sandbox_executor_for(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# The production wirings carry the factory
+# ---------------------------------------------------------------------------
+
+
+class _LoopProvider:
+    """A provider that only ever constructs: no turn runs in these tests."""
+
+    def __init__(self) -> None:
+        self.api_key = "test"
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+def _record_dag_tool_constructions(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    """Capture the kwargs of every ``SubAgentDagTool`` construction in the test."""
+    seen: list[dict[str, Any]] = []
+    original_init = SubAgentDagTool.__init__
+
+    def recording_init(self: SubAgentDagTool, *args: Any, **kwargs: Any) -> None:
+        seen.append(dict(kwargs))
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubAgentDagTool, "__init__", recording_init)
+    return seen
+
+
+def _wired_loop(tmp_path: Path) -> Any:
+    from raven.agent.loop import AgentLoop
+
+    home = tmp_path / "home"
+    home.mkdir()
+    return AgentLoop(
+        provider=_LoopProvider(),
+        workspace=home,
+        model="stub",
+        sandbox_config=SandboxConfig(backend="none"),
+    )
+
+
+def test_the_loop_registers_the_graph_tool_with_the_sandbox_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The loop's registered ``run_subagent_dag`` carries the manager's factory.
+
+    The defect this file pins was itself a missing wiring, so each production
+    construction site gets a guard: dropping its ``sandbox_factory=`` line
+    fails here instead of resurfacing as nodes back on the host.
+    """
+    seen = _record_dag_tool_constructions(monkeypatch)
+    loop = _wired_loop(tmp_path)
+
+    assert any(kwargs.get("sandbox_factory") == loop.subagents.sandbox_executor_for for kwargs in seen), (
+        "the registered graph tool must ask the manager's recipe for its executor"
+    )
+
+
+def test_the_loops_playbook_runtime_gets_the_sandbox_factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The loop's private playbook ``SubAgentDagTool`` carries the factory too.
+
+    A ``mode: dag`` playbook step runs under the host's configured executor
+    like a conversational graph does, so the funnel the loop builds for
+    playbooks is wired to the same recipe, not left on ``None``.
+    """
+    from raven.config.schema import PlaybookConfig
+
+    playbooks = tmp_path / "playbooks"
+    playbooks.mkdir()
+    seen = _record_dag_tool_constructions(monkeypatch)
+    loop = _wired_loop(tmp_path)
+
+    loop._build_playbook_runtime(PlaybookConfig(enabled=True, dir=str(playbooks)))
+
+    assert any(kwargs.get("sandbox_factory") == loop.subagents.sandbox_executor_for for kwargs in seen), (
+        "the playbook funnel's graph tool must ask the manager's recipe for its executor"
+    )

@@ -892,10 +892,14 @@ class SubagentManager:
     def dispatch_gate(self) -> asyncio.Semaphore:
         """The one gate every sub-agent dispatch waits on, spawns and DAG nodes alike.
 
-        Each dispatch runs its own sandbox VM, so the host resource being
-        rationed is the same whichever tool asked for it. Handed to the DAG tool
-        rather than duplicated there, so ``max_concurrent_subagents`` means the
-        total in flight and not a per-tool allowance that silently multiplies.
+        The gate rations the resource both dispatch shapes spend, at the shape's
+        own granularity: a spawn builds and enters its own sandbox VM around its
+        dispatch, while a graph builds one VM for the whole run before its first
+        node takes a slot -- the nodes then queue here sharing the VM the run
+        arrived with, each bringing none of its own. One VM per graph, not per
+        node, is the intended shape. Handed to the DAG tool rather than
+        duplicated there, so ``max_concurrent_subagents`` means the total in
+        flight and not a per-tool allowance that silently multiplies.
         """
         return self._gate
 
@@ -1640,8 +1644,10 @@ class SubagentManager:
         # still queued behind the gate (or a booting sandbox) ended.
         dispatched = False
         try:
-            # Each subagent runs its own sandbox VM; gate the count so heavy
-            # fan-out can't exhaust host resources.
+            # Each spawn runs its own sandbox VM; gate the count so heavy
+            # fan-out can't exhaust host resources. (A dispatched graph is the
+            # other shape: one VM for its whole run, built by SubAgentDagTool
+            # before any node queues on this same gate.)
             async with self._gate:
                 executor = build_executor(
                     self._sandbox_config,
@@ -1675,10 +1681,11 @@ class SubagentManager:
         by ``SubAgentDagTool``, which owns no sandbox config -- so it asks here
         with the directory the graph runs in and gets the same recipe a spawn
         gets: this config, the owned-id set and the agent-home mount. ``None``
-        when no sandbox is configured, which the tool reads as "run as before":
-        with nothing configured there is nothing to build, and a host that
-        never asked for a sandbox keeps its behavior down to the absent
-        executor.
+        only when no sandbox config exists at all, which the tool reads as "run
+        as before"; a default install normally holds ``tools.sandbox`` with
+        ``backend="none"``, and that builds a ``DirectExecutor`` -- the run
+        stays on the host by configuration rather than by absence, with the
+        same entry, enter and exit a real VM backend goes through.
         """
         if self._sandbox_config is None:
             return None

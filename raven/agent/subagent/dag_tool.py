@@ -2414,11 +2414,12 @@ class SubAgentDagTool(Tool):
         # graph's. An ordinary run has no charters and this rebinds nothing.
         dispatch_backends = _chartered(dispatch_backends, hooks.get("charters") or {})
         # One executor for the whole graph, built per run and entered around it:
-        # the nodes share it the way one spawn's dispatch shares its executor.
-        # Asked with the workdir the nodes will run in -- the same workspace a
-        # spawn's executor is built over. Without a factory (no sandbox
-        # configured) nothing is built and the nodes are dispatched with
-        # ``sandbox=None``, exactly as they always were.
+        # the nodes share it, so each waits on the dispatch gate for its turn
+        # inside a VM the run holds before its first dispatch -- one VM per
+        # graph, not per node. Asked with the workdir the nodes will run in --
+        # the same workspace a spawn's executor is built over. Without a factory
+        # (no sandbox configured) nothing is built and the nodes are dispatched
+        # with ``sandbox=None``, exactly as they always were.
         sandbox = self._sandbox_factory(Path(dirs.workdir)) if self._sandbox_factory is not None else None
         try:
             provider, model = self._binding_for() if self._binding_for is not None else (None, None)
