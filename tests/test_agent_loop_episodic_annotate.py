@@ -75,14 +75,27 @@ class _FakeConsolidator:
         return 0
 
 
-def _make_loop(workspace: Path, *, provider: Any | None = None, every: int = 3) -> AgentLoop:
+class _FakeBackend:
+    async def start(self) -> None: ...
+
+    async def stop(self) -> None: ...
+
+    async def feedback(self, signals: Any) -> None: ...
+
+    async def recall(self, query: Any, *, user_id: Any = None, agent_id: Any = None, top_k: int = 5) -> list:
+        return []
+
+    async def store(self, session_id: Any, messages: Any, *, metadata: Any = None) -> None: ...
+
+
+def _make_loop(workspace: Path, *, provider: Any | None = None, every: int = 3, backend: Any = None) -> AgentLoop:
     loop = AgentLoop(
         provider=provider or _StubProvider(),
         workspace=workspace,
         model="stub",
         policy=TurnPolicy(max_iterations=2),
         tools=ToolWiring(restrict_to_workspace=True),
-        engine=EngineWiring(backend=None, memory_config=MemoryConfig(annotate_every_turns=every)),
+        engine=EngineWiring(backend=backend, memory_config=MemoryConfig(annotate_every_turns=every)),
     )
     return loop
 
@@ -349,3 +362,30 @@ def _stub_edges(loop: AgentLoop) -> None:
 
     loop._start_executor = _noop
     loop._connect_mcp = _noop
+
+
+class TestABackendChangesNothingHere:
+    async def test_a_wired_backend_still_gets_the_tail_annotated(self, tmp_path: Path) -> None:
+        """The host's log is written whether or not a plugin owns memory.
+
+        Every acceptance run for this step drove a gateway with no backend,
+        while the shipped default wires one. The step reads no backend, so the
+        claim is structural -- pinned here so a later gate on one reddens
+        rather than silently stopping the log on the configuration almost
+        everyone runs.
+        """
+        loop = _make_loop(tmp_path, every=3, backend=_FakeBackend())
+        fake = _FakeConsolidator()
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:wired", turns=0)
+        session.metadata["annotated_through"] = 0
+        for i in range(3):
+            session.messages.extend(_turn(i))
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=len(session.messages) - 2)
+        await _settle(loop)
+
+        assert loop.backend is not None
+        assert len(fake.tails) == 1
+        assert session.metadata["annotated_through"] == 6
