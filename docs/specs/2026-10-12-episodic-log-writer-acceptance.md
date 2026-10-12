@@ -47,11 +47,11 @@ before forwarding (T7, T8); `fail:500:once` answers one request with HTTP 500
 and then resets itself to `pass` (T9); `empty:once` answers one request with
 a well-formed `annotate_conversation` tool call whose `episode_summary` is
 `[]`, then resets (T10). The case writes the mode before its sends and
-asserts the file reads `pass` at its end. The proxy script ships with the
-harness under `.work_context/episodic_log_writer/acceptance/` (pending);
-it is test tooling, not product code, and no part of the design depends on
-it. A second instance of the same script on 18836 fronts EverOS for
-`elw_backend`, in `pass` mode only, so T14 can read what `/add` received.
+asserts the file reads `pass` at its end. The proxy is not committed: it is a
+few dozen lines of aiohttp that an operator rebuilds from the contract above,
+and nothing in the design depends on it. A second instance of it on 18836
+fronts EverOS for `elw_backend`, in `pass` mode only, so T14 can read what
+`/add` received.
 
 Driving a turn without a browser: `raven gateway --port <rpc> --page-port
 <page>` from inside the home's workspace, then over WebSocket at
