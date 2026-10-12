@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import mimetypes
 import re
 import time
@@ -65,16 +66,16 @@ def _on_machine(raw: str) -> RemotePath | str | None:
 
 
 async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path | None, str]:
-    """``where``'s file, fetched from its machine to ``<workspace>/pulled/<machine>/<its path>``; or why it was not.
+    """``where``'s file, fetched from its machine to ``<workspace>/pulled/<machine>/<key>/<name>``; or why it was not.
 
     Only a file under the directories this Raven's agents work in on that
     machine is fetched here, since this tool asks nothing: a delivery is not
     a way around the read check, and what another conversation was allowed
     to read is no evidence for this one. A file elsewhere is read there. One
     over :data:`PULL_FILE_BUDGET` stays, and is named with its size. The file
-    lands under its whole path on the machine, each component written as one
-    name here (:func:`_landing`), so two files of one name from two
-    directories never land on each other and no name reaches above the
+    lands under a key of its path on the machine, by its name
+    (:func:`_landing`), so two paths never land on each other, however this
+    computer's filesystem reads their names, and no name reaches above the
     delivery directory.
     """
     pool = remote_path.nodes()
@@ -118,8 +119,8 @@ async def _brought_back(where: RemotePath, workspace: Path | None) -> tuple[Path
 #: The most a file fetched from a registered machine for a delivery may weigh; a bigger one is read there.
 PULL_FILE_BUDGET = 20 * 1024 * 1024
 
-#: What a component of a fetched file's path may not hold as a name on this
-#: computer: the other platform's separator, what Windows reserves in a name,
+#: What a fetched file's name may not hold as a name on this computer: the
+#: other platform's separator, what Windows reserves in a name,
 #: a control character. A Linux file name may hold any of them, and ``..\``
 #: inside one, read by a Windows host as two steps up, put a fetched file
 #: above the workspace. Each is written as its
@@ -130,23 +131,29 @@ _NOT_A_NAME_HERE = re.compile(r'[%\\<>:"|?*\x00-\x1f]')
 
 
 def _local_name(part: str) -> str:
-    """One component of a path on the machine, as one name on this computer's filesystem."""
+    """A name on the machine, as one name on this computer's filesystem."""
     if part in (".", ".."):
         return part.replace(".", "%2E")
     return _NOT_A_NAME_HERE.sub(lambda m: f"%{ord(m.group(0)):02X}", part)
 
 
 def _landing(workspace: Path | None, machine: str, place: str) -> Path:
-    """Where ``place`` on ``machine`` lands: under ``pulled/<machine>/``, by its POSIX components, each one name here.
+    """Where ``place`` on ``machine`` lands: ``pulled/<machine>/<key>/<name>``, the key a digest of the path there.
 
-    Checked before anything is made or written: a landing that resolves
-    outside its machine's delivery directory is refused, whatever the name
-    did to get there.
+    The key keeps apart two paths that this computer's filesystem would read
+    as one name -- ``Report.txt`` and ``report.txt`` on Windows or macOS,
+    ``report.txt`` and ``report.txt.`` on Windows -- as well as two files of
+    one name from two directories; the name, written as one this computer
+    keeps (:func:`_local_name`), stays readable beside it. Checked before
+    anything is made or written: a landing that resolves outside its
+    machine's delivery directory is refused, whatever the name did to get
+    there.
     """
     pulled = (workspace or Path.cwd()) / "pulled" / _local_name(machine)
-    parts = [_local_name(part) for part in PurePosixPath(place).parts if part != "/"]
-    local = pulled.joinpath(*parts)
-    if not parts or local.resolve() == pulled.resolve() or not local.resolve().is_relative_to(pulled.resolve()):
+    key = hashlib.sha256(f"{machine}\0{place}".encode()).hexdigest()[:16]
+    name = _local_name(PurePosixPath(place).name)
+    local = pulled / key / name
+    if not name or local.resolve() == pulled.resolve() or not local.resolve().is_relative_to(pulled.resolve()):
         raise ValueError(f"{place} would not land under {pulled}")
     return local
 

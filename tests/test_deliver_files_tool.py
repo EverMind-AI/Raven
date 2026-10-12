@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -388,6 +389,12 @@ def machines(tmp_path, monkeypatch):
     return pool
 
 
+def _landed(tmp_path: Path, place: str, *, name: str | None = None, machine: str = "box") -> Path:
+    """Where a file of the machine lands, as deliver.py lays it out: under a key of its path, by its name."""
+    key = hashlib.sha256(f"{machine}\0{place}".encode()).hexdigest()[:16]
+    return tmp_path / "chanwork" / "pulled" / machine / key / (name or PurePosixPath(place).name)
+
+
 class _RemotePool:
     """A node pool with one file of a given size, which it hands over as x's."""
 
@@ -415,7 +422,7 @@ async def test_a_file_on_a_machine_is_brought_back_and_delivered(tool, tmp_path,
     manifest = tool.take_metadata()["raven_delivery"]
     assert manifest["invalid"] == [], summary
     (entry,) = manifest["files"]
-    landed = tmp_path / "chanwork" / "pulled" / "box" / "root" / "raven-work" / "t1" / "report.pdf"
+    landed = _landed(tmp_path, "/root/raven-work/t1/report.pdf")
     assert entry["name"] == "report.pdf" and entry["path"] == str(landed) and entry["size"] == 5
     assert landed.read_bytes() == b"xxxxx"
     assert machines.pulled == [("/root/raven-work/t1/report.pdf", landed, ["/root/raven-work"])]
@@ -430,8 +437,9 @@ async def test_a_name_holding_the_other_platform_s_separators_lands_as_one_name_
     manifest = tool.take_metadata()["raven_delivery"]
     assert manifest["invalid"] == [], summary
     (landed,) = (Path(entry["path"]) for entry in manifest["files"])
-    pulled = tmp_path / "chanwork" / "pulled" / "box"
-    assert landed == pulled / "root" / "raven-work" / "t1" / "..%5C..%5C..%5Creview_escape.txt"
+    assert landed == _landed(
+        tmp_path, "/root/raven-work/t1/..\\..\\..\\review_escape.txt", name="..%5C..%5C..%5Creview_escape.txt"
+    )
     assert landed.is_file() and not list(tmp_path.glob("**/review_escape.txt"))
     assert machines.pulled[0][0] == "/root/raven-work/t1/..\\..\\..\\review_escape.txt"
 
@@ -445,13 +453,30 @@ async def test_two_names_that_differ_only_by_one_written_out_land_apart(tool, tm
     manifest = tool.take_metadata()["raven_delivery"]
     assert manifest["invalid"] == [], summary
     landed = [Path(entry["path"]) for entry in manifest["files"]]
-    pulled = tmp_path / "chanwork" / "pulled" / "box" / "root" / "raven-work" / "t1"
-    assert landed == [pulled / "a%5Cb.txt", pulled / "a%255Cb.txt"]
+    assert landed == [
+        _landed(tmp_path, "/root/raven-work/t1/a\\b.txt", name="a%5Cb.txt"),
+        _landed(tmp_path, "/root/raven-work/t1/a%5Cb.txt", name="a%255Cb.txt"),
+    ]
     assert all(place.is_file() for place in landed)
     assert [where for where, _, _ in machines.pulled] == [
         "/root/raven-work/t1/a\\b.txt",
         "/root/raven-work/t1/a%5Cb.txt",
     ]
+
+
+async def test_two_paths_this_filesystem_would_read_as_one_name_land_apart(tool, tmp_path, machines) -> None:
+    # Windows and macOS read `Report.txt` and `report.txt` as one name, and Windows drops a trailing dot: the
+    # key of each path keeps them apart, whatever the filesystem makes of the name.
+    names = ("Report.txt", "report.txt", "report.txt.")
+
+    summary = await tool.execute(files=[{"path": f"box:raven-work/t1/{name}"} for name in names])
+
+    manifest = tool.take_metadata()["raven_delivery"]
+    assert manifest["invalid"] == [], summary
+    landed = [Path(entry["path"]) for entry in manifest["files"]]
+    assert landed == [_landed(tmp_path, f"/root/raven-work/t1/{name}") for name in names]
+    assert len({place.parent for place in landed}) == 3 and all(place.is_file() for place in landed)
+    assert [where for where, _, _ in machines.pulled] == [f"/root/raven-work/t1/{name}" for name in names]
 
 
 async def test_nothing_is_fetched_to_a_landing_outside_the_delivery_directory(
@@ -475,8 +500,10 @@ async def test_two_files_of_one_name_from_two_directories_land_apart(tool, tmp_p
     manifest = tool.take_metadata()["raven_delivery"]
     assert manifest["invalid"] == [], summary
     landed = [Path(entry["path"]) for entry in manifest["files"]]
-    pulled = tmp_path / "chanwork" / "pulled" / "box" / "root" / "raven-work"
-    assert landed == [pulled / "a" / "report.pdf", pulled / "b" / "report.pdf"]
+    assert landed == [
+        _landed(tmp_path, "/root/raven-work/a/report.pdf"),
+        _landed(tmp_path, "/root/raven-work/b/report.pdf"),
+    ]
     assert [where for where, _, _ in machines.pulled] == [
         "/root/raven-work/a/report.pdf",
         "/root/raven-work/b/report.pdf",
