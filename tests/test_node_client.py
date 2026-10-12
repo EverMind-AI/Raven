@@ -898,7 +898,7 @@ async def test_a_heartbeat_unanswered_loses_the_link_tells_its_agents_and_reconn
     )
     await _until(lambda: len(tried) == 2 and pool.live() == ["box"] and endpoint.detached is None)
     again = pool._nodes["box"].client
-    # Among the new link's requests, not its last: a heartbeat may well follow the attach (reviewed 2026-10-12).
+    # Among the new link's requests, not its last: a heartbeat may well follow the attach.
     attach = (protocol.AGENT_ATTACH, {"channel": 1, "task": endpoint.task, "after": 0})
     assert attach in [asked[:2] for asked in again.asked]
     assert pool.status("box").state == "connected" and pool._nodes["box"].channels[1] is endpoint
