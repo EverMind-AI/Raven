@@ -928,7 +928,7 @@ async def test_on_a_windows_host_a_quoted_destination_or_port_is_matched_like_a_
     registry, tmp_path, monkeypatch, command
 ):
     # That shell takes the quotes off before the program sees the word; read with them on, the
-    # host and the port went unmatched and the command reached the executor (reviewed 2026-10-12).
+    # host and the port went unmatched and the command reached the executor.
     monkeypatch.setattr(machine_exec, "_WINDOWS", True)
     tool = ExecTool(working_dir=str(tmp_path))
     marker = tmp_path / "ran"

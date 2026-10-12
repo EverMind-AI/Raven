@@ -424,7 +424,7 @@ async def test_a_file_on_a_machine_is_brought_back_and_delivered(tool, tmp_path,
 async def test_a_name_holding_the_other_platform_s_separators_lands_as_one_name_under_the_delivery_directory(
     tool, tmp_path, machines
 ) -> None:
-    # A Linux file name may hold backslashes, which a Windows host reads as steps up (reviewed 2026-10-12).
+    # A Linux file name may hold backslashes, which a Windows host reads as steps up.
     summary = await tool.execute(files=[{"path": "box:raven-work/t1/..\\..\\..\\review_escape.txt"}])
 
     manifest = tool.take_metadata()["raven_delivery"]
@@ -437,7 +437,7 @@ async def test_a_name_holding_the_other_platform_s_separators_lands_as_one_name_
 
 
 async def test_two_names_that_differ_only_by_one_written_out_land_apart(tool, tmp_path, machines) -> None:
-    # `a\b.txt` is written `a%5Cb.txt` here, so a file named `a%5Cb.txt` must not land on it (reviewed 2026-10-12).
+    # `a\b.txt` is written `a%5Cb.txt` here, so a file named `a%5Cb.txt` must not land on it.
     summary = await tool.execute(
         files=[{"path": "box:raven-work/t1/a\\b.txt"}, {"path": "box:raven-work/t1/a%5Cb.txt"}]
     )

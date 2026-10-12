@@ -122,10 +122,10 @@ PULL_FILE_BUDGET = 20 * 1024 * 1024
 #: computer: the other platform's separator, what Windows reserves in a name,
 #: a control character. A Linux file name may hold any of them, and ``..\``
 #: inside one, read by a Windows host as two steps up, put a fetched file
-#: above the workspace (reviewed 2026-10-12). Each is written as its
+#: above the workspace. Each is written as its
 #: percent-code, the way a URL writes one -- the percent sign itself too, so
 #: two names that differ only by one written out never land as one
-#: (``a\b`` and ``a%5Cb``; reviewed 2026-10-12).
+#: (``a\b`` and ``a%5Cb``).
 _NOT_A_NAME_HERE = re.compile(r'[%\\<>:"|?*\x00-\x1f]')
 
 

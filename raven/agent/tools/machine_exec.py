@@ -105,7 +105,7 @@ def machines_registered() -> bool:
 _COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
 #: On a Windows host the shell that runs a command reads a backslash as a path's
 #: own, not as an escape: the words are read that way too, so ``C:\...\scp.exe``
-#: keeps its name (reviewed 2026-10-12).
+#: keeps its name.
 _WINDOWS = os.name == "nt"
 
 
@@ -115,7 +115,7 @@ def _words(command: str) -> list[str]:
     POSIX quoting here. On a Windows host the quotes come off the same way
     -- around a word or inside it, a quoted piece and a bare one next to it
     making one word, as that shell's argv has them (``"root@"host``,
-    ``"587"17``; reviewed 2026-10-12) -- but a backslash is a path's own and
+    ``"587"17``) -- but a backslash is a path's own and
     is kept, never an escape. An unbalanced quote is not a line this can
     read; the shell rejects it too, so nothing reaches a machine either way.
     """
@@ -191,8 +191,8 @@ def _program(word: str) -> str:
     Written ``ssh``, ``/usr/bin/ssh`` or ``\\ssh`` (a backslash suppresses alias
     lookup and still runs the client), and on Windows ``scp.exe``, ``SCP.EXE``
     or ``C:\\Windows\\System32\\OpenSSH\\scp.exe``, all of which reach the far
-    side: the directory, the case and the suffix are taken off (reviewed
-    2026-10-12: the three Windows spellings went past the copy refusal).
+    side: the directory, the case and the suffix are taken off (before
+    this, the three Windows spellings went past the copy refusal).
     """
     name = PureWindowsPath(PurePosixPath(word.strip("\"'").lstrip("\\")).name).name.lower()
     for suffix in _EXE_SUFFIXES:
