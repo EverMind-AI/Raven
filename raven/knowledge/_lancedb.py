@@ -367,32 +367,52 @@ class LanceDBVectorStore(VectorStoreBase):
         The order is the one already stored, so nothing moves: this rewrites
         the numbers rows are sorted by, never the sort. Only rows whose numbers
         actually changed are written back.
+
+        In one write, because deleting the first piece of a document changes
+        the index of every piece after it and the total on all of them. A write
+        per row is a commit per row: measured on a 400-chunk document, removing
+        one piece took the table from version 2 to 402 and 9.9 MB on disk,
+        with the panel's own controls inert for the whole time.
+
+        Keyed by chunk id and document together, which is the same pair the
+        per-row predicate scoped by and not a tidiness: a chunk id is derived
+        from the text, two documents in one base can hold the same sentence,
+        and a merge keyed on the id alone matches the identical row in the
+        other document and overwrites it with this one's -- which is that
+        document silently losing a piece.
+
+        The index column cannot be the thing addressed by, because it is what
+        is being rewritten. Rows from a build before ids existed carry an empty
+        one and are left alone, which is what the per-row predicate did for
+        them too: an empty id matches nothing, so each of those was a commit
+        that changed nothing.
         """
         if not await self.has_collection(collection):
             return 0
         table = await self._writable(collection)
-        rows = await (
-            table.query()
-            .where(f"document_id = {_sql_quote(document_id)}")
-            .select(["chunk_index", "chunk_json", "chunk_id"])
-            .to_list()
-        )
+        # Every column, not the three that are read: the rows go back through
+        # a merge that replaces what it matches, so a column left out here is
+        # a column emptied on disk -- including any added since (`_writable`).
+        rows = await table.query().where(f"document_id = {_sql_quote(document_id)}").to_list()
         if not rows:
             return 0
         ordered = sorted(rows, key=lambda row: int(row.get("chunk_index") or 0))
         total = len(ordered)
+        changed = []
         for index, row in enumerate(ordered):
             chunk = Chunk.model_validate_json(row["chunk_json"])
             if chunk.chunk_index == index and chunk.total_chunks == total:
                 continue
+            if not row.get("chunk_id"):
+                continue
             chunk.chunk_index = index
             chunk.total_chunks = total
-            # By chunk id, which is what names one row; the index column is
-            # being rewritten here and cannot also be the thing addressed by.
-            await table.update(
-                {"chunk_index": index, "chunk_json": chunk.model_dump_json()},
-                where=_id_predicate([row.get("chunk_id") or ""], document_id),
-            )
+            row["chunk_index"] = index
+            row["chunk_json"] = chunk.model_dump_json()
+            changed.append(row)
+        if changed:
+            merge = table.merge_insert(["chunk_id", "document_id"])
+            await merge.when_matched_update_all().execute(changed)
         return total
 
     async def set_chunks_enabled(
