@@ -398,6 +398,9 @@ jobs:
       - name: Test ACP handshakes and bundled launchers
         run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_stdio_smoke.py -m integration -q -n 0 --tb=short
 
+      - name: Test the registered launcher command
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_cli_agents_commands.py::test_register_pins_the_resolved_row_into_the_host_roster -q -n 0 --tb=short
+
   core-wheel:
     name: kernel wheel smoke
     runs-on: ubuntu-latest
