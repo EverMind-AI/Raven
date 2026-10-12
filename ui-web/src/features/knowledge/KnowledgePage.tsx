@@ -406,6 +406,10 @@ function SettingsPanel({ base, busy, models }: { base: KbBase; busy: boolean; mo
 function Sheet({ base }: { base: KbBase | null }): JSX.Element {
   const [name, setName] = useState(base?.name ?? '')
   const [description, setDescription] = useState(base?.description ?? '')
+  /* Creating only. A base with no model reaches no endpoint, which is the one
+     create that cannot fail because the configured one is unreachable -- and
+     without it there was no way to make a base at all while it was down. */
+  const [indexing, setIndexing] = useState(true)
   const field = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -414,7 +418,7 @@ function Sheet({ base }: { base: KbBase | null }): JSX.Element {
 
   const save = (): void => {
     if (base) void store.write(base, { name: name.trim(), description: description.trim() })
-    else void store.create(name, description)
+    else void store.create(name, description, indexing)
     if (base) store.closeSheet()
   }
 
@@ -435,6 +439,17 @@ function Sheet({ base }: { base: KbBase | null }): JSX.Element {
           <span>{t('gui.knowledge.description')}</span>
           <textarea value={description} onChange={(e) => setDescription(e.currentTarget.value)} rows={3} />
         </label>
+        {!base && (
+          <label className="knowledge-noembed" title={t('gui.knowledge.no_embedding_help')}>
+            <input
+              type="checkbox"
+              checked={!indexing}
+              aria-label={t('gui.knowledge.no_embedding')}
+              onChange={(e) => setIndexing(!e.currentTarget.checked)}
+            />
+            <span>{t('gui.knowledge.no_embedding')}</span>
+          </label>
+        )}
         <div className="knowledge-actions">
           <button className="mini ghost" onClick={() => store.closeSheet()}>
             {t('gui.cancel')}

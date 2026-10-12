@@ -34,7 +34,12 @@ export const DEFAULTS = {
   smart_chunking: true,
   separator: '\n\n',
   chunk_size: 2048,
-  chunk_overlap: 215,
+  /* Zero, which is what the engine defaults to. 215 is the number every base
+     carried while nothing read the setting, and the records layer reads a base
+     still holding exactly it as having no overlap -- so "restore defaults"
+     wrote the one value that means "never set": the chunker used a 215-token
+     overlap for the rest of the process and the next load read it back as 0. */
+  chunk_overlap: 0,
   table_context_size: 64,
   image_context_size: 64,
 } as const
@@ -250,8 +255,16 @@ export const knowledgeSource: KnowledgeSource = {
     await gateway().call('knowledge.documents.delete', { document_id: id })
   },
 
-  async create(name: string, description: string): Promise<KbBase> {
-    const out = await gateway().call('knowledge.bases.create', { name, description })
+  async create(name: string, description: string, embedding = true): Promise<KbBase> {
+    /* `embedding: false` is the one create that reaches no endpoint, which is
+       what makes a base possible while the configured one is unreachable.
+       Sent only when it is false: the server's own default is true, and a
+       page that always stated it would be a second opinion about it. */
+    const out = await gateway().call('knowledge.bases.create', {
+      name,
+      description,
+      ...(embedding ? {} : { embedding: false }),
+    })
     return baseOf(out.base)
   },
 

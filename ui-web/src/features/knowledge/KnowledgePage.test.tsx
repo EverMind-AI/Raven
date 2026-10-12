@@ -1385,7 +1385,11 @@ describe('the knowledge page', () => {
 
     expect((document.querySelector('input[type="range"]') as HTMLInputElement).value).toBe('6')
     expect((document.querySelector('input[aria-label="Piece size"]') as HTMLInputElement).value).toBe('2048')
-    expect((document.querySelector('input[aria-label="Overlap"]') as HTMLInputElement).value).toBe('215')
+    /* Zero, not 215. That number is what every base carried while nothing
+       read the setting, and the records layer reads a base still holding
+       exactly it as having none -- so restoring it wrote the one value that
+       means "never set". */
+    expect((document.querySelector('input[aria-label="Overlap"]') as HTMLInputElement).value).toBe('0')
     expect((document.querySelector('input[aria-label="Table context"]') as HTMLInputElement).value).toBe('64')
     expect((document.querySelector('input[aria-label="Figure context"]') as HTMLInputElement).value).toBe('64')
   })

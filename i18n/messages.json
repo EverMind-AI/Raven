@@ -10887,6 +10887,14 @@
       "en": "New knowledge base",
       "zh": "新建知识库"
     },
+    "gui.knowledge.no_embedding": {
+      "en": "Store the documents without indexing them yet",
+      "zh": "\u5148\u4fdd\u5b58\u6587\u6863\uff0c\u6682\u4e0d\u5efa\u7acb\u7d22\u5f15"
+    },
+    "gui.knowledge.no_embedding_help": {
+      "en": "A base with no embedding model reaches no endpoint, so it can be made while one is unreachable. Pick a model later in settings and its documents are indexed then.",
+      "zh": "\u672a\u914d\u7f6e\u5411\u91cf\u6a21\u578b\u7684\u77e5\u8bc6\u5e93\u4e0d\u4f1a\u8bbf\u95ee\u4efb\u4f55\u7aef\u70b9\uff0c\u56e0\u6b64\u5728\u7aef\u70b9\u4e0d\u53ef\u8fbe\u65f6\u4e5f\u80fd\u521b\u5efa\u3002\u7a0d\u540e\u5728\u8bbe\u7f6e\u4e2d\u9009\u62e9\u6a21\u578b\uff0c\u5176\u6587\u6863\u4f1a\u5728\u90a3\u65f6\u5efa\u7acb\u7d22\u5f15\u3002"
+    },
     "gui.knowledge.name": {
       "en": "Name",
       "zh": "名称"

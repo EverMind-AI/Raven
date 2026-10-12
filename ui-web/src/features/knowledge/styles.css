@@ -283,6 +283,23 @@
   resize: vertical;
 }
 
+/* The create form's one option, which is a tickbox and a sentence rather than
+   a field: the labels above it are a stacked grid, and this reads across. */
+.knowledge-noembed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.knowledge-sheet .knowledge-noembed input {
+  width: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
 .knowledge-actions {
   display: flex;
   justify-content: flex-end;

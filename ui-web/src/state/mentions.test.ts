@@ -182,4 +182,33 @@ describe('what a conversation is pointed at', () => {
 
     expect(calls).toEqual([])
   })
+
+  it('reads the bases again after a read that failed', async () => {
+    /* The note above `load` promises that opening the menu again is the
+       retry. Storing `[]` on failure made it a lie: the early return is on
+       `bases !== null`, so the menu said why once and never asked again. */
+    answer = () => {
+      throw new Error('the gateway is not there')
+    }
+    await mentions.load()
+    expect(mentions.get().failed).toBeTruthy()
+
+    answer = () => ({ bases: [{ id: 'kb-a', name: 'Notes', documents: 2 }] })
+    await mentions.load()
+
+    expect(mentions.get().bases?.map((row) => row.name)).toEqual(['Notes'])
+    expect(mentions.get().failed).toBeNull()
+  })
+
+  it('forgets the list when it is invalidated', async () => {
+    answer = () => ({ bases: [{ id: 'kb-a', name: 'Notes', documents: 0 }] })
+    await mentions.load()
+    expect(calls).toHaveLength(1)
+
+    mentions.invalidate()
+    answer = () => ({ bases: [{ id: 'kb-a', name: 'Notes', documents: 0 }, { id: 'kb-b', name: 'Papers', documents: 0 }] })
+    await mentions.load()
+
+    expect(mentions.get().bases?.map((row) => row.name)).toEqual(['Notes', 'Papers'])
+  })
 })

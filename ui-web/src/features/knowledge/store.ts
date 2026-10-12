@@ -6,6 +6,7 @@
  * same list and none of them holds a copy that can drift from the registry.
  */
 
+import * as mentions from '../../state/mentions'
 import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -845,15 +846,18 @@ export function closeSheet(): void {
   patch({ sheet: null })
 }
 
-export async function create(name: string, description: string): Promise<void> {
+export async function create(name: string, description: string, embedding = true): Promise<void> {
   const named = name.trim()
   if (!named || get().busy) return
   patch({ busy: true })
   try {
-    const made = await source().create(named, description.trim())
+    const made = await source().create(named, description.trim(), embedding)
     /* Inserted rather than refetched: create answers with the same row shape
        the list sends, which is what that shape is for. */
     patch({ bases: [...(get().bases ?? []), made], sheet: null })
+    /* The composer's menu holds its own list of names, read once. A base made
+       here should be offerable there without a reload. */
+    mentions.invalidate()
   } catch (e) {
     toast(reasonOf(e))
   } finally {
@@ -937,6 +941,7 @@ export function remove(base: KbBase): void {
         ...(get().opened?.id === base.id ? { opened: null, documents: null } : {}),
       }),
     )
+    .then(() => mentions.invalidate())
     .catch((e: unknown) => toast(reasonOf(e)))
     .finally(() => patch({ busy: false }))
 }

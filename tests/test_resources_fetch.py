@@ -485,3 +485,48 @@ class TestWarmDictionary:
         monkeypatch.setattr(tok, "Tokenizer", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no datrie here")))
 
         resources.warm_dictionary()
+
+
+class TestWithoutTheSegmenter:
+    """The segmenter is an extra, because datrie compiles from source on every
+    platform PyPI publishes for -- so a core install has none of it, and both
+    steps that reach it have to be steps to skip rather than errors."""
+
+    def test_the_corpora_step_skips(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import builtins
+
+        real = builtins.__import__
+
+        def refuse(name: str, *args: object, **kw: object):
+            if name == "nltk":
+                raise ImportError("No module named 'nltk'")
+            return real(name, *args, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(builtins, "__import__", refuse)
+
+        assert resources.fetch_nltk(force=False) == 0
+
+    def test_the_index_warm_up_skips(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        import builtins
+
+        real = builtins.__import__
+
+        def refuse(name: str, *args: object, **kw: object):
+            if name.startswith("raven.core"):
+                raise ImportError("No module named 'datrie'")
+            return real(name, *args, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(builtins, "__import__", refuse)
+
+        resources.warm_dictionary()
+
+    def test_the_dictionary_is_still_fetched(self, res: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """It is a word list, not code: an install with no segmenter can still
+        hold it, and the one that adds the extra later finds it already here."""
+        import httpx
+
+        client = _FakeClient([b"words"])
+        monkeypatch.setattr(httpx, "Client", lambda **_kw: client)
+        item = resources.Resource("huqie.txt", resources.CORE_RES, "the word dictionary")
+
+        assert resources.fetch_dictionary((item,), force=False) == 1

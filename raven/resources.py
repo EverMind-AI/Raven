@@ -118,7 +118,13 @@ def fetch_nltk(*, force: bool) -> int:
     # keeps its answer.
     os.environ.setdefault("NLTK_ALLOW_PROXIED_URLOPEN", "1")
 
-    import nltk
+    # Part of the segmenter extra. An install that did not take it has no
+    # corpora to fetch, which is a step to skip and not a failure.
+    try:
+        import nltk
+    except ImportError:
+        print("  the segmenter is not installed (extra: segmenter); skipping the corpora")
+        return 0
 
     NLTK_DATA.mkdir(parents=True, exist_ok=True)
     written = 0
@@ -212,16 +218,24 @@ def warm_dictionary() -> None:
 
     Best effort: a failure here costs six seconds later, not correctness, and
     an install must not stop because a cache could not be written.
-    """
-    from raven.core import tokenizer as tok
 
-    cache = tok.dictionary_path().with_suffix(".txt.trie")
-    if cache.is_file():
-        print("  index: already built")
-        return
-    print("  index: building (a few seconds)")
+    The import is inside the guard, not above it. The segmenter is an extra --
+    datrie compiles from source on every platform -- so an install that did
+    not take it reaches this with the module unimportable, and that is a step
+    to skip rather than an error to raise.
+    """
     try:
+        from raven.core import tokenizer as tok
+
+        cache = tok.dictionary_path().with_suffix(".txt.trie")
+        if cache.is_file():
+            print("  index: already built")
+            return
+        print("  index: building (a few seconds)")
         tok.Tokenizer()
+    except ImportError:
+        print("  index: the segmenter is not installed (extra: segmenter); skipping", file=sys.stderr)
+        return
     except Exception as exc:  # noqa: BLE001 - the dictionary still works without the cache
         print(f"  index: could not be built ({exc}); it will be built on first use", file=sys.stderr)
         return

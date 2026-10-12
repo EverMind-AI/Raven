@@ -979,4 +979,37 @@ describe('the knowledge store', () => {
 
     expect(store.get().opened?.chunks).toBe(12)
   })
+
+  it('can make a base that reaches no embedding endpoint', async () => {
+    /* #426 added `embedding: false` so a base can be made and take documents
+       without reaching the endpoint; the page never sent it, so with the
+       endpoint down there was no way to make a base at all. */
+    const made: Array<[string, boolean | undefined]> = []
+    install([])
+    sources.knowledge!.create = async (name, _description, embedding) => {
+      made.push([name, embedding])
+      if (embedding !== false) throw new Error('the embedding endpoint is not there')
+      return base({ id: name, name })
+    }
+
+    await store.create('notes', '', false)
+
+    expect(made).toEqual([['notes', false]])
+    expect(store.get().bases?.map((row) => row.name)).toEqual(['notes'])
+  })
+
+  it('indexes by default, without saying so', async () => {
+    /* The server's own default is true, and a page that always stated it
+       would be a second opinion about it. */
+    const made: Array<boolean | undefined> = []
+    install([])
+    sources.knowledge!.create = async (name, _description, embedding) => {
+      made.push(embedding)
+      return base({ id: name, name })
+    }
+
+    await store.create('notes', '')
+
+    expect(made).toEqual([true])
+  })
 })

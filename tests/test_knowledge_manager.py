@@ -1540,3 +1540,41 @@ async def test_the_manager_builds_the_client_the_endpoint_calls_for(tmp_path) ->
 
     assert isinstance(built("https://api.siliconflow.cn/v1", "BAAI/bge-large-zh-v1.5"), SiliconFlowEmbeddingClient)
     assert type(built("https://api.openai.com/v1", "text-embedding-3-small")) is EmbeddingClient
+
+
+# -- searching a document written before chunk ids existed ---------
+
+
+async def test_searching_a_document_from_before_ids_answers_distinct_pieces(manager) -> None:
+    """Rows written before chunk ids existed all carry the empty one.
+
+    Keyed by id, those rows collapsed onto a single entry and every one of
+    their hits was answered with whichever of them happened to be last -- so a
+    search of such a document came back as one piece repeated, and the branch
+    written for them could never be reached.
+    """
+    base = await manager.create_base(name="notes")
+    # Small enough to cut: the point of the case is several rows sharing the
+    # empty id, and the default size takes a short file whole.
+    manager.configure_base(base.id, chunk_size=16, chunk_overlap=0, separator="\n\n")
+    body = b"\n\n".join(b"alpha beta gamma delta epsilon %d" % n for n in range(6))
+    doc = manager.add_document(base.id, filename="handbook.md", content=body)
+    await manager.index_document(doc.id)
+
+    held, _ = await manager.document_chunks(doc.id)
+    assert len(held) >= 2, "the document was cut into pieces"
+
+    # Put the base back the way a build before ids wrote it: every row with
+    # the empty id, which is what `list_chunks` then reads back.
+    store = manager._store
+    rows = await (await store._writable(base.id)).query().to_list()
+    for row in rows:
+        row["chunk_id"] = ""
+    merge = (await store._writable(base.id)).merge_insert(["chunk_index", "document_id"])
+    await merge.when_matched_update_all().execute(rows)
+
+    found = await manager.search_document(doc.id, "alpha", limit=5)
+
+    assert len(found) >= 2, "every hit came back"
+    indices = [piece.chunk.chunk_index for piece in found]
+    assert len(set(indices)) == len(indices), f"one piece repeated: {indices}"

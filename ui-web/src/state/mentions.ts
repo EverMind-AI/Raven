@@ -76,9 +76,9 @@ export function toggle(): void {
   else open()
 }
 
-/* The bases, read once. A failure is kept rather than retried: the menu says
-   why, and opening it again is the retry -- a reader who has just fixed the
-   gateway should not have to wait out a backoff to see it. */
+/* The bases, read once and kept. A failure is not kept: the menu says why, and
+   opening it again is the retry -- a reader who has just fixed the gateway
+   should not have to wait out a backoff to see it. */
 export async function load(): Promise<void> {
   if (get().bases !== null) return
   try {
@@ -92,8 +92,21 @@ export async function load(): Promise<void> {
       failed: null,
     })
   } catch (e) {
-    patch({ bases: [], failed: (e as { message?: string })?.message || String(e) })
+    /* Left null, not emptied. The early return above is on `bases !== null`,
+       so storing `[]` here made the failure permanent -- the menu said why
+       once and never asked again, which is the opposite of what the note
+       above it promises. */
+    patch({ bases: null, failed: (e as { message?: string })?.message || String(e) })
   }
+}
+
+/* Forget the list, so the next open reads it again.
+
+   Called where a base is made or dropped: the menu is a list of names and
+   the one it offers should be the one that exists, not the one that did when
+   it was first opened. */
+export function invalidate(): void {
+  patch({ bases: null, failed: null })
 }
 
 /** Back to the two rows from the bases panel. */

@@ -1011,13 +1011,18 @@ class KnowledgeManager:
             hits = await self._store.keyword_search(base.id, query, top_k=limit, document_id=document_id)
 
         held, _ = await self._store.list_chunks(base.id, document_id)
-        by_id = {piece.chunk_id: piece for piece in held}
+        # Only the rows an id names. Rows written before ids existed all carry
+        # the empty one, so keying on it kept the last of them and answered
+        # every one of those hits with that same piece -- a search of such a
+        # document came back as one chunk repeated, and the branch below that
+        # exists for them could never run.
+        by_id = {piece.chunk_id: piece for piece in held if piece.chunk_id}
         ordered: list[StoredChunk] = []
         for hit in hits:
-            piece = by_id.get(hit.chunk_id)
+            piece = by_id.get(hit.chunk_id) if hit.chunk_id else None
             if piece is not None:
                 ordered.append(piece)
-            elif hit.chunk_id == "":
+            elif not hit.chunk_id:
                 # A row from before ids existed: readable, not addressable.
                 ordered.append(StoredChunk(chunk_id="", chunk=hit.chunk))
         return ordered

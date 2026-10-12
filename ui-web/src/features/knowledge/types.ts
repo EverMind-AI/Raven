@@ -217,7 +217,7 @@ export interface KnowledgeSource {
   /** Cut and embed it again, answering with the row as it now stands. */
   reindex(id: string): Promise<KbDoc>
   removeDoc(id: string): Promise<void>
-  create(name: string, description: string): Promise<KbBase>
+  create(name: string, description: string, embedding?: boolean): Promise<KbBase>
   settings(id: string, settings: KbSettings): Promise<KbBase>
   remove(id: string): Promise<void>
 }
