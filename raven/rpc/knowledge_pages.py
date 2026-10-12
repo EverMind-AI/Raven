@@ -121,16 +121,16 @@ def sizes(pdf: Path) -> "list[dict[str, Any]]":
     truncated column would show most of it and say nothing about the rest, and
     a chunk cut from page five hundred would have nowhere to be marked.
     """
-    import pymupdf
+    from raven.knowledge.parser._pdfdoc import open_document
 
     out: list[dict[str, Any]] = []
-    with pymupdf.open(pdf) as opened:
+    with open_document(pdf) as opened:
         if opened.page_count > MAX_PAGES:
             logger.debug("knowledge: {} pages is past the ceiling; framing it instead", opened.page_count)
             return []
         for number in range(1, opened.page_count + 1):
-            rect = opened[number - 1].rect
-            out.append({"number": number, "width": float(rect.width), "height": float(rect.height)})
+            page = opened[number - 1]
+            out.append({"number": number, "width": page.width, "height": page.height})
     return out
 
 
@@ -142,14 +142,12 @@ def _render(pdf: Path, page: int, out: Path) -> None:
     """One page, written where it will be found again."""
     import io
 
-    import pymupdf
-    from PIL import Image
+    from raven.knowledge.parser._pdfdoc import open_document
 
-    with pymupdf.open(pdf) as opened:
+    with open_document(pdf) as opened:
         if not 1 <= page <= opened.page_count:
             raise PagesUnavailableError(f"no page {page}")
-        pixmap = opened[page - 1].get_pixmap(matrix=pymupdf.Matrix(ZOOM, ZOOM), alpha=False)
-        drawn = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+        drawn = opened[page - 1].render(ZOOM)
     buffer = io.BytesIO()
     drawn.save(buffer, format=FORMAT, quality=QUALITY)
     drawn.close()
