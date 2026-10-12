@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import ssl
+import sys
 
 OPT_OUT_ENV = "RAVEN_NO_SYSTEM_CA"
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -38,6 +39,18 @@ def use_system_ca() -> None:
     import truststore
 
     truststore.inject_into_ssl()
+
+
+def system_ca_in_use() -> bool:
+    """Whether this process verifies TLS against the operating system's store.
+
+    Read from ``ssl`` itself rather than from ``RAVEN_NO_SYSTEM_CA``: a process
+    started some way other than the entry point never switched, whatever that
+    says. Nothing is imported, so a process that has no truststore gets an
+    answer too.
+    """
+    truststore = sys.modules.get("truststore")
+    return truststore is not None and ssl.SSLContext is truststore.SSLContext
 
 
 def is_untrusted_certificate(exc: BaseException) -> bool:
