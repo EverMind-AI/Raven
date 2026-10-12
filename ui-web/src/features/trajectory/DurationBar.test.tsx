@@ -612,6 +612,40 @@ describe('the switches, the bands and the dots', () => {
     return { ctx, calls }
   }
 
+  it('paints again when the system\'s colour scheme changes, and stops listening once gone', async () => {
+    const listeners = new Set<() => void>()
+    const asked: string[] = []
+    const original = globalThis.matchMedia
+    globalThis.matchMedia = ((query: string) => {
+      asked.push(query)
+      return {
+        matches: false, media: query,
+        addEventListener: (_type: string, cb: () => void) => { listeners.add(cb) },
+        removeEventListener: (_type: string, cb: () => void) => { listeners.delete(cb) },
+      }
+    }) as unknown as typeof matchMedia
+    const { ctx } = recorder()
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as never)
+    try {
+      await ready()
+      const { unmount } = render(<DurationBar />)
+      await flush()
+      await later(50)
+      expect(asked).toContain('(prefers-color-scheme: dark)')
+      expect(listeners.size).toBe(1)
+      const painted = getContext.mock.calls.length
+      expect(painted).toBeGreaterThan(0)
+      act(() => { for (const cb of listeners) cb() })
+      await later(50)
+      expect(getContext.mock.calls.length).toBeGreaterThan(painted)
+      unmount()
+      expect(listeners.size).toBe(0)
+    } finally {
+      getContext.mockRestore()
+      globalThis.matchMedia = original
+    }
+  })
+
   it('hides the recorded durations under the threshold set on its slider, never an unknown one or the user\'s input', async () => {
     rows = [
       entry('u', 0, { kind: 'user.input', charged_ms: 0, timing_basis: 'zero' }),

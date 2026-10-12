@@ -44,14 +44,18 @@ describe('the kind palette', () => {
 
   /* happy-dom does not load the stylesheet, so a class or a token the sheet
      lacks would pass every DOM test: the sheet itself is read here. */
-  it('gives every coloured kind its class and its pair of tokens in each theme block of the sheet', () => {
+  it('gives every coloured kind its class and its pair of tokens in each theme block of the sheet, the system\'s dark scheme included', () => {
     const sheet = readFileSync('src/features/trajectory/styles.css', 'utf8') as string
     const block = (head: string): string => {
       const at = sheet.indexOf(head)
       expect(at, head).toBeGreaterThanOrEqual(0)
       return sheet.slice(at, sheet.indexOf('}', at))
     }
-    const themes = [block(':root {'), block('html[data-theme="dark"] {'), block(':root:not([data-theme="light"]) {')]
+    const themes = [
+      block(':root {'),
+      block('html[data-theme="dark"] {'),
+      block('@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) {'),
+    ]
     for (const slug of [...KNOWN_KINDS.map(kindSlug), 'other']) {
       expect(sheet, slug).toContain(`.trajectory-k-${slug} {`)
       for (const theme of themes) {
