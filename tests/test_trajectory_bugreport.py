@@ -463,6 +463,18 @@ def _damage(payload, spec):
                 "sources": [{"source": "the span log", "count": -1}],
             }
         ]
+    elif spec == "bad-upload-state":
+        payload["upload"]["state"] = "queued"
+    elif spec == "upload-error-type":
+        payload["upload"]["error"] = 1
+    elif spec == "upload-uploaded-no-receipt":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["upload"] = {"state": "uploaded", "issue_url": "", "receipt": ""}
+    elif spec == "upload-failed-no-error":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["upload"] = {"state": "failed", "issue_url": "", "receipt": ""}
+    elif spec == "upload-before-ready":
+        payload["upload"] = {"state": "uploaded", "issue_url": "", "receipt": "rc-000000000000"}
     return payload
 
 
@@ -498,6 +510,11 @@ _DAMAGE_SPECS = [
     "decision-missing-id",
     "decision-bad-masked-token",
     "decision-bad-source-count",
+    "bad-upload-state",
+    "upload-error-type",
+    "upload-uploaded-no-receipt",
+    "upload-failed-no-error",
+    "upload-before-ready",
 ]
 
 
@@ -507,6 +524,38 @@ def test_every_legal_status_loads(tmp_path, status):
     record_dir.mkdir()
     breport.save_record(record_dir, _valid_payload(status=status))
     assert breport.load_record(record_dir)["status"] == status
+
+
+@pytest.mark.parametrize(
+    "upload",
+    [
+        {"state": "uploaded", "issue_url": "", "receipt": "rc-5f3c2a9d1e70", "uploaded_at": "2026-10-12T06:40:11Z"},
+        {"state": "failed", "issue_url": "", "receipt": "", "error": "connection refused"},
+        {"state": "", "issue_url": "", "receipt": ""},
+    ],
+)
+def test_upload_fields_are_optional_and_validated(tmp_path, upload):
+    record_dir = tmp_path / "br-20260904-abcdef"
+    record_dir.mkdir()
+    payload = _valid_payload(status="local_ready")
+    payload["upload"] = upload
+    breport.save_record(record_dir, payload)
+    assert breport.load_record(record_dir)["upload"] == upload
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("br-20260904-abcdef", True),
+        ("br-20260904-ABCDEF", False),
+        ("br-20260904", False),
+        ("br-2026090-abcdef", False),
+        (None, False),
+        (b"br-20260904-abcdef", False),
+    ],
+)
+def test_is_report_id(value, expected):
+    assert breport.is_report_id(value) is expected
 
 
 @pytest.mark.parametrize("spec", _DAMAGE_SPECS)

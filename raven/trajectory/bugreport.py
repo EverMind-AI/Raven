@@ -30,6 +30,8 @@ Record status is ``draft`` -> ``local_ready`` | ``failed`` (retryable only
 while the frozen snapshot verifies). A persisted ``draft`` can only be an
 interrupted process — the normal flow reaches a terminal state in the same
 call — so readers atomically convert it to ``failed`` (crash recovery).
+``upload.state`` is a separate axis (``""`` -> ``uploaded`` | ``failed``) that
+only moves once the record is ``local_ready``: there is nothing to send before.
 """
 
 from __future__ import annotations
@@ -81,9 +83,15 @@ STATUS_FAILED = "failed"
 PROBLEM_FIELDS = ("description", "expected", "actual", "severity", "steps")
 SEVERITIES = ("low", "medium", "high", "critical")
 
+UPLOAD_STATE_NONE = ""
+UPLOAD_STATE_UPLOADED = "uploaded"
+UPLOAD_STATE_FAILED = "failed"
+UPLOAD_STATES = (UPLOAD_STATE_NONE, UPLOAD_STATE_UPLOADED, UPLOAD_STATE_FAILED)
+
 _STALE_STAGING_SECONDS = 24 * 3600
 _ID_COLLISION_RETRIES = 16
-_REPORT_ID = re.compile(r"^br-\d{8}-[0-9a-f]{6}$")
+REPORT_ID = re.compile(r"^br-\d{8}-[0-9a-f]{6}$")
+_REPORT_ID = REPORT_ID
 
 REASON_INTERRUPTED = "interrupted before the package was written"
 REASON_INTERRUPTED_INCOMPLETE = "interrupted and the snapshot is incomplete; delete the report and file a new one"
@@ -112,6 +120,10 @@ class PackagingError(BugReportError):
 
 class _SnapshotCorruptedError(Exception):
     """Internal: the frozen export tree no longer matches its digest."""
+
+
+def is_report_id(value: object) -> bool:
+    return isinstance(value, str) and REPORT_ID.fullmatch(value) is not None
 
 
 def bugreports_root(state_dir: Path | None = None) -> Path:
@@ -368,7 +380,7 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
             raise ValueError(f"invalid bug report record ({what}): {dir_name}")
 
     report_id = payload.get("report_id")
-    _check(isinstance(report_id, str) and _REPORT_ID.fullmatch(report_id), "report id")
+    _check(is_report_id(report_id), "report id")
     _check(report_id == dir_name, "report id does not match its directory")
     for key in ("created_at", "raven_version", "reporter"):
         _check(isinstance(payload.get(key), str), key)
@@ -435,6 +447,16 @@ def _validate_record(payload: dict[str, Any], dir_name: str) -> None:
     _check(isinstance(upload, dict), "upload")
     for key in ("state", "issue_url", "receipt"):
         _check(isinstance(upload.get(key), str), f"upload {key}")
+    _check(upload["state"] in UPLOAD_STATES, "upload state")
+    # Absent on records written before uploads existed; validated when present.
+    for key in ("uploaded_at", "error"):
+        if key in upload:
+            _check(isinstance(upload[key], str), f"upload {key}")
+    if upload["state"] == UPLOAD_STATE_UPLOADED:
+        _check(upload["receipt"] != "", "uploaded needs a receipt")
+    elif upload["state"] == UPLOAD_STATE_FAILED:
+        _check(upload.get("error", "") != "", "failed upload needs an error")
+    _check(upload["state"] == UPLOAD_STATE_NONE or status == STATUS_LOCAL_READY, "upload before local_ready")
     links = payload.get("links")
     _check(isinstance(links, dict), "links")
     for key in ("issue", "pr", "regression_case"):
