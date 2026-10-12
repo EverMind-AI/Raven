@@ -23,6 +23,7 @@ redaction invariant — and the first failure is raised as
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -31,7 +32,7 @@ import tarfile
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, Iterator
 
 from raven.trajectory.bugreport import (
     CLASSIFICATION_CLEAN,
@@ -64,6 +65,8 @@ _CHUNK = 64 * 1024
 _END_BLOCK = b"\0" * tarfile.BLOCKSIZE
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_SEGMENTS = ("", ".", "..")
+_PLAIN_FILE_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.CONTTYPE)
+_SPARSE_PREFIX = "GNU.sparse."
 
 
 @dataclass(frozen=True)
@@ -189,6 +192,49 @@ class _BoundedGunzip(io.RawIOBase):
                 raise PackageError(CODE_NOT_GZIP_TAR, "data after the end-of-archive marker")
 
 
+def _no_sparse() -> PackageError:
+    return PackageError(CODE_BAD_MEMBER_TYPE, "sparse members are not supported")
+
+
+class _StrictTarInfo(tarfile.TarInfo):
+    """A TarInfo that refuses sparse members before tarfile builds their maps.
+
+    Every sparse flavour (old GNU type ``S``, PAX ``GNU.sparse.*`` 0.0/0.1
+    and 1.0) is expanded by tarfile *before* the member is handed back, and
+    a 1.0 map is read from the data stream in 512-byte pieces into a list
+    whose size the per-read cap cannot see. A bug report never carries a
+    sparse file, so each handler is cut off at its entry.
+    """
+
+    def _proc_sparse(self, *args: Any) -> Any:
+        raise _no_sparse()
+
+    def _proc_gnusparse_00(self, *args: Any) -> None:
+        raise _no_sparse()
+
+    def _proc_gnusparse_01(self, *args: Any) -> None:
+        raise _no_sparse()
+
+    def _proc_gnusparse_10(self, *args: Any) -> None:
+        raise _no_sparse()
+
+    def _apply_pax_info(self, pax_headers: Any, encoding: Any, errors: Any) -> None:
+        if any(key.startswith(_SPARSE_PREFIX) for key in pax_headers):
+            raise _no_sparse()
+        super()._apply_pax_info(pax_headers, encoding, errors)
+
+
+@contextlib.contextmanager
+def _tar_boundary() -> Iterator[None]:
+    """Turn what tarfile raises on malformed input into a :class:`PackageError`."""
+    try:
+        yield
+    except PackageError:
+        raise
+    except (tarfile.TarError, EOFError, ValueError) as exc:
+        raise PackageError(CODE_NOT_GZIP_TAR, str(exc) or exc.__class__.__name__) from exc
+
+
 @dataclass
 class _Walk:
     root: str = ""
@@ -210,41 +256,42 @@ def _safe_relative(path: Any) -> bool:
     return not any(part in _UNSAFE_SEGMENTS for part in path.split("/"))
 
 
-def _read_member(handle: Any, chunk: int) -> tuple[bytes, str, int]:
+def _read_member(handle: Any, chunk: int, *, keep: bool) -> tuple[bytes, str, int]:
     pieces = bytearray()
     digest = hashlib.sha256()
     count = 0
     while True:
-        piece = handle.read(chunk)
+        with _tar_boundary():
+            piece = handle.read(chunk)
         if not piece:
             break
-        pieces += piece
+        if keep:
+            pieces += piece
         digest.update(piece)
         count += len(piece)
     return bytes(pieces), digest.hexdigest(), count
 
 
-def _hash_member(handle: Any, chunk: int) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    count = 0
+def _members(tar: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
+    iterator = iter(tar)
     while True:
-        piece = handle.read(chunk)
-        if not piece:
-            break
-        digest.update(piece)
-        count += len(piece)
-    return digest.hexdigest(), count
+        with _tar_boundary():
+            member = next(iterator, None)
+        if member is None:
+            return
+        yield member
 
 
 def _walk(stream: _BoundedGunzip, limits: PackageLimits) -> _Walk:
     chunk = min(_CHUNK, limits.max_header_bytes)
-    tar = tarfile.TarFile(fileobj=stream, mode="r")
+    with _tar_boundary():
+        tar = tarfile.TarFile(fileobj=stream, mode="r", tarinfo=_StrictTarInfo)
     walk = _Walk()
     seen: set[str] = set()
-    for member in tar:
+    for member in _members(tar):
         if len(walk.names) >= limits.max_members:
             raise PackageError(CODE_TOO_MANY_MEMBERS, f"more than {limits.max_members} members")
-        if not (member.isreg() or member.isdir()):
+        if not (member.type in _PLAIN_FILE_TYPES or member.isdir()) or member.sparse is not None:
             raise PackageError(CODE_BAD_MEMBER_TYPE, f"unsupported member type {member.type!r}: {member.name!r}")
         name = member.name
         segments = _segments(name)
@@ -280,9 +327,9 @@ def _walk(stream: _BoundedGunzip, limits: PackageLimits) -> _Walk:
                     CODE_METADATA_TOO_LARGE,
                     f"{PACKAGE_METADATA_FILE} is {member.size} bytes; the limit is {limits.max_metadata_bytes}",
                 )
-            walk.metadata, _, count = _read_member(handle, chunk)
+            walk.metadata, _, count = _read_member(handle, chunk, keep=True)
         else:
-            sha256, count = _hash_member(handle, chunk)
+            _, sha256, count = _read_member(handle, chunk, keep=False)
             walk.files[rel] = (sha256, count)
         if count != member.size:
             raise PackageError(CODE_NOT_GZIP_TAR, f"member {name!r} is shorter than declared")
@@ -317,7 +364,9 @@ def _check_metadata(walk: _Walk, expected_report_id: str | None) -> PackageSumma
     try:
         text = walk.metadata.decode("utf-8")
         metadata = json.loads(text)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
+        # UnicodeDecodeError and JSONDecodeError, plus the plain ValueError the
+        # decoder raises for an integer longer than its digit limit.
         raise PackageError(CODE_METADATA_INVALID, f"{PACKAGE_METADATA_FILE} is not UTF-8 JSON: {exc}") from exc
     if not isinstance(metadata, dict):
         raise PackageError(CODE_METADATA_INVALID, f"{PACKAGE_METADATA_FILE} is not a JSON object")
@@ -379,12 +428,7 @@ def inspect_package(
         raise PackageError(CODE_NOT_GZIP_TAR, "empty file")
     with path.open("rb") as raw:
         stream = _BoundedGunzip(raw, max_output=limits.max_unpacked_bytes, max_read=limits.max_header_bytes)
-        try:
-            walk = _walk(stream, limits)
-        except PackageError:
-            raise
-        except (tarfile.TarError, EOFError) as exc:
-            raise PackageError(CODE_NOT_GZIP_TAR, str(exc) or exc.__class__.__name__) from exc
+        walk = _walk(stream, limits)
     return _check_metadata(walk, expected_report_id)
 
 

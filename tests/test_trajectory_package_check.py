@@ -52,6 +52,14 @@ def _padded(data):
     return data + b"\0" * (-len(data) % 512)
 
 
+def _pax_member(name, data, pax_headers):
+    """A PAX-format member (extended header + file header + padded data)."""
+    info = tarfile.TarInfo(name)
+    info.size = len(data)
+    info.pax_headers = dict(pax_headers)
+    return info.tobuf(tarfile.PAX_FORMAT) + _padded(data)
+
+
 END = b"\0" * 1024
 
 
@@ -359,3 +367,70 @@ def test_absolute_path_in_metadata_is_a_notice_not_a_rejection(tmp_path):
     metadata = _metadata(problem={"description": "see /Users/alice/x for details"})
     summary = inspect_package(_package(tmp_path, _entries(metadata=metadata)))
     assert summary.notices and summary.notices[0].startswith("absolute path in bugreport.json: /Users/alice/x")
+
+
+def test_long_json_integer_is_metadata_invalid(tmp_path):
+    error = _rejects(_package(tmp_path, _entries(metadata=b'{"x":' + b"1" * 5000 + b"}")), pcheck.CODE_METADATA_INVALID)
+    assert isinstance(error, PackageError)
+
+
+# --- sparse members ---------------------------------------------------------
+
+
+def test_sparse_1_0_map_is_refused_before_it_is_read(tmp_path):
+    pax = {"GNU.sparse.major": "1", "GNU.sparse.minor": "0", "GNU.sparse.realsize": "0"}
+    data = b"100000\n" + b"0\n0\n" * 100000
+    raw = _header(ROOT, 0, tarfile.DIRTYPE) + _pax_member(f"{ROOT}/sparse", data, pax) + END
+    path = _package(tmp_path, raw=raw)
+    tracemalloc.start()
+    try:
+        error = _rejects(path, pcheck.CODE_BAD_MEMBER_TYPE, limits=PackageLimits(max_unpacked_bytes=2**20))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert "sparse" in error.message
+    assert peak < 8 * 2**20
+
+
+def test_old_gnu_sparse_type_is_refused(tmp_path):
+    raw = _header(ROOT, 0, tarfile.DIRTYPE) + _header(f"{ROOT}/s", 0, tarfile.GNUTYPE_SPARSE) + END
+    error = _rejects(_package(tmp_path, raw=raw), pcheck.CODE_BAD_MEMBER_TYPE)
+    assert "sparse" in error.message
+
+
+@pytest.mark.parametrize(
+    "pax",
+    [
+        {"GNU.sparse.size": "10", "GNU.sparse.numblocks": "1", "GNU.sparse.offset": "0", "GNU.sparse.numbytes": "10"},
+        {"GNU.sparse.map": "0,10"},
+        {"GNU.sparse.map": "nonsense"},
+        {"GNU.sparse.realsize": "x"},
+        {"GNU.sparse.name": "elsewhere"},
+    ],
+    ids=["0.0", "0.1", "0.1-nonsense", "realsize-only", "name-only"],
+)
+def test_pax_sparse_headers_are_refused(tmp_path, pax):
+    raw = _header(ROOT, 0, tarfile.DIRTYPE) + _pax_member(f"{ROOT}/sparse", b"x" * 10, pax) + END
+    error = _rejects(_package(tmp_path, raw=raw), pcheck.CODE_BAD_MEMBER_TYPE)
+    assert "sparse" in error.message
+
+
+def test_harmless_pax_headers_still_pass(tmp_path):
+    pax = {"mtime": "1700000000.5", "comment": "written by a test"}
+    raw = (
+        _header(ROOT, 0, tarfile.DIRTYPE)
+        + _tar(_entries()[1:3])[: -len(END)]
+        + _pax_member(f"{ROOT}/{TRAJECTORY}", DEFAULT_FILES[TRAJECTORY], pax)
+        + END
+    )
+    summary = inspect_package(_package(tmp_path, raw=raw))
+    assert summary.members[-1] == f"{ROOT}/{TRAJECTORY}"
+
+
+def test_tarfile_value_errors_become_package_errors(tmp_path, monkeypatch):
+    def _boom(cls, *args, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(pcheck._StrictTarInfo, "frombuf", classmethod(_boom))
+    error = _rejects(_package(tmp_path), pcheck.CODE_NOT_GZIP_TAR)
+    assert error.message == "boom"
