@@ -7,9 +7,13 @@ this Raven's own versions, and this Raven's own code (:mod:`raven.node.bundle`).
 Nothing else on the machine changes: no system package, no shell rc file, no
 environment it already had.
 
-The Python is the machine's own when it has 3.12 or later with ``venv``;
-otherwise the machine's ``uv`` makes one inside ``node_dir``. With neither, the
-install stops and says so rather than fetching an installer and running it.
+Everything Python goes through ``uv``, as it does in this repository: the
+virtualenv is ``uv venv`` of the machine's own Python 3.12 when it has one,
+else of a Python uv keeps inside ``node_dir``; the packages are ``uv pip
+install``. A machine without uv gets one under ``node_dir/.uv`` first, from
+uv's own installer, fetched with the machine's curl or wget and told to
+touch nothing else; with neither uv nor a way to fetch it, the install stops
+and says so.
 
 Each step is one ssh call through :func:`raven.acp_client.remote.run`; a step
 that fails removes the half-made node directory, so the next attempt starts
@@ -28,10 +32,14 @@ from raven.node import bundle, protocol
 from raven.node.client import node_dir as registered_node_dir
 
 #: Roughly what a node takes, for the free-space check: Raven's code with
-#: pillow, loguru and ripgrep-bin (measured 2026-10-10), and a Python 3.12 when
-#: the machine has none of its own.
+#: pillow, loguru and ripgrep-bin (measured 2026-10-10), a Python 3.12 when
+#: the machine has none of its own, and uv when the machine has none.
 _NODE_KB = 60 * 1024
 _PYTHON_KB = 80 * 1024
+_UV_KB = 25 * 1024
+
+#: uv's own installer, which puts one binary where ``UV_INSTALL_DIR`` says.
+UV_INSTALLER = "https://astral.sh/uv/install.sh"
 
 _PROBE_TIMEOUT_S = 60.0
 _STEP_TIMEOUT_S = 900.0
@@ -52,17 +60,26 @@ class Plan:
     python: str
     uv: str
     free_kb: int | None
+    fetch: str = ""
+    """The machine's curl or wget, with which uv can be fetched when the machine has none."""
+
+    @property
+    def uv_from(self) -> str:
+        """``"machine"`` (its own uv), ``"fetched"`` (one put under node_dir first), or ``""`` (no way to one)."""
+        if self.uv:
+            return "machine"
+        return "fetched" if self.fetch else ""
 
     @property
     def how(self) -> str:
-        """``"python"`` (the machine's own 3.12), ``"uv"`` (one made by uv), or ``""`` (neither)."""
-        if self.python:
-            return "python"
-        return "uv" if self.uv else ""
+        """``"python"`` (uv over the machine's own 3.12), ``"uv"`` (over one uv keeps), or ``""`` (no uv to be had)."""
+        if not self.uv_from:
+            return ""
+        return "python" if self.python else "uv"
 
     @property
     def needed_kb(self) -> int:
-        return _NODE_KB + (_PYTHON_KB if self.how == "uv" else 0)
+        return _NODE_KB + (_PYTHON_KB if self.how == "uv" else 0) + (_UV_KB if self.uv_from == "fetched" else 0)
 
     def describe(self) -> str:
         """The install as a person is asked to approve it."""
@@ -70,13 +87,18 @@ class Plan:
         python = (
             f"a virtualenv of the machine's own {self.python}"
             if self.how == "python"
-            else "a Python 3.12 made by the machine's uv, kept beside it"
+            else "a Python 3.12 made by uv, kept beside it"
+        )
+        uv = (
+            f" uv itself first, under {self.node_dir}/.uv (the machine has none), fetched with its own {self.fetch};"
+            if self.uv_from == "fetched"
+            else ""
         )
         space = f"; {self.free_kb // (1024 * 1024)} GB free there" if self.free_kb is not None else ""
         return (
-            f"Install the Raven node {self.install_name} on machine {self.target.label} into {where}: {python}, "
+            f"Install the Raven node {self.install_name} on machine {self.target.label} into {where}:{uv} {python}, "
             f"{' '.join(bundle.pinned((*protocol.REQUIREMENTS, protocol.SEARCH_REQUIREMENT)))} from the "
-            "machine's package index, and this Raven's code. "
+            "machine's package index, and this Raven's code, all through uv. "
             f"About {self.needed_kb // 1024} MB{space}. Nothing else on the machine changes."
         )
 
@@ -110,15 +132,21 @@ def _vars(node_dir: str, install_name: str) -> str:
 
 
 def probe_script(node_dir: str, install_name: str, digest: str) -> str:
-    """One look at the machine: is this node there, which Python and uv does it have, how much room."""
+    """One look at the machine: is this node there, which Python, uv and fetcher it has, how much room.
+
+    uv is looked for on the PATH, in the two places its installer puts it
+    that a non-login PATH misses, and under ``node_dir/.uv``, where an
+    earlier install of this Raven may have put it.
+    """
     return _vars(node_dir, install_name) + (
         f'if [ -x "$node/bin/python" ] && "$node/bin/python" -I -m raven.node --version 2>/dev/null '
         f"| grep -q {shlex.quote(f'"digest": "{digest}"')}; then echo PRESENT=1; fi; "
         'for p in python3.13 python3.12 python3; do q=$(command -v "$p" 2>/dev/null) || continue; '
-        "if \"$q\" -c 'import sys, venv, ensurepip; sys.exit(0 if sys.version_info >= (3, 12) else 1)' "
+        "if \"$q\" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' "
         '2>/dev/null; then echo "PYTHON=$q"; break; fi; done; '
-        'for u in "$(command -v uv 2>/dev/null)" "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv"; do '
+        'for u in "$(command -v uv 2>/dev/null)" "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" "$dir/.uv/uv"; do '
         'if [ -n "$u" ] && [ -x "$u" ]; then echo "UV=$u"; break; fi; done; '
+        'for f in curl wget; do c=$(command -v "$f" 2>/dev/null) || continue; echo "FETCH=$c"; break; done; '
         'd="$dir"; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; '
         'echo "FREE_KB=$(df -Pk "$d" 2>/dev/null | awk \'NR==2 {print $4}\')"'
     )
@@ -142,7 +170,7 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
     seen: dict[str, str] = {}
     for line in out.splitlines():
         key, sep, value = line.strip().partition("=")
-        if sep and key in {"PRESENT", "PYTHON", "UV", "FREE_KB"}:
+        if sep and key in {"PRESENT", "PYTHON", "UV", "FETCH", "FREE_KB"}:
             seen[key] = value.strip()
     free = seen.get("FREE_KB", "")
     return Plan(
@@ -153,6 +181,7 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         python=seen.get("PYTHON", ""),
         uv=seen.get("UV", ""),
         free_kb=int(free) if free.isdigit() else None,
+        fetch=seen.get("FETCH", ""),
     )
 
 
@@ -160,8 +189,8 @@ def refusal(p: Plan) -> str | None:
     """Why ``p`` cannot go ahead, or ``None`` when it can."""
     if p.how == "":
         return (
-            f"machine {p.target.label} has neither a Python 3.12 (with venv) nor uv; "
-            "install one of them there, then run this again"
+            f"machine {p.target.label} has no uv, and no curl or wget to fetch one with; "
+            f"install uv there ({UV_INSTALLER}), then run this again"
         )
     if p.free_kb is not None and p.free_kb < p.needed_kb:
         return (
@@ -173,23 +202,33 @@ def refusal(p: Plan) -> str | None:
 
 def steps(p: Plan) -> list[tuple[str, str]]:
     """``(name, command)`` for each ssh step after the code is sent, in order."""
-    head = _vars(p.node_dir, p.install_name)
-    if p.how == "python":
-        venv = f'mkdir -p "$dir" && {shlex.quote(p.python)} -m venv "$node"'
-    else:
-        # Python, cache and all inside node_dir: the machine's home may be on a
-        # disk with no room (measured 2026-10-10: one registered machine's root
-        # filesystem was full).
-        venv = (
-            'mkdir -p "$dir" && UV_CACHE_DIR="$dir/.uv-cache" UV_PYTHON_INSTALL_DIR="$dir/.uv-python" '
-            f'{shlex.quote(p.uv)} venv --quiet --seed --python 3.12 "$node"'
+    # uv's cache and the Python it keeps live inside node_dir: the machine's
+    # home may be on a disk with no room (measured 2026-10-10: one registered
+    # machine's root filesystem was full).
+    uv = shlex.quote(p.uv) if p.uv_from == "machine" else '"$dir/.uv/uv"'
+    head = _vars(p.node_dir, p.install_name) + f"uv={uv}; "
+    env = 'UV_CACHE_DIR="$dir/.uv-cache" UV_PYTHON_INSTALL_DIR="$dir/.uv-python"'
+    out: list[tuple[str, str]] = []
+    if p.uv_from == "fetched":
+        # uv's own installer, told where to put the one binary and to leave
+        # the shell's rc files alone; a wget machine reads it the same way.
+        fetch = f"wget -qO- {UV_INSTALLER}" if p.fetch.endswith("wget") else f"curl -LsSf {UV_INSTALLER}"
+        out.append(
+            (
+                "uv",
+                head + f'mkdir -p "$dir/.uv" && {fetch} | UV_INSTALL_DIR="$dir/.uv" UV_NO_MODIFY_PATH=1 '
+                'INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null && test -x "$dir/.uv/uv"',
+            )
         )
-    pip = '"$node/bin/python" -m pip install --quiet --no-cache-dir --disable-pip-version-check --no-input'
+    python = shlex.quote(p.python) if p.how == "python" else "3.12"
+    venv = f'mkdir -p "$dir" && {env} "$uv" venv --quiet --python {python} "$node"'
+    pip = f'{env} "$uv" pip install --quiet --python "$node/bin/python"'
     requirements = " ".join(shlex.quote(r) for r in bundle.pinned(protocol.REQUIREMENTS))
     deps = f"{pip} {requirements}"
-    # Optional, and never fails the install: the machine's own index first (its
-    # owner chose it, often a nearby mirror); then the public index, for a
-    # mirror that does not carry it; else the node searches without rg.
+    # Optional, and never fails the install: the index uv is configured with
+    # on the machine first (its owner's choice, often a nearby mirror); then
+    # the public index, for a mirror that does not carry it; else the node
+    # searches without rg.
     (rg,) = bundle.pinned((protocol.SEARCH_REQUIREMENT,))
     search = (
         f"{{ {pip} {shlex.quote(rg)} || {pip} --extra-index-url {protocol.PUBLIC_INDEX} {shlex.quote(rg)}; }} "
@@ -199,7 +238,7 @@ def steps(p: Plan) -> list[tuple[str, str]]:
         '"$node/bin/python" -c \'import site, sys; '
         'open(site.getsitepackages()[0] + "/raven-node.pth", "w").write(sys.argv[1] + "\\n")\' "$node/lib"'
     )
-    return [
+    out += [
         ("virtualenv", head + venv),
         ("packages", head + deps),
         ("search", head + search),
@@ -207,6 +246,7 @@ def steps(p: Plan) -> list[tuple[str, str]]:
         ("path", head + link),
         ("check", head + '"$node/bin/python" -I -m raven.node --version'),
     ]
+    return out
 
 
 def prune_script(node_dir: str, install_name: str) -> str:
@@ -253,8 +293,8 @@ def install(p: Plan, *, run: Runner = _run, push: Pusher = _push) -> Installed:
             if name == "check":
                 _confirm_digest(p, out)
     except BaseException:
-        # Only the node's own directory: node_dir may hold other nodes, and a
-        # Python uv made there is reused by the next attempt.
+        # Only the node's own directory: node_dir may hold other nodes, and the
+        # uv and the Python put there are reused by the next attempt.
         run(p.target, head + 'rm -rf "$node"')
         raise
     rc, out = run(p.target, head + 'du -sk "$node" 2>/dev/null | cut -f1')
@@ -285,6 +325,7 @@ def _confirm_digest(p: Plan, out: str) -> None:
 
 
 __all__ = [
+    "UV_INSTALLER",
     "InstallError",
     "Installed",
     "Plan",
