@@ -11,6 +11,7 @@ import asyncio
 import pytest
 
 from raven.knowledge.parser import ELEMENTS, LAYOUT_TYPE, LayoutType
+from raven.knowledge.parser._pdfdoc import open_document
 from raven.knowledge.parser.deepdoc import _onnx, _pipeline
 from raven.knowledge.parser.pdf_parser import PdfParser
 
@@ -26,14 +27,15 @@ _GRID = [
 ]
 
 
-def _document(build):
+def _bytes(build) -> bytes:
+    """A one-page PDF built by the fixture, as bytes."""
     import pymupdf
 
     document = pymupdf.open()
     build(document.new_page(), pymupdf)
     raw = document.tobytes()
     document.close()
-    return pymupdf.open(stream=raw, filetype="pdf")
+    return raw
 
 
 def _ruled(page, pymupdf) -> None:
@@ -61,13 +63,13 @@ def _unruled(page, pymupdf) -> None:
 
 
 def test_the_model_finds_the_rows_and_columns_of_an_unruled_table() -> None:
-    """The whole argument for the weights. PyMuPDF's own finder looks for
+    """The whole argument for the weights. The line-based finder looks for
     ruling lines, so a table set with whitespace is invisible to it; the model
     looks at the table the way a reader does."""
-    document = _unruled and _document(_unruled)
+    document = open_document(_bytes(_unruled))
     page = document[0]
 
-    assert not list(page.find_tables().tables), "no lines to find, which is the point"
+    assert not page.tables(), "no lines to find, which is the point"
 
     structure = _pipeline._table_model()([_pipeline.render(page)])[0]
     labels = [box["label"] for box in structure]
@@ -83,7 +85,7 @@ def test_a_table_is_rebuilt_as_a_grid() -> None:
     """The model says where the rows and columns are; the text layer says what
     the cells are. Put back together as a table rather than flattened, because
     a grid is what the thing was and what a model reads it as."""
-    sections = asyncio.run(PdfParser().parse(_document(_ruled).tobytes(), "revenue.pdf"))
+    sections = asyncio.run(PdfParser().parse(_bytes(_ruled), "revenue.pdf"))
 
     text = " ".join(section.content.text for section in sections)
     # The column names as a header row: the reader that follows the ruled lines
@@ -110,7 +112,7 @@ def test_a_cell_carrying_markup_cannot_break_out_of_its_cell() -> None:
             for c, value in enumerate(row):
                 page.insert_text(pymupdf.Point(xs[c] + 8, ys[r] + 23), value, fontsize=11)
 
-    text = " ".join(s.content.text for s in asyncio.run(PdfParser().parse(_document(build).tobytes(), "r.pdf")))
+    text = " ".join(s.content.text for s in asyncio.run(PdfParser().parse(_bytes(build), "r.pdf")))
 
     assert "&lt;b&gt;Q1&lt;/b&gt;" in text
     assert "<b>" not in text
@@ -120,7 +122,7 @@ def test_a_cell_carrying_markup_cannot_break_out_of_its_cell() -> None:
 def test_a_cell_is_not_also_indexed_as_a_line_of_prose() -> None:
     """A table's cells are text boxes too. Indexed twice, a search for a figure
     matches both the row that explains it and a bare number that does not."""
-    sections = asyncio.run(PdfParser().parse(_document(_ruled).tobytes(), "revenue.pdf"))
+    sections = asyncio.run(PdfParser().parse(_bytes(_ruled), "revenue.pdf"))
 
     text = " ".join(section.content.text for section in sections)
     assert text.count("2.4M") == 1
@@ -137,7 +139,7 @@ def test_a_table_the_model_chokes_on_is_read_as_prose(monkeypatch) -> None:
 
     monkeypatch.setattr(_pipeline, "_table_model", explode)
 
-    sections = asyncio.run(PdfParser().parse(_document(_ruled).tobytes(), "revenue.pdf"))
+    sections = asyncio.run(PdfParser().parse(_bytes(_ruled), "revenue.pdf"))
 
     text = " ".join(section.content.text for section in sections)
     assert "2.4M" in text, "the cells were still read"
@@ -149,7 +151,7 @@ def test_an_absent_model_leaves_the_rest_of_the_layout_working(monkeypatch) -> N
     reason to stop asking the other two."""
     monkeypatch.setattr(_pipeline, "available", lambda *names: "tsr" not in names and _onnx.available(*names))
 
-    sections = asyncio.run(PdfParser().parse(_document(_ruled).tobytes(), "revenue.pdf"))
+    sections = asyncio.run(PdfParser().parse(_bytes(_ruled), "revenue.pdf"))
 
     assert [s.metadata.get("heading_path") for s in sections] == [["Revenue by region"]]
 
@@ -166,7 +168,7 @@ def test_both_readers_render_one_table_the_same_way(monkeypatch) -> None:
     names came back as body cells. A base built on one machine then read
     differently on the other.
     """
-    raw = _document(_ruled).tobytes()
+    raw = _bytes(_ruled)
 
     with_models = asyncio.run(PdfParser().parse(raw, "revenue.pdf"))
     monkeypatch.setattr(_pipeline, "available", lambda *names: False)

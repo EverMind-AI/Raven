@@ -11,6 +11,7 @@ import asyncio
 
 import pytest
 
+from raven.knowledge.parser._pdfdoc import open_document
 from raven.knowledge.parser.deepdoc import _onnx, _pipeline
 from raven.knowledge.parser.pdf_parser import PdfParser
 
@@ -51,11 +52,8 @@ def _parse(raw: bytes, **kwargs):
 def test_the_model_labels_the_regions_of_a_page() -> None:
     """Title, prose and page furniture, told apart by how they look rather than
     by how big they are set."""
-    import pymupdf
-
-    document = pymupdf.open(stream=_page(_report), filetype="pdf")
-
-    kinds = [region["type"] for region in _pipeline.regions(document[0], 1)]
+    with open_document(_page(_report)) as document:
+        kinds = [region["type"] for region in _pipeline.regions(document[0], 1)]
 
     assert "title" in kinds
     assert "text" in kinds
@@ -65,12 +63,11 @@ def test_the_model_labels_the_regions_of_a_page() -> None:
 def test_the_boxes_come_back_in_the_pages_own_points() -> None:
     """The model works on a 3x render. A box left in render pixels would put a
     highlight three times too far down the page."""
-    import pymupdf
+    with open_document(_page(_report)) as document:
+        height = document[0].height
+        regions = _pipeline.regions(document[0], 1)
 
-    document = pymupdf.open(stream=_page(_report), filetype="pdf")
-    height = document[0].rect.y1
-
-    for region in _pipeline.regions(document[0], 1):
+    for region in regions:
         assert region["bottom"] <= height + 1, region
 
 

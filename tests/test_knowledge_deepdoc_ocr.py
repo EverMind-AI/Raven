@@ -10,6 +10,7 @@ import asyncio
 
 import pytest
 
+from raven.knowledge.parser._pdfdoc import open_document
 from raven.knowledge.parser.deepdoc import _onnx, _pipeline
 from raven.knowledge.parser.pdf_parser import PdfParser
 
@@ -89,9 +90,7 @@ def test_a_scanned_page_carries_nothing_to_read() -> None:
 
 
 def test_the_models_read_the_words_off_the_picture() -> None:
-    import pymupdf
-
-    with pymupdf.open(stream=_scanned(), filetype="pdf") as document:
+    with open_document(_scanned()) as document:
         page = document[0]
         boxes, recognised = _pipeline.text_boxes(page, _pipeline.render(page), 1)
 

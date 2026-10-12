@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from raven.knowledge.parser import LayoutType
+from raven.knowledge.parser._pdfdoc import Block, Line
 from raven.knowledge.parser.deepdoc import _pipeline
 
 
@@ -479,32 +480,42 @@ class TestFromTextLayer:
     page cost nothing to read."""
 
     @staticmethod
-    def _page(blocks: list[dict]):
-        return SimpleNamespace(get_text=lambda _kind: {"blocks": blocks})
+    def _page(blocks: "list[Block]"):
+        return SimpleNamespace(blocks=lambda: blocks)
+
+    @staticmethod
+    def _block(*lines: Line, picture: bool = False) -> Block:
+        boxes = [line.box for line in lines] or [(0.0, 0.0, 0.0, 0.0)]
+        return Block(
+            lines=tuple(lines),
+            x0=min(box[0] for box in boxes),
+            top=min(box[1] for box in boxes),
+            x1=max(box[2] for box in boxes),
+            bottom=max(box[3] for box in boxes),
+            picture=picture,
+        )
 
     def test_a_line_comes_back_with_its_box(self) -> None:
-        page = self._page([{"type": 0, "lines": [{"bbox": [1.0, 2.0, 3.0, 4.0], "spans": [{"text": "hello"}]}]}])
+        page = self._page([self._block(Line("hello", 10.0, 1.0, 2.0, 3.0, 4.0))])
 
         out = _pipeline._from_text_layer(page, 7)
 
         assert out == [{"x0": 1.0, "x1": 3.0, "top": 2.0, "bottom": 4.0, "text": "hello", "page_number": 7}]
 
-    def test_the_spans_of_one_line_are_joined(self) -> None:
-        """A line is split into spans wherever the font changes, which is not
-        a word boundary."""
-        page = self._page(
-            [{"type": 0, "lines": [{"bbox": [0, 0, 10, 10], "spans": [{"text": "hel"}, {"text": "lo"}]}]}]
-        )
+    def test_every_line_of_a_block_comes_back_on_its_own(self) -> None:
+        """A block is a paragraph and the models place one line at a time, so
+        a block is not the unit that leaves here."""
+        page = self._page([self._block(Line("first", 10.0, 0, 0, 10, 10), Line("second", 10.0, 0, 12, 10, 22))])
 
-        assert _pipeline._from_text_layer(page, 1)[0]["text"] == "hello"
+        assert [box["text"] for box in _pipeline._from_text_layer(page, 1)] == ["first", "second"]
 
     def test_an_image_block_carries_no_lines(self) -> None:
-        page = self._page([{"type": 1, "lines": []}])
+        page = self._page([self._block(picture=True)])
 
         assert _pipeline._from_text_layer(page, 1) == []
 
     def test_a_blank_line_is_left_out(self) -> None:
-        page = self._page([{"type": 0, "lines": [{"bbox": [0, 0, 10, 10], "spans": [{"text": "   "}]}]}])
+        page = self._page([self._block(Line("   ", 10.0, 0, 0, 10, 10))])
 
         assert _pipeline._from_text_layer(page, 1) == []
 

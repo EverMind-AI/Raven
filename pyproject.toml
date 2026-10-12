@@ -96,6 +96,7 @@ dependencies = [
     # core is not theirs to keep working. Range-matched to the engine's own pin.
     "lxml>=5.0,<7",
     "truststore>=0.10.1,<1.0.0",
+    "pdfplumber>=0.11.4,<0.11.10",
 ]
 
 [project.optional-dependencies]

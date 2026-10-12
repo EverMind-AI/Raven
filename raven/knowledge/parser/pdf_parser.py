@@ -36,6 +36,7 @@ from raven.knowledge._notes import note
 from raven.knowledge._types import Section
 from raven.knowledge.parser import BBox, LayoutType, ParserBase
 from raven.knowledge.parser._layout import Element, sections_from
+from raven.knowledge.parser._pdfdoc import PasswordProtectedError, open_document
 from raven.knowledge.parser._tables import html_table, pad_grid
 
 if TYPE_CHECKING:
@@ -125,27 +126,20 @@ class PdfParser(ParserBase):
             `ValueError`: if the payload is not a readable PDF -- a renamed
                 file, a truncated download, or one encrypted with a password.
         """
-        import pymupdf
-
+        if isinstance(file, str) and not Path(file).is_file():
+            raise FileNotFoundError(f"{filename!r}: no such file: {file!r}")
         try:
-            if isinstance(file, str):
-                if not Path(file).is_file():
-                    raise FileNotFoundError(f"{filename!r}: no such file: {file!r}")
-                document = pymupdf.open(file)
-            else:
-                document = pymupdf.open(stream=BytesIO(file), filetype="pdf")
-        except FileNotFoundError:
-            raise
+            document = open_document(file)
+        except PasswordProtectedError as error:
+            raise ValueError(f"{filename!r} is password-protected, so nothing in it can be read") from error
         except Exception as error:
             raise ValueError(f"Failed to read {filename!r} as a PDF: {error}") from error
 
         with document:
-            if document.needs_pass:
-                raise ValueError(f"{filename!r} is password-protected, so nothing in it can be read")
             body = _body_size(document)
             by_model = self._layout_reader()
             # Off the loop. Reading a page is seconds of ONNX inference and
-            # PyMuPDF rendering with no await in it, and the caller is the
+            # rasterising with no await in it, and the caller is the
             # gateway's own loop -- the one serving every socket, every turn
             # and the heartbeat. Measured before this moved: a 40-page file
             # blocked it for 21s and answered no RPC in that time.
@@ -186,6 +180,10 @@ class PdfParser(ParserBase):
                 elements.extend(found)
             else:
                 unread.append(number)
+            # Let the page go as it is passed: the reader walks forward and
+            # never looks back, and holding every page's objects to the end of
+            # a long document is how reading one costs its own size in memory.
+            page.release()
         return elements, unread
 
     def _layout_reader(self) -> Any:
@@ -247,8 +245,8 @@ class PdfParser(ParserBase):
 
         async def describe(number: int) -> "tuple[int, str, BBox]":
             page = document[number - 1]
-            box = _box(page.rect)
-            image = page.get_pixmap(matrix=_matrix(), alpha=False).tobytes("png")
+            box = _box(page.box)
+            image = _png(page.render(_RENDER_SCALE))
             async with limit:
                 try:
                     return number, await model.describe(image, mime="image/png"), box
@@ -267,19 +265,22 @@ class PdfParser(ParserBase):
         ]
 
 
-def _matrix() -> Any:
-    import pymupdf
+def _png(image: Any) -> bytes:
+    """A rendered page as PNG bytes, which is what a vision model is sent."""
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    image.close()
+    return buffer.getvalue()
 
-    return pymupdf.Matrix(_RENDER_SCALE, _RENDER_SCALE)
 
-
-def _box(rect: Any) -> BBox:
-    """A PyMuPDF rectangle as the box this package records.
+def _box(box: "tuple[float, float, float, float]") -> BBox:
+    """A rectangle as the box this package records.
 
     Both measure in points from the top-left, so this is a rename rather than
     a conversion -- and writing it once is what keeps it that way.
     """
-    return BBox(x0=float(rect.x0), x1=float(rect.x1), top=float(rect.y0), bottom=float(rect.y1))
+    x0, top, x1, bottom = box
+    return BBox(x0=float(x0), x1=float(x1), top=float(top), bottom=float(bottom))
 
 
 def _body_size(document: Any) -> float:
@@ -292,13 +293,12 @@ def _body_size(document: Any) -> float:
     to learn it is three hundred pages of work for one number.
     """
     seen: Counter[float] = Counter()
-    for page in list(document)[:8]:
-        for block in page.get_text("dict").get("blocks", []):
-            for line in block.get("lines", []):
-                for span in line.get("spans", []):
-                    text = (span.get("text") or "").strip()
-                    if text:
-                        seen[round(float(span.get("size") or 0), 1)] += len(text)
+    for number in range(min(8, len(document))):
+        for block in document[number].blocks():
+            for line in block.lines:
+                text = line.text.strip()
+                if text:
+                    seen[round(line.size, 1)] += len(text)
     return seen.most_common(1)[0][0] if seen else 0.0
 
 
@@ -311,8 +311,8 @@ def _page_elements(page: Any, number: int, body: float) -> list[Element]:
     with no column name, and once inside the row that explains it.
     """
     elements: list[Element] = []
-    covered: list[Any] = []
-    for table in _tables(page):
+    covered: list[tuple[float, float, float, float]] = []
+    for table in page.tables():
         # As HTML, the way the model-driven path composes one and the way
         # RAGFlow indexes every PDF table. A PDF states where its cell
         # boundaries are, which is the thing a flattened row throws away.
@@ -320,22 +320,23 @@ def _page_elements(page: Any, number: int, body: float) -> list[Element]:
         text = html_table(grid)
         if not text:
             continue
-        covered.append(table.bbox)
+        area = tuple(float(value) for value in table.bbox)
+        covered.append(area)
         elements.append(
             Element(
                 layout=LayoutType.TABLE,
                 text=text,
                 page_number=number,
                 page_end=number,
-                bbox=_box(_rect(table.bbox)),
+                bbox=_box(area),
             )
         )
 
     characters = 0
     pictures = 0
-    for block in page.get_text("dict").get("blocks", []):
-        box = _rect(block.get("bbox") or (0, 0, 0, 0))
-        if block.get("type") == 1:
+    for block in page.blocks():
+        box = block.box
+        if block.picture:
             pictures += 1
             # An image. Its bytes are not read: a figure inside a PDF has no
             # caption of its own to index, and describing every one of them is
@@ -381,51 +382,27 @@ def _page_elements(page: Any, number: int, body: float) -> list[Element]:
     return elements
 
 
-def _tables(page: Any) -> list[Any]:
-    """The tables PyMuPDF finds, or none when it cannot look.
-
-    Table finding is heuristic and occasionally throws on a page whose drawing
-    commands it cannot make sense of. One page's tables are not worth the
-    document.
-    """
-    try:
-        return list(page.find_tables().tables)
-    except Exception as exc:  # noqa: BLE001 - the prose on the page is still readable
-        logger.debug("pdf: table detection failed on a page ({})", exc)
-        return []
-
-
-def _rect(bbox: Any) -> Any:
-    import pymupdf
-
-    return bbox if hasattr(bbox, "x0") else pymupdf.Rect(*bbox)
-
-
-def _inside(inner: Any, outer: Any) -> bool:
+def _inside(inner: "tuple[float, float, float, float]", outer: "tuple[float, float, float, float]") -> bool:
     """Whether a block sits within a table's area, with a point of slack.
 
     Slack because the two boxes are measured differently: a table's bounds come
     from its ruling lines and a block's from its glyphs, so a cell's text can
     sit a hair outside the grid drawn around it.
     """
-    area = _rect(outer)
-    return inner.x0 >= area.x0 - 1 and inner.x1 <= area.x1 + 1 and inner.y0 >= area.y0 - 1 and inner.y1 <= area.y1 + 1
+    return (
+        inner[0] >= outer[0] - 1 and inner[2] <= outer[2] + 1 and inner[1] >= outer[1] - 1 and inner[3] <= outer[3] + 1
+    )
 
 
 def _block_text(block: Any) -> tuple[str, float]:
     """A block's text, and the size most of it is set in."""
     lines: list[str] = []
     sizes: Counter[float] = Counter()
-    for line in block.get("lines", []):
-        parts = []
-        for span in line.get("spans", []):
-            text = span.get("text") or ""
-            if text.strip():
-                sizes[round(float(span.get("size") or 0), 1)] += len(text.strip())
-            parts.append(text)
-        joined = "".join(parts).strip()
-        if joined:
-            lines.append(joined)
+    for line in block.lines:
+        text = line.text.strip()
+        if text:
+            sizes[round(line.size, 1)] += len(text)
+            lines.append(text)
     if not lines:
         return "", 0.0
     # Joined with spaces rather than newlines: a PDF breaks a paragraph into a

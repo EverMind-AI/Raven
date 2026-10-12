@@ -123,15 +123,16 @@ def _ocr_model() -> Any:
 def render(page: Any) -> np.ndarray:
     """The page as the models want it: RGB, at :data:`ZOOM`.
 
-    From the pixmap's own buffer rather than through an encode and decode.
-    PyMuPDF hands out RGB, which is what these graphs were trained on, so
+    Over the rendered image's own buffer rather than through an encode and a
+    decode. It is already RGB, which is what these graphs were trained on, so
     there is no channel swap here -- see the note in ``_recognizer.preprocess``
     about what one costs.
     """
-    import pymupdf
-
-    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(ZOOM, ZOOM), alpha=False)
-    return np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(pixmap.height, pixmap.width, 3)
+    drawn = page.render(ZOOM)
+    try:
+        return np.array(drawn, dtype=np.uint8)
+    finally:
+        drawn.close()
 
 
 def text_boxes(page: Any, image: np.ndarray, number: int) -> "tuple[list[dict], bool]":
@@ -398,20 +399,19 @@ def _is_english(cells: "list[dict]") -> bool:
 def _from_text_layer(page: Any, number: int) -> "list[dict]":
     """The lines the file itself states, with their boxes."""
     found = []
-    for block in page.get_text("dict").get("blocks", []):
-        if block.get("type") == 1:
+    for block in page.blocks():
+        if block.picture:
             continue
-        for line in block.get("lines", []):
-            text = "".join(span.get("text") or "" for span in line.get("spans", [])).strip()
+        for line in block.lines:
+            text = line.text.strip()
             if not text:
                 continue
-            x0, top, x1, bottom = line["bbox"]
             found.append(
                 {
-                    "x0": float(x0),
-                    "x1": float(x1),
-                    "top": float(top),
-                    "bottom": float(bottom),
+                    "x0": float(line.x0),
+                    "x1": float(line.x1),
+                    "top": float(line.top),
+                    "bottom": float(line.bottom),
                     "text": text,
                     "page_number": number,
                 }
