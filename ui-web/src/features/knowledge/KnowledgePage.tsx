@@ -292,13 +292,20 @@ function SettingsPanel({ base, busy, models }: { base: KbBase; busy: boolean; mo
           </span>
         </Field>
 
+        {/* Shown and not operable, which is what the engine says about it:
+            `_chunker_for` cuts every base the naive way and reads this
+            setting nowhere. It was a switch that decided nothing, on by
+            default, whose help said the document's structure was the
+            boundary -- and which greyed out the separator, the setting that
+            actually decides, while it was on. */}
         <Field label={t('gui.knowledge.set_smart')} help={t('gui.knowledge.set_smart_help')}>
           <button
             className="knowledge-chunkon"
             role="switch"
             aria-checked={smart}
+            aria-disabled="true"
+            disabled
             aria-label={t('gui.knowledge.set_smart')}
-            onClick={() => setSmart((on) => !on)}
           >
             <span className="knowledge-knob" />
           </button>
@@ -310,7 +317,6 @@ function SettingsPanel({ base, busy, models }: { base: KbBase; busy: boolean; mo
           <input
             className="knowledge-small"
             value={sep.replace(/\n/g, '\\n').replace(/\t/g, '\\t')}
-            disabled={smart}
             aria-label={t('gui.knowledge.set_sep')}
             onChange={(e) => setSep(e.currentTarget.value.replace(/\\n/g, '\n').replace(/\\t/g, '\t'))}
           />

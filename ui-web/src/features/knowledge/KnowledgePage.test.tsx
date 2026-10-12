@@ -1390,7 +1390,7 @@ describe('the knowledge page', () => {
     expect((document.querySelector('input[aria-label="Figure context"]') as HTMLInputElement).value).toBe('64')
   })
 
-  it('offers the separator only when the chunker is not cutting on structure', async () => {
+  it('offers the separator whatever the structure switch says', async () => {
     await mount([base({ id: 'a', smart_chunking: true })])
     await open()
     await act(async () => {
@@ -1398,15 +1398,26 @@ describe('the knowledge page', () => {
     })
 
     const sep = (): HTMLInputElement => document.querySelector('input[aria-label="Separator"]') as HTMLInputElement
-    expect(sep().disabled).toBe(true)
+    /* The separator is what cuts every base -- `_chunker_for` reads
+       `smart_chunking` nowhere -- so greying it out while the switch was on
+       hid the only setting that decides. */
+    expect(sep().disabled).toBe(false)
     /* And written as it is typed: the separator a reader means is two
        newlines, which a one-line field cannot hold as themselves. */
     expect(sep().value).toBe('\\n\\n')
+  })
 
+  it('does not offer a switch that decides nothing', async () => {
+    /* On by default, with help that said the document's structure was the
+       boundary. `_chunker_for` cuts every base the naive way. */
+    await mount([base({ id: 'a', smart_chunking: true })])
+    await open()
     await act(async () => {
-      ;(document.querySelector('.knowledge-sets .knowledge-chunkon') as HTMLButtonElement).click()
+      ;(document.querySelector('.knowledge-gear') as HTMLButtonElement).click()
     })
-    expect(sep().disabled).toBe(false)
+
+    const toggle = document.querySelector('.knowledge-sets .knowledge-chunkon') as HTMLButtonElement
+    expect(toggle.disabled).toBe(true)
   })
   it('carries prose into a table or a figure by as much as the reader said', async () => {
     /* A table on its own embeds as a grid of values with nothing saying what
@@ -1589,4 +1600,5 @@ describe('the knowledge page', () => {
     const pick = document.querySelector('select[aria-label="Embedding model"]') as HTMLSelectElement
     expect([...pick.options].map((o) => o.value)).toEqual([''])
   })
+
 })

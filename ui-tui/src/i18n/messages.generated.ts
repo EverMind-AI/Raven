@@ -3079,7 +3079,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.knowledge.set_adv': 'How documents are cut',
     'gui.knowledge.set_smart': 'Cut on structure',
     'gui.knowledge.set_smart_help':
-      "Cut on the document's own headings and sections. With this off, the separator below is what it cuts on instead.",
+      'Not in force yet: every base is cut on the separator below. Kept because it is the shape the answer will take once the structural pass is finished.',
     'gui.knowledge.set_sep': 'Separator',
     'gui.knowledge.set_sep_help': 'Written as it is typed: \\n is a newline.',
     'gui.knowledge.set_size': 'Piece size',
@@ -6075,7 +6075,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.knowledge.set_topk_help': '一次检索从该知识库取回多少个分块。',
     'gui.knowledge.set_adv': '文档切分方式',
     'gui.knowledge.set_smart': '按结构切分',
-    'gui.knowledge.set_smart_help': '按文档自身的标题与章节切分。关闭后，改为按下方的分隔符切分。',
+    'gui.knowledge.set_smart_help':
+      '暂未生效：目前所有知识库均按下方的分隔符切分。保留此开关，是因为结构化切分完成后答案将是这个形式。',
     'gui.knowledge.set_sep': '分隔符',
     'gui.knowledge.set_sep_help': '按输入的字面写法，\\n 表示换行。',
     'gui.knowledge.set_size': '分块大小',

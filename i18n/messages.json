@@ -11116,8 +11116,8 @@
       "zh": "按结构切分"
     },
     "gui.knowledge.set_smart_help": {
-      "en": "Cut on the document's own headings and sections. With this off, the separator below is what it cuts on instead.",
-      "zh": "按文档自身的标题与章节切分。关闭后，改为按下方的分隔符切分。"
+      "en": "Not in force yet: every base is cut on the separator below. Kept because it is the shape the answer will take once the structural pass is finished.",
+      "zh": "暂未生效：目前所有知识库均按下方的分隔符切分。保留此开关，是因为结构化切分完成后答案将是这个形式。"
     },
     "gui.knowledge.set_sep": {
       "en": "Separator",
