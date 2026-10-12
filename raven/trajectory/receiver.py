@@ -119,9 +119,14 @@ class Existing:
 
 
 def _private_dir(path: Path) -> None:
-    if not path.exists():
+    """Create ``path`` as a 0700 directory; a concurrent creator winning the race is fine."""
+    try:
         path.mkdir(parents=True, mode=0o700)
-        os.chmod(path, 0o700)
+    except FileExistsError:
+        if not path.is_dir():
+            raise
+        return
+    os.chmod(path, 0o700)
 
 
 def _write_private(path: Path, data: bytes) -> None:

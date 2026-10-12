@@ -12,6 +12,7 @@ import stat
 import threading
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -619,3 +620,73 @@ async def test_oversized_length_is_refused_before_the_body(client, config):
     data = await _raw(client, _request_head(config.limits.max_package_bytes + 1))
     assert _status_of(data) == 413
     assert _json_of(data)["error"] == "too_large"
+
+
+# --- first commits of a day race on the date directory ----------------------
+
+OTHER_PACKAGE = _package_bytes(root=OTHER_ID)
+OTHER_SHA = hashlib.sha256(OTHER_PACKAGE).hexdigest()
+
+
+def _barrier_before_date_mkdir(monkeypatch, parties=2):
+    """Hold every thread that is about to create the date directory until all have arrived."""
+    barrier = threading.Barrier(parties)
+    real_mkdir = Path.mkdir
+
+    def _mkdir(self, *args, **kwargs):
+        if self.name == DATE:
+            barrier.wait(timeout=5)
+        return real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _mkdir)
+    return barrier
+
+
+def test_two_ids_can_create_the_date_dir_at_once(save_dir, clock, monkeypatch):
+    store = ReceiverStore(save_dir, clock=clock)
+    store.prepare()
+    _barrier_before_date_mkdir(monkeypatch)
+    outcomes = {}
+
+    def _commit(report_id, body):
+        part = store.new_part(report_id)
+        part.write_bytes(body)
+        payload = store.receipt_payload(
+            report_id=report_id,
+            sha256=hashlib.sha256(body).hexdigest(),
+            size_bytes=len(body),
+            accounting_date=DATE,
+            remote={"peer": "", "client": "", "user_agent": ""},
+            package=rcv._package_digest({}),
+            notices=(),
+            recovered=False,
+        )
+        try:
+            outcomes[report_id] = store.commit(report_id, part, payload)
+        except BaseException as exc:
+            outcomes[report_id] = exc
+
+    threads = [
+        threading.Thread(target=_commit, args=(ROOT, PACKAGE)),
+        threading.Thread(target=_commit, args=(OTHER_ID, OTHER_PACKAGE)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert all(isinstance(result, Path) for result in outcomes.values()), outcomes
+    assert sorted(p.name for p in (save_dir / DATE).iterdir()) == sorted(
+        [f"{ROOT}.json", f"{ROOT}.tar.gz", f"{OTHER_ID}.json", f"{OTHER_ID}.tar.gz"]
+    )
+    assert list((save_dir / ".incoming").iterdir()) == []
+    assert _mode(save_dir / DATE) == 0o700
+
+
+async def test_two_ids_uploaded_at_once_on_a_fresh_day(client, save_dir, monkeypatch):
+    _barrier_before_date_mkdir(monkeypatch)
+    first, second = await asyncio.gather(_post(client), _post(client, OTHER_PACKAGE, report_id=OTHER_ID, sha=OTHER_SHA))
+    assert (first.status, second.status) == (201, 201)
+    assert sorted(p.name for p in (save_dir / DATE).iterdir()) == sorted(
+        [f"{ROOT}.json", f"{ROOT}.tar.gz", f"{OTHER_ID}.json", f"{OTHER_ID}.tar.gz"]
+    )
+    assert list((save_dir / ".incoming").iterdir()) == []
