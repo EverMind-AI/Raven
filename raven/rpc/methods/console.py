@@ -768,6 +768,9 @@ def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
     The same ``atomic_update`` transaction the ``update.py`` writers run, so a
     console save cannot interleave with a CLI save on the same file, and a
     config held at 0600 keeps its mode across the replace.
+
+    Null intermediate sections are initialized like absent sections, retaining
+    their existing spelling. Other non-object values remain invalid.
     """
     from raven.config.loader import get_config_path, read_raw_or_raise
 
@@ -781,9 +784,13 @@ def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
         node = raw
         parts = key.split(".")
         for p in parts[:-1]:
-            node = node.setdefault(_as_written(node, p), {})
-            if not isinstance(node, dict):
+            name = _as_written(node, p)
+            child = node.get(name)
+            if child is None:
+                child = node[name] = {}
+            elif not isinstance(child, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
+            node = child
         leaf = _as_written(node, parts[-1])
         prev = node.get(leaf)
         if merge:

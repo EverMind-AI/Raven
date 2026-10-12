@@ -550,11 +550,12 @@ def test_skill_block_writes_camel_into_empty_config(cfg_path: Path) -> None:
 
 @pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
 @pytest.mark.parametrize("invalid", [[], 1, "invalid"])
-def test_skill_block_preserves_an_invalid_section(cfg_path, spelling, invalid):
+@pytest.mark.parametrize("blocked", [True, False])
+def test_skill_block_preserves_an_invalid_section(cfg_path, spelling, invalid, blocked):
     cfg_path.write_text(json.dumps({spelling: invalid}), encoding="utf-8")
     before = cfg_path.read_bytes()
     with pytest.raises(ValueError, match="object or null"):
-        set_skill_blocked("alpha", True, config_path=cfg_path)
+        set_skill_blocked("alpha", blocked, config_path=cfg_path)
     assert cfg_path.read_bytes() == before
 
 
