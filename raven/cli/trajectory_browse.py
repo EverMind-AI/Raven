@@ -1172,7 +1172,7 @@ def _upload_and_report(record_dir: Path, base_url: str) -> dict[str, Any]:
         with console.status("Uploading the package...", spinner="dots"):
             record, receipt = tupload.upload_record(record_dir, base_url=base_url)
     except tupload.UploadError as exc:
-        console.print(f"  [red]✗ Upload failed: {escape(str(exc))}[/red]", highlight=False)
+        console.print(f"  [red]✗ Upload failed: {escape(str(exc))}[/red]", highlight=False, soft_wrap=True)
         console.print('  Retry from this attempt\'s "Bug reports" entry (Upload).')
         return breport.load_record(record_dir)
     verb = "Already uploaded" if receipt.duplicate else "Uploaded"

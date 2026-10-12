@@ -533,10 +533,11 @@ def _upload_and_report(record_dir: Path, base_url: str) -> int:
         with console.status("Uploading the package...", spinner="dots"):
             _record, receipt = tupload.upload_record(record_dir, base_url=base_url)
     except tupload.UploadError as exc:
-        console.print(f"  [red]✗ Upload failed: {escape(str(exc))}[/red]", highlight=False)
+        console.print(f"  [red]✗ Upload failed: {escape(str(exc))}[/red]", highlight=False, soft_wrap=True)
         console.print(
             f"  The package is kept; retry with: raven trajectory upload-bug-report {escape(record_dir.name)}",
             highlight=False,
+            soft_wrap=True,
         )
         return 1
     verb = "Already uploaded" if receipt.duplicate else "Uploaded"
@@ -650,9 +651,11 @@ def trajectory_receiver(
 
     def _announce(bound_host: str, bound_port: int) -> None:
         console.print(
-            f"Bug report receiver listening on {escape(_receiver_address(bound_host, bound_port))}", highlight=False
+            f"Bug report receiver listening on {escape(_receiver_address(bound_host, bound_port))}",
+            highlight=False,
+            soft_wrap=True,
         )
-        console.print(f"Saving packages under {escape(str(save_dir))}", highlight=False)
+        console.print(f"Saving packages under {escape(str(save_dir))}", highlight=False, soft_wrap=True)
         console.print("Press Ctrl-C to stop.")
 
     try:
