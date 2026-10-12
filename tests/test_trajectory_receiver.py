@@ -456,12 +456,15 @@ class _GatedInspection:
         self.release = threading.Event()
         self.exited = threading.Event()
         self.part_existed_at_exit = None
+        self.fail = False
 
     def __call__(self, path, *, limits, expected_report_id, should_stop):
         self.started.set()
         try:
             while not should_stop():
                 if self.release.is_set():
+                    if self.fail:
+                        raise pcheck.PackageError(pcheck.CODE_NOT_GZIP_TAR, "forced by the test")
                     return pcheck.inspect_package(path, limits=limits, expected_report_id=expected_report_id)
                 threading.Event().wait(0.01)
             raise pcheck.InspectionStoppedError("stopped by the test")
@@ -581,7 +584,8 @@ async def test_id_locks_serialise_late_arrivals():
     assert peak == 1 and len(locks) == 0
 
 
-async def test_concurrent_identical_uploads_land_once(client, save_dir):
+async def test_concurrent_identical_uploads_land_once(make_client, save_dir):
+    client = await make_client(concurrency=8)
     responses = await asyncio.gather(*(_post(client) for _ in range(5)))
     statuses = sorted(r.status for r in responses)
     assert statuses == [200, 200, 200, 200, 201]
@@ -690,3 +694,468 @@ async def test_two_ids_uploaded_at_once_on_a_fresh_day(client, save_dir, monkeyp
         [f"{ROOT}.json", f"{ROOT}.tar.gz", f"{OTHER_ID}.json", f"{OTHER_ID}.tar.gz"]
     )
     assert list((save_dir / ".incoming").iterdir()) == []
+
+
+# === step 3: admission, budgets, proxies, timeouts, serving ==================
+
+
+@pytest.fixture
+async def make_client(save_dir, clock):
+    clients = []
+
+    async def _make(**overrides):
+        client = await _start(ReceiverConfig(save_dir=save_dir, clock=clock, **overrides))
+        clients.append(client)
+        return client
+
+    yield _make
+    for client in clients:
+        await client.close()
+
+
+def _receiver(client):
+    return client.server.app[rcv.RECEIVER_KEY]
+
+
+async def _post_other(client):
+    return await _post(client, OTHER_PACKAGE, report_id=OTHER_ID, sha=OTHER_SHA)
+
+
+# --- token buckets ------------------------------------------------------------
+
+
+def test_buckets_refill_and_forget_the_least_recent_client():
+    now = [0.0]
+    buckets = rcv._Buckets(burst=2, per_10min=600, max_entries=2, monotonic=lambda: now[0])
+    assert buckets.take("a") is None and buckets.take("a") is None
+    assert buckets.take("a") == pytest.approx(1.0)
+    now[0] += 1.0
+    assert buckets.take("a") is None
+    buckets.take("b")
+    buckets.take("c")
+    assert buckets.keys() == ["b", "c"]
+    assert rcv._Buckets(burst=0, per_10min=600).take("x") is None
+    assert rcv._Buckets(burst=5, per_10min=0).take("x") is None
+
+
+async def test_rate_limited_client_gets_429_until_tokens_return(make_client, save_dir, monkeypatch):
+    client = await make_client(rate_burst=2, rate_per_10min=600)
+    assert (await _post(client)).status == 201
+    assert (await _post(client)).status == 200
+    resp = await _post_other(client)
+    assert resp.status == 429
+    assert (await resp.json())["error"] == "rate_limited"
+    assert int(resp.headers["Retry-After"]) >= 1
+    assert not _landed(save_dir, OTHER_ID)
+    base = rcv._monotonic()
+    monkeypatch.setattr(rcv, "_monotonic", lambda: base + 5.0)
+    assert (await _post_other(client)).status == 201
+
+
+# --- concurrency slots --------------------------------------------------------
+
+
+async def test_busy_receiver_refuses_without_queueing(make_client, save_dir, monkeypatch):
+    client = await make_client(concurrency=1)
+    gate = _GatedInspection()
+    monkeypatch.setattr(rcv, "inspect_package", gate)
+    first = asyncio.create_task(_post(client))
+    await asyncio.to_thread(gate.started.wait, 5)
+    resp = await _post_other(client)
+    assert resp.status == 503
+    assert (await resp.json())["error"] == "busy" and resp.headers["Retry-After"] == "5"
+    assert len(list((save_dir / ".incoming").iterdir())) == 1
+    gate.release.set()
+    assert (await first).status == 201
+    assert (await _post_other(client)).status == 201
+
+
+# --- the daily ledger ---------------------------------------------------------
+
+
+def test_ledger_backfills_budgets_and_settles_once(save_dir, clock):
+    _place(save_dir)
+    _place(save_dir, OTHER_PACKAGE, report_id=OTHER_ID)
+    (save_dir / DATE / "notes.tar.gz").write_bytes(b"x" * 10)
+    stored = len(PACKAGE) + len(OTHER_PACKAGE)
+    ledger = rcv.DailyLedger(save_dir, max_bytes=stored + 100, max_count=3, clock=clock)
+    day = ledger.snapshot(DATE)
+    assert (day.landed_count, day.landed_bytes, day.reserved_count) == (2, stored, 0)
+    with pytest.raises(rcv.ReceiverError) as exc:
+        ledger.reserve(DATE, 101)
+    assert exc.value.status == 507
+    reservation = ledger.reserve(DATE, 50)
+    assert ledger.in_flight_bytes() == 50
+    with pytest.raises(rcv.ReceiverError) as exc:
+        ledger.reserve(DATE, 1)
+    assert exc.value.status == 429 and exc.value.retry_after == 17 * 3600 + 19 * 60 + 49
+    reservation.settle(40)
+    reservation.settle(40)
+    reservation.release()
+    day = ledger.snapshot(DATE)
+    assert (day.landed_count, day.landed_bytes, day.reserved_count, day.reserved_bytes) == (3, stored + 40, 0, 0)
+    released = ledger.reserve("2026-10-11", 10)
+    assert DATE not in ledger._days
+    released.release()
+    assert ledger.snapshot("2026-10-11").reserved_bytes == 0
+
+
+async def test_daily_count_and_byte_budgets_over_http(make_client, save_dir):
+    client = await make_client(max_daily_count=1)
+    assert (await _post(client)).status == 201
+    resp = await _post_other(client)
+    assert resp.status == 429 and (await resp.json())["error"] == "rate_limited" and "Retry-After" in resp.headers
+    await client.close()
+    for path in (save_dir / DATE).iterdir():
+        path.unlink()
+    client = await make_client(max_daily_bytes=len(PACKAGE) + 10)
+    assert (await _post(client)).status == 201
+    resp = await _post_other(client)
+    assert resp.status == 507 and (await resp.json())["error"] == "insufficient_storage"
+
+
+async def test_a_failed_upload_gives_its_budget_back(make_client, monkeypatch):
+    client = await make_client(max_daily_bytes=len(PACKAGE) + len(OTHER_PACKAGE) - 1)
+    gate = _GatedInspection()
+    monkeypatch.setattr(rcv, "inspect_package", gate)
+    first = asyncio.create_task(_post(client))
+    await asyncio.to_thread(gate.started.wait, 5)
+    assert (await _post_other(client)).status == 507
+    gate.fail = True
+    gate.release.set()
+    resp = await first
+    assert resp.status == 400 and (await resp.json())["message"].startswith("not_gzip_tar:")
+    assert _receiver(client).ledger.snapshot(DATE).reserved_count == 0
+    gate.fail = False
+    assert (await _post_other(client)).status == 201
+
+
+async def test_every_exit_settles_the_reservation(make_client, save_dir, monkeypatch):
+    client = await make_client(idle_timeout=0.2)
+    ledger = _receiver(client).ledger
+    assert (await _post(client)).status == 201
+    assert (await _post(client)).status == 200
+    assert (await _post(client, DIFFERENT, sha=DIFFERENT_SHA)).status == 409
+    assert (await _post(client, b"junk", sha=hashlib.sha256(b"junk").hexdigest())).status == 400
+    assert (await _post(client, sha="0" * 64)).status == 400
+    data = await _raw(client, _request_head(len(OTHER_PACKAGE), OTHER_ID, OTHER_SHA), OTHER_PACKAGE[:50])
+    assert _status_of(data) == 408
+    await _raw(client, _request_head(len(OTHER_PACKAGE), OTHER_ID, OTHER_SHA), OTHER_PACKAGE[:50], close=True)
+    await _eventually(lambda: list((save_dir / ".incoming").iterdir()) == [])
+    monkeypatch.setattr(rcv, "inspect_package", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert (await _post_other(client)).status == 500
+    await _eventually(lambda: ledger.snapshot(DATE).reserved_count == 0)
+    day = ledger.snapshot(DATE)
+    assert (day.landed_count, day.landed_bytes, day.reserved_bytes) == (1, len(PACKAGE), 0)
+
+
+async def test_an_upload_is_charged_to_the_day_it_was_admitted(make_client, save_dir, clock, monkeypatch):
+    clock.now = datetime(2026, 10, 12, 23, 59, 59, tzinfo=timezone.utc)
+    client = await make_client()
+    gate = _GatedInspection()
+    monkeypatch.setattr(rcv, "inspect_package", gate)
+    task = asyncio.create_task(_post(client))
+    await asyncio.to_thread(gate.started.wait, 5)
+    clock.now = datetime(2026, 10, 13, 0, 0, 1, tzinfo=timezone.utc)
+    gate.release.set()
+    assert (await task).status == 201
+    assert (save_dir / DATE / f"{ROOT}.tar.gz").exists()
+    sidecar = _sidecar(save_dir)
+    assert sidecar["accounting_date"] == DATE and sidecar["received_at"] == "2026-10-13T00:00:01Z"
+    ledger = _receiver(client).ledger
+    assert ledger.snapshot(DATE).landed_count == 1
+    assert ledger.snapshot("2026-10-13") == rcv._Day()
+
+
+# --- disk reserve -------------------------------------------------------------
+
+
+def _usage(free):
+    return type("Usage", (), {"total": 10**12, "used": 0, "free": free})()
+
+
+async def test_disk_reserve_counts_in_flight_uploads(make_client, monkeypatch):
+    client = await make_client(min_free_bytes=1000)
+    monkeypatch.setattr(rcv.shutil, "disk_usage", lambda _path: _usage(1000 + len(PACKAGE) - 1))
+    resp = await _post(client)
+    assert resp.status == 507 and (await resp.json())["error"] == "insufficient_storage"
+    monkeypatch.setattr(rcv.shutil, "disk_usage", lambda _path: _usage(1000 + len(PACKAGE)))
+    assert (await _post(client)).status == 201
+    gate = _GatedInspection()
+    monkeypatch.setattr(rcv, "inspect_package", gate)
+    monkeypatch.setattr(rcv.shutil, "disk_usage", lambda _path: _usage(1000 + len(OTHER_PACKAGE) + len(DIFFERENT) - 1))
+    first = asyncio.create_task(_post_other(client))
+    await asyncio.to_thread(gate.started.wait, 5)
+    assert (await _post(client, DIFFERENT, sha=DIFFERENT_SHA)).status == 507
+    gate.release.set()
+    assert (await first).status == 201
+
+
+# --- trusted proxies ----------------------------------------------------------
+
+TRUSTED = rcv._parse_networks(("10.0.0.0/8", "fd00::/8"))
+
+
+@pytest.mark.parametrize(
+    "peer,forwarded,expected",
+    [
+        ("10.0.0.2", "1.2.3.4, 10.0.0.2", "1.2.3.4"),
+        ("10.0.0.2", None, "10.0.0.2"),
+        ("8.8.8.8", "1.2.3.4", "8.8.8.8"),
+        ("10.0.0.2", "10.0.0.3, 10.0.0.2", "10.0.0.2"),
+        ("10.0.0.2", "9.9.9.9, 1.2.3.4, 10.0.0.2", "1.2.3.4"),
+        ("10.0.0.2", "junk, 1.2.3.4", "1.2.3.4"),
+        ("10.0.0.2", "1.2.3.4, junk", "10.0.0.2"),
+        ("10.0.0.2", "1.2.3.4, , 10.0.0.2", "10.0.0.2"),
+        ("10.0.0.2", "junk, 10.0.0.2", "10.0.0.2"),
+        ("fd00::1", "2001:db8::7, fd00::2", "2001:db8::7"),
+        ("fd00::1", "2001:db8::7", "2001:db8::7"),
+    ],
+)
+def test_client_ip_walks_the_proxy_chain_from_the_right(peer, forwarded, expected):
+    assert rcv._client_ip(peer, forwarded, TRUSTED) == expected
+
+
+def test_invalid_trusted_proxy_fails_at_construction(save_dir, clock):
+    with pytest.raises(ValueError):
+        rcv.Receiver(ReceiverConfig(save_dir=save_dir, clock=clock, trusted_proxies=("not-a-network",)))
+
+
+async def test_forwarded_client_is_recorded_and_rate_limited(make_client, save_dir):
+    client = await make_client(trusted_proxies=("127.0.0.0/8",), rate_burst=1, rate_per_10min=1)
+    resp = await _post(client, **{"X-Forwarded-For": "1.2.3.4"})
+    assert resp.status == 201
+    sidecar = _sidecar(save_dir)
+    assert sidecar["remote"] == {
+        "peer": "127.0.0.1",
+        "client": "1.2.3.4",
+        "user_agent": sidecar["remote"]["user_agent"],
+    }
+    assert (
+        await _post(client, OTHER_PACKAGE, report_id=OTHER_ID, sha=OTHER_SHA, **{"X-Forwarded-For": "5.6.7.8"})
+    ).status == 201
+    assert (await _post(client, **{"X-Forwarded-For": "5.6.7.8"})).status == 429
+    assert (await _post(client, **{"X-Forwarded-For": "1.2.3.4, junk"})).status == 200
+    assert sorted(_receiver(client).buckets.keys()) == ["1.2.3.4", "127.0.0.1", "5.6.7.8"]
+
+
+# --- timeouts -----------------------------------------------------------------
+
+
+async def test_idle_body_times_out(make_client, save_dir):
+    client = await make_client(idle_timeout=0.2)
+    data = await _raw(client, _request_head(len(PACKAGE)), PACKAGE[: len(PACKAGE) // 2])
+    assert _status_of(data) == 408
+    assert "idle" in _json_of(data)["message"]
+    await _eventually(lambda: list((save_dir / ".incoming").iterdir()) == [])
+
+
+async def test_total_timeout_stops_the_inspection_thread(make_client, save_dir, monkeypatch):
+    client = await make_client(total_timeout=0.3)
+    gate = _GatedInspection()
+    monkeypatch.setattr(rcv, "inspect_package", gate)
+    resp = await _post(client)
+    assert resp.status == 408
+    assert "total" in (await resp.json())["message"]
+    assert gate.exited.is_set() and gate.part_existed_at_exit is True
+    assert list((save_dir / ".incoming").iterdir()) == []
+    monkeypatch.setattr(rcv, "inspect_package", pcheck.inspect_package)
+    assert (await _post_other(client)).status == 201
+
+
+# --- the request log ----------------------------------------------------------
+
+
+async def test_each_request_logs_one_line_without_the_body(client):
+    from loguru import logger
+
+    lines = []
+    sink = logger.add(lines.append, format="{message}")
+    try:
+        assert (await _post(client)).status == 201
+    finally:
+        logger.remove(sink)
+    matching = [line for line in lines if line.startswith("POST ") and f"report={ROOT}" in line]
+    assert len(matching) == 1
+    line = matching[0].rstrip("\n")
+    assert " 201 " in line and "client=127.0.0.1" in line and line.endswith(" ok")
+    assert all(PACKAGE[:8].hex() not in line and "\x1f\x8b" not in line for line in lines)
+
+
+# --- settlement follows the commit, not the response -------------------------
+
+
+class _GatedCommit:
+    """Wraps ReceiverStore.commit with a gate before or after the real commit."""
+
+    def __init__(self, where):
+        self.where = where
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.real = ReceiverStore.commit
+
+    def __call__(self, store, report_id, part, payload):
+        if self.where == "before":
+            self.entered.set()
+            self.release.wait(10)
+            return self.real(store, report_id, part, payload)
+        result = self.real(store, report_id, part, payload)
+        self.entered.set()
+        self.release.wait(10)
+        return result
+
+    def patch(self):
+        """A plain function, so it binds as a method when set on the class."""
+
+        def _commit(store, report_id, part, payload):
+            return self(store, report_id, part, payload)
+
+        return _commit
+
+
+@pytest.mark.parametrize("where", ["before", "after"])
+async def test_a_package_landed_during_a_timeout_is_still_charged(make_client, save_dir, monkeypatch, where):
+    client = await make_client(total_timeout=0.3, max_daily_count=1)
+    gate = _GatedCommit(where)
+    monkeypatch.setattr(ReceiverStore, "commit", gate.patch())
+    task = asyncio.create_task(_post(client))
+    await asyncio.to_thread(gate.entered.wait, 5)
+    await asyncio.sleep(0.5)
+    gate.release.set()
+    assert (await task).status == 408
+    assert (save_dir / DATE / f"{ROOT}.tar.gz").read_bytes() == PACKAGE
+    day = _receiver(client).ledger.snapshot(DATE)
+    assert (day.landed_count, day.reserved_count, day.reserved_bytes) == (1, 0, 0)
+    assert list((save_dir / ".incoming").iterdir()) == []
+    monkeypatch.setattr(ReceiverStore, "commit", gate.real)
+    assert (await _post_other(client)).status == 429
+
+
+@pytest.mark.parametrize("where", ["before", "after"])
+async def test_a_package_landed_after_the_client_left_is_still_charged(make_client, save_dir, monkeypatch, where):
+    client = await make_client(max_daily_count=1)
+    gate = _GatedCommit(where)
+    monkeypatch.setattr(ReceiverStore, "commit", gate.patch())
+    _reader, writer = await asyncio.open_connection(client.server.host, client.server.port)
+    writer.write(_request_head(len(PACKAGE)).encode() + PACKAGE)
+    await writer.drain()
+    await asyncio.to_thread(gate.entered.wait, 5)
+    writer.close()
+    await asyncio.sleep(0.2)
+    gate.release.set()
+    ledger = _receiver(client).ledger
+    await _eventually(lambda: ledger.snapshot(DATE).reserved_count == 0)
+    assert (save_dir / DATE / f"{ROOT}.tar.gz").read_bytes() == PACKAGE
+    assert ledger.snapshot(DATE).landed_count == 1
+    await _eventually(lambda: list((save_dir / ".incoming").iterdir()) == [])
+    monkeypatch.setattr(ReceiverStore, "commit", gate.real)
+    assert (await _post_other(client)).status == 429
+
+
+async def test_a_commit_that_fails_releases_the_budget(make_client, save_dir, monkeypatch):
+    client = await make_client(max_daily_count=1)
+    gate = _GatedCommit("before")
+    gate.release.set()
+    monkeypatch.setattr(ReceiverStore, "commit", gate.patch())
+    real_replace = os.replace
+
+    def _replace(src, dst):
+        if str(dst).endswith(".tar.gz"):
+            raise OSError("rename refused")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(rcv.os, "replace", _replace)
+    assert (await _post(client)).status == 500
+    day = _receiver(client).ledger.snapshot(DATE)
+    assert (day.landed_count, day.reserved_count) == (0, 0)
+    assert list((save_dir / ".incoming").iterdir()) == []
+    monkeypatch.setattr(rcv.os, "replace", real_replace)
+    assert (await _post_other(client)).status == 201
+
+
+# --- serving ------------------------------------------------------------------
+
+
+async def test_serve_binds_serves_and_stops(save_dir, clock):
+    import signal
+
+    import aiohttp
+
+    (save_dir / ".incoming").mkdir(parents=True)
+    (save_dir / ".incoming" / "stale.part").write_bytes(b"x")
+    before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+    bound = asyncio.Event()
+    address = {}
+
+    def _ready(host, port):
+        address.update(host=host, port=port)
+        bound.set()
+
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        rcv.serve(ReceiverConfig(save_dir=save_dir, port=0, clock=clock), ready=_ready, stop=stop)
+    )
+    await asyncio.wait_for(bound.wait(), 10)
+    assert address["port"] != 0
+    assert list((save_dir / ".incoming").iterdir()) == []
+    url = f"http://{address['host']}:{address['port']}{rcv.ENDPOINT_PATH}"
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=PACKAGE, headers=_headers()) as resp:
+            assert resp.status == 201
+    stop.set()
+    await asyncio.wait_for(task, 10)
+    with pytest.raises(OSError):
+        await asyncio.open_connection(address["host"], address["port"])
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)) == before
+
+
+def test_run_receiver_runs_serve(save_dir, clock, monkeypatch):
+    runs = []
+
+    def _run(coro):
+        runs.append(coro.__qualname__)
+        coro.close()
+
+    monkeypatch.setattr(rcv.asyncio, "run", _run)
+    rcv.run_receiver(ReceiverConfig(save_dir=save_dir, clock=clock))
+    assert runs == ["serve"]
+
+
+_CHILD = """
+import sys
+from pathlib import Path
+from raven.trajectory.receiver import ReceiverConfig, run_receiver
+run_receiver(ReceiverConfig(save_dir=Path(sys.argv[1]), port=0), ready=lambda host, port: print(port, flush=True))
+"""
+
+
+async def test_sigterm_stops_a_real_receiver_process(tmp_path):
+    import signal
+    import subprocess
+    import sys
+
+    import aiohttp
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _CHILD, str(tmp_path / "inbox")], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    try:
+        line = await asyncio.wait_for(asyncio.to_thread(proc.stdout.readline), 60)
+        if not line:
+            stderr = proc.stderr.read().decode(errors="replace")
+            if "not permitted" in stderr or "Permission denied" in stderr:
+                pytest.skip("this environment does not allow a local listening socket")
+            raise AssertionError(f"the receiver did not start: {stderr[-2000:]}")
+        port = int(line.strip())
+        # aiohttp ignores proxy environment variables by default; urllib would honour them.
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://127.0.0.1:{port}{rcv.HEALTH_PATH}") as resp:
+                assert resp.status == 200
+        proc.send_signal(signal.SIGTERM)
+        assert await asyncio.wait_for(asyncio.to_thread(proc.wait), 15) == 0
+        with pytest.raises(OSError):
+            await asyncio.open_connection("127.0.0.1", port)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()

@@ -25,14 +25,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import ipaddress
 import json
+import math
 import os
 import re
 import secrets
+import shutil
+import signal
 import threading
+import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -63,10 +69,19 @@ _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _RECEIPT_ID = re.compile(r"^rc-[0-9a-f]{12}$")
 _RECEIPT_FIELDS = ("receipt_id", "report_id", "sha256", "size_bytes", "received_at")
 _HTTP_CODES = {404: "not_found", 405: "method_not_allowed"}
+_BUSY_RETRY_AFTER = 5
+_SHUTDOWN_TIMEOUT = 30.0
+_monotonic = time.monotonic
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _seconds_to_midnight(moment: datetime) -> int:
+    moment = moment.astimezone(timezone.utc)
+    midnight = (moment + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(1, math.ceil((midnight - moment).total_seconds()))
 
 
 def _stamp(moment: datetime) -> str:
@@ -424,18 +439,200 @@ async def _finish(task: asyncio.Task[Any], *, on_cancel: Callable[[], None] | No
         raise
 
 
-def _remote_of(request: web.Request) -> dict[str, str]:
-    peer = request.remote or ""
-    return {"peer": peer, "client": peer, "user_agent": request.headers.get("User-Agent", "")}
+class _Buckets:
+    """Per-client token buckets in a bounded table that forgets the least recently seen client."""
+
+    def __init__(
+        self, *, burst: int, per_10min: int, max_entries: int = 10_000, monotonic: Callable[[], float] | None = None
+    ) -> None:
+        self._burst = burst
+        self._rate = per_10min / 600.0
+        self._max_entries = max_entries
+        self._monotonic = monotonic
+        self._table: OrderedDict[str, list[float]] = OrderedDict()
+
+    @property
+    def enabled(self) -> bool:
+        return self._burst > 0 and self._rate > 0
+
+    def keys(self) -> list[str]:
+        return list(self._table)
+
+    def take(self, key: str) -> float | None:
+        """Spend one token for ``key``; None when allowed, else seconds until a token is back."""
+        if not self.enabled:
+            return None
+        now = (self._monotonic or _monotonic)()
+        entry = self._table.get(key)
+        if entry is None:
+            entry = [float(self._burst), now]
+            self._table[key] = entry
+            if len(self._table) > self._max_entries:
+                self._table.popitem(last=False)
+        else:
+            entry[0] = min(float(self._burst), entry[0] + (now - entry[1]) * self._rate)
+            entry[1] = now
+            self._table.move_to_end(key)
+        if entry[0] >= 1.0:
+            entry[0] -= 1.0
+            return None
+        return (1.0 - entry[0]) / self._rate
+
+
+@dataclass
+class _Day:
+    landed_bytes: int = 0
+    landed_count: int = 0
+    reserved_bytes: int = 0
+    reserved_count: int = 0
+
+
+class Reservation:
+    """One request's claim on a day's budget; settled or released exactly once."""
+
+    def __init__(self, ledger: DailyLedger, date: str, nbytes: int) -> None:
+        self.date = date
+        self.nbytes = nbytes
+        self._ledger = ledger
+        self._open = True
+
+    def settle(self, actual: int) -> None:
+        if self._open:
+            self._open = False
+            self._ledger._settle(self.date, self.nbytes, actual)
+
+    def release(self) -> None:
+        if self._open:
+            self._open = False
+            self._ledger._release(self.date, self.nbytes)
+
+
+class DailyLedger:
+    """What each UTC day has landed and has in flight, against the daily byte and count budgets.
+
+    A request is charged to the day it was admitted on, and the package lands
+    in that day's directory, so a day's ledger always equals what its
+    directory holds plus what is in flight for it -- which is also how a
+    day is backfilled when the receiver starts or first touches it.
+    """
+
+    def __init__(self, save_dir: Path, *, max_bytes: int, max_count: int, clock: Callable[[], datetime]) -> None:
+        self._save_dir = save_dir
+        self._max_bytes = max_bytes
+        self._max_count = max_count
+        self._clock = clock
+        self._days: dict[str, _Day] = {}
+
+    def reserve(self, date: str, nbytes: int) -> Reservation:
+        day = self._day(date)
+        if day.landed_bytes + day.reserved_bytes + nbytes > self._max_bytes:
+            raise ReceiverError(507, "insufficient_storage", "the daily byte budget is exhausted")
+        if day.landed_count + day.reserved_count + 1 > self._max_count:
+            raise ReceiverError(
+                429,
+                "rate_limited",
+                "the daily package budget is exhausted",
+                retry_after=_seconds_to_midnight(self._clock()),
+            )
+        day.reserved_bytes += nbytes
+        day.reserved_count += 1
+        self._prune(date)
+        return Reservation(self, date, nbytes)
+
+    def in_flight_bytes(self) -> int:
+        return sum(day.reserved_bytes for day in self._days.values())
+
+    def snapshot(self, date: str) -> _Day:
+        day = self._day(date)
+        return _Day(day.landed_bytes, day.landed_count, day.reserved_bytes, day.reserved_count)
+
+    def _day(self, date: str) -> _Day:
+        day = self._days.get(date)
+        if day is None:
+            day = _Day()
+            for package in (self._save_dir / date).glob("*.tar.gz"):
+                if is_report_id(package.name[: -len(".tar.gz")]) and package.is_file():
+                    day.landed_bytes += package.stat().st_size
+                    day.landed_count += 1
+            self._days[date] = day
+        return day
+
+    def _settle(self, date: str, nbytes: int, actual: int) -> None:
+        day = self._day(date)
+        day.reserved_bytes -= nbytes
+        day.reserved_count -= 1
+        day.landed_bytes += actual
+        day.landed_count += 1
+
+    def _release(self, date: str, nbytes: int) -> None:
+        day = self._day(date)
+        day.reserved_bytes -= nbytes
+        day.reserved_count -= 1
+
+    def _prune(self, today: str) -> None:
+        for date in [d for d, day in self._days.items() if d != today and day.reserved_count == 0]:
+            del self._days[date]
+
+
+def _parse_networks(cidrs: tuple[str, ...]) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    return tuple(ipaddress.ip_network(cidr, strict=False) for cidr in cidrs)
+
+
+def _in_networks(address: str, networks: tuple[Any, ...]) -> bool | None:
+    """Whether ``address`` lies in one of ``networks``; None when it is not an address at all."""
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    return any(ip in network for network in networks)
+
+
+def _client_ip(peer: str, forwarded: str | None, trusted: tuple[Any, ...]) -> str:
+    """The address a request is attributed to: the peer, or what a trusted proxy chain reports.
+
+    X-Forwarded-For is walked from the right. A hop that is one of our proxies
+    is skipped; the first hop that is a real address but not a proxy is the
+    client; a hop that is not an address at all ends the walk at the peer,
+    because nothing to its left can be vouched for.
+    """
+    if not trusted or _in_networks(peer, trusted) is not True or not forwarded:
+        return peer
+    for hop in reversed([hop.strip() for hop in forwarded.split(",")]):
+        verdict = _in_networks(hop, trusted)
+        if verdict is None:
+            return peer
+        if not verdict:
+            return hop
+    return peer
+
+
+@dataclass
+class _Upload:
+    """What one request's log line and cleanup need to know."""
+
+    client: str = ""
+    report_id: str = ""
+    declared: int = 0
+    code: str = "ok"
+    part: Path | None = None
+    reservation: Reservation | None = None
+    commit_task: asyncio.Task[Any] | None = None
+    slot: bool = False
 
 
 class Receiver:
-    """The request side: header checks, streaming the body, inspection, and landing."""
+    """The request side: admission, header checks, streaming the body, inspection, and landing."""
 
     def __init__(self, config: ReceiverConfig, *, store: ReceiverStore | None = None) -> None:
         self._config = config
         self._store = store or ReceiverStore(config.save_dir, clock=config.clock, limits=config.limits)
         self._locks = _IdLocks()
+        self._trusted = _parse_networks(config.trusted_proxies)
+        self._buckets = _Buckets(burst=config.rate_burst, per_10min=config.rate_per_10min)
+        self._slots = asyncio.Semaphore(config.concurrency)
+        self._ledger = DailyLedger(
+            config.save_dir, max_bytes=config.max_daily_bytes, max_count=config.max_daily_count, clock=config.clock
+        )
 
     @property
     def config(self) -> ReceiverConfig:
@@ -449,47 +646,134 @@ class Receiver:
     def locks(self) -> _IdLocks:
         return self._locks
 
+    @property
+    def buckets(self) -> _Buckets:
+        return self._buckets
+
+    @property
+    def ledger(self) -> DailyLedger:
+        return self._ledger
+
     async def handle_health(self, request: web.Request) -> web.Response:
         return web.json_response({"status": "ok"})
 
     async def handle_upload(self, request: web.Request) -> web.Response:
-        part: Path | None = None
+        started = _monotonic()
+        upload = _Upload(client=_client_ip(request.remote or "", request.headers.get("X-Forwarded-For"), self._trusted))
         try:
-            report_id, declared, expected = self._check_headers(request)
-            accounting_date = self._config.clock().astimezone(timezone.utc).strftime("%Y-%m-%d")
-            part = self._store.new_part(report_id)
-            digest = await self._receive_body(request, part, declared)
-            if digest != expected:
-                raise ReceiverError(400, "digest_mismatch", f"the body's sha256 does not match {SHA256_HEADER}")
-            summary = await self._inspect(part, report_id)
-            async with self._locks.acquire(report_id):
-                existing = await _finish(asyncio.create_task(asyncio.to_thread(self._store.lookup, report_id)))
-                if existing is not None:
-                    if existing.payload["sha256"] == digest:
-                        return web.json_response(receipt_of(existing.payload, duplicate=True))
-                    raise ReceiverError(409, "conflict", "a different package with this report id was already received")
-                payload = self._store.receipt_payload(
-                    report_id=report_id,
-                    sha256=digest,
-                    size_bytes=declared,
-                    accounting_date=accounting_date,
-                    remote=_remote_of(request),
-                    package=_package_digest(summary.metadata),
-                    notices=summary.notices,
-                    recovered=False,
+            response = await self._handle(request, upload)
+        except asyncio.CancelledError:
+            upload.code = "cancelled"
+            self._log(request, upload, "-", started)
+            raise
+        self._log(request, upload, str(response.status), started)
+        return response
+
+    def _log(self, request: web.Request, upload: _Upload, status: str, started: float) -> None:
+        logger.info(
+            "{} {} {} client={} report={} bytes={} ms={} {}",
+            request.method,
+            request.path,
+            status,
+            upload.client or "-",
+            upload.report_id or "-",
+            upload.declared,
+            round((_monotonic() - started) * 1000),
+            upload.code,
+        )
+
+    async def _handle(self, request: web.Request, upload: _Upload) -> web.Response:
+        try:
+            if self._slots.locked():
+                raise ReceiverError(503, "busy", "all upload slots are taken", retry_after=_BUSY_RETRY_AFTER)
+            await self._slots.acquire()
+            upload.slot = True
+            wait = self._buckets.take(upload.client)
+            if wait is not None:
+                raise ReceiverError(
+                    429, "rate_limited", "too many uploads from this address", retry_after=math.ceil(wait)
                 )
-                await _finish(asyncio.create_task(asyncio.to_thread(self._store.commit, report_id, part, payload)))
-                return web.json_response(receipt_of(payload, duplicate=False), status=201)
+            report_id, declared, expected = self._check_headers(request)
+            upload.report_id, upload.declared = report_id, declared
+            accounting_date = self._config.clock().astimezone(timezone.utc).strftime("%Y-%m-%d")
+            upload.reservation = self._ledger.reserve(accounting_date, declared)
+            self._check_disk()
+            async with asyncio.timeout(self._config.total_timeout):
+                return await self._receive(request, upload, report_id, declared, expected, accounting_date)
         except ReceiverError as exc:
+            upload.code = exc.code
             return _json_error(exc.status, exc.code, exc.message, retry_after=exc.retry_after)
+        except TimeoutError:
+            upload.code = "timeout"
+            return _json_error(
+                408, "timeout", f"the upload took longer than the total limit of {self._config.total_timeout}s"
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("bug report upload failed")
+            upload.code = "internal"
             return _json_error(500, "internal")
         finally:
-            if part is not None:
-                part.unlink(missing_ok=True)
+            await self._settle(upload)
+
+    async def _receive(
+        self, request: web.Request, upload: _Upload, report_id: str, declared: int, expected: str, accounting_date: str
+    ) -> web.Response:
+        upload.part = part = self._store.new_part(report_id)
+        digest = await self._receive_body(request, part, declared)
+        if digest != expected:
+            raise ReceiverError(400, "digest_mismatch", f"the body's sha256 does not match {SHA256_HEADER}")
+        summary = await self._inspect(part, report_id)
+        async with self._locks.acquire(report_id):
+            existing = await _finish(asyncio.create_task(asyncio.to_thread(self._store.lookup, report_id)))
+            if existing is not None:
+                if existing.payload["sha256"] == digest:
+                    upload.code = "duplicate"
+                    return web.json_response(receipt_of(existing.payload, duplicate=True))
+                raise ReceiverError(409, "conflict", "a different package with this report id was already received")
+            payload = self._store.receipt_payload(
+                report_id=report_id,
+                sha256=digest,
+                size_bytes=declared,
+                accounting_date=accounting_date,
+                remote={
+                    "peer": request.remote or "",
+                    "client": upload.client,
+                    "user_agent": request.headers.get("User-Agent", ""),
+                },
+                package=_package_digest(summary.metadata),
+                notices=summary.notices,
+                recovered=False,
+            )
+            upload.commit_task = asyncio.create_task(asyncio.to_thread(self._store.commit, report_id, part, payload))
+            await _finish(upload.commit_task)
+            return web.json_response(receipt_of(payload, duplicate=False), status=201)
+
+    async def _settle(self, upload: _Upload) -> None:
+        """Release everything the request held, charging the budget by what actually landed.
+
+        The commit task, not the HTTP outcome, says whether a package was
+        committed: a cancellation or timeout can land while the rename is
+        already done, and that package must count against the day.
+        """
+        if upload.part is not None:
+            upload.part.unlink(missing_ok=True)
+        if upload.reservation is not None:
+            task = upload.commit_task
+            if task is not None:
+                await _drain(task)
+            if task is not None and not task.cancelled() and task.exception() is None:
+                upload.reservation.settle(upload.declared)
+            else:
+                upload.reservation.release()
+        if upload.slot:
+            self._slots.release()
+
+    def _check_disk(self) -> None:
+        free = shutil.disk_usage(self._store.save_dir).free
+        if free - self._ledger.in_flight_bytes() < self._config.min_free_bytes:
+            raise ReceiverError(507, "insufficient_storage", "not enough free disk space for this upload")
 
     def _check_headers(self, request: web.Request) -> tuple[str, int, str]:
         if request.content_type not in GZIP_TYPES:
@@ -513,10 +797,11 @@ class Receiver:
     async def _receive_body(self, request: web.Request, part: Path, declared: int) -> str:
         digest = hashlib.sha256()
         received = 0
+        idle = self._config.idle_timeout
         with part.open("r+b") as handle:
             try:
                 while True:
-                    chunk = await request.content.read(_CHUNK)
+                    chunk = await asyncio.wait_for(request.content.read(_CHUNK), idle)
                     if not chunk:
                         break
                     received += len(chunk)
@@ -524,6 +809,8 @@ class Receiver:
                         raise ReceiverError(400, "bad_request", "the body is longer than Content-Length")
                     handle.write(chunk)
                     digest.update(chunk)
+            except TimeoutError as exc:
+                raise ReceiverError(408, "timeout", f"no body data arrived for {idle}s (idle limit)") from exc
             except (aiohttp.ClientError, ConnectionError, asyncio.IncompleteReadError) as exc:
                 raise ReceiverError(400, "incomplete_body", f"the body ended early: {exc.__class__.__name__}") from exc
             handle.flush()
@@ -572,6 +859,60 @@ def build_app(config: ReceiverConfig, *, store: ReceiverStore | None = None) -> 
     return app
 
 
+async def serve(
+    config: ReceiverConfig,
+    *,
+    ready: Callable[[str, int], None] | None = None,
+    stop: asyncio.Event | None = None,
+) -> None:
+    """Run the receiver until ``stop`` is set or SIGTERM/SIGINT arrives.
+
+    The runner cancels a request's handler when its client goes away
+    (``handler_cancellation``), which is what frees that request's upload slot
+    and inspection thread promptly; the test server behaves the same way, so
+    one lifecycle covers both. ``ready`` is told the bound address once the
+    socket listens -- the port may be 0 in the config.
+    """
+    app = build_app(config)
+    runner = web.AppRunner(app, handler_cancellation=True, shutdown_timeout=_SHUTDOWN_TIMEOUT, **RUNNER_OPTIONS)
+    await runner.setup()
+    try:
+        site = web.TCPSite(runner, config.host, config.port)
+        await site.start()
+        host, port = runner.addresses[0][:2]
+        logger.info("bug report receiver listening on {}:{}, saving to {}", host, port, config.save_dir)
+        if ready is not None:
+            ready(host, port)
+        stop = stop or asyncio.Event()
+        loop = asyncio.get_running_loop()
+        previous: dict[signal.Signals, Any] = {}
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            handler = signal.getsignal(sig)
+            try:
+                loop.add_signal_handler(sig, stop.set)
+                previous[sig] = handler
+            except (NotImplementedError, RuntimeError) as exc:
+                logger.debug("not handling {} for the receiver: {}", sig.name, exc)
+        try:
+            await stop.wait()
+        finally:
+            # remove_signal_handler leaves the default disposition behind; the
+            # caller (asyncio.run, a test runner) may have had its own handler.
+            for sig, handler in previous.items():
+                loop.remove_signal_handler(sig)
+                if handler is not None:
+                    signal.signal(sig, handler)
+    finally:
+        await runner.cleanup()
+    logger.info("bug report receiver stopped")
+
+
+def run_receiver(config: ReceiverConfig, *, ready: Callable[[str, int], None] | None = None) -> None:
+    """Blocking entry point: serve on the current thread until stopped."""
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(serve(config, ready=ready))
+
+
 __all__ = [
     "ENDPOINT_PATH",
     "HEALTH_PATH",
@@ -579,11 +920,15 @@ __all__ = [
     "REPORT_ID_HEADER",
     "RUNNER_OPTIONS",
     "SHA256_HEADER",
+    "DailyLedger",
     "Receiver",
     "ReceiverConfig",
     "ReceiverError",
     "ReceiverStore",
     "RepairReport",
+    "Reservation",
     "build_app",
     "receipt_of",
+    "run_receiver",
+    "serve",
 ]
