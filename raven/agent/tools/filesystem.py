@@ -153,22 +153,48 @@ def _unified(before: str, after: str, name: str) -> str | None:
 
 
 # A DOS device name opens the device, not a file: ``nul`` maps to NUL in every
-# directory on every Windows version (CPython issue 95486), the whole set on
-# Windows 10 and earlier, with or without an extension (``nul.md`` is NUL).
-# ``Path.resolve()`` cannot catch one: on Windows that is ``ntpath.realpath``,
-# which maps only a path that is exactly ``nul`` to ``\\.\NUL`` and hands
-# ``<workspace>\nul`` back unchanged, so the allowed-dir check then accepts it.
-# The set matches Python 3.13's ``os.path.isreserved`` device names (COM/LPT
-# widened to 0-9 as the issue's naming rules have them); trailing dots and
-# spaces are how Windows trims a name before that comparison.
+# directory on every Windows version (CPython issue 95486). ``Path.resolve()``
+# cannot catch one: on Windows that is ``ntpath.realpath``, which maps only a
+# path that is exactly ``nul`` to ``\\.\NUL`` and hands ``<workspace>\nul``
+# back unchanged, so the allowed-dir check then accepts it. Windows' naming
+# rules hold for every path component, not only the last, and reach further
+# than the bare devices: a device name with or without a first extension
+# (``subdir/nul.md``), the superscript spellings (``COM¹.txt``, ``LPT²``), a
+# trailing dot or space (the bytes land in ``notes.md`` while the receipt
+# names ``notes.md.``), and a colon (``notes.md:hidden`` is an NTFS stream no
+# directory listing shows; ``NUL:`` is the device itself). The set and the
+# per-component order mirror CPython 3.13's ``ntpath.isreserved``, which
+# Python 3.12 cannot call: Microsoft's naming rules list COM/LPT 1-9 only, so
+# ``com0.txt`` is an ordinary file and stays one.
 _WINDOWS_DEVICE_NAMES = frozenset(
-    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {f"COM{i}" for i in range(10)} | {f"LPT{i}" for i in range(10)}
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+    | {f"COM{s}" for s in "¹²³"}
+    | {f"LPT{s}" for s in "¹²³"}
 )
 
 
-def _is_device_name(segment: str) -> bool:
-    """Whether a path segment is a DOS device name in one of its spellings."""
-    return segment.partition(".")[0].rstrip(" ").upper() in _WINDOWS_DEVICE_NAMES
+def _is_reserved_windows_component(part: str) -> bool:
+    """Whether one path component is a reserved Windows name in one of its spellings."""
+    if part in (".", ".."):
+        return False
+    if part[-1:] in (".", " "):
+        return True
+    if ":" in part:
+        return True
+    return part.partition(".")[0].rstrip(" ").upper() in _WINDOWS_DEVICE_NAMES
+
+
+def _has_reserved_windows_component(p: Path) -> bool:
+    """Whether any component the caller supplied is a reserved Windows name.
+
+    The anchor (drive and root) names an operator-installed location and is
+    skipped; everything below it goes through the check, because Windows
+    applies its naming rules to directory components too.
+    """
+    components = p.parts[1:] if (p.drive or p.root) else p.parts
+    return any(_is_reserved_windows_component(part) for part in components)
 
 
 # Read once: the platform of a process never changes, and keying the fence on
@@ -188,8 +214,11 @@ def resolve_path(
     if any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in str(path)):
         raise PermissionError(f"Path {path!r} contains a line break or control character")
     p = Path(path).expanduser()
-    if _WINDOWS and _is_device_name(p.name):
-        raise PermissionError(f"Path {path} is a reserved device name on Windows; choose a different name")
+    # A URL argument is not a path on this machine, so its scheme colon is not
+    # a stream spelling; the tool's not-found answer is the one that names the
+    # tool which can actually serve it, and this fence must not answer first.
+    if _WINDOWS and not _URL_SCHEME_RE.match(path.strip()) and _has_reserved_windows_component(p):
+        raise PermissionError(f"Path {path} is a reserved name on Windows; choose a different name")
     if not p.is_absolute() and workspace:
         p = workspace / p
     resolved = p.resolve()
