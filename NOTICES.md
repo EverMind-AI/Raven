@@ -167,12 +167,32 @@ retained in `LICENSES/`.
 - Scope: the ONNX weights the PDF parser runs -- text detection (`det.onnx`),
   text recognition (`rec.onnx`) with its character set (`ocr.res`), page layout
   (`layout.onnx`) and table structure (`tsr.onnx`).
-- **Not redistributed.** No Raven artifact contains these files. They are
-  gitignored (`.gitignore`, `raven/knowledge/res/`), the wheel's include list
-  names no `.onnx` and no `res/`, and `python -m raven.resources` fetches them
-  from Hugging Face into an already-installed `raven/knowledge/res/` when an
-  operator runs `make fetch-resources`. An install that skips that step reads
-  PDFs geometrically and never loads them.
+- **Not published by this project, but baked into the default container.**
+  Two artifacts, and they differ:
+
+  The wheel carries no weight. They are gitignored (`.gitignore`,
+  `raven/knowledge/res/`), the wheel's include list names no `.onnx` and no
+  `res/`, and `python -m raven.resources` fetches them from Hugging Face into
+  an already-installed `raven/knowledge/res/` when an operator runs
+  `make fetch-resources`. An install that skips that step reads PDFs
+  geometrically and never loads them.
+
+  The Docker image does. `Dockerfile` defaults `RAVEN_RESOURCES=1` and runs
+  that same fetch at build time, so the image `docker/docker-compose.yml`
+  builds -- the one the top-level README's install instructions produce --
+  contains all four, `layout.onnx` among them. The default is deliberate and is
+  explained where it is set: a container that first reached Hugging Face when
+  somebody uploaded a PDF would fail in a deployment with no egress, long after
+  the build that could have said so.
+
+  No registry push exists in `.github/workflows/`, so this project publishes no
+  such image; the compose file builds one on the operator's own machine, which
+  is their own fetch happening inside a container rather than beside one.
+  Pushing that image to a registry, or shipping an appliance built from it, is
+  redistribution -- and that is the moment `layout.onnx`'s licence field stops
+  being a footnote. `RAVEN_RESOURCES=0` builds an image without any of them;
+  what it costs is PDF layout and Chinese segmentation, both of which report
+  their own absence.
 
   What each file says about itself, read out of its ONNX metadata:
 

@@ -161,3 +161,11 @@ docker compose run --rm raven status
   `--build-arg RAVEN_RESOURCES=0`, or `RAVEN_RESOURCES=0` in the environment
   Compose reads, for a smaller image that does neither; both features report
   their own absence rather than failing obscurely.
+
+  **Before you push this image anywhere**, read the "deepdoc models" section of
+  `NOTICES.md`. One of the four, `layout.onnx`, stamps `AGPL-3.0` into its own
+  metadata under `author: Ultralytics`, and its metadata contradicts itself
+  about that. Building the image here is your own fetch happening inside a
+  container; pushing it to a registry, or shipping an appliance built from it,
+  is redistribution, and that is where the question becomes yours to answer.
+  `RAVEN_RESOURCES=0` is the build that carries none of them.

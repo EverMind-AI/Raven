@@ -100,6 +100,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 #
 # RAVEN_RESOURCES=0 builds a smaller image without them. What it costs is
 # Chinese segmentation and PDF layout; both report their own absence.
+#
+# What it also costs is the licence question: one of the four models,
+# layout.onnx, stamps AGPL-3.0 into its own metadata. Baking it in here is the
+# operator's own fetch inside a container, but an image that is then pushed to
+# a registry is redistribution. NOTICES.md, "deepdoc models", has the detail.
 ARG RAVEN_RESOURCES="1"
 RUN --mount=type=cache,target=/root/.cache/uv \
     set -eu; \
