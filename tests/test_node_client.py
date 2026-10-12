@@ -57,7 +57,8 @@ if mode == "unreachable":
     sys.exit(255)
 command = args[args.index("--") + 1] if "--" in args else args[-1]
 os.chdir(home)
-os.execve("/bin/sh", ["/bin/sh", "-c", command], {{"HOME": home, "SHELL": "/bin/sh", "PATH": os.environ["PATH"]}})
+# A daemon these tests start leaves soon after they do; the relay reads the idle time from its environment.
+os.execve("/bin/sh", ["/bin/sh", "-c", command], {{"HOME": home, "SHELL": "/bin/sh", "PATH": os.environ["PATH"], "RAVEN_NODE_IDLE_S": "2"}})
 """
 
 # A node that misbehaves in one named way, for the handshake's refusals.
