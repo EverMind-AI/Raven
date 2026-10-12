@@ -2182,8 +2182,8 @@ set with `with purpose(name):` around a provider call that records an
 span's extractor into the `llm.purpose` attribute. A call made under no label
 records nothing: absent means "not said", never "main". The trajectory
 projection reads an absent label as unknown rather than as a side question: it
-is compatible with any label when continuity is proven, counts as the turn's
-own output when the turn's end is compared with it, and carries no badge.
+is compatible with any label when continuity is proven, and counts as the
+turn's own output when the turn's end is compared with it.
 _Avoid_: reading `llm.invocation_source` as the purpose — that is the nearest
 enclosing span's name (`session.turn` for every call of a turn), not the
 caller's intent.

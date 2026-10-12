@@ -12,8 +12,9 @@
  *     tolerances read as a list instead of being found by grep.
  *
  * `system.hello` is the third source and the coarsest: `server_capabilities`
- * announces "jsonrpc-2.0", "subscriptions" and "cli-dispatch" and nothing
- * finer (raven/rpc/methods/system.py), so `absorb()` records it and `serves()`
+ * announces "jsonrpc-2.0", "subscriptions" and "cli-dispatch", plus
+ * "trajectory-v1" from a process launched with `--dev`, and nothing finer
+ * (raven/rpc/methods/system.py), so `absorb()` records it and `serves()`
  * reads it -- and none of the field questions below can be answered from it.
  */
 

@@ -11579,10 +11579,6 @@
       "en": "Recorded data missing",
       "zh": "记录数据缺失"
     },
-    "gui.trajectory.purpose_title": {
-      "en": "A side question the model was asked: {purpose}",
-      "zh": "向模型提出的辅助调用：{purpose}"
-    },
     "gui.trajectory.turn_total": {
       "en": "Turn {n}: {dur} in all",
       "zh": "回合 {n}：总耗时 {dur}"
