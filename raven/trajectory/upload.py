@@ -103,17 +103,18 @@ def upload_url(environ: Mapping[str, str] | None = None) -> str:
 def _shown(url: str) -> str:
     """``url`` the way an error message may show it.
 
-    Userinfo and everything from the first ``?`` or ``#`` are cut on the
-    string, before any parsing, so a URL that does not even parse cannot
-    echo a secret typed into it.
+    Cut on the string, before any parsing, so a URL that does not even parse
+    cannot echo a secret typed into it: everything up to the last ``@`` before
+    the first ``/`` goes (userinfo, however malformed, including a ``?`` or
+    ``#`` inside it), then everything from the first ``?`` or ``#`` goes.
     """
-    cut = min((i for i in (url.find("?"), url.find("#")) if i != -1), default=len(url))
-    head, tail = url[:cut], url[cut:]
-    prefix, sep, rest = head.partition("://")
+    prefix, sep, rest = url.partition("://")
     if not sep:
-        prefix, rest = "", head
+        prefix, rest = "", url
     authority, slash, path = rest.partition("/")
-    return f"{prefix}{sep}{authority.rpartition('@')[2]}{slash}{path}{tail[:1] + '...' if tail else ''}"
+    rest = authority.rpartition("@")[2] + slash + path
+    cut = min((i for i in (rest.find("?"), rest.find("#")) if i != -1), default=len(rest))
+    return f"{prefix}{sep}{rest[:cut]}{rest[cut] + '...' if cut < len(rest) else ''}"
 
 
 def validate_upload_url(url: str, *, environ: Mapping[str, str] | None = None) -> str:
@@ -131,7 +132,10 @@ def validate_upload_url(url: str, *, environ: Mapping[str, str] | None = None) -
         port = parts.port
         httpx.URL(url)
     except (ValueError, httpx.InvalidURL) as exc:
-        raise UploadConfigError(f"{UPLOAD_URL_ENV} is not a valid URL: {_shown(url)!r} ({exc})") from exc
+        # The parser's own text is left out: a port that fails to parse is
+        # quoted back verbatim, and in a malformed credential URL that token
+        # is the secret.
+        raise UploadConfigError(f"{UPLOAD_URL_ENV} is not a valid URL (check host and port): {_shown(url)!r}") from exc
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise UploadConfigError(f"{UPLOAD_URL_ENV} must be an absolute http(s) URL: {_shown(url)!r}")
     if port is not None and not 1 <= port <= 65535:

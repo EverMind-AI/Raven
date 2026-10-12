@@ -183,6 +183,10 @@ SECRET_BEARING_URLS = [
     "https://ops.example/base#secret",
     "https://ops.example/base?",
     "http://user:secret@10.1.2.3/base?token=secret",
+    "https://user:secret?x@ops.example",
+    "https://user:secret#x@ops.example",
+    "https://user:secret?x@ops.example/p?q=secret",
+    "https://ops.example?token=secret@x",
 ]
 
 
