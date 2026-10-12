@@ -1292,7 +1292,7 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
 
 
 def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
-    """Verify every enabled acp agent that has no fresh capability snapshot.
+    """Verify every enabled acp agent whose capability snapshot is missing, stale or a failure.
 
     Before this, the snapshot -- the record an acp row's ``stateful`` and
     ``can_resume`` are read from -- was written only by the UI Test button and a
@@ -1300,8 +1300,9 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
     the ``/new-instance`` picker hid those agents until someone opened a page
     and clicked. Backgrounded so a slow adapter (a first ``npx`` fetch) cannot
     delay startup; fire-and-forget, because a failure leaves the row stateless
-    with the snapshot's own detail rather than breaking the boot. Verification
-    costs no model tokens (handshake plus a throwaway ``session/new``).
+    with the snapshot's own detail rather than breaking the boot, and is
+    measured again at the next start. Verification costs no model tokens
+    (handshake plus a throwaway ``session/new``).
     """
     global _SCHEDULED
     if _SCHEDULED:
@@ -1328,7 +1329,7 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
 
 
 async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured: set[str] | None = None) -> None:
-    """One verification per missing or stale row, sequentially, never raising.
+    """One verification per row whose snapshot is missing, stale or a failure, sequentially, never raising.
 
     Sequential, not concurrent: every acp verify spawns a child process, and a
     machine with a slow adapter among several would otherwise launch them all at
