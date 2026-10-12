@@ -611,7 +611,10 @@ def own_file(path: Path, mode: str = "ab") -> Any:
     the host's own journal is.
     """
     flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if "a" in mode else os.O_TRUNC)
-    return os.fdopen(os.open(path, flags, 0o600), mode, **({} if "b" in mode else {"encoding": "utf-8"}))
+    fd = os.open(path, flags, 0o600)
+    if "b" in mode:
+        return os.fdopen(fd, mode)
+    return os.fdopen(fd, mode, encoding="utf-8")
 
 
 def pid_path(root: Path) -> Path:
