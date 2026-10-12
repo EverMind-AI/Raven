@@ -277,10 +277,12 @@ class Session:
         """Clear all messages and reset session to initial state."""
         self.messages = []
         self.last_consolidated = 0
-        # The episodic cursor indexes into ``messages``; an index into a list
-        # that no longer exists would swallow every turn written after the
-        # clear until the count climbed past it.
-        self.metadata.pop("annotated_through", None)
+        # The episodic cursor indexes into ``messages``; left at its old value
+        # it would swallow every turn written after the clear until the count
+        # climbed past it. Stated as zero rather than dropped, per the removal
+        # rule in ``SessionManager._metadata_to_write``: a key this copy merely
+        # omits comes back on the next save.
+        self.metadata["annotated_through"] = 0
         self.updated_at = datetime.now()
 
     def undo_last_turn(self, n: int = 1) -> int:

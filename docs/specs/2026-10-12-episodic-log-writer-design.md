@@ -69,7 +69,7 @@ parked, not retired); making native and plugin memory mutually exclusive
 | C4 | design | Per session, annotation runs under the consolidator's session lock (`MemoryConsolidator.get_lock`), the same lock `/new` holds; the tail is computed inside the lock, so a task that waited re-reads the cursor and finds nothing to do | A8 |
 | C5 | architecture | No new import edge: `raven/agent/loop/_shared.py:68` already imports `raven.memory_engine` | `uv run --frozen --all-extras lint-imports` stays at 10 contracts kept |
 | C6 | assumption | `MemoryConsolidator.consolidate_messages` then `maybe_refresh_hot_tags`, under `get_lock(session.key)`, is the write path `/new` runs today (`consolidator.py:1729-1743`) | verified 2026-10-12 against a live gateway, not by reading: reading missed that the annotator's `tool_choice="required"` (`consolidator.py:1111`) is refused by the default model, which made the whole path inert. See the provider repair below |
-| C11 | assumption | A forced tool choice reaches the model. It does not on every vendor: DeepSeek's thinking mode answers `HTTP 400: Thinking mode does not support this tool_choice`, and nine call sites across the repo force a choice | measured 2026-10-12 against the live vendor, three ways (`required` -> 400, `auto` -> tool called, omitted -> tool called); the adapter now relaxes and retries once, which `tests/test_providers_forced_tool_choice.py` pins |
+| C11 | assumption | A forced tool choice reaches the model. It does not on every vendor: DeepSeek's thinking mode answers `HTTP 400: Thinking mode does not support this tool_choice`, and eleven call sites across the repo force a choice | measured 2026-10-12 against the live vendor, three ways (`required` -> 400, `auto` -> tool called, omitted -> tool called); the adapter now relaxes and retries once, which `tests/test_providers_forced_tool_choice.py` pins |
 | C7 | assumption | A metadata patch survives a restart: `append_metadata_patch` appends one record and the last record wins on load (`raven/session/manager.py:682-703`, `_scan_file` at `:546`) | verified 2026-10-12 by reading; A6 restarts the gateway and checks the cursor |
 | C8 | assumption | The consolidator's provider and model follow a `/model` switch (`raven/agent/loop/wiring.py:1119` calls `set_provider`) | verified 2026-10-12 by reading; not re-tested here |
 | C9 | design | `annotate_every_turns = 0` short-circuits the step; the only other conditions are the turn's origin and the count | A4 |
@@ -267,9 +267,11 @@ Also touched: `raven/providers/openai_responses_provider.py` gains the
 repair its Anthropic sibling already has (`anthropic_messages_provider.py:505`):
 a 400 that names `tool_choice` while the body forces one relaxes it to `auto`
 and retries once. Without it the annotator never writes on the default model.
-Nine call sites force a choice today (two in the consolidator, three in the
-proactive layer, four in the playbook compiler), so the repair is placed where
-all of them pass rather than at the two this change depends on.
+Eleven call sites force a choice today (two in the consolidator, one in the
+behaviours extractor, four in the proactive layer, four in the playbook
+compiler), so the repair is placed where all of them pass rather than at the
+two this change depends on. Adapters for the other protocols (`litellm`,
+`azure`, `codex`) do not carry it; the default model routes to `responses`.
 
 Also touched: `Session.clear` drops the cursor and `Session.undo_last_turn`
 pulls it back to the cut (`raven/session/manager.py:276-306`), beside the

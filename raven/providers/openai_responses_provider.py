@@ -135,7 +135,7 @@ class OpenAIResponsesProvider(LLMProvider):
                     ) as response:
                         if response.status_code >= 400:
                             detail = (await response.aread()).decode("utf-8", "replace")
-                            if not relaxed and _relax_forced_tool_choice(body, detail):
+                            if response.status_code == 400 and not relaxed and _relax_forced_tool_choice(body, detail):
                                 relaxed = True
                                 logger.info(
                                     "{} refused a forced tool choice; retrying with tool_choice=auto",

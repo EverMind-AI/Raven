@@ -118,7 +118,7 @@ class TestIdentityBootstrap:
         assert f"{tmp_path}/user_memory/profile/user.md" in seg.text
         assert f"{tmp_path}/user_memory/episodic/episodes.md" in seg.text
 
-    async def test_identity_with_a_backend_names_no_memory_file(self, tmp_path: Path) -> None:
+    async def test_identity_with_a_backend_names_no_profile_file(self, tmp_path: Path) -> None:
         """A wired backend owns memory, so agent home holds no file for it.
 
         Told otherwise, the agent treats ``user.md`` as the place a

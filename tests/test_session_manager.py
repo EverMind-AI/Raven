@@ -949,13 +949,28 @@ def test_undo_last_turn_pulls_the_episodic_cursor_back_to_the_cut():
     assert s.metadata["annotated_through"] == 2
 
 
-def test_clear_forgets_the_episodic_cursor():
-    s = Session(key="cli:u")
-    s.messages.extend([{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}])
-    s.metadata["annotated_through"] = 2
+def test_clear_resets_the_episodic_cursor_through_a_save(tmp_path: Path):
+    """Asserted after a save and a reload, because that is where it was lost.
+
+    An in-memory check passes while the cursor is merely dropped, and a
+    dropped key comes back on the next save (the removal rule in
+    ``_metadata_to_write``). A cleared session carrying its old cursor
+    swallows every turn written after the clear until the count climbs past
+    it.
+    """
+    sm = SessionManager(tmp_path)
+    s = sm.get_or_create("cli:u")
+    for i in range(5):
+        s.messages.extend([{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"}])
+    sm.save(s)
+    sm.append_metadata_patch("cli:u", {"annotated_through": 10})
+    s.metadata["annotated_through"] = 10
 
     s.clear()
-    assert "annotated_through" not in s.metadata
+    sm.save(s)
+    sm._cache.pop("cli:u", None)
+
+    assert sm.get_or_create("cli:u").metadata.get("annotated_through") == 0
 
 
 def test_undo_last_turn_no_user_returns_zero():

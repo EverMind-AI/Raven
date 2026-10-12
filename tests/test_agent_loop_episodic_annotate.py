@@ -389,3 +389,107 @@ class TestABackendChangesNothingHere:
         assert loop.backend is not None
         assert len(fake.tails) == 1
         assert session.metadata["annotated_through"] == 6
+
+
+class TestWhatHappensDuringTheAwait:
+    async def test_a_truncation_during_the_await_does_not_claim_the_turns_that_replaced_it(
+        self, tmp_path: Path
+    ) -> None:
+        """The reader can undo mid-annotation and then keep talking.
+
+        The task sliced against indices that no longer mean anything:
+        ``undo_last_turn`` moved the cursor itself, and the messages the
+        write-back would claim are the new turns that arrived after it. A
+        clamp to the live length is not enough -- the session is longer than
+        the stale arithmetic, so the patch lands inside the replacements and
+        they are never annotated.
+        """
+        loop = _make_loop(tmp_path, every=3)
+        gate = asyncio.Event()
+        fake = _FakeConsolidator(hold=gate)
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:race", turns=0)
+        for i in range(6):
+            session.messages.extend(_turn(i))
+        session.metadata["annotated_through"] = 6
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=10)
+        await asyncio.sleep(0)
+        assert len(fake.tails) == 1  # sliced messages 6..12, now holding
+
+        assert session.undo_last_turn(4) == 8
+        assert session.metadata["annotated_through"] == 4  # pulled back to the cut
+        for i in range(10, 13):
+            session.messages.extend(_turn(i))
+        loop.sessions.save(session)
+
+        gate.set()
+        await _settle(loop)
+
+        assert session.metadata["annotated_through"] == 4, "the stale write-back claimed the new turns"
+
+        fake.tails.clear()
+        loop._maybe_annotate_tail(session, prev_len=len(session.messages) - 2)
+        await _settle(loop)
+        assert [m["content"] for m in fake.tails[0]] == ["q10", "a10", "q11", "a11", "q12", "a12"]
+
+    async def test_the_tail_ends_on_the_turn_that_asked_for_it(self, tmp_path: Path) -> None:
+        """A task that waited must not slice into the turn that overtook it.
+
+        The task is held on the lock, not inside the annotator, so the slice
+        happens after the next turn's question has landed. Sliced to the live
+        end it would hand over a user message whose answer has not arrived.
+        """
+        loop = _make_loop(tmp_path, every=3)
+        fake = _FakeConsolidator()
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:boundary", turns=0)
+        session.metadata["annotated_through"] = 0
+        for i in range(3):
+            session.messages.extend(_turn(i))
+        loop.sessions.save(session)
+
+        held = fake.get_lock(session.key)
+        await held.acquire()
+        loop._maybe_annotate_tail(session, prev_len=4)
+        await asyncio.sleep(0)
+        assert fake.tails == []  # still waiting on the lock
+        session.messages.append({"role": "user", "content": "still unanswered"})
+        held.release()
+        await _settle(loop)
+
+        assert len(fake.tails) == 1
+        assert fake.tails[0][-1] == {"role": "assistant", "content": "a2"}
+
+
+class TestMachineTurnsInsideTheTail:
+    async def test_a_sentinel_turn_between_two_user_turns_is_not_annotated(self, tmp_path: Path) -> None:
+        """Sentinel reads this file; its own turns must not come back to it.
+
+        The origin check gates the trigger, not the content: a Sentinel turn
+        lands in the reader's own session, between their turns, and would ride
+        into the tail the next user turn hands over.
+        """
+        loop = _make_loop(tmp_path, every=2)
+        fake = _FakeConsolidator()
+        loop.memory_consolidator = fake
+        session = _session_with(loop, "cli:mixed", turns=0)
+        session.metadata["annotated_through"] = 0
+        session.messages.extend(_turn(0))
+        session.messages.extend(
+            [
+                {"role": "user", "content": "SENTINEL NOTICE", "origin": "sentinel"},
+                {"role": "assistant", "content": "noted", "origin": "sentinel"},
+            ]
+        )
+        session.messages.extend(_turn(1))
+        loop.sessions.save(session)
+
+        loop._maybe_annotate_tail(session, prev_len=len(session.messages) - 2)
+        await _settle(loop)
+
+        assert len(fake.tails) == 1
+        contents = [m["content"] for m in fake.tails[0]]
+        assert "SENTINEL NOTICE" not in contents
+        assert contents == ["q0", "a0", "q1", "a1"]

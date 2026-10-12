@@ -2870,6 +2870,11 @@ class TurnPathMixin:
         every = self.memory_config.annotate_every_turns
         if every <= 0:
             return
+        # Read here, not in the task: this is the end of a turn, so it is a turn
+        # boundary. A task that waited for the lock would otherwise slice to a
+        # length the next turn has already grown, ending the tail on a user
+        # message whose answer has not arrived.
+        end = len(session.messages)
 
         async def _run() -> None:
             try:
@@ -2877,15 +2882,35 @@ class TurnPathMixin:
                     stored = session.metadata.get("annotated_through")
                     if stored is None:
                         stored = prev_len
-                        self._set_annotated_through(session, prev_len)
-                    start = min(int(stored), len(session.messages))
-                    tail = session.messages[start:]
+                        self._set_annotated_through(session, min(prev_len, len(session.messages)))
+                    start = min(int(stored), end, len(session.messages))
+                    if start >= end:
+                        return
+                    # A machine-initiated turn carries an origin mark and a
+                    # person's does not (``_runtime_origin``). Two of this
+                    # file's readers are Sentinel producers, so writing
+                    # Sentinel's own turns into it would feed the layer its
+                    # output back.
+                    tail = [m for m in session.messages[start:end] if not m.get("origin")]
                     if sum(1 for m in tail if m.get("role") == "user") < every:
                         return
+                    before = session.metadata.get("annotated_through")
                     if not await self.memory_consolidator.consolidate_messages(tail):
                         logger.warning("episodic annotate for {} declined; cursor kept at {}", session.key, start)
                         return
-                    self._set_annotated_through(session, start + len(tail))
+                    # The reader may undo or clear while the annotator runs:
+                    # both move the cursor themselves, and both leave the
+                    # indices this task sliced against meaningless. Writing the
+                    # old arithmetic back would claim the turns that replaced
+                    # them, and those turns would never be annotated.
+                    if session.metadata.get("annotated_through") != before:
+                        logger.info(
+                            "episodic annotate for {}: truncated while it ran; cursor left at {}",
+                            session.key,
+                            session.metadata.get("annotated_through"),
+                        )
+                        return
+                    self._set_annotated_through(session, min(end, len(session.messages)))
                     await self.memory_consolidator.maybe_refresh_hot_tags()
             except Exception:
                 logger.exception("episodic annotate for {} failed", session.key)
