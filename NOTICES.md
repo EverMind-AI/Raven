@@ -161,12 +161,37 @@ retained in `LICENSES/`.
 ## deepdoc models (document vision)
 - Upstream source: https://huggingface.co/InfiniFlow/deepdoc
 - Copyright (c) 2025 InfiniFlow
-- License: Apache-2.0
+- License: Apache-2.0 for the repository. The weights are not all under it --
+  see the per-file table below, which is what each file's own embedded
+  metadata states rather than what the repository does.
 - Scope: the ONNX weights the PDF parser runs -- text detection (`det.onnx`),
   text recognition (`rec.onnx`) with its character set (`ocr.res`), page layout
-  (`layout.onnx`) and table structure (`tsr.onnx`). Not vendored: together they
-  are about 103 MB, and `scripts/fetch_resources.py` downloads them into
-  `raven/knowledge/res/`.
+  (`layout.onnx`) and table structure (`tsr.onnx`).
+- **Not redistributed.** No Raven artifact contains these files. They are
+  gitignored (`.gitignore`, `raven/knowledge/res/`), the wheel's include list
+  names no `.onnx` and no `res/`, and `python -m raven.resources` fetches them
+  from Hugging Face into an already-installed `raven/knowledge/res/` when an
+  operator runs `make fetch-resources`. An install that skips that step reads
+  PDFs geometrically and never loads them.
+
+  What each file says about itself, read out of its ONNX metadata:
+
+  | file | author | license, as stamped | trained on |
+  |---|---|---|---|
+  | `layout.onnx` | Ultralytics | **AGPL-3.0** | YOLOv10m-doclayout, a mixed document-layout set |
+  | `tsr.onnx` | Ultralytics | Apache-2.0 | PubTables-1M |
+  | `det.onnx` | -- (PaddlePaddle export) | not stamped | PaddleOCR detection |
+  | `rec.onnx` | -- (PaddlePaddle export) | not stamped | PaddleOCR recognition |
+
+  `layout.onnx` is the one that matters and its metadata is self-contradictory:
+  the licence field reads `AGPL-3.0 License` and the URL beside it points at
+  RAGFlow's own LICENSE, which is Apache-2.0. AGPL-3.0 is also what Ultralytics'
+  export tooling stamps by default on anything built with it, so the field may
+  record the tool rather than the publisher's intent. This repository cannot
+  settle which was meant, and does not try to: the fact is recorded here so that
+  anyone who builds an image or an appliance with the weights already fetched
+  into it -- which is redistribution, where a plain `pip install` is not --
+  decides it with the upstream rather than discovering it.
 - Modifications: none to the weights. The three genre-specific layout variants
   published beside them are not fetched, and neither are the `.ort`
   serialisations, because nothing here selects between the first or reads the

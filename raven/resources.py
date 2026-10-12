@@ -52,9 +52,14 @@ PACKAGE = Path(__file__).resolve().parent
 DICTIONARY_REPO = "https://raw.githubusercontent.com/infiniflow/resource/main/rag"
 
 #: The vision models, from the Hugging Face repository RAGFlow publishes them
-#: in (Apache-2.0). Named by file rather than snapshotted whole: the repo is
-#: 663 MB, and all but 103 MB of that is the same models in a second
-#: serialisation plus three genre-specific layout variants nothing here selects.
+#: in. Named by file rather than snapshotted whole: the repo is 663 MB, and all
+#: but 103 MB of that is the same models in a second serialisation plus three
+#: genre-specific layout variants nothing here selects.
+#:
+#: The repository is Apache-2.0 and the weights inside it are not uniformly so
+#: -- `layout.onnx` stamps itself AGPL-3.0. Fetched here rather than vendored,
+#: so no Raven artifact carries one; what that leaves for anyone who ships an
+#: image with them already fetched is in NOTICES.md, under "deepdoc models".
 DEEPDOC_REPO = "InfiniFlow/deepdoc"
 
 
