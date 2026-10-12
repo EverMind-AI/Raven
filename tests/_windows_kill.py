@@ -17,11 +17,12 @@ import pytest
 TASKKILL = r"C:\Windows\System32\taskkill.exe"
 
 
-def windows_kill_path(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+def windows_kill_path(monkeypatch: pytest.MonkeyPatch, *, fails: BaseException | None = None) -> list[list[str]]:
     """Remove ``os.killpg``, put ``taskkill`` on PATH, and return the calls made to it.
 
     Every other ``subprocess.run`` still runs: the login-shell capture a spawn
-    reads its environment from goes through it too.
+    reads its environment from goes through it too. With ``fails``, each call to
+    ``taskkill`` is recorded and then raises it.
     """
     monkeypatch.delattr(os, "killpg")
     real_which, real_run = shutil.which, subprocess.run
@@ -33,6 +34,8 @@ def windows_kill_path(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     def run(argv, *args, **kwargs):
         if argv and argv[0] == TASKKILL:
             calls.append(list(argv))
+            if fails is not None:
+                raise fails
             return subprocess.CompletedProcess(argv, 0)
         return real_run(argv, *args, **kwargs)
 

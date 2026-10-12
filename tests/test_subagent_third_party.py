@@ -377,6 +377,36 @@ def test_readers_that_find_no_capture_share_the_one_in_flight(
     assert len(calls) == 1
 
 
+def test_readers_that_wait_on_a_capture_that_fails_do_not_run_the_shell_again(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """The failure is shared the way a capture is: each waiting reader falls back to raven's own environment."""
+    started, release = threading.Event(), threading.Event()
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        started.set()
+        release.wait(5)
+        raise OSError("profile timed out")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    monkeypatch.setenv("RAVEN_ENV_PROBE", "inherited")
+    seen: list[str | None] = []
+    first = threading.Thread(target=lambda: seen.append(login_shell_env().get("RAVEN_ENV_PROBE")))
+    first.start()
+    assert started.wait(5)
+    second = threading.Thread(target=lambda: seen.append(login_shell_env().get("RAVEN_ENV_PROBE")))
+    second.start()
+    second.join(0.3)
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert seen == ["inherited", "inherited"]
+    assert len(calls) == 1
+
+
 def test_login_shell_env_capture_starts_from_a_minimal_base_not_ravens_env(
     monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
 ) -> None:
@@ -3356,6 +3386,21 @@ async def test_cli_backend_timeout_without_killpg_still_reports_the_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = windows_kill_path(monkeypatch)
+    be = CliAgentBackend(name="windows", command="sleep 30", timeout=0.2)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await asyncio.wait_for(be.run("x", task_id="t1", workspace=tmp_path, executor=None), 10)
+
+    assert [call[:4] for call in calls] == [[TASKKILL, "/T", "/F", "/PID"]]
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(calls[0][4]), 0)
+
+
+async def test_cli_backend_timeout_without_killpg_ends_the_launcher_when_taskkill_does_not_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``taskkill`` that hangs past its timeout neither replaces the timeout nor leaves the launcher running."""
+    calls = windows_kill_path(monkeypatch, fails=subprocess.TimeoutExpired("taskkill", 5))
     be = CliAgentBackend(name="windows", command="sleep 30", timeout=0.2)
 
     with pytest.raises(RuntimeError, match="timed out"):
