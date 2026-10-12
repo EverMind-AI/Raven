@@ -19,7 +19,7 @@ from raven.agent.spine_runner import AgentTurnRunner
 from raven.contracts.asking import SupportsDirectAsk
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.providers.base import bound_llm_detail, llm_error_summary, parse_llm_error
-from raven.spine import OriginPools, Scheduler
+from raven.spine import OriginPools, Scheduler, session_key_for
 from raven.spine.delivery import DeliveryHub
 from raven.spine.events import Text, TurnEnded, TurnFailed, TurnStarted
 from raven.spine.message import Source
@@ -126,6 +126,8 @@ class GatewayTurnRunner(AgentTurnRunner):
         start_permission_turn(
             ApprovalViaAsk(asker, cid) if asker is not None else None,
             conversation_id=cid,
+            # An instance-addressed cron wake uses its conversation's policy.
+            session=session_key_for(req) if req.direct_target else "",
             turn_id=req.turn_id or "",
             origin=req.origin.value,
         )

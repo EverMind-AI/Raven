@@ -75,31 +75,52 @@ _BOOTSTRAP_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # homebrew or nix `$SHELL` path still matches; the path itself is what gets run.
 _DRIVABLE_SHELLS = frozenset({"bash", "zsh"})
 
+# The batch-file kinds CreateProcess also starts, through cmd.exe, in PATHEXT's order.
+_BATCH_SUFFIXES = (".bat", ".cmd")
+
 
 def _on_windows() -> bool:
     """Whether this is Windows, the one switch the capture and the launch lookup below read."""
     return sys.platform == "win32"
 
 
-def resolve_program(argv: list[str], env: Mapping[str, str]) -> list[str]:
+def resolve_program(argv: list[str], env: Mapping[str, str], *, batch_files: bool = False) -> list[str]:
     r"""``argv`` with a bare program name looked up on the PATH of the env the child gets.
 
     POSIX needs nothing here: its exec resolves the name on that PATH itself.
     CreateProcess searches the gateway's own PATH instead and never the block it is
     handed, so on Windows an agent installed after raven started -- found by the
     refreshed capture and by the probe -- would still not start. The lookup follows
-    CreateProcess's own rule that a name with no extension means ``.exe``, and only
-    a program CreateProcess runs natively is put in its place: CreateProcess never
-    turns a bare name into a ``.cmd`` or ``.bat`` shim, and doing it here would put
-    the shim's arguments, a cli agent's prompt among them, through cmd.exe's parser.
+    CreateProcess's own rule that a name with no extension means ``.exe``, and by
+    default only a program CreateProcess runs natively is put in its place:
+    CreateProcess never turns a bare name into a ``.cmd`` or ``.bat`` shim, and doing
+    it here would put the shim's arguments, a cli agent's prompt among them, through
+    cmd.exe's parser.
+
+    ``batch_files`` lets a ``.bat`` or ``.cmd`` stand in as well, for a caller whose
+    argv is configuration rather than turn content: an acp server takes its turns
+    over stdio, and an npm-installed one (``npx``) has no ``.exe`` to find at all.
+    The PATH directories are searched in order and ``.exe`` first within each, the
+    order a terminal finds the name in, so the program that starts is the one the
+    user runs there.
     """
     if not _on_windows() or not argv or ntpath.dirname(argv[0]):
         return argv
-    program = argv[0] if ntpath.splitext(argv[0])[1] else f"{argv[0]}.exe"
-    if ntpath.splitext(program)[1].lower() not in (".exe", ".com"):
-        return argv
-    found = shutil.which(program, path=env.get("PATH"))
-    return [found, *argv[1:]] if found else argv
+    batch = _BATCH_SUFFIXES if batch_files else ()
+    suffix = ntpath.splitext(argv[0])[1].lower()
+    if suffix:
+        programs = [argv[0]] if suffix in (".exe", ".com", *batch) else []
+    else:
+        programs = [f"{argv[0]}{ext}" for ext in (".exe", *batch)]
+    search = env.get("PATH")
+    if search is None:
+        search = os.environ.get("PATH", os.defpath)
+    for directory in search.split(os.pathsep):
+        for program in programs:
+            found = directory and shutil.which(program, path=directory)
+            if found:
+                return [found, *argv[1:]]
+    return argv
 
 
 def _login_shell() -> str | None:

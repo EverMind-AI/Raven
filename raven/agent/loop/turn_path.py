@@ -69,7 +69,6 @@ from raven.agent.loop._shared import (
     replace,
     resolve_context_window,
     semconv,
-    session_of,
     stream_llm_call,
     strip_think_blocks,
     time,
@@ -3068,8 +3067,10 @@ class TurnPathMixin:
             # the instance registry and the handoff are the *session's* though --
             # keyed by the lane they would scatter one instance's history into a
             # directory of its own and land the handoff on a conversation nobody
-            # reads. See ``raven.spine.turn.session_of``.
-            session_key = session_of(cid)
+            # reads. The request retains that original session independently.
+            from raven.spine import session_key_for
+
+            session_key = session_key_for(req)
             streamed_direct = False
 
             async def on_direct_delta(text: str) -> None:

@@ -685,7 +685,8 @@ def _agent_loop_for_direct_chat(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_run_turn_routes_a_direct_target_to_the_subagent(tmp_path, monkeypatch):
+@pytest.mark.parametrize("parent", ["s1", "tui:issue#42"])
+async def test_run_turn_routes_a_direct_target_to_the_subagent(tmp_path, monkeypatch, parent):
     """The model is never called, and the transcript is never written."""
     emitted: list[Any] = []
     called: dict[str, Any] = {}
@@ -711,26 +712,27 @@ async def test_run_turn_routes_a_direct_target_to_the_subagent(tmp_path, monkeyp
     async def emit(event):
         emitted.append(event)
 
-    from raven.spine import ChatType, Origin, Source, TurnRequest
+    from raven.spine import ChatType, Origin, Source, TurnRequest, direct_lane
 
     req = TurnRequest(
         origin=Origin.USER,
         source=Source(channel="tui", chat_id="c", sender_id="u", chat_type=ChatType.DM),
         text="fix it",
-        conversation="s1",
+        conversation=direct_lane(parent, "Raven-Code", "refactor-auth"),
         direct_target=("Raven-Code", "refactor-auth"),
+        parent_session=parent,
     )
 
     await loop.run_turn(req, emit, lambda: [])
 
     assert called == {
-        "session_key": "s1",
+        "session_key": parent,
         "agent": "Raven-Code",
         "handle": "refactor-auth",
         "text": "fix it",
     }
     assert any(getattr(e, "content", None) == "sub reply" for e in emitted)
-    assert loop.sessions.get_or_create("s1").messages == []
+    assert loop.sessions.get_or_create(parent).messages == []
 
 
 @pytest.mark.asyncio

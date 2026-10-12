@@ -15,10 +15,10 @@ every row here is read from.
 from __future__ import annotations
 
 import re
-import shlex
 from typing import Any
 
 from raven.acp_client.acp_dialects.base import AcpDialect, DialectResult, ToolCall, _dict
+from raven.utils.commands import command_argv
 
 # Codex's own item types (`codex-rs/protocol/src/items.rs`), which the adapter
 # flattens into five ACP `kind` values on the way out. Recovering them is what
@@ -41,7 +41,7 @@ def _argv0(command: str) -> str:
     (`codex-rs/apply-patch/src/invocation.rs`); the patch body arrives on stdin.
     """
     try:
-        parts = shlex.split(command)
+        parts = command_argv(command)
     except ValueError:
         parts = command.split()
     return parts[0] if parts else ""
