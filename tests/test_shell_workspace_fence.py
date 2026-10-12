@@ -29,6 +29,7 @@ operator turns the fence off, which costs more than the hole did.
 
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
 
@@ -524,12 +525,30 @@ def test_a_brace_group_that_walks_out_is_refused(fenced: ExecTool) -> None:
     assert refusal(fenced, "{ cd /; cat etc/shadow; }") is not None
 
 
-@pytest.mark.parametrize("command", ["cd -", 'cd ""'], ids=["oldpwd", "empty-operand"])
-def test_a_destination_this_cannot_name_is_not_guessed_at(fenced: ExecTool, command: str) -> None:
-    """``$OLDPWD`` can only hold a directory an earlier ``cd`` already passed,
-    and an empty operand moves nowhere. Refusing either would refuse a command
-    that cannot leave."""
-    assert refusal(fenced, command) is None
+def test_an_empty_directory_operand_does_not_move_the_shell(fenced: ExecTool) -> None:
+    assert refusal(fenced, 'cd ""') is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd -",
+        "cd -- -",
+        "cd -L -- -",
+        "cd build && cd - >/dev/null && cd .. && pwd",
+        "cd build && cd -- - && cd .. && pwd",
+        "cd build && cd -LP -- - && cd .. && pwd",
+        "cd build && cd -P -e -- - && cd .. && pwd",
+    ],
+)
+def test_a_previous_directory_is_not_assumed_to_be_the_current_one(fenced: ExecTool, command: str) -> None:
+    assert refusal(fenced, command) is not None
+
+
+def test_unmodelled_directory_options_are_refused(fenced: ExecTool) -> None:
+    assert refusal(fenced, "cd -LP build && cd .. && pwd") is not None
+    assert refusal(fenced, "cd -- -build && cd .. && pwd") is None
+    assert refusal(fenced, "cd ./- && cd .. && pwd") is None
 
 
 def test_a_destination_that_cannot_be_resolved_at_all_is_refused(fenced: ExecTool) -> None:
@@ -541,7 +560,9 @@ def test_a_destination_that_cannot_be_resolved_at_all_is_refused(fenced: ExecToo
 
 def test_the_shell_nesting_bound_refuses_unscanned_payloads(fenced: ExecTool, monkeypatch: pytest.MonkeyPatch) -> None:
     import raven.agent.tools.shell as shell_module
+    from raven.permissions import shell_policy
 
+    assert shell_module._MAX_EMBEDDED_SHELL_DEPTH == shell_policy._MAX_EMBEDDED_SHELL_DEPTH
     monkeypatch.setattr(shell_module, "_MAX_EMBEDDED_SHELL_DEPTH", 2)
     command = "printf ready"
     for _ in range(2):
@@ -570,6 +591,73 @@ def test_a_pipeline_keeps_the_directory_established_before_it(fenced: ExecTool, 
 )
 def test_a_pipeline_does_not_prove_an_uncertain_directory_change(fenced: ExecTool, command: str) -> None:
     assert refusal(fenced, command) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "(true) || cd build && cd .. && pwd",
+        "{ true; } || cd build && cd .. && pwd",
+        "`true` || cd build && cd .. && pwd",
+        "(cat f) | cd build && cd .. && pwd",
+        "(cat f) |& cd build && cd .. && pwd",
+        "(true) || cd build && true | cd .. && pwd",
+        "(cd build) && cd .. && pwd",
+        "zsh -c '(true) || cd build && true | cd .. && pwd'",
+    ],
+)
+def test_group_terminators_do_not_hide_the_following_operator(fenced: ExecTool, command: str) -> None:
+    assert refusal(fenced, command) is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd build && (printf ready)",
+        "cd build && (cd .. && printf ready)",
+        "(printf ready) && cd build && pwd",
+        "{ printf ready; } && cd build && pwd",
+        'printf "%s" "||"',
+        "cd build &&\ncd .. && pwd",
+    ],
+)
+def test_grouped_workspace_local_commands_remain_usable(fenced: ExecTool, command: str) -> None:
+    assert refusal(fenced, command) is None
+
+
+def test_the_last_pipeline_members_move_stays_visible(fenced: ExecTool) -> None:
+    assert refusal(fenced, "cd build && cat | cd .. && cd ..") is not None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires a POSIX symlink fixture")
+def test_a_failed_pipeline_retains_the_last_members_move(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    (workspace / "build").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workspace / "build" / "link").symlink_to(outside, target_is_directory=True)
+    tool = ExecTool(working_dir=str(workspace), restrict_to_workspace=True, follow_binding=False)
+    assert refusal(tool, "cat | cd build || cd link") is not None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "if cd ..; then pwd; fi",
+        "if true; then printf ready; fi",
+        "for part in one two; do cd ..; done",
+        "while true; do cd ..; done",
+        "! cd ..; pwd",
+    ],
+)
+def test_unmodelled_control_flow_is_refused_by_the_workspace_fence(fenced: ExecTool, command: str) -> None:
+    assert "unsupported shell control flow" in (refusal(fenced, command) or "")
+
+
+@pytest.mark.parametrize("runner", ["nice", "nice -n 5", "timeout 5", "env nice -n 5"])
+def test_a_command_runner_does_not_hide_a_shell_payload(fenced: ExecTool, runner: str) -> None:
+    assert refusal(fenced, f"{runner} sh -c 'cd ..; pwd'") is not None
+    assert refusal(fenced, f"{runner} sh -c 'printf ready'") is None
 
 
 # ---------- a wrapper in front of the thing that runs -------------------------

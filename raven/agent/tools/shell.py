@@ -29,6 +29,7 @@ from raven.permissions.shell_policy import (
     _MAX_EMBEDDED_SHELL_DEPTH,
     _command_segments_with_separators,
     _embedded_shell_command,
+    _runner_inner_command,
     _unwrap_command_wrappers,
     executable_text,
 )
@@ -547,6 +548,13 @@ class ExecTool(Tool):
         arguable; the failure it replaces was silent, and silence is what let
         four spellings through at once.
 
+        **Unmodelled directory state is refused.** Conditional and loop syntax
+        can hide directory changes, and ``cd -`` reads mutable OLDPWD state.
+        The fence rejects those forms and unknown directory options instead of
+        treating them as no move or as literal directory names.
+        Shell and command-runner payloads share the policy's inspection bound;
+        exceeding it refuses the command rather than leaving a payload unseen.
+
         **Command substitution is a declared limit, not a gap.** It holds an
         arbitrary program, so no textual guard can resolve it, and refusing it
         would refuse ``echo "built at $(date)"`` along with everything else.
@@ -578,6 +586,27 @@ class ExecTool(Tool):
             # answering here would only duplicate that refusal.
             segments = []
 
+        for segment, _ in segments:
+            tokens = _unwrap_command_wrappers(segment)
+            if tokens and tokens[0] in {
+                "if",
+                "then",
+                "elif",
+                "else",
+                "fi",
+                "for",
+                "while",
+                "until",
+                "do",
+                "done",
+                "case",
+                "esac",
+                "select",
+                "function",
+                "!",
+            }:
+                return "Error: Command blocked by safety guard (unsupported shell control flow)"
+
         if self._steps_outside(segments, cwd_path, roots, env):
             return "Error: Command blocked by safety guard (directory change outside working dir)"
 
@@ -605,14 +634,15 @@ class ExecTool(Tool):
             # asking what it runs. Reusing the payload helper without the
             # unwrap that precedes it there reused half the agreement:
             # `env sh -c '...'` put the program back out of view.
-            inner = _embedded_shell_command(_unwrap_command_wrappers(segment))
-            if not inner:
-                continue
-            if _depth >= _MAX_EMBEDDED_SHELL_DEPTH:
-                return "Error: Command blocked by safety guard (shell nesting limit exceeded)"
-            nested = self._check_workspace_restriction(inner, cwd, _depth=_depth + 1)
-            if nested:
-                return nested
+            tokens = _unwrap_command_wrappers(segment)
+            for inner in (_embedded_shell_command(tokens), _runner_inner_command(tokens)):
+                if not inner:
+                    continue
+                if _depth >= _MAX_EMBEDDED_SHELL_DEPTH:
+                    return "Error: Command blocked by safety guard (shell nesting limit exceeded)"
+                nested = self._check_workspace_restriction(inner, cwd, _depth=_depth + 1)
+                if nested:
+                    return nested
 
         return None
 
@@ -687,16 +717,13 @@ class ExecTool(Tool):
         walk falls back to the shallowest of those, which is where the command
         began.
 
-        Each `cd` starts from where the last one landed, so
-        `cd subdir && cd ..` ends where it began rather than being read as
-        leaving. Which is knowable only where the separator says so: `&&` runs
-        its right side *because* the left one returned zero, so after one of
-        those the shell is at the destination and nowhere else. After every
-        other separator the move may not have happened -- the directory may
-        not exist, the operator may have skipped it, a pipe or a bracket may
-        have run it in a subshell that took its directory with it -- so both
-        readings stay in view and a later step that leaves the workspace from
-        either one is refused.
+        A successful `cd` advances the paths on which it executes, so
+        `cd subdir && cd ..` can return to its starting directory. An AND/OR
+        chain can also skip that move while retaining a successful result:
+        `x || cd a &&` keeps the directory where x succeeded. The successful
+        and failed paths therefore travel separately. A move in a pipeline or
+        group may leave the parent's directory unchanged, so a later step must
+        stay inside from every retained position.
 
         A pipeline is one step of an AND/OR chain. Its members start from the
         directory before the pipeline; earlier members cannot change the
@@ -712,11 +739,8 @@ class ExecTool(Tool):
         skipped_passed: list[Path] = []
         skipped_failed: list[Path] = []
         for raw_tokens, separator in segments:
-            # A wrapper needs unwrapping here -- `command cd /` names the same
-            # builtin. A subshell does not: the splitter treats `(`, `)` and a
-            # standalone `{` as operators, so `(cd /; x)` arrives as its own
-            # segment with the bracket already gone, and the bracket is now
-            # one more separator that ends a chain.
+            # Group terminators and following flow operators are separate
+            # events: both the parent directory and the next branch matter.
             tokens = _unwrap_command_wrappers(raw_tokens)
             continues_pipe = separator in ("|", "|&")
             if pipeline_start is None:
@@ -776,16 +800,15 @@ class ExecTool(Tool):
             # them is where the command began.
             return cls._either(here, [cwd])
         arguments = list(tokens[1:])
-        while arguments and arguments[0] in ("-L", "-P"):
-            arguments.pop(0)
-        if arguments and arguments[0] == "--":
-            # The option terminator is not a destination. Past it every word is
-            # an operand, so a `-` there names a directory rather than $OLDPWD,
-            # and nothing there means what a bare `cd` means.
-            arguments.pop(0)
-        elif arguments and arguments[0] == "-":
-            # ``$OLDPWD`` is a directory some earlier ``cd`` already passed.
-            return here
+        while arguments and arguments[0].startswith("-"):
+            option = arguments.pop(0)
+            if option == "--":
+                break
+            if option not in {"-L", "-P"}:
+                return None
+        if arguments and arguments[0] == "-":
+            # Even after --, this operand reads mutable OLDPWD state.
+            return None
         if not arguments and tokens[0] == "pushd":
             # A bare `pushd` swaps the top two entries rather than naming a
             # destination. Both were cleared on the way in, so the worst case
