@@ -109,6 +109,14 @@ afterEach(() => {
 })
 
 describe('workspace island', () => {
+  it('keeps a composite version inside one query value', () => {
+    const version = '3:2000&token=changed'
+    const url = new URL(store.versioned('/file?path=%2Fw%2Fpicture.png&token=kept', version), 'http://localhost')
+    expect(url.searchParams.get('v')).toBe(version)
+    expect(url.searchParams.get('path')).toBe('/w/picture.png')
+    expect(url.searchParams.get('token')).toBe('kept')
+  })
+
   it('owns the stable record and round-trips a parked snapshot', () => {
     const first = emptyWs({ turn: 3, urls: [{ url: 'https://one', kind: 'fetch', at: 'now' }] })
     store.restore(first)

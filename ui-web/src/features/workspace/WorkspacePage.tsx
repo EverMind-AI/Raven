@@ -532,11 +532,13 @@ function diffLineCls(line: string): string {
 }
 
 function FileBody({ f }: { f: WsFile }): JSX.Element {
-  const [broken, setBroken] = useState<string | null>(null)
   const asSource = TWO_VIEWS[f.kind] ? f.raw : !RENDERED[f.kind]
   const asImage = f.kind === 'img' || (f.kind === 'svg' && !asSource)
   const asFrame = (f.kind === 'pdf' || f.kind === 'html') && !asSource
   const asDeck = f.kind === 'office'
+  const deliveredAt = useSyncExternalStore(deliveries.subscribe,
+    () => asImage || asDeck ? deliveries.byPath(f.path)?.when ?? null : null)
+  const version = f.seq == null ? deliveredAt : `${f.seq}:${deliveredAt ?? ''}`
   const sniffs = f.kind === 'bin' && !f.raw && !f.sniffed && store.sniffable(f.path)
   const wantsText = !asImage && !asFrame && !asDeck && (f.kind !== 'bin' || f.raw)
   useEffect(() => {
@@ -549,26 +551,7 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
   if (f.err) {
     body = <div className="verr">{f.err}</div>
   } else if (asImage) {
-    /* Versioned by the open, not by the paint: every open is a fresh `seq`, so
-       a re-open draws the file as it stands now -- what the text kinds get from
-       their own fetch -- and a repaint of the same open asks for nothing. */
-    body = (
-      <div className="shot">
-        {broken
-          ? <div className="verr">{broken}</div>
-          : <img src={versioned(fileURL(f.path), f.seq)} alt={f.path}
-            /* The picture kinds never read text, so this is the only place they
-               learn why nothing came -- and the error itself does not say, which
-               is why the probe asks for a status: gone, over the ceiling, or
-               served and still not a picture this browser can draw. */
-            onError={() => {
-              void store.probeDeliveryMissing(f.path).then((status) => setBroken(
-                status === 404 ? t('gui.ws.file_gone')
-                  : status === 413 ? t('gui.ws.file_big')
-                    : status === 403 ? t('gui.ws.file_denied') : t('gui.ws.img_broken')))
-            }} />}
-      </div>
-    )
+    body = <PictureBody key={`${f.path}:${version}`} f={f} version={version} />
   } else if (asFrame) {
     /* No sandbox attribute on a PDF frame: Chromium refuses its PDF viewer
        inside any sandboxed frame -- the request is answered 200 and then
@@ -587,7 +570,7 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
       ? <iframe referrerPolicy="no-referrer" src={fileURL(f.path)} />
       : <iframe sandbox="allow-scripts" referrerPolicy="no-referrer" src={runURL(f.path)} />
   } else if (asDeck) {
-    body = <DeckBody f={f} />
+    body = <DeckBody f={f} version={version} />
   } else if (sniffs) {
     body = <div className="vspin">{t('gui.ws.file_loading')}</div>
   } else if (f.kind === 'bin' && !f.raw) {
@@ -609,6 +592,27 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
   return <div className={fills ? 'fview workspace-fill' : 'fview'}>{body}</div>
 }
 
+function PictureBody({ f, version }: { f: WsFile; version: number | string | null }): JSX.Element {
+  const [broken, setBroken] = useState<string | null>(null)
+  return (
+    <div className="shot">
+      {broken
+        ? <div className="verr">{broken}</div>
+        : <img src={versioned(fileURL(f.path), version)} alt={f.path}
+          /* The picture kinds never read text, so this is the only place they
+             learn why nothing came -- and the error itself does not say, which
+             is why the probe asks for a status: gone, over the ceiling, or
+             served and still not a picture this browser can draw. */
+          onError={() => {
+            void store.probeDeliveryMissing(f.path).then((status) => setBroken(
+              status === 404 ? t('gui.ws.file_gone')
+                : status === 413 ? t('gui.ws.file_big')
+                  : status === 403 ? t('gui.ws.file_denied') : t('gui.ws.img_broken')))
+          }} />}
+    </div>
+  )
+}
+
 /* A deck is shown as the PDF the gateway renders of it. The render is asked
    for before it is framed, because a frame cannot say why its document did not
    come, and this one can take a while or fail outright: LibreOffice may be
@@ -616,14 +620,10 @@ function FileBody({ f }: { f: WsFile }): JSX.Element {
    -- the gateway keeps the rendering, so the frame's own request is a cache
    read -- and a failure falls back to the note a deck used to get, with the
    gateway's words beside it. */
-function DeckBody({ f }: { f: WsFile }): JSX.Element {
+function DeckBody({ f, version }: { f: WsFile; version: number | string | null }): JSX.Element {
   const [pages, setPages] = useState<number | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const [gone, setGone] = useState(false)
-  /* A deck the agent rebuilt and delivered again keeps its path; the delivery's
-     own stamp is what tells this view the bytes behind the path moved. */
-  useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
-  const version = deliveries.byPath(f.path)?.when ?? null
   const first = pageURL(f.path, 1, version)
   useEffect(() => {
     setPages(null)

@@ -182,8 +182,8 @@ export const thumbURL = (p: string): string => fileURL(p) + '&render=thumb'
    the document has not drawn yet, or the old picture comes back. `version` is
    whatever moves when the bytes may have, riding along as a query the gateway
    ignores. */
-export const versioned = (url: string, version?: number | null): string =>
-  url + (version ? '&v=' + version : '')
+export const versioned = (url: string, version?: number | string | null): string =>
+  url + (version ? '&v=' + encodeURIComponent(String(version)) : '')
 /* One page of the rendering as a picture. The viewer draws a PDF this way
    rather than framing the document: Safari does not draw a framed PDF served
    under the sandbox policy these files carry, and that policy is what keeps an
@@ -192,7 +192,7 @@ export const versioned = (url: string, version?: number | null): string =>
 
    `version` rides along as a query the gateway ignores, so a deck delivered
    again under the same path is fetched again rather than shown from cache. */
-export const pageURL = (p: string, n: number, version?: number | null): string =>
+export const pageURL = (p: string, n: number, version?: number | string | null): string =>
   versioned(fileURL(p) + '&render=page&p=' + n, version)
 
 /* The same route, asked to serve the file under a policy that lets its scripts
@@ -419,9 +419,10 @@ export const markDeliveryMissing = (path: string): void => deliveries.markMissin
    status is asked for, and only 404 marks the shelf. The transcript's tile
    probes the same way. */
 export async function probeDeliveryMissing(path: string): Promise<number | null> {
+  const probed = deliveries.byPath(path)
   try {
     const r = await fetch(fileURL(path), { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
-    if (r.status === 404) deliveries.markMissing(path)
+    if (r.status === 404 && deliveries.byPath(path) === probed) deliveries.markMissing(path)
     return r.status
   } catch {
     /* No answer at all is not an answer about the file. */
