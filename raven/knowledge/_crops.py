@@ -133,17 +133,18 @@ def crops_for(document: bytes, chunks: "list[Chunk]", ids: list[str]) -> dict[st
 
     pieces: dict[str, list[tuple[int, Any]]] = defaultdict(list)
     try:
-        import pymupdf
         from PIL import Image
+
+        from raven.knowledge.parser._pdfdoc import open_document
     except ImportError as exc:  # pragma: no cover - both are hard dependencies
         logger.warning("knowledge: no crops for this document ({})", exc)
         return {}
 
-    with pymupdf.open(stream=document, filetype="pdf") as opened:
+    with open_document(document) as opened:
         for number in sorted(wanted):
             if not 1 <= number <= opened.page_count:
                 continue
-            page = _render(opened[number - 1], pymupdf, Image)
+            page = opened[number - 1].render(ZOOM)
             for chunk_id, order, box in wanted[number]:
                 cut = _cut(page, box)
                 if cut is not None:
@@ -162,12 +163,6 @@ def crops_for(document: bytes, chunks: "list[Chunk]", ids: list[str]) -> dict[st
         if stacked is not None:
             out[chunk_id] = stacked
     return out
-
-
-def _render(page: Any, pymupdf: Any, image_module: Any) -> Any:
-    """One page as an image, at :data:`ZOOM`."""
-    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(ZOOM, ZOOM), alpha=False)
-    return image_module.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
 
 
 def _cut(page: Any, box: "tuple[float, float, float, float]") -> Any:
