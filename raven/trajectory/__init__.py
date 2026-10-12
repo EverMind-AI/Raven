@@ -32,6 +32,20 @@ into trajectories — addressable, labeled, retained units of agent work:
 - ``regression`` — the regression-case layer: ``expect.yaml`` expectations
   (where the replay must diverge, what the live side must do there) evaluated
   against a cassette replay, driving ``tests/trajectories/``.
+- ``entries``  — the structured projection. Turns a logical-span collection
+  into trajectory entries with a stable ``trace:span:slot`` identity, an
+  operation status with evidence, integrity codes, and one Timing Owner per
+  span — the data layer behind the Web trajectory view, sharing per-span
+  expansion with ``conversation``.
+- ``index``    — the per-session incremental index: scans the span log chain
+  under a byte/time budget, decides trace membership (own session key or a
+  proven sub-agent dispatch link), projects member spans into entries and
+  serves consistent list snapshots plus per-change revisions.
+- ``policy``   — whether this process serves the trajectory view at all; a
+  launch flag today, replaceable without touching the readers.
+- ``details``  — the detail pane's data: a descriptor (status, notes, one
+  bounded summary per block) and per-block bodies for one entry, read from a
+  single consistent capture of the index under byte and read budgets.
 
 The address unit is the **attempt**: one task try, possibly spanning several
 turns. At read time an attempt id equals the trace id unless a definition in
@@ -44,6 +58,22 @@ from __future__ import annotations
 
 from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
 from raven.trajectory.cassette import CassetteReport, minimize_bundle
+from raven.trajectory.details import (
+    BlockBody,
+    BlockDescriptor,
+    Descriptor,
+    describe,
+    read_block,
+)
+from raven.trajectory.entries import (
+    Projection,
+    TrajectoryEntry,
+    TurnInfo,
+    merge_snapshots,
+    project_entries,
+)
+from raven.trajectory.index import EntryView, SessionIndex, TrajectoryIndexer, indexer_for
+from raven.trajectory.policy import TrajectoryPolicy
 from raven.trajectory.redact import (
     KnownSecret,
     RedactionReport,
@@ -100,13 +130,18 @@ from raven.trajectory.verdict import (
 __all__ = [
     "BUNDLE_FORMAT_VERSION",
     "VERDICT_STATUSES",
+    "BlockBody",
+    "BlockDescriptor",
     "CassetteReport",
     "Check",
+    "Descriptor",
     "Divergence",
     "DivergenceExpectation",
+    "EntryView",
     "KnownSecret",
     "LocalTarballUploader",
     "Mismatch",
+    "Projection",
     "Recording",
     "RedactionReport",
     "RegressionExpectation",
@@ -115,6 +150,11 @@ __all__ = [
     "ReplayState",
     "ReplayToolRegistry",
     "ResidualFinding",
+    "SessionIndex",
+    "TrajectoryEntry",
+    "TrajectoryIndexer",
+    "TrajectoryPolicy",
+    "TurnInfo",
     "Uploader",
     "Verdict",
     "attempt_alias_ids",
@@ -123,12 +163,15 @@ __all__ = [
     "collect_bundle",
     "collect_known_secrets",
     "definitions",
+    "describe",
     "get_uploader",
+    "indexer_for",
     "is_pinned",
     "iter_spans",
     "load_expectation",
     "load_recording",
     "merge_attempts",
+    "merge_snapshots",
     "minimize_bundle",
     "new_attempt_id",
     "owning_attempt",
@@ -136,6 +179,8 @@ __all__ = [
     "pin",
     "pin_attempt",
     "pins",
+    "project_entries",
+    "read_block",
     "read_verdicts",
     "record_verdict",
     "redact_bundle",

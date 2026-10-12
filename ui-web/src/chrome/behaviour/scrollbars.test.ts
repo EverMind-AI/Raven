@@ -102,6 +102,19 @@ describe('overlay scrollbars', () => {
     expect(vert()).toBeUndefined()
   })
 
+  it('draws no thumb over a hidden scroller, and takes a showing one down once it is hidden', () => {
+    const parked = scroller()
+    parked.style.visibility = 'hidden'
+    show(parked)
+    expect(thumbs()).toHaveLength(0)
+    const el = scroller()
+    show(el)
+    expect(vert()).toBeTruthy()
+    el.style.visibility = 'hidden'
+    sync()
+    expect(vert()).toBeUndefined()
+  })
+
   it('draws no thumb over a one-line field, however far its text runs', () => {
     /* A text input scrolls itself to the caret, so there is nothing to grab,
        and the bar was laid across the bottom of a box one line tall: 6px of

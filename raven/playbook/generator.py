@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol, get_args, get_origin
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.playbook.agent_profiles import AgentProfileSource, validate_agent_capabilities
 from raven.playbook.llm_result import (
     ProviderFailure,
@@ -255,12 +256,13 @@ class PlaybookGenerator:
     ) -> GeneratedPlaybook:
         errors: list[str] = []
         for round_no in range(1 + _MAX_REPAIR_ROUNDS):
-            response = await self._provider.chat_with_retry(
-                messages=messages,
-                tools=emit_tool(),
-                model=self._model or None,
-                tool_choice={"type": "function", "function": {"name": EMIT_TOOL_NAME}},
-            )
+            with _llm_purpose("playbook"):
+                response = await self._provider.chat_with_retry(
+                    messages=messages,
+                    tools=emit_tool(),
+                    model=self._model or None,
+                    tool_choice={"type": "function", "function": {"name": EMIT_TOOL_NAME}},
+                )
             args = _required_tool_args(response)
 
             spec, errors, missing, reported = self._check(args, known_skills, fixed_name, agent_profiles)

@@ -1,0 +1,379 @@
+/* The trajectory domain's own rules.
+ *
+ * One file per domain, imported by that domain's App and collected by Vite into
+ * one CSS asset that build.py inlines after page.css (`cssFileName` in
+ * vite.config.ts) -- so the page still ships one <style> block. Every class
+ * below carries this domain's prefix; the only rules outside this sheet are
+ * the two in styles/page.css that park the scroller and size `#trajHost`,
+ * which are the chat column's and not this island's.
+ *
+ * Colours are pairs of custom properties per kind, `-bg` for the row's tag and
+ * `-fg` for its text -- the duration bar reads the same `-fg` later, so a tool
+ * call is one purple in the row and in the bar. Input and output of one
+ * actor share a hue at two strengths; thinking stands apart in amber; every
+ * kind the palette does not know is one neutral grey. Both themes are set
+ * here, on the same attribute state/look.ts writes; the system theme writes
+ * none, so the dark pair also answers the media query when no theme is set,
+ * the way page.css does.
+ */
+
+:root {
+  --trajectory-c-user-input-bg: #e3efdc;  --trajectory-c-user-input-fg: #2f6a1f;
+  --trajectory-c-turn-end-bg: #cfe4c4;    --trajectory-c-turn-end-fg: #245317;
+  --trajectory-c-llm-input-bg: #dde8f7;   --trajectory-c-llm-input-fg: #2c5aa0;
+  --trajectory-c-llm-output-bg: #c6d8f2;  --trajectory-c-llm-output-fg: #1f4480;
+  --trajectory-c-llm-thinking-bg: #f3e8c8; --trajectory-c-llm-thinking-fg: #8a6a12;
+  --trajectory-c-tool-input-bg: #ebe0f5;  --trajectory-c-tool-input-fg: #6a3fa0;
+  --trajectory-c-tool-output-bg: #dccbee; --trajectory-c-tool-output-fg: #512a84;
+  --trajectory-c-other-bg: #ececec;       --trajectory-c-other-fg: #5c5c5c;
+}
+html[data-theme="dark"] {
+  --trajectory-c-user-input-bg: #243a1c;  --trajectory-c-user-input-fg: #9fd48a;
+  --trajectory-c-turn-end-bg: #2d4a22;    --trajectory-c-turn-end-fg: #b6e3a3;
+  --trajectory-c-llm-input-bg: #22314a;   --trajectory-c-llm-input-fg: #9dbdf0;
+  --trajectory-c-llm-output-bg: #2a3f63;  --trajectory-c-llm-output-fg: #b7d0f7;
+  --trajectory-c-llm-thinking-bg: #46391a; --trajectory-c-llm-thinking-fg: #e8cf6a;
+  --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
+  --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
+  --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --trajectory-c-user-input-bg: #243a1c;  --trajectory-c-user-input-fg: #9fd48a;
+    --trajectory-c-turn-end-bg: #2d4a22;    --trajectory-c-turn-end-fg: #b6e3a3;
+    --trajectory-c-llm-input-bg: #22314a;   --trajectory-c-llm-input-fg: #9dbdf0;
+    --trajectory-c-llm-output-bg: #2a3f63;  --trajectory-c-llm-output-fg: #b7d0f7;
+    --trajectory-c-llm-thinking-bg: #46391a; --trajectory-c-llm-thinking-fg: #e8cf6a;
+    --trajectory-c-tool-input-bg: #37284d;  --trajectory-c-tool-input-fg: #c9aef2;
+    --trajectory-c-tool-output-bg: #45336a; --trajectory-c-tool-output-fg: #d9c5f7;
+    --trajectory-c-other-bg: #343434;       --trajectory-c-other-fg: #b0b0b0;
+  }
+}
+
+/* ── the island ─────────────────────────────────────────────────── */
+
+.trajectory-root { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+
+/* One quiet line above the list for what the index wants the reader to know:
+   a scan still running, a head cut off, a failure. Absent when nothing is. */
+.trajectory-status {
+  flex: none; display: flex; flex-wrap: wrap; gap: 4px 14px;
+  padding: 6px 20px 4px; font-size: 11.5px; color: var(--muted);
+}
+.trajectory-status-bad { color: var(--clay); }
+
+/* ── the list ───────────────────────────────────────────────────── */
+
+/* The scroller. Its rows are positioned inside `.trajectory-rows`, which is
+   as tall as every row would be, so the scrollbar speaks for the whole list
+   while only the rows in view exist. */
+.trajectory-list {
+  flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
+  position: relative; outline: 0; scrollbar-gutter: stable;
+  --trajectory-cols: 72px 14px 176px minmax(0, 1fr);
+}
+.trajectory-list:focus-visible { box-shadow: inset 0 0 0 2px var(--amber); }
+.trajectory-list[data-narrow] { --trajectory-cols: 48px 14px 120px minmax(0, 1fr); }
+.trajectory-rows { position: relative; width: 100%; }
+
+/* Fixed 32px rows, one grid each: turn, failure mark, kind, content. */
+.trajectory-row {
+  position: absolute; left: 0; right: 0; height: 32px;
+  display: grid; grid-template-columns: var(--trajectory-cols); align-items: center; gap: 8px;
+  padding: 0 20px 0 16px; box-sizing: border-box; cursor: default;
+  font-size: 12.5px; color: var(--text); border-bottom: 1px solid var(--line-soft);
+}
+.trajectory-row:hover { background: var(--hover); }
+.trajectory-row-on, .trajectory-row-on:hover { background: var(--selected, var(--raised)); }
+
+.trajectory-turn {
+  font-family: var(--mono); font-size: 11px; color: var(--faint);
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
+}
+.trajectory-turn-sub::after { content: '\2022'; margin-left: 4px; color: var(--sky); }
+
+.trajectory-fail { width: 14px; height: 14px; display: grid; place-items: center; }
+.trajectory-fail-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--chat-danger, var(--clay)); }
+
+/* The kind tag: right-aligned so the column's ragged edge is on the left,
+   away from the content it introduces. */
+.trajectory-kind { display: flex; justify-content: flex-end; min-width: 0; }
+.trajectory-tag {
+  display: inline-block; max-width: 100%; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--trajectory-c-other-bg); color: var(--trajectory-c-other-fg);
+}
+.trajectory-k-user-input { background: var(--trajectory-c-user-input-bg); color: var(--trajectory-c-user-input-fg); }
+.trajectory-k-turn-end { background: var(--trajectory-c-turn-end-bg); color: var(--trajectory-c-turn-end-fg); }
+.trajectory-k-llm-input { background: var(--trajectory-c-llm-input-bg); color: var(--trajectory-c-llm-input-fg); }
+.trajectory-k-llm-output { background: var(--trajectory-c-llm-output-bg); color: var(--trajectory-c-llm-output-fg); }
+.trajectory-k-llm-thinking { background: var(--trajectory-c-llm-thinking-bg); color: var(--trajectory-c-llm-thinking-fg); }
+.trajectory-k-tool-input { background: var(--trajectory-c-tool-input-bg); color: var(--trajectory-c-tool-input-fg); }
+.trajectory-k-tool-output { background: var(--trajectory-c-tool-output-bg); color: var(--trajectory-c-tool-output-fg); }
+.trajectory-k-other { background: var(--trajectory-c-other-bg); color: var(--trajectory-c-other-fg); }
+
+.trajectory-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trajectory-text-none { color: var(--faint); font-style: italic; }
+/* A row whose record is not there to read says so, in the failure colour. */
+.trajectory-text-missing { color: var(--chat-danger, var(--clay)); }
+/* A hidden row shown because something pointed at it: a dashed edge on the left. */
+.trajectory-row-revealed { box-shadow: inset 3px 0 0 var(--line); color: var(--muted); }
+
+.trajectory-empty {
+  flex: 1; display: grid; place-items: center; padding: 24px;
+  font-size: 12.5px; color: var(--muted); text-align: center;
+}
+
+/* ── the duration bar ───────────────────────────────────────────── */
+
+/* One row the height of a list row, between the title and the list: the
+   canvas takes the width and the tools sit after it; what the bar has to say
+   it says on hover. The lines above and below are the pane dividers. */
+.trajectory-bar {
+  flex: none; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 0;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); position: relative; outline: 0;
+}
+.trajectory-canvas { flex: 1; min-width: 0; height: 32px; display: block; cursor: crosshair; touch-action: none; }
+.trajectory-bar[data-fit] .trajectory-canvas { cursor: pointer; }
+.trajectory-bar[data-drag] .trajectory-canvas { cursor: grabbing; }
+.trajectory-bar-tools { flex: none; display: flex; gap: 2px; }
+.trajectory-bar-switch[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--raised)); }
+/* The duration filter's popover: under the tools, right-aligned, one line of words and the slider. */
+.trajectory-threshold {
+  position: absolute; z-index: var(--z-pop); top: calc(100% + 4px); right: 8px; width: 240px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--ink); box-shadow: var(--elev);
+}
+.trajectory-threshold-text { font-size: 12px; color: var(--text); }
+.trajectory-threshold-range { width: 100%; accent-color: var(--accent, var(--text)); }
+.trajectory-threshold-btn[aria-expanded="true"] { outline: 1px solid var(--line); }
+.trajectory-bar-tool {
+  width: 22px; height: 22px; border-radius: 6px; color: var(--muted); font-size: 13px; line-height: 1;
+  display: grid; place-items: center;
+}
+.trajectory-bar-tool:hover { color: var(--text); background: var(--hover); }
+.trajectory-bar-tool:disabled { color: var(--faint); background: none; }
+.trajectory-bar-tool:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+
+/* The three-line card over the block under the pointer. */
+.trajectory-hover {
+  position: fixed; z-index: var(--z-tip); max-width: 360px; width: 320px; padding: 7px 10px; border-radius: 8px;
+  background: var(--text); color: var(--ink); font-size: 11.5px; line-height: 1.5; pointer-events: none;
+  box-shadow: var(--elev);
+}
+.trajectory-hover-line { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trajectory-hover-brief { width: auto; max-width: 420px; padding: 5px 10px; }
+.trajectory-hover-mono { font-family: var(--mono); font-size: 11px; }
+.trajectory-hover-muted { opacity: .8; }
+.trajectory-hover-fail { color: var(--chat-danger, var(--clay)); }
+
+/* The dense block's pick list. */
+.trajectory-bucket {
+  position: fixed; z-index: var(--z-pop); width: 320px; max-height: 280px; display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--ink); box-shadow: var(--elev); overflow: hidden;
+}
+.trajectory-bucket-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px;
+  font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line-soft);
+}
+.trajectory-bucket-list { flex: 1; min-height: 0; overflow-y: auto; padding: 4px; }
+.trajectory-bucket-item {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; text-align: left;
+  font-size: 12px; color: var(--text);
+}
+.trajectory-bucket-item:hover, .trajectory-bucket-item:focus-visible { background: var(--hover); outline: 0; }
+.trajectory-bucket-item[aria-selected="true"] { background: var(--selected, var(--raised)); }
+.trajectory-bucket-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── the list and the pane ──────────────────────────────────────── */
+
+/* Side by side, the list taking what the pane leaves; over the list when the
+   area is narrow, where the pane covers the body and the list stays beneath
+   for the way back. */
+.trajectory-body { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
+.trajectory-body > .trajectory-list, .trajectory-body > .trajectory-empty { flex: 1; min-width: 0; }
+.trajectory-details {
+  flex: none; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  border-left: 1px solid var(--line);
+}
+.trajectory-details-over { background: var(--ink); }
+.trajectory-details-over { position: absolute; inset: 0; width: auto; border-left: 0; z-index: 1; }
+
+/* The seam: a 6px grab area drawn as a hairline, lit while dragged. */
+.trajectory-grip {
+  flex: none; width: 6px; margin: 0 -3px; cursor: col-resize; position: relative; z-index: 2; outline: 0;
+}
+.trajectory-grip::after { content: ''; position: absolute; inset: 0 2px; background: transparent; transition: background .12s; }
+.trajectory-grip:hover::after, .trajectory-grip[data-drag]::after, .trajectory-grip:focus-visible::after { background: var(--amber); }
+
+/* ── the pane's head and tabs ───────────────────────────────────── */
+
+.trajectory-head {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; min-height: 40px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.trajectory-head-name { flex: 1; min-width: 0; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trajectory-close {
+  flex: none; height: 26px; min-width: 26px; padding: 0 8px; border-radius: 7px; color: var(--muted);
+  font-size: 12px; display: grid; place-items: center;
+}
+.trajectory-close:hover { color: var(--text); background: var(--hover); }
+
+/* The strip and, when it overflows, an arrow at either end to move it. */
+.trajectory-tabs-wrap { flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line-soft); }
+.trajectory-tabs {
+  flex: 1; min-width: 0; display: flex; gap: 2px; padding: 4px 8px 0; overflow-x: auto; overflow-y: hidden; white-space: nowrap;
+  scrollbar-width: none;
+}
+.trajectory-tab-arrow {
+  flex: none; width: 22px; color: var(--muted); font-size: 16px; line-height: 1; display: grid; place-items: center;
+}
+.trajectory-tab-arrow:hover { color: var(--text); background: var(--hover); }
+.trajectory-tab-arrow:disabled { color: var(--faint); background: none; }
+.trajectory-tab {
+  flex: none; padding: 6px 10px 7px; font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent;
+  border-radius: 6px 6px 0 0; display: inline-flex; align-items: center; gap: 5px;
+}
+.trajectory-tab:hover { color: var(--text); background: var(--hover); }
+.trajectory-tab-on, .trajectory-tab-on:hover { color: var(--text); border-bottom-color: var(--amber); background: transparent; }
+.trajectory-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.trajectory-tab-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+
+/* ── the pane's body ────────────────────────────────────────────── */
+
+.trajectory-pane { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 12px 14px 20px; font-size: 12.5px; }
+.trajectory-overview { display: flex; flex-direction: column; gap: 20px; }
+
+/* Info: two borderless rows, a 72px label, the value free to wrap. */
+.trajectory-info { margin: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 6px 10px; }
+.trajectory-info-row { display: contents; }
+.trajectory-info dt { color: var(--muted); }
+.trajectory-info dd { margin: 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.trajectory-info-sub { color: var(--muted); font-size: 11.5px; }
+.trajectory-info-mono { font-family: var(--mono); font-size: 11.5px; }
+.trajectory-status-error { color: var(--clay); }
+.trajectory-status-running { color: var(--amber); }
+.trajectory-status-cancelled, .trajectory-status-unknown { color: var(--muted); }
+.trajectory-notes { margin: 0; padding: 0 0 0 16px; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+
+.trajectory-sec { min-width: 0; }
+.trajectory-h-row { margin: 0 0 8px; display: flex; align-items: baseline; gap: 10px; font-size: 16px; font-weight: 600; }
+.trajectory-h { font: inherit; color: var(--text); text-align: left; border-radius: 4px; }
+.trajectory-h:hover { text-decoration: underline; }
+.trajectory-h:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.trajectory-h-from { font-size: 11px; font-weight: 400; color: var(--faint); }
+.trajectory-sec-note, .trajectory-tool-note { margin: 0; color: var(--muted); font-size: 11.5px; }
+.trajectory-sec-body { min-width: 0; }
+.trajectory-link { color: var(--link); font-size: 12px; text-align: left; border-radius: 4px; }
+.trajectory-link:hover { text-decoration: underline; }
+.trajectory-link:disabled { color: var(--faint); text-decoration: none; }
+.trajectory-see-all { margin-top: 6px; }
+
+/* One tab's body: the toolbar, then the rendered block. */
+.trajectory-block { min-width: 0; }
+
+/* The tab's toolbar: what is known about the body, and the copy button. */
+.trajectory-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.trajectory-tool-notes { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.trajectory-tool-warn { color: var(--gold); }
+.trajectory-copy {
+  flex: none; height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; color: var(--muted);
+  border: 1px solid var(--line); background: var(--ink);
+}
+.trajectory-copy:hover { color: var(--text); background: var(--hover); }
+.trajectory-fault { margin: 0 0 8px; color: var(--clay); font-size: 12px; }
+.trajectory-more { margin-top: 10px; display: flex; gap: 10px; align-items: center; }
+
+/* Text as written, wrapped; code may scroll inside its own box but never
+   pushes the pane wider. */
+.trajectory-text-body {
+  margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--text);
+}
+.trajectory-v { overflow-wrap: anywhere; }
+.trajectory-v-none { color: var(--faint); font-style: italic; }
+.trajectory-v-bool, .trajectory-v-num { font-family: var(--mono); color: var(--sky); }
+.trajectory-ph { color: var(--faint); font-style: italic; font-size: 11.5px; }
+
+/* JSON as a tree of rows, two spaces deep per level. */
+.trajectory-json { font-family: var(--mono); font-size: 12px; line-height: 1.55; overflow-x: auto; }
+.trajectory-json-row { white-space: pre-wrap; overflow-wrap: anywhere; }
+.trajectory-json-kids { padding-left: 16px; }
+.trajectory-json-k { color: var(--muted); margin-right: 6px; }
+.trajectory-json-k::after { content: ':'; }
+.trajectory-json-fold { font: inherit; color: inherit; text-align: left; border-radius: 3px; display: inline-flex; gap: 4px; align-items: baseline; }
+.trajectory-json-fold:hover { background: var(--hover); }
+.trajectory-json-caret { color: var(--faint); width: 10px; display: inline-block; }
+.trajectory-json-shape { color: var(--faint); }
+/* The rest of a long node, a page at a time, on the line its next child would take. */
+.trajectory-json-more { display: block; margin: 2px 0; font-size: 11.5px; }
+
+/* Key-values: no borders, label left, value beside it. */
+.trajectory-kv { margin: 0; display: grid; grid-template-columns: minmax(96px, 160px) minmax(0, 1fr); gap: 5px 12px; }
+.trajectory-kv-row { display: contents; }
+.trajectory-kv-k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trajectory-kv-v { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.trajectory-kv-src { margin-left: 8px; color: var(--faint); font-size: 10.5px; }
+.trajectory-kv-note { margin-left: 8px; color: var(--muted); }
+/* Relations: an id the list holds is a link to its row; one it does not is plain. */
+.trajectory-rel { font-family: var(--mono); font-size: 11.5px; overflow-wrap: anywhere; }
+.trajectory-rel-off { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.trajectory-rel-list { display: flex; flex-direction: column; gap: 2px; }
+.trajectory-usage .trajectory-kv-k { white-space: normal; }
+
+/* Skills: each one named, and whether the turn used it. */
+.trajectory-skill-use .trajectory-item { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.trajectory-skill-mark { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.trajectory-skill-used .trajectory-skill-mark { color: var(--moss); }
+.trajectory-skill-unused .trajectory-item-head { color: var(--muted); }
+
+/* Messages and lists. */
+.trajectory-msgs { display: flex; flex-direction: column; gap: 6px; }
+.trajectory-msg { padding: 8px 10px; border: 1px solid var(--line-soft); border-radius: 8px; min-width: 0; }
+.trajectory-msg-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+
+/* The message list drawn from its outline: the two controls, then every row,
+   folded to one line or opened with its body. */
+.trajectory-msgs-view { min-width: 0; }
+.trajectory-msg-controls { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 8px; }
+.trajectory-msg-progress, .trajectory-msg-note { font-size: 11.5px; color: var(--muted); }
+.trajectory-msg-fold {
+  width: 100%; display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; gap: 10px; align-items: baseline;
+  padding: 4px 10px; border: 1px solid var(--line-soft); border-radius: 6px; text-align: left; font-size: 12px; color: var(--text);
+}
+.trajectory-msg-fold:hover { background: var(--hover); }
+.trajectory-msg-role { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.trajectory-msg-first { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.trajectory-msg-size { font-family: var(--mono); font-size: 10.5px; color: var(--faint); white-space: nowrap; }
+.trajectory-msg-open { position: relative; min-width: 0; }
+
+/* The files under the raw record: each headed by its attribute's name, a
+   size larger than the body and bold, the path beneath it small. */
+.trajectory-files { margin-top: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.trajectory-file { min-width: 0; }
+.trajectory-file-h { margin: 0; font-size: 14px; font-weight: 600; }
+.trajectory-file-toggle { font: inherit; color: var(--text); text-align: left; border-radius: 4px; word-break: break-all; }
+.trajectory-file-toggle:hover { background: var(--hover); }
+.trajectory-file-path { margin: 2px 0 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); word-break: break-all; }
+.trajectory-file-body { min-width: 0; }
+.trajectory-file-cut { margin-bottom: 4px; }
+.trajectory-file-released { font-size: 12px; }
+/* The rows the window leaves out stand in as empty height, so the pane's scrollbar spans the whole list. */
+.trajectory-msg-space { flex: none; }
+.trajectory-msg-close {
+  position: absolute; top: 4px; right: 4px; width: 18px; height: 18px; border-radius: 4px; color: var(--faint); font-size: 12px;
+  display: grid; place-items: center;
+}
+.trajectory-msg-close:hover { color: var(--text); background: var(--hover); }
+.trajectory-items { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.trajectory-item { padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: 6px; min-width: 0; }
+.trajectory-item-head { font-weight: 500; margin-bottom: 2px; }
+.trajectory-ref { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px; font-family: var(--mono); font-size: 11.5px; }
+.trajectory-ref-k { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.trajectory-ref-v { overflow-wrap: anywhere; }
+.trajectory-ref-kind { color: var(--faint); }
+
+/* Three grey lines while a body is on its way. */
+.trajectory-skel { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.trajectory-skel-line { height: 10px; border-radius: 5px; background: var(--raised); }
+.trajectory-skel-short { width: 40%; }

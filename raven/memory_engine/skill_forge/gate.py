@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from raven.memory_engine.skill_forge.types import RouterHit
 from raven.observability import semconv
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.providers.binding import ModelBinding, active_binding
 from raven.tracing import trace
 
@@ -114,15 +115,16 @@ class LLMGateFilter:
         gate_provider, gate_model = self._binding()
 
         try:
-            resp = await asyncio.wait_for(
-                gate_provider.chat_with_retry(
-                    messages=[{"role": "user", "content": prompt}],
-                    model=gate_model,
-                    max_tokens=self._max_tokens,
-                    temperature=self._temperature,
-                ),
-                timeout=_TIMEOUT_S,
-            )
+            with _llm_purpose("skill_gate"):
+                resp = await asyncio.wait_for(
+                    gate_provider.chat_with_retry(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=gate_model,
+                        max_tokens=self._max_tokens,
+                        temperature=self._temperature,
+                    ),
+                    timeout=_TIMEOUT_S,
+                )
             content = resp.content or ""
             if getattr(resp, "finish_reason", None) == "error":
                 raise RuntimeError(content or "provider error")

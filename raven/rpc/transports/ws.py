@@ -195,9 +195,18 @@ class WsGateway:
 
     async def handle_health(self, request: web.Request) -> web.Response:
         from raven.rpc.methods.system import SCHEMA_VERSION, SERVER_VERSION
+        from raven.trajectory import policy as trajectory_policy
 
         return web.json_response(
-            {"ok": True, "service": "raven-serve", "server_version": SERVER_VERSION, "schema_version": SCHEMA_VERSION}
+            {
+                "ok": True,
+                "service": "raven-serve",
+                "server_version": SERVER_VERSION,
+                "schema_version": SCHEMA_VERSION,
+                # What a relauncher needs to know before attaching: whether this
+                # process serves the trajectory view (``raven --dev``).
+                "trajectory_view": trajectory_policy.current().enabled(),
+            }
         )
 
     async def handle_auth_page(self, request: web.Request) -> web.Response:

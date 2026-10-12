@@ -174,6 +174,11 @@ const UNSENT = new Set([
   // config.set: 5 -- the model-switch group, which the offline library does not
   // model: its gateway always has a loop, so there is no restart to report.
   'config.set.applies_to_session', 'config.set.needs_restart', 'config.set.scope', 'config.set.session_id', 'config.set.value',
+  // trajectory.*: 5 -- one recorded turn, served whole: no second page to point
+  // at, no index failure to report, and the probed block (the tool's own
+  // key-values) was read in full, so it carries no reason.
+  'trajectory.list.next_cursor', 'trajectory.list.index_state.failure', 'trajectory.changes.index_state.failure',
+  'trajectory.block.next_cursor', 'trajectory.block.reason',
   // cron.list: 4
   'cron.list.jobs[].at_ms', 'cron.list.jobs[].every_ms', 'cron.list.jobs[].last_error', 'cron.list.jobs[].tz',
   // cron.save: 4

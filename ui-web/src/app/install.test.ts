@@ -144,3 +144,69 @@ describe('the wizard asks for its import through the rail row (installSources)',
     store._resetForTests()
   })
 })
+
+/* The trajectory pane follows the list through the installer's wiring and
+   nothing else: a page that forgot the line would open a pane that never
+   changed entry. Driven through `installActions` on purpose, with no call
+   into the pane's own install. */
+describe('the trajectory pane follows the list (installActions)', () => {
+  it('opens on a selection, resets on the next, clears on a session switch, and goes stale on a revision', async () => {
+    const wiring = await harness()
+    const { setSources } = await import('../state/sources')
+    const { absorb } = await import('../rpc/capabilities')
+    const { unpitch, _resetFreshForTests } = await import('../state/session/conversation')
+    const list = await import('../features/trajectory/store')
+    const pane = await import('../features/trajectory/detailStore')
+    const entry = (id: string, revision: number) => ({
+      entry_id: id, revision, kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', trace_id: 't', span_id: id,
+      parent_span_id: null, turn_span_id: 'turn', turn_number: 1, turn_start: false, origin: 'main' as const, sort_key: [id],
+      event_time: '2026-01-01T00:00:00Z', preview: null, operation_status: 'ok' as const, status_evidence: [], failure_entry: false,
+      integrity: [], operation_start: null, operation_end: null, duration_ms: null, charged_ms: null,
+      timing_basis: 'span_full' as const, duration_owner: null, meta: {},
+    })
+    const ready = {
+      phase: 'ready' as const, scanned_bytes: 0, total_bytes: 0, head_truncated: 0, recovering_traces: 0, unresolved_traces: 0,
+      unresolved_dropped: 0, oversized_lines_dropped: 0, preview_pending: 0, failure: null,
+    }
+    setSources({
+      composer: { slash: [] },
+      tasks: { list: async () => [], one: async () => null, stop: async () => false, node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }), roster: async () => [] },
+      trajectory: {
+        state: async () => ({ enabled: true, policy_revision: 1, recording_enabled: true }),
+        list: async () => ({ epoch: 'e1', snapshot_revision: 1, entries: [entry('a', 1), entry('b', 1)], next_cursor: null, index_state: ready, complete: true }),
+        changes: async () => { throw new Error('not scripted') },
+        detail: async () => { throw new Error('not scripted') },
+        block: async () => { throw new Error('not scripted') },
+      },
+    } as unknown as Partial<Sources>)
+    list._resetForTests()
+    pane._resetForTests()
+    _resetFreshForTests()
+    document.body.innerHTML = '<div class="chat"></div>'
+    absorb(['trajectory-v1'])
+
+    wiring.installActions()
+    const { setCurrent, _resetForTests } = await import('../lib/session') as Session
+    unpitch()
+    setCurrent('gui:a')
+    await list.refreshState()
+    list.setView('trajectory')
+    await list.load()
+
+    list.select('a', { source: 'click' })
+    expect(pane.get().open).toBe(true)
+    pane.set({ ...pane.get(), current: { sessionKey: 'gui:a', epoch: 'e1', entryId: 'a', revision: 1 } })
+    list.select('b', { source: 'keyboard' })
+    expect(pane.get().open).toBe(true)
+    expect(pane.get().current).toBeNull()
+    pane.set({ ...pane.get(), current: { sessionKey: 'gui:a', epoch: 'e1', entryId: 'b', revision: 1 } })
+    list.applyChanges({ epoch: 'e1', from_revision: 1, to_revision: 2, upserts: [entry('b', 2)], removed: [], has_more: false, reset_required: false, index_state: ready })
+    expect(pane.get().stale).toBe(true)
+    setCurrent('gui:b')
+    expect(pane.get().open).toBe(false)
+    expect(pane.get().current).toBeNull()
+    _resetForTests()
+    list._resetForTests()
+    pane._resetForTests()
+  })
+})

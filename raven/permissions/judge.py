@@ -21,6 +21,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.security.trust import wrap_untrusted
 
 _TOOL_NAME = "report_permission_review"
@@ -139,15 +140,16 @@ async def review(
         },
     ]
     try:
-        response = await asyncio.wait_for(
-            provider.chat_with_retry(
-                messages=messages,
-                tools=_review_tool_schema(),
-                model=model,
-                tool_choice="auto",
-            ),
-            timeout=timeout_s,
-        )
+        with _llm_purpose("permission_judge"):
+            response = await asyncio.wait_for(
+                provider.chat_with_retry(
+                    messages=messages,
+                    tools=_review_tool_schema(),
+                    model=model,
+                    tool_choice="auto",
+                ),
+                timeout=timeout_s,
+            )
     except TimeoutError:
         return JudgeOutcome(allow=False, reason=f"review timed out after {timeout_s:.0f}s", failed=True)
     except Exception as exc:  # noqa: BLE001 - an unreviewable call escalates, never crashes the turn

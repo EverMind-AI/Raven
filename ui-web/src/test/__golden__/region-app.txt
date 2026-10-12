@@ -91,6 +91,7 @@ div.app
           div#bannerHost
           div#flash.flash
           div#stage.col
+        div#trajHost
         button#backpill.backpill
           svg
             path

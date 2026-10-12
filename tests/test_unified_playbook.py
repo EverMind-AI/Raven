@@ -32,9 +32,13 @@ class _Provider:
     def __init__(self, *responses: LLMResponse) -> None:
         self.responses = list(responses)
         self.calls: list[dict] = []
+        self.purposes: list[str | None] = []
 
     async def chat_with_retry(self, **kwargs):
+        from raven.observability.purpose import current
+
         self.calls.append(kwargs)
+        self.purposes.append(current())
         return self.responses.pop(0)
 
 
@@ -173,6 +177,7 @@ async def test_task_generator_receives_only_task_selection_inputs() -> None:
     payload = json.loads(provider.calls[0]["messages"][1]["content"])
     assert payload["agents"][0]["readsLocalFiles"] is True
     assert payload["availableTools"] == [{"name": "web_search", "description": "Search the web"}]
+    assert provider.purposes == ["playbook"]
     assert "playbookCandidates" not in payload
 
 
@@ -271,6 +276,7 @@ async def test_workflow_compiler_builds_a_composite_v2_artifact() -> None:
     assert compiled.harness is not None and compiled.workflow is not None
     assert compiled.workflow.nodes[0].subagent == "analyst"
     assert compiled.metadata.source_run_id == "pb-test"
+    assert provider.purposes == ["playbook"]
     schema = provider.calls[0]["tools"][0]["function"]["parameters"]
     assert schema["properties"]["workflow"]["properties"]["nodes"]["items"]
 
