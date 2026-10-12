@@ -2723,6 +2723,9 @@ class TurnPathMixin:
             _t4.add_done_callback(self._consolidation_tasks.discard)
         # ── End Step 4 ──────────────────────────────────────────────────────
 
+        if origin is Origin.USER:
+            self._maybe_annotate_tail(session, prev_len)
+
         if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt.sent_in_turn:
             # Defensive fingerprint. A silent return None would leave no
             # trace when the agent replied via the message tool, making
@@ -2848,6 +2851,53 @@ class TurnPathMixin:
         if mark := _runtime_origin(origin):
             entry["origin"] = mark
         session.record(entry)
+
+    def _maybe_annotate_tail(self, session: Session, prev_len: int) -> None:
+        """Hand the unannotated tail to the consolidator once enough user turns piled up.
+
+        Detached from the turn, under the consolidator's per-session lock so it
+        cannot interleave with the ``/new`` path. The tail is sliced inside the
+        lock: a task that waited re-reads the cursor the holder wrote and finds
+        nothing left to do. Its cursor is ``annotated_through`` in the session's
+        metadata, patched rather than saved so a task that lands mid-turn cannot
+        drop keys the turn wrote in between. A session seen for the first time is
+        seeded at ``prev_len``, the message count before the turn that just
+        ended: history is never back-filled, so an upgraded install or a fork
+        does not hand its past to one call, while a new session counts from its
+        first turn. Truncation (``clear``, ``undo_last_turn``) moves the cursor
+        itself; the clamp here only covers a file edited by hand.
+        """
+        every = self.memory_config.annotate_every_turns
+        if every <= 0:
+            return
+
+        async def _run() -> None:
+            try:
+                async with self.memory_consolidator.get_lock(session.key):
+                    stored = session.metadata.get("annotated_through")
+                    if stored is None:
+                        stored = prev_len
+                        self._set_annotated_through(session, prev_len)
+                    start = min(int(stored), len(session.messages))
+                    tail = session.messages[start:]
+                    if sum(1 for m in tail if m.get("role") == "user") < every:
+                        return
+                    if not await self.memory_consolidator.consolidate_messages(tail):
+                        logger.warning("episodic annotate for {} declined; cursor kept at {}", session.key, start)
+                        return
+                    self._set_annotated_through(session, start + len(tail))
+                    await self.memory_consolidator.maybe_refresh_hot_tags()
+            except Exception:
+                logger.exception("episodic annotate for {} failed", session.key)
+
+        task = asyncio.create_task(_run())
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
+
+    def _set_annotated_through(self, session: Session, n: int) -> None:
+        session.metadata["annotated_through"] = n
+        if not self.sessions.append_metadata_patch(session.key, {"annotated_through": n}):
+            logger.debug("episodic cursor for {} not persisted: no session file yet", session.key)
 
     def _save_turn(
         self,

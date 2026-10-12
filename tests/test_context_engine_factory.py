@@ -563,7 +563,7 @@ class TestTheEngineTellsItsIdentityWhoOwnsMemory:
 
     async def test_with_a_backend_the_turn_names_no_memory_file(self, tmp_path: Path) -> None:
         text = await self._identity_text(_build_engine(tmp_path, backend=_FakeBackend()))
-        assert "user_memory" not in text
+        assert "profile/user.md" not in text
         assert "# Memory" in text
 
 

@@ -277,6 +277,10 @@ class Session:
         """Clear all messages and reset session to initial state."""
         self.messages = []
         self.last_consolidated = 0
+        # The episodic cursor indexes into ``messages``; an index into a list
+        # that no longer exists would swallow every turn written after the
+        # clear until the count climbed past it.
+        self.metadata.pop("annotated_through", None)
         self.updated_at = datetime.now()
 
     def undo_last_turn(self, n: int = 1) -> int:
@@ -298,6 +302,9 @@ class Session:
         cut_index = user_starts[-n] if n <= len(user_starts) else user_starts[0]
         removed = len(self.messages) - cut_index
         self.messages = self.messages[:cut_index]
+        cursor = self.metadata.get("annotated_through")
+        if isinstance(cursor, int) and cursor > cut_index:
+            self.metadata["annotated_through"] = cut_index
         self.updated_at = datetime.now()
         return removed
 

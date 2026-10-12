@@ -935,6 +935,29 @@ def test_undo_last_turn_drops_last_user_block():
     assert [m["content"] for m in s.messages] == ["q1", "a1"]
 
 
+def test_undo_last_turn_pulls_the_episodic_cursor_back_to_the_cut():
+    s = Session(key="cli:u")
+    for i in range(4):
+        s.messages.extend([{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"}])
+    s.metadata["annotated_through"] = 8
+
+    assert s.undo_last_turn(2) == 4
+    assert s.metadata["annotated_through"] == 4
+
+    s.metadata["annotated_through"] = 2
+    assert s.undo_last_turn(1) == 2
+    assert s.metadata["annotated_through"] == 2
+
+
+def test_clear_forgets_the_episodic_cursor():
+    s = Session(key="cli:u")
+    s.messages.extend([{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}])
+    s.metadata["annotated_through"] = 2
+
+    s.clear()
+    assert "annotated_through" not in s.metadata
+
+
 def test_undo_last_turn_no_user_returns_zero():
     s = Session(key="tui:t1")
     s.messages = [_msg("assistant", "a1"), _msg("tool", "t1")]

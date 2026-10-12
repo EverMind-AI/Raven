@@ -1162,6 +1162,13 @@ class MemoryConfig(_Base):
     """Top-K passed to ``backend.recall(user_id=user_id)`` per turn for
     the ``# Recalled memory`` block."""
 
+    annotate_every_turns: int = 5
+    """How many user turns accumulate before the unannotated tail is handed
+    to the annotator and written to ``episodes.md``. ``0`` turns the step
+    off. The tail always starts and ends on a turn boundary because the
+    step runs after a turn, so this is a cadence, not a cut point. Read at
+    boot; a change needs a gateway reload."""
+
 
 class EmbeddingConfig(_Base):
     """The embedding endpoint this install uses, for everything that embeds.
