@@ -337,8 +337,8 @@ def test_pinned_scan_takes_the_whole_exchange_and_supersedes_earlier_fetches() -
     assert pinned == {5, 6}
 
 
-def test_pinned_scan_covers_sibling_results_of_the_pinned_turn() -> None:
-    from raven.context_engine.curator import pinned_message_ids
+def test_pinned_scan_covers_sibling_results_of_the_pinned_turn(tmp_path: Path) -> None:
+    from raven.context_engine.curator import CuratorArchiveStore, pinned_message_ids
 
     messages = [
         {"role": "user", "content": "go"},
@@ -358,9 +358,12 @@ def test_pinned_scan_covers_sibling_results_of_the_pinned_turn() -> None:
         {"role": "tool", "tool_call_id": "c2", "name": "grep", "content": "hits"},
     ]
 
-    # The sibling result comes along: the trimmer drops ids without re-closing
-    # adjacency, so an unpinned sibling could leave the pinned parent dangling.
     assert pinned_message_ids(messages, ["local/guide"]) == {1, 2, 3}
+    store = CuratorArchiveStore(tmp_path, ContextConfig(pinned_skill_ids=["local/guide"]))
+    manifest = store.build_manifest("cli:pin-siblings", messages)
+    assert manifest[0].group_id is None
+    assert manifest[1].group_id is not None
+    assert manifest[1].group_id == manifest[2].group_id == manifest[3].group_id
 
 
 @pytest.mark.parametrize("later_id", ["first", "different"])
@@ -382,6 +385,24 @@ def test_pinned_scan_pairs_reused_ids_by_position(tmp_path, later_id, reread):
     store = CuratorArchiveStore(tmp_path, ContextConfig(pinned_skill_ids=["local/guide"]))
     manifest = store.build_manifest("cli:pin-reused", messages)
     assert {item.id for item in manifest if item.pinned} == expected
+    assert manifest[1].group_id == manifest[2].group_id
+    assert manifest[4].group_id == manifest[5].group_id
+    assert manifest[1].group_id != manifest[4].group_id
+    saved = json.loads(store.manifest_path("cli:pin-reused").read_text(encoding="utf-8"))
+    assert [item["group_id"] for item in saved["items"]] == [item.group_id for item in manifest]
+
+
+def test_manifest_leaves_unpaired_messages_without_a_tool_group(tmp_path: Path) -> None:
+    from raven.context_engine.curator import CuratorArchiveStore
+
+    messages = [
+        {"role": "tool", "tool_call_id": "unknown", "content": "orphan"},
+        {"role": "assistant", "tool_calls": [{"id": "pending"}]},
+        {"role": "assistant", "tool_calls": ["malformed", {}]},
+        {"role": "tool", "content": "no call id"},
+    ]
+    store = CuratorArchiveStore(tmp_path, ContextConfig())
+    assert all(item.group_id is None for item in store.build_manifest("cli:unpaired", messages))
 
 
 @pytest.mark.parametrize(
