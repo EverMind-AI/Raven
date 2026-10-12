@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import shlex
 import sys
 import time
@@ -3179,7 +3180,6 @@ def _without_killpg(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 
     The ``taskkill`` runs are recorded rather than made.
     """
-    import os
     import shutil
     import subprocess
 
@@ -3238,6 +3238,47 @@ async def test_close_without_killpg_kills_nothing_by_the_pid_of_an_exited_launch
 
     assert ran == []
     assert client.closed
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are POSIX")
+async def test_close_kills_a_worker_the_launcher_started(tmp_path: Path) -> None:
+    """``close`` ends the launcher's whole process group, not only the launcher.
+
+    An ACP server that hands its work to a child would otherwise leave that
+    child running once the connection is gone: ``Process.kill`` reaches the
+    launcher alone.
+    """
+    from raven.acp_client.client import AcpClient
+
+    pid_file = tmp_path / "worker.pid"
+    script = tmp_path / "launch.sh"
+    script.write_text(
+        f"#!/bin/sh\nsleep 100 &\necho $! > {shlex.quote(str(pid_file))}\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    client = await AcpClient.launch(name="group", command=f"sh {shlex.quote(str(script))}", env={"ACP_STUB_MODE": "ok"})
+    try:
+        for _ in range(100):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            await asyncio.sleep(0.05)
+        else:
+            raise AssertionError("the worker never started")
+        worker = int(pid_file.read_text().strip())
+        os.kill(worker, 0)
+    finally:
+        await client.close()
+
+    for _ in range(40):
+        try:
+            os.kill(worker, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        raise AssertionError("the worker outlived close")
 
 
 async def test_an_unanswered_request_does_not_stall_the_read_loop() -> None:
