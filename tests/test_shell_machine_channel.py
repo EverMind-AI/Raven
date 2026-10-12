@@ -826,6 +826,9 @@ def test_the_machine_lane_appears_once_a_first_machine_is_added(tmp_path, monkey
         "rsync -av --port 58717 ./dir rsync://203.0.113.7/module",
         "scp scp://root@203.0.113.7:58717//tmp/a .",
         "true && \\scp -P 58717 a root@203.0.113.7:b",
+        "scp.exe -P 58717 a.txt root@203.0.113.7:/tmp/",
+        "SCP.EXE -P 58717 a.txt root@203.0.113.7:/tmp/",
+        "sftp.exe -P 58717 root@203.0.113.7",
     ],
 )
 async def test_a_copy_to_a_registered_machine_is_refused_and_points_at_the_file_tools(registry, tmp_path, command):
@@ -865,6 +868,47 @@ async def test_a_copy_to_a_registered_machine_is_refused_and_points_at_the_file_
 )
 def test_copy_destinations_are_read_the_way_the_programs_read_them(command, expected):
     assert machine_exec._copy_destinations(command) == expected
+
+
+@pytest.mark.parametrize(
+    ("word", "program"),
+    [
+        ("ssh", "ssh"),
+        ("/usr/bin/ssh", "ssh"),
+        ("\\ssh", "ssh"),
+        ("scp.exe", "scp"),
+        ("SCP.EXE", "scp"),
+        ("C:\\Windows\\System32\\OpenSSH\\scp.exe", "scp"),
+        ("rsync.cmd", "rsync"),
+        ("scpx", "scpx"),
+        ("my-scp.exe.bak", "my-scp.exe.bak"),
+    ],
+)
+def test_the_program_a_word_runs_is_read_with_windows_spellings_too(word, program):
+    assert machine_exec._program(word) == program
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "C:\\Windows\\System32\\OpenSSH\\scp.exe -P 58717 a.txt root@203.0.113.7:/tmp/",
+        '"C:\\Program Files\\OpenSSH\\scp.exe" -P 58717 a.txt root@203.0.113.7:/tmp/',
+        "C:\\Windows\\System32\\OpenSSH\\ssh.exe -p 58717 root@203.0.113.7 ls",
+    ],
+)
+async def test_on_a_windows_host_a_program_s_whole_path_keeps_its_backslashes_and_its_name(
+    registry, tmp_path, monkeypatch, command
+):
+    # The shell there reads a backslash as a path's own; read as POSIX escapes, the name was lost.
+    monkeypatch.setattr(machine_exec, "_WINDOWS", True)
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"{command}; touch {marker}")
+
+    assert out.startswith("Error:") and "the way scp writes it" in out and "Nothing was run." in out
+    assert "203.0.113.7" not in out.replace("user@host", "")
+    assert not marker.exists()
 
 
 async def test_a_copy_to_the_same_address_on_another_port_is_another_machine(registry):

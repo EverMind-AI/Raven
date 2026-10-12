@@ -45,9 +45,10 @@ output, so a detach that was not refused is still not a detach.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shlex
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 # Long enough to tail a large log or hash a directory; far short of any solver
@@ -102,6 +103,10 @@ def machines_registered() -> bool:
 # does to the command. A separator ends it, so the words after one belong to the
 # next command and not to this ssh.
 _COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
+#: On a Windows host the shell that runs a command reads a backslash as a path's
+#: own, not as an escape: the words are read that way too, so ``C:\...\scp.exe``
+#: keeps its name (reviewed 2026-10-12).
+_WINDOWS = os.name == "nt"
 
 # A redirection does not end the command: `ssh 2>/dev/null -p 58717 root@host`
 # is a single ssh. Reading one as a terminator -- or, worse, reading `&>` as a
@@ -155,6 +160,26 @@ def _read_option_group(word: str, tokens: list[str], index: int) -> tuple[int, s
     return index, None
 
 
+#: What Windows appends to an executable's name, which names the same program.
+_EXE_SUFFIXES = (".exe", ".cmd", ".bat")
+
+
+def _program(word: str) -> str:
+    """The program a command word runs, as the refusals name one: ``ssh``, ``scp``, ``sftp``, ``rsync``.
+
+    Written ``ssh``, ``/usr/bin/ssh`` or ``\\ssh`` (a backslash suppresses alias
+    lookup and still runs the client), and on Windows ``scp.exe``, ``SCP.EXE``
+    or ``C:\\Windows\\System32\\OpenSSH\\scp.exe``, all of which reach the far
+    side: the directory, the case and the suffix are taken off (reviewed
+    2026-10-12: the three Windows spellings went past the copy refusal).
+    """
+    name = PureWindowsPath(PurePosixPath(word.strip("\"'").lstrip("\\")).name).name.lower()
+    for suffix in _EXE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
 def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     """Every host and port an ``ssh`` word in a shell command would connect to.
 
@@ -184,7 +209,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     true -p 58717`` is 22) or a ``--``.
     """
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(command, posix=not _WINDOWS, punctuation_chars=True)
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
@@ -195,7 +220,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     found: list[tuple[str, int]] = []
     index = 0
     while index < len(tokens):
-        if PurePosixPath(tokens[index].lstrip("\\")).name != "ssh":
+        if _program(tokens[index]) != "ssh":
             index += 1
             continue
         index += 1
@@ -206,7 +231,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
         options_ended = False
         while index < len(tokens):
             word = tokens[index]
-            if word in _COMMAND_SEPARATORS or PurePosixPath(word.lstrip("\\")).name == "ssh":
+            if word in _COMMAND_SEPARATORS or _program(word) == "ssh":
                 # The command ended, or the next one began; either way this
                 # ssh's arguments are over and the token is left for the outer
                 # loop to read.
@@ -359,7 +384,7 @@ def _copy_destinations(command: str) -> list[tuple[str, int]]:
     remote path names the host, and all of one command's share its port.
     """
     try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer = shlex.shlex(command, posix=not _WINDOWS, punctuation_chars=True)
         lexer.whitespace_split = True
         tokens = list(lexer)
     except ValueError:
@@ -367,7 +392,7 @@ def _copy_destinations(command: str) -> list[tuple[str, int]]:
     found: list[tuple[str, int]] = []
     index = 0
     while index < len(tokens):
-        program = PurePosixPath(tokens[index].lstrip("\\")).name
+        program = _program(tokens[index])
         if program not in _COPIERS:
             index += 1
             continue
@@ -377,7 +402,7 @@ def _copy_destinations(command: str) -> list[tuple[str, int]]:
         options_ended = False
         while index < len(tokens):
             word = tokens[index]
-            if word in _COMMAND_SEPARATORS or PurePosixPath(word.lstrip("\\")).name in _COPIERS | {"ssh"}:
+            if word in _COMMAND_SEPARATORS or _program(word) in _COPIERS | {"ssh"}:
                 break
             following = tokens[index + 1] if index + 1 < len(tokens) else None
             if word in _REDIRECTIONS:

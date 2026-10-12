@@ -218,6 +218,18 @@ async def test_a_local_path_is_read_here_as_before(registry, pool, tmp_path):
     assert pool.calls == []
 
 
+@pytest.mark.parametrize("path", ["\\\\?\\C:\\work\\review_marker.txt", "C:review_marker.txt", "\\\\box\\share\\f"])
+async def test_a_windows_path_form_is_this_computer_s_not_a_machine_s(registry, pool, tmp_path, monkeypatch, path):
+    # Drive-relative and extended paths, as a Windows host writes them (reviewed 2026-10-12): the lane
+    # on, each is left to this computer's tool rather than refused as a machine nobody registered.
+    monkeypatch.setattr(remote_path, "_WINDOWS", True)
+
+    got = await _tools(tmp_path)["read_file"].execute(path)
+
+    assert "registered machine" not in got and "machine" not in got.lower().split("error")[-1][:40], got
+    assert pool.calls == []
+
+
 # --- the real node, behind a stand-in ssh ----------------------------------------------------
 
 
