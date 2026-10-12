@@ -18,6 +18,7 @@ from typing import Any
 from loguru import logger
 from pydantic.alias_generators import to_camel
 
+from raven.config.keys import key_as_written
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import CronConfig
 from raven.utils.atomic_io import atomic_update
@@ -240,18 +241,7 @@ def set_skill_blocked(
 
     def _apply(_text: str | None) -> tuple[str | None, tuple[list[str], bool]]:
         data = read_raw_or_raise(path)
-        # Reuse whichever spelling the file already carries. The loader accepts
-        # both, but a second block under the other one is an extra input to a
-        # model that forbids extras: the whole config then stops loading, and
-        # the blocklist we just read came from the empty block we created.
-        if isinstance(data.get("skillForge"), dict):
-            sf_key = "skillForge"
-        elif isinstance(data.get("skill_forge"), dict):
-            sf_key = "skill_forge"
-        elif "skill_forge" in data and "skillForge" not in data:
-            sf_key = "skill_forge"
-        else:
-            sf_key = "skillForge"
+        sf_key = key_as_written(data, "skillForge")
         section = data.get(sf_key)
         if section is None:
             section = data[sf_key] = {}
