@@ -11,7 +11,7 @@ import * as browser from '../browser/mount'
 import * as agents from '../subagents/mount'
 import * as deliveries from './deliveries'
 
-import type { WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
+import type { DeliveryRow, WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
 
@@ -422,12 +422,16 @@ export async function probeDeliveryMissing(path: string): Promise<number | null>
   const probed = deliveries.byPath(path)
   try {
     const r = await fetch(fileURL(path), { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
-    if (r.status === 404 && deliveries.byPath(path) === probed) deliveries.markMissing(path)
+    if (r.status === 404) markProbedMissing(path, probed)
     return r.status
   } catch {
     /* No answer at all is not an answer about the file. */
     return null
   }
+}
+
+function markProbedMissing(path: string, probed: DeliveryRow | null): void {
+  if (deliveries.byPath(path) === probed) deliveries.markMissing(path)
 }
 
 /* Fill the shelf from the gateway's registry for this conversation. Called when
@@ -457,18 +461,19 @@ export async function loadDeliveries(sessionKey: string): Promise<void> {
 /* Only 404 says the file is gone. A refusal (403) or a file too big to render
    (413) is the viewer's limit, not the file's absence, and marking a
    deliverable missing for either would put a lie on the shelf. */
-function refused(f: WsFile, status: number): Error {
-  if (status === 404) deliveries.markMissing(f.path)
+function refused(f: WsFile, status: number, probed: DeliveryRow | null): Error {
+  if (status === 404) markProbedMissing(f.path, probed)
   return new Error(status === 403 ? t('gui.ws.file_denied')
     : status === 404 ? t('gui.ws.file_gone')
       : status === 413 ? t('gui.ws.file_big') : `HTTP ${status}`)
 }
 
 export async function loadFileText(f: WsFile): Promise<void> {
+  const probed = deliveries.byPath(f.path)
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), { credentials: 'same-origin' })
-    if (!r.ok) throw refused(f, r.status)
+    if (!r.ok) throw refused(f, r.status, probed)
     f.text = await r.text()
   } catch (e) {
     f.err = (e as Error).message || String(e)
@@ -488,12 +493,13 @@ const SNIFF_BYTES = 8192
    over the view ceiling (413) cannot be read as text either way, so it stays
    the note, and so does an answer that is no answer at all. */
 export async function sniffFile(f: WsFile): Promise<void> {
+  const probed = deliveries.byPath(f.path)
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), {
       credentials: 'same-origin', headers: { Range: `bytes=0-${SNIFF_BYTES - 1}` },
     })
-    if (r.status === 403 || r.status === 404) throw refused(f, r.status)
+    if (r.status === 403 || r.status === 404) throw refused(f, r.status, probed)
     /* An empty file has no first byte to ask for; it is empty text. */
     if (r.status === 416) {
       f.raw = true

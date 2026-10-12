@@ -298,8 +298,13 @@ describe('the pane of a delivered file', () => {
     expect(document.querySelector('.desk-pane .verr')).toBeNull()
   })
 
-  it('ignores a late failure from the picture replaced by a new delivery', async () => {
+  it.each([false, true])('ignores a late picture failure with an existing delivery: %s', async (existing) => {
     const path = '/w/out/replaced.png'
+    if (existing) {
+      deliveries.record(deliveries.SESSION, 1, {
+        raven_delivery: { files: [{ path }], delivered_at: 1000 },
+      })
+    }
     let refuse: (value: { ok: boolean; status: number }) => void = () => {}
     vi.stubGlobal('fetch', () => new Promise((resolve) => { refuse = resolve }))
     render(<DeskSurface />)
@@ -318,6 +323,41 @@ describe('the pane of a delivered file', () => {
     expect(fresh?.getAttribute('src')).not.toBe(first.getAttribute('src'))
     expect(document.querySelector('.desk-pane .verr')).toBeNull()
     expect(deliveries.byPath(path)?.missing).toBe(false)
+  })
+
+  it.each(['text', 'sniff'])('keeps a replacement delivery present after an earlier %s read returns 404', async (kind) => {
+    const path = kind === 'text' ? '/w/out/notes.md' : '/w/out/content.bin'
+    const deliver = (at: number) => deliveries.record(deliveries.SESSION, at, {
+      raven_delivery: { files: [{ path }], delivered_at: at },
+    })
+    let answer: (value: { ok: boolean; status: number }) => void = () => {}
+    vi.stubGlobal('fetch', () => new Promise((resolve) => { answer = resolve }))
+    deliver(1000)
+    const file = workspace.makeFile(path)
+    const pending = kind === 'text' ? workspace.loadFileText(file) : workspace.sniffFile(file)
+    deliver(2000)
+    answer({ ok: false, status: 404 })
+    await pending
+    expect(deliveries.byPath(path)?.when).toBe(2000)
+    expect(deliveries.byPath(path)?.missing).toBe(false)
+  })
+
+  it.each(['text', 'sniff'])('marks the original %s delivery missing after an unrelated delivery', async (kind) => {
+    const path = kind === 'text' ? '/w/out/notes.md' : '/w/out/content.bin'
+    deliveries.record(deliveries.SESSION, 1, {
+      raven_delivery: { files: [{ path }], delivered_at: 1000 },
+    })
+    let answer: (value: { ok: boolean; status: number }) => void = () => {}
+    vi.stubGlobal('fetch', () => new Promise((resolve) => { answer = resolve }))
+    const file = workspace.makeFile(path)
+    const pending = kind === 'text' ? workspace.loadFileText(file) : workspace.sniffFile(file)
+    deliveries.record(deliveries.SESSION, 2, {
+      raven_delivery: { files: [{ path: '/w/out/unrelated.png' }], delivered_at: 2000 },
+    })
+    answer({ ok: false, status: 404 })
+    await pending
+    expect(deliveries.byPath(path)?.missing).toBe(true)
+    expect(deliveries.byPath('/w/out/unrelated.png')?.missing).toBe(false)
   })
 
   it('still marks a probed file missing when only another path was delivered', async () => {
