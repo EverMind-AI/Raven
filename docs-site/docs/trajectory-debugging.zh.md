@@ -53,7 +53,7 @@ Bug Report Receiver 时才上传（见[发送与接收问题报告](#send-and-re
 
 ## 发送与接收问题报告 { #send-and-receive-bug-reports }
 
-### 接收器
+### 接收器 { #the-receiver }
 
 Bug Report Receiver 是一个小型 HTTP 服务：接收 Bug Report Package、校验、按日
 落盘、返回回执。它不做别的事：不鉴权，也不提供列表或下载。谁能连上它，由它
@@ -82,7 +82,7 @@ raven trajectory receiver --save-dir /srv/raven-bugreports
 录真实落地时刻。同一个包再发一次返回已存的回执；同一 report id 的不同内容会被
 拒绝。保留与清理由运维负责——按日的目录让 `find -mtime` 式清理很简单。
 
-### 部署
+### 部署 { #deployment }
 
 接收器只说明文 HTTP，默认只绑 loopback。要让本机以外访问，必须放在终止 TLS 的
 反代之后；绝不要把端口直接暴露到公网。可用的 nginx location：
@@ -101,7 +101,7 @@ location /v1/bugreports {
 `{"status": "ok"}` 供探活。用非特权账号运行，并把 `--save-dir` 当作敏感材料的
 目录：包只做了凭据脱敏，没有匿名化。
 
-### 告诉客户端往哪发
+### 告诉客户端往哪发 { #telling-clients-where-to-send }
 
 `report-bug`、浏览器里的 *Report a bug* 和 `raven trajectory upload-bug-report`
 读同一个设置：
@@ -122,7 +122,7 @@ URL 配置错误会让 `report-bug` 在采集任何东西之前停下。配置�
 raven trajectory upload-bug-report REPORT_ID
 ```
 
-### 接收器校验什么
+### 接收器校验什么 { #what-the-receiver-checks }
 
 存入之前，包的大小、gzip 与 tar 结构、成员名与类型、清单哈希，以及
 `needs_review`/`risk_accepted` 不变量都以流式方式校验，不解包任何内容。接收器
