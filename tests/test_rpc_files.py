@@ -1397,10 +1397,59 @@ async def test_knowledge_crop_refuses_without_a_token(client: TestClient, kb) ->
 async def test_knowledge_crop_answers_404_for_anything_it_did_not_write(client: TestClient, kb, chunk: str) -> None:
     """The chunk id arrives from the page and becomes a path segment, so it is
     checked rather than trusted -- and anything that is not a crop this base
-    wrote is simply not there."""
+    wrote is simply not there.
+
+    A readable file is planted where the traversal would land, so these can
+    fail. Without one the walk reaches nothing and the route answers 404 for
+    the ordinary reason, which is the same answer the check gives.
+    """
     document, _ = await _cropped(kb)
+    (kb._crops / "secret.webp").write_bytes(b"RIFF0000WEBPVP8 ")
+    (kb._crops.parent / "records.json").write_bytes(b"{}")
 
     r = await client.get("/knowledge/crop", params={"document": document, "chunk": chunk}, headers=auth())
+
+    assert r.status == 404
+
+
+@pytest.mark.parametrize(
+    "document",
+    ["", "nosuchdocument", "../private", "..", "a/b", "x" * 65],
+    ids=["nothing", "not written", "traversal", "parent", "separator", "too long"],
+)
+async def test_knowledge_crop_refuses_a_document_that_names_a_place(client: TestClient, kb, document: str) -> None:
+    """The other half of the path, and the one that was trusted.
+
+    The route's contract is two ids and no location. `..` walks out of the
+    crops directory carrying no separator for a shape test to catch, and the
+    planted file below is what the walk would have served.
+    """
+    await _cropped(kb)
+    outside = kb._crops.parent / "private"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "secret.webp").write_bytes(b"RIFF0000WEBPVP8 ")
+
+    r = await client.get("/knowledge/crop", params={"document": document, "chunk": "secret"}, headers=auth())
+
+    assert r.status == 404
+
+
+async def test_knowledge_crop_refuses_a_document_naming_an_absolute_path(
+    client: TestClient, kb, tmp_path: Path
+) -> None:
+    """The worst of the two, because it needs no walking.
+
+    Joining an absolute path replaces everything to its left, so a `document`
+    naming any readable directory served whatever `.webp` sat in it -- past
+    the state directory, and past the workspace fence the `/file` route
+    applies, for any file whose name fits a chunk id.
+    """
+    await _cropped(kb)
+    private = tmp_path / "Pictures"
+    private.mkdir(parents=True, exist_ok=True)
+    (private / "secret.webp").write_bytes(b"RIFF0000WEBPVP8 ")
+
+    r = await client.get("/knowledge/crop", params={"document": str(private), "chunk": "secret"}, headers=auth())
 
     assert r.status == 404
 

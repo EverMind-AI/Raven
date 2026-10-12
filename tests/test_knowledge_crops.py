@@ -295,12 +295,45 @@ async def test_deleting_the_base_takes_them_too(manager) -> None:
     assert not any(manager.crop_path(document.id, chunk_id) for chunk_id in kept)
 
 
-async def test_a_chunk_id_is_checked_before_it_becomes_a_path(manager) -> None:
-    """It arrives from the page, and it is about to be a path segment."""
-    _, document = await _indexed(manager)
+async def test_a_chunk_id_is_checked_before_it_becomes_a_path(manager, tmp_path) -> None:
+    """It arrives from the page, and it is about to be a path segment.
 
-    for hostile in ("../../records.json", "..", "a/b", "", "x" * 65):
+    A file is planted at the traversal target so these can fail. Without one
+    the walk lands on nothing and `crop_path` answers None for the ordinary
+    reason -- which is the same answer the check gives, and so no answer at
+    all about whether the check is there.
+    """
+    _, document = await _indexed(manager)
+    # Where `crops/<document>/../secret.webp` lands, which is the file the
+    # walk would serve. One directory higher and the walk misses it, and the
+    # case passes whether or not anything is checking.
+    (manager._crops / "secret.webp").write_bytes(b"planted")
+
+    for hostile in ("../../records.json", "..", "a/b", "", "x" * 65, "../secret"):
         assert manager.crop_path(document.id, hostile) is None
+
+
+async def test_a_document_id_is_checked_the_same_way(manager) -> None:
+    """The other half of the path, and the one that was trusted.
+
+    Joining an absolute path replaces everything to its left, so a
+    `document` naming a directory outright served any `.webp` inside it; and
+    `..` walks out of the crops root while containing no separator for a
+    shape test to catch. Either one reaches past the state directory to
+    whatever the gateway's own user can read.
+    """
+    _, document = await _indexed(manager)
+    outside = manager._crops.parent / "private"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "secret.webp").write_bytes(b"planted")
+
+    for hostile in (str(outside), "../private", "..", "a/b", "", "x" * 65):
+        assert manager.crop_path(hostile, "secret") is None
+
+    # And the check still leaves the feature working: a document id is uuid
+    # hex, which is inside the shape both halves are now held to.
+    held, _ = await manager.document_chunks(document.id)
+    assert any(manager.crop_path(document.id, piece.chunk_id) for piece in held)
 
 
 async def test_a_document_whose_pages_cannot_be_read_still_indexes(manager, monkeypatch) -> None:

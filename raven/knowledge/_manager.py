@@ -670,13 +670,27 @@ class KnowledgeManager:
         """The picture of where one chunk came from, when there is one.
 
         By the two ids and nothing else, so a caller reaching this from a
-        request never names a location. ``chunk_id`` is checked rather than
-        trusted: it arrives from the page, and it is about to be a path
-        segment.
+        request never names a location. Both arrive from the page and both
+        become a path segment, so both are checked rather than trusted --
+        `document_id` as much as `chunk_id`: an absolute one replaces the
+        crops root outright, because that is what joining an absolute path
+        does, and `..` walks out of it while containing no separator to
+        test for.
+
+        Checked twice over, the way `rpc.knowledge_pages.forget` checks the
+        cache it owns: the shape first, and then the resolved path against
+        the directory it has to be in. The shape alone would be enough today,
+        but it is one edit away from not being -- and what is on the other
+        side of this is every file the gateway's user can read.
         """
-        if not chunk_id or not document_id or not _SAFE_ID.fullmatch(chunk_id):
+        if not chunk_id or not document_id:
             return None
-        path = self._crops_dir(document_id) / f"{chunk_id}{_crops.SUFFIX}"
+        if not _SAFE_ID.fullmatch(chunk_id) or not _SAFE_ID.fullmatch(document_id):
+            return None
+        root = self._crops.resolve()
+        path = (self._crops_dir(document_id) / f"{chunk_id}{_crops.SUFFIX}").resolve()
+        if path.parent.parent != root:
+            return None
         return path if path.is_file() else None
 
     def _write_crops(self, record: KnowledgeDocumentRecord, chunks: list[Chunk], ids: list[str]) -> None:
