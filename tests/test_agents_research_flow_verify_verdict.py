@@ -164,3 +164,40 @@ def test_a_verdict_call_without_a_usable_pass_is_named_as_such():
     ctx = _ctx()
     asyncio.run(DraftReviewerGate(_Reviewer(reply)).after_iteration(ctx))
     assert ctx.metadata["verify_gate"]["fail_open_reason"] == "tool_args_unusable"
+
+
+def test_a_provider_that_refuses_a_forced_choice_is_asked_again_with_auto():
+    """DeepSeek in thinking mode answers a named tool_choice with HTTP 400, which
+    reached the gate as an error reply and failed every review open as no_content."""
+    refused = SimpleNamespace(
+        content="Error calling LLM (invalid_request@deepseek): HTTP 400: Thinking mode does not support this tool_choice",
+        tool_calls=[],
+        finish_reason="error",
+    )
+    verdict = _tool_reply({"pass": True, "unsupported_claims": [], "estimated_cells": [], "issues": []})
+
+    class _Picky(_Reviewer):
+        async def chat_with_retry(self, *args, **kwargs):
+            await super().chat_with_retry(*args, **kwargs)
+            return refused if isinstance(self.calls[-1]["tool_choice"], dict) else verdict
+
+    reviewer = _Picky(None)
+    gate = DraftReviewerGate(reviewer)
+    ctx = _ctx()
+    asyncio.run(gate.after_iteration(ctx))
+    assert [c["tool_choice"] for c in reviewer.calls][1:] == ["auto"]
+    assert ctx.metadata["verify_gate"]["passes"] == 1
+    assert "fail_open_reason" not in ctx.metadata["verify_gate"]
+
+    asyncio.run(gate.after_iteration(_ctx()))
+    assert reviewer.calls[-1]["tool_choice"] == "auto"
+    assert len(reviewer.calls) == 3
+
+
+def test_an_unrelated_error_reply_still_fails_open_without_a_retry():
+    reply = SimpleNamespace(content="Error calling LLM: HTTP 500", tool_calls=[], finish_reason="error")
+    reviewer = _Reviewer(reply)
+    ctx = _ctx()
+    asyncio.run(DraftReviewerGate(reviewer).after_iteration(ctx))
+    assert len(reviewer.calls) == 1
+    assert ctx.metadata["verify_gate"]["fail_open_reason"] == "no_content"

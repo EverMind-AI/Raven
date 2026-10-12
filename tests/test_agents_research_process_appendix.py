@@ -201,8 +201,10 @@ def test_the_rendered_trail_leads_with_the_summary_and_folds_the_detail():
     # still counts two - only the noun stops claiming two different things were
     # looked for.
     assert "3 searches (2 unique query strings), 1 pages read" in lines[1]
-    assert text.count("<details>") == 2  # queries + pages; no open points on a pass
-    assert text.index("<details>") > text.index("**Research trail**")
+    assert "**Queries run**" in lines and "**Pages read**" in lines  # no open points on a pass
+    assert "**Reviewer's open points**" not in text
+    assert "<details>" not in text
+    assert text.index("**Queries run**") > text.index("**Research trail**")
 
 
 def test_the_appendix_is_gated_on_the_assembly_so_the_anchor_cannot_reach_it():
@@ -782,6 +784,54 @@ def test_thin_pages_are_counted_not_only_rendered():
     assert "(1 returned almost nothing)" in t.render()
 
 
+def test_a_page_the_site_refused_is_not_counted_as_read():
+    """The reader answers 200 over a CAPTCHA wall; the trail said every page was read
+    while the report beside it listed two as blocked."""
+    rows = [
+        {"op": "search", "query": "q", "replay": False, "zero_hit": False},
+        {"op": "fetch", "url": "https://a.example/real", "chars": 12431, "ok": True, "status": 200},
+        {"op": "fetch", "url": "https://a.example/wall", "chars": 862, "ok": True, "status": 405, "blocked": "captcha"},
+        {"op": "fetch", "url": "https://a.example/gate", "chars": 491, "ok": True, "status": 200, "blocked": "captcha"},
+        {"op": "fetch", "url": "https://a.example/pixel", "chars": 38, "ok": True, "status": 200},
+    ]
+    t = build_trail(rows, "[a](https://a.example/real) [w](https://a.example/wall) [g](https://a.example/gate)")
+    c = t.counters()
+    assert (c["pages_ok"], c["pages_refused"], c["thin_pages"], c["pages_failed"]) == (4, 2, 1, 0)
+    # Requested all the same, so citing one is not citing a page never opened.
+    assert c["cited_not_opened"] == 0
+    rendered = t.render()
+    # The stub note stays beside "pages read", whose count it belongs to.
+    assert "2 pages read (1 returned almost nothing), 2 refused by the site" in rendered
+    assert "- (2 page(s) the site refused: https://a.example/gate, https://a.example/wall)" in rendered
+    assert "- https://a.example/wall" not in rendered
+
+
+def test_a_refusal_is_per_fetch_so_a_retry_that_reads_the_page_counts_as_read():
+    """A page refused once and read on a retry was read; one refused twice is two refusals
+    of one URL, listed once."""
+    rows = [
+        {"op": "fetch", "url": "https://a.example/p", "chars": 300, "ok": True, "status": 403},
+        {"op": "fetch", "url": "https://a.example/p", "chars": 9000, "ok": True, "status": 200},
+        {"op": "fetch", "url": "https://b.example/q", "chars": 300, "ok": True, "status": 403},
+        {"op": "fetch", "url": "https://b.example/q", "chars": 300, "ok": True, "status": 403},
+    ]
+    t = build_trail(rows, "[a](https://a.example/p)")
+    c = t.counters()
+    assert (c["pages_ok"], c["pages_refused"], c["thin_pages"]) == (4, 3, 0)
+    rendered = t.render()
+    assert "1 pages read, 3 refused by the site" in rendered
+    assert "- https://a.example/p (9,000 chars)" in rendered
+    assert "- (3 page(s) the site refused: https://a.example/p, https://b.example/q)" in rendered
+
+
+def test_the_refused_listing_is_capped_like_the_others():
+    rows = [
+        {"op": "fetch", "url": f"https://a.example/{i:02d}", "chars": 300, "ok": True, "status": 403} for i in range(45)
+    ]
+    line = next(ln for ln in build_trail(rows, "").render().splitlines() if "the site refused" in ln)
+    assert line.endswith("https://a.example/39, ... and 5 more)")
+
+
 def test_a_truncated_fence_tag_is_still_a_fence_tag():
     """The ``{4,16}`` width. ``token_hex(4)`` mints exactly 8, so ``{8}`` looks
     right and passes every other test here; a clipped quote is still a fence tag."""
@@ -821,14 +871,59 @@ def _module_body(path: Path) -> str:
     return ast.unparse(_Strip().visit(ast.parse(path.read_text(encoding="utf-8"))))
 
 
-def test_the_appendix_twin_is_the_forks_module_body():
+# The record is frozen at dr@3.5 and is never edited to make this green
+# (tests/fixtures/vendored_fork/README.md); the twin's deliberate lead over it is
+# named here, definition by definition. A difference outside these sets is drift,
+# and an entry that has stopped differing is a stale allowance.
+
+#: Definitions the twin has that the record does not; a class member is ``Class.member``.
+TWIN_LEADS_ADDED: frozenset[str] = frozenset(
+    {"_TRACKING_KEYS", "_is_tracking", "_drop_tracking"}  # click-tracking parameters dropped before matching
+    | {"ResearchTrail.refused"}  # pages the site refused, counted apart
+)
+#: Definitions in both whose bodies the twin changed.
+TWIN_LEADS_CHANGED: frozenset[str] = frozenset(
+    {"_norm", "build_trail"}  # the tracking drop, and the refused pages
+    | {"ResearchTrail._page_split", "ResearchTrail.counters", "ResearchTrail.render"}
+)
+
+
+def _definitions(path: Path) -> dict[str, str]:
+    """Each definition of :func:`_module_body`'s stripped module, by name.
+
+    A class is split into its header and one entry per member, so a lead inside a
+    class names the members it changed and the rest of the class stays pinned.
+    """
+    import ast
+
+    def name_of(node: ast.stmt, i: int) -> str:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return node.name
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            return node.targets[0].id
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            return node.target.id
+        return f"{i}:{type(node).__name__}"
+
+    out: dict[str, str] = {}
+    for i, node in enumerate(ast.parse(_module_body(path)).body):
+        name = name_of(node, i)
+        if isinstance(node, ast.ClassDef):
+            for j, member in enumerate(node.body):
+                out[f"{name}.{name_of(member, j)}"] = ast.unparse(member)
+            node.body = [ast.Pass()]
+        out[name] = ast.unparse(node)
+    return out
+
+
+def test_the_appendix_twin_is_the_forks_module_body_plus_its_named_lead():
     """The third layer of the twin, after config values and class defaults.
 
     A fix that lands on the fork's appendix and not here ships a launcher whose
     integrity appendix says something the fork's no longer does - the fence-tag
     disclosure did exactly that for one review round. Docstrings and comments
     are stripped before comparing, so the two files may explain themselves in
-    their own words; the code has to be one.
+    their own words; the code has to be one, apart from the lead named above.
     """
     fork = (
         REPO
@@ -842,7 +937,15 @@ def test_the_appendix_twin_is_the_forks_module_body():
         / "process_appendix.py"
     )
     twin = PLUGIN_DIR / "research_flow" / "support" / "process_appendix.py"
-    assert _module_body(twin) == _module_body(fork), "port the fork's change or the twin's, so the two agree"
+    record, ours = _definitions(fork), _definitions(twin)
+    assert set(ours) - set(record) == TWIN_LEADS_ADDED, set(ours) ^ set(record)
+    assert not (set(record) - set(ours)), "the twin dropped a definition the record has: " + repr(
+        set(record) - set(ours)
+    )
+    changed = {name for name in record if record[name] != ours[name]}
+    assert changed == TWIN_LEADS_CHANGED, "changed outside the named lead (or a stale entry): " + repr(
+        changed ^ TWIN_LEADS_CHANGED
+    )
 
 
 # ── fence-tag citations, and the unreviewed banner ─────────────────────
@@ -1140,6 +1243,26 @@ def test_a_query_value_is_held_out_of_the_fold():
     t = build_trail(ledger, "see https://huggingface.co/datasets/o/D?config=wikitext for the split")
 
     assert t.cited_not_opened == ["https://huggingface.co/datasets/o/D?config=wikitext"]
+
+
+def test_a_search_results_tracking_parameter_does_not_make_a_citation_unseen():
+    """Google lists a shop page with ``?srsltid=...``; the model cites it without.
+    That is the page the search returned, so it is unopened, not never surfaced."""
+    listed = "https://www.shop.example/glasses/display/?srsltid=AU7gw4Wc0iu9"
+    ledger = [*LEDGER, {"op": "search", "query": "display glasses", "urls": [listed]}]
+    t = build_trail(ledger, "see https://www.shop.example/glasses/display/ for the price")
+
+    assert t.cited_not_opened == ["https://www.shop.example/glasses/display/"]
+    assert t.cited_never_surfaced == []
+
+
+def test_dropping_tracking_parameters_keeps_the_ones_that_name_the_page():
+    opened = "https://d.example/item?id=2&utm_source=x&gclid=y#notes"
+    ledger = [*LEDGER, {"op": "fetch", "url": opened, "chars": 6100, "ok": True}]
+
+    assert build_trail(ledger, "see https://d.example/item?id=2#notes").cited_not_opened == []
+    t = build_trail(ledger, "see https://d.example/item?id=3#notes")
+    assert t.cited_never_surfaced == ["https://d.example/item?id=3#notes"]
 
 
 def test_an_unlisted_host_keeps_every_character_of_its_path():

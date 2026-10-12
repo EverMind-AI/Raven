@@ -1489,6 +1489,19 @@ def _encoding_lost(text: str) -> bool:
     return text.count("\ufffd") > max(8, len(text) // 200)
 
 
+# Jina answers 200 for the page it rendered and names the target's own failure in the
+# header above ``Markdown Content:``, so without these a CAPTCHA wall reads as a page.
+_READER_TARGET_ERROR_RE = re.compile(r"^Warning: Target URL returned error (\d{3})\b", re.M)
+_READER_CAPTCHA_RE = re.compile(r"^Warning: This page maybe requiring CAPTCHA\b", re.M)
+
+
+def reader_target_verdict(text: str) -> tuple[int | None, bool]:
+    """``(status, blocked)`` the reader reported for the target, from its header only."""
+    head = text.split("\nMarkdown Content:", 1)[0]
+    hit = _READER_TARGET_ERROR_RE.search(head)
+    return (int(hit.group(1)) if hit else None), _READER_CAPTCHA_RE.search(head) is not None
+
+
 _UNRESOLVED_REFUSAL = "Cannot resolve hostname:"
 """The trunk validator's one refusal that says nothing about the target. Pinned
 by the tool tests, which fail if the wording moves and takes the tolerance below
@@ -1749,6 +1762,8 @@ class WebFetchTool(Tool):
             # written under the address that served it.
             ("requested_chars", "chars"),
             ("length", "chars"),
+            ("requested_status", "status"),
+            ("requested_blocked", "blocked"),
             ("source_chars", "source_chars"),
             ("digested", "digested"),
             ("docid", "docid"),
@@ -1758,7 +1773,13 @@ class WebFetchTool(Tool):
             ("extractor", "extractor"),
             ("served_url", "served_url"),
             ("fallbacks_tried", "fallbacks_tried"),
+            ("status", "status"),
+            ("blocked", "blocked"),
         ):
+            # A recovered fetch's ``blocked`` is the served text's verdict; that text
+            # has its own row, and this one carries ``requested_blocked`` or nothing.
+            if key == "blocked" and "served_url" in payload:
+                continue
             if key in payload and out_key not in record:
                 record[out_key] = payload[key]
         # Annotations a digest function asked to have ledgered but not shown
@@ -1869,6 +1890,7 @@ class WebFetchTool(Tool):
         # never really read - on the run that prompted this, 21 of 33 listed pages came
         # back under 3,000 characters and the report estimated what it could not find.
         served_url, fallbacks_tried, requested_chars = url, [], len(text)
+        requested_text, requested_status = text, status
         if len(text) < _THIN_PAGE_CHARS:
             text, status, served_url, fallbacks_tried = await self._recover_thin(url, text, status)
 
@@ -1877,11 +1899,22 @@ class WebFetchTool(Tool):
         self._record_source(url, text, self.spec.extractor)
 
         recovery: dict[str, Any] = {}
+        target_status, blocked = self._target_verdict(text)
+        if target_status is not None:
+            status = target_status
+        if blocked:
+            recovery["blocked"] = "captcha"
         if fallbacks_tried:
             recovery["fallbacks_tried"] = fallbacks_tried
             recovery["requested_chars"] = requested_chars
             if served_url != url:
                 recovery["served_url"] = served_url
+                # The verdict above is the served text's; the requested address keeps
+                # its own, as its row keeps its own length (``_fetch_record``).
+                own_status, own_blocked = self._target_verdict(requested_text)
+                recovery["requested_status"] = requested_status if own_status is None else own_status
+                if own_blocked:
+                    recovery["requested_blocked"] = "captcha"
 
         # A page that lost its encoding is not worth a digest call: the
         # model would distill replacement characters.
@@ -1925,6 +1958,10 @@ class WebFetchTool(Tool):
             payload["warning"] = _ENCODING_LOST_WARNING
         return json.dumps(payload, ensure_ascii=False)
 
+    def _target_verdict(self, text: str) -> tuple[int | None, bool]:
+        """:func:`reader_target_verdict` for the Jina reader; other backends carry no such header."""
+        return reader_target_verdict(text) if self.provider == "jina" else (None, False)
+
     async def _recover_thin(self, url: str, text: str, status: int) -> tuple[str, int, str, list[str]]:
         """Re-read a stub at the addresses that carry its body.
 
@@ -1962,18 +1999,22 @@ class WebFetchTool(Tool):
                     }
                 )
                 continue
-            _ledger_append(
-                {
-                    "ts": time.time(),
-                    "op": "fetch",
-                    "url": candidate,
-                    "source": "web",
-                    "ok": True,
-                    "chars": len(alt_text),
-                    "status": alt_status,
-                    "fallback_for": url,
-                }
-            )
+            # The reader answers 200 for whatever it rendered; a fallback's own refusal
+            # is in its header, as it is for the requested page.
+            own_status, own_blocked = self._target_verdict(alt_text)
+            row: dict[str, Any] = {
+                "ts": time.time(),
+                "op": "fetch",
+                "url": candidate,
+                "source": "web",
+                "ok": True,
+                "chars": len(alt_text),
+                "status": alt_status if own_status is None else own_status,
+                "fallback_for": url,
+            }
+            if own_blocked:
+                row["blocked"] = "captcha"
+            _ledger_append(row)
             if len(alt_text) > len(best_text):
                 best_text, best_status, served = alt_text, alt_status, candidate
             if len(best_text) >= _THIN_PAGE_CHARS:

@@ -53,7 +53,9 @@ class SessionRecord:
     (``ctx.metadata["observers"]`` is stamped onto the turn's last substantive
     assistant message at persist) and the flow feeds it at turn end, so this
     field is the latest turn's readable copy while the message stamp carries
-    the history.
+    the history. ``report_files`` maps each markdown file the session wrote as a
+    report to the sha256 it left there, so a later turn can tell whether anyone
+    changed the file since.
     """
 
     research_memo: dict[str, Any] | None = None
@@ -61,6 +63,7 @@ class SessionRecord:
     chain_round: int = 0
     mode: str = ""
     observers: dict[str, Any] = field(default_factory=dict)
+    report_files: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, raw: Any) -> "SessionRecord":
@@ -69,6 +72,7 @@ class SessionRecord:
         memo = raw.get("research_memo")
         pending = raw.get("pending_clarify")
         observers = raw.get("observers")
+        report_files = raw.get("report_files")
         try:
             chain = int(raw.get("chain_round") or 0)
         except (TypeError, ValueError):
@@ -79,6 +83,11 @@ class SessionRecord:
             chain_round=chain,
             mode=str(raw.get("mode") or ""),
             observers=observers if isinstance(observers, dict) else {},
+            report_files={
+                str(k): v
+                for k, v in (report_files if isinstance(report_files, dict) else {}).items()
+                if isinstance(v, str)
+            },
         )
 
 

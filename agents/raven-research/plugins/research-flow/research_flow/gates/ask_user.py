@@ -852,7 +852,7 @@ class AskUserGate(Gate):
         return HookDecision(short_circuit_result=render_handoff(payload))
 
 
-def is_prose_clarify(ctx: GateCtx) -> bool:
+def is_prose_clarify(ctx: GateCtx, layout: str = "sections") -> bool:
     """Whether this terminal response is a clarify the model wrote as text.
 
     Structural, and nothing here reads the prose as language: the contract
@@ -891,7 +891,7 @@ def is_prose_clarify(ctx: GateCtx) -> bool:
         # Also what makes this safe to call from ``terminal_answerless``, where the
         # loop sets ``ctx.response`` to None.
         return False
-    if len(ReportShape(content).missing) != len(REPORT_SECTIONS):
+    if len(ReportShape(content, layout).missing) != len(REPORT_SECTIONS):
         return False
     return bool(_QUESTION_MARK_RE.search(content))
 
@@ -923,8 +923,9 @@ class ClarifyExemptHook(Gate):
     there is. See ``is_prose_clarify`` for the four conditions.
     """
 
-    def __init__(self, inner: Gate) -> None:
+    def __init__(self, inner: Gate, layout: str = "sections") -> None:
         self._inner = inner
+        self._layout = layout
 
     @property
     def name(self) -> str:
@@ -944,7 +945,7 @@ class ClarifyExemptHook(Gate):
         return await self._inner.before_execute_tools(ctx)
 
     async def after_iteration(self, ctx: GateCtx) -> HookDecision:
-        if is_prose_clarify(ctx):
+        if is_prose_clarify(ctx, self._layout):
             # The commit marker the tool path already sets, and the reason this
             # wrapper does not need a fourth copy: the loop reads it for
             # ``answerless``, ``answerless_shape_exempt``, ``awaiting_user`` and the
