@@ -840,6 +840,7 @@ class SessionIndex:
             try:
                 updated = _entries.preview_records(span, state=self.state_dir, budget=budget, cache=cache)
             except Exception as exc:  # noqa: BLE001 -- one span's artifacts must not stop the session's index
+                _log.debug("index: previews of span %s/%s unreadable", key[0], key[1], exc_info=True)
                 reason = f"artifact unreadable ({type(exc).__name__})"
                 updated = _entries.preview_failed(span, state=self.state_dir, cache=cache, reason=reason)
             self.preview_cache[key] = updated

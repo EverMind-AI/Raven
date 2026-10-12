@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -640,6 +641,34 @@ def test_walks_started_side_by_side_keep_their_own_snapshots_up_to_the_limit(sta
         index.list_page(third.next_cursor, 2)
 
 
+def test_a_finished_walk_lets_go_of_its_own_snapshot_and_a_read_walk_is_kept_longest(state, clock):
+    """Finishing a walk frees that walk's snapshot only; reading a walk makes
+    it the most recent, so the one read longest ago goes first, past the limit
+    and past the idle time alike."""
+    _append(state, [_turn("t", f"s{i}", start=i, end=i) for i in range(5)])
+    index = _index(state, clock, snapshots=2, snapshot_ttl=10)
+    _refresh_until_ready(index, clock)
+    total = len(index.entries())
+    done = index.list_page(None, 2)
+    ongoing = index.list_page(None, 2)
+    assert index.list_page(done.next_cursor, total).complete
+    assert index.list_page(ongoing.next_cursor, 2).entries == index.entries()[2:4]
+
+    older = index.list_page(None, 2)
+    assert index.list_page(ongoing.next_cursor, 2).entries
+    newest = index.list_page(None, 2)
+    with pytest.raises(tidx.CursorExpiredError):
+        index.list_page(older.next_cursor, 2)
+    assert index.list_page(ongoing.next_cursor, 2).entries
+
+    clock.advance(6)
+    assert index.list_page(newest.next_cursor, 2).entries
+    clock.advance(6)
+    with pytest.raises(tidx.CursorExpiredError):
+        index.list_page(ongoing.next_cursor, 2)
+    assert index.list_page(newest.next_cursor, 2).entries
+
+
 # ── resource limits ───────────────────────────────────────────────────
 
 
@@ -876,7 +905,7 @@ def test_one_unreadable_tool_result_leaves_the_rest_of_the_session_indexed(state
         assert bad_entry.operation_status == "ok"
 
 
-def test_a_preview_pass_that_raises_marks_its_span_and_the_index_goes_on(state, clock, monkeypatch):
+def test_a_preview_pass_that_raises_marks_its_span_and_the_index_goes_on(state, clock, monkeypatch, caplog):
     real = tent.preview_records
 
     def flaky(span, **kwargs):
@@ -895,11 +924,14 @@ def test_a_preview_pass_that_raises_marks_its_span_and_the_index_goes_on(state, 
         ],
     )
     index = _index(state, clock)
-    _refresh_until_ready(index, clock)
+    with caplog.at_level(logging.DEBUG, logger="raven.trajectory.index"):
+        _refresh_until_ready(index, clock)
     assert index.index_state().phase == tidx.PHASE_READY and index.index_state().failure is None
     assert {"a", "bad", "fine"} <= {e.span_id for e in index.entries()}
     bad_entry = next(e for e in index.entries() if e.span_id == "bad" and e.kind == "tool.output")
     assert "artifact_unreadable" in bad_entry.integrity
+    logged = [r for r in caplog.records if "t/bad" in r.getMessage()]
+    assert logged and logged[0].exc_info is not None and logged[0].exc_info[0] is RecursionError
     calls = {"n": 0}
 
     def counting(span, **kwargs):
