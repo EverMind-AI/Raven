@@ -105,6 +105,10 @@ paste another product's permission schema or precedence into Raven. Avoid
 | Deny | Refuse the action; normally the turn can continue |
 | Deny and stop | Refuse and end the current turn |
 
+On a WebUI approval card, Esc means Deny and leaves the turn running so the
+agent can respond to the refusal. A later Esc follows the page's normal close
+order and stops the turn when no other layer is open.
+
 For shell commands, session grants include the command segment, machine, and
 working directory. Built-in file writers key by path and working directory;
 browser acting tools share a per-site key. Other tools generally key the exact

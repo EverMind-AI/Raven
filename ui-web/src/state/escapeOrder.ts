@@ -20,12 +20,10 @@
  * the module's own answer for the settings dialog, which has been a flag in
  * state/settings.ts since C4, for the desk, and for the running turn.
  *
- * The three capture-phase handlers each open sheet registers run before this
- * table and two of them act on Escape without stopping propagation, so one
- * Escape can both deny an approval and interrupt the turn behind it. That is
- * the behaviour, not an accident of where the listener sits. The credential
- * card (features/composer/credential.ts) is the one that stops it: skipping a
- * key is not stopping the turn, which goes on to say where it can be entered.
+ * The capture-phase handlers each open sheet registers run before this table.
+ * Approval and credential cards consume Escape after denying or skipping:
+ * answering a card leaves the turn running, just as its button does. Once the
+ * card is answered, a later Escape reaches this table's normal close order.
  */
 
 import { busy as turnBusy } from '../features/composer/turn'

@@ -44,10 +44,13 @@ class IdentitySegmentBuilder:
         workspace: Path,
         list_subagents: Any | None = None,
         get_tool_definitions: Any | None = None,
+        *,
+        has_memory_backend: bool = False,
     ) -> None:
         self._workspace = workspace
         self._list_subagents = list_subagents
         self._get_tool_definitions = get_tool_definitions
+        self._has_memory_backend = has_memory_backend
 
     def _specialists(self) -> list[tuple[str, str]]:
         """``(name, owns)`` for every agent that declares what it owns.
@@ -83,5 +86,6 @@ class IdentitySegmentBuilder:
             self._workspace,
             specialists=self._specialists(),
             dispatch_tools=render.live_dispatch_tools(self._get_tool_definitions),
+            has_memory_backend=self._has_memory_backend,
         )
         return Segment(text=text + _task_block(ctx))

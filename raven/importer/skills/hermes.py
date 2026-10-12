@@ -180,7 +180,7 @@ def _is_curator_managed(record: Any) -> bool:
 
 def _frontmatter_name(skill_md: Path) -> str:
     try:
-        front, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
+        front, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"), line_fallback=True)
     except OSError:
         return ""
     return str(front.get("name") or "").strip()

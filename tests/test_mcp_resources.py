@@ -36,12 +36,12 @@ class _Session:
         self._contents = list(contents)
         self._fail = fail
 
-    async def list_resources(self):
+    async def list_resources(self, params=None):
         if self._fail:
             raise self._fail
         return types.ListResourcesResult(resources=self._resources)
 
-    async def list_resource_templates(self):
+    async def list_resource_templates(self, params=None):
         if self._fail:
             raise self._fail
         return types.ListResourceTemplatesResult(resourceTemplates=self._templates)
@@ -68,6 +68,26 @@ class _Manager:
 
 def _res(uri: str, name: str, mime: str = "text/plain") -> types.Resource:
     return types.Resource(uri=AnyUrl(uri), name=name, mimeType=mime, description=f"about {name}")
+
+
+class _PagingSession:
+    """Answers each page by the cursor it was asked for; a call past the pages is a walk that lost its stop rule."""
+
+    def __init__(self, pages: dict) -> None:
+        self._pages = pages
+        self.cursors: list[str | None] = []
+
+    async def _page(self, params):
+        cursor = params.cursor if params else None
+        self.cursors.append(cursor)
+        assert len(self.cursors) <= len(self._pages), "walked past the last page"
+        return self._pages[cursor]
+
+    async def list_resources(self, params=None):
+        return await self._page(params)
+
+    async def list_resource_templates(self, params=None):
+        return await self._page(params)
 
 
 class TestListing:
@@ -111,6 +131,38 @@ class TestListing:
     async def test_an_empty_server_says_so_rather_than_returning_nothing(self):
         mgr = _Manager({"a": _Session()})
         assert "No resources" in await ListMcpResourcesTool(mgr).execute()
+
+    async def test_a_paging_server_hands_over_every_page(self):
+        pages = {
+            None: types.ListResourcesResult(resources=[_res("file:///a", "a")], nextCursor="page-2"),
+            "page-2": types.ListResourcesResult(resources=[_res("file:///b", "b")]),
+        }
+        session = _PagingSession(pages)
+        rows = json.loads(await ListMcpResourcesTool(_Manager({"a": session})).execute())
+        assert [row["uri"] for row in rows] == ["file:///a", "file:///b"]
+        assert session.cursors == [None, "page-2"]
+
+    async def test_a_paging_templates_server_hands_over_every_page(self):
+        logs = types.ResourceTemplate(uriTemplate="file:///logs/{date}", name="logs")
+        cfg = types.ResourceTemplate(uriTemplate="file:///cfg/{name}", name="cfg")
+        pages = {
+            None: types.ListResourceTemplatesResult(resourceTemplates=[logs], nextCursor="page-2"),
+            "page-2": types.ListResourceTemplatesResult(resourceTemplates=[cfg]),
+        }
+        session = _PagingSession(pages)
+        rows = json.loads(await ListMcpResourceTemplatesTool(_Manager({"a": session})).execute())
+        assert [row["name"] for row in rows] == ["logs", "cfg"]
+        assert session.cursors == [None, "page-2"]
+
+    async def test_a_repeated_cursor_ends_the_walk(self):
+        pages = {
+            None: types.ListResourcesResult(resources=[_res("file:///a", "a")], nextCursor="stuck"),
+            "stuck": types.ListResourcesResult(resources=[_res("file:///b", "b")], nextCursor="stuck"),
+        }
+        session = _PagingSession(pages)
+        rows = json.loads(await ListMcpResourcesTool(_Manager({"a": session})).execute())
+        assert [row["uri"] for row in rows] == ["file:///a", "file:///b"]
+        assert session.cursors == [None, "stuck"]
 
 
 class TestTheExecutionTimeGate:

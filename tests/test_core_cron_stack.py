@@ -474,7 +474,8 @@ def _instance_job(*, agent: str = "Raven-Oncall", handle: str = "inst-7", name: 
     return job
 
 
-async def test_a_wake_naming_an_instance_runs_as_that_instance_turn(spine):
+@pytest.mark.parametrize("destination", ["default", "issue#42"])
+async def test_a_wake_naming_an_instance_runs_as_that_instance_turn(spine, destination):
     """The gap this closes, measured 2026-08-25 through ``/new-instance``.
 
     An on-call wake's message is addressed to the agent holding the campaign --
@@ -486,14 +487,17 @@ async def test_a_wake_naming_an_instance_runs_as_that_instance_turn(spine):
     """
     handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, default_channel="tui")
 
-    response = await handler(_instance_job())
+    job = _instance_job()
+    job.payload.to = destination
+    response = await handler(job)
 
     req = spine.captured[0]
     assert req.direct_target == ("Raven-Oncall", "inst-7")
     # Derived from this job's own (channel, to), not hardcoded: the direct lane
     # hangs off the session key the main-agent lane for this outlet uses, which
     # is what lets RpcOutlet map it back to the client's one subscription.
-    assert req.conversation == "tui:default#Raven-Oncall/inst-7"
+    assert req.conversation == f"tui:{destination}#Raven-Oncall/inst-7"
+    assert req.parent_session == f"tui:{destination}"
     # Read back off the lane the request actually used, not "cron:<job id>".
     assert response == "resolved body"
 

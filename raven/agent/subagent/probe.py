@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 import shutil
 import tempfile
 import time
@@ -44,6 +43,7 @@ from raven.agent.subagent.presets import (
     upgrade_hint_for,
 )
 from raven.agent.subagent.probe_state import LastTest, Remedy
+from raven.utils.commands import command_argv
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
 Source = Literal["config", "preset", "vendored"]
@@ -515,7 +515,7 @@ def _stale_node(cfg: Any) -> NodeTooOld | None:
     if not runs_on_node(cfg):
         return None
     try:
-        argv = shlex.split((getattr(cfg, "command", None) or "").strip())
+        argv = command_argv((getattr(cfg, "command", None) or "").strip())
     except ValueError:
         return None
     if not argv:
@@ -537,7 +537,7 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     if not command:
         return done("unknown", "command is empty")
     try:
-        argv = shlex.split(command)
+        argv = command_argv(command)
     except ValueError as exc:
         return done("unknown", f"command cannot be parsed: {exc}")
     if not argv:
@@ -583,7 +583,7 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     if not command:
         return done("unknown", "command is empty")
     try:
-        argv = shlex.split(command)
+        argv = command_argv(command)
     except ValueError as exc:
         return done("unknown", f"command cannot be parsed: {exc}")
     if not argv:
@@ -1272,7 +1272,7 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
     here = []
     for preset in wanted:
         try:
-            argv = shlex.split((preset.get("command") or "").strip())
+            argv = command_argv((preset.get("command") or "").strip())
         except ValueError:
             continue
         if argv and shutil.which(argv[0], path=path or None) is not None:

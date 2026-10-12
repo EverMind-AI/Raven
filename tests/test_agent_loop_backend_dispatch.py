@@ -111,6 +111,20 @@ class TestConstructorWiring:
         agent = _make_loop(tmp_path, backend=b)
         assert agent.backend is b
 
+    def test_the_loop_tells_its_estimation_renderer_a_backend_is_wired(self, tmp_path: Path) -> None:
+        """Asserted on what the loop renders, not on the argument it passes.
+
+        The flag reaches two renderers from two places, and a test that hands
+        each of them the flag by hand pins that they agree once told -- not
+        that the loop tells them. This one holds the loop's half: drop the
+        argument at its call site and this reddens.
+        """
+        plain = _make_loop(tmp_path, backend=None).context._get_identity()
+        assert "user_memory" in plain
+
+        wired = _make_loop(tmp_path, backend=_FakeBackend()).context._get_identity()
+        assert "user_memory" not in wired
+
 
 # ---------------------------------------------------------------------------
 # _dispatch_backend_store

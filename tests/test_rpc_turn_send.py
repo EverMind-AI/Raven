@@ -77,6 +77,77 @@ def dispatcher() -> Dispatcher:
 # --- Happy path ---
 
 
+@pytest.mark.parametrize("entrance", ["rpc", "gateway", "one_shot"])
+@pytest.mark.parametrize("direct", [False, True])
+async def test_requests_keep_separator_named_permission_scopes(monkeypatch, entrance, direct) -> None:
+    from raven.cli._one_shot_spine import _OneShotTurnRunner
+    from raven.config.schema import PermissionsConfig
+    from raven.contracts.permissions import Allow, DecisionSource, NeedsApproval
+    from raven.gateway.spine import GatewayTurnRunner
+    from raven.permissions import session as permissions_session
+    from raven.permissions.builtin import BuiltinRulings
+    from raven.permissions.gate import PermissionGate
+    from raven.rpc.methods import turn as turn_module
+    from raven.rpc.spine import RpcTurnRunner
+    from raven.spine import TurnOutcome, Usage
+
+    monkeypatch.setattr(permissions_session, "_GRANTS", {})
+    monkeypatch.setattr(permissions_session, "_MODES", {})
+    monkeypatch.setattr(permissions_session, "_LOOKED_UP", set())
+    monkeypatch.setattr(permissions_session, "_RESTORE", None)
+    config = PermissionsConfig(mode="full")
+    gate = PermissionGate(config_source=lambda: config, builtin=BuiltinRulings(), allow_ask=True)
+    arguments = {"command": "git push origin HEAD"}
+
+    class ProbeLoop:
+        tools = {}
+        decision = None
+
+        async def run_turn(self, _req, _emit, _drain, **_kwargs):
+            self.decision = await gate.check("exec", arguments)
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+    loop = ProbeLoop()
+    runner = {
+        "rpc": lambda: RpcTurnRunner(loop, FakeEmitter(), {}, {}),
+        "gateway": lambda: GatewayTurnRunner(loop, {}, {}),
+        "one_shot": lambda: _OneShotTurnRunner(loop, stream=False),
+    }[entrance]()
+
+    async def run(parent):
+        scheduler = FakeScheduler()
+        await turn_send(
+            {
+                "session_key": parent,
+                "content": "check",
+                "target": {"agent": "Raven", "handle": "h#1"} if direct else None,
+            },
+            scheduler=scheduler,
+            turn_ids={},
+        )
+        request = scheduler.submitted[0]
+
+        async def emit(_event):
+            pass
+
+        try:
+            await runner.run(request, emit, lambda: [])
+            return loop.decision
+        finally:
+            turn_module._active_turns.pop(request.conversation, None)
+
+    parent = "tui:issue#42"
+    permissions_session.set_session_mode(parent, "ask")
+    initial = await run(parent)
+    assert isinstance(initial, NeedsApproval)
+    permissions_session.set_session_mode(parent, None)
+    config.mode = "ask"
+    permissions_session.remember_allowed(parent, initial.session_keys)
+    allowed = await run(parent)
+    assert isinstance(allowed, Allow) and allowed.source is DecisionSource.SESSION
+    assert isinstance(await run("tui:issue#43"), NeedsApproval)
+
+
 async def test_turn_send_happy_path_returns_turn_id_and_accepted() -> None:
     scheduler = FakeScheduler()
     turn_ids: dict[str, str] = {}
@@ -494,12 +565,13 @@ async def test_message_start_carries_the_question_that_opened_the_turn() -> None
 # ---------------------------------------------------------------------------
 
 
-async def test_target_becomes_direct_target_on_the_request() -> None:
+@pytest.mark.parametrize("parent", ["tui:default", "tui:issue#42"])
+async def test_target_becomes_direct_target_on_the_request(parent: str) -> None:
     scheduler = FakeScheduler()
 
     await turn_send(
         {
-            "session_key": "tui:default",
+            "session_key": parent,
             "content": "fix it",
             "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
         },
@@ -508,6 +580,7 @@ async def test_target_becomes_direct_target_on_the_request() -> None:
     )
 
     assert scheduler.submitted[0].direct_target == ("Raven-Code", "refactor-auth")
+    assert scheduler.submitted[0].parent_session == parent
 
 
 async def test_no_target_leaves_direct_target_none() -> None:
@@ -516,6 +589,7 @@ async def test_no_target_leaves_direct_target_none() -> None:
     await turn_send({"session_key": "tui:default", "content": "hi"}, scheduler=scheduler, turn_ids={})
 
     assert scheduler.submitted[0].direct_target is None
+    assert scheduler.submitted[0].parent_session is None
 
 
 async def test_a_partial_target_is_refused_at_the_schema() -> None:
@@ -824,7 +898,8 @@ async def test_an_accepted_inject_is_announced_to_every_window() -> None:
     assert event["payload"] == {"turn_id": result["turn_id"], "content": "only the last quarter"}
 
 
-async def test_an_inject_aimed_at_an_instance_carries_its_target() -> None:
+@pytest.mark.parametrize("parent", ["tui:default", "tui:issue#42"])
+async def test_an_inject_aimed_at_an_instance_carries_its_target(parent: str) -> None:
     """One subscription per session carries every lane's events, so an untagged
     frame is drawn into the main conversation -- which is the whole reason the
     tag exists."""
@@ -832,23 +907,25 @@ async def test_an_inject_aimed_at_an_instance_carries_its_target() -> None:
     from raven.spine import direct_lane
 
     emitter = FakeEmitter()
-    lane = direct_lane("tui:default", "Raven-Code", "refactor-auth")
+    lane = direct_lane(parent, "Raven-Code", "refactor-auth")
     turn_mod._active_turns[lane] = FakeHandle()
+    scheduler = FakeScheduler()
 
     await turn_send(
         {
-            "session_key": "tui:default",
+            "session_key": parent,
             "content": "the docs first",
             "busy": "inject",
             "target": {"agent": "Raven-Code", "handle": "refactor-auth"},
         },
         emitter=emitter,
-        scheduler=FakeScheduler(),
+        scheduler=scheduler,
         turn_ids={},
     )
 
     assert emitter.types() == ["message.injected"]
     assert emitter.emitted[0][1]["payload"]["target"] == {"agent": "Raven-Code", "handle": "refactor-auth"}
+    assert scheduler.submitted[0].parent_session == parent
 
 
 async def test_a_refused_inject_is_announced_to_nobody() -> None:

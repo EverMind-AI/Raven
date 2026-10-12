@@ -320,6 +320,8 @@ async def _run_one_shot_turn(
         text=prompt,
         conversation=conversation_id,
     )
+    # No ``session=`` beside it: the request three lines up is built without a
+    # direct_target, so no lane can reach this entrance (PermissionTurn.session).
     start_permission_turn(None, conversation_id=conversation_id, turn_id=req.turn_id or "")
 
     # Function-level: raven/rpc/spine.py's RpcTurnRunner.run defers this same

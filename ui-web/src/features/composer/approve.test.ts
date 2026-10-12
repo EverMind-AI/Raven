@@ -161,13 +161,23 @@ describe('the approval sheet', () => {
     expect(sheets().length).toBe(0)
   })
 
-  it('answers deny on the first option, and on Escape', () => {
+  it('answers deny on the first option and consumes Escape before the page sees it', () => {
     const said: string[] = []
-    open('a', () => said.push('allow'), () => said.push('deny'))
-    opts()[0]!.click()
-    open('b', () => said.push('allow'), () => said.push('deny'))
-    key('Escape')
-    expect(said).toEqual(['deny', 'deny'])
+    const pageKey = vi.fn()
+    document.addEventListener('keydown', pageKey)
+    try {
+      open('a', () => said.push('allow'), () => said.push('deny'))
+      opts()[0]!.click()
+      open('b', () => said.push('allow'), () => said.push('deny'))
+      key('Escape')
+      expect(said).toEqual(['deny', 'deny'])
+      expect(pageKey).not.toHaveBeenCalled()
+      key('Escape')
+      expect(said).toEqual(['deny', 'deny'])
+      expect(pageKey).toHaveBeenCalledTimes(1)
+    } finally {
+      document.removeEventListener('keydown', pageKey)
+    }
   })
 
   it('reads Escape and Cmd+Enter as answers, and a digit as nothing', () => {
@@ -491,6 +501,11 @@ describe('the permission approval sheet', () => {
     expect(document.querySelector('.cp-add')!.textContent).toBe('+ gui.confirm.cfg.reset')
     expect(document.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive')
 
+    setTranslator((k, vars) => (vars ? `${k}(${Object.values(vars).join(',')})` : k))
+    openApproval(fresh({ ...cfg, evidence: { action: 'set', setting: 'x', value: '1', sensitive: 'loosens', sensitive_key: 'permissions.mode' } }), handlers())
+    expect(document.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive(gui.confirm.cfg.why.permissions.mode)')
+    setTranslator((key) => key)
+
     openApproval(fresh({ ...cfg, evidence: { action: 'test', setting: 'subagents.Raven-Research', change: 'Run it' } }), handlers())
     expect(document.querySelector('.cp-ev')!.textContent).toBe('gui.confirm.cfg.test')
 
@@ -511,7 +526,7 @@ describe('the permission approval sheet', () => {
       evidence: {
         action: 'add', setting: 'subagents', change: 'Connect sub-agent: pi',
         agents: [{ preset: 'pi', lend_key: 'openrouter', title: 'Pi' }, { preset: 'codex', model: 'gpt-5' }],
-        sensitive: 'billed to that key',
+        sensitive: 'billed to that key', sensitive_key: 'subagents.*.lendKeys',
       },
     }
     openApproval(fresh(add), handlers())
@@ -520,7 +535,7 @@ describe('the permission approval sheet', () => {
     expect(card.textContent).toContain('gui.confirm.cfg.add_lend(Pi,openrouter)')
     expect(card.textContent).toContain('gui.confirm.cfg.add(codex)')
     expect(card.querySelector('.cp-cfg-note')!.textContent).toBe('gui.confirm.cfg.add_model(gpt-5)')
-    expect(card.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive(billed to that key)')
+    expect(card.querySelector('.cp-cfg-warn')!.textContent).toBe('gui.confirm.cfg.sensitive(gui.confirm.cfg.why.subagents.*.lendKeys)')
   })
 
   /* Seen live: asked to switch the search vendor and set its key, the agent
@@ -685,6 +700,24 @@ describe('the permission approval sheet', () => {
     broaderKey()
     expect(said.map(([c]) => c)).toEqual(['deny', 'allow', 'allow_always'])
     expect(said[2]![2]).toBe('git push *')
+  })
+
+  it.each(['input', 'textarea'])('consumes Escape from %s without also reaching the page', (tag) => {
+    const pageKey = vi.fn()
+    document.addEventListener('keydown', pageKey)
+    try {
+      openApproval(base, handlers())
+      const field = document.createElement(tag)
+      rack().appendChild(field)
+      field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+      expect(said.map(([choice]) => choice)).toEqual(['deny'])
+      expect(sheets()).toHaveLength(0)
+      expect(pageKey).not.toHaveBeenCalled()
+      key('Escape')
+      expect(pageKey).toHaveBeenCalledTimes(1)
+    } finally {
+      document.removeEventListener('keydown', pageKey)
+    }
   })
 
   /* With no rule to save, the broader grant is the conversation's, and the

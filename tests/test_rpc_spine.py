@@ -1684,7 +1684,15 @@ async def test_the_turns_end_drops_the_binding():
     assert targets == {}
 
 
-async def test_a_failed_direct_turn_reports_against_its_target():
+@pytest.mark.parametrize(
+    ("parent", "lane"),
+    [
+        ("tui:c1", "tui:c1"),
+        ("tui:c1", "tui:c1#Raven-Code/refactor-auth"),
+        ("tui:issue#42", "tui:issue#42#Raven-Code/refactor-auth"),
+    ],
+)
+async def test_a_failed_direct_turn_reports_against_its_target(parent, lane):
     """The error is what clears the spinner, so it has to name the same view the
     turn was streaming into -- and it is emitted after the binding is dropped."""
 
@@ -1693,12 +1701,12 @@ async def test_a_failed_direct_turn_reports_against_its_target():
             raise RuntimeError("boom")
 
     emitter = FakeEmitter()
-    targets = {"tui:c1": {"agent": "Raven-Code", "handle": "refactor-auth"}}
+    targets = {lane: {"agent": "Raven-Code", "handle": "refactor-auth"}}
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(_BoomLoop(), emitter, direct_targets=targets)
     try:
-        turn_ids["tui:c1"] = "t1"
+        turn_ids[lane] = "t1"
         handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
+            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation=lane, turn_id="t1")
         )
         await handle.result()
     finally:
@@ -1706,6 +1714,7 @@ async def test_a_failed_direct_turn_reports_against_its_target():
 
     errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
     assert errors[0]["payload"]["target"] == {"agent": "Raven-Code", "handle": "refactor-auth"}
+    assert {key for key, event in emitter.emitted if event["type"] == "error"} == {parent}
 
 
 async def test_a_main_agent_turn_emits_no_target_key_at_all():
@@ -1814,22 +1823,25 @@ async def test_a_direct_turn_does_not_block_the_main_agent():
         await teardown()
 
 
-async def test_a_direct_turns_events_reach_the_sessions_subscription():
+@pytest.mark.parametrize("parent", ["tui:c1", "tui:issue#42"])
+async def test_a_direct_turns_events_reach_the_sessions_subscription(parent):
     """The client holds one subscription per session and demultiplexes on the
     event's target; emitting on the lane key would reach nobody."""
     emitter = FakeEmitter()
     loop = _RunTurnLoop(events=[StreamDelta(delta="a"), Text(content="b")])
-    targets = {"tui:c1#A/one": {"agent": "A", "handle": "one"}}
+    lane = f"{parent}#A/one#part"
+    targets = {lane: {"agent": "A", "handle": "one#part"}}
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
     try:
-        turn_ids["tui:c1#A/one"] = "t1"
+        turn_ids[lane] = "t1"
         handle = scheduler.submit(
             TurnRequest(
                 origin=Origin.USER,
                 source=_src(),
                 text="hi",
-                conversation="tui:c1#A/one",
-                direct_target=("A", "one"),
+                conversation=lane,
+                direct_target=("A", "one#part"),
+                parent_session=parent,
                 turn_id="t1",
             )
         )
@@ -1837,5 +1849,5 @@ async def test_a_direct_turns_events_reach_the_sessions_subscription():
     finally:
         await teardown()
 
-    assert {key for key, _e in emitter.emitted} == {"tui:c1"}
-    assert all(e["payload"].get("target") == {"agent": "A", "handle": "one"} for _k, e in emitter.emitted)
+    assert {key for key, _e in emitter.emitted} == {parent}
+    assert all(e["payload"].get("target") == {"agent": "A", "handle": "one#part"} for _k, e in emitter.emitted)

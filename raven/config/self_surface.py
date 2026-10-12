@@ -971,6 +971,27 @@ def sensitive_reason(path: str) -> str:
     return str((_channel_field(path) or {}).get("sensitive") or "")
 
 
+def _channel_declaration(path: str) -> tuple[str, dict[str, Any]] | None:
+    """A ``channels.<name>.<field>`` path as its channel declares it, with that field's spec.
+
+    Any spelling the tool would write resolves here: a channel name in another
+    case, a field in camelCase or snake_case. The declared spelling is the one
+    the note catalogue carries its zh entry under, so a key sent as the call
+    spelled it (``gatewayUrl``) misses and falls back to English.
+    """
+    parts = path.split(".")
+    if len(parts) < 3 or parts[0] != "channels":
+        return None
+    from raven.config.update_channels import channel_field_specs, channel_names
+
+    name = parts[1].lower()
+    if name not in channel_names():
+        return None
+    specs = channel_field_specs(name)
+    key = channel_key(".".join(parts[2:]), specs)
+    return (f"channels.{name}.{key}", specs[key]) if key in specs else None
+
+
 def _channel_field(path: str) -> dict[str, Any] | None:
     """The declaration a channel's adapter gives a ``channels.<name>.<field>`` path, if any.
 
@@ -979,18 +1000,22 @@ def _channel_field(path: str) -> dict[str, Any] | None:
     server address); a guess from the key's spelling would be a second
     definition, one that disagrees with the channel's own.
     """
-    parts = path.split(".")
-    if len(parts) < 3 or parts[0] != "channels":
-        return None
-    from raven.config.update_channels import channel_field_specs, channel_names
+    declaration = _channel_declaration(path)
+    return declaration[1] if declaration else None
 
-    # Any spelling the tool would write: a channel name in another case, a field
-    # in camelCase or snake_case.
-    name = parts[1].lower()
-    if name not in channel_names():
-        return None
-    specs = channel_field_specs(name)
-    return specs.get(channel_key(".".join(parts[2:]), specs))
+
+def _note_key(path: str) -> str:
+    """The spelling the note catalogue carries ``path``'s zh entry under.
+
+    A channel field resolves to its channel's declared field; a setting under a
+    wildcard pattern names that pattern (``providers.*.apiBase``), the one entry
+    the catalogue grows per declaration rather than per instance.
+    """
+    declared = _channel_declaration(path)
+    if declared is not None:
+        return declared[0]
+    found = find(path)
+    return found[0].path if found is not None else path
 
 
 def channel_key(field: str, specs: dict[str, Any]) -> str:
@@ -1340,6 +1365,7 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             view["agents"] = [_agent_view(item) for item in items]
             if any(item.get("lend_key") for item in items):
                 view["sensitive"] = sensitive_reason(_LENT)
+                view["sensitive_key"] = _LENT
             return view
     if action != "unset":
         view["value"] = _shown(path, params.get("value"))
@@ -1358,14 +1384,22 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             view["was_default"] = True
     if found is not None:
         view["effect"] = found[0].effect.value
-    if reason := _reason_within(path, params.get("value")):
-        view["sensitive"] = reason
+    if leaf_reason := _sensitive_leaf_within(path, params.get("value")):
+        view["sensitive"] = leaf_reason[1]
+        view["sensitive_key"] = _note_key(leaf_reason[0])
     return view
 
 
 def _reason_within(path: str, value: Any) -> str:
     """The sensitive reason for ``path``, or for the first field below it an object sets."""
     return next((reason for leaf, _ in _leaves(path, _decoded(value)) if (reason := sensitive_reason(leaf))), "")
+
+
+def _sensitive_leaf_within(path: str, value: Any) -> tuple[str, str] | None:
+    """The first leaf an object set under ``path`` carries a sensitive reason for, with that reason."""
+    return next(
+        ((leaf, reason) for leaf, _ in _leaves(path, _decoded(value)) if (reason := sensitive_reason(leaf))), None
+    )
 
 
 def _short(value: Any) -> str:

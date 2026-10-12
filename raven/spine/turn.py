@@ -98,6 +98,9 @@ class TurnRequest:
     # transcript -- a direct chat exists to keep those exchanges out of the main
     # agent's context. See AgentLoop.run_turn.
     direct_target: tuple[str, str] | None = None
+    # The original session key cannot be recovered by splitting a direct lane:
+    # both the session and the instance handle may contain the lane separator.
+    parent_session: str | None = None
     # Per-turn UI choice for Playbook generation. None inherits the configured
     # default; off/task/persona are resolved before the setup model call.
     playbook_mode: str | None = None
@@ -113,19 +116,15 @@ _LANE_SEP = "#"
 def direct_lane(session_key: str, agent: str, handle: str) -> str:
     """The lane a direct chat with one instance runs on.
 
-    Derived rather than passed as a second field so nothing downstream has to
-    carry two ids: everything already keyed by conversation -- the active-turn
-    slot, the turn id, the addressee, the delivery hub's stream -- becomes
-    per-instance by construction.
+    This identifies the queue, turn, and addressee per instance. The request
+    carries its original parent session separately for permissions and records.
     """
     return f"{session_key}{_LANE_SEP}{agent}/{handle}"
 
 
 def session_of(lane: str) -> str:
-    """The session a lane belongs to; a main-agent lane *is* its session.
-
-    Splits on the **first** separator, which is what makes the encoding safe: a
-    session key is ``channel:chat_id`` and never contains one, while a handle is
-    free-form text the model chose and may contain anything at all.
+    """Legacy string-only lookup for parents without a separator. A request must
+    use ``session_key_for`` instead, since a caller can choose a parent key
+    containing ``#`` and a handle can contain it too.
     """
     return lane.split(_LANE_SEP, 1)[0]

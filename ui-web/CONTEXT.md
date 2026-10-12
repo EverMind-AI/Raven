@@ -367,10 +367,11 @@ The ordered table in `src/state/escapeOrder.ts` (`ESCAPE_ORDER`, of
 Escape takes back. A table rather than a
 stack, because each entry answers "am I open" when the key arrives -- the
 channel dialog opens over the entries page and closes first, while the shared
-drawer opens over the dialog and closes second. Three capture-phase handlers
-the docked sheets register run ahead of it, and two of them do not stop
-propagation, so one Escape can both deny an approval and interrupt the turn
-behind it.
+drawer opens over the dialog and closes second. Capture-phase handlers the
+docked sheets register run ahead of it. Approval and credential cards consume
+Escape after denying or skipping, leaving the turn running. A later Escape
+reaches the normal close order and stops a running turn only when no higher
+layer is open.
 
 **Menu**:
 `src/state/menu.ts` plus `<ContextMenu/>` (`src/App.tsx`) -- the one context

@@ -107,6 +107,42 @@ class TestIdentityBootstrap:
         assert f"{home}/user_memory/profile/user.md" in seg.text
         assert str(project / "user_memory") not in seg.text
 
+    async def test_identity_without_a_backend_still_names_both_memory_files(self, tmp_path: Path) -> None:
+        """No backend, no change.
+
+        Whether an episodic log nothing writes earns a line in the prompt is a
+        separate question from where memory lives once a backend owns it, and
+        deciding it here would tie the two together.
+        """
+        seg = await IdentitySegmentBuilder(tmp_path).build(_ctx(tmp_path))
+        assert f"{tmp_path}/user_memory/profile/user.md" in seg.text
+        assert f"{tmp_path}/user_memory/episodic/episodes.md" in seg.text
+
+    async def test_identity_with_a_backend_names_no_memory_file(self, tmp_path: Path) -> None:
+        """A wired backend owns memory, so agent home holds no file for it.
+
+        Told otherwise, the agent treats ``user.md`` as the place a
+        "remember this" goes. On a non-interactive turn that ``edit_file``
+        is refused at the ask tier, and the agent reports the refusal as the
+        memory system having failed -- while the backend has already stored
+        the turn and recalls it in the next session.
+
+        The same block forbids the claim in either direction. ``backend.store``
+        is dispatched after the turn ends, so neither "saved" nor "not saved"
+        is something this side watched happen -- and the claim is extracted
+        into memory next turn as if it were an observation of the system.
+        """
+        seg = await IdentitySegmentBuilder(tmp_path, has_memory_backend=True).build(_ctx(tmp_path))
+        assert "user_memory" not in seg.text
+        assert "# Memory" in seg.text
+        assert "never report it to the user as done or as failed" in seg.text
+
+    async def test_identity_with_a_backend_matches_the_estimation_prompt(self, tmp_path: Path) -> None:
+        """``_get_identity`` renders what the turn renders, backend included."""
+        seg = await IdentitySegmentBuilder(tmp_path, has_memory_backend=True).build(_ctx(tmp_path))
+        legacy = ContextBuilder(workspace=tmp_path, has_memory_backend=True)._get_identity()
+        assert seg.text == legacy
+
     async def test_the_identity_renders_the_task_it_is_handed(self, tmp_path: Path) -> None:
         """The segment owns how the identity reads and nothing about deciding it.
 

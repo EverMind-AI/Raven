@@ -31,7 +31,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import shutil
 import threading
 from collections.abc import Collection
@@ -40,6 +39,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
+from raven.utils.text import parse_frontmatter
 
 # Default builtin skills directory.
 #
@@ -350,7 +350,7 @@ class SkillRegistry:
         name: str,
         source: str | None = None,
     ) -> dict | None:
-        """Top-level frontmatter dict (YAML-lite parsed)."""
+        """Top-level frontmatter dict, as :func:`_parse_frontmatter` reads it."""
         body = self.get_body(name, source=source)
         if not body:
             return None
@@ -442,14 +442,13 @@ class SkillRegistry:
         except (OSError, UnicodeDecodeError):
             return None
 
-        frontmatter = _parse_frontmatter(body) or {}
+        frontmatter, content = parse_frontmatter(body, line_fallback=True, preserve_body_whitespace=True)
         nested = _parse_nested_metadata(frontmatter.get("metadata", ""))
         requires = nested.get("requires", {}) if isinstance(nested.get("requires"), dict) else {}
         always = _resolve_always(frontmatter, nested)
         if not always_enabled:
             always = False
         inject = _resolve_inject(frontmatter, nested)
-        content = _strip_frontmatter(body)
 
         # ``stable_key`` is the directory name. For everos it is
         # the sqlite ``skills.id`` string (the pipeline materializes
@@ -461,7 +460,7 @@ class SkillRegistry:
         # label. Falls back to dir name for hand-authored skills lacking
         # that field.
         display_name = (frontmatter.get("name") or "").strip() or skill_dir.name
-        description = frontmatter.get("description", "") or display_name
+        description = " ".join(frontmatter.get("description", "").split()) or display_name
 
         return SkillMeta(
             id=f"{source}/{stable_key}",
@@ -483,54 +482,32 @@ class SkillRegistry:
 
 
 def _parse_frontmatter(content: str) -> dict | None:
-    """Minimal YAML-lite parser for SKILL.md frontmatter.
-
-    Expected format::
-
-        ---
-        name: foo
-        description: "bar"
-        metadata: '{"raven": {...}}'
-        ---
-
-    Values are stripped of surrounding quotes; nested keys are not supported.
-    Returns ``None`` when no frontmatter is present.
-    """
-    if not content.startswith("---"):
-        return None
-    m = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-    if not m:
-        return None
-    metadata: dict = {}
-    for line in m.group(1).split("\n"):
-        if ":" in line:
-            key, value = line.split(":", 1)
-            metadata[key.strip()] = value.strip().strip("\"'")
-    return metadata
+    """Read SKILL.md with the importers' shared YAML and legacy-fallback rules."""
+    metadata, body = parse_frontmatter(content, line_fallback=True)
+    return metadata if body != content else None
 
 
 def _strip_frontmatter(content: str) -> str:
     """Return the markdown body with the leading ``---...---`` frontmatter removed."""
-    if not content.startswith("---"):
-        return content
-    m = re.match(r"^---\n.*?\n---\n?", content, re.DOTALL)
-    if not m:
-        return content
-    return content[m.end() :]
+    return parse_frontmatter(content, line_fallback=True, preserve_body_whitespace=True)[1]
 
 
-def _parse_nested_metadata(raw: str) -> dict:
-    """Extract Raven-namespaced metadata from the ``metadata`` JSON blob.
+def _parse_nested_metadata(raw: object) -> dict:
+    """Extract Raven-namespaced metadata from ``metadata``: a JSON string, or
+    the mapping YAML reads the same one-line JSON as.
 
     Lookup order (first match wins): ``raven`` > ``nanobot`` > ``openclaw``.
     Returns ``{}`` on any failure.
     """
-    if not raw:
+    if isinstance(raw, dict):
+        data = raw
+    elif not isinstance(raw, str) or not raw:
         return {}
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return {}
+    else:
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
     if not isinstance(data, dict):
         return {}
     for key in ("raven", "nanobot", "openclaw"):
