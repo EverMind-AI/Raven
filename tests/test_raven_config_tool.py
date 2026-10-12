@@ -225,6 +225,27 @@ async def test_cron_timezone_is_written_through_settings_and_used_by_new_jobs(co
     assert _pending(await _run(tool, action="describe")) is None
 
 
+async def test_cron_timezone_set_to_null_returns_new_jobs_to_local_time(config_file):
+    from raven.core.cron_stack import build_cron_service
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["cron"] = {"defaultTimezone": "UTC"}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value="null")
+    assert not reply.startswith("Error:"), reply
+    job = build_cron_service(allowed_channels=None).add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "d")
+    assert job.schedule.tz is None
+
+
 @pytest.mark.parametrize("invalid", [7, "Not/AZone"])
 async def test_cron_timezone_rejects_invalid_tool_writes(config_file, invalid):
     from raven.rpc.methods import console as rpc_console

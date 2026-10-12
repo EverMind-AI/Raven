@@ -804,6 +804,19 @@ class TestTheCronTimezoneControl:
         with pytest.raises(ConfigValidationError):
             await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": ""})
 
+    async def test_null_returns_new_jobs_to_local_time(self, cfg):
+        from raven.core.cron_stack import build_cron_service
+        from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+        await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
+        r = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": None})
+
+        assert r["previous"] == "Asia/Tokyo"
+        job = build_cron_service(allowed_channels=None).add_job(
+            "daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily"
+        )
+        assert job.schedule.tz is None
+
 
 async def test_the_retired_forward_channels_key_is_not_writable(cfg):
     """``forward_channels`` left ``CronConfig`` when delivery became fire-at-origin.

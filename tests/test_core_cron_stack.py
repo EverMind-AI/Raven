@@ -543,20 +543,39 @@ def test_every_process_opens_the_one_cron_store(monkeypatch, tmp_path) -> None:
     assert service.allowed_channels == {"tui"}
 
 
-def test_a_new_cron_uses_the_schema_default_when_no_setting_was_written(monkeypatch, tmp_path):
-    from raven.config.schema import CronConfig
+def test_a_new_cron_keeps_local_time_when_no_setting_was_written(monkeypatch, tmp_path):
     from raven.core.cron_stack import build_cron_service
 
     monkeypatch.setattr("raven.home._current_config_path", tmp_path / "config.json")
     service = build_cron_service(allowed_channels=None)
     job = service.add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily")
-    assert job.schedule.tz == CronConfig().default_timezone
+    assert job.schedule.tz is None
+
+
+def test_a_chosen_timezone_survives_a_config_save(monkeypatch, tmp_path):
+    """``save_config`` drops every value equal to its schema default.
+
+    That is lossless only while the default means what the value means. A
+    chosen ``Asia/Shanghai`` must not read as "unset" after a save and move
+    new reminders onto the host's local time.
+    """
+    from raven.config.loader import load_config, save_config
+    from raven.core.cron_stack import build_cron_service
+
+    config = tmp_path / "config.json"
+    monkeypatch.setattr("raven.home._current_config_path", config)
+    config.write_text(json.dumps({"cron": {"defaultTimezone": "Asia/Shanghai"}}), encoding="utf-8")
+    save_config(load_config(config), config)
+
+    assert json.loads(config.read_text(encoding="utf-8"))["cron"] == {"defaultTimezone": "Asia/Shanghai"}
+    service = build_cron_service(allowed_channels=None)
+    job = service.add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily")
+    assert job.schedule.tz == "Asia/Shanghai"
 
 
 @pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
 def test_cron_creation_keeps_the_last_admitted_timezone(monkeypatch, tmp_path, spelling):
     from raven.config.live import LiveConfig
-    from raven.config.schema import CronConfig
     from raven.core.cron_stack import build_cron_service
 
     config = tmp_path / "config.json"
@@ -576,15 +595,17 @@ def test_cron_creation_keeps_the_last_admitted_timezone(monkeypatch, tmp_path, s
     config.write_text(json.dumps({"cron": {spelling: "UTC"}}), encoding="utf-8")
     original = create()
     assert original.schedule.tz == "UTC"
-    for invalid in (7, None, "Not/AZone"):
+    for invalid in (7, "Not/AZone"):
         config.write_text(json.dumps({"cron": {spelling: invalid}}), encoding="utf-8")
         assert create().schedule.tz == "UTC"
     config.write_text('{"cron":', encoding="utf-8")
     assert create().schedule.tz == "UTC"
     config.write_text(json.dumps({"cron": {spelling: "Europe/Paris"}}), encoding="utf-8")
     assert create().schedule.tz == "Europe/Paris"
+    config.write_text(json.dumps({"cron": {spelling: None}}), encoding="utf-8")
+    assert create().schedule.tz is None
     config.write_text('{"cron": {}}', encoding="utf-8")
-    assert create().schedule.tz == CronConfig().default_timezone
+    assert create().schedule.tz is None
     assert next(job for job in service.list_jobs() if job.id == original.id).schedule.tz == "UTC"
 
 

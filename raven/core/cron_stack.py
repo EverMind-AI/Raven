@@ -499,7 +499,7 @@ def build_cron_service(*, allowed_channels: "set[str] | None") -> "CronService":
     from raven.config.paths import get_cron_dir
     from raven.proactive_engine.schedulers.cron.service import CronService
 
-    def default_timezone() -> str:
+    def default_timezone() -> str | None:
         return cron_default_timezone(default_live())
 
     return CronService(

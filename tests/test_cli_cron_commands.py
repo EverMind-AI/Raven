@@ -861,7 +861,8 @@ def test_config_get_all_shows_defaults(runner, isolated_config):
     r = runner.invoke(cron_app, ["config", "get"])
     assert r.exit_code == 0, r.output
     assert "default_timezone" in r.stdout
-    assert "Asia/Shanghai" in r.stdout
+    assert "local" in r.stdout
+    assert "Asia/Shanghai" not in r.stdout
 
 
 def test_config_get_single_flag(runner, isolated_config):
@@ -869,7 +870,7 @@ def test_config_get_single_flag(runner, isolated_config):
     r = runner.invoke(cron_app, ["config", "get", "--default-timezone"])
     assert r.exit_code == 0, r.output
     lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
-    assert lines == ["Asia/Shanghai"]
+    assert lines == ["local"]
 
 
 def test_config_retired_forward_channels_flag_rejected(runner, isolated_config):

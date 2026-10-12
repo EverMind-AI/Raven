@@ -114,9 +114,9 @@ def remove_exec_pattern(pattern: str, *, config_path: Path | None = None) -> boo
 def reset_cron_config(*, config_path: Path | None = None) -> None:
     """Remove the entire ``cron`` section from on-disk config.
 
-    Schema defaults (``default_timezone="Asia/Shanghai"``) take effect on
-    next load. Stays consistent with the file's "never bake defaults to
-    disk" principle.
+    Schema defaults take effect on next load: with no ``default_timezone``,
+    new jobs use the host's local time. Stays consistent with the file's
+    "never bake defaults to disk" principle.
     """
     path = config_path or get_config_path()
 

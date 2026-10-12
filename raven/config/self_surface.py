@@ -602,6 +602,8 @@ SECTIONS: tuple[Section, ...] = (
                 "str",
                 _E.NEXT_TURN,
                 writer="settings",
+                nullable=True,
+                unset_means="new cron jobs use the host's local time",
                 note="read when a new cron-expression job is created; existing jobs keep their stored timezone",
             ),
         ),

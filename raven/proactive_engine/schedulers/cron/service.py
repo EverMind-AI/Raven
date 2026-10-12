@@ -124,8 +124,8 @@ class CronService:
 
         ``default_timezone`` resolves a new cron job's omitted timezone at
         creation. The resolved zone is stored on the job, so a later default
-        change cannot move an existing reminder. Without a resolver, new jobs
-        use local time.
+        change cannot move an existing reminder. Without a resolver, or when it
+        answers None, new jobs use local time.
         """
         self.store_path = store_path
         # Sibling file for advisory locking (survives atomic rename of

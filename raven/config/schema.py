@@ -302,11 +302,12 @@ class CronConfig(Base):
     key is stripped by the config loader for backwards compatibility.
     """
 
-    default_timezone: str = "Asia/Shanghai"
+    default_timezone: str | None = None
     """IANA timezone stored on new cron-expression jobs without an explicit zone.
 
-    Read at creation, including in a running process. Existing jobs keep their
-    stored timezone; legacy jobs without one continue to use local time.
+    Unset, a new job stores no zone and fires on the host's local time, as
+    legacy jobs do. Read at creation, including in a running process. Existing
+    jobs keep their stored timezone.
     """
 
     notify_missed: bool = True

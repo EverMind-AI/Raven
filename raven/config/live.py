@@ -221,12 +221,13 @@ def _admit(live: LiveConfig, slot: str, *, present: bool, value: Any) -> Any:
     return value
 
 
-def cron_default_timezone(live: LiveConfig) -> str:
+def cron_default_timezone(live: LiveConfig) -> str | None:
     """The zone a new cron-expression job captures, keeping the last valid answer.
 
     An invalid edit must not prevent scheduling or silently move reminders to
-    another zone. Removing the field resets the preference to its schema default;
-    existing jobs already hold their own zone and never consult this reader.
+    another zone. Without the field the answer is None, and a new job fires on
+    the host's local time; existing jobs already hold their own zone and never
+    consult this reader.
     """
     from zoneinfo import ZoneInfo
 
@@ -240,12 +241,16 @@ def cron_default_timezone(live: LiveConfig) -> str:
     value = None
     if present and isinstance(section, dict):
         candidate = section.get("defaultTimezone", section.get("default_timezone"))
-        try:
-            value = CronConfig.model_validate({"default_timezone": candidate}).default_timezone
-            ZoneInfo(value)
-        except (ValueError, TypeError, KeyError):
-            value = None
-    return _admit(live, "cron_default_timezone", present=present, value=value) or CronConfig().default_timezone
+        if candidate is None:
+            # Null is the schema's own "unset", not a rejected edit.
+            present = False
+        else:
+            try:
+                value = CronConfig.model_validate({"default_timezone": candidate}).default_timezone
+                ZoneInfo(value)
+            except (ValueError, TypeError, KeyError):
+                value = None
+    return _admit(live, "cron_default_timezone", present=present, value=value)
 
 
 def exec_extra_deny_patterns(live: LiveConfig) -> list[str] | None:

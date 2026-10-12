@@ -657,14 +657,15 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if key == "cron.defaultTimezone":
         from raven.config.update import update_cron_config
 
-        if not isinstance(value, str) or not value:
-            raise ConfigValidationError("defaultTimezone must be a non-empty string")
-        from zoneinfo import ZoneInfo
+        if value is not None:
+            if not isinstance(value, str) or not value:
+                raise ConfigValidationError("defaultTimezone must be a non-empty string or null")
+            from zoneinfo import ZoneInfo
 
-        try:
-            ZoneInfo(value)
-        except Exception:
-            raise ConfigValidationError(f"unknown timezone: {value}") from None
+            try:
+                ZoneInfo(value)
+            except Exception:
+                raise ConfigValidationError(f"unknown timezone: {value}") from None
         # The page names the key the way the config file spells it; the writer
         # validates against ``CronConfig.model_fields``, which holds the Python
         # field names. Nothing else in this endpoint crosses the two, so the
