@@ -3605,6 +3605,24 @@ async def test_session_usage_is_no_longer_a_stub(tmp_path: Path, monkeypatch: py
 # ---------------------------------------------------------------------------
 
 
+async def test_resuming_an_id_that_does_not_exist_caches_no_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read must not mint what it was asked to look at.
+
+    `_default_session_info` reads the knowledge selection before `resume`
+    peeks, so a read that used `get_or_create` cached a fresh empty session
+    under the unknown id -- and the peek below it then found that ghost and
+    answered it as a session, with nothing on disk behind it.
+    """
+    sessions = _shared_sessions(tmp_path, monkeypatch)
+    unknown = "tui:doesnotexist123"
+
+    await session_resume({"session_id": unknown})
+
+    assert unknown not in sessions._cache, "a read minted nothing"
+
+
 def _shared_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionManager:
     """One session manager behind every call in a case.
 

@@ -75,7 +75,15 @@ def read(sessions: Any, session_key: str) -> tuple[str, ...]:
     if sessions is None or not session_key:
         return ()
     try:
-        stored = sessions.get_or_create(session_key).metadata.get(METADATA_KEY)
+        # `peek`, not `get_or_create`: this is a read, and the manager's own
+        # note on peek says why -- get_or_create caches a fresh empty session
+        # for a key it has never seen. `_default_session_info` calls this
+        # before `session.resume` peeks, so resuming an id that does not exist
+        # found the ghost this had just cached and answered it as a session.
+        held = sessions.peek(session_key)
+        if held is None:
+            return ()
+        stored = held.metadata.get(METADATA_KEY)
     except Exception:  # noqa: BLE001 - a session that cannot be read has no selection
         return ()
     if not isinstance(stored, (list, tuple)):

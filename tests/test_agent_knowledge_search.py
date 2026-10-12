@@ -199,14 +199,30 @@ async def test_a_search_that_fails_is_told_rather_than_raised() -> None:
 
 
 class _Sessions:
+    """Both halves of the manager's read contract.
+
+    `get_or_create` mints what it cannot find; `peek` does not. A seeded
+    double stands for a session that is already on disk, so peek answers from
+    the seed -- and answers without storing, which is the half that matters:
+    a read must leave the cache as it found it.
+    """
+
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
         self._records: dict[str, Any] = {}
         self._seed = metadata or {}
 
+    def _record(self) -> Any:
+        return type("_S", (), {"metadata": dict(self._seed)})()
+
     def get_or_create(self, key: str) -> Any:
         if key not in self._records:
-            self._records[key] = type("_S", (), {"metadata": dict(self._seed)})()
+            self._records[key] = self._record()
         return self._records[key]
+
+    def peek(self, key: str) -> Any:
+        if key in self._records:
+            return self._records[key]
+        return self._record() if self._seed else None
 
 
 async def test_the_selection_is_read_off_the_session() -> None:
