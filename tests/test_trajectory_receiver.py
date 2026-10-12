@@ -1159,3 +1159,55 @@ async def test_sigterm_stops_a_real_receiver_process(tmp_path):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+# --- a temporary file that cannot be removed leaks nothing else ----------------
+
+
+def _refuse_part_unlink(monkeypatch):
+    real_unlink = Path.unlink
+    enabled = [True]
+
+    def _unlink(self, missing_ok=False):
+        if enabled[0] and self.suffix == ".part":
+            raise OSError("unlink refused")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", _unlink)
+    return enabled
+
+
+async def test_unremovable_part_of_a_rejected_upload_frees_the_slot_and_budget(make_client, save_dir, monkeypatch):
+    client = await make_client(concurrency=1)
+    enabled = _refuse_part_unlink(monkeypatch)
+    body = b"not a package"
+    resp = await _post(client, body, sha=hashlib.sha256(body).hexdigest())
+    assert resp.status == 400
+    stale = list((save_dir / ".incoming").iterdir())
+    assert len(stale) == 1 and stale[0].suffix == ".part"
+    day = _receiver(client).ledger.snapshot(DATE)
+    assert (day.reserved_count, day.reserved_bytes) == (0, 0)
+    assert (await _post(client)).status == 201
+    enabled[0] = False
+    restarted = await make_client()
+    assert list((save_dir / ".incoming").iterdir()) == []
+    assert (await _post(restarted)).status == 200
+
+
+async def test_unremovable_part_of_a_timed_out_commit_still_counts_the_package(make_client, save_dir, monkeypatch):
+    client = await make_client(concurrency=1, total_timeout=0.3, max_daily_count=1)
+    gate = _GatedCommit("after")
+    monkeypatch.setattr(ReceiverStore, "commit", gate.patch())
+    enabled = _refuse_part_unlink(monkeypatch)
+    task = asyncio.create_task(_post(client))
+    await asyncio.to_thread(gate.entered.wait, 5)
+    await asyncio.sleep(0.5)
+    gate.release.set()
+    assert (await task).status == 408
+    assert (save_dir / DATE / f"{ROOT}.tar.gz").read_bytes() == PACKAGE
+    day = _receiver(client).ledger.snapshot(DATE)
+    assert (day.landed_count, day.reserved_count) == (1, 0)
+    enabled[0] = False
+    monkeypatch.setattr(ReceiverStore, "commit", gate.real)
+    resp = await _post_other(client)
+    assert resp.status == 429 and (await resp.json())["error"] == "rate_limited"

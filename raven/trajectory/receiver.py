@@ -755,20 +755,30 @@ class Receiver:
 
         The commit task, not the HTTP outcome, says whether a package was
         committed: a cancellation or timeout can land while the rename is
-        already done, and that package must count against the day.
+        already done, and that package must count against the day. The steps
+        are nested so none of them can be skipped by the one before it: a
+        temporary file that cannot be removed is logged and left for the next
+        startup, never allowed to keep a slot or a reservation.
         """
-        if upload.part is not None:
-            upload.part.unlink(missing_ok=True)
-        if upload.reservation is not None:
-            task = upload.commit_task
-            if task is not None:
-                await _drain(task)
-            if task is not None and not task.cancelled() and task.exception() is None:
-                upload.reservation.settle(upload.declared)
-            else:
-                upload.reservation.release()
-        if upload.slot:
-            self._slots.release()
+        try:
+            try:
+                task = upload.commit_task
+                if task is not None:
+                    await _drain(task)
+                if upload.reservation is not None:
+                    if task is not None and not task.cancelled() and task.exception() is None:
+                        upload.reservation.settle(upload.declared)
+                    else:
+                        upload.reservation.release()
+            finally:
+                if upload.part is not None:
+                    try:
+                        upload.part.unlink(missing_ok=True)
+                    except OSError as exc:
+                        logger.warning("could not remove the unfinished upload {}: {}", upload.part.name, exc)
+        finally:
+            if upload.slot:
+                self._slots.release()
 
     def _check_disk(self) -> None:
         free = shutil.disk_usage(self._store.save_dir).free
