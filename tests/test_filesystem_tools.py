@@ -271,6 +271,53 @@ def test_a_page_is_the_lines_splitlines_gives_whatever_the_chunk_edge(monkeypatc
     assert filesystem._page_of_lines(BytesIO(b"\n"), 0, 5) == ([b""], 1)
 
 
+@pytest.mark.parametrize("chunk", [1, 3, 8, 64])
+def test_a_line_longer_than_a_chunk_is_whole_on_its_page_and_only_counted_off_it(monkeypatch, chunk: int):
+    from io import BytesIO
+
+    from raven.agent.tools import filesystem
+
+    monkeypatch.setattr(filesystem, "_PAGE_CHUNK", chunk)
+    text = b"first\n" + b"L" * 50 + b"\r\nthird\n\n" + b"M" * 30
+    want = text.decode("utf-8").splitlines()
+    assert len(want) == 5
+
+    for start, limit in ((0, 1), (0, 2), (1, 1), (1, 2), (2, 5), (4, 1), (5, 1)):
+        page, total = filesystem._page_of_lines(BytesIO(text), start, limit)
+        assert total == 5 and [line.decode("utf-8") for line in page] == want[start : start + limit], (start, limit)
+
+
+def test_a_long_line_is_looked_at_once_whatever_its_length(monkeypatch):
+    """Each chunk is split once, never the whole of the line again: a long line costs its length, not its square.
+
+    Held whole and split again with every chunk, a file with no break in it
+    took half a minute at 256 MiB where the whole-file read took under a
+    second (measured 2026-10-13).
+    """
+    from io import BytesIO
+
+    from raven.agent.tools import filesystem
+
+    seen: list[int] = []
+    split = filesystem._split_lines
+    monkeypatch.setattr(filesystem, "_split_lines", lambda body: (seen.append(len(body)), split(body))[1])
+    monkeypatch.setattr(filesystem, "_PAGE_CHUNK", 16)
+    one_line = b"x" * 1000 + b"\xe2\x80" + b"y" * 500  # a held-back pair inside it, and no break at all
+
+    page, total = filesystem._page_of_lines(BytesIO(one_line), 0, 5)
+    assert (page, total) == ([one_line], 1)
+    assert max(seen) <= 16 + 2 and sum(seen) == len(one_line), "every byte looked at once, plus a held-back pair"
+
+    seen.clear()
+    assert filesystem._page_of_lines(BytesIO(one_line + b"\nnext"), 1, 5) == ([b"next"], 2)
+    assert max(seen) <= 16 + 2, "the line that is not on the page is counted, not kept"
+
+    # A byte held back at the very end: a break that ends the last line, or part of it.
+    assert filesystem._page_of_lines(BytesIO(b"abc\r"), 0, 5) == ([b"abc"], 1)
+    assert filesystem._page_of_lines(BytesIO(b"abc\xe2"), 0, 5) == ([b"abc\xe2"], 1)
+    assert filesystem._page_of_lines(BytesIO(b"\r"), 0, 5) == ([b""], 1)
+
+
 @pytest.mark.asyncio
 async def test_read_file_pages_a_file_without_holding_all_of_it(tmp_path: Path, monkeypatch):
     from raven.agent.tools import filesystem
