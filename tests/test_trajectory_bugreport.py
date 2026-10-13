@@ -176,6 +176,54 @@ def test_parser_stops_at_the_requested_number_of_spans():
     assert tsan.find_absolute_paths(text, limit=0) == []
 
 
+@pytest.mark.parametrize(
+    ("value", "text_level_hits"),
+    [
+        ("problem: \\n- step one \\n- step two", True),
+        ("problem:\n- step one", False),
+        ("matches \\d+ digits", True),
+        ("\\d+ at start", True),
+        ("a\\nb", False),
+    ],
+    ids=["literal-newline", "real-newline", "regex", "leading-backslash", "unbounded-backslash"],
+)
+def test_json_scan_ignores_escape_artifacts(value, text_level_hits):
+    document = {"problem": {"steps": value}}
+    assert tsan.find_absolute_paths_in_json(document) == []
+    assert bool(tsan.find_absolute_paths(json.dumps(document))) is text_level_hits
+    assert tsan.find_absolute_paths_in_json(json.loads(json.dumps(document))) == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/raven/license.key", "C:\\Users\\alice\\key.txt", "\\\\server\\share\\key.txt"],
+    ids=["posix", "drive", "unc"],
+)
+def test_json_scan_reports_the_field_path(path):
+    value = {
+        "problem": {"steps": f"see {path} here"},
+        "contents": [{"path": "bugreport.json"}, {"path": path}],
+    }
+    hits = tsan.find_absolute_paths_in_json(value)
+    assert ("problem.steps", path) in hits
+    assert ("contents[1].path", path) in hits
+    assert all(where != "contents[0].path" for where, _ in hits)
+
+
+def test_json_scan_finds_a_known_root_glued_to_text():
+    value = "prefixC:\\Users\\alice\\file.txt"
+    roots = ["C:\\Users\\alice"]
+    assert tsan.find_absolute_paths(value) == []
+    assert tsan.find_absolute_paths_in_json({"problem": {"steps": value}}, roots) == [
+        ("problem.steps", "C:\\Users\\alice")
+    ]
+
+
+def test_json_scan_checks_object_keys():
+    hits = tsan.find_absolute_paths_in_json({"problem": {"/etc/shadow": "x"}})
+    assert hits == [("problem./etc/shadow (key)", "/etc/shadow")]
+
+
 def test_a_path_glued_to_a_url_does_not_ride_out_in_an_export(tmp_path):
     """The export's own no-local-paths assertion cannot catch this one.
 
@@ -763,6 +811,44 @@ def test_archive_headers_carry_no_local_identity(state, workspace, tmp_path):
         assert members
         for member in members:
             assert (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "")
+
+
+def test_backslashes_in_problem_fields_ship_verbatim(state, workspace):
+    fields = {
+        "description": "problem: \\n- step one \\n- step two",
+        "steps": "matches \\d+ digits",
+        "expected": "\\d+ at start",
+    }
+    _record_dir, record = _full_flow(state, workspace, **fields)
+    assert record["status"] == "local_ready"
+    with tarfile.open(record["package"]["path"]) as tar:
+        meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
+    assert {name: meta["problem"][name] for name in fields} == fields
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/raven/license.key", "C:\\Users\\alice\\key.txt", "\\\\server\\share\\key.txt"],
+    ids=["posix", "drive", "unc"],
+)
+def test_export_gate_reads_the_metadata_on_disk(state, workspace, monkeypatch, path):
+    """The gate must stop a path that reached the written file, not the dict."""
+    real_gate = breport._assert_export_ready
+
+    def tampered_gate(prep, metadata):
+        target = prep.export_dir / "bugreport.json"
+        on_disk = json.loads(target.read_text(encoding="utf-8"))
+        on_disk["problem"]["steps"] = path
+        target.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
+        real_gate(prep, metadata)
+
+    monkeypatch.setattr(breport, "_assert_export_ready", tampered_gate)
+    prep = _prepared(state, workspace)
+    with pytest.raises(breport.ExportLeakError, match=r"bugreport\.json problem\.steps"):
+        breport.freeze_export(prep, description="it broke", steps="harmless", decide=_decide_all())
+
+    assert not (breport.bugreports_root(state) / prep.report_id).exists()
+    assert not (prep.staging_dir / "record.json").exists()
 
 
 @pytest.mark.parametrize("damage", ["modify", "add", "symlink"], ids=["modified", "added-file", "symlink-injected"])

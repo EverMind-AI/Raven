@@ -2278,6 +2278,37 @@ def test_bug_report_optional_details_reach_summary_and_record(
     assert record["reporter"] == "forrest"
 
 
+def test_bug_report_backslashes_in_fields_do_not_stop_the_report(
+    state, workspace, monkeypatch, capsys, _no_machine_secrets
+):
+    _write_log(state / "logs" / "audit-spans.log", [_span("trace-1", session_key="cli:a")])
+
+    _bug_flow(
+        monkeypatch,
+        workspace,
+        [
+            "problem: \\n- first",
+            True,
+            "\\d+ at start",
+            "",
+            ("pick", "(skip)"),
+            "\\n- one \\n- two",
+            "",
+            True,
+            _CANCEL,
+        ],
+    )
+
+    out = capsys.readouterr().out
+    assert "Could not prepare" not in out
+    _record_dir, record = _single_report(state)
+    assert record["status"] == "local_ready"
+    assert f"Bug report {record['report_id']} ready (local_ready)" in out
+    assert record["problem"]["description"] == "problem: \\n- first"
+    assert record["problem"]["expected"] == "\\d+ at start"
+    assert record["problem"]["steps"] == "\\n- one \\n- two"
+
+
 def test_bug_report_cancel_keeps_nothing(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     from raven.trajectory import bugreport as breport
 

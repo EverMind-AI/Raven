@@ -59,6 +59,7 @@ repository's commit conventions.
 | `plugins` | Plugin manifests, discovery, contribution registry, and bundled plugins |
 | `proactive_engine` | Sentinel event processing, cron scheduling, heartbeat, and proactive decisions |
 | `providers` | LLM adapters, provider pool, and model-to-provider binding |
+| `resources` | Downloads the dictionary and parser models that are too large to track |
 | `routing` | Task classification and model selection by quality and cost |
 | `rpc` | Shared typed RPC methods, streaming events, and the gateway control interface |
 | `sandbox` | Isolated execution, VM lifecycle, and debugging tools |

@@ -241,6 +241,13 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A backslash typed into a bug report's description or steps (a literal
+  `\n` standing in for a line break, or a regular expression such as `\d+`)
+  no longer stops `raven trajectory report-bug` and the browser's
+  `Report a bug` with "absolute path leaked into the export". The export
+  gate now checks the metadata values rather than their JSON-escaped text;
+  a real absolute path is still refused.
+
 - The research trail no longer says a cited link "appears nowhere in this
   run" when a search returned it with a click-tracking parameter
   (`srsltid`, `utm_*`, `gclid`, `fbclid`, `msclkid`) that the citation left

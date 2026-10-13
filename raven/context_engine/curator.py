@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from raven.config.raven import ContextConfig
-from raven.context_engine.history_trimmer import HistoryTrimmer
+from raven.context_engine.history_trimmer import HistoryTrimmer, _tool_parents
 from raven.contracts.assembled import AssembledContext, TokenBudget
 from raven.contracts.context import AssembledPrefix, TurnContext
 from raven.contracts.llm_provider import LLMProvider
@@ -154,23 +154,14 @@ class CuratorArchiveStore:
         # saved manifest: ids are positional, and a later fetch of the same skill
         # has to move the pin rather than add a second one.
         pinned = pinned_message_ids(messages, getattr(self.config, "pinned_skill_ids", None))
+        tool_parents = _tool_parents(messages)
+        group_ids = {idx: f"tool:{parent}" for idx, parent in tool_parents.items()}
+        group_ids.update({parent: f"tool:{parent}" for parent in tool_parents.values()})
         manifest: list[ManifestItem] = []
         turn_id = 0
-        tool_parent: dict[str, int] = {}
         for idx, message in enumerate(messages):
             if message.get("role") == "user":
                 turn_id += 1
-            group_id: str | None = None
-            if message.get("role") == "assistant" and message.get("tool_calls"):
-                call_ids = []
-                for tc in message.get("tool_calls") or []:
-                    call_id = tc.get("id") if isinstance(tc, dict) else None
-                    if call_id:
-                        call_ids.append(str(call_id))
-                        tool_parent[str(call_id)] = idx
-                group_id = "tool:" + ",".join(call_ids) if call_ids else None
-            elif message.get("role") == "tool" and message.get("tool_call_id"):
-                group_id = f"tool:{message.get('tool_call_id')}"
 
             content_text = _message_text(message)
             prior = previous.get(idx, {})
@@ -191,7 +182,7 @@ class CuratorArchiveStore:
                     ts=message.get("timestamp") if isinstance(message.get("timestamp"), str) else None,
                     tokens=estimate_message_tokens(message),
                     turn_id=turn_id,
-                    group_id=group_id,
+                    group_id=group_ids.get(idx),
                     snippet=_snippet(content_text, 240),
                     summary=_snippet(content_text, 420),
                     keywords=_keywords(content_text),
@@ -872,12 +863,10 @@ def _tool_call_name_args(tool_call: Any) -> tuple[str, dict[str, Any]]:
 def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | None) -> set[int]:
     """Ids of the messages that fetched a pinned skill's body.
 
-    Returns the assistant message carrying the fetch **and every result message
-    of that assistant turn** -- not only the skill result. Pinning half of a
-    tool exchange is what creates a dangling tool_call: the budget trimmer drops
-    ids one at a time without re-closing adjacency, so a sibling result left
-    unpinned can be dropped out from under a pinned parent and the provider
-    rejects the request.
+    Returns the assistant message carrying the fetch and every result paired
+    with it by ``_tool_parents``, including sibling results. This is the same
+    positional pairing used by ``HistoryTrimmer.tool_group``: the trimmer drops
+    whole tool groups and treats a group with any protected member as protected.
 
     Only the latest fetch per skill id is pinned: a re-read supersedes the
     earlier copy, so the same 2k-token body can never occupy the window twice.
@@ -886,32 +875,20 @@ def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | No
     if not wanted:
         return set()
 
-    results_by_call: dict[str, list[int]] = {}
-    for idx, message in enumerate(messages):
-        if message.get("role") == "tool" and message.get("tool_call_id"):
-            results_by_call.setdefault(str(message["tool_call_id"]), []).append(idx)
-
     latest: dict[str, int] = {}
-    calls_by_parent: dict[int, list[str]] = {}
     for idx, message in enumerate(messages):
         if message.get("role") != "assistant" or not message.get("tool_calls"):
             continue
         for tool_call in message.get("tool_calls") or []:
             name, args = _tool_call_name_args(tool_call)
-            call_id = tool_call.get("id") if isinstance(tool_call, dict) else None
-            if call_id:
-                calls_by_parent.setdefault(idx, []).append(str(call_id))
             if name not in _SKILL_FETCH_TOOLS:
                 continue
             skill_id = args.get("skill_id")
             if isinstance(skill_id, str) and skill_id in wanted:
                 latest[skill_id] = idx
 
-    pinned: set[int] = set()
-    for parent_idx in set(latest.values()):
-        pinned.add(parent_idx)
-        for call_id in calls_by_parent.get(parent_idx, []):
-            pinned.update(results_by_call.get(call_id, []))
+    parents = set(latest.values())
+    pinned = parents | {result for result, parent in _tool_parents(messages).items() if parent in parents}
     return pinned
 
 

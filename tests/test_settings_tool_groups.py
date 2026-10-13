@@ -50,7 +50,20 @@ def test_every_tool_is_in_exactly_one_group() -> None:
     groups = _listed()
     names = [t for tools in groups.values() for t in tools]
     assert len(names) == len(set(names)), "a tool sits in two groups"
-    assert set(groups) == {"file", "run", "net", "generate", "collab", "skills", "memory", "search"}
+    assert set(groups) == {
+        "file",
+        # The reader's own indexed material, which is neither the working tree
+        # nor memory: a base is a library they chose to put in front of the
+        # agent, and it is attached per conversation rather than always there.
+        "knowledge",
+        "run",
+        "net",
+        "generate",
+        "collab",
+        "skills",
+        "memory",
+        "search",
+    }
 
 
 def test_tool_groups_cover_the_default_tools() -> None:

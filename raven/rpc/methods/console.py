@@ -22,9 +22,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, get_args
 
 from loguru import logger
-from pydantic.alias_generators import to_camel, to_snake
+from pydantic.alias_generators import to_snake
 
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
+from raven.config.keys import key_as_written as _as_written
 from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
@@ -715,10 +716,10 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
     if checker is not None:
         written = _write_raw_key(key, checker(value), merge=key in _MERGED_KEYS)
         if key in MIRRORED_KEYS:
-            # cli/acp sub-agents read every web credential from the
-            # environment, not from the config, so the ~/.raven/env mirror has
-            # to follow the write or they keep running on the key this call
-            # just replaced.
+            # POSIX cli/acp sub-agents read every web credential from the
+            # environment their login shell builds, not from the config, so the
+            # ~/.raven/env mirror has to follow the write or they keep running
+            # on the key this call just replaced (see ``raven.config.env_file``).
             refresh_env_file()
         return written
 
@@ -743,31 +744,15 @@ _MERGED_KEYS = frozenset(
 )
 
 
-def _as_written(node: dict, name: str) -> str:
-    """The spelling this object already uses for ``name``, or ``name`` itself.
-
-    The config models set ``alias_generator=to_camel`` with
-    ``populate_by_name=True``, so every block and field is accepted under two
-    spellings and a hand-written config may hold either. A write that always
-    used the camelCase one did not update the file, it grew a second key beside
-    the first -- and since the models forbid extras, the block that was there
-    before became an extra input and the whole config stopped loading. The
-    write has to follow the file rather than the writer's spelling.
-    """
-    if name in node:
-        return name
-    for alias in (to_camel(name), to_snake(name)):
-        if alias != name and alias in node:
-            return alias
-    return name
-
-
 def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
     """Dotted-path read-modify-write into config.json, under the config lock.
 
     The same ``atomic_update`` transaction the ``update.py`` writers run, so a
     console save cannot interleave with a CLI save on the same file, and a
     config held at 0600 keeps its mode across the replace.
+
+    Null intermediate sections are initialized like absent sections, retaining
+    their existing spelling. Other non-object values remain invalid.
     """
     from raven.config.loader import get_config_path, read_raw_or_raise
 
@@ -781,9 +766,13 @@ def _write_raw_key(key: str, value: Any, *, merge: bool = False) -> dict:
         node = raw
         parts = key.split(".")
         for p in parts[:-1]:
-            node = node.setdefault(_as_written(node, p), {})
-            if not isinstance(node, dict):
+            name = _as_written(node, p)
+            child = node.get(name)
+            if child is None:
+                child = node[name] = {}
+            elif not isinstance(child, dict):
                 raise ConfigValidationError(f"config path {key} blocked by non-object")
+            node = child
         leaf = _as_written(node, parts[-1])
         prev = node.get(leaf)
         if merge:
@@ -1018,11 +1007,14 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "translate.provider": _chk_pin_provider("translate.provider"),
     "embedding.model": _chk_pin_model("embedding.model"),
     "embedding.provider": _chk_pin_provider("embedding.provider"),
+    "vision.model": _chk_pin_model("vision.model"),
+    "vision.provider": _chk_pin_provider("vision.provider"),
     # The pair keys. A surface offering a pin writes one of these, not the two
     # leaves in sequence.
     "sessionTitle": _chk_pin_pair("sessionTitle", "model", "provider"),
     "translate": _chk_pin_pair("translate", "model", "provider"),
     "embedding": _chk_pin_pair("embedding", "model", "provider"),
+    "vision": _chk_pin_pair("vision", "model", "provider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
     "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),

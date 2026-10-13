@@ -68,6 +68,16 @@ dependencies = [
     "aiohttp>=3.13.4",
     "click>=8.1",
     "pyarrow>=17",
+    # The deepdoc vision pipeline: layout detection, text detection and
+    # recognition, and table structure, all as ONNX graphs. onnxruntime runs
+    # them; opencv, shapely and pyclipper are what the pre- and post-processing
+    # around them is written in. Headless opencv on purpose -- nothing here
+    # opens a window, and the GUI build pulls a display stack a server does
+    # not have.
+    "onnxruntime>=1.20,<2",
+    "opencv-python-headless>=4.10,<5",
+    "shapely>=2.0,<3",
+    "pyclipper>=1.3,<2",
     "a2a-sdk>=1.1.2",
     # The A2A object model IS protobuf, so the inbound face converts at its own
     # boundary (raven/a2a/runtime.py, routes_aiohttp.py) rather than letting the
@@ -83,6 +93,29 @@ dependencies = [
     # core is not theirs to keep working. Range-matched to the engine's own pin.
     "lxml>=5.0,<7",
     "truststore>=0.10.1,<1.0.0",
+    # Every PDF this wheel reads, through raven.knowledge.parser._pdfdoc: the
+    # text and its geometry, the tables, and the rendering (which it does with
+    # pypdfium2). The same reader RAGFlow uses, which is where the deepdoc
+    # pipeline beside it was ported from.
+    #
+    # One library does all of this on its own, and PyMuPDF is what the port
+    # first used -- but it is AGPL-3.0, and a knowledge base is part of this
+    # wheel, so carrying it put that obligation on every install including the
+    # ones that never open a PDF. The plugins that need its writing side pin it
+    # themselves and keep the obligation on their own wheels.
+    #
+    # Capped below 0.11.10 rather than left open: that release requires
+    # pypdfium2 5.x, and both bundled deck engines pin pypdfium2 4.x. One
+    # PDFium in the workspace is worth more than the newer reader, and lifting
+    # the cap is the deck engines' bump to make.
+    "pdfplumber>=0.11.4,<0.11.10",
+    # pdfplumber's own text engine, declared because one name is imported from
+    # it directly: the error a locked file raises. pdfplumber wraps every cause
+    # it can hit in one exception type, so a truncated download and a
+    # password-protected file arrive identically and only what is underneath
+    # tells them apart -- and a reader can do something about a password and
+    # nothing about a corrupt file.
+    "pdfminer-six>=20250416",
 ]
 
 [project.optional-dependencies]
@@ -158,6 +191,24 @@ eval = [
     # this to pull the PROBE dataset. Keep out of main deps so production installs
     # stay lean.
     "huggingface-hub>=1.11.0",
+]
+# The Chinese word segmenter (raven.core.tokenizer). datrie holds the
+# dictionary as a trie, hanziconv folds traditional characters onto simplified
+# before a lookup, and nltk supplies the stemmer and lemmatizer the latin path
+# uses. A tokenizer that splits CJK per character is what makes a keyword
+# search over Chinese answer with noise.
+#
+# An extra rather than a core dependency because of datrie: PyPI publishes no
+# wheel for any Python this project supports -- 0.8.3 is an sdist and 0.8.2's
+# wheels stop at cp38 -- so every install compiles a C extension, and
+# `uv tool install raven` fails outright on a machine with no toolchain. That
+# is the whole install lost, for a module the runtime reaches only through
+# `resources.warm_dictionary`, which already treats a failure there as six
+# seconds spent later rather than as an error.
+segmenter = [
+    "datrie>=0.8.2,<0.9",
+    "hanziconv>=0.3,<0.4",
+    "nltk>=3.9,<4",
 ]
 
 [project.scripts]
@@ -298,7 +349,10 @@ ignore = ["DEP002", "DEP004"]
 #   rpc/deck_templates.py, imported inside a function and probed with find_spec
 #   first. The gallery only exists when the ppt-engine plugin is installed, and
 #   that plugin is what pins PyMuPDF (under either import name); the core must
-#   not carry an AGPL dependency for a feature that is absent without the plugin.
+#   not carry an AGPL dependency for a feature that is absent without the
+#   plugin. It is in the dev group as well, as a PDF *writer*: the fixtures
+#   these tests read are built by drawing one, which the reader the wheel ships
+#   cannot do. A dev group is not distributed, so no obligation rides with it.
 #
 # The list is per-module, not per-file, so a later unguarded import of any other
 # package is still caught by both rules.
@@ -417,6 +471,23 @@ max-complexity = 40
 # unused variables, deferred imports, ambiguous names — idiomatic in tests, not
 # product code. (Auto-fixable churn E702/F401/I001 is left for the reformat branch.)
 "tests/**" = ["E402", "E741", "F811", "F841", "N802", "N805", "N806", "N817", "N818", "S101", "S105", "S106", "S107", "S607"]
+
+# A port kept recognisable against its original (Infinity's `rag_tokenizer`).
+# The names are upstream's -- `preTks`, `_strQ2B`, and single capitals for the
+# scores and spans inside the segmentation search -- and renaming them by hand
+# in dense dynamic-programming code buys a lint pass at the price of being able
+# to diff this file against the source it has to stay faithful to. The asserts
+# are upstream's invariants for the same reason.
+"raven/core/tokenizer.py" = ["N802", "N803", "N806", "S101"]
+
+# The same rule for the deepdoc port: these modules are RAGFlow's vision
+# pipeline kept diff-able against it, and its operator and recogniser classes
+# carry PaddleOCR's names and its asserts on tensor shapes. Renaming them by
+# hand would buy a lint pass and cost the ability to check this tree against
+# the one it has to stay faithful to. C901 for one function: rebuilding a
+# table's rows from where its cells sit is a 65-branch walk upstream, and
+# splitting it up here is how a port stops being one.
+"raven/knowledge/parser/deepdoc/*.py" = ["C901", "N801", "N802", "N803", "N806", "S101"]
 
 # Tracing probe factories take the target class as an argument, named after
 # the class (e.g. `def _install_llm(LLMProvider: type)`) for readability.
@@ -571,6 +642,10 @@ dev = [
     "pexpect>=4.9",
     "pip-audit>=2.10.0",
     "pre-commit>=4.6.0",
+    # Writes the PDFs the tests read. The reader this wheel ships cannot draw
+    # one, and a fixture has to be drawn before it can be parsed. Tests only --
+    # see the deptry note above for why it is not in [project.dependencies].
+    "pymupdf>=1.24,<2",
     "pyte>=0.8",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",

@@ -40,8 +40,9 @@
 import { LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
 import { useSyncExternalStore } from 'react'
 
-import { AgentsGlyph, Icon } from '../components/Icon'
+import { AgentsGlyph, CubeGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
+import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
@@ -95,11 +96,11 @@ function RailTop(): JSX.Element {
    that same table (features/rail/store.ts's markNew), which is the pair a page
    used to be able to miss in silence.
 
-   One destination, not five. Schedules and memory are set up once and then
+   Two destinations, not five. Schedules and memory are set up once and then
    left alone, so they are sections of the settings dialog, which the foot
-   opens; a playbook is not a place a reader goes at all. What is left is the
-   one place you go TO: what Raven connects to, agents and channels, one row
-   that goes back to whichever of the two the reader was last on. */
+   opens; a playbook is not a place a reader goes at all. What is left are the
+   two you go TO: what Raven connects to, agents and channels, one row that
+   goes back to whichever of the two the reader was last on, and knowledge. */
 const NAV_ROWS: ReadonlyArray<{
   readonly button: NavButton
   readonly key: string
@@ -111,6 +112,12 @@ const NAV_ROWS: ReadonlyArray<{
     key: 'gui.nav.hub',
     open: () => hub.open(),
     icon: <AgentsGlyph />,
+  },
+  {
+    button: 'knowledgeBtn',
+    key: 'gui.nav.knowledge',
+    open: () => openKnowledge(),
+    icon: <CubeGlyph />,
   },
 ]
 

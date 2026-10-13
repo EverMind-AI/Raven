@@ -1022,8 +1022,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chip.risk { color: var(--clay); }
 .chip.risk:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
 
-/* The three small popovers off the bar -- the "+" menu (#plusPop), the
-   workspace (#wdPop) and the permission modes (#permPop) -- hang off their own
+/* The four small popovers off the bar -- the "+" menu (#plusPop), the "@"
+   (#atPop), the workspace (#wdPop) and the permission modes (#permPop) -- hang
+   off their own
    chips: each is a child of the `.chrome-anch` wrapper around its chip, and sits 6px
    above the chip's top edge, left edges lined up. Names only, no heading: the
    chip already says what is being chosen, and the sentence behind a name is on
@@ -1031,22 +1032,37 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    filled band behind the row, which on a translucent panel reads as a second
    material. */
 .chrome-anch { position: relative; display: inline-flex; align-items: center; }
-#plusPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
+#plusPop, #atPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
 #plusPop { width: 220px; }
+#atPop { width: 240px; }
 #wdPop { width: 200px; }
 #wdPop[data-view="browse"] { width: 300px; }
 #permPop { width: 200px; }
 .pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }
-#plusPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
-#plusPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
+#plusPop .prow, #atPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
+#plusPop .prow .nm, #atPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
 #wdPop .prow[aria-checked="true"] .nm, #permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
 #wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); }
 /* The tier with no brakes says so in its row too, in the chip's colour. */
 #permPop .prow.risk .nm { color: var(--clay); }
-#plusPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
-/* The workspace chip names a folder in the text colour, the default in the
-   bar's muted one. */
-#wdChip.chrome-wd-set { color: var(--text); }
+#plusPop .chrome-plus-row .pico, #atPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
+/* The "@" (src/chrome/AtMenu.tsx): what the conversation is pointed at. The
+   button carries the count, because the scope of a question is worth seeing
+   while it is being typed and not only while it is being set. */
+#atBtn { font-size: 15px; font-weight: 600; }
+#atBtn.chrome-at-set { color: var(--amber); }
+.chrome-at-n { position: absolute; top: -1px; right: -2px; min-width: 13px; height: 13px; padding: 0 3px;
+  border-radius: 999px; background: var(--amber); color: var(--ink-on-accent); font-size: 9.5px; font-weight: 600;
+  line-height: 13px; text-align: center; }
+/* A base's row: the tick, the name, and how many documents are in it. The tick
+   holds its width whether or not it is set, so a list does not shuffle as it
+   is ticked. */
+#atPop .chrome-at-row { display: flex; align-items: center; gap: 8px; }
+.chrome-at-tick { width: 11px; flex: none; color: var(--amber); font-size: 11px; }
+.chrome-at-count { margin-left: auto; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+#atPop .chrome-at-back { color: var(--muted); }
+.chrome-at-note { padding: 7px 9px; color: var(--muted); font-size: 11.5px; }
+
 #wdPop .chrome-wd-open .nm { font-weight: 500; color: var(--amber); }
 #wdPop .chrome-wd-err { color: var(--clay); }
 /* The folder browser under the menu: a path bar, a scrolling list, two buttons. */
@@ -1760,6 +1776,21 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    held to 78% of a number it had just set, which cut it below its own content
    and wrapped a row that had room. The turn's own 70% is the bound that means
    something; what a row may be is its items' business. */
+/* What a knowledge search found, under the query it answered. Each row is a
+   press: a citation a reader cannot follow is a claim they have to take on
+   trust, and the whole point of searching their own material is that they can
+   go and look. */
+.transcript-cites { display: grid; gap: 3px; margin-bottom: 8px; }
+.transcript-cite { display: flex; align-items: baseline; gap: 7px; width: 100%; padding: 4px 7px;
+  border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface); color: var(--text);
+  font-size: 11.5px; text-align: left; cursor: pointer; }
+.transcript-cite:hover { border-color: var(--line); background: var(--hover); }
+/* The number the prose below cites, so a reader reading "[2]" knows which row
+   is the second. */
+.transcript-citen { flex: none; min-width: 13px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.transcript-cited { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transcript-citep { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+
 .transcript-arow {
   display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: flex-end;
   gap: 6px; max-width: 100%;
@@ -2480,9 +2511,8 @@ textarea:focus, textarea:focus-visible,
 @container dock (max-width: 480px) {
   .under .meter { visibility: hidden; width: 0; }
   .under #permName, .under #wdName { display: none; }
-  .under #permChip, .under #wdChip { padding: 0 9px; }
+  .under #permChip { padding: 0 9px; }
 }
-@container dock (max-width: 360px) { .under .chrome-anch:has(#wdChip) { display: none; } }
 @container dock (max-width: 320px) { .under #ctxChip { display: none; } }
 @container dock (max-width: 280px) { .under .chrome-anch:has(#permChip) { display: none; } }
 

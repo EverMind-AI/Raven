@@ -1186,6 +1186,24 @@ def test_report_bug_happy_path_with_yes(state, _no_machine_secrets):
     assert _staging_entries(state) == []
 
 
+def test_report_bug_backslashes_in_fields_do_not_stop_the_report(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state)
+    r = runner.invoke(
+        trajectory_app,
+        ["report-bug", "trace-1", "-d", "problem: \\n- step one", "--steps", "matches \\d+ digits", "--yes"],
+    )
+
+    assert r.exit_code == 0, r.output
+    assert "Could not prepare" not in r.output
+    assert "ready (local_ready)" in r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert record["problem"]["description"] == "problem: \\n- step one"
+    assert record["problem"]["steps"] == "matches \\d+ digits"
+    assert _staging_entries(state) == []
+
+
 def test_report_bug_requires_description(state, _no_machine_secrets):
     _simple_log(state)
     r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "--yes"])

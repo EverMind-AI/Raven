@@ -234,6 +234,22 @@ async def test_read_only_default_runs_without_asking():
 
 
 @pytest.mark.asyncio
+async def test_knowledge_search_default_runs_without_asking():
+    """Narrower than the web tools beside it in the allow set: those reach the
+    whole internet, this reaches only the bases the reader attached to this
+    conversation by hand.
+
+    In the ask tier it cost an approval per search, and on a turn with nobody
+    to ask -- a cron job, the heartbeat, a channel with no approver -- the
+    registry refused the call and told the model it needed approval, so the
+    attached bases were never searched at all.
+    """
+    gate = gate_for(PermissionsConfig())
+    bind(None)
+    assert await gate.enforce("knowledge_search", {"query": "what the handbook says"}) is None
+
+
+@pytest.mark.asyncio
 async def test_deliver_files_default_runs_without_asking():
     """The one default-allow tool that is not a read. Handing the user a file
     they asked for is not an effect they need to approve, and the approval it

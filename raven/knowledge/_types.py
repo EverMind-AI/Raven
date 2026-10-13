@@ -65,19 +65,70 @@ class VectorRecord(BaseModel):
     vector: list[float]
     document_id: str
     chunk: Chunk
+    chunk_id: str = ""
+    """What addresses this piece for the life of the index.
+
+    Derived from the content, so the same text in the same document is the same
+    piece across a rebuild -- see ``chunk_id`` in ``_manager``. Empty on rows
+    written before ids existed; those answer searches like any other row and
+    cannot be acted on one at a time until the document is reindexed."""
+
+    enabled: bool = True
+    """Whether this piece may be retrieved at all.
+
+    Off is not a soft ranking penalty: a disabled piece is filtered out of
+    search and never reaches the agent, which is the only reading under which
+    turning one off is worth doing."""
+
+    manual: bool = False
+    """Whether a person wrote this piece rather than a parser cutting it.
+
+    Recorded so the panel can say so. It buys no protection: reindexing a
+    document deletes every piece of it, this one included."""
+
+
+class StoredChunk(BaseModel):
+    """A chunk as the index holds it: the piece, plus what can be done to it.
+
+    Separate from :class:`Chunk` because the two answer to different owners. A
+    Chunk is what a parser and a chunker produced, and nothing about storage
+    belongs in it; this is that piece once the store has given it an identity
+    and a state a reader can change.
+    """
+
+    chunk_id: str
+    chunk: Chunk
+    enabled: bool = True
+    manual: bool = False
 
 
 class VectorSearchResult(BaseModel):
-    """One hit. ``score`` is a similarity -- higher is nearer.
+    """One hit. ``score`` runs the same direction whatever found it: higher is
+    nearer.
 
-    Stated as similarity rather than distance because that is the direction
-    every caller already reads: the reranker sorts descending, and a relevance
-    floor is a lower bound.
+    Stated that way rather than as a distance because it is the direction every
+    caller already reads: the reranker sorts descending, and a relevance floor
+    is a lower bound. What the number *means* is :attr:`retrieval`'s business,
+    and the two scales are not comparable by value -- see :func:`_merged`.
     """
 
     score: float
     document_id: str
     chunk: Chunk
+    chunk_id: str = ""
+    retrieval: Literal["vector", "keyword"] = "vector"
+    """How this hit was found, and therefore what ``score`` is.
+
+    ``vector`` is a cosine similarity in 0..1; ``keyword`` is a BM25 score on
+    the index's own scale, which is unbounded and not calibrated to the first.
+    Carried on the hit rather than inferred by the caller because a base falls
+    back to keywords per search, and a merged result set can hold both -- a
+    reader shown 8.4 beside 0.62 under one heading called "similarity" is being
+    told something false about both."""
+    """Which stored piece this was, when the store knows.
+
+    Empty for rows written before ids existed. A hit that cannot be named is
+    still a hit worth reading; it just cannot be acted on one at a time."""
 
 
 class DocumentSummary(BaseModel):

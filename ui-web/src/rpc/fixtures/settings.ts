@@ -213,6 +213,12 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         required: ['llm', 'embedding'],
       }),
       'settings.everosSet': () => ({ applied: true, warning: null }),
+      /* What the conversation may search, echoed back. There is no session
+         behind an offline page, so the answer is what was sent -- which is
+         what the panel draws either way. */
+      'session.set_knowledge': (p) => ({
+        knowledge_bases: ((p as { knowledge_bases?: string[] }).knowledge_bases ?? []).slice(),
+      }),
       'session.set_mode': (p) => {
         const mode = (p as { mode?: string }).mode
         if (mode) tier = mode

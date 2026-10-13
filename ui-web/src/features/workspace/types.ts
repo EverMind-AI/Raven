@@ -81,6 +81,12 @@ export interface DeliveryRow {
      carry one, and that one belongs to the conversation; every row the registry
      gives back has it, filled in on the way in. */
   scope?: string
+  /* When the gateway says the delivery happened (`delivered_at`, epoch
+     milliseconds), or null for a manifest that predates the field and for a
+     row recovered from the registry. Declared here because a card's picture is
+     named by it: a path delivered again keeps its token, and the stamp is what
+     tells the two cards' pictures apart. */
+  when?: number | null
 }
 
 /* The stable workspace record owned by the island store. */
