@@ -308,10 +308,9 @@ class RavenLoopBackend:
             # in-process run and an unbriefed one read identically in the log,
             # and the difference between them is the whole of this feature.
             logger.info(
-                "agent playbook: charter applied to this run ({} tool(s), {} check(s){})",
+                "agent playbook: charter applied to this run ({} tool(s), {} function(s))",
                 "all" if charter.tools is None else len(charter.tools),
-                len(charter.checks),
-                ", judge" if charter.code else "",
+                len(charter.functions),
             )
         try:
             with annotate_mcp_failure(grant), charter_mod.charter_scope(charter):

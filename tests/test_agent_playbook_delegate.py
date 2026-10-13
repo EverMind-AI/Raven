@@ -490,7 +490,16 @@ def test_persona_tool_exposes_rich_harness_fields_and_one_function_surface() -> 
     assert "agent" not in coordinator and "as" not in coordinator
     assert "coordinator" in schema["required"]
     assert {"agent", "brief", "systemPrompt", "stopWhen", "functions"} <= set(worker)
-    assert set(worker["functions"]["properties"]) == {"intake", "advise", "judge", "salvage"}
+    assert set(worker["functions"]["properties"]) == {
+        "intake",
+        "system_addendum",
+        "archive",
+        "select_tools",
+        "advise",
+        "judge",
+        "review",
+        "salvage",
+    }
     assert set(coordinator["functions"]["properties"]) == set(worker["functions"]["properties"])
     assert "code" not in worker
 

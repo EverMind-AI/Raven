@@ -115,7 +115,7 @@ def test_unified_composite_round_trips_through_the_existing_store(tmp_path: Path
     assert "Workers: analyst" in path.read_text(encoding="utf-8")
 
 
-def test_generated_judge_round_trips_without_serializing_an_implicit_checks_impl(tmp_path: Path) -> None:
+def test_a_generated_judge_round_trips_as_one_of_the_seats_functions(tmp_path: Path) -> None:
     store = PlaybookStore(tmp_path / "user", builtin_root=tmp_path / "builtin")
     judge = "def judge(name, params, prior):\n    return []"
     harness = AgentPlaybookSpec(
@@ -127,7 +127,7 @@ def test_generated_judge_round_trips_without_serializing_an_implicit_checks_impl
                     "as": "booking-guard",
                     "name": "Raven",
                     "brief": "Reject unapproved bookings",
-                    "playbook": {"action": {"checks": {"code": judge}}},
+                    "playbook": {"action": {"functions": {"judge": judge}}},
                 }
             )
         ],
@@ -142,11 +142,10 @@ def test_generated_judge_round_trips_without_serializing_an_implicit_checks_impl
     body = store.save(spec).read_text(encoding="utf-8")
     loaded = store.load(spec.name)
 
-    assert "impl: default" not in body
+    assert "impl:" not in body and "checks:" not in body
     assert isinstance(loaded, UnifiedPlaybookSpec)
     assert loaded.harness is not None
-    checks = loaded.harness.delegate[0].playbook.action.checks
-    assert checks is not None and checks.code == judge
+    assert loaded.harness.delegate[0].playbook.action.functions == {"judge": judge}
 
 
 @pytest.mark.asyncio
