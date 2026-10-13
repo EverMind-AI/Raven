@@ -701,3 +701,15 @@ async def test_every_enabled_verb_runs_from_one_charter() -> None:
         assert await participant.archive(step, "final") == {"filed": "final"}
         assert judge("write_file", {}, []) == ["no writes"]
         assert judge("read_file", {}, []) == []
+
+
+def test_one_sentence_is_as_good_as_a_list_for_a_generated_judge() -> None:
+    """The judge this verb replaced accepted a bare string, and reading one as
+    silence would turn a refusal into permission."""
+    one = "def judge(name, params, prior):\n    return 'just the one'"
+    with charter_scope(Charter(functions=(("judge", one),))):
+        assert judge("write_file", {}, []) == ["just the one"]
+
+    empty = "def judge(name, params, prior):\n    return '   '"
+    with charter_scope(Charter(functions=(("judge", empty),))):
+        assert judge("write_file", {}, []) == []

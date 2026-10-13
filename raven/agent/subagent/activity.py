@@ -89,6 +89,10 @@ class RunActivity:
     tokens_out: int | None = None
     thought_chars: int = 0
     step_counts: dict[str, int] = field(default_factory=dict)
+    archived: dict[str, Any] = field(default_factory=dict)
+    """What this run's participants stamped on its record, observer name to its
+    value. A generated ``archive`` is pure -- the mapping it answers with is the
+    whole of its effect -- so dropping this would be dropping the verb."""
     # The run's own transcript, as provider-shaped messages (assistant entries
     # carrying reasoning/tool_calls, tool entries carrying results), when the
     # transport can see it. Not part of as_meta: it is written to its own file
@@ -198,6 +202,8 @@ class RunActivity:
             meta["thought_chars"] = self.thought_chars
         if self.step_counts:
             meta["step_counts"] = self.step_counts
+        if self.archived:
+            meta["archived"] = self.archived
         if self.frames:
             meta["acp_frames"] = self.frames
         if self.response_meta:
@@ -650,6 +656,18 @@ def note_frames(frames: dict[str, Any] | None) -> None:
         activity.frames = dict(frames)
 
 
+def note_archived(name: str, value: Any) -> None:
+    """File what one participant stamped on this run's record.
+
+    Last writer wins for one name, which is what a verb asked once per turn
+    means: there is no second answer to merge with, and a participant that
+    answers twice is the same participant correcting itself.
+    """
+    activity = _current.get()
+    if activity is not None and name:
+        activity.archived[str(name)] = value
+
+
 def note_output_limit() -> None:
     """Record that this run's generation stopped at the model's output ceiling.
 
@@ -860,6 +878,7 @@ __all__ = [
     "count_line_changes",
     "merge_file_change",
     "note_alive",
+    "note_archived",
     "note_closing",
     "note_console",
     "note_file_change",

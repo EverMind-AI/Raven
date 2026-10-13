@@ -756,6 +756,20 @@ class RavenLoopBackend:
             )
             cut_at_ceiling = response.truncated
             if response.has_tool_calls:
+                if participants:
+                    # Before the calls, not after them: this is the phase the
+                    # main hook asks from ``before_execute_tools``, and the
+                    # whole of what ``end`` or ``resample`` is for here is
+                    # keeping the proposed calls from running. Asked after,
+                    # the verdict would be a verdict on work already done.
+                    verdict = await participant_answer("review", participant_step("execute_tools", response=response))
+                    decided = _review_verdict(verdict)
+                    if decided == "end":
+                        return str(verdict.get("reply") or "")
+                    if decided == "resample" and resamples < MAX_PARTICIPANT_RESAMPLES:
+                        resamples += 1
+                        _apply_resample(messages, verdict)
+                        continue
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages.append(
                     build_assistant_message(
@@ -881,14 +895,6 @@ class RavenLoopBackend:
                     advice = await participant_answer("advise", participant_step("after_iteration", response=response))
                     if isinstance(advice, str) and advice:
                         _append_participant_note(messages, advice)
-                    verdict = await participant_answer("review", participant_step("execute_tools", response=response))
-                    decided = _review_verdict(verdict)
-                    if decided == "end":
-                        return str(verdict.get("reply") or "")
-                    if decided == "resample" and resamples < MAX_PARTICIPANT_RESAMPLES:
-                        resamples += 1
-                        _apply_resample(messages, verdict)
-                        continue
             else:
                 if participants:
                     verdict = await participant_answer("review", participant_step("after_iteration", response=response))
@@ -952,13 +958,15 @@ class RavenLoopBackend:
             salvaged = await participant_answer("salvage", participant_step("answerless"))
             final_result = salvaged if isinstance(salvaged, str) and salvaged else None
         if participants:
-            # Asked for its own sake: a dispatched run hands back a string, so
-            # there is no record here to stamp what ``archive`` returns on. The
-            # call is what lets a seat file what it keeps across turns, and what
-            # it answers is logged rather than dropped silently.
+            # A generated ``archive`` is pure: the mapping it answers with is
+            # the whole of its effect, so it is filed on this run's record
+            # rather than counted and dropped. Observer name to its value, the
+            # shape the contract names, and it reaches ``meta.json`` through
+            # the activity this run is collected into.
             filed = await participant_answer("archive", participant_step("archived"), final_result)
-            if isinstance(filed, Mapping) and filed:
-                logger.debug("Subagent [{}] archive filed {} key(s)", task_id, len(filed))
+            if isinstance(filed, Mapping):
+                for observer, value in filed.items():
+                    activity.note_archived(str(observer), value)
         if final_result is None:
             # Nothing to hand back. Raised rather than returned, so the node
             # fails instead of completing with a sentence the next step would

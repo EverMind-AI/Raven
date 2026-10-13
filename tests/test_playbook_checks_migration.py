@@ -94,3 +94,18 @@ def test_a_seat_that_already_has_a_judge_is_left_alone() -> None:
     migrated = migrated_action({"functions": {"judge": own}, "checks": {"rules": THREE_RULES}})
 
     assert migrated["functions"] == {"judge": own}
+
+
+def test_a_seat_that_is_not_a_mapping_passes_through_untouched() -> None:
+    """The validator runs before pydantic has read anything, so it has to
+    answer for whatever arrived rather than assume a dict."""
+    from raven.playbook.agent_spec import SubPlaybook
+
+    assert SubPlaybook.model_validate({"action": {"functions": {}}}).action.functions == {}
+    assert migrated_action({"functions": {"judge": "x"}}) == {"functions": {"judge": "x"}}
+    assert migrated_action({"checks": "not a block"}) == {"checks": "not a block"}
+
+
+def test_a_rule_with_no_tool_names_nothing_to_judge() -> None:
+    assert judge_from_rules([{"pathPrefix": "src/"}]) == ""
+    assert judge_from_rules(["not a rule"]) == ""
