@@ -208,8 +208,8 @@ _JPG = b"\xff\xd8\xff\xe0" + b"jpg pixels"
 
 async def test_an_ark_plan_base_is_answered_in_url_form_and_downloads_the_picture(monkeypatch, tmp_path) -> None:
     """The Volces Ark Agent-Plan endpoint speaks its own dialect on
-    /images/generations -- ``size`` as a "2K" tier, no pixel pair, no
-    response_format -- and answers with ``data[].url`` only, so the picture
+    /images/generations -- ``size`` as an explicit WxH pair at the 2K budget,
+    no response_format -- and answers with ``data[].url`` only, so the picture
     behind the URL is fetched and written like any other generated file."""
     sent: dict = {}
 
@@ -231,7 +231,7 @@ async def test_an_ark_plan_base_is_answered_in_url_form_and_downloads_the_pictur
     assert out["success"] and out["model"] == "doubao-seedream-5-0-pro"
     path = Path(out["paths"][0])
     assert path.suffix == ".jpg" and path.read_bytes() == _JPG
-    assert sent["body"] == {"model": "doubao-seedream-5-0-pro", "prompt": "a poster", "n": 1, "size": "2K"}
+    assert sent["body"] == {"model": "doubao-seedream-5-0-pro", "prompt": "a poster", "n": 1, "size": "2736x1539"}
     # The download URL is the provider's own storage, not its API: the key the
     # generation call carried must not travel with the fetch.
     assert sent["download"].headers.get("Authorization") is None
@@ -252,6 +252,26 @@ async def test_an_ark_plan_base_without_a_ratio_leaves_size_to_the_endpoint(monk
         api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
     )
     assert json.loads(await tool.execute("a poster"))["success"]
+
+
+async def test_an_ark_plan_base_with_an_unknown_ratio_falls_back_to_the_2k_tier(monkeypatch, tmp_path) -> None:
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    assert json.loads(await tool.execute("a poster", aspect_ratio="5:1"))["success"]
+    assert sent["body"]["size"] == "2K"
 
 
 async def test_an_ark_plan_base_still_takes_an_inline_b64_picture(monkeypatch, tmp_path) -> None:
