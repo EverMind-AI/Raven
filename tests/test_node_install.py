@@ -336,6 +336,25 @@ def test_the_index_pip_is_configured_with_is_handed_to_uv_and_named_in_the_plan(
     assert "from PyPI (pip is configured with no other index there), and this Raven's code" in _plan().describe()
 
 
+def test_a_sign_in_inside_the_index_url_reaches_uv_and_never_a_sentence():
+    """pip takes `https://user:password@host/simple`; the plan is printed before the confirmation, and under --yes."""
+    p = _plan(index="https://user:s3cret-pw@mirror.example:8443/simple")
+
+    said = p.describe()
+    assert (
+        "from https://mirror.example:8443/simple (the index pip is configured with there, shown without its sign-in)"
+        in said
+    )
+    assert "s3cret-pw" not in said and "user:" not in said
+    assert "--default-index https://user:s3cret-pw@mirror.example:8443/simple" in dict(install.steps(p))["packages"]
+    failed = install._failed(
+        p, "packages", 2, "error: Failed to fetch: `https://user:s3cret-pw@mirror.example:8443/simple/loguru/`"
+    )
+    assert "s3cret-pw" not in failed and "https://mirror.example:8443/simple/loguru/" in failed
+    assert install._shown_index("https://mirror.example/simple") == "https://mirror.example/simple"
+    assert install._shown_index("http://u:p@[::1]:8080/simple") == "http://[::1]:8080/simple"
+
+
 @pytest.mark.parametrize(
     ("fetch", "fetched_with"),
     [
