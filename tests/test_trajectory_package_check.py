@@ -220,8 +220,14 @@ def test_path_notices_are_capped(tmp_path):
     package = _package(tmp_path, _entries(metadata=_metadata(problem={"description": description})))
     notices = inspect_package(package).notices
     assert len(notices) == pcheck.MAX_NOTICES + 1
-    assert all(notice.startswith("absolute path in bugreport.json: /a") for notice in notices[:-1])
+    assert all(notice.startswith("absolute path in bugreport.json problem.description: /a") for notice in notices[:-1])
     assert notices[-1].startswith(f"more than {pcheck.MAX_NOTICES} absolute paths in bugreport.json")
+
+
+def test_path_notices_read_values_not_json_escapes(tmp_path):
+    """A literal backslash-n in a field is text, not a UNC prefix: no notice for it."""
+    package = _package(tmp_path, _entries(metadata=_metadata(problem={"description": "problem: \\n- step \\d+"})))
+    assert inspect_package(package).notices == ()
 
 
 def test_truncated_gzip(tmp_path):
@@ -421,7 +427,9 @@ def test_reviewed_package_passes(tmp_path):
 def test_absolute_path_in_metadata_is_a_notice_not_a_rejection(tmp_path):
     metadata = _metadata(problem={"description": "see /Users/alice/x for details"})
     summary = inspect_package(_package(tmp_path, _entries(metadata=metadata)))
-    assert summary.notices and summary.notices[0].startswith("absolute path in bugreport.json: /Users/alice/x")
+    assert summary.notices and summary.notices[0].startswith(
+        "absolute path in bugreport.json problem.description: /Users/alice/x"
+    )
 
 
 def test_long_json_integer_is_metadata_invalid(tmp_path):

@@ -45,7 +45,7 @@ from raven.trajectory.bugreport import (
     SCHEMA_VERSION,
     is_report_id,
 )
-from raven.trajectory.sanitize import find_absolute_paths
+from raven.trajectory.sanitize import find_absolute_paths_in_json
 
 CODE_TOO_LARGE = "too_large"
 CODE_NOT_GZIP_TAR = "not_gzip_tar"
@@ -461,11 +461,11 @@ def _check_metadata(walk: _Walk, expected_report_id: str | None) -> PackageSumma
         raise PackageError(CODE_RISK_NOT_ACCEPTED, f"unknown redaction classification {classification!r}")
     if classification == CLASSIFICATION_NEEDS_REVIEW and redaction.get("risk_accepted") is not True:
         raise PackageError(CODE_RISK_NOT_ACCEPTED, "a needs_review package must carry risk_accepted: true")
-    spans = find_absolute_paths(text, limit=MAX_NOTICES + 1)
+    hits = find_absolute_paths_in_json(metadata, limit=MAX_NOTICES + 1)
     notices = tuple(
-        f"absolute path in {PACKAGE_METADATA_FILE}: {text[start:end][:80]}" for start, end in spans[:MAX_NOTICES]
+        f"absolute path in {PACKAGE_METADATA_FILE} {where}: {sample[:80]}" for where, sample in hits[:MAX_NOTICES]
     )
-    if len(spans) > MAX_NOTICES:
+    if len(hits) > MAX_NOTICES:
         notices += (f"more than {MAX_NOTICES} absolute paths in {PACKAGE_METADATA_FILE}; only the first are listed",)
     return PackageSummary(report_id, metadata, tuple(walk.names), notices)
 

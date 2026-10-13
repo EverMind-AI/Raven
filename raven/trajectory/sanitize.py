@@ -313,25 +313,34 @@ def scan_absolute_paths(root: Path, roots: Iterable[str] = ()) -> list[tuple[str
     return hits
 
 
-def find_absolute_paths_in_json(value: Any, roots: Iterable[str] = ()) -> list[tuple[str, str]]:
+def find_absolute_paths_in_json(
+    value: Any, roots: Iterable[str] = (), *, limit: int | None = None
+) -> list[tuple[str, str]]:
     """Assertion pass over a parsed JSON value: ``(field path, sample)`` per hit.
 
     Parse first, then scan each string: ``json.dumps`` writes one backslash as
     two, so a literal ``\\n`` inside a value reads as a UNC prefix in the
     serialized text. Every string value and every object key runs through the
     same parser sanitization used, plus the known-root substring check.
+    ``limit`` ends the walk once that many hits are collected, as in
+    :func:`find_absolute_paths`.
     """
     needles = _root_needles(roots)
     hits: list[tuple[str, str]] = []
 
+    def full() -> bool:
+        return limit is not None and len(hits) >= limit
+
     def scan(text: str, where: str) -> None:
-        for start, end in find_absolute_paths(text):
+        for start, end in find_absolute_paths(text, limit=None if limit is None else limit - len(hits)):
             hits.append((where, text[start:end][:120]))
         for needle in needles:
-            if needle in text:
+            if not full() and needle in text:
                 hits.append((where, needle))
 
     def walk(node: Any, where: str) -> None:
+        if full():
+            return
         if isinstance(node, str):
             scan(node, where)
         elif isinstance(node, list):
