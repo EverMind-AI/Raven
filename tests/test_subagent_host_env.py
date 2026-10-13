@@ -380,22 +380,20 @@ async def test_windows_probe_finds_agents_on_the_captured_path(
     """
     boot_bin, fresh_bin = tmp_path / "boot-bin", tmp_path / "fresh-bin"
     for directory, name in ((boot_bin, "on-boot-agent"), (fresh_bin, "fresh-agent")):
-        directory.mkdir()
-        (directory / name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        (directory / name).chmod(0o755)
+        _executable(directory, f"{name}.exe")
     monkeypatch.setenv("PATH", str(boot_bin))
     windows_host.user["Path"] = str(fresh_bin)
     monkeypatch.setattr(os, "pathsep", ";")
     monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
     rows = [
-        ThirdPartyAcpSubagentConfig(name=name, command=f"{name} --acp") for name in ("on-boot-agent", "fresh-agent")
+        ThirdPartyAcpSubagentConfig(name=name, command=f"{name}.exe --acp") for name in ("on-boot-agent", "fresh-agent")
     ]
 
     results = await probe_all([(cfg, "config") for cfg in rows])
 
     assert [(r.name, r.status, r.target) for r in results] == [
-        ("on-boot-agent", "attention", str(boot_bin / "on-boot-agent")),
-        ("fresh-agent", "attention", str(fresh_bin / "fresh-agent")),
+        ("on-boot-agent", "attention", str(boot_bin / "on-boot-agent.exe")),
+        ("fresh-agent", "attention", str(fresh_bin / "fresh-agent.exe")),
     ]
 
 
