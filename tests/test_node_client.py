@@ -692,8 +692,8 @@ def _box(machine_id: str = "box") -> remote.Machine:
     return remote.Machine(id=machine_id, display_name="Lab box", _row=row(id=machine_id))
 
 
-def _live(pool: NodePool, tmp_path: Path, machine_id: str = "box", **kw: Any) -> _Client:
-    client = _Client(**kw)
+def _live(pool: NodePool, tmp_path: Path, machine_id: str = "box", client: _Client | None = None, **kw: Any) -> _Client:
+    client = client or _Client(**kw)
     log = tmp_path / f"{machine_id}.log"
     log.write_text(f"ssh: connect to host {HOST} port {PORT}: Connection refused\n", encoding="utf-8")
     hello = {"protocol": protocol.PROTOCOL, "home": "/home/worker", "version": "0.9", "limits": {"agents": 8}}
@@ -1103,3 +1103,99 @@ async def test_an_attach_the_link_cannot_carry_parks_every_waiting_endpoint_agai
     assert len(client.asked) == 1, "the second was not tried on a link that had just failed"
     assert pool.status("box").state == "lost" and pool.status("box").agents == 2
     await pool.close_all()
+
+
+# --- a link replaced by an ordinary call brings its agents along ------------------------
+
+
+async def test_a_call_that_replaces_a_dead_link_attaches_the_parked_agents_again(tmp_path, monkeypatch):
+    """The transport died before the heartbeat saw it: the next call relaunches the link, and the agents come with it."""
+    pool = NodePool(heartbeat_s=60.0)
+    client = _live(pool, tmp_path)
+    endpoint = ChannelEndpoint(client, 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    pool._nodes["box"].channels[1] = endpoint
+    again = _Client()
+
+    async def launch(machine_id: str) -> _Node:
+        return _Node(again, _box(), tmp_path / "box.log", {"home": "/h"}, {})  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pool, "_launch", launch)
+    client.alive = False
+
+    assert await pool.call("box", protocol.PING, {}) == {"text": "ok"}
+
+    assert pool._parked.get("box", []) == [] and endpoint.detached is None
+    assert (protocol.AGENT_ATTACH, {"channel": 1, "task": endpoint.task, "after": 0}) in [a[:2] for a in again.asked]
+    assert pool._nodes["box"].client is again and pool._nodes["box"].channels[1] is endpoint
+    await pool.close_all()
+
+
+class _Gone(_Client):
+    """A connection that answers requests but can carry no notification: it died right after the attach."""
+
+    async def notify(self, method: str, params: dict[str, Any]) -> None:
+        self.said.append((method, params))
+        raise AcpConnectionError("the ssh ended", returncode=255, stderr="")
+
+
+async def test_a_replay_the_link_cannot_carry_keeps_the_frames_and_every_waiting_endpoint(tmp_path):
+    pool = NodePool(backoff_s=())
+    client = _live(pool, tmp_path, client=_Gone())
+    first = ChannelEndpoint(client, 1, target=_box(), agent="a@box")  # type: ignore[arg-type]
+    second = ChannelEndpoint(client, 2, target=_box(), agent="b@box")  # type: ignore[arg-type]
+    for endpoint in (first, second):
+        endpoint.detach("the link went")
+    await first.write(b"one\n")
+    await first.write(b"two\n")
+    pool._parked["box"] = [first, second]
+
+    await pool._reattach("box")
+
+    assert [params["line"] for _, params in first._pending] == ["one", "two"], (
+        "nothing the link did not carry is dropped"
+    )
+    assert pool._parked["box"] == [first, second], "the one being replayed and the one not yet reached both wait"
+    assert first.detached and second.detached and first.returncode is None and second.returncode is None
+    assert not client.alive and "box" not in pool._nodes
+    assert len(client.said) == 1, "the second frame was not tried on a link that had just failed"
+    assert "box" in pool._reconnects, "and the link is tried again"
+    assert pool.status("box").state == "lost" and pool.status("box").agents == 2
+    await pool.close_all()
+
+
+async def test_a_cancel_the_link_cannot_carry_is_kept_for_the_next_link(tmp_path):
+    dead = _Client(raises=AcpConnectionError("the ssh ended", returncode=255, stderr=""))
+    endpoint = ChannelEndpoint(dead, 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+
+    await endpoint.end()  # the link died; the heartbeat has not said so yet
+
+    assert endpoint._cancel_wanted and endpoint.returncode is None
+    again = _Client()
+    await endpoint.reattach(again, 3)
+    assert (protocol.AGENT_CANCEL, {"channel": 3}, node_client._CANCEL_TIMEOUT_S) in again.asked
+    assert not endpoint._cancel_wanted, "delivered"
+
+
+async def test_a_cancel_that_fails_during_the_reattach_is_still_wanted_after_it(tmp_path):
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+    endpoint.detach("the link went")
+    await endpoint.end()
+    assert endpoint._cancel_wanted
+    dying = _Client(raises=AcpConnectionError("the ssh ended", returncode=255, stderr=""))
+
+    await endpoint.reattach(dying, 2)  # the cancel's request fails on the new link too
+
+    assert endpoint._cancel_wanted, "not delivered: still wanted"
+    again = _Client()
+    await endpoint.reattach(again, 4)
+    assert (protocol.AGENT_CANCEL, {"channel": 4}, node_client._CANCEL_TIMEOUT_S) in again.asked
+    assert not endpoint._cancel_wanted
+
+
+async def test_a_cancel_the_node_refuses_is_not_wanted_any_more(tmp_path):
+    refusing = _Client(raises=AcpRemoteError(protocol.AGENT_CANCEL, protocol.UNKNOWN_TASK, "no agent on channel 1"))
+    endpoint = ChannelEndpoint(refusing, 1, target=_box(), agent="echo@box")  # type: ignore[arg-type]
+
+    await endpoint.end()
+
+    assert not endpoint._cancel_wanted, "the node answered: there is nothing there to cancel"

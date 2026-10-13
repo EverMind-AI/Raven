@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import contextlib
 import hashlib
 import os
 import time
@@ -247,14 +246,28 @@ class ChannelEndpoint:
         return b"" if item is None else item
 
     async def end(self) -> None:
-        """End the agent and what it started, through the node; while the link is down, as soon as it is back."""
+        """End the agent and what it started, through the node; while the link is down, as soon as it is back.
+
+        Wanted until delivered: a link that dies under the request, or that
+        has died and not been said so yet, keeps the cancel for the next
+        link, and only the node's answer settles it -- the cancel taken, or
+        nothing there to cancel.
+        """
         if self.returncode is not None:
             return
-        if self._detached is not None:
-            self._cancel_wanted = True
+        self._cancel_wanted = True
+        if self._detached is not None or not self._link.alive:
             return
-        with contextlib.suppress(AcpError):
+        try:
             await self._link.request(protocol.AGENT_CANCEL, {"channel": self.channel}, timeout=_CANCEL_TIMEOUT_S)
+        except AcpRemoteError:
+            # The node answered: no such channel or task there, so nothing is left to cancel.
+            self._cancel_wanted = False
+        except AcpError:
+            # The link is going (the pool parks this endpoint) or slow: the cancel goes with the next link.
+            return
+        else:
+            self._cancel_wanted = False
 
     async def wait(self) -> int | None:
         await self._done.wait()
@@ -295,14 +308,19 @@ class ChannelEndpoint:
             self._detached = reason
 
     async def reattach(self, link: AcpClient, channel: int) -> None:
-        """The task is on ``channel`` of ``link`` again: send what waited, and the cancel if one was asked."""
+        """The task is on ``channel`` of ``link`` again: send what waited, and the cancel if one was asked.
+
+        A frame leaves the held list only once the link took it: a link that
+        goes under the replay leaves the rest held for the next one, and the
+        pool parks the endpoint again with them.
+        """
         self._link, self.channel = link, channel
         self._detached = None
-        held, self._pending = self._pending, []
-        for method, params in held:
+        while self._pending:
+            method, params = self._pending[0]
             await self._link.notify(method, {"channel": channel, **params})
+            self._pending.pop(0)
         if self._cancel_wanted:
-            self._cancel_wanted = False
             await self.end()
 
     def _settle(self) -> None:
@@ -557,6 +575,8 @@ class NodePool:
             if node is not None and node.client.alive:
                 return node
             if node is not None:
+                # Gone before the heartbeat said so: its agents wait, as they
+                # would have for the heartbeat, and the new link brings them.
                 await self._drop(machine_id, f"the Raven node on machine {node.target.label} stopped")
             try:
                 node = await self._launch(machine_id)
@@ -566,6 +586,14 @@ class NodePool:
             self._nodes[machine_id] = node
             self._errors.pop(machine_id, None)
             node.heartbeat = asyncio.create_task(self._heartbeat(machine_id, node), name=f"node-heartbeat-{machine_id}")
+            if self._parked.get(machine_id):
+                # Whichever path made this link, the agents parked for the
+                # machine ride on it; a link that goes under the attach is
+                # dropped again, and the call that asked for it hears why.
+                await self._reattach(machine_id)
+                if self._nodes.get(machine_id) is not node:
+                    said = self._errors.get(machine_id, "").removesuffix("; reconnecting")
+                    raise NodeError(said or f"the link to machine {node.target.label} was lost")
         return node
 
     def _prepare(self, machine_id: str) -> tuple[remote.Machine, Path, list[str], str]:
@@ -716,7 +744,13 @@ class NodePool:
             self._reconnects.pop(machine_id, None)
 
     async def _reattach(self, machine_id: str) -> None:
-        """Every endpoint parked for the machine onto a channel of its new link, from the frame it last read."""
+        """Every endpoint parked for the machine onto a channel of its new link, from the frame it last read.
+
+        A link that goes while this runs -- under the attach, or under the
+        replay of what an endpoint held -- parks that endpoint and every one
+        not yet reached again, with everything they still hold, and the link
+        is tried again: nothing that waited is dropped on the way.
+        """
         node = self._nodes.get(machine_id)
         waiting = self._parked.pop(machine_id, [])
         if node is None or not node.client.alive:
@@ -732,6 +766,8 @@ class NodePool:
             params = {"channel": channel, "task": endpoint.task, "after": endpoint.received}
             try:
                 await node.client.request(protocol.AGENT_ATTACH, params, timeout=_ATTACH_TIMEOUT_S)
+                if endpoint.returncode is None:
+                    await endpoint.reattach(node.client, channel)
             except AcpRemoteError as exc:
                 node.channels.pop(channel, None)
                 endpoint.lost(
@@ -740,18 +776,19 @@ class NodePool:
                 continue
             except (AcpTimeoutError, AcpConnectionError) as exc:
                 # This link is gone too: this endpoint and every one not yet
-                # reached wait for the next one.
+                # reached wait for the next one, with what they still hold.
                 node.channels.pop(channel, None)
-                self._parked.setdefault(machine_id, []).extend(e for e in waiting[i:] if e.returncode is None)
                 said = (
                     self._ended(node.target, node.log, exc)
                     if isinstance(exc, AcpConnectionError)
                     else f"the Raven node on machine {node.target.label} did not answer {protocol.AGENT_ATTACH}"
                 )
+                rest = [e for e in waiting[i:] if e.returncode is None]
+                for e in rest:
+                    e.detach(said)
+                self._parked.setdefault(machine_id, []).extend(rest)
                 await self._lost(machine_id, node, said)
                 return
-            if endpoint.returncode is None:
-                await endpoint.reattach(node.client, channel)
             logger.info("acp agent {!r}: attached again on {}", endpoint.agent, endpoint.describe())
 
     def _stop_reconnect(self, machine_id: str) -> None:

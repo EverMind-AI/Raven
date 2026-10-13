@@ -551,15 +551,18 @@ def socket_path(root: Path) -> Path:
     """Where the daemon of this install listens for ``root``: under ``run/``, or when that path is too long for a socket, in a directory of this user's own in the temp directory.
 
     A unix socket's path is short by the system's rule, and a node directory
-    is wherever the owner put it. The fallback is named after ``root`` so a
-    relay and a daemon given the same directory meet, and it lies in a
-    directory only this user may open (:func:`own_dir`), as ``run/`` is, so
-    what listens there is this user's own daemon and nothing else.
+    is wherever the owner put it. The fallback is named after ``root`` and
+    this install, as the path under ``run/`` is, so a relay and a daemon of
+    one install given the same directory meet and another install's daemon
+    on that directory listens elsewhere; and it lies in a directory only this
+    user may open (:func:`own_dir`), as ``run/`` is, so what listens there is
+    this user's own daemon and nothing else.
     """
-    under = root / RUN_DIR / f"{bundle.install_name()}.sock"
+    install = bundle.install_name()
+    under = root / RUN_DIR / f"{install}.sock"
     if len(os.fsencode(under)) <= _SOCKET_PATH_MAX:
         return under
-    tag = hashlib.sha256(os.fsencode(root.resolve())).hexdigest()[:16]
+    tag = hashlib.sha256(os.fsencode(root.resolve()) + b"\0" + install.encode("utf-8")).hexdigest()[:16]
     return Path(tempfile.gettempdir()) / f"raven-node-{os.getuid()}" / f"{tag}.sock"
 
 
@@ -869,6 +872,8 @@ class Daemon:
         self.root = root
         self.ephemeral = ephemeral
         self.tasks: dict[str, _Task] = {}
+        self._starting: set[str] = set()
+        """The task ids whose launch is under way: they take a place before their task is registered."""
         self.connections: set[Node] = set()
         self._env: dict[str, str] | None = None
         self._env_lock = asyncio.Lock()
@@ -894,41 +899,47 @@ class Daemon:
     async def launch(self, node: Node, channel: int, params: dict[str, Any]) -> _Task:
         task_id = _task_id(params)
         known = self.tasks.get(task_id)
-        if known is not None and known.rc is None:
+        if (known is not None and known.rc is None) or task_id in self._starting:
             raise _RefusedError(_INVALID_PARAMS, f"task {task_id!r} is already running; attach to it")
-        if len(self.running()) >= protocol.MAX_AGENTS:
+        if len(self.running()) + len(self._starting) >= protocol.MAX_AGENTS:
             raise _RefusedError(protocol.BUSY, f"{protocol.MAX_AGENTS} agents are already running on this machine")
-        argv = _argv(params)
-        env = {**await self.env(), **_env(params)}
-        found = shutil.which(argv[0], path=env.get("PATH"))
-        if found is None:
-            raise _RefusedError(protocol.NOT_FOUND, f"{argv[0]!r} is not on this machine's PATH")
-        cwd = Path(_text(params, "cwd")).expanduser()
-        record = self.record_dir(task_id)
+        # The place is taken before the first await: requests are served
+        # together, and a launch still preparing has not registered its task.
+        self._starting.add(task_id)
         try:
-            cwd.mkdir(parents=True, exist_ok=True)
-            if record.exists():
-                shutil.rmtree(record)
-            record.mkdir(mode=0o700, parents=True)
-        except OSError as exc:
-            raise _RefusedError(_INTERNAL_ERROR, f"could not make {cwd}: {exc.strerror or exc}") from None
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                found,
-                *argv[1:],
-                cwd=str(cwd),
-                env=env,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,
-                limit=_AGENT_LINE_LIMIT,
-            )
-        except OSError as exc:
-            raise _RefusedError(_INTERNAL_ERROR, f"could not start {argv[0]!r}: {exc.strerror or exc}") from None
-        task = _Task(task_id, proc, self, record, command=shlex.join(argv), cwd=str(cwd))
-        task.subscriber = (node, channel)
-        self.tasks[task_id] = task
+            argv = _argv(params)
+            env = {**await self.env(), **_env(params)}
+            found = shutil.which(argv[0], path=env.get("PATH"))
+            if found is None:
+                raise _RefusedError(protocol.NOT_FOUND, f"{argv[0]!r} is not on this machine's PATH")
+            cwd = Path(_text(params, "cwd")).expanduser()
+            record = self.record_dir(task_id)
+            try:
+                cwd.mkdir(parents=True, exist_ok=True)
+                if record.exists():
+                    shutil.rmtree(record)
+                record.mkdir(mode=0o700, parents=True)
+            except OSError as exc:
+                raise _RefusedError(_INTERNAL_ERROR, f"could not make {cwd}: {exc.strerror or exc}") from None
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    found,
+                    *argv[1:],
+                    cwd=str(cwd),
+                    env=env,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
+                    limit=_AGENT_LINE_LIMIT,
+                )
+            except OSError as exc:
+                raise _RefusedError(_INTERNAL_ERROR, f"could not start {argv[0]!r}: {exc.strerror or exc}") from None
+            task = _Task(task_id, proc, self, record, command=shlex.join(argv), cwd=str(cwd))
+            task.subscriber = (node, channel)
+            self.tasks[task_id] = task
+        finally:
+            self._starting.discard(task_id)
         self.touch()
         return task
 
