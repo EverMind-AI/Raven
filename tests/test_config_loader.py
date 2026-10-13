@@ -1130,6 +1130,7 @@ def test_a_clean_config_is_stamped_without_being_touched(tmp_path: Path) -> None
     assert load_config(p).agents.defaults.context_window_tokens == 65536
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_migration_preserves_the_config_file_mode(tmp_path: Path) -> None:
     """``os.replace`` swaps the inode, so a replacing writer owns the mode of
     what it puts there. config.json holds providers.*.apiKey -- a user who
