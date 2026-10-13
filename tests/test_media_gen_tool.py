@@ -203,6 +203,93 @@ async def test_an_openai_compatible_base_takes_a_size_and_edits_by_multipart(mon
     assert b'name="image[]"' in edit.content and _PNG in edit.content and b"gpt-image-2" in edit.content
 
 
+_JPG = b"\xff\xd8\xff\xe0" + b"jpg pixels"
+
+
+async def test_an_ark_plan_base_is_answered_in_url_form_and_downloads_the_picture(monkeypatch, tmp_path) -> None:
+    """The Volces Ark Agent-Plan endpoint speaks its own dialect on
+    /images/generations -- ``size`` as a "2K" tier, no pixel pair, no
+    response_format -- and answers with ``data[].url`` only, so the picture
+    behind the URL is fetched and written like any other generated file."""
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        sent["download"] = request
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["success"] and out["model"] == "doubao-seedream-5-0-pro"
+    path = Path(out["paths"][0])
+    assert path.suffix == ".jpg" and path.read_bytes() == _JPG
+    assert sent["body"] == {"model": "doubao-seedream-5-0-pro", "prompt": "a poster", "n": 1, "size": "2K"}
+    # The download URL is the provider's own storage, not its API: the key the
+    # generation call carried must not travel with the fetch.
+    assert sent["download"].headers.get("Authorization") is None
+
+
+async def test_an_ark_plan_base_without_a_ratio_leaves_size_to_the_endpoint(monkeypatch, tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            assert "size" not in json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    assert json.loads(await tool.execute("a poster"))["success"]
+
+
+async def test_an_ark_plan_base_still_takes_an_inline_b64_picture(monkeypatch, tmp_path) -> None:
+    """b64_json keeps working wherever it appears: the url form was added for
+    Ark, not swapped for it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+
+
+async def test_any_openai_compatible_base_may_answer_in_url_form(monkeypatch, tmp_path) -> None:
+    """data[].url is read on every Images base, not only Ark's: a gateway
+    answering OpenAI's documented url form used to look like no image at all,
+    and the pixel size the same base takes is unchanged."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/images/generations":
+            assert json.loads(request.content)["size"] == "1024x1536"
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/cdn/signed.png"}]})
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=_PNG)
+
+    tool = _image_tool(
+        monkeypatch, handler, model="gpt-image-2", workspace=tmp_path / "ws", api_base="https://gw.test/v1"
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="3:4"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+
+
 @pytest.mark.parametrize(
     ("model", "ratio", "size"),
     [

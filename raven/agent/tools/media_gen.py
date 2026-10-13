@@ -752,6 +752,28 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             {"success": True, "model": model_id, "quality": quality or "", "paths": paths}, ensure_ascii=False
         )
 
+    async def _generated_bytes(self, client: httpx.AsyncClient, item: Any) -> tuple[str, bytes] | None:
+        """The picture one ``data`` entry carries, as ``(mime, bytes)``, or None
+        when it has none this code can take: inline as ``b64_json``, or behind
+        its ``url`` -- an Ark-style endpoint answers with download URLs only, so
+        the bytes are fetched (through the guarded fetch: a provider response
+        is as untrusted a place for a URL as a model's chat text)."""
+        if not isinstance(item, dict):
+            return None
+        if encoded := item.get("b64_json"):
+            return str(item.get("media_type") or "image/png"), base64.b64decode(encoded)
+        url = str(item.get("url") or "")
+        if url.startswith("data:"):
+            return _split_data_uri(url)
+        if not url.startswith(("http://", "https://")):
+            return None
+        fetched = await guarded_fetch(client, url, what="generated image")
+        if fetched is None:
+            return None
+        fetched.raise_for_status()
+        mime = fetched.headers.get("content-type", "image/png").split(";", 1)[0].strip()
+        return mime, fetched.content
+
     async def _via_images_api(
         self,
         model_id: str,
@@ -763,9 +785,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
         stem: str = "",
     ) -> str:
         """The Images API: OpenRouter's unified ``/images``, or ``/images/generations``
-        and ``/images/edits`` on an OpenAI-compatible base."""
+        and ``/images/edits`` on an OpenAI-compatible base. A Volces Ark base
+        speaks the Ark dialect on the generations route: ``size`` in "1K"/"2K"
+        resolution tiers rather than pixel pairs, and the pictures behind
+        ``data[].url`` rather than ``b64_json``."""
         headers = self._headers()
         openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
+        volces = httpx.URL(self.api_base).host.endswith(".volces.com")
         try:
             # OpenRouter takes the chat content-part shape verbatim; the OpenAI
             # edits form takes the bytes behind it.
@@ -810,7 +836,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                     r = await client.post(f"{self.api_base}/images/edits", headers=headers, data=form, files=files)
                 else:
                     body = {"model": model_id, "prompt": prompt, "n": 1}
-                    if size := images_api_size(model_id, aspect_ratio):
+                    if volces:
+                        # Ark's size is a resolution tier, and it has no ratio
+                        # knob: the asked-for frame is dropped rather than sent
+                        # as pixels the endpoint does not take.
+                        if aspect_ratio:
+                            body["size"] = "2K"
+                    elif size := images_api_size(model_id, aspect_ratio):
                         body["size"] = size
                     if quality:
                         body["quality"] = quality
@@ -818,19 +850,20 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 r.raise_for_status()
                 payload = r.json()
                 await self._record_usage(payload, model_id, "images")
-                items = payload.get("data") or []
+                pictures = [
+                    picture
+                    for item in payload.get("data") or []
+                    if (picture := await self._generated_bytes(client, item)) is not None
+                ]
         except httpx.HTTPStatusError as e:
             return self._format_http_error(e)
         except Exception as e:
             logger.error("image_generate error: {}", e)
             return json.dumps({"error": type(e).__name__, "detail": str(e)}, ensure_ascii=False)
         paths: list[str] = []
-        for item in items:
-            encoded = item.get("b64_json") if isinstance(item, dict) else None
-            if not encoded:
-                continue
-            path = self._output_path(_MIME_EXT.get(item.get("media_type"), "png"), output_dir, stem)
-            path.write_bytes(base64.b64decode(encoded))
+        for mime, data in pictures:
+            path = self._output_path(_MIME_EXT.get(mime, "png"), output_dir, stem)
+            path.write_bytes(data)
             paths.append(str(path))
         if not paths:
             return json.dumps({"error": "no image returned", "model": model_id}, ensure_ascii=False)
