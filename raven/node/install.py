@@ -31,6 +31,7 @@ import json
 import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
+from urllib.parse import urlsplit, urlunsplit
 
 from raven.acp_client import remote
 from raven.node import bundle, protocol
@@ -107,11 +108,17 @@ class Plan:
             if self.uv_from == "fetched"
             else ""
         )
-        index = (
-            f"{self.index} (the index pip is configured with there)"
-            if self.index
-            else "PyPI (pip is configured with no other index there)"
-        )
+        if self.index:
+            # The host and the path only: pip takes a sign-in inside the URL
+            # (``https://user:password@host/simple``), and this line is
+            # printed before the confirmation and under ``--yes``.
+            shown = _shown_index(self.index)
+            how = "the index pip is configured with there" + (
+                ", shown without its sign-in" if shown != self.index else ""
+            )
+            index = f"{shown} ({how})"
+        else:
+            index = "PyPI (pip is configured with no other index there)"
         space = f"; {self.free_kb // (1024 * 1024)} GB free there" if self.free_kb is not None else ""
         return (
             f"Install the Raven node {self.install_name} on machine {self.target.label} into {where}:{uv} {python}, "
@@ -348,12 +355,28 @@ def install(p: Plan, *, run: Runner = _run, push: Pusher = _push) -> Installed:
     return Installed(p.node_dir, p.install_name, int(size) if size.isdigit() else None, rg=rg)
 
 
+def _shown_index(url: str) -> str:
+    """``url`` as a sentence shows it: the host and the path, with any sign-in in it left out."""
+    parts = urlsplit(url)
+    if not (parts.username or parts.password):
+        return url
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    return urlunsplit(parts._replace(netloc=host))
+
+
 def _failed(p: Plan, step: str, rc: int, out: str) -> str:
     """One sentence for a failed step: ssh's failure explained, else the machine's own last line."""
     if (said := remote.explain(p.target, rc, out)) is not None and rc != remote.NOT_FOUND_RC:
         return f"installing the Raven node: {said}"
     lines = [line.strip() for line in out.splitlines() if line.strip()]
     last = lines[-1][:300] if lines else f"exit {rc}"
+    if p.index:
+        # uv names the index in its own refusals; a sign-in in it stays out of this sentence too.
+        last = last.replace(p.index, _shown_index(p.index))
     return f"installing the Raven node on machine {p.target.label} failed at the {step} step: {last}"
 
 
