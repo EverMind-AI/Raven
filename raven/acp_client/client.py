@@ -285,8 +285,13 @@ class AcpClient:
         client._start_loops()
         # The breadcrumb for the sweep above: if this host dies without
         # reaching close(), the next launch on this machine finds the pgid,
-        # the owner's pid and the agent's start time here.
-        await asyncio.to_thread(orphans.record_agent, name, proc.pid)
+        # the owner's pid and the agent's start time here. The agent is
+        # already running, so a failed record must not fail the launch -- the
+        # alternative is precisely the untracked orphan this exists to end.
+        try:
+            await asyncio.to_thread(orphans.record_agent, name, proc.pid)
+        except Exception as exc:  # noqa: BLE001 - a broken record must not stop the launch
+            logger.debug("acp orphan record failed (launching anyway): {}", exc)
 
         logger.info("acp agent {!r}: started {} (pid {})", name, argv[:1], proc.pid)
         return client
