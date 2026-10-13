@@ -40,42 +40,72 @@ _LINE_BREAK = re.compile(rb"\r\n|[\n\r\x0b\x0c\x1c\x1d\x1e]|\xc2\x85|\xe2\x80[\x
 _ODD_BREAKS = (b"\r", b"\x0b", b"\x0c", b"\x1c", b"\x1d", b"\x1e", b"\xc2\x85", b"\xe2\x80\xa8", b"\xe2\x80\xa9")
 
 
+def _split_lines(body: bytes) -> list[bytes]:
+    """``body`` cut at every break ``str.splitlines`` knows; the last piece is what follows the last break."""
+    odd = any(sign in body for sign in _ODD_BREAKS)
+    return _LINE_BREAK.split(body) if odd else body.split(b"\n")
+
+
 def _page_of_lines(handle: Any, start: int, limit: int) -> tuple[list[bytes], int]:
     """Lines ``start`` to ``start + limit`` (0-based) of the bytes ``handle`` reads, and how many lines there are.
 
     Exactly the lines ``read_text(encoding="utf-8").splitlines()`` would give,
-    read a chunk at a time. A break may straddle two chunks, so the bytes
-    that could begin one are held back until the next chunk says; the tail
-    after the last break is a line only when it holds something, as
-    ``splitlines`` has it.
+    read a chunk at a time and each chunk looked at once: the bytes of the
+    line in progress are kept only while that line may be on the page, so a
+    line longer than a chunk costs its length and nothing more, wherever it
+    falls. (Held whole and looked at again with every chunk, a file with no
+    break in it cost time square in its size: 256 MiB took half a minute.)
+    A break may straddle two chunks, so the bytes that could begin one are
+    held back until the next chunk says; the tail after the last break is a
+    line only when it holds something, as ``splitlines`` has it.
     """
     page: list[bytes] = []
     total = 0
     stop = start + limit
+    # The line in progress is line ``total``: its bytes, kept while it may be
+    # on the page, and whether it holds anything at all.
+    line: list[bytes] = []
+    begun = False
 
-    def take(lines: list[bytes]) -> None:
-        nonlocal total
-        if total < stop and total + len(lines) > start:
-            page.extend(lines[max(start - total, 0) : stop - total])
-        total += len(lines)
+    def wanted() -> bool:
+        return start <= total < stop
 
-    def cut(body: bytes) -> bytes:
-        """Count and keep the complete lines of ``body``; what follows the last break comes back."""
-        odd = any(sign in body for sign in _ODD_BREAKS)
-        pieces = _LINE_BREAK.split(body) if odd else body.split(b"\n")
-        take(pieces[:-1])
-        return pieces[-1]
+    def feed(body: bytes) -> None:
+        nonlocal total, line, begun
+        head, *rest = _split_lines(body)
+        if head:
+            begun = True
+            if wanted():
+                line.append(head)
+        if not rest:
+            return
+        # The first break ends the line in progress, the pieces between
+        # breaks are whole lines, and the last piece begins the next line.
+        if wanted():
+            page.append(b"".join(line))
+        total += 1
+        line = []
+        *middle, last = rest
+        if middle:
+            if total < stop and total + len(middle) > start:
+                page.extend(middle[max(start - total, 0) : stop - total])
+            total += len(middle)
+        begun = bool(last)
+        if last and wanted():
+            line = [last]
 
-    buffer = b""
+    kept = b""
     while chunk := handle.read(_PAGE_CHUNK):
-        buffer += chunk
-        hold = 2 if buffer.endswith(b"\xe2\x80") else (1 if buffer.endswith((b"\r", b"\xc2", b"\xe2")) else 0)
-        kept = buffer[len(buffer) - hold :] if hold else b""
-        buffer = cut(buffer[: len(buffer) - hold] if hold else buffer) + kept
-    if buffer:
-        tail = cut(buffer)
-        if tail:
-            take([tail])
+        body = kept + chunk
+        hold = 2 if body.endswith(b"\xe2\x80") else (1 if body.endswith((b"\r", b"\xc2", b"\xe2")) else 0)
+        kept = body[len(body) - hold :] if hold else b""
+        feed(body[: len(body) - hold] if hold else body)
+    if kept:
+        feed(kept)
+    if begun:
+        if wanted():
+            page.append(b"".join(line))
+        total += 1
     return page, total
 
 
