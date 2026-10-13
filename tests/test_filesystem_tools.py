@@ -231,3 +231,64 @@ def test_a_file_too_large_to_preview_is_not_read_at_all(tmp_path: Path):
     view = WriteFileTool(workspace=tmp_path).approval_evidence({"path": "big.log", "content": "small"})
 
     assert view == {"path": str(target.resolve()), "created": False}
+
+
+# --- a page of a text file, read a chunk at a time ------------------------------------
+
+
+_EVERY_BREAK = (
+    b"one\n"
+    b"two\r\n"
+    b"three\r"
+    b"four\x0b"
+    b"five\x0c"
+    b"six\x1c"
+    b"seven\x1d"
+    b"eight\x1e"
+    b"nine\xc2\x85"
+    b"ten\xe2\x80\xa8"
+    b"eleven\xe2\x80\xa9"
+    b"\n"
+    b"twelve \xc3\xa9 last, with no break after it"
+)
+
+
+@pytest.mark.parametrize("chunk", [1, 2, 3, 4, 7, 64])
+def test_a_page_is_the_lines_splitlines_gives_whatever_the_chunk_edge(monkeypatch, chunk: int):
+    """Every break ``str.splitlines`` knows, each landing on a chunk edge for some chunk size."""
+    from io import BytesIO
+
+    from raven.agent.tools import filesystem
+
+    monkeypatch.setattr(filesystem, "_PAGE_CHUNK", chunk)
+    want = _EVERY_BREAK.decode("utf-8").splitlines()
+    assert len(want) == 13 and want[11] == "", "a blank line between two breaks counts; a trailing break does not"
+
+    for start, limit in ((0, 2000), (0, 1), (1, 3), (8, 2), (12, 1), (13, 5)):
+        page, total = filesystem._page_of_lines(BytesIO(_EVERY_BREAK), start, limit)
+        assert total == 13 and [line.decode("utf-8") for line in page] == want[start : start + limit]
+    assert filesystem._page_of_lines(BytesIO(b""), 0, 5) == ([], 0)
+    assert filesystem._page_of_lines(BytesIO(b"\n"), 0, 5) == ([b""], 1)
+
+
+@pytest.mark.asyncio
+async def test_read_file_pages_a_file_without_holding_all_of_it(tmp_path: Path, monkeypatch):
+    from raven.agent.tools import filesystem
+
+    target = tmp_path / "breaks.txt"
+    target.write_bytes(_EVERY_BREAK)
+    monkeypatch.setattr(filesystem, "_PAGE_CHUNK", 5)
+    read = ReadFileTool(workspace=tmp_path)
+
+    first = await read.execute(path=str(target), limit=2)
+    assert first == "1| one\n2| two\n\n(Showing lines 1-2 of 13. Use offset=3 to continue.)"
+    last = await read.execute(path=str(target), offset=12)
+    assert last == "12| \n13| twelve \u00e9 last, with no break after it\n\n(End of file \u2014 13 lines total)"
+    assert await read.execute(path=str(target), offset=14) == "Error: offset 14 is beyond end of file (13 lines)"
+
+    # A byte that is not UTF-8 refuses the page it is on, as the whole-file decode refused the file.
+    target.write_bytes(b"fine\n\xff broken\n")
+    assert (
+        await read.execute(path=str(target), limit=1)
+    ) == "1| fine\n\n(Showing lines 1-1 of 2. Use offset=2 to continue.)"
+    assert str(await read.execute(path=str(target), offset=2)).startswith("Error reading file: 'utf-8' codec")
