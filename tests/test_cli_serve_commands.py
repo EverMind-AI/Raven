@@ -1508,6 +1508,7 @@ class TestTheSessionSurvivesARestart:
 
         assert gw.session_cookie == "freshly-minted"
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes are not available on Windows")
     def test_the_state_file_stays_owner_only(self, home: Path) -> None:
         """It now carries two credentials rather than one."""
         path = serve_commands._write_serve_state(18792, "tok-1", "cookie-1")
