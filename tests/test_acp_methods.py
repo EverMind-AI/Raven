@@ -1123,6 +1123,29 @@ class TestConfigOptions:
         assert "result" in response
         assert "configOptions" not in response["result"]
 
+    @pytest.mark.parametrize("method,closing", [("model.options", False), ("turn.subscribe", True)])
+    async def test_session_creation_preserves_cancellation_outside_shutdown_metadata(self, rig, method, closing):
+        entered = asyncio.Event()
+
+        async def suspended(params):
+            entered.set()
+            await asyncio.Future()
+
+        rig.stack.dispatcher._handlers[method] = suspended
+        await rig.handshake()
+        if closing:
+            rig.translator.close()
+        task = asyncio.create_task(rig.new_session())
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
 
 class TestPrompt:
     async def test_a_text_prompt_runs_a_turn_and_answers_its_stop_reason(self, rig):

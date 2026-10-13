@@ -132,14 +132,22 @@ def test_malformed_input_is_answered_and_the_next_frame_still_lands():
     assert result.returncode == 0
 
 
-def test_a_whole_handshake_runs_in_one_process(tmp_path):
+@pytest.mark.parametrize(
+    "cold_imports", [False, pytest.param(True, marks=pytest.mark.slow)], ids=["warm_imports", "cold_imports"]
+)
+def test_a_whole_handshake_runs_in_one_process(tmp_path, monkeypatch, cold_imports):
     """Three exchanges against the real binary: negotiate, mint, then a session
     the agent does not have.
 
     The last one is the point. An agent that answered an unknown session by
     minting a fresh one would look identical here until a user reopened a
     conversation and found it empty.
+
+    A fresh bytecode cache also exercises the first model-catalogue import
+    while the finite input's EOF grace period is running.
     """
+    if cold_imports:
+        monkeypatch.setenv("PYTHONPYCACHEPREFIX", str(tmp_path / "bytecode"))
     project = tmp_path / "project"
     project.mkdir()
     payload = (
