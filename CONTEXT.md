@@ -1125,10 +1125,10 @@ and injects into the main agent's system prompt so evicted facts stay present.
 **EverOS** (`plugins-dist/everos-memory/raven_everos/`):
 Raven's default memory-backend plugin (`everos-memory`; ships enabled, works out of
 the box). Its own distribution rather than part of the raven wheel, found through the
-`raven.plugins` entry-point group. (`plugins-dist/ppt-engine/` and
-`plugins-dist/design-engine/` and `plugins-dist/everos-cloud-memory/` ship the same way -- the group's other
-distributed members, contributing a deck-building toolchain, a visual-design
-engine rather than memory.) Provides dual-track semantic recall — the user track (episodes/profiles,
+`raven.plugins` entry-point group. (`plugins-dist/ppt-engine/`,
+`plugins-dist/design-engine/` and `plugins-dist/everos-cloud-memory/` ship the same way --
+the group's other distributed members: a deck-building toolchain, a visual-design
+engine, and the hosted memory backend below.) Provides dual-track semantic recall — the user track (episodes/profiles,
 injected into the `# Memory` segment) and the agent track (skills/cases, one of
 SkillForge's three sources at RRF weight 0.9). The name refers to the external package
 [EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS); the in-tree code is only an
