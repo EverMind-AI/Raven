@@ -1699,7 +1699,7 @@ def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets,
     import raven.cli.trajectory_browse as tbrowse
     from raven.trajectory import review as treview
 
-    def _keep_all(_questionary, _style):
+    def _keep_all(_questionary, _style, **_kwargs):
         def _decide(items, _reasons):
             return [treview.ReviewDecision(item.id, treview.ACTION_KEPT) for item in items]
 
@@ -1721,6 +1721,283 @@ def test_report_bug_summary_shows_semantic_decisions(state, _no_machine_secrets,
     assert confirms == ["Ship the package with the risks listed above?"]
     assert len(breport.list_reports(state)) == 1  # only the first run's report
     assert _staging_entries(state) == []
+
+
+# ── report-bug redaction history ──────────────────────────────────────
+
+_SECOND_TOKEN = "Qw8eR3tY6uI1oP4aS7dF2gH5"
+
+
+def _history():
+    from raven.trajectory import redaction_history as thistory
+
+    return thistory.RedactionHistory()
+
+
+def _seed(token, action="kept"):
+    return _history().record(token, action, category="high-entropy", source="cli")
+
+
+def _one_line(text):
+    return " ".join(text.split())
+
+
+def _no_asking():
+    raise AssertionError("no item may be asked")
+
+
+def _actions(record):
+    return [entry["action"] for entry in record["redaction"]["user_decisions"]]
+
+
+def _ask_with(monkeypatch, answer):
+    import raven.cli.trajectory_browse as tbrowse
+
+    monkeypatch.setattr(tbrowse, "_require_questionary", lambda: _FakeReviewQuestionary(answer))
+
+
+def test_report_bug_tty_replays_a_remembered_decision(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    args = ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"]
+    _ask_with(monkeypatch, lambda: "k")
+    r = runner.invoke(trajectory_app, args)
+    assert r.exit_code == 0, r.output
+    first = _history().lookup(_ENTROPY_TOKEN)
+    assert (first.action, first.source, first.applied) == ("kept", "cli", 0)
+
+    _ask_with(monkeypatch, _no_asking)
+    r2 = runner.invoke(trajectory_app, args)
+
+    assert r2.exit_code == 0, r2.output
+    out = _one_line(r2.output)
+    assert "Redaction review — every item was decided from your redaction history" in out
+    assert "1 item(s) decided from your redaction history:" in out
+    assert "-- kept (decided " in out and "reused 0 time(s)" in out
+    assert [_actions(record) for _dir, record in breport.list_reports(state)] == [["kept"], ["kept"]]
+    second = _history().lookup(_ENTROPY_TOKEN)
+    assert second.applied == 1 and second.revision == first.revision
+
+
+def test_report_bug_non_tty_history_covers_every_finding(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _seed(_ENTROPY_TOKEN)
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 0, r.output
+    assert "1 item(s) decided from your redaction history:" in _one_line(r.output)
+    ((_dir, record),) = breport.list_reports(state)
+    assert _actions(record) == ["kept"]
+    assert _history().lookup(_ENTROPY_TOKEN).applied == 1
+
+
+def test_report_bug_non_tty_history_still_needs_accept_risk(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _seed(_ENTROPY_TOKEN)
+    before = _history().path.read_bytes()
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
+
+    assert r.exit_code == 1
+    out = _one_line(r.output)
+    assert "The redaction needs review:" in out
+    assert "1 item(s) decided from your redaction history:" in out
+    assert "Pass: --accept-risk (--yes does not imply them)." in out
+    assert "--keep-findings or --redact-findings" not in out
+    assert _history().path.read_bytes() == before
+    assert breport.list_reports(state) == []
+    assert _staging_entries(state) == []
+
+
+def test_report_bug_non_tty_partial_history_lists_the_rest(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN} and {_SECOND_TOKEN}"})
+    _seed(_ENTROPY_TOKEN)
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 1
+    out = _one_line(r.output)
+    assert "1 item(s) require your decision:" in out
+    assert "1 item(s) decided from your redaction history:" in out
+    assert f"Token: {_SECOND_TOKEN}" in out
+    assert f"Token: {_ENTROPY_TOKEN}" not in out
+    assert "Pass: --keep-findings or --redact-findings (--yes does not imply them)." in out
+    assert breport.list_reports(state) == []
+
+
+def test_report_bug_flags_win_over_history_without_touching_it(state, _no_machine_secrets):
+    from raven.trajectory import bugreport as breport
+
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _seed(_ENTROPY_TOKEN)
+    before = _history().path.read_bytes()
+
+    r = runner.invoke(
+        trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk", "--redact-findings"]
+    )
+
+    assert r.exit_code == 0, r.output
+    assert "decided from your redaction history" not in r.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert _actions(record) == ["redacted"]
+    assert _history().path.read_bytes() == before
+
+
+def test_report_bug_blanket_flags_are_not_remembered(state, _no_machine_secrets):
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk", "--keep-findings"])
+
+    assert r.exit_code == 0, r.output
+    assert not _history().path.exists()
+
+
+def test_report_bug_review_all_asks_again_and_replaces(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    seeded = _seed(_ENTROPY_TOKEN)
+    _ask_with(monkeypatch, lambda: "r")
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk", "--review-all"])
+
+    assert r.exit_code == 0, r.output
+    assert "Redaction review — 1 item(s) need your decision" in _one_line(r.output)
+    ((_dir, record),) = breport.list_reports(state)
+    assert _actions(record) == ["redacted"]
+    entry = _history().lookup(_ENTROPY_TOKEN)
+    assert entry.action == "redacted" and entry.revision != seeded.revision and entry.applied == 0
+
+
+def test_report_bug_review_all_without_tty_ignores_history(state, _no_machine_secrets):
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _seed(_ENTROPY_TOKEN)
+    before = _history().path.read_bytes()
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk", "--review-all"])
+
+    assert r.exit_code == 1
+    out = _one_line(r.output)
+    assert "Pass: --keep-findings or --redact-findings (--yes does not imply them)." in out
+    assert "decided from your redaction history" not in out
+    assert _history().path.read_bytes() == before
+
+
+def test_report_bug_history_switched_off(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    monkeypatch.setenv("RAVEN_BUGREPORT_REDACTION_HISTORY", "off")
+    _simple_log(state, attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _seed(_ENTROPY_TOKEN, "redacted")
+    before = _history().path.read_bytes()
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+    assert r.exit_code == 1
+    assert "Pass: --keep-findings or --redact-findings" in _one_line(r.output)
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _ask_with(monkeypatch, lambda: "k")
+    r2 = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+
+    assert r2.exit_code == 0, r2.output
+    ((_dir, record),) = breport.list_reports(state)
+    assert _actions(record) == ["kept"]
+    assert _history().path.read_bytes() == before
+
+
+def test_report_bug_cancelled_review_remembers_nothing(state, _no_machine_secrets, monkeypatch):
+    import raven.cli.trajectory_browse as tbrowse
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _ask_with(monkeypatch, lambda: tbrowse._BACK)
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 1
+    assert not _history().path.exists()
+
+
+def test_report_bug_declined_ship_still_remembers_decisions(state, _no_machine_secrets, monkeypatch):
+    from raven.cli import trajectory_commands as tcmd
+    from raven.trajectory import bugreport as breport
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _ask_with(monkeypatch, lambda: "k")
+    monkeypatch.setattr(tcmd.typer, "confirm", lambda *_a, **_k: False)
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes"])
+
+    assert r.exit_code == 1
+    assert breport.list_reports(state) == []
+    assert _history().lookup(_ENTROPY_TOKEN).action == "kept"
+
+
+def test_report_bug_corrupt_history_asks_and_backs_up(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    path = _history().path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"{not json")
+    _ask_with(monkeypatch, lambda: "k")
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 0, r.output
+    out = _one_line(r.output)
+    assert "Redaction history could not be read (not valid JSON (line 1))" in out
+    assert "Backed up the unreadable redaction history to" in out
+    assert len(list(breport.list_reports(state))) == 1
+    (backup,) = path.parent.glob(f"{path.name}.corrupt-*")
+    assert backup.read_bytes() == b"{not json"
+    assert _history().lookup(_ENTROPY_TOKEN).action == "kept"
+
+
+def test_report_bug_unreadable_history_asks_every_item(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import redaction_history as thistory
+
+    def _denied(self, _items):
+        raise thistory.HistoryStorageError("cannot read X: Permission denied")
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    _seed(_ENTROPY_TOKEN)
+    monkeypatch.setattr(thistory.RedactionHistory, "resolve", _denied)
+    _ask_with(monkeypatch, lambda: "r")
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 0, r.output
+    assert "Redaction history is unavailable (cannot read X: Permission denied)" in _one_line(r.output)
+    ((_dir, record),) = breport.list_reports(state)
+    assert _actions(record) == ["redacted"]
+
+
+def test_report_bug_unsaved_history_still_ships(state, _no_machine_secrets, monkeypatch):
+    from raven.trajectory import bugreport as breport
+    from raven.trajectory import redaction_history as thistory
+
+    def _full(self, *_args, **_kwargs):
+        raise thistory.HistoryStorageError("cannot save X: No space left on device")
+
+    _tty_review_setup(state, monkeypatch, {"llm.output": f"token {_ENTROPY_TOKEN}"})
+    monkeypatch.setattr(thistory.RedactionHistory, "remember", _full)
+    _ask_with(monkeypatch, lambda: "k")
+
+    r = runner.invoke(trajectory_app, ["report-bug", "trace-1", "-d", "x", "--yes", "--accept-risk"])
+
+    assert r.exit_code == 0, r.output
+    assert "Your decisions were not remembered: cannot save X: No space left on device" in _one_line(r.output)
+    ((_dir, record),) = breport.list_reports(state)
+    assert _actions(record) == ["kept"]
 
 
 # ── report-bug upload (RAVEN_BUGREPORT_URL) ───────────────────────────

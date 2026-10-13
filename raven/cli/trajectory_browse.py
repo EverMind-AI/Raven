@@ -80,6 +80,7 @@ from raven.session.manager import SessionManager
 from raven.tracing import config as tracing_config
 from raven.trajectory import bugreport as breport
 from raven.trajectory import conversation as tconversation
+from raven.trajectory import redaction_history as thistory
 from raven.trajectory import review as treview
 from raven.trajectory import store as tstore
 from raven.trajectory import upload as tupload
@@ -1303,9 +1304,23 @@ def _print_review_item(item: Any, index: int, total: int, index_by_id: dict[str,
 
 
 def _ask_review_item(
-    item: Any, index: int, total: int, index_by_id: dict[str, int], questionary: Any, style: Any
+    item: Any,
+    index: int,
+    total: int,
+    index_by_id: dict[str, int],
+    questionary: Any,
+    style: Any,
+    *,
+    hint: thistory.RememberedDecision | None = None,
 ) -> str:
     _print_review_item(item, index, total, index_by_id)
+    if hint is not None:
+        verb = "kept" if hint.action == treview.ACTION_KEPT else "replaced"
+        console.print(
+            f"  History: you {verb} this value on {escape(hint.decided_at[:10])}; its linked items have"
+            " no matching remembered answer, so the group is asked again.",
+            highlight=False,
+        )
     if item.kind == treview.KIND_CONFIRMED:
         while True:
             answer = (
@@ -1357,36 +1372,142 @@ def _conflicted_review_items(items: list[Any], actions: dict[str, str]) -> list[
     return conflicted
 
 
-def make_review_decider(questionary: Any, style: Any) -> Any:
+def _report_history() -> thistory.RedactionHistory | None:
+    return thistory.RedactionHistory() if thistory.enabled() else None
+
+
+def _resolve_history(
+    history: thistory.RedactionHistory, items: list[Any]
+) -> tuple[thistory.HistoryResolution | None, list[str]]:
+    """Replayed decisions plus the warnings to show; storage trouble never stops a report.
+
+    The warnings are returned rather than printed so each caller can place
+    them under its own heading.
+    """
+    try:
+        resolution = history.resolve(items)
+    except thistory.HistoryStorageError as exc:
+        return None, [f"Redaction history is unavailable ({exc}); every item needs your decision."]
+    if resolution.corrupt:
+        return resolution, [
+            f"Redaction history could not be read ({resolution.corrupt}); every item needs your decision."
+            " The file is backed up on the next save."
+        ]
+    return resolution, []
+
+
+def _print_history_warnings(warnings: list[str]) -> None:
+    for warning in warnings:
+        console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
+
+
+def _print_history_decisions(resolution: thistory.HistoryResolution | None, items: list[Any]) -> None:
+    if resolution is None or not resolution.auto:
+        return
+    by_id = {item.id: item for item in items}
+    index_by_id = {item.id: index for index, item in enumerate(items, 1)}
+    console.print(f"  {len(resolution.auto)} item(s) decided from your redaction history:", highlight=False)
+    for decision in resolution.auto:
+        record = resolution.replayed[decision.item_id]
+        verb = "kept" if record.action == treview.ACTION_KEPT else "replaced"
+        line = (
+            f"[{index_by_id[decision.item_id]}/{len(items)}] {by_id[decision.item_id].category} {record.masked}"
+            f" -- {verb} (decided {record.decided_at[:10]}, reused {record.applied} time(s))"
+        )
+        console.print(f"    {escape(line)}", highlight=False)
+
+
+def _remember_decisions(
+    history: thistory.RedactionHistory,
+    items: list[Any],
+    decisions: list[Any],
+    *,
+    source: str,
+    replayed: dict[str, thistory.RememberedDecision],
+) -> None:
+    """Record a valid decision set; a storage failure only warns, the report proceeds."""
+    try:
+        result = history.remember(items, decisions, source=source, replayed=replayed)
+    except thistory.HistoryStorageError as exc:
+        console.print(f"[yellow]! Your decisions were not remembered: {escape(str(exc))}[/yellow]", highlight=False)
+        return
+    if result.stale:
+        console.print(
+            f"[yellow]! {result.stale} remembered decision(s) changed elsewhere during this review;"
+            " this report used the earlier answer.[/yellow]",
+            highlight=False,
+        )
+    if result.backup is not None:
+        console.print(f"Backed up the unreadable redaction history to {escape(str(result.backup))}.", highlight=False)
+
+
+def make_review_decider(
+    questionary: Any,
+    style: Any,
+    *,
+    history: thistory.RedactionHistory | None = None,
+    replay: bool = True,
+    source: str = "cli",
+) -> Any:
     """The interactive ``decide`` callback for :func:`breport.freeze_export`.
 
     Validates before returning and re-asks only the conflicting linked group,
     so the pipeline never sees an inconsistent decision set (and nothing is
     applied until the set is legal). Shared by the browser and the CLI's TTY
-    path.
+    path. With a ``history``, remembered decisions are replayed first (whole
+    linked groups only) and listed, only the other items are asked, and once
+    the set is valid every suspected item's decision is recorded -- replayed
+    ones only count a reuse. ``replay=False`` asks every item but still
+    records the answers.
     """
 
     def _decide(items: list[Any], reasons: list[str]) -> list[Any]:
+        resolution, history_warnings = (
+            _resolve_history(history, items) if history is not None and replay else (None, [])
+        )
+        auto_ids = set(resolution.replayed) if resolution else set()
+        remaining = [item for item in items if item.id not in auto_ids]
         console.print()
-        console.print(f"Redaction review — {len(items)} item(s) need your decision", highlight=False)
+        if remaining:
+            console.print(f"Redaction review — {len(remaining)} item(s) need your decision", highlight=False)
+        else:
+            console.print("Redaction review — every item was decided from your redaction history", highlight=False)
         console.print(f"  {_REVIEW_PATHS_NOTE}", highlight=False)
         for warning in _review_warnings(reasons):
             console.print(f"  [yellow]! {escape(warning)}[/yellow]", highlight=False)
+        _print_history_warnings(history_warnings)
+        _print_history_decisions(resolution, items)
+        hints = resolution.hints if resolution else {}
         index_by_id = {item.id: index for index, item in enumerate(items, 1)}
-        actions: dict[str, str] = {}
-        for index, item in enumerate(items, 1):
-            actions[item.id] = _ask_review_item(item, index, len(items), index_by_id, questionary, style)
+        actions: dict[str, str] = (
+            {decision.item_id: decision.action for decision in resolution.auto} if resolution else {}
+        )
+        for item in remaining:
+            actions[item.id] = _ask_review_item(
+                item, index_by_id[item.id], len(items), index_by_id, questionary, style, hint=hints.get(item.id)
+            )
         while True:
             decisions = [treview.ReviewDecision(item.id, actions[item.id]) for item in items]
             try:
                 treview.validate_review_decisions(items, decisions)
-                return decisions
+                break
             except treview.ReviewConflictError as exc:
                 console.print(f"[red]{escape(str(exc))}[/red]", highlight=False)
                 for item in _conflicted_review_items(items, actions):
                     actions[item.id] = _ask_review_item(
-                        item, index_by_id[item.id], len(items), index_by_id, questionary, style
+                        item,
+                        index_by_id[item.id],
+                        len(items),
+                        index_by_id,
+                        questionary,
+                        style,
+                        hint=hints.get(item.id),
                     )
+        if history is not None:
+            _remember_decisions(
+                history, items, decisions, source=source, replayed=resolution.replayed if resolution else {}
+            )
+        return decisions
 
     return _decide
 
@@ -1559,7 +1680,11 @@ def _bug_report_action(
     try:
         fields = _ask_problem_fields(questionary, style)
         try:
-            prep = breport.freeze_export(prep, **fields, decide=make_review_decider(questionary, style))
+            prep = breport.freeze_export(
+                prep,
+                **fields,
+                decide=make_review_decider(questionary, style, history=_report_history(), source="browser"),
+            )
         except breport.PreparationError as exc:
             console.print(
                 f"[red]✗ Could not prepare the trajectory snapshot: {escape(str(exc))}[/red]", highlight=False

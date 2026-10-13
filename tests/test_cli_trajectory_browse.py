@@ -2381,6 +2381,152 @@ def test_bug_report_review_kept_finding_ships(state, workspace, monkeypatch, cap
     assert meta["redaction"]["user_decisions"] == record["redaction"]["user_decisions"]
 
 
+def _one_line(text):
+    return " ".join(text.split())
+
+
+def test_bug_report_replays_remembered_decisions(state, workspace, monkeypatch, capsys, _no_machine_secrets):
+    from raven.trajectory import redaction_history as thistory
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
+    )
+    thistory.RedactionHistory().record(_ENTROPY_TOKEN, "kept", category="high-entropy", source="cli")
+
+    fake = _bug_flow(monkeypatch, workspace, ["it broke", False, True, _CANCEL])
+
+    out = _one_line(capsys.readouterr().out)
+    assert "Redaction review — every item was decided from your redaction history" in out
+    assert "1 item(s) decided from your redaction history:" in out
+    assert not any(str(msg).startswith("Decision") for _k, msg, _t in fake.prompts)
+    _record_dir, record = _single_report(state)
+    assert [entry["action"] for entry in record["redaction"]["user_decisions"]] == ["kept"]
+    assert thistory.RedactionHistory().lookup(_ENTROPY_TOKEN).applied == 1
+
+
+def test_bug_report_records_browser_decisions(state, workspace, monkeypatch, _no_machine_secrets):
+    from raven.trajectory import redaction_history as thistory
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [_span("trace-1", session_key="cli:a", attrs={"llm.output": f"token {_ENTROPY_TOKEN}"})],
+    )
+
+    _bug_flow(monkeypatch, workspace, ["it broke", False, "k", True, _CANCEL])
+
+    entry = thistory.RedactionHistory().lookup(_ENTROPY_TOKEN)
+    assert (entry.action, entry.source) == ("kept", "browser")
+
+
+_INNER_TOKEN = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
+_OUTER_TOKEN = _INNER_TOKEN + "W6xC2v"
+_OTHER_TOKEN = "Qw8eR3tY6uI1oP4aS7dF2gH5"
+
+
+def _review_items(tmp_path, text):
+    from raven.trajectory import redact as tredact
+    from raven.trajectory import review as treview
+
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "spans.jsonl").write_text(text, encoding="utf-8")
+    report = tredact.RedactionReport(bundle_dir=tree, redacted_dir=tree.resolve())
+    report.findings = tredact.scan_residuals(tree)
+    return treview.build_review_items([report])
+
+
+def _decider_history(tmp_path):
+    from raven.trajectory import redaction_history as thistory
+
+    return thistory.RedactionHistory(tmp_path / "home" / thistory.HISTORY_FILENAME)
+
+
+def test_decider_asks_a_partly_remembered_group_with_a_hint(tmp_path, capsys):
+    items = _review_items(tmp_path, f"a {_INNER_TOKEN} b {_OUTER_TOKEN}\n")
+    assert len(items) == 2 and all(item.linked for item in items)
+    history = _decider_history(tmp_path)
+    history.record(_INNER_TOKEN, "kept", category="high-entropy", source="cli")
+    fake = _FakeQuestionary(["k", "k"])
+
+    decisions = tbrowse.make_review_decider(fake, None, history=history)(items, [])
+
+    out = _one_line(capsys.readouterr().out)
+    assert "Redaction review — 2 item(s) need your decision" in out
+    assert out.count("History: you kept this value on") == 1
+    assert len(fake.prompts) == 2
+    assert [d.action for d in decisions] == ["kept", "kept"]
+    assert history.lookup(_OUTER_TOKEN).action == "kept"
+
+
+def test_decider_replays_an_agreeing_group_without_asking(tmp_path, capsys):
+    items = _review_items(tmp_path, f"a {_INNER_TOKEN} b {_OUTER_TOKEN}\n")
+    history = _decider_history(tmp_path)
+    for token in (_INNER_TOKEN, _OUTER_TOKEN):
+        history.record(token, "redacted", category="high-entropy", source="cli")
+    fake = _FakeQuestionary([])
+
+    decisions = tbrowse.make_review_decider(fake, None, history=history)(items, [])
+
+    out = _one_line(capsys.readouterr().out)
+    assert "Redaction review — every item was decided from your redaction history" in out
+    assert "2 item(s) decided from your redaction history:" in out
+    assert out.count("-- replaced (decided ") == 2
+    assert fake.prompts == []
+    assert [d.action for d in decisions] == ["redacted", "redacted"]
+    assert {history.lookup(token).applied for token in (_INNER_TOKEN, _OUTER_TOKEN)} == {1}
+
+
+def test_decider_without_replay_asks_and_replaces(tmp_path, capsys):
+    items = _review_items(tmp_path, f"a {_OTHER_TOKEN}\n")
+    history = _decider_history(tmp_path)
+    seeded = history.record(_OTHER_TOKEN, "kept", category="high-entropy", source="cli")
+    fake = _FakeQuestionary(["r"])
+
+    decisions = tbrowse.make_review_decider(fake, None, history=history, replay=False, source="browser")(items, [])
+
+    assert "decided from your redaction history" not in capsys.readouterr().out
+    assert [d.action for d in decisions] == ["redacted"]
+    entry = history.lookup(_OTHER_TOKEN)
+    assert (entry.action, entry.source) == ("redacted", "browser")
+    assert entry.revision != seeded.revision
+
+
+def test_decider_reports_a_decision_changed_during_review(tmp_path, capsys):
+    from raven.trajectory import redaction_history as thistory
+
+    items = _review_items(tmp_path, f"a {_INNER_TOKEN}\nb {_OTHER_TOKEN}\n")
+    history = _decider_history(tmp_path)
+    history.record(_INNER_TOKEN, "kept", category="high-entropy", source="cli")
+    elsewhere = thistory.RedactionHistory(history.path)
+
+    def _change_then_keep():
+        elsewhere.record(_INNER_TOKEN, "redacted", category="high-entropy", source="web")
+        return "k"
+
+    fake = _FakeQuestionary([_change_then_keep])
+
+    tbrowse.make_review_decider(fake, None, history=history)(items, [])
+
+    out = _one_line(capsys.readouterr().out)
+    assert "1 remembered decision(s) changed elsewhere during this review" in out
+    assert history.lookup(_INNER_TOKEN).action == "redacted"
+    assert history.lookup(_OTHER_TOKEN).action == "kept"
+
+
+def test_decider_without_history_is_unchanged(tmp_path, capsys):
+    from raven.trajectory import redaction_history as thistory
+
+    items = _review_items(tmp_path, f"a {_OTHER_TOKEN}\n")
+    fake = _FakeQuestionary(["k"])
+
+    decisions = tbrowse.make_review_decider(fake, None)(items, [])
+
+    assert "Redaction review — 1 item(s) need your decision" in _one_line(capsys.readouterr().out)
+    assert [d.action for d in decisions] == ["kept"]
+    assert not thistory.RedactionHistory().path.exists()
+
+
 def test_bug_report_private_key_acknowledged_ships(state, workspace, monkeypatch, capsys, _no_machine_secrets):
     _write_log(
         state / "logs" / "audit-spans.log",

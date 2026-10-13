@@ -2083,7 +2083,12 @@ decision; confirmed-sensitive items are never decided from history. Each human
 decision gets a fresh revision, and a replay is counted only against the
 revision it read, so a stale replay never overrides a newer human answer or
 revives a forgotten record. An unreadable file reads as empty and is backed
-up, never overwritten in place, before the next save.
+up, never overwritten in place, before the next save. The bug report review
+(`report-bug` and the browser's "Report a bug") replays it before asking and
+records the human decisions once the decision set is valid; decisions made by
+the blanket `--keep-findings` / `--redact-findings` flags are neither replayed
+over nor recorded, `--review-all` asks again, and
+`RAVEN_BUGREPORT_REDACTION_HISTORY=off` disables it.
 _Avoid_: "memory" (the agent memory engine), "cache" (it is an authoritative
 record, never evicted automatically).
 
