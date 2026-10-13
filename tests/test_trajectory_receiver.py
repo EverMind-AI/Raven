@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import stat
+import tarfile
 import threading
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -20,7 +21,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from raven.trajectory import package_check as pcheck
 from raven.trajectory import receiver as rcv
 from raven.trajectory.receiver import ReceiverConfig, ReceiverStore, build_app
-from tests.test_trajectory_package_check import OTHER_ID, ROOT, _entries, _metadata, _tar
+from tests.test_trajectory_package_check import OTHER_ID, ROOT, _chain, _entries, _metadata, _tar
 
 
 def _package_bytes(**kw):
@@ -416,6 +417,28 @@ async def test_metadata_nested_beyond_recursion_is_a_bad_package(client, save_di
     payload = await resp.json()
     assert payload["error"] == "bad_package" and payload["message"].startswith("metadata_invalid:")
     assert not list(save_dir.glob("*/*"))
+
+
+@pytest.mark.parametrize("kind", [tarfile.XHDTYPE, tarfile.GNUTYPE_LONGNAME])
+async def test_a_chain_of_extended_headers_is_a_bad_package(client, save_dir, kind):
+    body = gzip.compress(_chain(kind, 2000) + _tar(_entries()), mtime=0)
+    resp = await _post(client, body, sha=hashlib.sha256(body).hexdigest())
+    assert resp.status == 400
+    payload = await resp.json()
+    assert payload["error"] == "bad_package" and payload["message"].startswith("header_chain_too_long:")
+    assert not list(save_dir.glob("*/*"))
+
+
+async def test_the_sidecar_digest_and_notices_are_bounded(client, save_dir):
+    description = "x" * 5000 + " /a" * 100_000
+    body = _package_bytes(metadata=_metadata(problem={"description": description}))
+    resp = await _post(client, body, sha=hashlib.sha256(body).hexdigest())
+    assert resp.status == 201
+    sidecar = _sidecar(save_dir)
+    assert sidecar["package"]["description"] == "x" * 1000
+    assert len(sidecar["notices"]) == pcheck.MAX_NOTICES + 1
+    assert sidecar["notices"][-1].startswith(f"more than {pcheck.MAX_NOTICES} absolute paths")
+    assert (save_dir / DATE / f"{ROOT}.json").stat().st_size < 8192
 
 
 # --- fault injection --------------------------------------------------------
@@ -826,6 +849,28 @@ async def test_daily_count_and_byte_budgets_over_http(make_client, save_dir):
     assert resp.status == 507 and (await resp.json())["error"] == "insufficient_storage"
 
 
+def test_ledger_counts_sidecars_as_landed_bytes(save_dir, clock):
+    _place(save_dir, payload=_valid_payload(save_dir, clock))
+    _place(save_dir, OTHER_PACKAGE, report_id=OTHER_ID)
+    sidecar = (save_dir / DATE / f"{ROOT}.json").stat().st_size
+    assert sidecar > 0
+    ledger = rcv.DailyLedger(save_dir, max_bytes=10**9, max_count=10, clock=clock)
+    day = ledger.snapshot(DATE)
+    assert (day.landed_count, day.landed_bytes) == (2, len(PACKAGE) + sidecar + len(OTHER_PACKAGE))
+
+
+async def test_the_daily_byte_budget_covers_the_sidecar_too(make_client, save_dir):
+    """Two packages fit the budget on their own; the first one's sidecar is what tips it."""
+    client = await make_client(max_daily_bytes=len(PACKAGE) + len(OTHER_PACKAGE) + 10)
+    assert (await _post(client)).status == 201
+    sidecar = (save_dir / DATE / f"{ROOT}.json").stat().st_size
+    assert sidecar > 10
+    day = _receiver(client).ledger.snapshot(DATE)
+    assert (day.landed_count, day.landed_bytes) == (1, len(PACKAGE) + sidecar)
+    resp = await _post_other(client)
+    assert resp.status == 507 and (await resp.json())["error"] == "insufficient_storage"
+
+
 async def test_a_failed_upload_gives_its_budget_back(make_client, monkeypatch):
     client = await make_client(max_daily_bytes=len(PACKAGE) + len(OTHER_PACKAGE) - 1)
     gate = _GatedInspection()
@@ -858,7 +903,8 @@ async def test_every_exit_settles_the_reservation(make_client, save_dir, monkeyp
     assert (await _post_other(client)).status == 500
     await _eventually(lambda: ledger.snapshot(DATE).reserved_count == 0)
     day = ledger.snapshot(DATE)
-    assert (day.landed_count, day.landed_bytes, day.reserved_bytes) == (1, len(PACKAGE), 0)
+    landed = len(PACKAGE) + (save_dir / DATE / f"{ROOT}.json").stat().st_size
+    assert (day.landed_count, day.landed_bytes, day.reserved_bytes) == (1, landed, 0)
 
 
 async def test_an_upload_is_charged_to_the_day_it_was_admitted(make_client, save_dir, clock, monkeypatch):

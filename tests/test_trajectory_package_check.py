@@ -169,6 +169,61 @@ def test_huge_extended_header_is_refused_before_allocation(tmp_path, kind, name)
     assert peak < 8 * 2**20
 
 
+def _pax_record(key, value):
+    body = f" {key}={value}\n"
+    total = next(n for n in range(len(body) + 1, len(body) + 4) if len(str(n)) + len(body) == n)
+    return f"{total}{body}".encode()
+
+
+def _chain(kind, depth, *, payload=None):
+    """``depth`` extended headers of ``kind`` in a row, each with valid data."""
+    if payload is None:
+        payload = _pax_record("comment", "x") if kind in (tarfile.XHDTYPE, tarfile.XGLTYPE) else b"././@LongLink"
+    name = "./PaxHeaders/x" if kind in (tarfile.XHDTYPE, tarfile.XGLTYPE) else "././@LongLink"
+    return (_header(name, len(payload), kind) + _padded(payload)) * depth
+
+
+@pytest.mark.parametrize("kind", [tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK])
+def test_a_long_chain_of_extended_headers_is_a_package_error_not_a_recursion(tmp_path, kind):
+    raw = _chain(kind, 2000) + _tar(_entries())
+    error = _rejects(_package(tmp_path, raw=raw), pcheck.CODE_HEADER_CHAIN_TOO_LONG)
+    assert "extended headers before a member" in error.message
+
+
+def test_a_mixed_chain_of_extended_headers_is_bounded(tmp_path):
+    kinds = (tarfile.XHDTYPE, tarfile.GNUTYPE_LONGNAME, tarfile.GNUTYPE_LONGLINK, tarfile.XGLTYPE, tarfile.XHDTYPE)
+    raw = b"".join(_chain(kind, 1) for kind in kinds) + _tar(_entries())
+    _rejects(_package(tmp_path, raw=raw), pcheck.CODE_HEADER_CHAIN_TOO_LONG)
+
+
+def test_a_short_chain_of_extended_headers_is_accepted(tmp_path):
+    raw = _chain(tarfile.XHDTYPE, 3) + _tar(_entries())
+    summary = inspect_package(_package(tmp_path, raw=raw))
+    assert summary.members[0] == ROOT
+
+
+def test_chained_extended_headers_do_not_accumulate_in_memory(tmp_path):
+    big = b"x" * (60 * 1024)
+    raw = _chain(tarfile.GNUTYPE_LONGNAME, 200, payload=big) + _tar(_entries())
+    path = _package(tmp_path, raw=raw)
+    tracemalloc.start()
+    try:
+        _rejects(path, pcheck.CODE_HEADER_CHAIN_TOO_LONG)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 8 * 2**20
+
+
+def test_path_notices_are_capped(tmp_path):
+    description = " /a" * 100_000
+    package = _package(tmp_path, _entries(metadata=_metadata(problem={"description": description})))
+    notices = inspect_package(package).notices
+    assert len(notices) == pcheck.MAX_NOTICES + 1
+    assert all(notice.startswith("absolute path in bugreport.json: /a") for notice in notices[:-1])
+    assert notices[-1].startswith(f"more than {pcheck.MAX_NOTICES} absolute paths in bugreport.json")
+
+
 def test_truncated_gzip(tmp_path):
     data = gzip.compress(_tar(_entries()))
     _rejects(_write(tmp_path, data[: len(data) // 2]), pcheck.CODE_NOT_GZIP_TAR)

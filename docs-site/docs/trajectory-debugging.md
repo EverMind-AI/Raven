@@ -88,7 +88,9 @@ Packages land as `<save-dir>/<YYYY-MM-DD>/<report-id>.tar.gz`, the original
 bytes untouched, next to a `<report-id>.json` sidecar that holds the receipt,
 the sender's address, and a triage digest of `bugreport.json` (reporter,
 description, severity, completeness, redaction classification) so a reader can
-sort packages without unpacking them. The day is the UTC day the upload was
+sort packages without unpacking them. The digest keeps the first 1000
+characters of each field and at most 16 path notices, and a sidecar counts
+against the daily byte budget together with its package. The day is the UTC day the upload was
 admitted on: a package that finishes after midnight stays in the day it
 started, and its sidecar's `received_at` records when it actually landed. The
 same package sent twice returns the receipt already stored; a different

@@ -77,7 +77,9 @@ raven trajectory receiver --save-dir /srv/raven-bugreports
 
 包以原始字节落在 `<save-dir>/<YYYY-MM-DD>/<report-id>.tar.gz`，旁边的
 `<report-id>.json` sidecar 保存回执、发送方地址和 `bugreport.json` 的分诊摘要
-（reporter、描述、严重程度、完整度、脱敏分类），读者不解包即可分拣。日期是上传
+（reporter、描述、严重程度、完整度、脱敏分类），读者不解包即可分拣。摘要只保留
+每个字段的前 1000 个字符和至多 16 条路径提示；sidecar 与它的包一起计入每日字节
+预算。日期是上传
 被准入的 UTC 日：跨午夜才完成的包留在开始的那一天，sidecar 的 `received_at` 记
 录真实落地时刻。同一个包再发一次返回已存的回执；同一 report id 的不同内容会被
 拒绝。保留与清理由运维负责——按日的目录让 `find -mtime` 式清理很简单。

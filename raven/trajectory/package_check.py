@@ -13,7 +13,10 @@ PAX/GNU extended header's declared size straight to one ``read()`` call, so
 a header claiming gigabytes is decompressed whole into memory before the
 first member is ever returned. :class:`_BoundedGunzip` sits between ``zlib``
 and ``tarfile`` instead, capping each single read (which is what an extended
-header is) and the total output, and refusing to go past either limit.
+header is) and the total output, and refusing to go past either limit; the
+chain of extended headers tarfile holds at once before a member is bounded
+as well, so no header shape can make the walk recurse or hold more than a
+few reads.
 
 Checks run in archive order — size, gzip/tar framing, each member's type and
 name, the metadata file, the manifest against the hashed members, the
@@ -47,6 +50,7 @@ from raven.trajectory.sanitize import find_absolute_paths
 CODE_TOO_LARGE = "too_large"
 CODE_NOT_GZIP_TAR = "not_gzip_tar"
 CODE_HEADER_TOO_LARGE = "header_too_large"
+CODE_HEADER_CHAIN_TOO_LONG = "header_chain_too_long"
 CODE_UNPACKED_TOO_LARGE = "unpacked_too_large"
 CODE_TOO_MANY_MEMBERS = "too_many_members"
 CODE_BAD_MEMBER_TYPE = "bad_member_type"
@@ -67,6 +71,17 @@ _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_SEGMENTS = ("", ".", "..")
 _PLAIN_FILE_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.CONTTYPE)
 _SPARSE_PREFIX = "GNU.sparse."
+_EXTENDED_TYPES = (
+    tarfile.XHDTYPE,
+    tarfile.XGLTYPE,
+    tarfile.SOLARIS_XHDTYPE,
+    tarfile.GNUTYPE_LONGNAME,
+    tarfile.GNUTYPE_LONGLINK,
+)
+# A PAX archive carries one extended header per member; a global one, a long
+# name and a long link on top of it is already more than any writer emits.
+_MAX_EXTENDED_HEADERS = 4
+MAX_NOTICES = 16
 
 
 @dataclass(frozen=True)
@@ -104,7 +119,9 @@ class _BoundedGunzip(io.RawIOBase):
     :func:`inspect_package` reads member data in pieces no larger than it, so
     the only bigger request a well-formed archive can make is a PAX/GNU
     extended header — the per-call cap *is* the extended-header cap, and it
-    is checked before any buffer proportional to the request exists.
+    is checked before any buffer proportional to the request exists. A chain
+    of such headers is held at once by tarfile; :class:`_StrictTarInfo`
+    bounds its length, so the headers alive together stay within a few caps.
     ``max_output`` bounds everything ever produced — headers, data, padding
     and skipped bytes alike — and is checked before decompressing.
     """
@@ -213,7 +230,24 @@ class _StrictTarInfo(tarfile.TarInfo):
     a 1.0 map is read from the data stream in 512-byte pieces into a list
     whose size the per-read cap cannot see. A bug report never carries a
     sparse file, so each handler is cut off at its entry.
+
+    Extended headers (PAX ``x``/``g``, GNU ``L``/``K``) each describe the
+    header after them, which tarfile fetches by recursing once per header
+    and holding every header of the chain at once. The chain before a member
+    is cut off at ``_MAX_EXTENDED_HEADERS``, so neither the recursion depth
+    nor the memory held grows with what the archive declares.
     """
+
+    def _proc_member(self, tar: Any) -> Any:
+        if self.type in _EXTENDED_TYPES:
+            tar.extended_headers += 1
+            if tar.extended_headers > _MAX_EXTENDED_HEADERS:
+                raise PackageError(
+                    CODE_HEADER_CHAIN_TOO_LONG, f"more than {_MAX_EXTENDED_HEADERS} extended headers before a member"
+                )
+        else:
+            tar.extended_headers = 0
+        return super()._proc_member(tar)
 
     def _proc_sparse(self, *args: Any) -> Any:
         raise _no_sparse()
@@ -233,14 +267,26 @@ class _StrictTarInfo(tarfile.TarInfo):
         super()._apply_pax_info(pax_headers, encoding, errors)
 
 
+class _StrictTarFile(tarfile.TarFile):
+    """A TarFile that reads :class:`_StrictTarInfo` headers and counts the chain they form."""
+
+    tarinfo = _StrictTarInfo
+    extended_headers = 0
+
+
 @contextlib.contextmanager
 def _tar_boundary() -> Iterator[None]:
-    """Turn what tarfile raises on malformed input into a :class:`PackageError`."""
+    """Turn what tarfile raises on malformed input into a :class:`PackageError`.
+
+    ``RecursionError`` is a ``RuntimeError``, not a ``TarError``: the chain
+    bound keeps tarfile from reaching it, and this keeps the contract if some
+    other header shape ever does.
+    """
     try:
         yield
     except PackageError:
         raise
-    except (tarfile.TarError, EOFError, ValueError) as exc:
+    except (tarfile.TarError, EOFError, ValueError, RecursionError) as exc:
         raise PackageError(CODE_NOT_GZIP_TAR, str(exc) or exc.__class__.__name__) from exc
 
 
@@ -294,7 +340,7 @@ def _members(tar: tarfile.TarFile) -> Iterator[tarfile.TarInfo]:
 def _walk(stream: _BoundedGunzip, limits: PackageLimits) -> _Walk:
     chunk = min(_CHUNK, limits.max_header_bytes)
     with _tar_boundary():
-        tar = tarfile.TarFile(fileobj=stream, mode="r", tarinfo=_StrictTarInfo)
+        tar = _StrictTarFile(fileobj=stream, mode="r")
     walk = _Walk()
     seen: set[str] = set()
     for member in _members(tar):
@@ -415,9 +461,12 @@ def _check_metadata(walk: _Walk, expected_report_id: str | None) -> PackageSumma
         raise PackageError(CODE_RISK_NOT_ACCEPTED, f"unknown redaction classification {classification!r}")
     if classification == CLASSIFICATION_NEEDS_REVIEW and redaction.get("risk_accepted") is not True:
         raise PackageError(CODE_RISK_NOT_ACCEPTED, "a needs_review package must carry risk_accepted: true")
+    spans = find_absolute_paths(text, limit=MAX_NOTICES + 1)
     notices = tuple(
-        f"absolute path in {PACKAGE_METADATA_FILE}: {text[start:end][:80]}" for start, end in find_absolute_paths(text)
+        f"absolute path in {PACKAGE_METADATA_FILE}: {text[start:end][:80]}" for start, end in spans[:MAX_NOTICES]
     )
+    if len(spans) > MAX_NOTICES:
+        notices += (f"more than {MAX_NOTICES} absolute paths in {PACKAGE_METADATA_FILE}; only the first are listed",)
     return PackageSummary(report_id, metadata, tuple(walk.names), notices)
 
 

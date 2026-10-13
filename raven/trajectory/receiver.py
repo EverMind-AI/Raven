@@ -75,6 +75,9 @@ _SHUTDOWN_TIMEOUT = 30.0
 _monotonic = time.monotonic
 
 
+_DIGEST_CHARS = 1000
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -169,7 +172,19 @@ def _file_sha256(path: Path) -> str:
 
 
 def _text(value: Any) -> str:
-    return value if isinstance(value, str) else ""
+    """``value`` when it is a string, cut to what a triage line needs; the package keeps the rest."""
+    return value[:_DIGEST_CHARS] if isinstance(value, str) else ""
+
+
+def _sidecar_of(package: Path) -> Path:
+    return package.with_name(package.name[: -len(".tar.gz")] + ".json")
+
+
+def _size_of(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
 
 
 def _block(metadata: dict[str, Any], key: str) -> dict[str, Any]:
@@ -513,8 +528,9 @@ class DailyLedger:
 
     A request is charged to the day it was admitted on, and the package lands
     in that day's directory, so a day's ledger always equals what its
-    directory holds plus what is in flight for it -- which is also how a
-    day is backfilled when the receiver starts or first touches it.
+    directory holds -- packages and their sidecars -- plus what is in flight
+    for it, which is also how a day is backfilled when the receiver starts
+    or first touches it.
     """
 
     def __init__(self, save_dir: Path, *, max_bytes: int, max_count: int, clock: Callable[[], datetime]) -> None:
@@ -553,7 +569,7 @@ class DailyLedger:
             day = _Day()
             for package in (self._save_dir / date).glob("*.tar.gz"):
                 if is_report_id(package.name[: -len(".tar.gz")]) and package.is_file():
-                    day.landed_bytes += package.stat().st_size
+                    day.landed_bytes += package.stat().st_size + _size_of(_sidecar_of(package))
                     day.landed_count += 1
             self._days[date] = day
         return day
@@ -756,10 +772,11 @@ class Receiver:
 
         The commit task, not the HTTP outcome, says whether a package was
         committed: a cancellation or timeout can land while the rename is
-        already done, and that package must count against the day. The steps
-        are nested so none of them can be skipped by the one before it: a
-        temporary file that cannot be removed is logged and left for the next
-        startup, never allowed to keep a slot or a reservation.
+        already done, and that package must count against the day, together
+        with the sidecar written beside it. The steps are nested so none of
+        them can be skipped by the one before it: a temporary file that
+        cannot be removed is logged and left for the next startup, never
+        allowed to keep a slot or a reservation.
         """
         try:
             try:
@@ -768,7 +785,7 @@ class Receiver:
                     await _drain(task)
                 if upload.reservation is not None:
                     if task is not None and not task.cancelled() and task.exception() is None:
-                        upload.reservation.settle(upload.declared)
+                        upload.reservation.settle(upload.declared + _size_of(_sidecar_of(task.result())))
                     else:
                         upload.reservation.release()
             finally:

@@ -106,17 +106,21 @@ def _token_end(text: str, start: int, prev: str) -> int:
     return j
 
 
-def find_absolute_paths(text: str) -> list[tuple[int, int]]:
+def find_absolute_paths(text: str, *, limit: int | None = None) -> list[tuple[int, int]]:
     """Spans of absolute-path tokens in ``text`` (POSIX, Windows drive, UNC).
 
     The single parser behind sanitization and the export assertions — both
     must agree on what a path is, or a "clean" scan would not imply a clean
-    package.
+    package. ``limit`` stops the scan once that many spans are found, for a
+    caller that only reports the first few and must not hold a list that
+    grows with hostile input.
     """
     spans: list[tuple[int, int]] = []
     n = len(text)
     i = 0
     while i < n:
+        if limit is not None and len(spans) >= limit:
+            break
         ch = text[i]
         prev = text[i - 1] if i > 0 else ""
         at_boundary = i == 0 or prev.isspace() or prev in _BOUNDARY

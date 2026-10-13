@@ -169,6 +169,13 @@ def test_parser_leaves_non_paths_alone(text):
     assert tsan.sanitize_text(text) == text
 
 
+def test_parser_stops_at_the_requested_number_of_spans():
+    text = "see /a and /b and /c"
+    assert len(tsan.find_absolute_paths(text)) == 3
+    assert tsan.find_absolute_paths(text, limit=2) == tsan.find_absolute_paths(text)[:2]
+    assert tsan.find_absolute_paths(text, limit=0) == []
+
+
 def test_a_path_glued_to_a_url_does_not_ride_out_in_an_export(tmp_path):
     """The export's own no-local-paths assertion cannot catch this one.
 
