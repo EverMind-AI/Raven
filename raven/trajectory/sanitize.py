@@ -338,21 +338,23 @@ def find_absolute_paths_in_json(
             if not full() and needle in text:
                 hits.append((where, needle))
 
-    def walk(node: Any, where: str) -> None:
-        if full():
-            return
+    # An explicit stack, not recursion: json.loads accepts nesting close to
+    # the interpreter's limit, and a walk that recursed would overflow on a
+    # document the decoder had just accepted.
+    pending: list[tuple[Any, str]] = [(value, "")]
+    while pending and not full():
+        node, where = pending.pop()
         if isinstance(node, str):
             scan(node, where)
         elif isinstance(node, list):
-            for index, item in enumerate(node):
-                walk(item, f"{where}[{index}]")
+            pending.extend(reversed([(item, f"{where}[{index}]") for index, item in enumerate(node)]))
         elif isinstance(node, dict):
+            children: list[tuple[Any, str]] = []
             for key, item in node.items():
                 child = f"{where}.{key}" if where else str(key)
-                scan(str(key), f"{child} (key)")
-                walk(item, child)
-
-    walk(value, "")
+                children.append((str(key), f"{child} (key)"))
+                children.append((item, child))
+            pending.extend(reversed(children))
     return hits
 
 

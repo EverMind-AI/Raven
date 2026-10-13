@@ -230,6 +230,21 @@ def test_path_notices_read_values_not_json_escapes(tmp_path):
     assert inspect_package(package).notices == ()
 
 
+def test_metadata_nested_as_deep_as_the_decoder_allows_is_still_inspected(tmp_path):
+    depth = 900
+    nested = json.loads("[" * depth + '"/etc/shadow"' + "]" * depth)
+    package = _package(tmp_path, _entries(metadata=_metadata(problem={"description": "x", "extra": nested})))
+    notices = inspect_package(package).notices
+    assert len(notices) == 1 and notices[0].endswith(": /etc/shadow")
+
+
+def test_a_long_object_key_does_not_enlarge_its_notice(tmp_path):
+    key = "/a" + "k" * 100_000
+    package = _package(tmp_path, _entries(metadata=_metadata(problem={"description": "x", key: "v"})))
+    (notice,) = inspect_package(package).notices
+    assert len(notice) < 300 and notice.startswith("absolute path in bugreport.json problem./akkk")
+
+
 def test_truncated_gzip(tmp_path):
     data = gzip.compress(_tar(_entries()))
     _rejects(_write(tmp_path, data[: len(data) // 2]), pcheck.CODE_NOT_GZIP_TAR)

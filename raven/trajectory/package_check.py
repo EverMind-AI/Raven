@@ -463,7 +463,7 @@ def _check_metadata(walk: _Walk, expected_report_id: str | None) -> PackageSumma
         raise PackageError(CODE_RISK_NOT_ACCEPTED, "a needs_review package must carry risk_accepted: true")
     hits = find_absolute_paths_in_json(metadata, limit=MAX_NOTICES + 1)
     notices = tuple(
-        f"absolute path in {PACKAGE_METADATA_FILE} {where}: {sample[:80]}" for where, sample in hits[:MAX_NOTICES]
+        f"absolute path in {PACKAGE_METADATA_FILE} {where[:120]}: {sample[:80]}" for where, sample in hits[:MAX_NOTICES]
     )
     if len(hits) > MAX_NOTICES:
         notices += (f"more than {MAX_NOTICES} absolute paths in {PACKAGE_METADATA_FILE}; only the first are listed",)

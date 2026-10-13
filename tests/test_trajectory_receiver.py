@@ -441,6 +441,16 @@ async def test_the_sidecar_digest_and_notices_are_bounded(client, save_dir):
     assert (save_dir / DATE / f"{ROOT}.json").stat().st_size < 8192
 
 
+async def test_metadata_nested_as_deep_as_the_decoder_allows_is_received(client, save_dir):
+    depth = 900
+    nested = json.loads("[" * depth + '"/etc/shadow"' + "]" * depth)
+    body = _package_bytes(metadata=_metadata(problem={"description": "x", "extra": nested}))
+    resp = await _post(client, body, sha=hashlib.sha256(body).hexdigest())
+    assert resp.status == 201
+    (notice,) = _sidecar(save_dir)["notices"]
+    assert notice.endswith(": /etc/shadow") and len(notice) < 300
+
+
 # --- fault injection --------------------------------------------------------
 
 

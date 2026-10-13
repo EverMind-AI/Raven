@@ -224,6 +224,20 @@ def test_json_scan_checks_object_keys():
     assert hits == [("problem./etc/shadow (key)", "/etc/shadow")]
 
 
+def test_json_scan_walks_nesting_the_decoder_accepts():
+    """The decoder admits nesting close to the recursion limit; the walk must not overflow on it."""
+    depth = 900
+    document = json.loads("[" * depth + '"/etc/shadow"' + "]" * depth)
+    hits = tsan.find_absolute_paths_in_json({"problem": {"steps": document}})
+    assert hits == [("problem.steps" + "[0]" * depth, "/etc/shadow")]
+    assert tsan.find_absolute_paths_in_json({"problem": {"steps": document}}, limit=0) == []
+
+
+def test_json_scan_keeps_document_order():
+    value = {"a": {"k /x": "/one"}, "b": ["/two", {"c": "/three"}]}
+    assert [sample for _, sample in tsan.find_absolute_paths_in_json(value)] == ["/x", "/one", "/two", "/three"]
+
+
 def test_a_path_glued_to_a_url_does_not_ride_out_in_an_export(tmp_path):
     """The export's own no-local-paths assertion cannot catch this one.
 
