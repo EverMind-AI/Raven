@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.core.plugin_stack import everos_plugin_installed, everos_plugin_missing_note
 from raven.rpc.errors import ConfigValidationError, InternalError
 
@@ -39,8 +40,12 @@ _HTTP_TIMEOUT_S = 15.0
 # that shape -- the local server and EverOS Cloud -- and the page follows
 # whichever ``memory.backend`` names; its slice and its package are looked up
 # here by that name.
-_EVEROS_BACKEND = "everos"
+_EVEROS_BACKEND = SHIPPED_DEFAULT_BACKEND
 _CLOUD_BACKEND = "everos-cloud"
+# Read off the pairing rather than spelled again: a backend name that stops
+# being one of its keys fails here at import rather than reporting a plugin
+# nobody ships.
+_CLOUD_DISTRIBUTION = MEMORY_BACKEND_DISTRIBUTIONS[_CLOUD_BACKEND]
 
 _USER_KINDS = ("episode", "profile")
 _AGENT_KINDS = ("agent_case", "agent_skill")
@@ -78,7 +83,7 @@ def _cfg() -> tuple[str, str, str]:
     if cfg.memory.backend == _CLOUD_BACKEND:
         from raven_everos_cloud.backend import DEFAULT_BASE_URL
 
-        plug = (cfg.plugins.config or {}).get("everos-cloud-memory", {})
+        plug = (cfg.plugins.config or {}).get(_CLOUD_DISTRIBUTION, {})
         return str(plug.get("base_url") or DEFAULT_BASE_URL).rstrip("/"), user_id, agent_id
     from raven_everos.server import DEFAULT_EVEROS_BASE_URL
 
@@ -95,7 +100,7 @@ def _auth_headers() -> dict[str, str]:
         return {}
     from raven_everos_cloud.backend import resolve_api_key
 
-    key, _source = resolve_api_key((cfg.plugins.config or {}).get("everos-cloud-memory", {}))
+    key, _source = resolve_api_key((cfg.plugins.config or {}).get(_CLOUD_DISTRIBUTION, {}))
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
@@ -217,7 +222,7 @@ def _unavailable_note() -> str | None:
     except Exception:  # noqa: BLE001 - an unreadable config is not this page's to report
         backend = _EVEROS_BACKEND
     if backend == _CLOUD_BACKEND:
-        distribution, package = "everos-cloud-memory", "raven_everos_cloud"
+        distribution, package = _CLOUD_DISTRIBUTION, "raven_everos_cloud"
         if find_spec(package) is None:
             return (
                 f"the {distribution} distribution is not installed, so the {_CLOUD_BACKEND} memory "

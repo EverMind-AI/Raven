@@ -1386,9 +1386,12 @@ async def settings_everos_cloud(params: dict, *, agent_loop_factory=None) -> dic
     del params
     from importlib.util import find_spec
 
-    from raven.config.raven import load_raven_config
+    from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, load_raven_config
 
     cfg = load_raven_config()
+    # The distribution name is the pairing's to give; the import package is not
+    # in it, and the local backend keeps its own (plugin_stack).
+    distribution = MEMORY_BACKEND_DISTRIBUTIONS["everos-cloud"]
     installed = find_spec("raven_everos_cloud") is not None
     answer: dict[str, Any] = {
         "available": installed,
@@ -1400,11 +1403,11 @@ async def settings_everos_cloud(params: dict, *, agent_loop_factory=None) -> dic
         "hint": None,
     }
     if not installed:
-        answer["hint"] = "the everos-cloud-memory distribution is not installed"
+        answer["hint"] = f"the {distribution} distribution is not installed"
         return answer
     from raven_everos_cloud.backend import DEFAULT_BASE_URL, resolve_api_key
 
-    slice_ = dict((cfg.plugins.config or {}).get("everos-cloud-memory") or {})
+    slice_ = dict((cfg.plugins.config or {}).get(distribution) or {})
     key, source = resolve_api_key(slice_)
     answer["api_key_set"] = bool(key)
     answer["key_source"] = source
