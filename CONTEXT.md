@@ -429,8 +429,12 @@ named by the code's version and digest -- its install name, `bundle.install_name
 host keeps at most one live link per machine and watches it with a heartbeat
 (`raven/node/client.py`): a link silent for 15 s is lost, the agents on it wait, and the
 link is tried again on a backoff for as long as any waits; a link that comes back attaches
-each agent again by its task id. Only `--stdio` (tests, a fallback) ties the agents to the
-connection.
+each agent again by its task id. A turn running on a machine when this computer stops is
+left with the daemon (`remote.leave_agents_running()`), remembered while in flight in
+`<raven home>/machines/runs/` (`raven/acp_client/remote_runs.py`), and picked up by the
+next start (`raven/agent/subagent/resume_remote.py`): attached from the frame last read,
+its reply read off the machine and announced into the conversation that asked. Only
+`--stdio` (tests, a fallback) ties the agents to the connection.
 _Avoid_: "node" alone (a DAG node is a `run_subagent_dag` step, and the Machine
 entry already rules the bare word out for a computer); "node id" for the install
 name (a **Node id** is a delegated task's address); "agent" or "server" (it

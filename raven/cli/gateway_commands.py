@@ -1235,6 +1235,12 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 publish_control_endpoint(bound_host, bound_port, control_token)
                 console.print(f"[green]✓[/green] Control plane: ws://{bound_host}:{bound_port}/ws")
                 await _bind_generation()
+                # The runs a gateway before this one left on registered machines
+                # are picked up and reported to their conversations; after the
+                # generation is bound, so the announce has a spine to go to.
+                from raven.agent.subagent.resume_remote import schedule_remote_resume
+
+                schedule_remote_resume(agent.subagents)
                 await cron.start()
                 await heartbeat.start()
                 if sentinel_runner is not None:
@@ -1301,6 +1307,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     await control.stop()
                 from raven.acp_client.client import begin_drain
                 from raven.acp_client.pool import close_pool
+                from raven.acp_client.remote import leave_agents_running
                 from raven.node.client import close_node_pool
 
                 # Before anything tears a transport down: an ACP connection
@@ -1311,6 +1318,10 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # either. Draining first, because the pool close below kills
                 # every ACP server anyway and no cancelled turn is worth waiting
                 # on when its process is about to go.
+                # The agents on registered machines stay with their daemons:
+                # neither the cancel below nor the pool close reaches them, and
+                # the next gateway picks their runs up (remote_runs).
+                leave_agents_running()
                 begin_drain()
                 await agent.subagents.cancel_all(reason="the gateway stopped")
                 # The page's spine seals after the sub-agents are cancelled, the

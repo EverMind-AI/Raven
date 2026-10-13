@@ -36,7 +36,7 @@ import hashlib
 import os
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -171,7 +171,11 @@ class ChannelEndpoint:
         self.pid: int | None = None
         self.received = 0
         """How many of the agent's frames reached here: where an attach goes on from."""
-        self._frames: asyncio.Queue[bytes | None] = asyncio.Queue()
+        self.watchers: list[Callable[[int], None]] = []
+        """Told, after each frame the connection has dealt with, how many it has read: what a record of the
+        run keeps, so a process that comes after this one attaches from there (:mod:`raven.acp_client.remote_runs`)."""
+        self._handing = 0
+        self._frames: asyncio.Queue[tuple[int, bytes] | None] = asyncio.Queue()
         self._stderr: asyncio.Queue[bytes | None] = asyncio.Queue()
         self._rc: int | None = None
         self._lost: str | None = None
@@ -194,6 +198,19 @@ class ChannelEndpoint:
     def detached(self) -> str | None:
         """Why the endpoint is waiting for its link, or ``None`` while it has one."""
         return self._detached
+
+    @property
+    def stays(self) -> bool:
+        """Whether the agent stays with its machine when this endpoint is ended: this process is stopping."""
+        return remote.leaving()
+
+    def consumed(self) -> None:
+        """The connection has dealt with the frame last handed over: the watchers hear how many it has read."""
+        for watcher in list(self.watchers):
+            try:
+                watcher(self._handing)
+            except Exception as exc:  # noqa: BLE001 - a record that cannot be kept must not stop the frames
+                logger.warning("raven node: a watcher of {} failed: {}", self.describe(), exc)
 
     async def write(self, data: bytes) -> None:
         if self.returncode is not None:
@@ -218,15 +235,27 @@ class ChannelEndpoint:
 
     async def readline(self) -> bytes:
         item = await self._frames.get()
-        return b"" if item is None else item
+        if item is None:
+            return b""
+        self._handing, line = item
+        return line
 
     async def readerr(self) -> bytes:
         item = await self._stderr.get()
         return b"" if item is None else item
 
     async def end(self) -> None:
-        """End the agent and what it started, through the node; while the link is down, as soon as it is back."""
+        """End the agent and what it started, through the node; while the link is down, as soon as it is back.
+
+        Not while this process is stopping (:func:`raven.acp_client.remote.leave_agents_running`):
+        then the agent stays with the machine's daemon, this end is only the
+        endpoint's, and the run is picked up by the next process.
+        """
         if self.returncode is not None:
+            return
+        if self.stays:
+            self._lost = f"left running on {self.describe()}: this computer stopped"
+            self._settle()
             return
         if self._detached is not None:
             self._cancel_wanted = True
@@ -249,7 +278,7 @@ class ChannelEndpoint:
     def feed_frame(self, line: Any, n: Any = None) -> None:
         if isinstance(line, str) and line and not self._done.is_set():
             self.received = n if isinstance(n, int) and not isinstance(n, bool) else self.received + 1
-            self._frames.put_nowait(line.encode("utf-8"))
+            self._frames.put_nowait((self.received, line.encode("utf-8")))
 
     def feed_stderr(self, text: Any) -> None:
         if isinstance(text, str) and not self._done.is_set():
@@ -476,6 +505,50 @@ class NodePool:
         node.used = time.monotonic()
         logger.info("acp agent {!r}: started on {}", name, endpoint.describe())
         return endpoint
+
+    async def attach(
+        self, machine_id: str, task: str, *, name: str, after: int = 0
+    ) -> tuple[ChannelEndpoint, dict[str, Any]]:
+        """``task`` on the machine, onto a channel of its link, from the frame past the ``after``-th.
+
+        What a process that comes after the one that started the agent uses
+        to pick the run up: the daemon replays what this computer never read
+        and hands the rest over as it comes, or, for a task that has ended,
+        replays its record and says so. The endpoint returned is what an
+        :class:`AcpClient` runs over; the answer says the pid, the frames
+        and the exit code (``None`` while the agent runs).
+        """
+        node = await self._acquire(machine_id)
+        label = node.target.label
+        channel = node.next_channel
+        node.next_channel += 1
+        endpoint = ChannelEndpoint(node.client, channel, target=node.target, agent=name, task=task)
+        endpoint.received = after
+        node.channels[channel] = endpoint
+        params = {"channel": channel, "task": task, "after": after}
+        try:
+            answer = await node.client.request(protocol.AGENT_ATTACH, params, timeout=_ATTACH_TIMEOUT_S)
+        except AcpRemoteError as exc:
+            node.channels.pop(channel, None)
+            raise NodeError(
+                f"machine {label} no longer runs {name!r} (task {task}): {exc.message}", reason=_REASONS.get(exc.code)
+            ) from None
+        except AcpTimeoutError:
+            node.channels.pop(channel, None)
+            said = f"the Raven node on machine {label} did not answer {protocol.AGENT_ATTACH}"
+            await self._lost(machine_id, node, said)
+            raise NodeError(said) from None
+        except AcpConnectionError as exc:
+            node.channels.pop(channel, None)
+            said = self._ended(node.target, node.log, exc)
+            await self._lost(machine_id, node, said)
+            raise NodeError(said) from None
+        answer = answer if isinstance(answer, dict) else {}
+        if isinstance(answer.get("pid"), int):
+            endpoint.pid = answer["pid"]
+        node.used = time.monotonic()
+        logger.info("acp agent {!r}: picked up on {} from frame {}", name, endpoint.describe(), after)
+        return endpoint, answer
 
     def status(self, machine_id: str) -> MachineStatus:
         """The link's state, with no round trip: for a listing."""

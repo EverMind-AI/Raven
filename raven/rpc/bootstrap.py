@@ -396,8 +396,12 @@ async def build_rpc_stack(
         # row launching another child), and the host's own stack does it.
         if channel != "acp":
             from raven.agent.subagent.probe import schedule_snapshot_verification
+            from raven.agent.subagent.resume_remote import schedule_remote_resume
 
             schedule_snapshot_verification(agent_loop.subagents)
+            # The runs a process before this one left on registered machines
+            # are picked up and reported to their conversations.
+            schedule_remote_resume(agent_loop.subagents)
 
         # Per-server MCP events, broadcast rather than conversation-scoped: a
         # server connecting is not part of anybody's turn. Clients already listen
@@ -550,7 +554,11 @@ async def build_rpc_stack(
         if owns_loop:
             try:
                 from raven.acp_client.client import begin_drain
+                from raven.acp_client.remote import leave_agents_running
 
+                # The agents on registered machines stay with their daemons
+                # (see the gateway's shutdown): the next process picks them up.
+                leave_agents_running()
                 begin_drain()
                 if agent_loop is not None:
                     await agent_loop.subagents.cancel_all(reason="the server stopped")

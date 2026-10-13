@@ -11,6 +11,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.acp_client import remote_runs
 from raven.agent import workdir
 from raven.agent.subagent import activity
 from raven.agent.subagent.attachments import retarget_note, with_attachment_note, with_undeliverable_note
@@ -1795,6 +1796,7 @@ class SubagentManager:
         # the same instance a direct chat talks to, and watching it there is
         # the same question.
         cancelled = False
+        left = False
         # The record's own id, not its directory's name: the artifacts are a
         # filename prefix in the shared node root now, so the directory names
         # the namespace rather than the call.
@@ -1885,6 +1887,16 @@ class SubagentManager:
             except asyncio.CancelledError:
                 cancelled = True
                 reason = self._cancel_reasons.pop(task_id, UNEXPLAINED_CANCEL)
+                if remote_runs.was_left(task_id):
+                    # This process is stopping and the turn goes on under the
+                    # machine's daemon: nothing is finished or announced here;
+                    # the next process picks the run up and does both
+                    # (raven.agent.subagent.resume_remote).
+                    left = True
+                    logger.info(
+                        "Subagent [{}] stays running on its machine; picked up when this computer starts again", task_id
+                    )
+                    raise
                 await _write_spawn_status(session_key, agent, handle, "cancelled")
                 self._emit_status(
                     origin, task_id, task_summary, "cancelled", call_id=call_id, ended_at=int(time.time() * 1000)
@@ -1933,8 +1945,10 @@ class SubagentManager:
                 # nothing can free, so the registry has to be closed on the way
                 # out whichever branch above ran. `finish` is idempotent and has
                 # already written the record by here, so the file it reports is
-                # the one that decides `has_output`.
-                await self._finalize_node_claim(session_key, record)
+                # the one that decides `has_output`. Not for a run left on its
+                # machine: its claim stays open for the process that picks it up.
+                if not left:
+                    await self._finalize_node_claim(session_key, record)
                 # Not for a cancelled call: this poller would be created after
                 # the cancellation sweep took its snapshot, so nothing could
                 # reap it (see cancel_all / cancel_by_session).

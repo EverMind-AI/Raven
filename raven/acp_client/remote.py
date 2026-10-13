@@ -194,6 +194,34 @@ def ssh_command(
     return argv
 
 
+# Whether this process is stopping and leaves the agents on registered machines to their daemons.
+_LEAVING = False
+
+
+def leave_agents_running() -> None:
+    """From here on, closing a link leaves the agents on the machines running: this process is stopping.
+
+    A machine's daemon owns the agent (:mod:`raven.node.server`); the link is
+    only the way to it. Said once by the host's shutdown, before the sub-agents
+    are cancelled and the pools closed, so neither a turn's cancel nor a link's
+    close reaches an agent there, and the next process picks the run up
+    (:mod:`raven.acp_client.remote_runs`).
+    """
+    global _LEAVING
+    _LEAVING = True
+
+
+def leaving() -> bool:
+    """Whether this process is stopping and leaves the agents on the machines running."""
+    return _LEAVING
+
+
+def staying() -> None:
+    """The opposite of :func:`leave_agents_running`: for a process that goes on (tests)."""
+    global _LEAVING
+    _LEAVING = False
+
+
 def failure(target: Machine, log: str | os.PathLike[str], exc: BaseException) -> str | None:
     """The sentence for a connection that ended, when ssh or the far shell ended it.
 
@@ -439,5 +467,8 @@ __all__ = [
     "shell_path",
     "shown",
     "ssh_command",
+    "leave_agents_running",
+    "leaving",
+    "staying",
     "ssh_log_path",
 ]

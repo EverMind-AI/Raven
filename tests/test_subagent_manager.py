@@ -5178,3 +5178,60 @@ def test_a_prefix_that_names_no_section_is_left_to_the_pool_to_derive() -> None:
     mgr.registry.backend("local")._pin()
 
     assert asked == [("deepseek-ai/DeepSeek-V3", None), ("mylocal/m", "mylocal")]
+
+
+async def test_a_dispatch_left_running_on_its_machine_when_the_host_stops_is_neither_finished_nor_announced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Shutdown cancels every run; one on a machine goes on under its daemon, and the next host picks it up."""
+    from raven.acp_client import remote_runs
+    from raven.agent.subagent.history import nodes_root
+    from raven.agent.subagent.spawn_tool import SpawnTool
+    from raven.config.schema import ThirdPartyCliSubagentConfig
+    from raven.session.manager import SessionManager
+
+    home = tmp_path / "home"
+    submitted: list[Any] = []
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=home,
+        session_dir=lambda key: SessionManager(home).session_dir(key),
+        max_concurrent=2,
+        agents=[ThirdPartyCliSubagentConfig(name="Remote", command="cat {prompt_file}")],
+    )
+    mgr.set_submit(submitted.append)
+    finalized: list[str] = []
+
+    async def finalize(session_key: Any, record: Any) -> None:
+        finalized.append(record.node_id)
+
+    monkeypatch.setattr(mgr, "_finalize_node_claim", finalize)
+    started = asyncio.Event()
+
+    class _OnMachine:
+        async def run(self, task: str, **kwargs: Any) -> str:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                # What the acp backend does for a run on a machine while the host is leaving.
+                remote_runs.mark_left(kwargs["task_id"])
+                raise
+            return "never"
+
+    mgr.registry._backends["Remote"] = _OnMachine()
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    tool = SpawnTool(manager=mgr)
+    tool.set_context("cli", "direct", "cli:direct")
+    await tool.execute(node_id="r1", task_summary="Run on the machine", task="Go.", subagent="Remote")
+    await asyncio.wait_for(started.wait(), timeout=5)
+
+    assert await mgr.cancel_all(reason="the gateway stopped") == 1
+
+    nodes = nodes_root(SessionManager(home).session_dir("cli:direct"))
+    meta = json.loads((nodes / "r1.meta.json").read_text(encoding="utf-8"))
+    assert meta["status"] == "running" and "ended_at_ms" not in meta, (
+        "the record stays open for the host that picks it up"
+    )
+    assert not (nodes / "r1.out.md").exists() and not (nodes / "r1.error.md").exists()
+    assert submitted == [] and finalized == [], "nothing is announced or closed here"
