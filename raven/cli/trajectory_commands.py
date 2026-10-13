@@ -21,6 +21,9 @@ wrappers over the trajectory layer:
   When ``RAVEN_BUGREPORT_URL``
   names a receiver, the package is uploaded as soon as it lands
   (:mod:`raven.trajectory.upload`).
+- ``redaction-history`` — ``list`` / ``forget`` / ``clear`` the keep/replace
+  decisions the bug report review remembers
+  (:mod:`raven.trajectory.redaction_history`).
 - ``upload-bug-report`` — send (or send again) a filed report's package to the
   receiver; the same package twice yields the same receipt.
 - ``receiver`` — run the Bug Report Receiver itself: the HTTP service that takes
@@ -74,6 +77,8 @@ console = Console()
 
 trajectory_app = typer.Typer(help="Package, label, and protect agent trajectories.")
 trajectory_app.add_typer(regression_app, name="regression")
+redaction_history_app = typer.Typer(help="Inspect and edit the remembered redaction review decisions.")
+trajectory_app.add_typer(redaction_history_app, name="redaction-history")
 
 
 @trajectory_app.callback(invoke_without_command=True)
@@ -1071,6 +1076,105 @@ def trajectory_split(
     )
     for member in members:
         console.print(f"  [dim]{escape(member)}[/dim]")
+
+
+@redaction_history_app.command("list")
+def redaction_history_list() -> None:
+    """List the remembered redaction decisions, newest first."""
+    from raven.trajectory import redaction_history as thistory
+    from raven.trajectory import review as treview
+
+    history = thistory.RedactionHistory()
+    try:
+        snapshot = history.read()
+    except thistory.HistoryStorageError as exc:
+        console.print(f"[red]✗ {escape(str(exc))}[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    if snapshot.corrupt:
+        console.print(
+            f"[red]✗ The redaction history at {escape(str(history.path))} could not be read"
+            f" ({escape(snapshot.corrupt)}); it is backed up on the next save.[/red]",
+            highlight=False,
+        )
+        raise typer.Exit(code=1)
+    if not thistory.enabled():
+        console.print(
+            "[yellow]! RAVEN_BUGREPORT_REDACTION_HISTORY is off: bug reports neither replay nor record"
+            " these decisions.[/yellow]",
+            highlight=False,
+        )
+    if not snapshot.entries:
+        console.print("No remembered redaction decisions.", highlight=False)
+        return
+    table = Table()
+    table.add_column("ID", style="cyan", overflow="fold")
+    table.add_column("Token")
+    table.add_column("Category")
+    table.add_column("Action")
+    table.add_column("Decided")
+    table.add_column("Reused", justify="right")
+    for entry in snapshot.entries:
+        table.add_row(
+            escape(entry.id),
+            escape(entry.masked),
+            escape(entry.category),
+            "kept" if entry.action == treview.ACTION_KEPT else "replaced",
+            escape(entry.decided_at[:10]),
+            str(entry.applied),
+        )
+    console.print(table)
+    console.print(f"{len(snapshot.entries)} remembered decision(s) in {escape(str(history.path))}.", highlight=False)
+
+
+@redaction_history_app.command("forget")
+def redaction_history_forget(
+    ids: list[str] = typer.Argument(..., metavar="ID...", help="Decision id from 'list' (12 to 64 hex digits)"),
+) -> None:
+    """Forget remembered decisions by id; nothing is removed unless every id matches exactly one."""
+    from raven.trajectory import redaction_history as thistory
+
+    try:
+        result = thistory.RedactionHistory().forget(ids)
+    except thistory.HistoryStorageError as exc:
+        console.print(f"[red]✗ {escape(str(exc))}; nothing was forgotten.[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    if result.unknown or result.ambiguous:
+        for item_id in result.unknown:
+            console.print(f"[red]✗ No remembered decision matches {escape(item_id)}.[/red]", highlight=False)
+        for item_id in result.ambiguous:
+            console.print(
+                f"[red]✗ {escape(item_id)} matches more than one decision; give more digits.[/red]", highlight=False
+            )
+        console.print("[red]Nothing was forgotten.[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    for item_id in result.removed:
+        console.print(f"Forgot {escape(item_id)}.", highlight=False)
+    if result.backup is not None:
+        console.print(f"Backed up the unreadable redaction history to {escape(str(result.backup))}.", highlight=False)
+
+
+@redaction_history_app.command("clear")
+def redaction_history_clear(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation (required without a TTY)"),
+) -> None:
+    """Forget every remembered redaction decision."""
+    from raven.trajectory import redaction_history as thistory
+
+    if not yes:
+        if not _stdin_is_tty():
+            console.print("[red]✗ --yes is required without a TTY; nothing was cleared.[/red]", highlight=False)
+            raise typer.Exit(code=1)
+        if not typer.confirm("Forget every remembered redaction decision?", default=False):
+            console.print("Cancelled — nothing was cleared.", highlight=False)
+            raise typer.Exit(code=1)
+    try:
+        result = thistory.RedactionHistory().clear()
+    except thistory.HistoryStorageError as exc:
+        console.print(f"[red]✗ {escape(str(exc))}; nothing was cleared.[/red]", highlight=False)
+        raise typer.Exit(code=1)
+    console.print(f"Removed {result.removed} remembered decision(s).", highlight=False)
+    if result.backup is not None:
+        console.print(f"Backed up the unreadable redaction history to {escape(str(result.backup))}.", highlight=False)
 
 
 @trajectory_app.command("list")

@@ -51,6 +51,25 @@ Bug Report Receiver 时才上传（见[发送与接收问题报告](#send-and-re
 `--yes` 不代表敏感数据风险授权，不应习惯性使用 `--accept-risk` 绕过，
 或宣称所有 token 都无害。
 
+### 记住的脱敏裁决 { #remembered-redaction-decisions }
+
+你在审核中给出的每个"保留"或"替换"回答都会记在本机 Raven home（`~/.raven`，
+设置了 `RAVEN_HOME` 时为该目录）下的 `redaction_history.json`。下一次报告会回放
+这些记录：已经裁决过的值会列为"由脱敏裁决历史决定"，不再重复询问；没有 TTY 的
+运行也不再需要为这些值传 `--keep-findings` 或 `--redact-findings`（仍需
+`--accept-risk`）。文件里只保存每个值的哈希和掩码样本。私钥条目每次都会询问，
+通过 `--keep-findings` / `--redact-findings` 整批做出的决定不会被记住。
+
+```bash
+raven trajectory report-bug ATTEMPT_ID -d "..." --review-all   # decide every item again
+raven trajectory redaction-history list                        # what is remembered
+raven trajectory redaction-history forget 3f9a1c2b7d4e          # drop one decision by id
+raven trajectory redaction-history clear --yes                  # drop all of them
+```
+
+设置 `RAVEN_BUGREPORT_REDACTION_HISTORY=off` 可既不回放也不记录。读不了的历史
+文件会在下一次保存前备份到同目录；在那之前每个条目都会询问。
+
 ## 发送与接收问题报告 { #send-and-receive-bug-reports }
 
 ### 接收器 { #the-receiver }

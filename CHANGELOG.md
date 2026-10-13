@@ -6,6 +6,15 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- The bug report review remembers your redaction decisions. Every keep or
+  replace answer is stored in `redaction_history.json` under the Raven home
+  (hashes and masked samples only), and the next `report-bug` or browser
+  *Report a bug* replays it: values you already decided are listed instead of
+  asked, and a run without a TTY no longer needs `--keep-findings` /
+  `--redact-findings` for them. `--review-all` asks again, `raven trajectory
+  redaction-history list|forget|clear` inspects and edits what is remembered,
+  and `RAVEN_BUGREPORT_REDACTION_HISTORY=off` turns it off.
+
 - Bug Report Packages can be sent to a Bug Report Receiver. `raven trajectory
   receiver --save-dir DIR` runs the receiver: it checks each package in a
   stream without extracting it, stores the original bytes by UTC day next to

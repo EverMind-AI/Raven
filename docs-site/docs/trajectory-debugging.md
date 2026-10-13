@@ -59,6 +59,29 @@ receipt is then written into the record. Review flagged items and the package
 before sharing. `--yes` is not sensitive-data risk consent. Do not routinely
 bypass findings with `--accept-risk` or declare every token harmless.
 
+### Remembered redaction decisions
+
+Every keep or replace answer you give in the review is remembered on this
+machine, in `redaction_history.json` under the Raven home (`~/.raven`, or
+`RAVEN_HOME` when set). The next report replays it: a value you already decided
+is listed as decided from your redaction history instead of being asked again,
+and a run without a TTY no longer needs `--keep-findings` or `--redact-findings`
+for those values (`--accept-risk` is still required). Only a hash of each value
+and a masked sample are stored. Private-key items are always asked, and
+decisions made by the blanket `--keep-findings` / `--redact-findings` flags are
+never remembered.
+
+```bash
+raven trajectory report-bug ATTEMPT_ID -d "..." --review-all   # decide every item again
+raven trajectory redaction-history list                        # what is remembered
+raven trajectory redaction-history forget 3f9a1c2b7d4e          # drop one decision by id
+raven trajectory redaction-history clear --yes                  # drop all of them
+```
+
+Set `RAVEN_BUGREPORT_REDACTION_HISTORY=off` to neither replay nor record
+decisions. A history file that cannot be read is backed up next to it before
+the next save; until then every item is asked.
+
 ## Send and receive bug reports
 
 ### The receiver

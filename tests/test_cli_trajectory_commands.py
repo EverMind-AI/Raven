@@ -2000,6 +2000,207 @@ def test_report_bug_unsaved_history_still_ships(state, _no_machine_secrets, monk
     assert _actions(record) == ["kept"]
 
 
+# ── redaction-history management ──────────────────────────────────────
+
+
+def _rh(*args):
+    return runner.invoke(trajectory_app, ["redaction-history", *args])
+
+
+def _storage_failure(monkeypatch, method):
+    from raven.trajectory import redaction_history as thistory
+
+    def _fail(self, *_args, **_kwargs):
+        raise thistory.HistoryStorageError("cannot save X: No space left on device")
+
+    monkeypatch.setattr(thistory.RedactionHistory, method, _fail)
+
+
+def _write_corrupt_history():
+    path = _history().path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"{not json")
+    return path
+
+
+def test_redaction_history_list_empty():
+    r = _rh("list")
+
+    assert r.exit_code == 0, r.output
+    assert "No remembered redaction decisions." in r.output
+
+
+def test_redaction_history_list_shows_masked_entries():
+    kept = _seed(_ENTROPY_TOKEN)
+    replaced = _seed(_SECOND_TOKEN, "redacted")
+
+    r = _rh("list")
+
+    assert r.exit_code == 0, r.output
+    out = _one_line(r.output)
+    for entry in (kept, replaced):
+        assert entry.id in out and entry.masked in out
+    assert " kept " in out and " replaced " in out
+    assert "2 remembered decision(s) in" in out
+    assert _ENTROPY_TOKEN not in r.output and _SECOND_TOKEN not in r.output
+
+
+def test_redaction_history_list_reports_an_unreadable_file():
+    path = _write_corrupt_history()
+
+    r = _rh("list")
+
+    assert r.exit_code == 1
+    assert "could not be read (not valid JSON (line 1)); it is backed up on the next save" in _one_line(r.output)
+    assert path.read_bytes() == b"{not json"
+
+
+def test_redaction_history_list_storage_error(monkeypatch):
+    _storage_failure(monkeypatch, "read")
+
+    r = _rh("list")
+
+    assert r.exit_code == 1
+    assert "cannot save X: No space left on device" in _one_line(r.output)
+
+
+def test_redaction_history_list_notes_the_switch_is_off(monkeypatch):
+    entry = _seed(_ENTROPY_TOKEN)
+    monkeypatch.setenv("RAVEN_BUGREPORT_REDACTION_HISTORY", "off")
+
+    r = _rh("list")
+
+    assert r.exit_code == 0, r.output
+    out = _one_line(r.output)
+    assert "RAVEN_BUGREPORT_REDACTION_HISTORY is off" in out
+    assert entry.id in out
+
+
+def test_redaction_history_forget_by_id():
+    entry = _seed(_ENTROPY_TOKEN)
+
+    r = _rh("forget", entry.id)
+
+    assert r.exit_code == 0, r.output
+    assert f"Forgot {entry.id}." in r.output
+    assert _history().lookup(_ENTROPY_TOKEN) is None
+
+
+def test_redaction_history_forget_unknown_id_removes_nothing():
+    kept = _seed(_ENTROPY_TOKEN)
+    _seed(_SECOND_TOKEN)
+
+    r = _rh("forget", kept.id, "ffffffffffff")
+
+    assert r.exit_code == 1
+    out = _one_line(r.output)
+    assert "No remembered decision matches ffffffffffff." in out
+    assert "Nothing was forgotten." in out
+    assert len(_history().read().entries) == 2
+
+
+def test_redaction_history_forget_ambiguous_prefix():
+    path = _history().path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "action": "kept",
+        "category": "high-entropy",
+        "masked": "abcd***wxyz",
+        "decided_at": "2026-10-01T00:00:00.000000+00:00",
+        "source": "cli",
+        "revision": "0123456789abcdef",
+        "applied": 0,
+        "last_applied_at": None,
+    }
+    prefix = "abcdef012345"
+    entries = {prefix + "0" * 52: entry, prefix + "1" * 52: entry}
+    path.write_text(json.dumps({"schema_version": 1, "entries": entries}), encoding="utf-8")
+
+    r = _rh("forget", prefix)
+
+    assert r.exit_code == 1
+    assert f"{prefix} matches more than one decision; give more digits." in _one_line(r.output)
+    assert len(_history().read().entries) == 2
+
+
+def test_redaction_history_forget_storage_error(monkeypatch):
+    entry = _seed(_ENTROPY_TOKEN)
+    _storage_failure(monkeypatch, "forget")
+
+    r = _rh("forget", entry.id)
+
+    assert r.exit_code == 1
+    assert "nothing was forgotten" in _one_line(r.output)
+
+
+def test_redaction_history_clear_needs_yes_without_a_tty():
+    _seed(_ENTROPY_TOKEN)
+
+    r = _rh("clear")
+
+    assert r.exit_code == 1
+    assert "--yes is required without a TTY; nothing was cleared." in _one_line(r.output)
+    assert len(_history().read().entries) == 1
+
+
+@pytest.mark.parametrize("answer", [False, True])
+def test_redaction_history_clear_confirms_on_a_tty(monkeypatch, answer):
+    from raven.cli import trajectory_commands as tcmd
+
+    _seed(_ENTROPY_TOKEN)
+    monkeypatch.setattr(tcmd, "_stdin_is_tty", lambda: True)
+    monkeypatch.setattr(tcmd.typer, "confirm", lambda *_a, **_k: answer)
+
+    r = _rh("clear")
+
+    if answer:
+        assert r.exit_code == 0, r.output
+        assert "Removed 1 remembered decision(s)." in r.output
+        assert _history().read().entries == []
+    else:
+        assert r.exit_code == 1
+        assert "Cancelled — nothing was cleared." in r.output
+        assert len(_history().read().entries) == 1
+
+
+def test_redaction_history_clear_with_yes():
+    _seed(_ENTROPY_TOKEN)
+    _seed(_SECOND_TOKEN)
+
+    r = _rh("clear", "--yes")
+    assert r.exit_code == 0, r.output
+    assert "Removed 2 remembered decision(s)." in r.output
+
+    _history().path.unlink()
+    r2 = _rh("clear", "--yes")
+    assert r2.exit_code == 0, r2.output
+    assert "Removed 0 remembered decision(s)." in r2.output
+    assert not _history().path.exists()
+
+
+def test_redaction_history_clear_backs_up_an_unreadable_file():
+    path = _write_corrupt_history()
+
+    r = _rh("clear", "--yes")
+
+    assert r.exit_code == 0, r.output
+    assert "Backed up the unreadable redaction history to" in _one_line(r.output)
+    (backup,) = path.parent.glob(f"{path.name}.corrupt-*")
+    assert backup.read_bytes() == b"{not json"
+    assert "No remembered redaction decisions." in _rh("list").output
+
+
+def test_redaction_history_clear_storage_error(monkeypatch):
+    _seed(_ENTROPY_TOKEN)
+    _storage_failure(monkeypatch, "clear")
+
+    r = _rh("clear", "--yes")
+
+    assert r.exit_code == 1
+    assert "nothing was cleared" in _one_line(r.output)
+    assert len(_history().read().entries) == 1
+
+
 # ── report-bug upload (RAVEN_BUGREPORT_URL) ───────────────────────────
 
 
