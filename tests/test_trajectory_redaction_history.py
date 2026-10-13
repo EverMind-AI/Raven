@@ -269,6 +269,35 @@ def test_write_failures_raise_and_keep_the_records(hist, path, monkeypatch, call
     assert _siblings(path) == [rh.HISTORY_FILENAME]
 
 
+@pytest.mark.parametrize("call", ["record", "remember", "forget", "clear"])
+def test_lock_failure_raises_a_storage_error(hist, path, monkeypatch, call):
+    import portalocker
+
+    from raven.utils.portable_lock import LockTimeoutError
+
+    entry = hist.record(TOKEN_A, treview.ACTION_KEPT, category="high-entropy", source="cli")
+    before = path.read_bytes()
+
+    def _no_lock(*_args, **_kwargs):
+        raise portalocker.exceptions.LockException(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(portalocker, "lock", _no_lock)
+
+    with pytest.raises(rh.HistoryStorageError, match="write lock") as caught:
+        if call == "record":
+            hist.record(TOKEN_B, treview.ACTION_KEPT, category="high-entropy", source="cli")
+        elif call == "remember":
+            items = [_item(TOKEN_B)]
+            hist.remember(items, _decide(items, {items[0].id: "redacted"}), source="cli")
+        elif call == "forget":
+            hist.forget([entry.id])
+        else:
+            hist.clear()
+
+    assert isinstance(caught.value.__cause__, LockTimeoutError)
+    assert path.read_bytes() == before
+
+
 def test_clear_on_an_empty_history_succeeds_without_a_file(hist, path):
     result = hist.clear()
 
@@ -299,11 +328,17 @@ def test_unreadable_file_raises_instead_of_reading_empty(hist, path, monkeypatch
 
 # ── corrupt files ────────────────────────────────────────────────────
 
+UNHASHABLE_ACTIONS = [
+    json.dumps({"schema_version": 1, "entries": {"a" * 64: _entry(action=[])}}).encode(),
+    json.dumps({"schema_version": 1, "entries": {"a" * 64: _entry(action={})}}).encode(),
+]
+
 CORRUPT_CONTENTS = [
     b"\xff\xfe",
     b"{not json",
     json.dumps({"schema_version": 1, "entries": {"short": {}}}).encode(),
     json.dumps({"schema_version": 1, "entries": {"a" * 64: _entry(action="ignored")}}).encode(),
+    *UNHASHABLE_ACTIONS,
     json.dumps({"schema_version": 1, "entries": []}).encode(),
     json.dumps(["not", "an", "object"]).encode(),
     json.dumps({"entries": {}}).encode(),
@@ -323,7 +358,7 @@ def test_corrupt_file_reads_as_empty_with_a_reason(hist, path, content):
     assert resolution.corrupt == snapshot.corrupt
 
 
-@pytest.mark.parametrize("content", CORRUPT_CONTENTS[:3])
+@pytest.mark.parametrize("content", [*CORRUPT_CONTENTS[:3], *UNHASHABLE_ACTIONS])
 def test_saving_over_a_corrupt_file_backs_it_up_first(hist, path, content):
     path.parent.mkdir(parents=True)
     path.write_bytes(content)
@@ -334,6 +369,18 @@ def test_saving_over_a_corrupt_file_backs_it_up_first(hist, path, content):
     assert backup.read_bytes() == content
     assert backup.stat().st_mode & 0o777 == 0o600
     assert hist.read() == rh.HistorySnapshot(entries=[entry], corrupt=None)
+
+
+@pytest.mark.parametrize("content", UNHASHABLE_ACTIONS)
+def test_clear_backs_up_and_resets_a_corrupt_file(hist, path, content):
+    path.parent.mkdir(parents=True)
+    path.write_bytes(content)
+
+    result = hist.clear()
+
+    assert result.removed == 0
+    assert result.backup is not None and result.backup.read_bytes() == content
+    assert hist.read() == rh.HistorySnapshot(entries=[], corrupt=None)
 
 
 def test_backup_never_overwrites_an_existing_backup(hist, path, monkeypatch):

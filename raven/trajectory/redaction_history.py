@@ -50,6 +50,7 @@ from raven.trajectory.review import (
     ReviewItem,
 )
 from raven.utils.atomic_io import write_transaction
+from raven.utils.portable_lock import LockTimeoutError
 
 HISTORY_FILENAME = "redaction_history.json"
 SCHEMA_VERSION = 1
@@ -185,7 +186,7 @@ def _entry_from_raw(digest: str, raw: Any) -> RememberedDecision | None:
     revision = raw.get("revision")
     applied = raw.get("applied")
     last_applied_at = raw.get("last_applied_at")
-    if action not in _ACTIONS:
+    if not isinstance(action, str) or action not in _ACTIONS:
         return None
     if not all(_non_empty_str(raw.get(name)) for name in ("category", "masked", "decided_at", "source")):
         return None
@@ -420,6 +421,8 @@ class RedactionHistory:
                             pass
                     raise
                 return result, backup
+        except LockTimeoutError as exc:
+            raise HistoryStorageError(f"cannot save {self.path}: its write lock could not be acquired") from exc
         except OSError as exc:
             raise HistoryStorageError(f"cannot save {self.path}: {_reason(exc)}") from exc
 
