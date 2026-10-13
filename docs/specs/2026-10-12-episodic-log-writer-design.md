@@ -226,12 +226,14 @@ created at `main.py:650`.
 `memory_top_k` (`:1161`):
 
 ```python
-    annotate_every_turns: int = 5
+    annotate_every_turns: int = 0
     """How many user turns accumulate before the unannotated tail is handed
-    to the annotator and written to ``episodes.md``. ``0`` turns the step
-    off. The tail always starts and ends on a turn boundary because the
-    step runs after a turn, so this is a cadence, not a cut point. Read at
-    boot; a change needs a gateway reload."""
+    to the annotator and written to ``episodes.md``. ``0``, the default,
+    turns the step off: it costs one provider call per cadence, and an
+    install that never reads the log should not pay for it. The tail always
+    starts and ends on a turn boundary because the step runs after a turn,
+    so this is a cadence, not a cut point. Read at boot; a change needs a
+    gateway reload."""
 ```
 
 `raven/context_engine/segments/render.py:413-419`, the backend branch.
@@ -287,7 +289,7 @@ Not touched: `owns_compaction`, the three guards, `consolidate_unconsolidated`,
 | Item | Size (estimate) | Depth | Why that depth |
 |---|---|---|---|
 | after-turn block + two helpers | `turn_path.py`, ~45 lines | deep | runs an LLM call on every install; a wrong cursor re-annotates or skips silently; a blocking await would stall every reply; a missing seed replays a session's whole history in one call |
-| config field | `raven.py`, ~7 lines | shallow | additive, default-on, boot-time read |
+| config field | `raven.py`, ~7 lines | shallow | additive, default-off, boot-time read |
 | prompt line | `render.py`, ~2 lines | deep | shared text every backend-wired install renders; #440 was a wording accident on this exact block |
 | tests | 3 files: `tests/test_agent_loop_episodic_annotate.py` (new, ~150 lines), `tests/test_segments.py` (~15 lines changed), `tests/integration/test_episodic_writer_real_llm.py` (new, ~60 lines) | - | see Acceptance |
 
@@ -348,12 +350,17 @@ and F5's safety follows from how `append_history` writes, not from new code.
 
 | Who pays | What |
 |---|---|
-| every install | one annotator LLM call per `annotate_every_turns` user turns, plus a profile refresh call whenever a tag crosses the hot threshold; an install with EverOS wired now runs two extractors over the same conversation |
-| reversibility | `annotate_every_turns = 0` stops the step after a gateway reload; the file and cursor are left as they are |
+| an install that sets the knob | one annotator LLM call per `annotate_every_turns` user turns, plus a profile refresh call whenever a tag crosses the hot threshold; an install with EverOS wired then runs two extractors over the same conversation |
+| every other install | nothing: the default is `0`, which short-circuits before the seed |
+| reversibility | back to `annotate_every_turns = 0` stops the step after a gateway reload; the file and cursor are left as they are |
 | minimal set | the after-turn block, the helpers and the config field; the prompt line is a separate, smaller commit |
 
 ## Decisions
 
+- **The knob ships at `0`, off.** The log has had no writer for the life of
+  the project, so no install is waiting on one; turning it on everywhere would
+  bill every user for a side provider call per cadence to fill a file they may
+  never read. The owner chose cost over reach. Rejected: shipping at 5.
 - **The cursor is a new metadata key, not `last_consolidated`.** The gate on
   `owns_compaction` exists to keep a second writer off the Curator's pointer;
   reusing that pointer would reintroduce the conflict the gate prevents, and
