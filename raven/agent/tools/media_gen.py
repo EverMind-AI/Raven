@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import shutil
@@ -330,6 +331,23 @@ def images_api_size(model_id: str, aspect_ratio: str | None) -> str | None:
     if width == height:
         return _GPT_IMAGE_SQUARE
     return _GPT_IMAGE_LANDSCAPE if width > height else _GPT_IMAGE_PORTRAIT
+
+
+def ark_explicit_size(aspect_ratio: str | None) -> str | None:
+    """The explicit WxH an Ark generations call spells a ratio as, or None to leave it."""
+    if not aspect_ratio or aspect_ratio not in _SIZES:
+        return None
+    width, height = (int(side) for side in _SIZES[aspect_ratio].split("x"))
+    divisor = math.gcd(width, height)
+    rw, rh = width // divisor, height // divisor
+    # Ark accepts explicit sizes only between 2560x1440 and 4096x4096 total
+    # pixels, and the _SIZES dims (~1.3M pixels) sit below that floor; scaling
+    # the coprime sides by one common factor at the 2K budget (2048x2048 =
+    # 4.19M pixels, the class the "2K" tier itself outputs) keeps the ratio
+    # exact by construction. Every ratio in _SIZES is inside Ark's [1/16, 16]
+    # side-ratio window and lands per-side under 4096, so no clamping is due.
+    k = round(math.sqrt(2048 * 2048 / (rw * rh)))
+    return f"{rw * k}x{rh * k}"
 
 
 def _image_only_refusal(e: httpx.HTTPStatusError) -> bool:
@@ -786,9 +804,10 @@ class ImageGenerateTool(_OpenRouterMediaTool):
     ) -> str:
         """The Images API: OpenRouter's unified ``/images``, or ``/images/generations``
         and ``/images/edits`` on an OpenAI-compatible base. A Volces Ark base
-        speaks the Ark dialect on the generations route: ``size`` in "1K"/"2K"
-        resolution tiers rather than pixel pairs, and the pictures behind
-        ``data[].url`` rather than ``b64_json``."""
+        speaks the Ark dialect on the generations route: ``size`` as a "1K"/"2K"
+        resolution tier or an explicit WxH pair (the pair is sent to keep the
+        asked-for frame; the tier only when the ratio is not one we spell), and
+        the pictures behind ``data[].url`` rather than ``b64_json``."""
         headers = self._headers()
         openrouter = httpx.URL(self.api_base).host == "openrouter.ai"
         volces = httpx.URL(self.api_base).host.endswith(".volces.com")
@@ -837,10 +856,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                 else:
                     body = {"model": model_id, "prompt": prompt, "n": 1}
                     if volces:
-                        # Ark's size is a resolution tier, and it has no ratio
-                        # knob: the asked-for frame is dropped rather than sent
-                        # as pixels the endpoint does not take.
-                        if aspect_ratio:
+                        # Ark's size is a resolution tier or an explicit WxH
+                        # pair: spell the ratio as pixels so the asked-for
+                        # frame survives, and keep the "2K" tier only for a
+                        # ratio the table does not know how to spell.
+                        if size := ark_explicit_size(aspect_ratio):
+                            body["size"] = size
+                        elif aspect_ratio:
                             body["size"] = "2K"
                     elif size := images_api_size(model_id, aspect_ratio):
                         body["size"] = size
