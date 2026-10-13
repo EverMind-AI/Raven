@@ -12,7 +12,8 @@ Steps:
   4. EverOS long-term memory (optional; llm/embedding required once enabled,
      rerank/multimodal optional)
   5. Web access (optional; pick a search vendor and a page reader and give
-     each its key; keys are mirrored to ~/.raven/env so sub-agents inherit them)
+     each its key; keys are mirrored to ~/.raven/env, which POSIX cli/acp
+     sub-agents read through their login shell)
   6. Sub-agents shipped in this checkout (optional; per folder, own key or
      this raven's LLM)
   7. Cold-start import from other AI tools (optional)

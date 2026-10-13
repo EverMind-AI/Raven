@@ -168,6 +168,42 @@ def test_write_follows_a_snake_case_file(tmp_path, monkeypatch):
     assert json.loads(path.read_text())["agents"]["defaults"] == {"max_tool_iterations": 7}
 
 
+@pytest.mark.parametrize("snake_active", [False, True])
+@pytest.mark.parametrize("remove", [False, True])
+def test_raw_access_follows_the_non_null_alias(tmp_path, monkeypatch, snake_active, remove):
+    from raven.config.raven import load_raven_config
+
+    active, empty = ("skill_forge", "skillForge") if snake_active else ("skillForge", "skill_forge")
+    path = _home(tmp_path, monkeypatch, {empty: None, active: {"autoInstall": "off", "blocklist": ["a"]}})
+    assert load_raven_config(config_path=path).skill_forge.blocklist == ["a"]
+    assert surface.lookup(surface.read_raw(path), "skillForge.blocklist") == (True, ["a"])
+
+    if remove:
+        assert surface.remove_value("skillForge.blocklist", config_path=path) == ["a"]
+        expected = {"autoInstall": "off"}
+    else:
+        assert surface.write_value("skillForge.blocklist", ["zed"], config_path=path) == ["a"]
+        expected = {"autoInstall": "off", "blocklist": ["zed"]}
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {empty: None, active: expected}
+    assert load_raven_config(config_path=path).skill_forge.blocklist == ([] if remove else ["zed"])
+
+
+@pytest.mark.parametrize("invalid", [[], 0, False, "invalid"])
+@pytest.mark.parametrize("remove", [False, True])
+def test_raw_write_refuses_an_invalid_alias_beside_null(tmp_path, monkeypatch, invalid, remove):
+    path = _home(tmp_path, monkeypatch, {"skillForge": None, "skill_forge": invalid})
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="not an object"):
+        if remove:
+            surface.remove_value("skillForge.blocklist", config_path=path)
+        else:
+            surface.write_value("skillForge.blocklist", ["zed"], config_path=path)
+
+    assert path.read_bytes() == before
+
+
 def test_a_write_the_schema_rejects_is_refused_and_nothing_changes(tmp_path, monkeypatch):
     path = _home(tmp_path, monkeypatch, {"tools": {"exec": {"timeout": 60}}})
     before = path.read_text()

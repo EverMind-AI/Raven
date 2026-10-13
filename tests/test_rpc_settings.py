@@ -1219,6 +1219,115 @@ async def test_settings_set_blocklist_is_a_raw_list(cfg):
         await rpc_console.settings_set({"key": "skillForge.blocklist", "value": "codeword"})
 
 
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("section", [None, {"autoInstall": "off"}])
+async def test_settings_set_blocklist_preserves_the_section_spelling(cfg, spelling, section):
+    from raven.config.raven import load_raven_config
+
+    cfg.write_text(json.dumps({spelling: section}), encoding="utf-8")
+    result = await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["codeword"]})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg) == {spelling: {**(section or {}), "blocklist": ["codeword"]}}
+    assert load_raven_config(config_path=cfg).skill_forge.blocklist == ["codeword"]
+
+
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("invalid", [[], 0, 1, "invalid", False])
+async def test_settings_set_blocklist_preserves_invalid_sections(cfg, spelling, invalid):
+    cfg.write_text(json.dumps({spelling: invalid}), encoding="utf-8")
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigValidationError, match="non-object"):
+        await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["codeword"]})
+
+    assert cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize("snake_active", [False, True])
+@pytest.mark.parametrize(
+    "camel,snake,field,previous,value",
+    [
+        ("skillForge", "skill_forge", "blocklist", ["a"], ["zed"]),
+        ("sessionTitle", "session_title", "model", "old/model", "openai/new"),
+        ("skillForge", "skill_forge", "llmGateModel", "old/model", "openai/new"),
+    ],
+)
+async def test_settings_leaf_write_follows_the_non_null_alias(cfg, snake_active, camel, snake, field, previous, value):
+    from raven.config.raven import load_raven_config
+
+    active, empty = (snake, camel) if snake_active else (camel, snake)
+    cfg.write_text(json.dumps({empty: None, active: {field: previous}}), encoding="utf-8")
+    load_raven_config(config_path=cfg)
+
+    result = await rpc_console.settings_set({"key": f"{camel}.{field}", "value": value})
+
+    assert result == {"applied": True, "previous": previous}
+    assert _read(cfg) == {empty: None, active: {field: value}}
+    load_raven_config(config_path=cfg)
+
+
+@pytest.mark.parametrize("snake_active", [False, True])
+@pytest.mark.parametrize(
+    "camel,snake,model_field,provider_field,keep",
+    [
+        ("sessionTitle", "session_title", "model", "provider", {"enabled": False}),
+        ("skillForge", "skill_forge", "llmGateModel", "llmGateProvider", {"llmGateEnabled": True}),
+    ],
+)
+async def test_settings_pin_merge_follows_the_non_null_alias(
+    cfg, snake_active, camel, snake, model_field, provider_field, keep
+):
+    from raven.config.raven import load_raven_config
+
+    active, empty = (snake, camel) if snake_active else (camel, snake)
+    previous = {model_field: "old/model", provider_field: "openai"}
+    value = {model_field: "openai/new", provider_field: "openai"}
+    cfg.write_text(json.dumps({empty: None, active: {**keep, **previous}}), encoding="utf-8")
+    load_raven_config(config_path=cfg)
+
+    result = await rpc_console.settings_set({"key": camel, "value": value})
+
+    assert result == {"applied": True, "previous": previous}
+    assert _read(cfg) == {empty: None, active: {**keep, **value}}
+    load_raven_config(config_path=cfg)
+
+
+async def test_settings_write_initializes_one_of_two_null_aliases(cfg):
+    from raven.config.raven import load_raven_config
+
+    cfg.write_text(json.dumps({"skillForge": None, "skill_forge": None}), encoding="utf-8")
+
+    result = await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["zed"]})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg) == {"skillForge": {"blocklist": ["zed"]}, "skill_forge": None}
+    assert load_raven_config(config_path=cfg).skill_forge.blocklist == ["zed"]
+
+
+@pytest.mark.parametrize("invalid", [[], 0, False, "invalid"])
+async def test_settings_write_refuses_an_invalid_alias_beside_null(cfg, invalid):
+    cfg.write_text(json.dumps({"skillForge": None, "skill_forge": invalid}), encoding="utf-8")
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigValidationError, match="non-object"):
+        await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["zed"]})
+
+    assert cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize("raw", [{"tools": None}, {"tools": {"media": None}}])
+async def test_settings_set_initializes_null_parents_of_a_merged_object(cfg, raw):
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    result = await rpc_console.settings_set(
+        {"key": "tools.media.speech", "value": {"model": "tts-1", "quality": "high"}}
+    )
+
+    assert result == {"applied": True, "previous": {"model": None, "quality": None}}
+    assert _read(cfg) == {"tools": {"media": {"speech": {"model": "tts-1", "quality": "high"}}}}
+
+
 async def test_settings_set_media_speech_selection_merges(cfg):
     await rpc_console.settings_set({"key": "tools.media.speech", "value": {"model": "tts-1", "quality": "high"}})
     await rpc_console.settings_set({"key": "tools.media.speech", "value": {"model": "tts-2", "quality": ""}})

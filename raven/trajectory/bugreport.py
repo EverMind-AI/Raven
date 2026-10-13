@@ -55,7 +55,13 @@ from raven.trajectory.bundle import BUNDLE_FORMAT_VERSION, collect_bundle
 from raven.trajectory.errors import BugReportError as BugReportError
 from raven.trajectory.errors import PreparationError as PreparationError
 from raven.trajectory.redact import KnownSecret, RedactionReport, _variants, collect_known_secrets, redact_bundle
-from raven.trajectory.sanitize import sanitize_export_tree, sanitize_text, scan_absolute_paths, tree_digest
+from raven.trajectory.sanitize import (
+    find_absolute_paths_in_json,
+    sanitize_export_tree,
+    sanitize_text,
+    scan_absolute_paths,
+    tree_digest,
+)
 from raven.trajectory.store import member_traces
 
 if TYPE_CHECKING:
@@ -830,8 +836,8 @@ def _assert_export_ready(prep: ExportPreparation, metadata: dict[str, Any]) -> N
     """The final gate before anything may be shown as shippable.
 
     Manifest, type, and metadata assertions over ``export/``: the files on
-    disk match ``contents`` exactly, all are regular files, and the metadata
-    text carries no absolute path.
+    disk match ``contents`` exactly, all are regular files, and no metadata
+    string (value or key) carries an absolute path.
     """
     export_dir = prep.export_dir
     expected = {entry["path"] for entry in metadata["contents"]}
@@ -849,9 +855,10 @@ def _assert_export_ready(prep: ExportPreparation, metadata: dict[str, Any]) -> N
             f"export manifest mismatch: extra={sorted(actual - expected)} missing={sorted(expected - actual)}"
         )
     metadata_text = (export_dir / PACKAGE_METADATA_FILE).read_text(encoding="utf-8")
-    hits = _metadata_leaks(metadata_text, prep.roots)
+    hits = find_absolute_paths_in_json(json.loads(metadata_text), prep.roots)
     if hits:
-        raise ExportLeakError(f"absolute path leaked into the export: {PACKAGE_METADATA_FILE}: {hits[0]}")
+        where, sample = hits[0]
+        raise ExportLeakError(f"absolute path leaked into the export: {PACKAGE_METADATA_FILE} {where}: {sample}")
     # The record's redaction/problem/completeness fields come from the same
     # prep values this metadata serializes, so this one gate covers both
     # landing surfaces.
@@ -861,17 +868,6 @@ def _assert_export_ready(prep: ExportPreparation, metadata: dict[str, Any]) -> N
         for variant in _variants(secret.value):
             if variant and variant in metadata_text:
                 raise ExportLeakError(f"user-redacted content leaked into the export: {PACKAGE_METADATA_FILE}")
-
-
-def _metadata_leaks(text: str, roots: list[str]) -> list[str]:
-    from raven.trajectory.sanitize import find_absolute_paths
-
-    hits = [text[start:end][:120] for start, end in find_absolute_paths(text)]
-    for root in roots:
-        needle = root.rstrip("/\\")
-        if needle and needle in text:
-            hits.append(needle)
-    return hits
 
 
 def _file_sha256(path: Path) -> str:

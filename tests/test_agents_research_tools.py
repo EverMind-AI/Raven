@@ -51,6 +51,19 @@ from raven.security.network import validate_url_target  # noqa: E402
 _NO_LLM_GATES = {"verify": {"enabled": False}, "forceFinalize": {"enabled": False}}
 
 
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    """Keep the real URL checks, with deterministic DNS beside the stubbed HTTP.
+
+    Cases about resolution failure override this function-scoped fixture.
+    """
+
+    def resolve(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", port or 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+
+
 def _ctx(tmp_path: Path, slice_: dict, *, provider: object | None = None) -> PluginContext:
     return PluginContext(
         config=slice_,
