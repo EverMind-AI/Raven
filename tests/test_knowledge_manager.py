@@ -8,6 +8,7 @@ pretending to be a model.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import replace
 
@@ -231,6 +232,39 @@ async def _ready_base(manager, content: bytes = MARKDOWN, filename: str = "handb
     doc = manager.add_document(base.id, filename=filename, content=content)
     indexed = await manager.index_document(doc.id)
     return base, indexed
+
+
+async def test_an_interrupted_index_goes_back_in_the_queue(manager) -> None:
+    """The whole index is awaited inside the RPC that asked for it, so the
+    reader reloading the page or losing the socket cancels it mid-flight.
+
+    Left to propagate, that stranded the document: `CancelledError` is a
+    `BaseException`, so neither the failure clause in `index_document` nor the
+    `except Exception` in the RPC method saw it, and the row read `indexing`
+    with nothing indexing it, no error beside it and nothing to retry it.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    started = asyncio.Event()
+
+    async def embed_forever(texts):
+        started.set()
+        await asyncio.sleep(3600)
+
+    manager.stub.embed = embed_forever
+
+    task = asyncio.create_task(manager.index_document(doc.id))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert manager._records.get_document(doc.id).status == "indexing", "it had got that far"
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    record = manager._records.get_document(doc.id)
+    assert record.status == "pending", "queued again, because nothing about the document is wrong"
+    assert record.error == "", "and not reported as a fault the reader has to act on"
 
 
 # ── the whole path ────────────────────────────────────────────────

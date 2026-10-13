@@ -910,6 +910,24 @@ class KnowledgeManager:
                     for v, c, i in zip(vectors, chunks, ids, strict=True)
                 ],
             )
+        except asyncio.CancelledError:
+            # Put it back in the queue on the way out. This whole call is
+            # awaited inside the RPC that asked for it, so the reader closing
+            # the tab, reloading the page or losing the socket cancels it --
+            # and a document is seconds to tens of seconds of work, which is
+            # long enough for that to be ordinary rather than unlucky.
+            #
+            # Caught by name because `CancelledError` is a `BaseException`:
+            # the clause below does not see it, and neither does the
+            # `except Exception` in the RPC method above. Uncaught, the record
+            # was left reading `indexing` with nothing indexing it, no error
+            # beside it and nothing to retry it -- until a restart, where
+            # `_requeue_interrupted` does exactly what this does.
+            #
+            # `pending`, not `failed`: nothing about the document is wrong.
+            logger.info("knowledge: indexing {} was interrupted; requeued", record.source)
+            self._records.set_status(document_id, "pending")
+            raise
         except (KnowledgeError, EmbeddingError, VisionError, ValueError, OSError) as exc:
             logger.warning("knowledge: indexing {} failed: {}", record.source, exc)
             return self._records.set_status(document_id, "failed", error=str(exc))
