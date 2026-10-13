@@ -157,7 +157,15 @@ Every phase returns a `HookDecision`. Its vocabulary, by field:
   never in the folder.
 - **Your plugin's slice** is `plugins.config["<id>"]` inside that file --
   yours alone, delivered verbatim as `ctx.config` to every factory. This is
-  where your tools' and hooks' own knobs live; the host never interprets it.
+  where your tools' and hooks' own knobs live; the host never interprets it,
+  with one exception below.
+- **Long-term memory is not yours to point.** `memory.backend` and the memory
+  distribution's address arrive from the host at render time, because the host
+  reads a sub-agent's memories back through its own backend -- a product
+  writing anywhere else leaves that record empty with nothing reporting it. Do
+  not name a server in your config; name only your identity (`memory.userId` /
+  `agentId`, and `user_id` / `agent_id` in the slice), which is what keeps your
+  memories apart from every other product's inside one store.
 
 Secrets never sit in `config.json` (it is publishable): they ride `.env` or
 the environment, merged in at render time. With no key of your own, the

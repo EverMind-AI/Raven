@@ -891,6 +891,122 @@ def test_opt_outs_never_carry_the_products_own_engine():
     assert config == {}
 
 
+# --- the memory backend: the store is the installation's, the name is the product's
+
+
+def _product(backend="everos", slice_=None, distribution="everos-memory"):
+    """A product config shaped like the five under agents/."""
+    config = {"memory": {"backend": backend, "userId": "raven-x", "agentId": "raven-x"}}
+    if slice_ is not None:
+        config["plugins"] = {"config": {distribution: dict(slice_)}}
+    return config
+
+
+def test_the_hosts_backend_and_address_replace_the_products():
+    config = _product(slice_={"user_id": "raven-x", "agent_id": "raven-x"})
+    host = {
+        "memory": {"backend": "everos", "userId": "default", "agentId": "default"},
+        "plugins": {"config": {"everos-memory": {"base_url": "http://localhost:18962", "port": 18962}}},
+    }
+
+    assert render.inherit_memory_backend(config, host) == "everos"
+
+    assert config["plugins"]["config"]["everos-memory"] == {
+        "user_id": "raven-x",
+        "agent_id": "raven-x",
+        "base_url": "http://localhost:18962",
+        "owned": False,
+    }
+    # Identity is the product's in both spellings; port is not a key the
+    # product reads, so it does not travel either.
+    assert config["memory"] == {"backend": "everos", "userId": "raven-x", "agentId": "raven-x"}
+
+
+def test_a_product_follows_the_host_onto_the_cloud_backend():
+    config = _product()
+    host = {
+        "memory": {"backend": "everos-cloud"},
+        "plugins": {"config": {"everos-cloud-memory": {"base_url": "https://api.example", "api_key": "host-key"}}},
+    }
+
+    assert render.inherit_memory_backend(config, host) == "everos-cloud"
+
+    assert config["memory"]["backend"] == "everos-cloud"
+    assert config["plugins"]["config"]["everos-cloud-memory"] == {
+        "base_url": "https://api.example",
+        "api_key": "host-key",
+    }
+    # The local slice is not the one in force, so nothing was written into it.
+    assert "everos-memory" not in config["plugins"]["config"]
+
+
+def test_a_credential_the_product_holds_itself_is_not_replaced():
+    config = _product(backend="everos-cloud", slice_={"api_key": "mine"}, distribution="everos-cloud-memory")
+    host = {
+        "memory": {"backend": "everos-cloud"},
+        "plugins": {"config": {"everos-cloud-memory": {"base_url": "https://api.example", "api_key": "host-key"}}},
+    }
+
+    render.inherit_memory_backend(config, host)
+
+    slice_ = config["plugins"]["config"]["everos-cloud-memory"]
+    assert slice_["api_key"] == "mine"
+    assert slice_["base_url"] == "https://api.example"
+
+
+def test_the_product_disclaims_the_servers_ownership_even_with_nothing_to_inherit():
+    """The hole this closes: a slice naming no root reads as raven's own, so a
+    product answering a host that is merely not serving would start a second
+    server against a root of its own."""
+    for host in ({}, {"memory": {"backend": "everos"}}, {"plugins": {"config": {}}}):
+        config = _product()
+        assert render.inherit_memory_backend(config, host) == "everos"
+        assert config["plugins"]["config"]["everos-memory"] == {"owned": False}
+
+
+def test_a_host_that_names_no_backend_leaves_the_products_own_standing():
+    config = _product(backend="everos-cloud", slice_={"api_key": "mine"}, distribution="everos-cloud-memory")
+
+    assert render.inherit_memory_backend(config, {"memory": {}}) == "everos-cloud"
+
+    assert config["memory"]["backend"] == "everos-cloud"
+    assert config["plugins"]["config"]["everos-cloud-memory"] == {"api_key": "mine"}
+
+
+def test_a_backend_no_distribution_is_known_for_is_named_but_not_furnished():
+    config: dict = {}
+
+    assert render.inherit_memory_backend(config, {"memory": {"backend": "someone-elses"}}) == "someone-elses"
+
+    assert config == {"memory": {"backend": "someone-elses"}}
+
+
+def test_neither_side_naming_a_backend_leaves_the_config_alone():
+    config: dict = {}
+    assert render.inherit_memory_backend(config, {}) is None
+    assert config == {}
+
+
+def test_write_rendered_carries_the_hosts_memory_backend(homed, tmp_path):
+    (homed / "config.json").write_text(
+        json.dumps(
+            {
+                "memory": {"backend": "everos-cloud"},
+                "plugins": {"config": {"everos-cloud-memory": {"base_url": "https://api.example"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+
+    rendered = render.write_rendered(_product(), out)
+
+    data = json.loads(rendered.read_text())
+    assert data["memory"] == {"backend": "everos-cloud", "userId": "raven-x", "agentId": "raven-x"}
+    assert data["plugins"]["config"]["everos-cloud-memory"] == {"base_url": "https://api.example"}
+
+
 def test_write_rendered_carries_the_hosts_opt_outs(homed, tmp_path):
     (homed / "config.json").write_text(
         json.dumps({"plugins": {"disabled": ["everme-memory", "research-flow"]}}), encoding="utf-8"

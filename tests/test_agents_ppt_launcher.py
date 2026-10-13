@@ -231,6 +231,12 @@ TRUNK_ONLY_SLICE = {"readerEffort": "low"}
 # and only an operator's own setting overrides it.
 TRUNK_DROPPED_SLICE = {"renderConcurrency": 2}
 
+# The fork pinned its memory at the stock EverOS address. The trunk stops
+# spelling it: which server answers is the host's to name, and it travels into
+# the render (raven/config/product_render.py, inherit_memory_backend), so a
+# copy here could only ever be a second answer going stale.
+TRUNK_DROPPED_MEMORY_SLICE = {"base_url": "http://localhost:18791"}
+
 
 def test_the_config_is_the_forks_modulo_the_swap_ledger():
     """Every delta against the sealed fork wrapper's config is a ledgered row:
@@ -270,6 +276,8 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
     assert theirs["agents"]["defaults"].pop("model") == FORK_MODEL
     assert ours["providers"]["ppt"].pop("models") == [TRUNK_MODEL]
     assert theirs["providers"]["ppt"].pop("models") == [FORK_MODEL]
+    assert theirs["plugins"]["config"].pop("everos-memory") == TRUNK_DROPPED_MEMORY_SLICE
+    assert "everos-memory" not in ours["plugins"]["config"]
     # The merged product's one identity; see the manifest test above.
     assert ours["memory"].pop("userId") == ours["memory"].pop("agentId") == "raven-design"
     assert theirs["memory"].pop("userId") == theirs["memory"].pop("agentId") == "raven-ppt"
@@ -278,10 +286,11 @@ def test_the_config_is_the_forks_modulo_the_swap_ledger():
 
 def test_the_everos_identity_agrees_in_all_its_places():
     """ppt's shape: the memory block and the roster row carry the identity
-    (the everos-memory slice holds only the endpoint), and the factory
-    posture is everos ON -- the fork ships backend "everos" with no plugin
-    opt-out, unlike code's double-off. The identity is the design product's:
-    one merged product keeps one memory of the user."""
+    (there is no everos-memory slice -- the address is the host's and arrives
+    at render time), and the factory posture is everos ON: the fork ships
+    backend "everos" with no plugin opt-out, unlike code's double-off. The
+    identity is the design product's: one merged product keeps one memory of
+    the user."""
     config = json.loads((RUN_PY.parent / "config.json").read_text())
     row = json.loads((RUN_PY.parent / "subagent.json").read_text())
     ids = {
@@ -293,7 +302,7 @@ def test_the_everos_identity_agrees_in_all_its_places():
     assert ids == {"raven-design"}
     assert config["memory"]["backend"] == "everos"
     assert "disabled" not in config["plugins"]
-    assert config["plugins"]["config"]["everos-memory"] == {"base_url": "http://localhost:18791"}
+    assert "everos-memory" not in config["plugins"]["config"]
 
 
 def test_the_carried_identity_prompts_are_the_forks_byte_for_byte():

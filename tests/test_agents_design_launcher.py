@@ -602,18 +602,20 @@ def test_the_exec_lane_is_installed_ravens_acp_with_no_chdir(grounded, tmp_path,
 
 
 def test_the_memory_address_follows_the_hosts_everos_server(grounded, tmp_path):
-    """The product config names the stock EverOS port; a host running its own server
-    elsewhere is followed, and a host naming none leaves the stock address alone."""
+    """A host running its own EverOS elsewhere is followed; a host naming none
+    leaves the product with no address of its own, which is what lets the
+    plugin's own default answer. Either way the product disclaims ownership of
+    the server, and its identity is untouched."""
     _host_config(
         tmp_path, {"plugins": {"config": {"everos-memory": {"base_url": "http://localhost:18962", "port": 18962}}}}
     )
     data = _render(grounded)
-    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18962"
+    assert data["plugins"]["config"]["everos-memory"] == {"base_url": "http://localhost:18962", "owned": False}
     assert data["memory"] == {"backend": "everos", "userId": "raven-design", "agentId": "raven-design", "memoryTopK": 5}
 
     _host_config(tmp_path, {})
     data = _render(grounded)
-    assert data["plugins"]["config"]["everos-memory"]["base_url"] == "http://localhost:18791"
+    assert data["plugins"]["config"]["everos-memory"] == {"owned": False}
 
 
 def test_the_build_interpreter_is_a_shim_on_the_exec_path(grounded, tmp_path):

@@ -72,6 +72,20 @@ default was and where it went.
 
 _EVEROS_PLUGIN_PACKAGE = "raven_everos"
 
+MEMORY_BACKEND_DISTRIBUTIONS: dict[str, str] = {
+    SHIPPED_DEFAULT_BACKEND: EVEROS_PLUGIN_DISTRIBUTION,
+    "everos-cloud": "everos-cloud-memory",
+}
+"""Which distribution contributes each memory backend raven ships a name for.
+
+The same pairing :func:`_resolve_plugin_config_slice` reaches through the
+registry, answerable without one. A launcher rendering a product config needs
+it before any plugin is loaded: ``memory.backend`` names the contribution
+while ``plugins.config`` is keyed by the distribution, and a launcher that
+guessed the second from the first would carry the wrong slice the day a third
+backend lands.
+"""
+
 
 def everos_plugin_installed() -> bool:
     """Whether the ``everos-memory`` distribution is present in this install.
