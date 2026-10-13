@@ -585,9 +585,10 @@ class CliAgentBackend:
         it: this computer's login shell, its ``RAVEN_HOME`` and the parent's
         model binding describe a process of raven's own here, and say nothing
         on that machine. A cancel or a timeout ends the whole process tree
-        there (``agent/cancel``). The daemon forwards whole lines, so a blank
-        line of a plain-text answer does not come back; every format this
-        module parses is one frame per line.
+        there (``agent/cancel``). The node forwards every line the command
+        writes, a blank one included, so a plain-text answer comes back as it
+        was printed; a quick command may leave before its stdin reaches it,
+        and then its own output and exit code are the report, as here.
         """
         from raven.ops import remote_path
 
@@ -619,19 +620,25 @@ class CliAgentBackend:
 
         async def read_out() -> None:
             while raw := await endpoint.readline():
-                line = raw.decode("utf-8", "replace")
+                line = raw.decode("utf-8", "replace").rstrip("\n")
                 out_lines.append(line)
                 await publish_out_line(line)
 
         async def read_err() -> None:
             while raw := await endpoint.readerr():
-                line = raw.decode("utf-8", "replace")
+                line = raw.decode("utf-8", "replace").rstrip("\n")
                 err_lines.append(line)
                 activity.note_console(line + "\n")
 
         async def drive() -> int | None:
-            # The prompt after the launch, and the end of stdin either way.
-            await endpoint.send_input("" if used_placeholder else task, eof=True)
+            # The prompt after the launch, and the end of stdin either way. A
+            # quick command may have left already, having read none of it: its
+            # own output and exit code are the report, as they are here.
+            try:
+                await endpoint.send_input("" if used_placeholder else task, eof=True)
+            except BrokenPipeError:
+                if endpoint.returncode is None:
+                    raise
             await asyncio.gather(read_out(), read_err())
             return await endpoint.wait()
 
