@@ -49,6 +49,7 @@ import typer
 from raven.providers.litellm_setup import warm_up_in_background
 from raven.rpc.serve_control import SERVE
 from raven.utils import asyncio_runner as bounded_asyncio
+from raven.utils.heap import start_trimmer
 
 # The repository's source tree, and the copy inside an installed wheel. The two
 # names differ on purpose: `ui-web/` is what this repository calls the page's
@@ -415,6 +416,7 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     # runs it; what it schedules is pinned by source in
     # tests/test_cli_serve_commands.py instead.
     warm_up_in_background()  # pragma: no cover
+    start_trimmer()  # pragma: no cover
 
     # Declared before anything can emit a span. The page runs on the terminal's
     # channel by design (one session pool), so `channel.id` cannot tell the two

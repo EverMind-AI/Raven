@@ -55,6 +55,7 @@ def serve(
     from raven.core.provider_stack import build_model_routing
     from raven.core.runtime import build_runtime
     from raven.providers.factory import make_provider
+    from raven.utils.heap import start_trimmer
 
     cfg = load_config()
     ec_config = load_raven_config()
@@ -73,6 +74,7 @@ def serve(
     run_turn = make_run_turn(runtime.loop)
 
     async def _serve() -> None:
+        start_trimmer()  # pragma: no cover
         # `raven a2a serve` is a resident host serving many turns over its whole
         # lifetime, not a one-shot `raven agent -m` invocation: build_runtime only
         # builds contributed plugin services inert, so a resident host is the one

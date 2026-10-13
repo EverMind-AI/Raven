@@ -24,7 +24,7 @@ from typing import Any
 
 from loguru import logger
 
-from raven.acp_client import protocol
+from raven.acp_client import leftovers, protocol
 from raven.acp_client.journal import FrameJournal, redact_acp_frame
 from raven.acp_client.protocol import (
     CANCEL_REQUEST_METHOD,
@@ -239,17 +239,26 @@ class AcpClient:
         if not argv:
             raise AcpConnectionError(f"acp agent {name!r}: command is empty")
 
+        # Before this launch starts its agent: a dead host's leftover of the same kind
+        # may still hold what the new one needs, such as a lock or a port.
+        await leftovers.sweep_before_first_launch()
+
         # The capture shells out and can block for real seconds on a slow
         # profile (nvm/conda init); to_thread keeps that off the event loop.
         # These agents need the login shell's PATH, not raven's -- the same
         # reason the cli transport does it.
         base_env = await asyncio.to_thread(login_shell_env)
         # The role goes on before the caller's own map, so a config ``env`` entry
-        # is the way to hand one agent back its full registry.
-        child_env = {**base_env, **host_identity_env(), **subagent_role_env(), **(env or {})}
+        # is the way to hand one agent back its full registry. The mark goes on
+        # last, so no entry can make an agent pass for another host's.
+        child_env = {**base_env, **host_identity_env(), **subagent_role_env(), **(env or {}), **leftovers.launch_env()}
         # An acp server's argv is its configuration -- its turns travel over
         # stdio -- so a batch file may stand in for the program here.
         argv = resolve_program(argv, child_env, batch_files=True)
+        # The agent's own argv, for what this logs and reports: the spawned one
+        # may lead with the parent-death wrapper.
+        program_argv = argv
+        argv = leftovers.bind_to_host(argv, child_env, cwd)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -262,7 +271,8 @@ class AcpClient:
                 limit=_READER_LIMIT,
             )
         except (OSError, ValueError) as exc:
-            raise AcpConnectionError(f"acp agent {name!r}: cannot start {argv[0]!r}: {exc}") from exc
+            raise AcpConnectionError(f"acp agent {name!r}: cannot start {program_argv[0]!r}: {exc}") from exc
+        leftovers.record(proc.pid, name)
 
         client = cls(
             name=name,
@@ -273,7 +283,7 @@ class AcpClient:
             journal=journal,
         )
         client._start_loops()
-        logger.info("acp agent {!r}: started {} (pid {})", name, argv[:1], proc.pid)
+        logger.info("acp agent {!r}: started {} (pid {})", name, program_argv[:1], proc.pid)
         return client
 
     def _start_loops(self) -> None:
@@ -307,6 +317,10 @@ class AcpClient:
         ``RuntimeError: Event loop is closed`` over whatever the user is looking
         at. So both waits below give up on their own and the teardown always
         runs to its end.
+
+        A close that is cancelled part-way leaves its launch record on disk, which
+        is harmless: the group it names was killed first, and the first sweep after
+        this host exits drops the file.
         """
         if self._closed:
             return
@@ -341,6 +355,7 @@ class AcpClient:
                     _TEARDOWN_REAP_S,
                 )
         self._release_transport()
+        leftovers.forget(self._pgid)
         self._fail_pending(AcpConnectionError(f"acp agent {self.name!r}: connection closed"))
         # Last, so the frames the teardown itself produced are in the file.
         if self._journal is not None:

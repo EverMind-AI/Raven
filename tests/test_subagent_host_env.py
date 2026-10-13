@@ -21,6 +21,7 @@ from typing import Any, NoReturn
 import pytest
 
 import raven.agent.subagent.probe as probe_mod
+from raven.acp_client import leftovers
 from raven.acp_client.client import AcpClient
 from raven.acp_client.protocol import AcpConnectionError
 from raven.agent.subagent.backends import env as backend_env
@@ -117,6 +118,7 @@ async def test_acp_launch_preserves_stored_windows_path_quotes(tmp_path, monkeyp
     command = f"{quote(sys.executable)} {quote(str(script))} --config {quote(str(config))}"
     started: list[tuple[str, ...]] = []
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_refusal(started))
+    monkeypatch.setattr(leftovers, "bind_to_host", _unbound)
 
     with pytest.raises(AcpConnectionError):
         await AcpClient.launch(name="stored-command", command=command)
@@ -400,6 +402,11 @@ async def test_windows_probe_finds_agents_on_the_captured_path(
 # --- Windows: the launch ---------------------------------------------------
 
 
+def _unbound(argv: list[str], env: Any, cwd: str | None) -> list[str]:
+    """The Linux parent-death wrapper is no part of a simulated Windows launch."""
+    return argv
+
+
 def _recording_refusal(started: list[tuple[str, ...]]) -> Any:
     async def refuse(*argv: str, **_: Any) -> NoReturn:
         started.append(argv)
@@ -426,6 +433,7 @@ async def test_on_windows_a_bare_program_starts_from_the_childs_own_path(
     monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(fresh_bin)})
     started: list[tuple[str, ...]] = []
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_refusal(started))
+    monkeypatch.setattr(leftovers, "bind_to_host", _unbound)
 
     with pytest.raises(AcpConnectionError):
         await AcpClient.launch(name="fresh", command="fresh-agent acp")
@@ -488,6 +496,7 @@ async def test_on_windows_an_acp_server_that_is_a_batch_file_starts_from_the_chi
     monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(npx.parent)})
     started: list[tuple[str, ...]] = []
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _recording_refusal(started))
+    monkeypatch.setattr(leftovers, "bind_to_host", _unbound)
 
     with pytest.raises(AcpConnectionError):
         await AcpClient.launch(name="npm", command="npx -y @scope/server")

@@ -1,13 +1,15 @@
 """Tests for SessionManager."""
 
+import gc
 import json
 import multiprocessing
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import raven.session.manager as manager_mod
 from raven.session.manager import Session, SessionManager, new_chat_id
 from raven.session.title import TITLE_STORAGE_MAX
 
@@ -1456,3 +1458,348 @@ def test_generated_title_is_declined_when_it_is_past_the_storage_ceiling(tmp_pat
 
     assert session.set_generated_title("y" * 201) is False
     assert session.metadata["title"] == "some opening message"
+
+
+def _saved_session(mgr: SessionManager, key: str, text: str = "hi") -> Session:
+    session = mgr.get_or_create(key)
+    session.add_message("user", text)
+    mgr.save(session)
+    return session
+
+
+def _crowd_out(mgr: SessionManager) -> None:
+    gc.collect()
+    _saved_session(mgr, "tui:other")
+    _saved_session(mgr, "tui:third")
+
+
+def test_clean_sessions_beyond_the_limit_leave_the_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 2)
+    mgr = SessionManager(tmp_path)
+    for n in range(4):
+        _saved_session(mgr, f"tui:c{n}")
+    assert list(mgr._cache) == ["tui:c2", "tui:c3"]
+
+
+def test_a_session_with_unsaved_messages_is_never_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    mgr.get_or_create("tui:pending").add_message("user", "not saved yet")
+    _crowd_out(mgr)
+    assert [m["content"] for m in mgr.get_or_create("tui:pending").messages] == ["not saved yet"]
+
+
+def test_metadata_changed_in_memory_keeps_its_session_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:meta")
+    mgr.get_or_create("tui:meta").metadata["workdir"] = "/somewhere"
+    _crowd_out(mgr)
+    assert mgr.get_or_create("tui:meta").metadata["workdir"] == "/somewhere"
+
+
+def test_a_nested_metadata_change_counts_as_unsaved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:nested")
+    session.metadata["harness"] = {"name": "a"}
+    session.add_message("user", "x")
+    mgr.save(session)
+    session.metadata["harness"]["name"] = "b"
+    del session
+    _crowd_out(mgr)
+    assert mgr.get_or_create("tui:nested").metadata["harness"]["name"] == "b"
+
+
+def test_a_pending_clarification_set_in_memory_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:ask")
+    mgr.get_or_create("tui:ask").pending_clarification = {"question": "which one?"}
+    _crowd_out(mgr)
+    assert mgr.get_or_create("tui:ask").pending_clarification == {"question": "which one?"}
+
+
+def test_a_held_session_comes_back_as_the_same_object(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    held = _saved_session(mgr, "tui:held")
+    _crowd_out(mgr)
+    assert "tui:held" not in mgr._cache
+    assert mgr.peek("tui:held") is held
+    assert mgr.get_or_create("tui:held") is held
+
+
+def test_a_released_session_reloads_from_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:gone", "kept on disk")
+    _crowd_out(mgr)
+    gc.collect()
+    assert "tui:gone" not in mgr._held
+    assert [m["content"] for m in mgr.get_or_create("tui:gone").messages] == ["kept on disk"]
+
+
+def test_invalidate_forgets_a_held_session_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    held = _saved_session(mgr, "tui:inv")
+    _crowd_out(mgr)
+    mgr.invalidate("tui:inv")
+    assert mgr.get_or_create("tui:inv") is not held
+
+
+def test_a_metadata_patch_does_not_clear_unsaved_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:patched")
+    mgr.get_or_create("tui:patched").metadata["workdir"] = "/unsaved"
+    assert mgr.append_metadata_patch("tui:patched", {"pinned": True})
+    _crowd_out(mgr)
+    kept = mgr.get_or_create("tui:patched")
+    assert kept.metadata["workdir"] == "/unsaved"
+    assert kept.metadata["pinned"] is True
+
+
+def test_a_patched_clean_session_can_still_leave(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:clean")
+    assert mgr.append_metadata_patch("tui:clean", {"pinned": True})
+    _crowd_out(mgr)
+    assert "tui:clean" not in mgr._cache
+    assert mgr.get_or_create("tui:clean").metadata["pinned"] is True
+
+
+def test_a_patch_counts_its_keys_as_saved_when_the_caller_set_them_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    session = _saved_session(mgr, "tui:set-first")
+    session.metadata["model"] = "m1"
+    mgr.save(session)
+    # The order most writers here use: their own copy first, then the record.
+    session.metadata["model"] = "m2"
+    del session
+    assert mgr.append_metadata_patch("tui:set-first", {"model": "m2"})
+    _crowd_out(mgr)
+    assert "tui:set-first" not in mgr._cache
+    assert mgr.get_or_create("tui:set-first").metadata["model"] == "m2"
+
+
+def test_a_patch_after_its_keys_were_set_keeps_other_unsaved_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    session = _saved_session(mgr, "tui:set-both")
+    session.metadata["model"] = "m2"
+    session.metadata["workdir"] = "/unsaved"
+    del session
+    assert mgr.append_metadata_patch("tui:set-both", {"model": "m2"})
+    _crowd_out(mgr)
+    assert mgr.get_or_create("tui:set-both").metadata["workdir"] == "/unsaved"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("last_consolidated", 1), ("pending_clarification", {"question": "which one?"})],
+    ids=["consolidation-mark", "pending-clarification"],
+)
+def test_a_patch_after_its_keys_were_set_keeps_unsaved_state_outside_the_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    session = _saved_session(mgr, "tui:set-rest")
+    setattr(session, field, value)
+    session.metadata["model"] = "m2"
+    del session
+    assert mgr.append_metadata_patch("tui:set-rest", {"model": "m2"})
+    _crowd_out(mgr)
+    assert getattr(mgr.get_or_create("tui:set-rest"), field) == value
+
+
+def test_an_unknown_key_read_through_get_or_create_can_leave(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path, project_dir=tmp_path)
+    assert mgr.get_or_create("tui:read-only").metadata.get("workdir") is None
+    _crowd_out(mgr)
+    assert "tui:read-only" not in mgr._cache
+
+
+def test_a_session_used_again_outlives_one_left_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 2)
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:a")
+    _saved_session(mgr, "tui:b")
+    mgr.get_or_create("tui:a")
+    _saved_session(mgr, "tui:c")
+    assert list(mgr._cache) == ["tui:a", "tui:c"]
+
+
+def test_flush_saves_a_held_session_that_left_the_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    held = _saved_session(mgr, "tui:flushed")
+    _crowd_out(mgr)
+    assert "tui:flushed" not in mgr._cache
+    held.add_message("assistant", "answered after it left")
+    assert mgr.flush("tui:flushed") is True
+    on_disk = SessionManager(tmp_path).peek("tui:flushed")
+    assert [m["content"] for m in on_disk.messages] == ["hi", "answered after it left"]
+
+
+def test_a_metadata_patch_reaches_a_held_session_that_left_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    held = _saved_session(mgr, "tui:heldpatch")
+    _crowd_out(mgr)
+    assert mgr.append_metadata_patch("tui:heldpatch", {"pinned": True})
+    assert held.metadata["pinned"] is True
+
+
+def test_a_session_whose_state_cannot_be_fingerprinted_is_still_saved_and_never_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    odd = mgr.get_or_create("tui:odd")
+    # Keys of two types: a save writes this, but sort_keys cannot order it.
+    odd.metadata["k"] = {1: "a", "b": 2}
+    odd.add_message("user", "kept")
+    mgr.save(odd)
+    assert mgr.append_metadata_patch("tui:odd", {"pinned": True})
+    _crowd_out(mgr)
+    assert "tui:odd" in mgr._cache
+
+
+def test_a_value_no_save_could_write_does_not_stall_the_rest_of_the_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    looped = _saved_session(mgr, "tui:looped")
+    # A value that refers to itself: json.dumps refuses it with ValueError, not TypeError.
+    looped.metadata["self"] = looped.metadata
+    _crowd_out(mgr)
+    assert "tui:looped" in mgr._cache
+
+
+def test_the_session_just_handed_out_is_never_the_one_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    mgr.get_or_create("tui:pending").add_message("user", "not saved yet")
+    # Written through a reference nobody keeps, as most metadata writers here do.
+    mgr.get_or_create("tui:fresh").metadata["workdir"] = "/unsaved"
+    gc.collect()
+    assert mgr.get_or_create("tui:fresh").metadata["workdir"] == "/unsaved"
+
+
+def test_a_fork_child_comes_back_as_the_same_object(tmp_path: Path) -> None:
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:src")
+    child = mgr.fork("tui:src")
+    assert child is not None
+    assert mgr.get_or_create(child.key) is child
+
+
+def test_a_second_get_does_not_bless_unsaved_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:again")
+    mgr.get_or_create("tui:again").metadata["workdir"] = "/unsaved"
+    mgr.get_or_create("tui:again")
+    _crowd_out(mgr)
+    assert mgr.get_or_create("tui:again").metadata["workdir"] == "/unsaved"
+
+
+def test_a_consolidation_mark_set_in_memory_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:consolidated")
+    session.add_message("user", "a")
+    session.add_message("assistant", "b")
+    mgr.save(session)
+    session.last_consolidated = 1
+    del session
+    _crowd_out(mgr)
+    assert mgr.get_or_create("tui:consolidated").last_consolidated == 1
+
+
+def _rewrite_saved_time(path: Path, value: object) -> None:
+    """Put ``value`` where the file's metadata record keeps when the session was last updated."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    record = json.loads(lines[0])
+    record["updated_at"] = value
+    lines[0] = json.dumps(record, ensure_ascii=False)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_a_session_reloaded_after_eviction_keeps_when_it_was_last_updated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(manager_mod, "_CACHE_LIMIT", 1)
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create("tui:stamped")
+    session.add_message("user", "hi")
+    # After the message, which stamps the session with the time it was added.
+    session.updated_at = datetime(2026, 1, 2, 3, 4, 5)
+    mgr.save(session)
+    del session
+    _crowd_out(mgr)
+    gc.collect()
+    assert "tui:stamped" not in mgr._cache
+    assert "tui:stamped" not in mgr._held
+    assert mgr.get_or_create("tui:stamped").updated_at == datetime(2026, 1, 2, 3, 4, 5)
+
+
+@pytest.mark.parametrize(
+    "saved",
+    ["not a time", None, 20260102, "9999-12-31T23:59:59-05:00", "0001-01-01T00:00:00+05:00"],
+    ids=["text", "null", "number", "past-the-last-day", "before-the-first-day"],
+)
+def test_a_saved_time_that_does_not_parse_leaves_the_session_loadable(tmp_path: Path, saved: object) -> None:
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:garbled", "kept")
+    _rewrite_saved_time(mgr.session_path("tui:garbled"), saved)
+    loaded = SessionManager(tmp_path).peek("tui:garbled")
+    assert loaded is not None
+    assert [m["content"] for m in loaded.messages] == ["kept"]
+    assert abs(datetime.now() - loaded.updated_at) < timedelta(minutes=1)
+
+
+def test_a_saved_time_windows_cannot_move_to_local_time_leaves_the_session_loadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class WindowsDatetime(datetime):
+        # Windows refuses local time before 1970 with EINVAL where Linux converts it.
+        def astimezone(self, tz=None):
+            raise OSError(22, "Invalid argument")
+
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:early", "kept")
+    _rewrite_saved_time(mgr.session_path("tui:early"), "1600-01-01T00:00:00+00:00")
+    monkeypatch.setattr(manager_mod, "datetime", WindowsDatetime)
+    loaded = SessionManager(tmp_path).peek("tui:early")
+    assert loaded is not None
+    assert [m["content"] for m in loaded.messages] == ["kept"]
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [timezone.utc, timezone(timedelta(hours=5, minutes=45))],
+    ids=["utc", "five-forty-five-east"],
+)
+def test_a_saved_time_with_an_offset_is_read_as_local_time(tmp_path: Path, offset: timezone) -> None:
+    saved = datetime(2026, 1, 2, 3, 4, 5, tzinfo=offset)
+    mgr = SessionManager(tmp_path)
+    _saved_session(mgr, "tui:offset")
+    _rewrite_saved_time(mgr.session_path("tui:offset"), saved.isoformat())
+    loaded = SessionManager(tmp_path).peek("tui:offset")
+    assert loaded is not None
+    assert loaded.updated_at.tzinfo is None
+    assert loaded.updated_at == saved.astimezone().replace(tzinfo=None)

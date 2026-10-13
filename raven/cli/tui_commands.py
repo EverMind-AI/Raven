@@ -318,6 +318,11 @@ async def _run_rpc_server_until_done(
 
     set_surface(TERMINAL_SURFACE)
 
+    from raven.utils.heap import start_trimmer
+
+    # This host outlives every session it serves, so it trims like the gateway.
+    start_trimmer()
+
     # Lazy import: keeps tui_commands importable without pulling rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
     from raven.cli._console_feature import register_console_feature

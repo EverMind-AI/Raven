@@ -57,7 +57,24 @@ class TestServe:
         monkeypatch.setattr(acp_commands, "claim_stdout", _claim)
         monkeypatch.setattr(acp_commands, "redirect_loguru_to_file", lambda *a, **k: tmp_path / "acp.log")
         monkeypatch.setattr(acp_commands, "_open_stdin", _open)
+        # Keep the real trimmer out: it would read /proc and leave heap._task set after the test.
+        monkeypatch.setattr(acp_commands, "start_trimmer", lambda: None)
         return written, released
+
+    async def test_the_heap_trimmer_starts_before_the_channel_is_served(self, monkeypatch, tmp_path):
+        """A pooled ``raven acp`` lives as long as its host and renders decks in-process."""
+        order = []
+        self._stub(monkeypatch, tmp_path, b"")
+        monkeypatch.setattr(acp_commands, "start_trimmer", lambda: order.append("trimmer"))
+
+        async def _serve(reader, out):
+            order.append("serve")
+
+        monkeypatch.setattr(acp_commands, "serve", _serve)
+
+        await acp_commands._serve()
+
+        assert order == ["trimmer", "serve"]
 
     async def test_the_server_is_handed_the_claimed_writer_and_the_opened_reader(self, monkeypatch, tmp_path):
         written, released = self._stub(monkeypatch, tmp_path, b'{"jsonrpc":"2.0","id":1,"method":"x"}\n')

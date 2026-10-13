@@ -27,6 +27,7 @@ from raven.acp.stdio import MAX_FRAME_BYTES, claim_stdout
 from raven.cli._log_file import redirect_loguru_to_file
 from raven.config.loader import set_config_path
 from raven.utils import asyncio_runner as bounded_asyncio
+from raven.utils.heap import start_trimmer
 
 _THREAD_CHUNK = 64 * 1024
 
@@ -196,6 +197,8 @@ async def _serve(*, verbose: bool = False) -> bool:
         "acp.log", file_level=_file_log_level(verbose), retention=3, terminal_level="WARNING"
     )
     install_crash_handlers()
+    # A pooled host outlives every deck it renders, so it trims like the gateway.
+    start_trimmer()
     with claim_stdout() as out:
         logger.info("acp: serving on stdio, logs at {}", log_path)
         async with _open_stdin() as reader:

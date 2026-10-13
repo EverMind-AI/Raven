@@ -1947,6 +1947,13 @@ def test_serve_starts_the_litellm_warm_up_at_boot() -> None:
     assert "warm_up_in_background()" in inspect.getsource(serve_commands._serve_main)
 
 
+def test_serve_starts_the_heap_trimmer_at_boot() -> None:
+    """``_serve_main`` serves forever, so its source is pinned rather than executed."""
+    import inspect
+
+    assert "start_trimmer()" in inspect.getsource(serve_commands._serve_main)
+
+
 def test_serve_warms_the_deck_template_covers_at_boot() -> None:
     """The template gallery's covers are drawn once the gateway is up, not on the
     click that opens the gallery; pinned by source for the same reason as above."""

@@ -33,6 +33,7 @@ from raven.core.provider_stack import build_model_routing
 from raven.providers.factory import make_resolving_provider
 from raven.providers.litellm_setup import warm_up_in_background
 from raven.utils import asyncio_runner as bounded_asyncio
+from raven.utils.heap import start_trimmer
 from raven.utils.workspace import sync_workspace_templates
 
 if TYPE_CHECKING:
@@ -689,6 +690,7 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
             # what it schedules is pinned by source in
             # tests/test_cli_gateway_commands.py instead.
             warm_up_in_background()  # pragma: no cover
+            start_trimmer()  # pragma: no cover
             health_server = None
             gw_teardown = None
             gw_scheduler = None

@@ -2649,6 +2649,39 @@ and every tool result.
 _Avoid_: calling it a transcript - a reader drawing a delegated run wants the Instance Log
 or `transcript.jsonl`, not this.
 
+**Leftover agent** (`raven/acp_client/leftovers.py`):
+An ACP agent process group whose launching host is no longer running. An ACP agent runs in a
+session of its own, so it gets none of the signals sent to its host's process group or
+terminal, and while the host lives only `AcpClient.close` ends it; a host that dies before its
+teardown can leave its agents' groups running with nobody on the other end of their pipes. On
+Linux the agent starts through an exec wrapper (`_WRAPPER`) that arms `PR_SET_PDEATHSIG`, so
+where the signal is armed and survives the exec (a set-id or file-capability binary clears it)
+its direct process ends when the thread that launched it does, which for an agent launched
+from the host's event loop is when the host dies. Every host records the ACP agent groups it
+launched in a file of its own under `acp-launches/` in the config file's directory
+(`<raven home>` unless `--config` moves it), and the first launch in any process ends the
+groups recorded by hosts that have since died, in the same boot and PID namespace, and only
+where a surviving member still carries the dead host's mark and, while the leader still runs,
+its start time matches the record - the group number alone can have been handed out again. Not
+covered: anything but Linux, a group whose record was never written (its host died first, the
+write failed, or its leader had already exited when the record was taken), and agents started
+by a Raven older than the records.
+_Avoid_: "orphaned" - in POSIX terms every agent group is an orphaned process group from the
+moment it starts, since its session does not hold the host; and the DAG vocabulary rules the
+word out for a released run.
+
+**Launch mark** (`raven/acp_client/leftovers.py`):
+`RAVEN_ACP_HOST` in a launched agent's environment, naming the host that launched it as
+`<host pid>-<host start ticks>`, the stem of that host's launch record. Every process the
+agent starts inherits it unless it is started with a fresh environment, so after the host dies
+a sweep can tell a group made of that host's agents and what they started from an unrelated
+group that happens to hold the same number. A process whose environment this user cannot read
+counts as carrying none (any other read error keeps the record for a later sweep), and a group
+none of whose surviving processes carries the mark is left running - which is what remains
+when the agent exits after starting its children without it.
+_Avoid_: a security token - it is an identifier, not a secret; its parts are world-readable in
+`/proc/<pid>/stat`.
+
 **Instance Log** (`raven/agent/subagent/instance_log.py`):
 One sub-agent instance's own conversation, for the whole conversation that owns it, at
 `<session_dir>/subagents/instances/<agent>/<handle>.jsonl`. A call record answers "what was
