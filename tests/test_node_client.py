@@ -994,14 +994,25 @@ async def test_a_channel_endpoint_carries_frames_both_ways_and_ends_with_the_age
     endpoint.feed_frame("too late")
 
     assert link.said == [(protocol.AGENT_FRAME, {"channel": 3, "line": '{"jsonrpc":"2.0","id":1,"method":"x"}'})]
-    assert await endpoint.readline() == b'{"jsonrpc":"2.0","id":1,"result":{}}'
+    assert await endpoint.readline() == b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
     assert await endpoint.readline() == b""
-    assert await endpoint.readerr() == b"agent: hello" and await endpoint.readerr() == b""
+    assert await endpoint.readerr() == b"agent: hello\n" and await endpoint.readerr() == b""
     assert endpoint.returncode == 3 and await endpoint.wait() == 3 and endpoint.ended() is None
     with pytest.raises(BrokenPipeError):
         await endpoint.write(b"{}\n")
     await endpoint.end()
     assert all(method != protocol.AGENT_CANCEL for method, *_ in link.asked), "nothing to cancel once it has exited"
+
+
+async def test_a_blank_line_is_a_frame_the_endpoint_hands_on_as_a_pipe_would():
+    endpoint = ChannelEndpoint(_Client(), 1, target=_box(), agent="cli@box")  # type: ignore[arg-type]
+    endpoint.feed_frame("a", 1)
+    endpoint.feed_frame("", 2)
+    endpoint.feed_frame("b", 3)
+    endpoint.exited(0)
+
+    assert [await endpoint.readline() for _ in range(4)] == [b"a\n", b"\n", b"b\n", b""]
+    assert endpoint.received == 3, "the blank line counts, so an attach picks up where this one stopped"
 
 
 async def test_ending_a_running_channel_is_a_cancel_on_the_link(tmp_path):
@@ -1069,7 +1080,7 @@ async def test_a_cli_agent_s_input_travels_on_the_link_and_its_stdin_ends_when_t
 
     lines = []
     while raw := await endpoint.readline():
-        lines.append(raw.decode("utf-8"))
+        lines.append(raw.decode("utf-8").rstrip("\n"))
     assert lines == ["first line", "second line"], "what went in came back, line by line"
     assert await endpoint.wait() == 0, "its stdin closed, cat left on its own"
     assert len(box.launches()) == 1, "on the node's ssh, like a frame"

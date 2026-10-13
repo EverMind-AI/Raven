@@ -149,7 +149,9 @@ class ChannelEndpoint:
 
     The client reads and writes it as it would a child process's pipes; what
     it gets are the ``agent/frame`` and ``agent/stderr`` notifications of one
-    channel, and what it writes goes back the same way -- a frame per line
+    channel, each read back as a pipe gives a line, with its line break (a
+    blank line is a frame too: a CLI agent's answer is its lines as printed),
+    and what it writes goes back the same way -- a frame per line
     (``write``), or a CLI agent's whole prompt and the end of its stdin
     (``send_input``, ``agent/stdin``). ``end`` is
     ``agent/cancel``: the node ends the agent's whole process tree, and the
@@ -253,6 +255,7 @@ class ChannelEndpoint:
         self._pending.append((method, params))
 
     async def readline(self) -> bytes:
+        """The next line the agent wrote, with its line break, as a pipe gives it; ``b""`` once the agent is gone."""
         item = await self._frames.get()
         if item is None:
             return b""
@@ -295,13 +298,13 @@ class ChannelEndpoint:
     # --- fed by the pool, off the link's notifications ---------------------------
 
     def feed_frame(self, line: Any, n: Any = None) -> None:
-        if isinstance(line, str) and line and not self._done.is_set():
+        if isinstance(line, str) and not self._done.is_set():
             self.received = n if isinstance(n, int) and not isinstance(n, bool) else self.received + 1
-            self._frames.put_nowait((self.received, line.encode("utf-8")))
+            self._frames.put_nowait((self.received, line.encode("utf-8") + b"\n"))
 
     def feed_stderr(self, text: Any) -> None:
         if isinstance(text, str) and not self._done.is_set():
-            self._stderr.put_nowait(text.encode("utf-8"))
+            self._stderr.put_nowait(text.encode("utf-8") + b"\n")
 
     def exited(self, rc: Any) -> None:
         if self._done.is_set():
