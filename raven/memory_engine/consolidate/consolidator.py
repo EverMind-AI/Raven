@@ -1108,7 +1108,15 @@ episode_summary:
                 ],
                 tools=_build_annotate_tool(enable_foresight=enable_foresight),
                 model=model,
-                tool_choice="required",
+                # Offered, not forced. A vendor can accept a tool list and
+                # still reject being told it must call one -- DeepSeek's
+                # thinking mode answers a 400 -- and on a transport without
+                # the adapter's relax-and-retry that 400 is the whole result,
+                # so the log is never written there at all. The system line
+                # above already says to call it exactly once, and a model that
+                # declines is a case this function has always had: no tool
+                # call, False, the caller keeps its cursor and tries again.
+                tool_choice="auto",
             )
 
             if not response.has_tool_calls:
@@ -1476,7 +1484,7 @@ section_body: full new content for that H2, every bullet ending with
                 ],
                 tools=_REFRESH_SECTION_TOOL,
                 model=model,
-                tool_choice="required",
+                tool_choice="auto",
             )
             if not response.has_tool_calls:
                 logger.warning("refresh_section({}): LLM did not call tool", tag)

@@ -152,3 +152,49 @@ class TestOnlyA400:
 
         assert [b.get("tool_choice") for b in _ServerError.bodies] == ["required"]
         assert out.finish_reason == "error"
+
+
+class TestTheAnnotatorOffersRatherThanForces:
+    """The memory writers ask for the tool; they do not demand it.
+
+    A forced choice is refused outright by some vendors, and only one of the
+    three transports carries the relax-and-retry above. Forcing there means
+    the log is never written on that transport at all, while the prompt
+    already says to call the tool and both callers have always handled a
+    model that declines.
+    """
+
+    def test_neither_memory_writer_forces_a_tool_choice(self) -> None:
+        import inspect
+
+        from raven.memory_engine.consolidate import consolidator as mod
+
+        for fn in (mod.MemoryStore.annotate, mod.MemoryStore.refresh_section):
+            src = inspect.getsource(fn)
+            assert 'tool_choice="required"' not in src, fn.__qualname__
+            assert 'tool_choice="auto"' in src, fn.__qualname__
+
+    async def test_a_declining_model_is_handled_rather_than_forced(self, tmp_path) -> None:
+        """What `auto` costs, and that it costs only this."""
+
+        seen: list[Any] = []
+
+        class _Declines:
+            def get_default_model(self) -> str:
+                return "m"
+
+            async def chat_with_retry(self, **kwargs: Any) -> Any:
+                # Recorded, not asserted here: ``annotate`` catches everything
+                # this raises, so an assertion inside would be swallowed and
+                # the test could not fail on it.
+                seen.append(kwargs.get("tool_choice"))
+                return type("R", (), {"has_tool_calls": False, "content": "I would rather not", "tool_calls": []})()
+
+        from raven.memory_engine import MemoryStore
+
+        store = MemoryStore(tmp_path)
+        ok = await store.annotate([{"role": "user", "content": "x"}], _Declines(), "m")
+
+        assert seen == ["auto"]
+        assert ok is False
+        assert not store.history_file.exists() or store.history_file.read_text(encoding="utf-8") == ""
