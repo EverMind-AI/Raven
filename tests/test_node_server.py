@@ -1397,3 +1397,41 @@ def test_serve_and_attach_need_the_node_directory(argv, capsys):
     with pytest.raises(SystemExit):
         node_main.main(argv)
     assert "--dir" in capsys.readouterr().err
+
+
+def test_the_long_path_socket_is_this_install_s_as_the_short_one_is(tmp_path, monkeypatch):
+    monkeypatch.setattr(server.tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
+    root = tmp_path / ("n" * 120)
+    monkeypatch.setattr(bundle, "install_name", lambda: "0.9.0-aaaaaaaaaaaa")
+    one = server.socket_path(root)
+    monkeypatch.setattr(bundle, "install_name", lambda: "0.9.0-bbbbbbbbbbbb")
+    other = server.socket_path(root)
+
+    assert one.parent == other.parent and one != other, "two installs on one long directory listen apart"
+    assert server.socket_path(root) == other, "and a relay of the same install finds its daemon"
+
+
+@pytest.mark.slow
+async def test_a_launch_in_progress_counts_toward_the_limit(tmp_path, agent, monkeypatch):
+    """Two launches that pass the check before either has registered its task: only one may spawn."""
+    host = _Host()
+    monkeypatch.setattr(protocol, "MAX_AGENTS", 1)
+    hold = threading.Event()
+    monkeypatch.setattr(server, "capture_login_env", lambda: (hold.wait(10), dict(os.environ))[1])
+
+    async def launch(channel: int) -> dict[str, Any]:
+        params = {"channel": channel, "task": f"t{channel}", "command": agent, "cwd": str(tmp_path)}
+        return await host.ask(protocol.AGENT_LAUNCH, params, request_id=channel)
+
+    first = asyncio.create_task(launch(1))
+    await asyncio.sleep(0.05)  # past the check, waiting for the login environment
+    second = asyncio.create_task(launch(2))
+    await asyncio.sleep(0.05)
+    hold.set()
+    one, two = await asyncio.gather(first, second)
+
+    assert "result" in one, one
+    assert two["error"] == {"code": protocol.BUSY, "message": "1 agents are already running on this machine"}
+    assert len(host.node.daemon.running()) == 1
+    await host.ask(protocol.AGENT_CANCEL, {"channel": 1}, request_id=3)
+    await host.until(lambda: host.node.daemon.running() == [])
