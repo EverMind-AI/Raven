@@ -36,6 +36,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from raven.contracts.memory import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
 from raven.home import raven_home
 from raven.utils.paths import safe_path_segment
@@ -384,8 +385,6 @@ def inherit_memory_backend(config: dict, host: dict) -> str | None:
 
     Returns the backend in force, or ``None`` when neither side names one.
     """
-    from raven.core.plugin_stack import EVEROS_PLUGIN_DISTRIBUTION, MEMORY_BACKEND_DISTRIBUTIONS
-
     host_memory = host.get("memory") if isinstance(host.get("memory"), dict) else {}
     backend = host_memory.get("backend")
     if isinstance(backend, str) and backend:
@@ -409,7 +408,7 @@ def inherit_memory_backend(config: dict, host: dict) -> str | None:
             if str(host_slice.get(key) or "").strip() and not str(own_slice.get(key) or "").strip()
         }
     )
-    if distribution == EVEROS_PLUGIN_DISTRIBUTION:
+    if backend == SHIPPED_DEFAULT_BACKEND:
         carried["owned"] = False
     if carried:
         config.setdefault("plugins", {}).setdefault("config", {}).setdefault(distribution, {}).update(carried)

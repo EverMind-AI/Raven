@@ -54,6 +54,43 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 # ---------------------------------------------------------------------------
+# What raven ships a backend name for
+# ---------------------------------------------------------------------------
+
+SHIPPED_DEFAULT_BACKEND = "everos"
+"""The value ``memory.backend`` carries when nobody has chosen one.
+
+Named rather than compared inline, because the places that test for it are not
+treating this backend as special -- they are answering "the default names
+something that is not here", which is the commonest way an install reaches
+those lines and the only one where the reader did not pick the name
+themselves. A reader who wrote a backend name into their config already knows
+what they asked for; a reader who never touched it needs to be told what the
+default was and where it went.
+"""
+
+MEMORY_BACKEND_DISTRIBUTIONS: dict[str, str] = {
+    SHIPPED_DEFAULT_BACKEND: "everos-memory",
+    "everos-cloud": "everos-cloud-memory",
+}
+"""Which distribution contributes each memory backend raven ships a name for.
+
+The same pairing the plugin registry reaches by activating a manifest,
+answerable without one. Two readers need it before any plugin is loaded: the
+launcher that renders an agent product's config, and anything that reports on
+a backend whose distribution is not installed. ``memory.backend`` names the
+contribution while ``plugins.config`` is keyed by the distribution, so a
+reader that guessed the second from the first would carry the wrong slice the
+day a third backend lands.
+
+Here rather than beside the registry because the one module both readers may
+import is this one: a launcher lives in ``raven.config``, which the registry's
+own package imports, and the edge back would put the two inside an import
+cycle (``tests/test_import_cycle_budget.py``).
+"""
+
+
+# ---------------------------------------------------------------------------
 # Data carrier
 # ---------------------------------------------------------------------------
 

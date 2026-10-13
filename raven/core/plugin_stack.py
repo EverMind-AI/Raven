@@ -38,6 +38,7 @@ from importlib.util import find_spec
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from raven.contracts.memory import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.plugins import (
     PluginActivationFailure,
     PluginNotFoundError,
@@ -55,36 +56,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-EVEROS_PLUGIN_DISTRIBUTION = "everos-memory"
+#: Re-exported: both names were defined here before a second reader outside
+#: this package needed them, and every importer still reads them from here.
+EVEROS_PLUGIN_DISTRIBUTION = MEMORY_BACKEND_DISTRIBUTIONS[SHIPPED_DEFAULT_BACKEND]
 """The distribution that contributes the ``everos`` memory backend."""
 
-SHIPPED_DEFAULT_BACKEND = "everos"
-"""The value ``memory.backend`` carries when nobody has chosen one.
-
-Named rather than compared inline, because the three places that test for it
-are not treating this backend as special -- they are answering "the default
-names something that is not here", which is the commonest way an install
-reaches those lines and the only one where the reader did not pick the name
-themselves. A reader who wrote a backend name into their config already knows
-what they asked for; a reader who never touched it needs to be told what the
-default was and where it went.
-"""
-
 _EVEROS_PLUGIN_PACKAGE = "raven_everos"
-
-MEMORY_BACKEND_DISTRIBUTIONS: dict[str, str] = {
-    SHIPPED_DEFAULT_BACKEND: EVEROS_PLUGIN_DISTRIBUTION,
-    "everos-cloud": "everos-cloud-memory",
-}
-"""Which distribution contributes each memory backend raven ships a name for.
-
-The same pairing :func:`_resolve_plugin_config_slice` reaches through the
-registry, answerable without one. A launcher rendering a product config needs
-it before any plugin is loaded: ``memory.backend`` names the contribution
-while ``plugins.config`` is keyed by the distribution, and a launcher that
-guessed the second from the first would carry the wrong slice the day a third
-backend lands.
-"""
 
 
 def everos_plugin_installed() -> bool:
