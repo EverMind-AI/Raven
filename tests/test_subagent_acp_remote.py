@@ -424,6 +424,10 @@ async def test_the_free_probe_shows_the_link_s_state_once_a_dispatch_has_opened_
 
     assert "runs on machine 'Lab box' (box) (connected, 1 agent running)" in result.detail
     await close_pool()
+    # The agent's exit reaches the link a beat after the close that asked for it; the listing reads the link.
+    deadline = time.monotonic() + 10
+    while box.nodes.status("box").agents and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
     assert "(connected, idle)" in (await probe.probe_one(cfg, source="config")).detail
 
 
