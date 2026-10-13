@@ -204,6 +204,54 @@ def test_raw_write_refuses_an_invalid_alias_beside_null(tmp_path, monkeypatch, i
     assert path.read_bytes() == before
 
 
+@pytest.mark.parametrize(
+    "camel,snake,previous,value",
+    [
+        ("contextWindowTokens", "context_window_tokens", 200000, 100000),
+        ("reasoningEffort", "reasoning_effort", "low", "high"),
+    ],
+)
+def test_raw_leaf_access_lands_on_the_alias_pydantic_reads(tmp_path, monkeypatch, camel, snake, previous, value):
+    """Below the top level pydantic reads a null alias over a populated snake_case key.
+
+    So ``lookup`` reports that null, as the schema does, and a write replaces
+    it: afterwards ``load_config`` reads the new value and the snake_case key
+    is left as it was.
+    """
+    from raven.config.loader import load_config
+
+    path = _home(tmp_path, monkeypatch, {"agents": {"defaults": {camel: None, snake: previous}}})
+    leaf = f"agents.defaults.{camel}"
+    assert getattr(load_config(path).agents.defaults, snake) is None
+    assert surface.lookup(surface.read_raw(path), leaf) == (True, None)
+
+    assert surface.write_value(leaf, value, config_path=path) is None
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"agents": {"defaults": {camel: value, snake: previous}}}
+    assert getattr(load_config(path).agents.defaults, snake) == value
+
+
+def test_a_nested_block_write_lands_on_the_alias_pydantic_reads(tmp_path, monkeypatch):
+    """Only the top level drops a null block; below it pydantic reads the null alias.
+
+    So this file does not load, and a write into the populated snake_case block
+    would leave it unloadable. The write goes to the alias instead, which is
+    the block the schema then reads.
+    """
+    from raven.config.loader import load_config
+
+    path = _home(tmp_path, monkeypatch, {"tools": {"askUser": None, "ask_user": {"timeout": 30}}})
+    with pytest.raises(ValueError, match="fails schema validation"):
+        load_config(path)
+
+    assert surface.write_value("tools.askUser.timeout", 45, config_path=path) is None
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "tools": {"askUser": {"timeout": 45}, "ask_user": {"timeout": 30}}
+    }
+    assert load_config(path).tools.ask_user.timeout == 45
+
+
 def test_a_write_the_schema_rejects_is_refused_and_nothing_changes(tmp_path, monkeypatch):
     path = _home(tmp_path, monkeypatch, {"tools": {"exec": {"timeout": 60}}})
     before = path.read_text()

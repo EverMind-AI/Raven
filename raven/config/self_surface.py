@@ -1426,7 +1426,7 @@ def lookup(data: dict[str, Any], path: str) -> tuple[bool, Any]:
     for part in path.split("."):
         if not isinstance(node, dict):
             return False, None
-        key = _spelled(node, part)
+        key = _spelled(node, part, top_level=node is data)
         if key not in node:
             return False, None
         node = node[key]
@@ -1563,7 +1563,7 @@ def _mutate(path: str, value: Any, *, remove: bool, config_path: Path | None) ->
         before = copy.deepcopy(data)
         node = data
         for part in parts[:-1]:
-            key = _spelled(node, part)
+            key = _spelled(node, part, top_level=node is data)
             child = node.get(key)
             if child is None:
                 if remove:
@@ -1572,7 +1572,7 @@ def _mutate(path: str, value: Any, *, remove: bool, config_path: Path | None) ->
             if not isinstance(child, dict):
                 raise ValueError(f"{path}: {key} is not an object in config.json")
             node = child
-        leaf = _spelled(node, parts[-1])
+        leaf = _spelled(node, parts[-1], top_level=node is data)
         previous = node.get(leaf)
         if remove:
             if leaf not in node:

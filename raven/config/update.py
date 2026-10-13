@@ -241,7 +241,7 @@ def set_skill_blocked(
 
     def _apply(_text: str | None) -> tuple[str | None, tuple[list[str], bool]]:
         data = read_raw_or_raise(path)
-        sf_key = key_as_written(data, "skillForge")
+        sf_key = key_as_written(data, "skillForge", top_level=True)
         section = data.get(sf_key)
         if section is None:
             section = data[sf_key] = {}
