@@ -1222,6 +1222,16 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
     )
 
 
+def _measured_at(snapshot: Any) -> int | None:
+    """When the record's verdict was measured; ``None`` for no record.
+
+    Every measurement stamps its own time (``_test_record`` carries it over), and
+    a modes relearn keeps the stamp it found, so a changed stamp means a newer
+    verdict and nothing else does.
+    """
+    return None if snapshot is None else getattr(snapshot, "measured_at_ms", 0)
+
+
 _SCHEDULED = False
 """One auto-verify per process. Manual Test runs and probe=true listings are
 peer paths to this backfill, not causes to run it again."""
@@ -1336,7 +1346,9 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
     once at boot. After the run the table is refreshed so the rows rebuilt at
     startup pick up the snapshots this task just recorded -- the alternative is
     a roster that reports an agent stateful and dispatches it stateless until
-    the next restart or hot-apply.
+    the next restart or hot-apply. The newest measurement wins: a row measured
+    while its handshake was in flight -- a manual Test, a connect -- keeps that
+    verdict, whatever the handshake returned.
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
@@ -1380,11 +1392,22 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
                 continue
             result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)
+            # Read again with nothing awaited between here and the write: the
+            # handshake held the row for up to the ready timeout. A measurement
+            # recorded meanwhile -- a manual Test, a connect -- is newer evidence
+            # than this one and stands. A dispatch relearning the agent's modes
+            # measures nothing and keeps the stamp, so it does not stop this
+            # write, and a failure below is kept over the re-read record, modes
+            # included.
+            current = acp_snapshot_for(cfg)
+            if _measured_at(current) != _measured_at(snapshot):
+                logger.info("acp agent {!r}: auto-verify {} superseded by a newer measurement", name, result.status)
+                continue
             # Replace an old failure with what this attempt actually measured.
             # Failed rows are retried next boot, so a timeout is not a permanent
             # verdict. A formerly working row still keeps its old capabilities.
             if result.status == "ready" or getattr(result, "needs_auth", False) or failed_before:
-                record = _test_record(result, snapshot) if snapshot is not None and result.status != "ready" else result
+                record = _test_record(result, current) if current is not None and result.status != "ready" else result
                 store.record(record)
                 recorded = True
             logger.info("acp agent {!r}: auto-verify {}", name, result.status)
