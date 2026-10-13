@@ -124,6 +124,10 @@ function heldByTheMenu(bases: { id: string; name: string; documents: number }[])
   mentions.set((prev) => ({ ...prev, bases }))
 }
 
+/* Set by a test that needs a reindex to still be running while it does
+   something else. Null for every other test, where reindex answers at once. */
+let reindexBlocks: Promise<void> | null = null
+
 function install(rows: KbBase[]): Fake {
   const fake: Fake = { rows, wrote: [], removed: [] }
   sources.knowledge = {
@@ -134,6 +138,7 @@ function install(rows: KbBase[]): Fake {
     documents: async () => docs,
     reindex: async (id) => {
       indexed.push(id)
+      if (reindexBlocks) await reindexBlocks
       if (indexFails) throw new Error(indexFails)
       docs = docs.map((row) => (row.id === id ? { ...row, status: 'ready' } : row))
       return docs.find((row) => row.id === id)!
@@ -220,6 +225,7 @@ beforeEach(() => {
   added.length = 0
   indexed.length = 0
   indexFails = ''
+  reindexBlocks = null
   removedDocs.length = 0
 })
 
@@ -327,6 +333,55 @@ describe('the knowledge store', () => {
     await store.write(store.get().bases![0]!, { starred: true })
 
     expect(mentions.get().bases?.map((row) => row.name)).toEqual(['Handbook'])
+  })
+
+  it('deletes a document while another one is indexing', async () => {
+    /* The reported bug, and the reason `busy` is not one flag any more. A
+       reindex runs for tens of seconds on a long PDF, and it used to hold the
+       same lock every other control checks -- so a confirmed delete returned
+       at the guard and did nothing: no row removed, no toast, nothing in the
+       console. The reader confirmed a destructive action and watched the page
+       sit still. */
+    const fake = install([base({ id: 'a' })])
+    docs = [doc({ id: 'd1' }), doc({ id: 'd2' })]
+    await store.openBase(base({ id: 'a' }))
+
+    let release: () => void = () => {}
+    reindexBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const slow = store.reindex(doc({ id: 'd1' }))
+
+    await store.removeDoc(doc({ id: 'd2' }))
+
+    expect(removedDocs).toEqual(['d2'])
+    expect((store.get().documents ?? []).map((row) => row.id)).toEqual(['d1'])
+
+    release()
+    await slow
+    expect(fake.rows.length).toBe(1)
+  })
+
+  it('still refuses to start a second index while one is running', async () => {
+    /* The part of the old guard that was load-bearing: each document is an
+       embedding round trip, and two at once is the same endpoint asked to do
+       everything simultaneously. */
+    install([base({ id: 'a' })])
+    docs = [doc({ id: 'd1' }), doc({ id: 'd2' })]
+    await store.openBase(base({ id: 'a' }))
+    indexed.length = 0
+
+    let release: () => void = () => {}
+    reindexBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const first = store.reindex(doc({ id: 'd1' }))
+    await store.reindex(doc({ id: 'd2' }))
+
+    /* Refused, not queued behind it. */
+    expect(indexed).toEqual(['d1'])
+    release()
+    await first
   })
 
   it('turns a mark off again', async () => {

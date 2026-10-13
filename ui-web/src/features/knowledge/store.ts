@@ -49,8 +49,21 @@ export interface KnowledgeState {
    *  panel should not pay for it. */
   models: KbModel[] | null
   tab: Tab
-  /** A write is in flight; the page's controls are disabled meanwhile. */
+  /** A structural write is in flight -- a create, a delete, a rename, a move.
+   *  Every one of those is a single sub-second call, so the controls they
+   *  guard are held for about as long as a click.
+   *
+   *  Indexing is deliberately not one of them. It is tens of seconds on a long
+   *  PDF, and holding this across it made every other control on the page do
+   *  nothing, silently: a reader confirmed a delete and watched the row stay
+   *  where it was, with no toast and nothing in the console. Indexing says
+   *  what it is doing on the row it is doing it to, which is where a reader
+   *  is already looking; it does not need the page's lock as well. */
   busy: boolean
+  /** A document is being parsed and embedded. Not a lock over the page --
+   *  only over starting a second one, which would be the same endpoint asked
+   *  to do two documents at once. */
+  indexing: boolean
   /** The base whose documents are showing, or null for the grid of cards.
    *  Held as the row rather than an id: the breadcrumb needs its name, and a
    *  base deleted while it is open should not leave the path looking up an id
@@ -139,6 +152,7 @@ const store = makeStore<KnowledgeState>({
   models: null,
   tab: 'all',
   busy: false,
+  indexing: false,
   opened: null,
   documents: null,
   view: 'list',
@@ -631,8 +645,8 @@ function put(baseId: string, doc: KbDoc): void {
    queued for good. */
 async function added(make: () => Promise<KbDoc>): Promise<void> {
   const base = get().opened
-  if (!base || get().busy) return
-  patch({ busy: true })
+  if (!base || get().indexing) return
+  patch({ indexing: true })
   try {
     let doc = await make()
     if (get().folder) doc = await source().move(doc.id, get().folder)
@@ -648,7 +662,7 @@ async function added(make: () => Promise<KbDoc>): Promise<void> {
        guess, and the status is the server's to say. */
     if (get().opened?.id === base.id) await loadDocuments(base.id)
   } finally {
-    patch({ busy: false })
+    patch({ indexing: false })
   }
 }
 
@@ -755,8 +769,8 @@ export function setView(view: View): void {
    changes the status and the piece count, and a page that guessed either would
    be showing a document as ready before it is. */
 export async function reindex(doc: KbDoc): Promise<void> {
-  if (get().busy) return
-  patch({ busy: true })
+  if (get().indexing) return
+  patch({ indexing: true })
   /* Marked as indexing the moment it is asked for, not when it answers. The
      call runs for as long as parsing and embedding the file takes -- tens of
      seconds on a long PDF -- and a row that does not move until it is over
@@ -785,7 +799,7 @@ export async function reindex(doc: KbDoc): Promise<void> {
     const base = get().opened
     if (base) await loadDocuments(base.id)
   } finally {
-    patch({ busy: false })
+    patch({ indexing: false })
   }
 }
 
@@ -871,6 +885,7 @@ export async function create(name: string, description: string, embedding = true
 export async function write(base: KbBase, settings: KbSettings): Promise<void> {
   if (get().busy) return
   patch({ busy: true })
+  let drain = ''
   try {
     const written = await source().settings(base.id, settings)
     patch({
@@ -893,12 +908,17 @@ export async function write(base: KbBase, settings: KbSettings): Promise<void> {
        this the base comes back reading Queued on every row and stays there
        until each is rebuilt by hand -- which is the page this change was
        meant to stop producing. */
-    if (settings.embedding_model !== undefined) await drainPending(written.id)
+    if (settings.embedding_model !== undefined) drain = written.id
   } catch (e) {
     toast(reasonOf(e))
   } finally {
     patch({ busy: false })
   }
+  /* Outside the lock above, and after it is released. The write itself is one
+     call; draining what it requeued is a base's worth of embedding, and a
+     reader who moved a base onto another model should still be able to rename
+     a document while it runs. */
+  if (drain) await drainPending(drain)
 }
 
 /* Index what a rebuild requeued, oldest first and one at a time.
@@ -909,6 +929,16 @@ export async function write(base: KbBase, settings: KbSettings): Promise<void> {
    back as it lands, so the panel empties its queue in front of the reader
    rather than after. */
 async function drainPending(baseId: string): Promise<void> {
+  if (get().indexing) return
+  patch({ indexing: true })
+  try {
+    await drainQueue(baseId)
+  } finally {
+    patch({ indexing: false })
+  }
+}
+
+async function drainQueue(baseId: string): Promise<void> {
   await loadDocuments(baseId)
   const queued = (get().documents ?? []).filter((row) => row.status === 'pending').map((row) => row.id)
   for (const id of queued) {

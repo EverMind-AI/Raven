@@ -902,6 +902,17 @@ class KnowledgeManager:
             # document held goes, including pieces a person wrote by hand and
             # pieces they had turned off -- a reindex is the document being
             # cut again, and there is nothing for those to be attached to.
+            if self._records.get_document(document_id) is None:
+                # Deleted while this was parsing and embedding -- which is now
+                # reachable from the page, because indexing no longer holds the
+                # lock that used to stop a reader touching anything else for
+                # the tens of seconds it runs. `delete_document` already took
+                # this document's vectors; inserting these would put a chunk of
+                # it back into the collection with no row to own it, no way to
+                # reach it from the page, and a search that answers out of a
+                # file the reader deleted.
+                logger.info("knowledge: {} was deleted while it indexed; its pieces are dropped", record.source)
+                return None
             await self._store.delete(base.id, document_id)
             await self._store.insert(
                 base.id,

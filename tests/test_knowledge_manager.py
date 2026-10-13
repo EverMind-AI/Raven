@@ -267,6 +267,38 @@ async def test_an_interrupted_index_goes_back_in_the_queue(manager) -> None:
     assert record.error == "", "and not reported as a fault the reader has to act on"
 
 
+async def test_a_document_deleted_while_it_indexed_leaves_no_pieces_behind(manager) -> None:
+    """Reachable from the page now that indexing no longer holds its lock: a
+    reader can delete a document while it is being embedded.
+
+    The vectors were already taken by the delete, so inserting the ones this
+    run computed would put pieces of the file back with no row to own them --
+    unreachable from the page, and answering searches out of a file the reader
+    deleted.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    embedding = asyncio.Event()
+    carry_on = asyncio.Event()
+    real = manager.stub.embed
+
+    async def embed_then_wait(texts):
+        embedding.set()
+        await carry_on.wait()
+        return await real(texts)
+
+    manager.stub.embed = embed_then_wait
+
+    task = asyncio.create_task(manager.index_document(doc.id))
+    await asyncio.wait_for(embedding.wait(), timeout=5)
+    await manager.delete_document(doc.id)
+    carry_on.set()
+
+    assert await task is None, "there is no record left to answer with"
+    assert (await manager.search([base.id], "alpha", top_k=5)).hits == [], "and nothing of it in the index"
+
+
 # ── the whole path ────────────────────────────────────────────────
 
 
