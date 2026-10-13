@@ -949,6 +949,31 @@ def test_undo_last_turn_pulls_the_episodic_cursor_back_to_the_cut():
     assert s.metadata["annotated_through"] == 2
 
 
+def test_a_fork_starts_annotated_through_its_inherited_history(tmp_path: Path):
+    """A fork's past is its parent's, and a past is never handed to one call.
+
+    The after-turn step seeds a session it has not seen before, so a fork is
+    safe on that path. ``/new`` is the one that is not: it reads the cursor
+    directly, and on an unseeded fork it reads 0 and hands every inherited
+    message to the annotator -- episodes the parent already wrote to the same
+    workspace log.
+    """
+    sm = SessionManager(tmp_path)
+    parent = sm.get_or_create("cli:p")
+    for i in range(3):
+        parent.messages.extend([{"role": "user", "content": f"q{i}"}, {"role": "assistant", "content": f"a{i}"}])
+    parent.metadata["annotated_through"] = 6
+    sm.save(parent)
+
+    child = sm.fork("cli:p")
+
+    assert child is not None
+    assert child.metadata["annotated_through"] == len(child.messages) == 6
+
+    sm._cache.pop(child.key, None)
+    assert sm.get_or_create(child.key).metadata.get("annotated_through") == 6
+
+
 def test_clear_resets_the_episodic_cursor_through_a_save(tmp_path: Path):
     """Asserted after a save and a reload, because that is where it was lost.
 

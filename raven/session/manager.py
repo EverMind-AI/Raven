@@ -887,7 +887,8 @@ class SessionManager:
         source's channel, a deep copy of the source's messages, and
         ``parent_session_id`` set to the source key (the reserved lineage slot).
         The child inherits ``last_consolidated`` (so its active-context window
-        matches the source at the fork point) and resets ``pending_clarification``
+        matches the source at the fork point), starts annotated through its
+        inherited history (see below), and resets ``pending_clarification``
         (interaction wait-state is not history). The child is persisted eagerly.
 
         Whatever the source is called, the child is called ``<title> (fork)``
@@ -931,6 +932,13 @@ class SessionManager:
             if parent_title:
                 child.set_title(_fork_title(parent_title))
         child.metadata["parent_session_id"] = source_key
+        # The fork starts annotated. Its inherited history is the parent's and
+        # is already in the workspace log if the parent annotated it, and a
+        # session's past is never back-filled -- the after-turn step seeds the
+        # same way, at the length before the first turn it sees. Without this
+        # the cursor reads 0, and ``/new`` as a fresh fork's first action hands
+        # every inherited message to the annotator a second time.
+        child.metadata["annotated_through"] = len(child.messages)
         # A fork continues its parent's conversation, so it continues on its
         # parent's model. The caller re-points the live binding, but that lives
         # in memory only -- without carrying the record too, the fork drops to

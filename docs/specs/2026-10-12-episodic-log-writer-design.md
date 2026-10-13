@@ -380,10 +380,13 @@ and F5's safety follows from how `append_history` writes, not from new code.
   not back-filled.** The original loop fed the annotator chunks bounded by a
   token budget; this step has no chunking, so an unseeded long session would go
   to the provider in one call. Seeding at `prev_len` rather than the current
-  length lets a brand-new session count its first turn. Seeding also covers
-  forks, which copy messages but not metadata. Rejected: chunked back-fill (a
-  second cut rule, for a one-time event); seeding at the current length (the
-  first turn of every session would never be annotated).
+  length lets a brand-new session count its first turn. `Session.fork`
+  seeds the child the same way, at its inherited length: the after-turn step
+  would have covered a fork on its own, but `/new` reads the cursor directly
+  and an unseeded fork hands its parent's annotated history over again.
+  Rejected: chunked back-fill (a second cut rule, for a one-time event);
+  seeding at the current length (the first turn of every session would never
+  be annotated).
 - **Truncation moves the cursor where it happens, not lazily.** Clamping to
   `len(messages)` at the next turn keeps the stale index on disk, and every
   turn written after an undo or a clear is swallowed until the count climbs
