@@ -5,14 +5,19 @@ machine's registry row, ``~/.raven-node`` when it names none): a Python 3.12
 virtualenv, the packages in :data:`raven.node.protocol.REQUIREMENTS` pinned to
 this Raven's own versions, and this Raven's own code (:mod:`raven.node.bundle`).
 Nothing else on the machine changes: no system package, no shell rc file, no
-environment it already had.
+environment it already had, no file outside ``node_dir``, and a ``node_dir``
+that was there before keeps its mode (only one this makes is made owner-only).
 
 Everything Python goes through ``uv``, as it does in this repository: the
 virtualenv is ``uv venv`` of the machine's own Python 3.12 when it has one,
 else of a Python uv keeps inside ``node_dir``; the packages are ``uv pip
-install``. A machine without uv gets one under ``node_dir/.uv`` first, from
-uv's own installer, fetched with the machine's curl or wget and told to
-touch nothing else; with neither uv nor a way to fetch it, the install stops
+install``, from the index pip is configured with on the machine when it is
+(``PIP_INDEX_URL``, or ``index-url`` in pip's config files, which uv does
+not read on its own), else from PyPI. A machine without uv gets one under
+``node_dir/.uv`` first: uv's installer for one pinned version
+(:data:`UV_VERSION`), fetched with the machine's curl or wget and run as an
+unmanaged install, which writes no receipt under the home directory and
+changes no PATH; with neither uv nor a way to fetch it, the install stops
 and says so.
 
 Each step is one ssh call through :func:`raven.acp_client.remote.run`; a step
@@ -38,8 +43,13 @@ _NODE_KB = 60 * 1024
 _PYTHON_KB = 80 * 1024
 _UV_KB = 25 * 1024
 
-#: uv's own installer, which puts one binary where ``UV_INSTALL_DIR`` says.
+#: uv's own installer, as a person is told to run it when the machine has no uv and no way to fetch one.
 UV_INSTALLER = "https://astral.sh/uv/install.sh"
+#: The uv an install fetches when the machine has none: one version, as the
+#: packages are one version each, so two installs a month apart put the same
+#: uv on two machines. The installer for a version is served under its number.
+UV_VERSION = "0.13.0"
+UV_PINNED_INSTALLER = f"https://astral.sh/uv/{UV_VERSION}/install.sh"
 
 _PROBE_TIMEOUT_S = 60.0
 _STEP_TIMEOUT_S = 900.0
@@ -62,6 +72,8 @@ class Plan:
     free_kb: int | None
     fetch: str = ""
     """The machine's curl or wget, with which uv can be fetched when the machine has none."""
+    index: str = ""
+    """The package index pip is configured with on the machine, or ``""`` for PyPI."""
 
     @property
     def uv_from(self) -> str:
@@ -90,16 +102,22 @@ class Plan:
             else "a Python 3.12 made by uv, kept beside it"
         )
         uv = (
-            f" uv itself first, under {self.node_dir}/.uv (the machine has none), fetched with its own {self.fetch};"
+            f" uv {UV_VERSION} itself first, under {self.node_dir}/.uv (the machine has none), fetched with its own "
+            f"{self.fetch};"
             if self.uv_from == "fetched"
             else ""
+        )
+        index = (
+            f"{self.index} (the index pip is configured with there)"
+            if self.index
+            else "PyPI (pip is configured with no other index there)"
         )
         space = f"; {self.free_kb // (1024 * 1024)} GB free there" if self.free_kb is not None else ""
         return (
             f"Install the Raven node {self.install_name} on machine {self.target.label} into {where}:{uv} {python}, "
-            f"{' '.join(bundle.pinned((*protocol.REQUIREMENTS, protocol.SEARCH_REQUIREMENT)))} from the "
-            "machine's package index, and this Raven's code, all through uv. "
-            f"About {self.needed_kb // 1024} MB{space}. Nothing else on the machine changes."
+            f"{' '.join(bundle.pinned((*protocol.REQUIREMENTS, protocol.SEARCH_REQUIREMENT)))} from {index}, "
+            f"and this Raven's code, all through uv. About {self.needed_kb // 1024} MB{space}. "
+            "Nothing else on the machine changes."
         )
 
 
@@ -131,12 +149,30 @@ def _vars(node_dir: str, install_name: str) -> str:
     return f'dir={remote.shell_path(node_dir)}; id={shlex.quote(install_name)}; node="$dir/$id"; '
 
 
+#: The index pip would install from on the machine, read the way pip reads it
+#: and said as ``INDEX=<url>``: ``PIP_INDEX_URL`` first (the shell checks it),
+#: else ``index-url`` in pip's config files, the user's over the system's
+#: and ``[install]`` over ``[global]``. One line of Python for the machine's
+#: own interpreter, with no single quote in it, since the whole line travels
+#: inside single quotes on the ssh command.
+_PIP_INDEX = (
+    "import configparser, os; c = configparser.ConfigParser(interpolation=None); "
+    'h = os.path.expanduser("~"); x = os.environ.get("XDG_CONFIG_HOME") or os.path.join(h, ".config"); '
+    'c.read(["/etc/pip.conf", "/etc/xdg/pip/pip.conf", os.path.join(h, ".pip", "pip.conf"), '
+    'os.path.join(x, "pip", "pip.conf")]); '
+    'v = next((c.get(s, "index-url") for s in ("install", "global") if c.has_option(s, "index-url")), ""); '
+    'print("INDEX=" + v.strip().splitlines()[0]) if v.strip() else None'
+)
+
+
 def probe_script(node_dir: str, install_name: str, digest: str) -> str:
-    """One look at the machine: is this node there, which Python, uv and fetcher it has, how much room.
+    """One look at the machine: is this node there, which Python, uv, fetcher and package index it has, how much room.
 
     uv is looked for on the PATH, in the two places its installer puts it
     that a non-login PATH misses, and under ``node_dir/.uv``, where an
-    earlier install of this Raven may have put it.
+    earlier install of this Raven may have put it. The index is read the way
+    pip reads it (:data:`_PIP_INDEX`), by whichever Python the loop found,
+    since uv reads no pip configuration of its own accord.
     """
     return _vars(node_dir, install_name) + (
         f'if [ -x "$node/bin/python" ] && "$node/bin/python" -I -m raven.node --version 2>/dev/null '
@@ -147,6 +183,8 @@ def probe_script(node_dir: str, install_name: str, digest: str) -> str:
         'for u in "$(command -v uv 2>/dev/null)" "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" "$dir/.uv/uv"; do '
         'if [ -n "$u" ] && [ -x "$u" ]; then echo "UV=$u"; break; fi; done; '
         'for f in curl wget; do c=$(command -v "$f" 2>/dev/null) || continue; echo "FETCH=$c"; break; done; '
+        f'if [ -n "$PIP_INDEX_URL" ]; then echo "INDEX=$PIP_INDEX_URL"; elif [ -n "$q" ]; then "$q" -c {shlex.quote(_PIP_INDEX)} '
+        "2>/dev/null; fi; "
         'd="$dir"; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; '
         'echo "FREE_KB=$(df -Pk "$d" 2>/dev/null | awk \'NR==2 {print $4}\')"'
     )
@@ -170,7 +208,7 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
     seen: dict[str, str] = {}
     for line in out.splitlines():
         key, sep, value = line.strip().partition("=")
-        if sep and key in {"PRESENT", "PYTHON", "UV", "FETCH", "FREE_KB"}:
+        if sep and key in {"PRESENT", "PYTHON", "UV", "FETCH", "FREE_KB", "INDEX"}:
             seen[key] = value.strip()
     free = seen.get("FREE_KB", "")
     return Plan(
@@ -182,6 +220,7 @@ def plan(machine_id: str, *, node_dir: str | None = None, run: Runner = _run) ->
         uv=seen.get("UV", ""),
         free_kb=int(free) if free.isdigit() else None,
         fetch=seen.get("FETCH", ""),
+        index=seen.get("INDEX", ""),
     )
 
 
@@ -208,28 +247,34 @@ def steps(p: Plan) -> list[tuple[str, str]]:
     uv = shlex.quote(p.uv) if p.uv_from == "machine" else '"$dir/.uv/uv"'
     head = _vars(p.node_dir, p.install_name) + f"uv={uv}; "
     env = 'UV_CACHE_DIR="$dir/.uv-cache" UV_PYTHON_INSTALL_DIR="$dir/.uv-python"'
+    # node_dir is made owner-only only when this makes it: one that was there
+    # already is the owner's, and may hold what they keep beside the nodes.
+    made = '[ -d "$dir" ] || { mkdir -p "$dir" && chmod 700 "$dir"; }; '
     out: list[tuple[str, str]] = []
     if p.uv_from == "fetched":
-        # uv's own installer, told where to put the one binary and to leave
-        # the shell's rc files alone; a wget machine reads it the same way.
-        fetch = f"wget -qO- {UV_INSTALLER}" if p.fetch.endswith("wget") else f"curl -LsSf {UV_INSTALLER}"
+        # uv's installer for one version, as an unmanaged install: the one
+        # binary goes where UV_UNMANAGED_INSTALL says, with no receipt written
+        # under the home directory and no shell rc file changed; a wget
+        # machine reads the installer the same way.
+        fetch = f"wget -qO- {UV_PINNED_INSTALLER}" if p.fetch.endswith("wget") else f"curl -LsSf {UV_PINNED_INSTALLER}"
         out.append(
             (
                 "uv",
-                head
-                + f'mkdir -p "$dir/.uv" && chmod 700 "$dir" && {fetch} | UV_INSTALL_DIR="$dir/.uv" UV_NO_MODIFY_PATH=1 '
-                'INSTALLER_NO_MODIFY_PATH=1 sh >/dev/null && test -x "$dir/.uv/uv"',
+                head + made + f'mkdir -p "$dir/.uv" && {fetch} | UV_UNMANAGED_INSTALL="$dir/.uv" sh >/dev/null '
+                '&& test -x "$dir/.uv/uv"',
             )
         )
     python = shlex.quote(p.python) if p.how == "python" else "3.12"
-    venv = f'mkdir -p "$dir" && chmod 700 "$dir" && {env} "$uv" venv --quiet --python {python} "$node"'
-    pip = f'{env} "$uv" pip install --quiet --python "$node/bin/python"'
+    venv = made + f'{env} "$uv" venv --quiet --python {python} "$node"'
+    # The index pip is configured with on the machine, which uv would not
+    # read for itself; without one, uv's default, PyPI.
+    index = f" --default-index {shlex.quote(p.index)}" if p.index else ""
+    pip = f'{env} "$uv" pip install --quiet --python "$node/bin/python"{index}'
     requirements = " ".join(shlex.quote(r) for r in bundle.pinned(protocol.REQUIREMENTS))
     deps = f"{pip} {requirements}"
-    # Optional, and never fails the install: the index uv is configured with
-    # on the machine first (its owner's choice, often a nearby mirror); then
-    # the public index, for a mirror that does not carry it; else the node
-    # searches without rg.
+    # Optional, and never fails the install: the machine's index first (its
+    # owner's choice, often a nearby mirror); then the public index too, for
+    # a mirror that does not carry it; else the node searches without rg.
     (rg,) = bundle.pinned((protocol.SEARCH_REQUIREMENT,))
     search = (
         f"{{ {pip} {shlex.quote(rg)} || {pip} --extra-index-url {protocol.PUBLIC_INDEX} {shlex.quote(rg)}; }} "
@@ -327,6 +372,8 @@ def _confirm_digest(p: Plan, out: str) -> None:
 
 __all__ = [
     "UV_INSTALLER",
+    "UV_PINNED_INSTALLER",
+    "UV_VERSION",
     "InstallError",
     "Installed",
     "Plan",
