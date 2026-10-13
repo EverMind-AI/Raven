@@ -11,8 +11,9 @@ opens no network port.
 One connection per machine carries everything the host asks of it. Agents the
 daemon starts for the host each get a *channel* of that connection, on which
 the agent's ACP frames travel in both directions as ``agent/frame``
-notifications (a CLI agent's output lines travel the same way, and its prompt
-reaches its stdin as ``agent/stdin``) -- and a *task* id of the host's
+notifications (a CLI agent's output lines travel the same way, every one of
+them, a blank line included, since they are its answer; its prompt reaches
+its stdin as ``agent/stdin``) -- and a *task* id of the host's
 choosing, which outlives the connection: an agent keeps running when the ssh
 goes, its frames are kept on the machine, and a new connection picks them up
 from where the host stopped reading (``agent/attach``). Requests are answered
@@ -28,7 +29,7 @@ from __future__ import annotations
 
 #: Bumped when a method or a field changes meaning. A daemon and a host that
 #: disagree refuse each other at ``node/hello`` instead of misreading a reply.
-PROTOCOL = 4
+PROTOCOL = 5
 
 HELLO = "node/hello"
 PING = "node/ping"

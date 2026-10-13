@@ -988,6 +988,26 @@ def _record(daemon: server.Daemon, task: str) -> dict[str, Any]:
 
 
 @pytest.mark.slow
+async def test_a_blank_line_an_agent_prints_is_forwarded_recorded_and_replayed(tmp_path):
+    """A CLI agent's answer is its lines as printed: a blank line is a frame, numbered, kept and replayed like any."""
+    daemon = server.Daemon(tmp_path / "node")
+    first = _Conn(daemon)
+    command = f"{sys.executable} -c \"print('a'); print(); print('b')\""
+    await first.ask(
+        protocol.AGENT_LAUNCH, {"channel": 1, "task": "t-blank", "command": command, "cwd": str(tmp_path / "w")}
+    )
+    await first.until(lambda: first.notified(protocol.AGENT_EXIT))
+
+    assert [(f["line"], f["n"]) for f in first.notified(protocol.AGENT_FRAME)] == [("a", 1), ("", 2), ("b", 3)]
+    assert (daemon.record_dir("t-blank") / "frames.jsonl").read_bytes() == b"a\n\nb\n"
+
+    second = _Conn(daemon)
+    await second.ask(protocol.AGENT_ATTACH, {"channel": 5, "task": "t-blank", "after": 1}, request_id=2)
+    await second.until(lambda: second.notified(protocol.AGENT_EXIT))
+    assert [(f["line"], f["n"]) for f in second.notified(protocol.AGENT_FRAME)] == [("", 2), ("b", 3)]
+
+
+@pytest.mark.slow
 async def test_a_task_is_recorded_as_it_runs_and_goes_on_when_its_connection_ends(tmp_path, agent):
     daemon = server.Daemon(tmp_path / "node")
     first = _Conn(daemon)

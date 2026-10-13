@@ -740,8 +740,9 @@ class _Task:
             if not raw:
                 return
             text = raw.decode("utf-8", "replace").rstrip("\r\n")
-            if not text:
-                continue
+            # Every line, a blank one included: a CLI agent's answer is its
+            # lines as it printed them, and a line numbered here is one an
+            # attach replays, so the two counts agree.
             async with self._send_lock:
                 handle = self._frames_file if frames else self._stderr_file
                 handle.write(text.encode("utf-8") + b"\n")
@@ -852,9 +853,8 @@ async def _replay(record: Path, node: Node, channel: int, after: int) -> int:
             if n <= after:
                 continue
             text = raw.decode("utf-8", "replace").rstrip("\r\n")
-            if text:
-                await node.notify(protocol.AGENT_FRAME, {"channel": channel, "line": text, "n": n})
-                sent += 1
+            await node.notify(protocol.AGENT_FRAME, {"channel": channel, "line": text, "n": n})
+            sent += 1
     return sent
 
 

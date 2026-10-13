@@ -186,8 +186,7 @@ async def test_the_prompt_reaches_a_cli_agent_there_the_three_ways_it_does_here(
     as_argument, _ = _split(await _run(cli_config("printf %s {prompt}"), prompt, tmp_path, task_id="t-arg"))
     from_file, _ = _split(await _run(cli_config("cat {prompt_file}"), prompt, tmp_path, task_id="t-file"))
 
-    # The node forwards whole lines, so a blank line of a plain answer does not come back.
-    assert on_stdin == as_argument == from_file == "first line\nthird line, after a blank one"
+    assert on_stdin == as_argument == from_file == prompt, "every line as printed, the blank one included"
     written = box.home / "raven-work" / "t-file" / ".raven" / "prompt-t-file.txt"
     assert written.read_text(encoding="utf-8") == prompt, "the prompt file is written into the run's directory there"
     assert not list(tmp_path.glob("raven_subagent_*")), "no prompt file is made on this computer"
@@ -204,6 +203,78 @@ async def test_the_entry_s_env_reaches_the_agent_on_the_link_and_this_computer_s
     assert head == "sk-raven-test-not-real:1:unset", "the entry's env and the role mark, and not this host's home"
     for argv in box.calls():
         assert "sk-raven-test-not-real" not in " ".join(argv), "a value in env is never an ssh argument"
+
+
+async def test_a_command_that_leaves_before_its_stdin_reaches_it_still_answers_with_every_line(box, tmp_path):
+    """A quick command is gone before the prompt is sent: its own output and exit code are the report."""
+    head, _ = _split(await _run(cli_config("sh -c 'printf \"a\\n\\nb\\n\"'"), "hi", tmp_path))
+
+    assert head == "a\n\nb", "every line as printed, the blank one included"
+
+
+class _Link:
+    """A node link that records what is said on it and answers every request with nothing."""
+
+    def __init__(self) -> None:
+        self.alive = True
+        self.said: list[tuple[str, dict[str, Any]]] = []
+
+    async def notify(self, method: str, params: dict[str, Any]) -> None:
+        self.said.append((method, params))
+
+    async def request(self, method: str, params: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        return {}
+
+
+class _Placed:
+    """A node pool whose one agent is ``endpoint``, already started: the dispatch's place on the machine."""
+
+    def __init__(self, endpoint: Any) -> None:
+        self.endpoint = endpoint
+
+    async def session_dir(self, machine_id: str, path: str) -> tuple[str, float]:
+        return f"/home/worker/raven-work/{path.rsplit('/', 1)[-1]}", 0.0
+
+    async def write_file(self, machine_id: str, path: str, content: str, *, roots: Any) -> None:
+        return None
+
+    async def open_channel(self, machine_id: str, **kw: Any) -> Any:
+        return self.endpoint
+
+
+async def test_an_agent_gone_before_its_stdin_is_sent_is_read_as_it_left(box, tmp_path, monkeypatch):
+    """The prompt reaches an agent that already left: nothing is sent, and what it printed and how it exited are the report."""
+    from raven.acp_client import remote
+    from raven.node.client import ChannelEndpoint
+    from raven.ops import remote_path
+
+    link = _Link()
+    endpoint = ChannelEndpoint(link, 1, target=remote.machine("box"), agent="where@box")  # type: ignore[arg-type]
+    endpoint.feed_frame("PONG", 1)
+    endpoint.feed_frame("", 2)
+    endpoint.feed_stderr("done already")
+    endpoint.exited(0)
+    monkeypatch.setattr(remote_path, "_NODES", lambda: _Placed(endpoint))
+
+    head, _ = _split(await _run(cli_config("sh -c 'echo PONG'"), "hi", tmp_path))
+
+    assert head == "PONG" and link.said == [], "nothing is sent to an agent that is gone"
+
+
+async def test_a_link_down_too_long_for_the_prompt_fails_the_run(box, tmp_path, monkeypatch):
+    from raven.acp_client import remote
+    from raven.node import client as node_client
+    from raven.node.client import ChannelEndpoint
+    from raven.ops import remote_path
+
+    link = _Link()
+    endpoint = ChannelEndpoint(link, 1, target=remote.machine("box"), agent="where@box")  # type: ignore[arg-type]
+    endpoint.detach("the link went")
+    endpoint._pending = [(node_client.protocol.AGENT_FRAME, {"line": "x"})] * node_client._PENDING_FRAMES
+    monkeypatch.setattr(remote_path, "_NODES", lambda: _Placed(endpoint))
+
+    with pytest.raises(BrokenPipeError, match="down too long"):
+        await _run(cli_config("cat"), "hi", tmp_path)
 
 
 async def test_a_cli_agent_that_exits_non_zero_there_fails_with_its_one_line(box, tmp_path):
@@ -254,8 +325,7 @@ async def test_the_files_that_came_with_the_task_are_named_by_address_and_not_co
 
     head, _ = _split(await _run(cli_config("cat"), "count the rows", tmp_path, media=media, instance="counter"))
 
-    # One line break, not the note's two: the node forwards whole lines, and a blank one does not come back.
-    assert head.startswith("count the rows\nFiles that came with this task, by their address on the computer")
+    assert head.startswith("count the rows\n\nFiles that came with this task, by their address on the computer")
     assert "Nothing was copied here" in head and f"- {data}" in head
     assert "[attachments, by absolute path]" not in head, "not the local note, whose paths mean nothing there"
     assert not (box.home / "raven-work" / "counter" / "sales.csv").exists()
