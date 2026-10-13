@@ -265,9 +265,33 @@ def _may_query_endpoint(model: str) -> bool:
     Every other driver answers offline: it strips the routing prefix and reads
     the table, which files most direct vendors under the bare name
     (``openai/gpt-4o-mini`` is keyed ``gpt-4o-mini``). That normalization is
-    what a cache-only lookup still needs. Any segment counts, as in ``may_fetch``.
+    what a cache-only lookup still needs.
+
+    Ollama's driver is asked only when the id routes to Ollama and no name
+    LiteLLM derives from it is in the table, compared without case
+    (``_get_model_info_helper``, utils.py:5698 in 1.85.0). So ``ollama/Llama3``
+    reads the ``ollama/llama3`` row, and ``litellm_proxy/ollama/llama3`` never
+    reaches the driver at all. The check is LiteLLM's own, put to it rather
+    than copied. A release that does not ship it gets the cautious answer for
+    an id with an Ollama segment, and only for one: LiteLLM reads Ollama off
+    the first segment, or off an ``api_base`` this module never passes, so an
+    id without one is answered here without the check -- which also spares it
+    a provider parse.
+
+    Asked of the id the caller passed, so the ``openrouter/`` alias of a model
+    the daemon would be asked about is skipped too: its row, if the table has
+    one, is read before the ask.
     """
-    return any(part in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part)
+    if not any(part in _ENDPOINT_METADATA_VENDORS for part in model.split("/") if part):
+        return False
+    try:
+        from litellm.utils import _get_potential_model_names, _is_potential_model_name_in_model_cost
+
+        names = _get_potential_model_names(model=model, custom_llm_provider=None)
+        routed_to_ollama = names["custom_llm_provider"] in _ENDPOINT_METADATA_VENDORS
+        return routed_to_ollama and not _is_potential_model_name_in_model_cost(names)
+    except Exception:
+        return True
 
 
 def _numeric(entry: dict | None, *fields: str) -> float | None:
@@ -821,8 +845,8 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetc
     this wrong answer the table and ``get_model_info`` alike, so guarding one
     would hand back exactly what the other just rejected.
 
-    ``allow_fetch=False`` skips ``get_model_info`` only where it would ask the
-    model's own server (see ``_may_query_endpoint``).
+    ``allow_fetch=False`` skips ``get_model_info`` for a model LiteLLM would
+    answer by asking the model's own server (see ``_may_query_endpoint``).
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -837,7 +861,7 @@ def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetc
         ceiling = _trustworthy_ceiling(_table_entry(candidate))
         if ceiling:
             return ceiling
-        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(candidate)):
+        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(model)):
             continue
         try:
             info = litellm.get_model_info(candidate)
@@ -978,8 +1002,8 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_
     hand the check is free and the lookup proceeds exactly as with
     ``allow_import=True``.
 
-    ``allow_fetch=False`` skips ``get_model_info`` only where it would ask the
-    model's own server (see ``_may_query_endpoint``).
+    ``allow_fetch=False`` skips ``get_model_info`` for a model LiteLLM would
+    answer by asking the model's own server (see ``_may_query_endpoint``).
     """
     if not allow_import and not _litellm_ready():
         return None
@@ -996,7 +1020,7 @@ def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_
         window = _numeric(_table_entry(candidate), "max_input_tokens", "max_tokens")
         if window:
             return int(window)
-        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(candidate)):
+        if may_prompt(candidate) or may_fetch(candidate) or (not allow_fetch and _may_query_endpoint(model)):
             continue
         try:
             info = litellm.get_model_info(candidate)

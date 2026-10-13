@@ -980,8 +980,13 @@ def test_allow_fetch_false_never_calls_fetch_with_a_keyword_it_may_not_accept(mo
 
 def _patch_table(monkeypatch, table: dict, *, info=_litellm_miss):
     import litellm
+    from litellm import utils as litellm_utils
 
     monkeypatch.setattr(litellm, "model_cost", table)
+    # LiteLLM matches a name without case through an index of the first table it
+    # read, rebuilt only once an indexed key has gone: dropped, this table is the
+    # one indexed, and the real table's index comes back after the test.
+    monkeypatch.setattr(litellm_utils, "_model_cost_lowercase_map", None)
     monkeypatch.setattr(litellm, "get_model_info", info)
 
 
@@ -992,14 +997,7 @@ def _seed_catalog(monkeypatch, table: dict) -> None:
     monkeypatch.setattr(rates, "_OPENROUTER_CACHE_TIME", 0.0, raising=False)
 
 
-@pytest.mark.parametrize(
-    "model",
-    [
-        "ollama/raven-uncached-model",
-        "ollama_chat/raven-uncached-model",
-        "openrouter/ollama/raven-uncached-model",
-    ],
-)
+@pytest.mark.parametrize("model", ["ollama/raven-uncached-model", "ollama_chat/raven-uncached-model"])
 @pytest.mark.parametrize("lookup", [rates.resolve_context_window, rates.declared_max_output_tokens])
 def test_no_fetch_metadata_does_not_ask_the_ollama_driver_on_a_table_miss(monkeypatch, model, lookup):
     asked = []
@@ -1014,12 +1012,12 @@ def test_no_fetch_metadata_does_not_ask_the_ollama_driver_on_a_table_miss(monkey
     assert asked == []
 
 
+@pytest.mark.parametrize("model", ["custom/raven-uncached-model", "openrouter/ollama/raven-uncached-model"])
 @pytest.mark.parametrize(
     ("lookup", "expected"),
     [(rates.resolve_context_window, 16384), (rates.declared_max_output_tokens, 4096)],
 )
-def test_no_fetch_metadata_still_asks_litellm_for_a_driver_that_reads_a_table(monkeypatch, lookup, expected):
-    model = "custom/raven-uncached-model"
+def test_no_fetch_metadata_still_asks_litellm_for_a_driver_that_reads_a_table(monkeypatch, model, lookup, expected):
     asked = []
 
     def info(candidate):
@@ -1030,6 +1028,50 @@ def test_no_fetch_metadata_still_asks_litellm_for_a_driver_that_reads_a_table(mo
 
     assert lookup(model, allow_fetch=False) == expected
     assert asked == [model]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["ollama/Raven-Cached-Model", "litellm_proxy/ollama/raven-cached-model", "github/ollama/raven-cached-model"],
+)
+@pytest.mark.parametrize(
+    ("lookup", "expected"),
+    [(rates.resolve_context_window, 16384), (rates.declared_max_output_tokens, 4096)],
+)
+def test_no_fetch_metadata_reads_an_ollama_model_litellm_answers_from_its_table(monkeypatch, model, lookup, expected):
+    """LiteLLM asks the daemon only for an Ollama-routed id none of whose names it files.
+
+    It matches those names without case, and a proxy or ``github/`` prefix routes
+    the model through another driver, so each of these reads the ``ollama/`` row
+    with no request made. Skipping the ask sized them on the fallback window.
+    """
+    from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+    litellm = import_litellm()
+    row = {"max_input_tokens": 16384, "max_output_tokens": 4096, "litellm_provider": "ollama"}
+    _patch_table(monkeypatch, {"ollama/raven-cached-model": row}, info=litellm.get_model_info)
+    daemon = OllamaConfig.get_model_info
+    asked = []
+
+    def ask(self, model, api_base=None):
+        asked.append(model)
+        return daemon(self, model, api_base)
+
+    monkeypatch.setattr(OllamaConfig, "get_model_info", ask)
+
+    assert lookup(model, allow_fetch=False) == expected
+    assert asked == []
+
+
+def test_no_fetch_metadata_falls_back_to_the_ollama_segment_without_litellms_own_check(monkeypatch):
+    """The check is LiteLLM's own, so a release without it skips the ask for any
+    id with an Ollama segment -- and for no other id."""
+    from litellm import utils as litellm_utils
+
+    monkeypatch.delattr(litellm_utils, "_is_potential_model_name_in_model_cost")
+
+    assert rates._try_litellm_context_window("litellm_proxy/ollama/llama3", allow_fetch=False) is None
+    assert rates._try_litellm_context_window("openai/gpt-4o-mini", allow_fetch=False)
 
 
 @pytest.mark.parametrize(
