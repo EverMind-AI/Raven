@@ -10,6 +10,7 @@ moved the failure rather than removed it.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from raven.agent.subagent.charter_code import compile_function, run_function
 from raven.playbook.agent_spec import AgentPlaybookSpec
@@ -166,3 +167,51 @@ def test_a_when_clause_separates_rules_for_the_same_tool() -> None:
     ]
     assert _run(rules, "spawn", {"subagent": "deck", "task": "draft it"}, []) == ["no draft deck"]
     assert _run(rules, "spawn", {"subagent": "research", "task": "draft it"}, []) == ["no draft research"]
+
+
+def test_a_default_message_is_built_where_it_is_needed_not_stored() -> None:
+    """A default message quotes the value it is about. Writing both puts every
+    forbidden path in the source twice -- once as the needle, once inside its
+    own sentence, escaped again -- so the source grew with the rules squared.
+    Thirty-two 91-character paths reached 8339 characters that way, over the
+    ceiling a charter may carry."""
+    from raven.agent.subagent.charter import MAX_CODE_CHARS
+
+    paths = [
+        rf"C:\Users\Example User\Documents\Raven output\project\customer-deliverables\protected-{i:02d}.txt"
+        for i in range(32)
+    ]
+    rules = [{"tool": "exec", "forbid": path} for path in paths]
+    source = judge_from_rules(rules)
+
+    assert len(source) <= MAX_CODE_CHARS, f"{len(source)} characters"
+    # Counted as the source spells it: a backslash path is escaped once as a
+    # literal, and twice over if it is also quoted inside a stored sentence.
+    assert source.count(repr(paths[-1])[1:-1]) == 1, "the path is the needle once, not inside its own sentence too"
+    assert _run(rules, "exec", {"command": 'type "' + paths[-1] + '"'}, []) == [
+        f"exec: this call may not contain '{paths[-1]}'"
+    ]
+
+
+def test_a_custom_message_is_still_carried_beside_the_defaults() -> None:
+    rules = [
+        {"tool": "exec", "forbid": "rm -rf"},
+        {"tool": "exec", "forbid": "shutdown", "message": "ask an operator first"},
+    ]
+
+    assert _run(rules, "exec", {"command": "rm -rf /"}, []) == ["exec: this call may not contain 'rm -rf'"]
+    assert _run(rules, "exec", {"command": "shutdown now"}, []) == ["ask an operator first"]
+
+
+def test_a_translation_over_the_ceiling_refuses_the_load_with_what_to_do() -> None:
+    """Refused where it is read rather than carried to a dispatch that drops
+    it: a seat that loaded without the rules it was written with enforces
+    nothing while reading as though it does."""
+    from raven.playbook.agent_spec import AgentPlaybookSpec
+
+    rules = [{"tool": "exec", "forbid": "x" * 300} for _ in range(40)]
+
+    with pytest.raises(ValidationError, match="over the 8000 a charter may carry"):
+        AgentPlaybookSpec.model_validate(
+            {"delegate": [{"name": "w", "playbook": {"action": {"checks": {"rules": rules}}}}]}
+        )

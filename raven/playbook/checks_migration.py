@@ -18,6 +18,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.agent.subagent.charter_code import MAX_SOURCE_CHARS
+
 MIGRATED_NOTE = "migrated from action.checks"
 
 
@@ -52,14 +54,13 @@ def _grouped(rules: list[Any]) -> dict[tuple[str, str], dict[str, list[tuple[str
         when = rule.get("when") if isinstance(rule.get("when"), dict) else {}
         key = (tool, _when_clause(when))
         by_operator = out.setdefault(key, {})
+        own = str(rule.get("message") or "")
         prefix = str(rule.get("pathPrefix") or rule.get("path_prefix") or "")
         if prefix:
-            message = str(rule.get("message") or f"{tool}: path must start with {prefix}")
-            by_operator.setdefault("prefix", []).append((prefix, message))
+            by_operator.setdefault("prefix", []).append((prefix, own))
         forbid = str(rule.get("forbid") or "")
         if forbid:
-            message = str(rule.get("message") or f"{tool}: this call may not contain {forbid!r}")
-            by_operator.setdefault("forbid", []).append((forbid, message))
+            by_operator.setdefault("forbid", []).append((forbid, own))
         earlier = str(rule.get("requiresPrior") or rule.get("requires_prior") or "")
         if earlier:
             message = str(rule.get("message") or f"{tool}: run {earlier} first")
@@ -68,8 +69,31 @@ def _grouped(rules: list[Any]) -> dict[tuple[str, str], dict[str, list[tuple[str
     return out
 
 
+def _values(values: list[tuple[str, str]]) -> str:
+    return "[" + ", ".join(_literal(value) for value, _ in values) + "]"
+
+
 def _pairs(values: list[tuple[str, str]]) -> str:
     return "[" + ", ".join(f"({_literal(value)}, {_literal(message)})" for value, message in values) + "]"
+
+
+def _operator_lines(values: list[tuple[str, str]], test: str, default: str) -> list[str]:
+    """One operator's rules, with default messages built at run time.
+
+    A default message quotes the value it is about, so writing both would put
+    every forbidden path in the source twice -- once as the needle and once
+    inside its own sentence, escaped again. The sentence is cheap to build
+    where it is needed, and the source then grows with the rules rather than
+    with the rules squared.
+    """
+    plain = [pair for pair in values if not pair[1]]
+    custom = [pair for pair in values if pair[1]]
+    lines: list[str] = []
+    if plain:
+        lines.append(f"        refusals = refusals + [{default} for v in {_values(plain)} if {test}]")
+    if custom:
+        lines.append(f"        refusals = refusals + [m for v, m in {_pairs(custom)} if {test}]")
+    return lines
 
 
 def judge_from_rules(rules: list[Any]) -> str:
@@ -78,15 +102,19 @@ def judge_from_rules(rules: list[Any]) -> str:
     for (tool, when), by_operator in _grouped(rules).items():
         body: list[str] = []
         if prefixes := by_operator.get("prefix"):
-            body += [
-                "        path = str(params.get('path', '') or params.get('file_path', ''))",
-                f"        refusals = refusals + [m for p, m in {_pairs(prefixes)} if path and not path.startswith(p)]",
-            ]
+            body.append("        path = str(params.get('path', '') or params.get('file_path', ''))")
+            body += _operator_lines(
+                prefixes,
+                "path and not path.startswith(v)",
+                f"{_literal(tool + ': path must start with ')} + v",
+            )
         if forbidden := by_operator.get("forbid"):
-            body += [
-                "        seen = ' '.join([str(v) for v in params.values()])",
-                f"        refusals = refusals + [m for f, m in {_pairs(forbidden)} if f in seen]",
-            ]
+            body.append("        seen = ' '.join([str(v) for v in params.values()])")
+            body += _operator_lines(
+                forbidden,
+                "v in seen",
+                f"{_literal(tool + ': this call may not contain ')} + {_literal(chr(39))} + v + {_literal(chr(39))}",
+            )
         for encoded, message in by_operator.get("prior", []):
             earlier, _, match_param = encoded.partition("\x00")
             same = f" and p.get({_literal(match_param)}) == params.get({_literal(match_param)})" if match_param else ""
@@ -132,6 +160,18 @@ def migrated_action(action: dict[str, Any]) -> dict[str, Any]:
                     len([rule for rule in rules if isinstance(rule, dict)]),
                 )
         elif generated := judge_from_rules(rules):
+            # Refused here rather than carried to a dispatch that would drop
+            # it. A translation over the ceiling cannot be sent, and a seat
+            # that loaded without the rules it was written with enforces
+            # nothing while reading as if it does -- the failure the stored
+            # artifact is least able to notice. The error names what to do.
+            if len(generated) > MAX_SOURCE_CHARS:
+                raise ValueError(
+                    f"action.checks carries {len([r for r in rules if isinstance(r, dict)])} rules that translate "
+                    f"to {len(generated)} characters of judge, over the {MAX_SOURCE_CHARS} a charter may carry. "
+                    "State them as one judge under action.functions, which can say the same thing in fewer "
+                    "characters than one block per rule."
+                )
             functions["judge"] = generated
     if functions:
         migrated["functions"] = functions
