@@ -879,6 +879,14 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                     deck_templates.warm_covers_in_background(  # pragma: no cover
                         language=config.language
                     )
+                    # Anything a restart or a cancelled upload left queued is
+                    # finished here, for the same reason: the reader asked for
+                    # it to be indexed and nothing else was ever going to pick
+                    # it up. After a delay, so the first page and the first
+                    # turn are answered before this starts embedding.
+                    from raven.knowledge._library import drain_pending_in_background
+
+                    drain_pending_in_background()  # pragma: no cover
                     # One shared loop, two question surfaces. build_rpc_stack
                     # bound the page's broker over the channel broker wired
                     # above (AskUserTool._broker is process-wide, last write
