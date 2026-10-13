@@ -1787,6 +1787,7 @@ class TestThePollFollowsTheChannelItIsWatching:
         assert asked[:3] == [1, 2, 3]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Popen.terminate does not deliver SIGTERM on Windows")
 class TestTheSupervisorCleansUpOnTheSignalThatStopsIt:
     """`raven web --stop` sends SIGTERM. Python's default disposition kills the
     process where it stands, so the `finally` that removes `web.json` never ran
