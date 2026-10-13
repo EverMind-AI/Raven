@@ -6,7 +6,7 @@ the HTTP request line or server logs; the auth page POSTs it to
 ``/auth/exchange`` which burns the nonce and sets an HttpOnly SameSite=Strict
 session cookie. The ``/rpc`` WebSocket upgrade and any future ``/files/*``
 endpoints require that cookie (or an ``X-Raven-Token`` header for local
-Tooling authenticates with the ``X-Raven-Token`` header; a browser relies on the Origin check.
+tooling), plus an Origin check when a browser sends one.
 
 Multi-connection from day one (plan D3): every authenticated socket receives
 all notification frames; request/response frames stay on the socket that sent
@@ -92,21 +92,12 @@ def cookie_name(port: int) -> str:
 
 
 def _loopback_origin(origin: str) -> bool:
-    """Whether a browser origin names this machine: ``localhost`` or a loopback IP."""
-    try:
-        hostname = urlsplit(origin).hostname
-    except ValueError:
-        return False
-    if hostname == "localhost":
-        return True
-    try:
-        return hostname is not None and ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
+    """Whether a browser origin names this machine: ``localhost`` or a loopback IP.
 
-
-def _loopback_origin(origin: str) -> bool:
-    """Whether a browser origin names this machine: ``localhost`` or a loopback IP."""
+    Both parses raise on input a client other than a browser can send:
+    ``urlsplit`` on an IPv6 bracket left open, ``ip_address`` on any name, which
+    is how the rebinding case lands here. Either one is a refusal, not an error.
+    """
     try:
         hostname = urlsplit(origin).hostname
     except ValueError:
@@ -235,7 +226,9 @@ class WsGateway:
         machines whose gateways both bound 18792 must not share one jar entry when
         one browser reaches them through different forwards. A Host with no port
         -- the container's nginx forwards ``$host`` -- keeps the bound port, which
-        is the name that proxy's auto-login sets.
+        is the name that proxy's auto-login sets. So does a Host whose port does
+        not parse: this is read before any credential is checked, so a raise here
+        would answer an unauthenticated request with a 500 instead of a refusal.
         """
         try:
             port = urlsplit(f"//{request.headers.get('Host', '')}").port

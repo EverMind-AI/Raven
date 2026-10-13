@@ -287,6 +287,20 @@ async def test_a_page_reached_through_a_port_forward_opens_its_socket(forwarded)
         assert not ws.closed
 
 
+async def test_a_page_reached_as_localhost_through_a_port_forward_signs_in(forwarded) -> None:
+    """A browser may reach the gateway as `localhost` rather than `127.0.0.1`, and
+    the two are different origins to it. Through a forward neither is on the bound
+    port's allowlist, so the forwarded rule has to know the name as well as the
+    loopback addresses."""
+    gateway, client, browser_port = forwarded
+    resp = await client.post(
+        "/auth/exchange",
+        json={"nonce": gateway.mint_nonce()},
+        headers={"Origin": f"http://localhost:{browser_port}", "Host": f"localhost:{browser_port}"},
+    )
+    assert resp.status == 200, await resp.text()
+
+
 async def test_a_page_on_another_local_port_is_refused(gateway_client) -> None:
     """Cookies and SameSite both ignore the port, so a page another local server
     shows (a dev server, a package's preview) gets this session cookie attached
@@ -313,6 +327,30 @@ async def test_a_name_that_only_resolves_to_this_machine_is_refused(gateway_clie
         headers={"Origin": f"http://{rebound}", "Host": rebound},
     )
     assert resp.status == 403
+
+
+@pytest.mark.parametrize(
+    ("origin", "want"),
+    [
+        ("http://127.0.0.1:18792", True),
+        ("http://localhost:18793", True),
+        ("http://[::1]:18792", True),
+        ("http://127.0.0.1", True),
+        ("http://rebind.example:18792", False),
+        ("http://127.0.0.1.evil.example", False),
+        ("http://10.1.2.3:18792", False),
+        ("http://[::1", False),
+        ("null", False),
+    ],
+)
+def test_the_loopback_rule_answers_each_name(origin: str, want: bool) -> None:
+    """The rule asked directly, over spellings a request-level test would each need
+    its own forward for: the IPv6 loopback, an origin with no port, a name that
+    only begins like a loopback address, a private address, and an origin that
+    does not parse."""
+    from raven.rpc.transports.ws import _loopback_origin
+
+    assert _loopback_origin(origin) is want
 
 
 async def test_a_proxy_that_restates_the_gateways_origin_still_signs_in(gateway_client) -> None:
@@ -350,16 +388,24 @@ async def test_a_refused_sign_in_says_which_refusal_it_was(gateway_client) -> No
     assert "raven web" not in foreign_says, "a new link cannot fix an address that is refused"
 
 
-@pytest.mark.parametrize("origin", ["http://[::1", "not a url", "http://127.0.0.1:99999"])
-async def test_an_origin_that_does_not_parse_is_refused_rather_than_raising(gateway_client, origin: str) -> None:
-    """A browser sends neither of these, so only a non-browser client reaches the
-    branch -- and a raise there answers a client that has no credential with a
-    500 instead of a refusal."""
+@pytest.mark.parametrize("host", ["127.0.0.1:99999", "127.0.0.1:abc", "[::1"])
+async def test_a_host_that_does_not_parse_is_refused_rather_than_raising(gateway_client, host: str) -> None:
+    """The cookie's name is read from Host before any credential is checked, and
+    each of these makes that read raise. A browser sends none of them; a client
+    that does gets a refusal, not a 500."""
+    _, client = gateway_client
+    resp = await client.get("/rpc", headers={"Host": host})
+    assert resp.status == 401
+
+
+async def test_an_origin_that_does_not_parse_is_refused_rather_than_raising(gateway_client) -> None:
+    """An Origin equal to its Host is what sends a request on to the loopback
+    test, so an IPv6 bracket left open in both reaches a parse that raises."""
     gateway, client = gateway_client
     resp = await client.post(
         "/auth/exchange",
         json={"nonce": gateway.mint_nonce()},
-        headers={"Origin": origin},
+        headers={"Origin": "http://[::1", "Host": "[::1"},
     )
     assert resp.status == 403
 
