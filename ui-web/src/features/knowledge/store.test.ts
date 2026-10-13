@@ -384,6 +384,31 @@ describe('the knowledge store', () => {
     await first
   })
 
+  it('shows a freshly uploaded file as indexing, not queued', async () => {
+    /* The add answers with the row as the server first wrote it -- pending,
+       which the page draws as Queued -- and the call that indexes it runs for
+       tens of seconds on a long PDF. Left at what the add said, the row read
+       Queued for all of it while the server had already moved on, so a reader
+       who reloaded saw the truth and a reader who waited saw a file that
+       never started. */
+    install([base({ id: 'a' })])
+    docs = []
+    await store.openBase(base({ id: 'a' }))
+
+    let release: () => void = () => {}
+    reindexBlocks = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const uploading = store.upload('report.pdf', 'Zm9v')
+    await vi.waitFor(() => expect(store.get().documents?.length).toBe(1))
+
+    expect(store.get().documents?.[0]?.status).toBe('indexing')
+
+    release()
+    await uploading
+    expect(store.get().documents?.[0]?.status).toBe('ready')
+  })
+
   it('turns a mark off again', async () => {
     const fake = install([base({ id: 'a', pinned: true })])
     await store.load()

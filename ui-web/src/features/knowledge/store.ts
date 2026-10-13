@@ -624,6 +624,20 @@ async function refreshBase(baseId: string): Promise<void> {
   if (row && get().opened?.id === baseId) patch({ opened: row })
 }
 
+/* Say the row is being worked on, before the call that works on it.
+
+   Both paths that index a document run for tens of seconds on a long PDF, and
+   the status the row carries until they answer is whatever the last call left
+   there -- `pending` for a fresh upload, which the page draws as Queued. The
+   server moves the document to `indexing` the moment it starts, so a reader
+   who reloaded saw the truth and a reader who waited watched a file that
+   never appeared to start. */
+function marking(doc: KbDoc): void {
+  patch({
+    documents: (get().documents ?? []).map((row) => (row.id === doc.id ? { ...row, status: 'indexing' } : row)),
+  })
+}
+
 function put(baseId: string, doc: KbDoc): void {
   if (get().opened?.id !== baseId) return
   const rows = get().documents ?? []
@@ -652,6 +666,7 @@ async function added(make: () => Promise<KbDoc>): Promise<void> {
     if (get().folder) doc = await source().move(doc.id, get().folder)
     put(base.id, doc)
     await loadFolders(base.id)
+    marking(doc)
     /* Failure comes back as a row that says failed and why, not as a throw:
        the manager records it on the document. */
     put(base.id, await source().reindex(doc.id))
@@ -771,13 +786,9 @@ export function setView(view: View): void {
 export async function reindex(doc: KbDoc): Promise<void> {
   if (get().indexing) return
   patch({ indexing: true })
-  /* Marked as indexing the moment it is asked for, not when it answers. The
-     call runs for as long as parsing and embedding the file takes -- tens of
-     seconds on a long PDF -- and a row that does not move until it is over
-     reads as a press that did nothing. */
-  patch({
-    documents: (get().documents ?? []).map((row) => (row.id === doc.id ? { ...row, status: 'indexing' } : row)),
-  })
+  /* Marked as indexing the moment it is asked for, not when it answers: a row
+     that does not move until it is over reads as a press that did nothing. */
+  marking(doc)
   try {
     const written = await source().reindex(doc.id)
     patch({ documents: (get().documents ?? []).map((row) => (row.id === written.id ? written : row)) })
