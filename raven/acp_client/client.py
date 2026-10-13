@@ -14,12 +14,16 @@ would otherwise survive ``proc.kill()`` exactly as a ``codex``-style CLI does.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import signal
+import subprocess
+import sys
+import tempfile
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
-from functools import partial
+from functools import lru_cache, partial
 from typing import Any
 
 from loguru import logger
@@ -114,6 +118,231 @@ def end_drain() -> None:
 def is_draining() -> bool:
     """Whether cancelled turns are currently abandoned rather than awaited."""
     return _DRAINING
+
+
+# ---- orphan guard -------------------------------------------------------
+#
+# ``launch`` starts every agent with ``start_new_session=True``, so an agent
+# receives none of raven's signals: the only thing that ever stops it is
+# ``close``'s ``killpg``. A host that dies without reaching ``close_pool`` --
+# SIGKILL, the OOM killer, a crash -- leaves the agent running forever,
+# parented to init, holding its memory (issue #928: 22 days, 523 MiB PSS).
+#
+# The guard closes that hole: ``launch`` records (pgid, agent birth, owner
+# pid, owner birth) in a per-boot file under the temp dir, and the next
+# ``launch`` sweeps the file first. An entry whose owner is gone -- dead, or
+# its pid recycled onto a different process -- and whose agent still runs
+# with the recorded birth gets its process group killed. Birth tokens are
+# what keep the sweep honest against pid reuse: a recycled pid has a
+# different birth, so it is neither killed nor trusted as the owner.
+
+_ORPHAN_FILE_ENV = "RAVEN_ACP_ORPHAN_FILE"
+"""Overrides where the guard file lives. Tests set this; nothing else does."""
+
+
+@lru_cache(maxsize=1)
+def _boot_token() -> str:
+    """A token that changes on reboot.
+
+    The guard file only means anything within one boot: pids and birth
+    tokens are minted per boot, so a file left over from the previous one
+    describes processes that no longer exist. The token goes into the file
+    name, so a stale file is simply never read again. ``unknown`` when
+    neither platform source answers -- the sweep then still runs, and the
+    birth checks below keep it from killing anything it should not.
+    """
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as fh:
+            token = fh.read().strip()
+            if token:
+                return token
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "kern.boottime"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        token = out.stdout.strip()
+        if out.returncode == 0 and token:
+            return token
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "unknown"
+
+
+def _orphan_file() -> str:
+    override = os.environ.get(_ORPHAN_FILE_ENV)
+    if override:
+        return override
+    uid = getattr(os, "getuid", lambda: 0)()
+    return os.path.join(tempfile.gettempdir(), f"raven-acp-agents-{uid}-{_boot_token()}.json")
+
+
+def _process_birth(pid: int) -> str | None:
+    """A token that distinguishes this incarnation of ``pid`` from any other.
+
+    Reused pids are the whole hazard in both directions: the sweep must not
+    kill a recycled pid, and must not mistake a recycled owner pid for a live
+    owner. ``None`` means the process is gone or unobservable.
+    """
+    if pid <= 0:
+        return None
+    if sys.platform == "win32":
+        try:
+            out = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "(Get-CimInstance Win32_Process -Filter 'ProcessId=" + str(pid) + "').CreationDate",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        birth = out.stdout.strip()
+        return birth or None
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            # Field 22 (starttime); comm (field 2) may contain spaces, so cut
+            # through the closing paren rather than split blindly.
+            after_comm = fh.read().rsplit(b")", 1)[1].split()
+            return after_comm[19].decode()
+    except (OSError, IndexError):
+        pass
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    birth = out.stdout.strip()
+    return birth or None
+
+
+def _kill_group(pgid: int) -> bool:
+    """Kill a recorded agent's whole process group. Windows kills the tree."""
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(
+                ["taskkill", "/PID", str(pgid), "/T", "/F"],
+                capture_output=True,
+                timeout=5,
+            )
+            return out.returncode == 0
+        os.killpg(pgid, signal.SIGKILL)
+        return True
+    except (ProcessLookupError, PermissionError, OSError, subprocess.SubprocessError):
+        return False
+
+
+def _load_guard_entries() -> list[dict[str, Any]]:
+    try:
+        with open(_orphan_file()) as fh:
+            entries = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    return entries if isinstance(entries, list) else []
+
+
+def _save_guard_entries(entries: list[dict[str, Any]]) -> None:
+    tmp = _orphan_file() + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            json.dump(entries, fh)
+        os.replace(tmp, _orphan_file())
+    except OSError:
+        pass
+
+
+def record_agent_group(pgid: int) -> None:
+    """Add the just-launched agent to the orphan guard.
+
+    Best effort by design: a failure here leaves one more agent killable by
+    ``close`` and nothing else, which is exactly the world before this
+    existed -- it must never block a launch.
+    """
+    try:
+        entries = [e for e in _load_guard_entries() if e.get("pgid") != pgid]
+        entries.append(
+            {
+                "pgid": pgid,
+                "birth": _process_birth(pgid),
+                "owner_pid": os.getpid(),
+                "owner_birth": _process_birth(os.getpid()),
+            }
+        )
+        _save_guard_entries(entries)
+    except Exception:  # noqa: BLE001 - the guard is strictly best effort
+        logger.opt(exception=True).debug("acp orphan guard: failed to record pgid {}", pgid)
+
+
+def forget_agent_group(pgid: int) -> None:
+    """Drop the agent from the guard once ``close`` has killed it."""
+    try:
+        entries = [e for e in _load_guard_entries() if e.get("pgid") != pgid]
+        _save_guard_entries(entries)
+    except Exception:  # noqa: BLE001
+        logger.opt(exception=True).debug("acp orphan guard: failed to forget pgid {}", pgid)
+
+
+def sweep_orphaned_agents() -> list[int]:
+    """Kill agents whose owner died without reaching ``close``.
+
+    An entry survives the sweep only while its recorded owner is still the
+    same living process. Everything else -- owner dead, owner pid recycled --
+    is an orphan whose group is killed if, and only if, the process now at
+    the recorded pgid still has the recorded birth. Returns the pgids killed.
+    Best effort like the rest of the guard: any failure drops the entry and
+    moves on rather than blocking the launch that called the sweep.
+    """
+    killed: list[int] = []
+    kept: list[dict[str, Any]] = []
+    try:
+        entries = _load_guard_entries()
+    except Exception:  # noqa: BLE001
+        return killed
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        pgid = entry.get("pgid")
+        if not isinstance(pgid, int) or pgid <= 0:
+            continue
+        owner_pid = entry.get("owner_pid")
+        owner_birth = entry.get("owner_birth")
+        owner_alive = (
+            isinstance(owner_pid, int)
+            and owner_pid > 0
+            and _process_birth(owner_pid) is not None
+            and _process_birth(owner_pid) == owner_birth
+        )
+        if owner_alive:
+            kept.append(entry)
+            continue
+        # The owner is gone or its pid was recycled. Kill only the exact
+        # process recorded at launch -- same pid, same birth.
+        if _process_birth(pgid) is not None and _process_birth(pgid) == entry.get("birth"):
+            if _kill_group(pgid):
+                killed.append(pgid)
+                logger.info("acp orphan guard: killed orphaned agent group {}", pgid)
+        # Entries that matched nothing are simply dropped: the agent died on
+        # its own, or the pid was recycled onto an unrelated process.
+    try:
+        if kept or killed:
+            _save_guard_entries(kept)
+    except Exception:  # noqa: BLE001
+        pass
+    return killed
 
 
 UNHANDLED: Any = object()
@@ -232,6 +461,14 @@ class AcpClient:
         from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
         from raven.agent.subagent.role import subagent_role_env
 
+        # Before spawning, not after: this is the only hook that reliably runs
+        # in a fresh host process, and it is what reaps the agents a previous
+        # host left behind (issue #928). Best effort; never blocks the launch.
+        try:
+            sweep_orphaned_agents()
+        except Exception:  # noqa: BLE001
+            logger.opt(exception=True).debug("acp orphan guard: sweep failed before launch")
+
         try:
             argv = command_argv(command)
         except ValueError as exc:
@@ -273,6 +510,7 @@ class AcpClient:
             journal=journal,
         )
         client._start_loops()
+        record_agent_group(proc.pid)
         logger.info("acp agent {!r}: started {} (pid {})", name, argv[:1], proc.pid)
         return client
 
@@ -311,6 +549,7 @@ class AcpClient:
         if self._closed:
             return
         self._closed = True
+        forget_agent_group(self._pgid)
         try:
             os.killpg(self._pgid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):

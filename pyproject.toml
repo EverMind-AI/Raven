@@ -501,6 +501,12 @@ max-complexity = 40
 # identity unknown. The Windows sibling resolves PowerShell through PATH too.
 "raven/utils/processes.py" = ["S607"]
 
+# The orphan guard has the same need one layer up: the boot token asks sysctl,
+# the birth token asks ps or PowerShell, and the Windows kill is taskkill --
+# all resolved through PATH because they live wherever the host puts them,
+# like the login shell above.
+"raven/acp_client/client.py" = ["S607"]
+
 # CLI startup-order / deferred imports, accepted long-term.
 "raven/cli/commands.py" = ["E402"]
 "raven/cli/cron_commands.py" = ["E402"]
