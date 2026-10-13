@@ -16,6 +16,7 @@ import asyncio
 import os
 import shlex
 import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,7 +27,8 @@ import raven.agent.subagent.backends.env as env_mod
 from raven.agent.subagent import kimi_code
 from raven.agent.subagent.probe_state import Remedy
 from raven.config.schema import ThirdPartyAcpSubagentConfig
-from tests._windows_kill import TASKKILL, windows_kill_path
+from raven.utils.pid import pid_alive
+from tests._windows_kill import PYTHON, windows_kill_path
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
 
@@ -382,38 +384,64 @@ async def test_a_connect_that_goes_away_mid_ask_takes_the_kimi_it_asked(tmp_path
     assert not _alive(pid)
 
 
+def _python_kimi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ThirdPartyAcpSubagentConfig:
+    """The Kimi Code preset, its `kimi -p` a script on ``PYTHON`` that notes its pid and does not finish.
+
+    Found by name through ``resolve_program``, the way the ask finds the real one;
+    a script on PATH would not start on Windows, where a bare name means ``.exe``.
+    """
+    stub, noted = tmp_path / "kimi.py", tmp_path / "ask.pid"
+    stub.write_text(
+        "import os, time\n"
+        f"with open({str(noted)!r} + '.tmp', 'w') as out:\n"
+        "    out.write(str(os.getpid()))\n"
+        f"os.replace({str(noted)!r} + '.tmp', {str(noted)!r})\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    real = env_mod.resolve_program
+
+    def resolve(argv, env, **kwargs):
+        if argv and argv[0] == "kimi":
+            return [PYTHON, str(stub), *argv[1:]]
+        return real(argv, env, **kwargs)
+
+    monkeypatch.setattr(env_mod, "resolve_program", resolve)
+    return _cfg()
+
+
 async def test_a_connect_that_goes_away_mid_ask_ends_its_kimi_through_taskkill_without_killpg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Windows has no ``os.killpg``: calling it raised ``AttributeError`` in place of the cancel."""
     calls = windows_kill_path(monkeypatch)
-    asking = asyncio.create_task(kimi_code.ask(_through_kimi(tmp_path, "ok", slow_ask=True), "hi"))
+    asking = asyncio.create_task(kimi_code.ask(_python_kimi(tmp_path, monkeypatch), "hi"))
     started = tmp_path / "ask.pid"
-    for _ in range(500):
-        if started.exists() and started.read_text().strip():
+    for _ in range(200):
+        if started.exists():
             break
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
     pid = int(started.read_text())
 
     asking.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asking
 
-    assert calls == [[TASKKILL, "/T", "/F", "/PID", str(pid)]]
-    assert not _alive(pid)
+    assert calls == [["/T", "/F", "/PID", str(pid)]]
+    assert not pid_alive(pid)
 
 
 async def test_an_ask_that_runs_out_without_killpg_still_says_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls = windows_kill_path(monkeypatch)
-    monkeypatch.setattr(kimi_code, "_ASK_TIMEOUT_S", 0.3)
+    """A ``taskkill`` that does not answer still leaves the `kimi` ended, and the ask still says nothing."""
+    calls = windows_kill_path(monkeypatch, fails=subprocess.TimeoutExpired("taskkill", 5))
+    monkeypatch.setattr(kimi_code, "_ASK_TIMEOUT_S", 1.0)
 
-    assert await kimi_code.ask(_through_kimi(tmp_path, "ok", slow_ask=True), "hi") == (None, "")
+    assert await kimi_code.ask(_python_kimi(tmp_path, monkeypatch), "hi") == (None, "")
 
-    pid = int((tmp_path / "ask.pid").read_text())
-    assert calls == [[TASKKILL, "/T", "/F", "/PID", str(pid)]]
-    assert not _alive(pid)
+    assert [call[:3] for call in calls] == [["/T", "/F", "/PID"]]
+    assert not pid_alive(int(calls[0][3]))
 
 
 @pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are POSIX")

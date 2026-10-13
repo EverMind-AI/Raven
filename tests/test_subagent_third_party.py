@@ -52,7 +52,9 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
-from tests._windows_kill import TASKKILL, windows_kill_path
+from raven.utils.commands import command_quote
+from raven.utils.pid import pid_alive
+from tests._windows_kill import PYTHON, windows_kill_path
 
 
 @pytest.fixture(autouse=True)
@@ -3352,48 +3354,90 @@ async def test_cli_backend_timeout_kills_reparented_child_after_launcher_already
         )
 
 
+#: A launcher that starts one worker, both Python, and notes both pids.
+#: The worker inherits the launcher's output pipes, the way a CLI's real worker
+#: does. Given ``wait`` the launcher stays; given ``leave`` it exits once noted.
+_LAUNCHER = """\
+import os, subprocess, sys, time
+worker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=sys.stdout, stderr=sys.stderr)
+with open(sys.argv[1] + ".tmp", "w") as noted:
+    noted.write(f"{os.getpid()} {worker.pid}")
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+if sys.argv[2] == "wait":
+    time.sleep(30)
+"""
+
+_SLEEP = "import time; time.sleep(30)"
+
+
+def _python_command(*argv: str) -> str:
+    """A command line that runs ``PYTHON`` on ``argv``, quoted for this host's parser."""
+    return " ".join(command_quote(token) for token in (PYTHON, *argv))
+
+
+def _launcher(tmp_path: Path, then: str) -> tuple[str, Path]:
+    script = tmp_path / "launcher.py"
+    script.write_text(_LAUNCHER, encoding="utf-8")
+    pids = tmp_path / "pids"
+    return _python_command(str(script), str(pids), then), pids
+
+
+async def _noted(pids: Path) -> tuple[int, int]:
+    for _ in range(200):
+        if pids.exists():
+            launcher, worker = (int(pid) for pid in pids.read_text().split())
+            return launcher, worker
+        await asyncio.sleep(0.05)
+    raise AssertionError("the launcher never noted its pids")
+
+
+async def _gone(*pids: int) -> None:
+    for _ in range(100):
+        if not any(pid_alive(pid) for pid in pids):
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"still running: {[pid for pid in pids if pid_alive(pid)]}")
+
+
+def _end(*pids: int) -> None:
+    for pid in pids:
+        with suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+
+
 async def test_cli_backend_cancel_without_killpg_ends_the_tree_through_taskkill(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Windows has no ``os.killpg``: calling it raised ``AttributeError`` in place of
-    the cancel, and the CLI kept running."""
+    the cancel, and the CLI and its worker kept running."""
     calls = windows_kill_path(monkeypatch)
-    pid_file = tmp_path / "launcher.pid"
-    script = tmp_path / "launcher.sh"
-    script.write_text(f"#!/bin/sh\necho $$ > {pid_file}\nexec sleep 30\n", encoding="utf-8")
-
-    be = CliAgentBackend(name="windows", command=f"sh {script}")
+    command, pids = _launcher(tmp_path, "wait")
+    be = CliAgentBackend(name="windows", command=command)
     task = asyncio.create_task(be.run("x", task_id="t1", workspace=tmp_path, executor=None))
-    for _ in range(100):
-        if pid_file.exists() and pid_file.read_text().strip():
-            break
-        await asyncio.sleep(0.05)
-    else:
-        raise AssertionError("launcher never started")
-    pid = int(pid_file.read_text())
+    launcher, worker = await _noted(pids)
+    try:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 10)
 
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(task, 10)
-
-    assert calls == [[TASKKILL, "/T", "/F", "/PID", str(pid)]]
-    # The taskkill here only records, so what ended the launcher is the kill after it.
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+        assert calls == [["/T", "/F", "/PID", str(launcher)]]
+        await _gone(launcher, worker)
+    except BaseException:
+        _end(launcher, worker)
+        raise
 
 
 async def test_cli_backend_timeout_without_killpg_still_reports_the_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = windows_kill_path(monkeypatch)
-    be = CliAgentBackend(name="windows", command="sleep 30", timeout=0.2)
+    be = CliAgentBackend(name="windows", command=_python_command("-c", _SLEEP), timeout=0.5)
 
     with pytest.raises(RuntimeError, match="timed out"):
         await asyncio.wait_for(be.run("x", task_id="t1", workspace=tmp_path, executor=None), 10)
 
-    assert [call[:4] for call in calls] == [[TASKKILL, "/T", "/F", "/PID"]]
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(calls[0][4]), 0)
+    assert [call[:3] for call in calls] == [["/T", "/F", "/PID"]]
+    await _gone(int(calls[0][3]))
 
 
 async def test_cli_backend_timeout_without_killpg_ends_the_launcher_when_taskkill_does_not_answer(
@@ -3401,14 +3445,13 @@ async def test_cli_backend_timeout_without_killpg_ends_the_launcher_when_taskkil
 ) -> None:
     """A ``taskkill`` that hangs past its timeout neither replaces the timeout nor leaves the launcher running."""
     calls = windows_kill_path(monkeypatch, fails=subprocess.TimeoutExpired("taskkill", 5))
-    be = CliAgentBackend(name="windows", command="sleep 30", timeout=0.2)
+    be = CliAgentBackend(name="windows", command=_python_command("-c", _SLEEP), timeout=0.5)
 
     with pytest.raises(RuntimeError, match="timed out"):
         await asyncio.wait_for(be.run("x", task_id="t1", workspace=tmp_path, executor=None), 10)
 
-    assert [call[:4] for call in calls] == [[TASKKILL, "/T", "/F", "/PID"]]
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(calls[0][4]), 0)
+    assert [call[:3] for call in calls] == [["/T", "/F", "/PID"]]
+    await _gone(int(calls[0][3]))
 
 
 async def test_cli_backend_without_killpg_kills_nothing_by_the_pid_of_an_exited_launcher(
@@ -3420,19 +3463,15 @@ async def test_cli_backend_without_killpg_kills_nothing_by_the_pid_of_an_exited_
     Windows has no group to address, so that worker outlives the timeout there.
     """
     calls = windows_kill_path(monkeypatch)
-    pid_file = tmp_path / "worker.pid"
-    script = tmp_path / "reparent.sh"
-    script.write_text(f"#!/bin/sh\nsleep 30 &\necho $! > {pid_file}\nexit 0\n", encoding="utf-8")
-
-    be = CliAgentBackend(name="reparented", command=f"sh {script}", timeout=0.5)
+    command, pids = _launcher(tmp_path, "leave")
+    be = CliAgentBackend(name="reparented", command=command, timeout=1.0)
     try:
         with pytest.raises(RuntimeError, match="timed out"):
             await be.run("x", task_id="t1", workspace=tmp_path, executor=None)
         assert calls == []
     finally:
-        if pid_file.exists() and pid_file.read_text().strip():
-            with suppress(ProcessLookupError):
-                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+        if pids.exists():
+            _end(int(pids.read_text().split()[1]))
 
 
 # --- kind-aware stateful ---------------------------------------------------
