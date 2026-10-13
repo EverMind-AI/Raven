@@ -299,6 +299,69 @@ async def test_a_document_deleted_while_it_indexed_leaves_no_pieces_behind(manag
     assert (await manager.search([base.id], "alpha", top_k=5)).hits == [], "and nothing of it in the index"
 
 
+async def test_a_delete_landing_mid_write_still_leaves_nothing_searchable(manager) -> None:
+    """The window the existence check alone cannot close.
+
+    That check and the insert are separated by an await, so a delete starting
+    just after it can take the record and the rows and still be overtaken: the
+    indexer resumes, runs its own delete over nothing, and inserts the vectors
+    it had already computed. The document is gone from the page and its pieces
+    answer searches.
+
+    Driven at exactly that point rather than earlier -- the delete is started
+    once the indexer is already inside its store write, which is past every
+    check it makes.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    inside = asyncio.Event()
+    carry_on = asyncio.Event()
+    real_delete = manager._store.delete
+    seen: list[str] = []
+
+    async def delete_and_pause(base_id, document_id):
+        seen.append(document_id)
+        if len(seen) == 1:
+            # The indexer is past its record check and inside the write.
+            inside.set()
+            await carry_on.wait()
+        return await real_delete(base_id, document_id)
+
+    manager._store.delete = delete_and_pause
+
+    indexing = asyncio.create_task(manager.index_document(doc.id))
+    await asyncio.wait_for(inside.wait(), timeout=5)
+
+    deleting = asyncio.create_task(manager.delete_document(doc.id))
+    await asyncio.sleep(0)
+    carry_on.set()
+
+    await indexing
+    assert await deleting is True
+
+    assert manager._records.get_document(doc.id) is None, "the reader deleted it"
+    hits = (await manager.search([base.id], "alpha", top_k=10)).hits
+    assert [hit for hit in hits if hit.document_id == doc.id] == [], "and nothing of it is searchable"
+
+
+async def test_the_write_locks_are_dropped_when_nobody_holds_them(manager) -> None:
+    """One per document in flight, not one per document ever written.
+
+    A table keyed by document id that is only ever added to is a leak the
+    length of the install's history, and a gateway is a process that runs for
+    weeks.
+    """
+    base = await manager.create_base(name="handbook")
+    doc = manager.add_document(base.id, filename="handbook.md", content=MARKDOWN)
+
+    await manager.index_document(doc.id)
+    assert manager._writes == {}, "nothing in flight, nothing held"
+
+    await manager.delete_document(doc.id)
+    assert manager._writes == {}
+
+
 # ── the whole path ────────────────────────────────────────────────
 
 
