@@ -1,8 +1,13 @@
 /* The EverOS Cloud card: whether the hosted memory backend answers, which key
-   it uses, where it points. Drawn only when settings.everosCloud says the
+   it uses, where it points. Renders only when settings.everosCloud says the
    backend is the selected one; the EverOS role slots it replaces are hidden
    by then (Roles.tsx). Its own file rather than a corner of Roles.tsx because
-   it borrows KeyRow from the tools page, which imports Roles. */
+   it borrows KeyRow from the tools page, which imports Roles.
+
+   No page mounts it today. It drew on Model settings until the EverOS role
+   rows it stood in for turned out to be the only reason it was there, and a
+   memory credential is not a model setting (pages/Model.tsx). It keeps its
+   tests so the Memory section can mount it once that section has a design. */
 import { useSyncExternalStore } from 'react'
 
 import { t } from '../../../i18n/t'
