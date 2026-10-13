@@ -360,6 +360,15 @@ def _ark_size_window(model_id: str) -> tuple[int | None, int | None, int, int]:
     return None, None, 2560 * 1440, 4096 * 4096
 
 
+def _ark_family_known(model_id: str) -> bool:
+    """Whether the size table knows this model's family.
+
+    An inference endpoint id (``ep-...``) names none, so the window it gets is
+    the family-wide default -- a guess, unlike a matched card's bounds.
+    """
+    return any(needle in model_id.lower() for needle, *_ in _ARK_SIZE_WINDOWS)
+
+
 def ark_explicit_size(model_id: str, aspect_ratio: str | None) -> str | None:
     """The explicit WxH an Ark generations call spells a ratio as, or None to leave it."""
     if not aspect_ratio or aspect_ratio not in _SIZES:
@@ -744,8 +753,13 @@ class ImageGenerateTool(_OpenRouterMediaTool):
             model_id = wire_model(model_id, client_provider=runs_on)
         quality = self.effective_quality(spec.get("quality"), model_id)
         # The Images API takes the frame only from the families known to honour
-        # it; the chat route takes it from any model, as image_config below.
-        frames = any(name in model_id.lower() for name in ("gpt-image", "seedream", "qwen-image", "grok-imagine"))
+        # it; the chat route takes it from any model, as image_config below. A
+        # volces base may serve the family behind an inference endpoint id
+        # (ep-...), which spells no keyword: the ratio passes through there, and
+        # the endpoint's own answer to the sized call sorts the rest out.
+        volces = httpx.URL(self.api_base).host.endswith(".volces.com")
+        families = ("gpt-image", "seedream", "qwen-image", "grok-imagine")
+        frames = volces or any(name in model_id.lower() for name in families)
         # Chat routing with output modalities is OpenRouter's own; any other
         # address serves pictures through the Images API, whatever the model.
         if not openrouter or any(name in model_id.lower() for name in _IMAGE_API_MODELS):
@@ -918,6 +932,7 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                     r = await client.post(f"{self.api_base}/images/edits", headers=headers, data=form, files=files)
                 else:
                     body = {"model": model_id, "prompt": prompt, "n": 1}
+                    retry_sizeless = False
                     if volces:
                         # Ark's size is a resolution tier or an explicit WxH
                         # pair, and the pair must fit the selected model's own
@@ -927,6 +942,14 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                         # there the endpoint default stands in for the tier.
                         if size := ark_explicit_size(model_id, aspect_ratio):
                             body["size"] = size
+                            # An unrecognized id (an inference endpoint) drew
+                            # that pair from the default window, which may sit
+                            # outside the endpoint's real one: a 400 is retried
+                            # once with no size, the endpoint default standing
+                            # in -- a rejected request is not a billed
+                            # generation. A known family's window is
+                            # documented, so its 400 is a real error.
+                            retry_sizeless = not _ark_family_known(model_id)
                         elif aspect_ratio and "3-0-t2i" not in model_id.lower():
                             body["size"] = "2K"
                     elif size := images_api_size(model_id, aspect_ratio):
@@ -934,6 +957,9 @@ class ImageGenerateTool(_OpenRouterMediaTool):
                     if quality:
                         body["quality"] = quality
                     r = await client.post(f"{self.api_base}/images/generations", headers=headers, json=body)
+                    if retry_sizeless and r.status_code == 400:
+                        body.pop("size", None)
+                        r = await client.post(f"{self.api_base}/images/generations", headers=headers, json=body)
                 r.raise_for_status()
                 payload = r.json()
                 await self._record_usage(payload, model_id, "images")

@@ -301,6 +301,109 @@ async def test_a_seedream_3_t2i_ark_base_is_sized_inside_its_own_window(monkeypa
     assert [body.get("size") for body in sent] == ["2048x1152", "1536x658", None]
 
 
+_EP_ID = "ep-20250101000000-abcde"
+
+
+def _ark_ep_tool(monkeypatch, handler, tmp_path: Path) -> ImageGenerateTool:
+    return _image_tool(
+        monkeypatch,
+        handler,
+        model=_EP_ID,
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+
+
+async def test_an_ark_endpoint_id_keeps_the_ratio_and_retries_sizeless_on_a_400(monkeypatch, tmp_path) -> None:
+    """An inference endpoint id names none of the family keywords, so the ratio
+    used to be dropped on the floor and the endpoint rendered its default
+    frame; and no single WxH is valid for every family behind an ep- id. The
+    ratio passes through, and a sized call the endpoint refuses is retried once
+    with no size at all, letting the endpoint default stand."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            if len(sent) == 1:
+                return httpx.Response(400, json={"error": {"message": "size exceeds the model's range"}})
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    out = json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _JPG
+    # The explicit pair drawn from the default window first, then no size key.
+    assert sent[0]["size"] == "2736x1539"
+    assert "size" not in sent[1]
+
+
+async def test_an_ark_endpoint_id_whose_sized_call_succeeds_never_reposts(monkeypatch, tmp_path) -> None:
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    assert json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))[
+        "success"
+    ]
+    assert len(sent) == 1 and sent[0]["size"] == "2736x1539"
+
+
+async def test_an_ark_endpoint_id_refused_both_times_propagates_the_400(monkeypatch, tmp_path) -> None:
+    """The retry is one shot: a size-less call still refused is a real error,
+    and it reaches the model the way every other HTTP failure does."""
+    posts: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            posts.append(json.loads(request.content))
+        return httpx.Response(400, text="InvalidParameter")
+
+    out = json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))
+    assert out["error"] == "HTTP 400"
+    assert len(posts) == 2 and "size" not in posts[1]
+
+
+async def test_a_ratio_less_ark_endpoint_call_sends_no_size_on_the_first_try(monkeypatch, tmp_path) -> None:
+    """Without a ratio there is nothing to spell, exactly as for a named model:
+    the first request carries no size key and no retry is waiting behind it."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    assert json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster"))["success"]
+    assert len(sent) == 1 and "size" not in sent[0]
+
+
+async def test_an_identified_family_s_400_is_not_retried(monkeypatch, tmp_path) -> None:
+    """A matched card's window is documented, so a 400 naming the size is a
+    real error there, not a guess to take back."""
+    posts: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            posts.append(json.loads(request.content))
+        return httpx.Response(400, text="InvalidParameter")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-4-5-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["error"] == "HTTP 400"
+    assert len(posts) == 1 and posts[0]["size"] == "2736x1539"
+
+
 def test_ark_explicit_sizes_stay_exact_and_inside_every_models_window() -> None:
     """The reviewer's hand enumeration, locked into CI: for every supported
     ratio and every Seedream window in the table (default included), the pair
