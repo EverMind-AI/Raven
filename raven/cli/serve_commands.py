@@ -411,9 +411,8 @@ async def _serve_main(port: int, open_browser: bool) -> None:
     from raven.rpc.transports.ws import WsGateway, build_app, pick_port
 
     register_console_feature()
-    # This coroutine binds a port and serves until it is killed, so no test
-    # runs it; what it schedules is pinned by source in
-    # tests/test_cli_serve_commands.py instead.
+    # Startup tests replace this background warm-up to keep provider
+    # initialization out of the serving probe.
     warm_up_in_background()  # pragma: no cover
 
     # Declared before anything can emit a span. The page runs on the terminal's

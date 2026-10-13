@@ -470,24 +470,8 @@ class TestTheSignInLink:
             build_error=None, agent_loop=None, deliverables=None, dispatcher=None, teardown=_teardown
         )
 
-    class _Application:
-        """The three things `build_app` touches on a real aiohttp application."""
-
-        def __init__(self) -> None:
-            self.router = self
-            self.on_shutdown: list = []
-
-        def add_get(self, *_args, **_kwargs) -> None:
-            pass
-
-        def add_post(self, *_args, **_kwargs) -> None:
-            pass
-
-        def add_static(self, *_args, **_kwargs) -> None:
-            pass
-
     class _Runner:
-        """`AppRunner`/`TCPSite`: the four awaitables `_serve_main` uses."""
+        """`AppRunner`/`TCPSite` without binding sockets."""
 
         def __init__(self, *_args) -> None:
             pass
@@ -532,13 +516,20 @@ class TestTheSignInLink:
         assert "_open(auth_url)" in src
         assert "webbrowser.open" not in src
 
-    async def test_a_standalone_serve_prints_the_link_it_opens(self, monkeypatch, opened: list[str]) -> None:
+    @pytest.mark.parametrize("built_page", [False, True], ids=["without-page", "with-page"])
+    async def test_a_standalone_serve_prints_the_link_it_opens(
+        self, two_candidates, built_page: bool, monkeypatch, opened: list[str]
+    ) -> None:
         """The standalone path, run rather than read: the URL it hands the browser
         is one the gateway minted, and the launch that asked for a browser is the
-        one that gets one."""
+        one that gets one, with or without a built page."""
         from contextlib import suppress
 
         from raven.cli import serve_commands as sc
+
+        packaged, _source = two_candidates
+        if built_page:
+            _build(packaged, "page")
 
         printed: list[str] = []
         monkeypatch.setattr(sc.typer, "echo", printed.append)
@@ -563,9 +554,14 @@ class TestTheSignInLink:
 
         from aiohttp import web
 
-        monkeypatch.setattr(web, "AppRunner", TestTheSignInLink._Runner)
+        apps: list[web.Application] = []
+
+        def _runner(app: web.Application) -> TestTheSignInLink._Runner:
+            apps.append(app)
+            return self._Runner()
+
+        monkeypatch.setattr(web, "AppRunner", _runner)
         monkeypatch.setattr(web, "TCPSite", TestTheSignInLink._Runner)
-        monkeypatch.setattr(web, "Application", TestTheSignInLink._Application)
         monkeypatch.setattr(serve_commands, "_announce_updates", lambda *a, **k: _nothing())
         monkeypatch.setattr(serve_commands, "_write_serve_state", lambda *a, **k: None)
 
@@ -575,6 +571,9 @@ class TestTheSignInLink:
         assert len(opened) == 1
         assert opened[0].startswith("http://127.0.0.1:18999/auth#")
         assert f"sign in with this link (it works once): {opened[0]}" in printed
+        (app,) = apps
+        assert isinstance(app, web.Application)
+        assert any(hook.__name__ == "revalidate" for hook in app.on_response_prepare) is built_page
 
 
 class _FakeProc:
