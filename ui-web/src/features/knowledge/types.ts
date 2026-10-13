@@ -220,4 +220,10 @@ export interface KnowledgeSource {
   create(name: string, description: string, embedding?: boolean): Promise<KbBase>
   settings(id: string, settings: KbSettings): Promise<KbBase>
   remove(id: string): Promise<void>
+  /** The filename extensions this install can actually index, lowercased and
+   *  each with its leading dot. Read off the parsers rather than listed on the
+   *  page: which formats can be indexed moves with the optional extras
+   *  installed, so a surface that walks a folder has to filter by today's
+   *  answer rather than by a list written when the page was. */
+  extensions(): Promise<string[]>
 }

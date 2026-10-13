@@ -11307,6 +11307,10 @@
       "en": "Upload folder",
       "zh": "上传文件夹"
     },
+    "gui.knowledge.skipped_unsupported": {
+      "en": "{n} file(s) were left out: this install cannot read them.",
+      "zh": "\u5df2\u8df3\u8fc7 {n} \u4e2a\u6587\u4ef6\uff1a\u5f53\u524d\u5b89\u88c5\u65e0\u6cd5\u8bfb\u53d6\u5b83\u4eec\u3002"
+    },
     "gui.knowledge.add_url": {
       "en": "Import from URL",
       "zh": "从链接导入"

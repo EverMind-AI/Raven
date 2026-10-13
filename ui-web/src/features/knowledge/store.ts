@@ -49,6 +49,11 @@ export interface KnowledgeState {
    *  panel should not pay for it. */
   models: KbModel[] | null
   tab: Tab
+  /** What this install can index, lowercased and dotted. Null until it has
+   *  been read, which is not the empty list an install with no parsers would
+   *  answer with. Read once per page: it moves with what is installed, not
+   *  with what the reader is doing. */
+  extensions: string[] | null
   /** A structural write is in flight -- a create, a delete, a rename, a move.
    *  Every one of those is a single sub-second call, so the controls they
    *  guard are held for about as long as a click.
@@ -153,6 +158,7 @@ const store = makeStore<KnowledgeState>({
   tab: 'all',
   busy: false,
   indexing: false,
+  extensions: null,
   opened: null,
   documents: null,
   view: 'list',
@@ -223,6 +229,11 @@ export function openBase(base: KbBase): void {
   patch({ opened: base, documents: null, folders: [], folder: '' })
   void loadDocuments(base.id)
   void loadFolders(base.id)
+  /* Here rather than on the click that opens the picker: the picker is built
+     and clicked in one synchronous go, so a list fetched at that moment is
+     not back in time to be its `accept`. Read once, and only inside a base,
+     which is the only place anything is uploaded. */
+  void loadExtensions()
 }
 
 export function closeBase(): void {
@@ -846,6 +857,49 @@ export function openCreate(): void {
    Failure is the empty list rather than a message: the panel still opens, with
    the model it is on and nothing to change it to, and a reader who cannot see
    a catalogue can still read every other setting. */
+/* What this install can read, for the pickers and for the folder walk.
+
+   Failure is the empty list rather than a message, and the empty list means
+   "do not filter": a reader whose gateway blipped while the menu opened
+   should get the upload they asked for and the server's own answer on each
+   row, not a picker that silently drops every file they chose. */
+export async function loadExtensions(): Promise<void> {
+  if (get().extensions !== null) return
+  try {
+    patch({ extensions: await source().extensions() })
+  } catch {
+    patch({ extensions: [] })
+  }
+}
+
+/** The extension of a filename, lowercased and dotted, or '' where it has
+ *  none. Dotted because that is the shape the server answers in, and a
+ *  leading dot is also what keeps `.gitignore` from reading as a file whose
+ *  extension is `gitignore`. */
+function extensionOf(name: string): string {
+  const cut = name.lastIndexOf('.')
+  return cut > 0 ? name.slice(cut).toLowerCase() : ''
+}
+
+/* Sort what was picked into what can be indexed and what cannot.
+
+   The picker's own `accept` cannot do this alone: a browser ignores it
+   entirely for a directory, which is the case that needs it most -- a chosen
+   folder arrives as every file under it, .DS_Store and node_modules and the
+   lock files included, and each one that is not a document is an upload, a
+   parse and a row that says Failed for a file nobody meant to add.
+
+   Kept in the order they were picked, because they are uploaded in that order
+   and a reader watching the list is watching their own folder fill in. */
+export function sortBySupported(names: readonly string[]): { kept: string[]; skipped: string[] } {
+  const known = get().extensions
+  if (!known || !known.length) return { kept: [...names], skipped: [] }
+  const kept: string[] = []
+  const skipped: string[] = []
+  for (const name of names) (known.includes(extensionOf(name)) ? kept : skipped).push(name)
+  return { kept, skipped }
+}
+
 async function loadModels(): Promise<void> {
   if (get().models !== null) return
   try {

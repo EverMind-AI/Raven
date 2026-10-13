@@ -251,6 +251,11 @@ export const knowledgeSource: KnowledgeSource = {
     return docOf(out.document)
   },
 
+  async extensions(): Promise<string[]> {
+    const out = await gateway().call('knowledge.status', {})
+    return (out.extensions ?? []).map((one) => String(one).toLowerCase())
+  },
+
   async removeDoc(id: string): Promise<void> {
     await gateway().call('knowledge.documents.delete', { document_id: id })
   },

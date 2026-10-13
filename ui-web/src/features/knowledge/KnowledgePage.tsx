@@ -6,6 +6,7 @@ import { assetStamp } from '../../lib/assetStamp'
 import { md } from '../../lib/prose'
 import * as lang from '../../state/lang'
 import * as menu from '../../state/menu'
+import { show as toast } from '../../state/toast'
 import { FolderTree } from './FolderTree'
 import { MoveSheet } from './MoveSheet'
 import { DEFAULTS } from './source'
@@ -687,6 +688,12 @@ function pick(multiple: boolean, then: (files: File[]) => void): void {
   const input = document.createElement('input')
   input.type = 'file'
   input.multiple = multiple
+  /* What this install can read, so the dialog greys out the rest. Advisory
+     only, and twice over: a reader can switch most pickers back to "All
+     files", and a browser ignores `accept` entirely for a directory. The
+     filter in `send` is what actually holds. */
+  const known = store.get().extensions
+  if (known?.length) input.accept = known.join(',')
   /* A folder upload is the same picker with one attribute: the browser hands
      back every file under what was chosen, and each goes up on its own. */
   if (multiple) input.setAttribute('webkitdirectory', '')
@@ -707,7 +714,20 @@ function base64Of(file: File): Promise<string> {
 }
 
 async function send(files: File[]): Promise<void> {
-  for (const file of files) await store.upload(file.name, await base64Of(file))
+  /* A chosen folder arrives as every file under it -- .DS_Store, lock files,
+     whatever a repository keeps -- because no browser applies `accept` to a
+     directory. Uploaded unfiltered, each of those is a round trip, a parse
+     and a row reading Failed for a file nobody meant to add.
+
+     Said rather than silently dropped: a reader who picked two hundred files
+     and got twelve rows is owed the reason, and the count is the reason. */
+  const { kept, skipped } = store.sortBySupported(files.map((file) => file.name))
+  if (skipped.length) toast(t('gui.knowledge.skipped_unsupported', { n: skipped.length }))
+  const wanted = new Set(kept)
+  for (const file of files) {
+    if (!wanted.has(file.name)) continue
+    await store.upload(file.name, await base64Of(file))
+  }
 }
 
 function raiseAdd(at: DOMRect): void {

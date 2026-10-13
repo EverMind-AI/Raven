@@ -128,6 +128,9 @@ function heldByTheMenu(bases: { id: string; name: string; documents: number }[])
    something else. Null for every other test, where reindex answers at once. */
 let reindexBlocks: Promise<void> | null = null
 
+/* What the install says it can read. The real one is read off the parsers. */
+let offeredExtensions: string[] = ['.pdf', '.md', '.txt', '.docx']
+
 function install(rows: KbBase[]): Fake {
   const fake: Fake = { rows, wrote: [], removed: [] }
   sources.knowledge = {
@@ -208,6 +211,7 @@ function install(rows: KbBase[]): Fake {
     remove: async (id) => {
       fake.removed.push(id)
     },
+    extensions: async () => offeredExtensions,
   }
   return fake
 }
@@ -226,6 +230,7 @@ beforeEach(() => {
   indexed.length = 0
   indexFails = ''
   reindexBlocks = null
+  offeredExtensions = ['.pdf', '.md', '.txt', '.docx']
   removedDocs.length = 0
 })
 
@@ -407,6 +412,54 @@ describe('the knowledge store', () => {
     release()
     await uploading
     expect(store.get().documents?.[0]?.status).toBe('ready')
+  })
+
+  it('keeps what this install can read and leaves the rest', async () => {
+    /* A chosen folder arrives as every file under it, because no browser
+       applies `accept` to a directory. Uploaded unfiltered, each of those is
+       a round trip, a parse, and a row reading Failed for a file nobody meant
+       to add. */
+    install([base({ id: 'a' })])
+    await store.openBase(base({ id: 'a' }))
+    await vi.waitFor(() => expect(store.get().extensions).not.toBeNull())
+
+    const sorted = store.sortBySupported([
+      'report.pdf',
+      '.DS_Store',
+      'notes.md',
+      'package-lock.json',
+      'photo.HEIC',
+      'README',
+      'deck.PDF',
+    ])
+
+    expect(sorted.kept).toEqual(['report.pdf', 'notes.md', 'deck.PDF'])
+    expect(sorted.skipped).toEqual(['.DS_Store', 'package-lock.json', 'photo.HEIC', 'README'])
+  })
+
+  it('treats a dotfile as having no extension rather than as its own', async () => {
+    /* `.DS_Store` is not a Store file and `.gitignore` is not a gitignore
+       file: the leading dot starts the name, it does not separate one. */
+    install([base({ id: 'a' })])
+    await store.openBase(base({ id: 'a' }))
+    await vi.waitFor(() => expect(store.get().extensions).not.toBeNull())
+
+    expect(store.sortBySupported(['.md']).kept).toEqual([])
+  })
+
+  it('uploads everything when it could not read what is supported', async () => {
+    /* The empty list means "do not filter". A reader whose gateway blipped
+       should get the upload they asked for and the server's own answer on
+       each row, not a picker that silently drops every file they chose. */
+    install([base({ id: 'a' })])
+    offeredExtensions = []
+    await store.openBase(base({ id: 'a' }))
+    await vi.waitFor(() => expect(store.get().extensions).not.toBeNull())
+
+    const sorted = store.sortBySupported(['anything.xyz', 'report.pdf'])
+
+    expect(sorted.kept).toEqual(['anything.xyz', 'report.pdf'])
+    expect(sorted.skipped).toEqual([])
   })
 
   it('turns a mark off again', async () => {
