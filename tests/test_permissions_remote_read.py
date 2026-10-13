@@ -1,10 +1,11 @@
-"""The permission check for a read on a registered machine (C30).
+"""The permission check for a read, and a write, on a registered machine.
 
 A registered machine's login is often root and its disks shared, so a read
 there is not waved through the way a read here is: the directories this
 Raven's agents work in there and the row's own paths read freely; anywhere
 else asks, and a grant for the session covers that machine and directory
-however the path is written.
+however the path is written. A write there asks wherever it falls, as a
+write here does, and its grant is for the one file.
 """
 
 from __future__ import annotations
@@ -115,36 +116,38 @@ async def test_the_gate_asks_once_and_the_grant_holds_for_the_directory():
     assert isinstance(inside, Allow) and inside.source is DecisionSource.DEFAULT
 
 
-# --- writes ask on their own account --------------------------------------------------------
+# --- writes ask wherever they fall, as a write here does ------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("tool", "path", "tier"),
+    ("tool", "path"),
     [
-        ("write_file", "box:raven-work/t1/out.md", Tier.ALLOW),
-        ("edit_file", "box:/srv/agents/t1/a.py", Tier.ALLOW),
-        ("edit_file", "nas:/data/shared/runs/notes.md", Tier.ALLOW),
-        ("write_file", "box:.bashrc", Tier.ASK),
-        ("write_file", "nas:/etc/hosts", Tier.ASK),
-        ("edit_file", "box:raven-work/../.ssh/authorized_keys", Tier.ASK),
+        # Inside the roots that free a read: a change is still asked about.
+        ("write_file", "box:raven-work/t1/out.md"),
+        ("edit_file", "box:/srv/agents/t1/a.py"),
+        ("edit_file", "nas:/data/shared/runs/notes.md"),
+        ("write_file", "box:.bashrc"),
+        ("write_file", "nas:/etc/hosts"),
+        ("edit_file", "box:raven-work/../.ssh/authorized_keys"),
         # A write here asks as it always did.
-        ("write_file", "/tmp/notes.md", Tier.ASK),
+        ("write_file", "/tmp/notes.md"),
     ],
 )
-def test_a_remote_write_is_free_in_the_roots_and_asks_elsewhere(tool, path, tier):
-    assert default_tier(tool, {"path": path}) is tier
+def test_a_remote_write_asks_wherever_it_falls(tool, path):
+    assert default_tier(tool, {"path": path}) is Tier.ASK
 
 
-def test_a_write_grant_is_kept_apart_from_a_read_grant_and_covers_its_directory():
+def test_a_write_grant_is_kept_apart_from_a_read_grant_and_covers_the_one_file():
     remote_path.remember_home("box", "/root")
 
     read = session_keys("read_file", {"path": "box:/root/.ssh/id_rsa"})
     write = session_keys("write_file", {"path": "box:/root/.ssh/id_rsa"})
-    same_dir = session_keys("edit_file", {"path": "scp://root@203.0.113.7:58717//root/.ssh/config"})
-    other_dir = session_keys("write_file", {"path": "box:/root/.config/x"})
+    same_file = session_keys("edit_file", {"path": "scp://root@203.0.113.7:58717//root/.ssh/id_rsa"})
+    relative = session_keys("write_file", {"path": "box:.ssh/id_rsa"})
+    neighbour = session_keys("write_file", {"path": "box:/root/.ssh/config"})
 
-    assert write == same_dir
-    assert len({read, write, other_dir}) == 3
+    assert write == same_file == relative
+    assert len({read, write, neighbour}) == 3
     assert session_keys("write_file", {"path": "/tmp/a"}) != session_keys("write_file", {"path": "/tmp/b"})
 
 
@@ -162,7 +165,11 @@ async def test_a_read_allowed_for_the_session_does_not_allow_a_write_there():
     assert isinstance(write, NeedsApproval), "a look is not a change"
     remember_allowed("conv-1", write.session_keys)
 
-    again = await gate.check("edit_file", {"path": "box:.config/raven/other.json", "old_text": "a", "new_text": "b"})
+    again = await gate.check("edit_file", {"path": "box:.config/raven/state.json", "old_text": "a", "new_text": "b"})
     assert isinstance(again, Allow) and again.source is DecisionSource.SESSION
+    neighbour = await gate.check(
+        "edit_file", {"path": "box:.config/raven/other.json", "old_text": "a", "new_text": "b"}
+    )
+    assert isinstance(neighbour, NeedsApproval), "the grant is for the one file, as it is here"
     inside = await gate.check("write_file", {"path": "box:raven-work/t1/out.md", "content": "x"})
-    assert isinstance(inside, Allow) and inside.source is DecisionSource.DEFAULT
+    assert isinstance(inside, NeedsApproval), "the roots free a look, not a change"

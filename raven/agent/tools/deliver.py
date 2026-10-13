@@ -147,7 +147,10 @@ def _landing(workspace: Path | None, machine: str, place: str) -> Path:
     keeps (:func:`_local_name`), stays readable beside it. Checked before
     anything is made or written: a landing that resolves outside its
     machine's delivery directory is refused, whatever the name did to get
-    there.
+    there. Nothing reclaims what lands here: a delivery is opened from its
+    landing for as long as its record lasts, and a bound by size or age was
+    left out of this change on purpose; clearing ``pulled/`` is the owner's
+    to do.
     """
     pulled = (workspace or Path.cwd()) / "pulled" / _local_name(machine)
     key = hashlib.sha256(f"{machine}\0{place}".encode()).hexdigest()[:16]

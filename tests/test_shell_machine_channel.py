@@ -810,64 +810,37 @@ def test_the_machine_lane_appears_once_a_first_machine_is_added(tmp_path, monkey
     assert "pass 'machine'" in after["description"]
 
 
-# ---- a copy to a registered machine goes through the file tools, not around them ----
+# ---- a copy to a registered machine is the plain shell's, as on main ----
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "command",
     [
         "scp -P 58717 a.txt root@203.0.113.7:/tmp/",
-        "scp -rP 58717 root@203.0.113.7:/tmp/a ./here",
-        "scp -o Port=58717 a.txt 203.0.113.7:a",
-        "scp -P58717 a.txt root@203.0.113.7:",
         "sftp -P 58717 root@203.0.113.7",
         "rsync -av -e 'ssh -p 58717' ./dir root@203.0.113.7:/data/",
-        "rsync -avP --rsh='ssh -o Port=58717' root@203.0.113.7:/data/ ./dir",
-        "rsync -av --port 58717 ./dir rsync://203.0.113.7/module",
-        "scp scp://root@203.0.113.7:58717//tmp/a .",
-        "true && \\scp -P 58717 a root@203.0.113.7:b",
         "scp.exe -P 58717 a.txt root@203.0.113.7:/tmp/",
-        "SCP.EXE -P 58717 a.txt root@203.0.113.7:/tmp/",
-        "sftp.exe -P 58717 root@203.0.113.7",
     ],
 )
-async def test_a_copy_to_a_registered_machine_is_refused_and_points_at_the_file_tools(registry, tmp_path, command):
+async def test_a_copy_to_a_registered_machine_is_not_refused(registry, tmp_path, command):
+    """A copy starts nothing on the far side, and passes exec's own question like any command.
+
+    The file tools cannot carry what a copy carries -- a directory, a binary
+    file, a file over the fetch budget -- so a refusal left those with no
+    route, and taught the very spelling it objected to. ``true`` stands for
+    the client: nothing here connects anywhere.
+    """
     tool = ExecTool(working_dir=str(tmp_path))
     marker = tmp_path / "ran"
 
-    out = await tool.execute(command=f"{command}; touch {marker}")
+    out = await tool.execute(command=f"true {command}; touch {marker}")
 
-    assert out.startswith("Error: this command copies files to or from GPU box")
-    assert "conn_gpu" in out and "read_file" in out and "deliver_files" in out and "Raven node" in out
-    assert "203.0.113.7" not in out.replace("user@host", "")
-    assert not marker.exists()
+    assert "Error:" not in out
+    assert marker.exists()
 
 
-@pytest.mark.parametrize(
-    ("command", "expected"),
-    [
-        ("scp a.txt root@203.0.113.7:/tmp/", [("203.0.113.7", 22)]),
-        ("scp -P 58717 a.txt root@203.0.113.7:/tmp/ b.txt h2:x", [("203.0.113.7", 58717), ("h2", 58717)]),
-        ("scp ./a:b /tmp/", []),
-        ("scp /tmp/a:b /tmp/c", []),
-        ("rsync -av ./dir /tmp/dir", []),
-        ("rsync -avP root@h:/data/ ./dir", [("h", 22)]),
-        ("rsync -av --port=873 ./dir h::module", [("h", 873)]),
-        ("rsync -e 'ssh -p 2222' ./x h:y", [("h", 2222)]),
-        ("sftp -P 2222 -b batch.txt h", [("h", 2222)]),
-        ("sftp root@h:uploads", [("h", 22)]),
-        # Read wherever the word stands, as the ssh guard reads `ssh`: a false
-        # refusal of an echo costs a retry, a copy let through costs the address.
-        ("echo scp root@203.0.113.7:/tmp/a", [("203.0.113.7", 22)]),
-        ("scp -i key -P 58717 a root@203.0.113.7:b", [("203.0.113.7", 58717)]),
-        ("scp 'a b:c' root@h:d", [("a b", 22), ("h", 22)]),
-        ("scp a root@h:b 2>&1", [("h", 22)]),
-        ("scp -- -weird:name root@h:b", [("-weird", 22), ("h", 22)]),
-        ("scp 'unbalanced", []),
-    ],
-)
-def test_copy_destinations_are_read_the_way_the_programs_read_them(command, expected):
-    assert machine_exec._copy_destinations(command) == expected
+# ---- the ssh client is read in its Windows spellings too ----
 
 
 @pytest.mark.parametrize(
@@ -876,24 +849,25 @@ def test_copy_destinations_are_read_the_way_the_programs_read_them(command, expe
         ("ssh", "ssh"),
         ("/usr/bin/ssh", "ssh"),
         ("\\ssh", "ssh"),
-        ("scp.exe", "scp"),
-        ("SCP.EXE", "scp"),
-        ("C:\\Windows\\System32\\OpenSSH\\scp.exe", "scp"),
-        ("rsync.cmd", "rsync"),
-        ("scpx", "scpx"),
-        ("my-scp.exe.bak", "my-scp.exe.bak"),
+        ("ssh.exe", "ssh"),
+        ("SSH.EXE", "ssh"),
+        ("C:\\Windows\\System32\\OpenSSH\\ssh.exe", "ssh"),
+        ("ssh.cmd", "ssh"),
+        ("sshx", "sshx"),
+        ("my-ssh.exe.bak", "my-ssh.exe.bak"),
     ],
 )
 def test_the_program_a_word_runs_is_read_with_windows_spellings_too(word, program):
     assert machine_exec._program(word) == program
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "command",
     [
-        "C:\\Windows\\System32\\OpenSSH\\scp.exe -P 58717 a.txt root@203.0.113.7:/tmp/",
-        '"C:\\Program Files\\OpenSSH\\scp.exe" -P 58717 a.txt root@203.0.113.7:/tmp/',
         "C:\\Windows\\System32\\OpenSSH\\ssh.exe -p 58717 root@203.0.113.7 ls",
+        '"C:\\Program Files\\OpenSSH\\ssh.exe" -p 58717 root@203.0.113.7 ls',
+        "SSH.EXE -p 58717 root@203.0.113.7 ls",
     ],
 )
 async def test_on_a_windows_host_a_program_s_whole_path_keeps_its_backslashes_and_its_name(
@@ -906,22 +880,20 @@ async def test_on_a_windows_host_a_program_s_whole_path_keeps_its_backslashes_an
 
     out = await tool.execute(command=f"{command}; touch {marker}")
 
-    assert out.startswith("Error:") and "the way scp writes it" in out and "Nothing was run." in out
-    assert "203.0.113.7" not in out.replace("user@host", "")
+    assert out.startswith("Error:") and "conn_gpu" in out and "Nothing was run." in out
+    assert "203.0.113.7" not in out
     assert not marker.exists()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "command",
     [
         'ssh -p 58717 "root@203.0.113.7" true',
-        'scp -P "58717" a.txt root@203.0.113.7:/tmp/a',
-        'sftp -P "58717" "root@203.0.113.7"',
-        "rsync -av -e 'ssh -p 58717' ./dir \"root@203.0.113.7:/data/\"",
+        'ssh -p "58717" root@203.0.113.7 true',
         'ssh -p"58717" root@203.0.113.7 true',
         'ssh -p 58717 "root@"203.0.113.7 true',
         'ssh -p "587"17 root@203.0.113.7 true',
-        'scp -P 58717 a.txt "root@203.0.113.7:"/tmp/a',
     ],
 )
 async def test_on_a_windows_host_a_quoted_destination_or_port_is_matched_like_a_bare_one(
@@ -935,8 +907,8 @@ async def test_on_a_windows_host_a_quoted_destination_or_port_is_matched_like_a_
 
     out = await tool.execute(command=f"{command}; touch {marker}")
 
-    assert out.startswith("Error:") and "the way scp writes it" in out and "Nothing was run." in out
-    assert "203.0.113.7" not in out.replace("user@host", "")
+    assert out.startswith("Error:") and "conn_gpu" in out and "Nothing was run." in out
+    assert "203.0.113.7" not in out
     assert not marker.exists()
 
 
@@ -971,14 +943,19 @@ def test_on_a_windows_host_the_words_are_read_without_their_quotes(monkeypatch):
     assert machine_exec._words('scp -P "58717" a.txt "root@h:/x"') == ["scp", "-P", "58717", "a.txt", "root@h:/x"]
 
 
-async def test_a_copy_to_the_same_address_on_another_port_is_another_machine(registry):
-    assert machine_exec.raw_copy_target("scp a.txt root@203.0.113.7:/tmp/") is None
-    assert machine_exec.raw_copy_target("scp -P 58717 a.txt root@203.0.113.7:/tmp/") == dict(ROW)
-
-
-async def test_typed_ssh_to_a_registered_machine_names_the_file_tools_too(registry, tmp_path):
+@pytest.mark.asyncio
+async def test_typed_ssh_s_refusal_leaves_copies_alone_and_names_the_file_tools_only_with_the_lane_on(
+    registry, tmp_path, monkeypatch
+):
+    # With the lane off the file tools read a remote spelling as a path here,
+    # so naming them would send the model to write on this computer.
     tool = ExecTool(working_dir=str(tmp_path))
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
 
-    out = await tool.execute(command="ssh -p 58717 root@203.0.113.7 ls")
+    off = await tool.execute(command="ssh -p 58717 root@203.0.113.7 ls")
+    monkeypatch.setenv("RAVEN_DEBUG_MACHINES", "1")
+    on = await tool.execute(command="ssh -p 58717 root@203.0.113.7 ls")
 
-    assert "write_file and edit_file on the path the way scp writes it" in out
+    assert "scp and rsync to it are still fine here" in off and "read_file" not in off
+    assert "scp and rsync to it are still fine here" in on
+    assert "read_file, write_file and edit_file on the path the way scp writes it" in on

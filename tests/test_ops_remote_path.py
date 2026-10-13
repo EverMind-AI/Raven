@@ -45,18 +45,18 @@ def _where(text: str):
 @pytest.mark.parametrize(
     ("text", "machine", "path"),
     [
-        # A16: the machine's id, the id with its user, and the URI with the address.
+        # The machine's id, the id with its user, and the URI with the address.
         ("box2:/root/x", "box2", "/root/x"),
         ("root@box2:/root/x", "box2", "/root/x"),
         ("scp://root@203.0.113.7:49273//root/x", "box2", "/root/x"),
-        # C25: the first slash after host:port only separates.
+        # The first slash after host:port only separates.
         ("scp://203.0.113.7:49273/root/x", "box2", "root/x"),
         ("scp://box2", "box2", ""),
-        # C26: after the colon, a path not starting with / is under the home.
+        # After the colon, a path not starting with / is under the home.
         ("box2:", "box2", ""),
         ("box2:raven-work/a", "box2", "raven-work/a"),
         ("box2:~/raven-work/a", "box2", "~/raven-work/a"),
-        # C21: an address with no port is port 22; the registry decides the rest.
+        # An address with no port is port 22; the registry decides the rest.
         ("alice@198.51.100.9:/data/x", "std", "/data/x"),
         ("198.51.100.9:/data/x", "std", "/data/x"),
         ("sftp://alice@198.51.100.9//data", "std", "/data"),
@@ -80,9 +80,9 @@ def test_a_user_and_a_machine_id_are_compared_as_written():
 @pytest.mark.parametrize(
     ("text", "said"),
     [
-        # A17: no port means 22, and no registered machine is on 22 there.
+        # No port means 22, and no registered machine is on 22 there.
         ("root@203.0.113.7:/etc/hostname", "no registered machine matches it"),
-        # C24: the short form has no port field -- `49273:/a` is a file name on 22.
+        # The short form has no port field -- `49273:/a` is a file name on 22.
         ("root@203.0.113.7:49273:/a", "no registered machine matches it"),
         ("bob@std:/x", "logs in as 'bob', and machine 'std' is registered for another user"),
         ("scp://box2:41941//x", "names machine 'Box 2' (box2) on a port it is not registered on"),
@@ -93,7 +93,7 @@ def test_a_user_and_a_machine_id_are_compared_as_written():
         ("scp://[2001:db8::5//x", "opens an address with '['"),
         ("scp://[2001:db8::5]x//x", "something after the address that is not a port"),
         ("nobox:/x", "write it as ./name or as an absolute path"),
-        # C27: a local name holding a colon reads as remote unless written as a path
+        # A local name holding a colon reads as remote unless written as a path
         # (one letter before the colon is a drive on a Windows host: the drive-relative test).
         ("ab:b.txt", "write it as ./name or as an absolute path"),
     ],
@@ -148,7 +148,7 @@ def test_a_drive_relative_path_is_this_computer_s_on_a_windows_host_and_scp_s_el
 @pytest.mark.parametrize(
     ("text", "shown"),
     [
-        # C28: not port 22 -- the URI form, absolute paths with two slashes.
+        # Not port 22 -- the URI form, absolute paths with two slashes.
         ("box2:/root/raven-work/t1/report.md", "scp://root@203.0.113.7:49273//root/raven-work/t1/report.md"),
         ("box2:raven-work/a", "scp://root@203.0.113.7:49273/raven-work/a"),
         # Port 22 -- the short form.
@@ -339,3 +339,32 @@ def test_the_node_pool_is_whatever_assembly_handed_over():
     remote_path.use_nodes(lambda: pool)
 
     assert remote_path.nodes() is pool
+
+
+# --- what a reader read ----------------------------------------------------------------
+
+
+def test_what_was_read_is_the_reader_s_own_and_the_table_is_bounded(monkeypatch):
+    monkeypatch.setattr(remote_path, "_READ", {})
+    monkeypatch.setattr(remote_path, "_READ_LIMIT", 3)
+
+    remote_path.remember_read("box2", "/root/a", "d1", reader="A")
+    remote_path.remember_read("box2", "/root/a", "d2", reader="B")
+    assert remote_path.last_read("box2", "/root/a", reader="A") == "d1"
+    assert remote_path.last_read("box2", "/root/a", reader="B") == "d2"
+    assert remote_path.last_read("box2", "/root/a") is None, "no name is one more reader, not every reader"
+
+    remote_path.forget_read("box2", "/root/a", reader="A")
+    assert remote_path.last_read("box2", "/root/a", reader="A") is None
+    assert remote_path.last_read("box2", "/root/a", reader="B") == "d2", "A wrote: B's next overwrite is checked"
+
+    remote_path.remember_read("box2", "/root/b", "d3", reader="B")
+    remote_path.remember_read("box2", "/root/a", "d4", reader="B")  # read again: the newest entry now
+    remote_path.remember_read("box2", "/root/c", "d5", reader="B")
+    remote_path.remember_read("box2", "/root/d", "d6", reader="B")
+    assert remote_path.last_read("box2", "/root/b", reader="B") is None, "past the bound the oldest goes"
+    assert [remote_path.last_read("box2", p, reader="B") for p in ("/root/a", "/root/c", "/root/d")] == [
+        "d4",
+        "d5",
+        "d6",
+    ]

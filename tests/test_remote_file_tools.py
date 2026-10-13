@@ -32,6 +32,7 @@ SHOWN = f"scp://worker@{HOST}:{PORT}/"
 def _fresh_state(monkeypatch):
     monkeypatch.setattr(remote_path, "_HOMES", {})
     monkeypatch.setattr(remote_path, "_NODES", None)
+    monkeypatch.setattr(remote_path, "_READ", {})
     monkeypatch.setattr(
         "raven.config.loader.load_config", lambda *a, **k: SimpleNamespace(subagents=SimpleNamespace(agents=[]))
     )
@@ -431,6 +432,44 @@ async def test_a_file_changed_since_it_was_read_is_left_alone_and_the_sentence_s
     )
     assert HOST not in got.split("on machine")[1]
     assert remote_path.last_read("box", f"{HOME}/raven-work/t1/a.md") is None, "the next write reads first"
+
+
+async def test_a_read_s_digest_is_the_reader_s_own_so_another_agent_s_read_vouches_for_no_write(
+    registry, pool, tmp_path
+):
+    """A read v1; the file became v2 and B read it: A's overwrite still expects v1. C, who never read it, expects nothing.
+
+    The conversation is the reader, and a sub-agent run inside one is a reader
+    of its own: B's sub-agent reads and writes on its own account, and B's
+    next overwrite is checked against B's read, not its sub-agent's write.
+    """
+    from raven.agent.subagent import activity
+    from raven.permissions import turn
+
+    place = "box:raven-work/t1/a.md"
+    reader, writer = _tools(tmp_path)["read_file"], _writers(tmp_path)["write_file"]
+    token = turn._TURN.set(turn.PermissionTurn(conversation_id="conv-a"))
+    try:
+        pool.answer = {"text": "1| one", "sha256": "a1" * 32}
+        await reader.execute(place)
+        turn._TURN.set(turn.PermissionTurn(conversation_id="conv-b"))
+        pool.answer = {"text": "1| two", "sha256": "b2" * 32}
+        await reader.execute(place)
+        with activity.collecting():
+            await reader.execute(place)
+            pool.answer = {"text": "ok"}
+            await writer.execute(place, "by the sub-agent of b\n")
+        turn._TURN.set(turn.PermissionTurn(conversation_id="conv-a"))
+        await writer.execute(place, "by a\n")
+        turn._TURN.set(turn.PermissionTurn(conversation_id="conv-c"))
+        await writer.execute(place, "by c\n")
+        turn._TURN.set(turn.PermissionTurn(conversation_id="conv-b"))
+        await writer.execute(place, "by b\n")
+    finally:
+        turn._TURN.reset(token)
+
+    expected = [params.get("expect") for _, method, params in pool.calls if method == "fs/write"]
+    assert expected == ["b2" * 32, "a1" * 32, None, "b2" * 32]
 
 
 def test_the_approval_card_for_a_write_on_a_machine_names_the_machine_and_the_path_as_written(registry, tmp_path):

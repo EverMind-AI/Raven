@@ -117,8 +117,9 @@ def session_keys(tool_name: str, params: dict[str, Any], ask_segments: tuple[str
     call, so its grant is never presented by a call to a real site. A read on a
     registered machine is keyed by its machine and the directory it reaches,
     placed on that machine, so the grant covers that directory however the path
-    is written. Every other tool keys the exact call -- a `path` field on an
-    unknown tool says nothing about what its other fields do.
+    is written; a write there by its machine and the one file, as a write here
+    is. Every other tool keys the exact call -- a `path` field on an unknown
+    tool says nothing about what its other fields do.
     """
     if tool_name == "exec" and ask_segments:
         working_dir = params.get("working_dir")
@@ -130,13 +131,14 @@ def session_keys(tool_name: str, params: dict[str, Any], ask_segments: tuple[str
     if (reach := remote_path.reading(tool_name, params)) is not None:
         # A read on a registered machine is granted for its machine and
         # directory, placed on the machine, so the same file written another
-        # way presents the same grant (C30).
+        # way presents the same grant.
         material = f"remote-read\x00{reach.target.machine}\x00{reach.directory}"
         return (sha256(material.encode()).hexdigest(),)
     if (reach := remote_path.writing(tool_name, params)) is not None:
-        # A write there likewise, and apart from the read: allowing a look at
-        # a directory is not allowing changes to it.
-        material = f"remote-write\x00{reach.target.machine}\x00{reach.directory}"
+        # A write there is granted for the one file, as a write here is, and
+        # apart from the read: allowing a look at a directory is not allowing
+        # changes in it.
+        material = f"remote-write\x00{reach.target.machine}\x00{reach.place}"
         return (sha256(material.encode()).hexdigest(),)
     path = params.get("path")
     if tool_name in PATH_KEYED_TOOLS and isinstance(path, str) and path.strip():
