@@ -299,6 +299,29 @@ def test_windows_expansion_keeps_literal_percent_and_later_references(value, exp
     assert backend_env._expand_windows(value, context) == expected
 
 
+def test_windows_expansion_resolves_each_name_once():
+    """A name is expanded once, however many references reach it.
+
+    ``A`` refers to ``B`` twice and ``B`` to ``C`` twice, so a walk without the memo
+    reads ``C`` once per path to it -- eight times here, and exponentially more as
+    the graph branches deeper -- while the result is the same either way.
+    """
+
+    class _Counting(dict):
+        def __init__(self, values):
+            super().__init__(values)
+            self.reads = dict.fromkeys(values, 0)
+
+        def __getitem__(self, name):
+            self.reads[name] += 1
+            return super().__getitem__(name)
+
+    context = _Counting({"A": "%B%%B%", "B": "%C%%C%", "C": "c"})
+
+    assert backend_env._expand_windows("%A%%A%", context) == "cccccccc"
+    assert context.reads == {"A": 1, "B": 1, "C": 1}
+
+
 @pytest.mark.parametrize("references", [{"A": "%A%"}, {"A": "%B%", "B": "%A%"}])
 def test_windows_expansion_refuses_cycles(references):
     with pytest.raises(ValueError, match="cyclic"):
